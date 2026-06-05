@@ -256,7 +256,7 @@ impl BrushNodeEvaluator for PenInputEvaluator {
             });
             // `drawing_angle` is `atan2(canvas_dy, canvas_dx)` — a
             // canvas-frame angle. The skeleton subtracts `view_rotation`
-            // from `theta`, so to keep `pen.drawing_angle → circle.rotation_input`
+            // from `theta`, so to keep `pen.drawing_angle → shape.rotation_input`
             // (the canonical stroke-follow wire) aligned with the on-
             // screen stroke direction, subtract `view_rotation` here too:
             // canvas-frame angle minus V = screen-frame angle. Both

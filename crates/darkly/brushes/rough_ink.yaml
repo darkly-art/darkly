@@ -24,7 +24,7 @@ nodes:
   6:
     type: random
   7:
-    type: circle
+    type: shape
     params:
       algorithm: 1
     port_defaults:

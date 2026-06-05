@@ -35,9 +35,9 @@ use crate::nodegraph::{ExecutionPlan, NodeId, PortDef, PortDir};
 pub enum ExtentContribution {
     /// No effect — bbox passes through unchanged from upstream.
     Identity,
-    /// Multiplier on upstream extent. `circle` uses `1 + amp_max` for
+    /// Multiplier on upstream extent. `shape` uses `1 + amp_max` for
     /// sine/perlin (or the superformula's `r_max`) so the bbox covers
-    /// the shape's worst-case rasterized footprint.
+    /// the silhouette's worst-case rasterized footprint.
     Multiply(f32),
     /// Additive canvas-pixel padding on top of upstream. Future
     /// displacement / warp nodes use this (e.g. warp by ±strength px).

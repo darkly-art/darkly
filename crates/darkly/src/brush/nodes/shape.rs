@@ -1,4 +1,4 @@
-//! Procedural shape coverage GPU node.
+//! Procedural shape coverage GPU node — the brush-tip silhouette.
 //!
 //! Compile-only: contributes a per-fragment scalar coverage expression
 //! (`f32` in `[0, 1]`) to the brush's compiled WGSL via [`compile_wgsl`].
@@ -34,18 +34,18 @@ const ALGO_SINE: u32 = 0;
 const ALGO_PERLIN: u32 = 1;
 const ALGO_SUPERFORMULA: u32 = 2;
 
-pub const TYPE_ID: &str = "circle";
+pub const TYPE_ID: &str = "shape";
 
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![],
-        evaluator: || Box::new(CircleEvaluator),
+        evaluator: || Box::new(ShapeEvaluator),
         lifecycle: crate::brush::node::Lifecycle::None,
         node: NodeRegistration {
         type_id: TYPE_ID,
         category: "shape",
-        display_name: "Circle",
-        description: "Soft round shape used as the brush tip.",
+        display_name: "Shape",
+        description: "Procedural brush-tip silhouette — disc, bumpy circle, or superformula.",
         ports: vec![
             PortDef::input("softness", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
@@ -161,10 +161,10 @@ pub fn register() -> BrushNodeRegistration {
 }
 
 /// Gielis superformula with `a = b = 1`. Used only by
-/// [`CircleEvaluator::extent`] to bound the dab footprint when the
+/// [`ShapeEvaluator::extent`] to bound the dab footprint when the
 /// shape is set to Superformula; the per-fragment math lives in
 /// `shaders/brush/_shape.wgsl` and the compiled brush splices it in
-/// via [`CircleEvaluator::compile_wgsl`].
+/// via [`ShapeEvaluator::compile_wgsl`].
 fn superformula_r(theta: f32, frequency: f32, n1: f32, n2: f32, n3: f32) -> f32 {
     let m_quarter = frequency * theta * 0.25;
     let term_a = (m_quarter.cos().abs()).powf(n2);
@@ -176,9 +176,9 @@ fn superformula_r(theta: f32, frequency: f32, n1: f32, n2: f32, n3: f32) -> f32 
     sum.powf(-1.0 / n1)
 }
 
-pub struct CircleEvaluator;
+pub struct ShapeEvaluator;
 
-impl BrushNodeEvaluator for CircleEvaluator {
+impl BrushNodeEvaluator for ShapeEvaluator {
     fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
         vec![]
     }
@@ -222,8 +222,8 @@ impl BrushNodeEvaluator for CircleEvaluator {
         // block-let preserves a single `let` binding name downstream
         // nodes can substitute.
         //
-        // Edge coverage mirrors `shaders/brush/circle.wgsl`:
-        // smoothstep over a constant softness band (in unit-disc /
+        // Edge coverage: smoothstep over a constant softness band
+        // (in unit-disc /
         // natural units, independent of `r_at`), with a 0.004 AA
         // floor so softness == 0 still produces a one-pixel-ish
         // anti-aliased boundary instead of jagged stair-steps.
@@ -233,8 +233,8 @@ impl BrushNodeEvaluator for CircleEvaluator {
         // outward bumps get softer than inward dips — which reads as
         // "wonky" and exaggerates the noise band when the dab is
         // large.
-        let params_ident = cctx.ident("circle_params");
-        let shape_ident = cctx.ident("circle_shape");
+        let params_ident = cctx.ident("shape_params");
+        let shape_ident = cctx.ident("shape");
         let body = format!(
             "    let {params_ident}: ShapeParams = ShapeParams(\n\
              \x20       {algorithm}u,\n\

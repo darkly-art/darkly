@@ -147,7 +147,7 @@ pub fn find_terminal(
 
 /// Build the default brush graph: pressure-sensitive disc through the
 /// compiled `paint` terminal. Same shape as Round in
-/// [`builtin_brushes`] — `pen → paint_color → circle (sine, amplitude 0)
+/// [`builtin_brushes`] — `pen → paint_color → shape (sine, amplitude 0)
 /// → stamp → paint` — minus the per-brush configuration
 /// closure (no exposed softness, no flow wire).
 pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
@@ -167,9 +167,9 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
         registry.get("paint_color").unwrap().ports.clone(),
         vec![],
     );
-    let circle = graph.add_node(
-        "circle",
-        registry.get("circle").unwrap().ports.clone(),
+    let shape = graph.add_node(
+        "shape",
+        registry.get("shape").unwrap().ports.clone(),
         vec![ParamValue::Int(0)], // sine, amplitude 0 → plain disc
     );
     let stamp = graph.add_node(
@@ -186,7 +186,7 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
     let wires = [
         (pen, "pressure", terminal, "flow"),
         (paint_color, "color", stamp, "color"),
-        (circle, "mask", stamp, "tip"),
+        (shape, "mask", stamp, "tip"),
         (stamp, "dab", terminal, "rgba"),
         (pen, "position", terminal, "position"),
     ];

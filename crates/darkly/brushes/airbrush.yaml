@@ -6,7 +6,7 @@ nodes:
   2:
     type: paint_color
   3:
-    type: circle
+    type: shape
     port_defaults:
       softness: 1.0
   4:

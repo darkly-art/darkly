@@ -2,7 +2,7 @@
 //!
 //! Inlines `color × mask` into the brush's WGSL via [`compile_wgsl`].
 //! The upstream `tip` input is a scalar coverage expression (typically
-//! from `circle.texture`'s compile output); the emitted `dab` output is
+//! from `shape.mask`'s compile output); the emitted `dab` output is
 //! premultiplied RGBA that downstream paint terminals consume.
 //!
 //! Flow lives on the `paint` terminal — that is the single, authoritative

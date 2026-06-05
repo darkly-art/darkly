@@ -6,7 +6,7 @@ nodes:
   2:
     type: paint_color
   3:
-    type: circle
+    type: shape
   4:
     type: stamp
   5:

@@ -40,7 +40,7 @@ not re-specify them.
 ```rust
 fn canvas_brush() -> PresetBundle {
     let mut b = PresetBuilder::new();
-    b.add_circle(0.4);
+    b.add_shape(0.4);
     b.wire(b.pen, "pressure", b.stamp, "size");
     b.wire(b.paint_color, "color", b.stamp, "color");
 

@@ -255,13 +255,13 @@ mod tests {
     use super::*;
 
     /// Regression: `ParamValue::Int(n)` must round-trip through JSON without
-    /// degrading to `ParamValue::Float`. The bug: Rough Watercolor's circle
+    /// degrading to `ParamValue::Float`. The bug: Rough Watercolor's shape
     /// node was configured with `algorithm = Int(1)` (Perlin), but after
     /// `brush_load` (graph → JSON → graph) the variant became `Float(1.0)`,
-    /// and `circle.rs`'s `match Some(ParamValue::Int(v))` silently fell
+    /// and `shape.rs`'s `match Some(ParamValue::Int(v))` silently fell
     /// through to the default `0` (Sine). Port defaults — which are floats
     /// natively — round-tripped fine, so the UI showed correct numbers
-    /// while the GPU rendered the wrong shape. Fix was to reorder the
+    /// while the GPU rendered the wrong silhouette. Fix was to reorder the
     /// `#[serde(untagged)]` variants so the more-specific `Bool` and `Int`
     /// are attempted before `Float`.
     #[test]

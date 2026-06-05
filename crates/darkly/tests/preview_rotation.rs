@@ -1,4 +1,4 @@
-//! End-to-end verification that `pen.drawing_angle → circle.rotation_input`
+//! End-to-end verification that `pen.drawing_angle → shape.rotation_input`
 //! actually rotates the **rendered mask** in the cursor preview pipeline.
 //!
 //! The previous version of this test asserted on
@@ -6,7 +6,7 @@
 //! only affected the cursor halo, not the painted dab. That port was removed
 //! because it produced "rotation that only the cursor sees, not the paint",
 //! which surprised users. Rotation now lives in the WGSL pipeline (sum of
-//! `circle.rotation` + `circle.rotation_input`, minus `view_rotation`), so
+//! `shape.rotation` + `shape.rotation_input`, minus `view_rotation`), so
 //! the cursor preview and the stroke deposit always agree.
 //!
 //! This test renders an asymmetric superformula shape twice — once
@@ -52,8 +52,8 @@ fn preview_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
     (tex, view)
 }
 
-/// Build a minimal paint graph with `pen.drawing_angle → circle.rotation_input`.
-/// Circle is set to the superformula algorithm so the shape has a four-fold
+/// Build a minimal paint graph with `pen.drawing_angle → shape.rotation_input`.
+/// Shape is set to the superformula algorithm so the silhouette has a four-fold
 /// symmetry whose orientation reads cleanly off rotation_input.
 fn build_graph_with_rotation_wire() -> Graph<BrushWireType> {
     let registry = registry();
@@ -69,9 +69,9 @@ fn build_graph_with_rotation_wire() -> Graph<BrushWireType> {
         registry.get("paint_color").unwrap().ports.clone(),
         vec![],
     );
-    let circle = graph.add_node(
-        "circle",
-        registry.get("circle").unwrap().ports.clone(),
+    let shape = graph.add_node(
+        "shape",
+        registry.get("shape").unwrap().ports.clone(),
         // Algorithm = 2 (Superformula).
         vec![darkly::gpu::params::ParamValue::Int(2)],
     );
@@ -90,9 +90,9 @@ fn build_graph_with_rotation_wire() -> Graph<BrushWireType> {
         (pen, "position", term, "position"),
         // Canonical stroke-follow wire — what users wire when they want
         // the dab to face the stroke direction.
-        (pen, "drawing_angle", circle, "rotation_input"),
+        (pen, "drawing_angle", shape, "rotation_input"),
         (paint_color, "color", stamp, "color"),
-        (circle, "mask", stamp, "tip"),
+        (shape, "mask", stamp, "tip"),
         (stamp, "dab", term, "rgba"),
     ];
     for (from_node, from_port, to_node, to_port) in wires {
@@ -113,11 +113,11 @@ fn build_graph_with_rotation_wire() -> Graph<BrushWireType> {
     graph.set_port_default(term, "size", 0.4).unwrap();
     // Superformula with a 4-pointed silhouette so rotation moves the
     // shape's lobes from axes to diagonals (and vice versa).
-    graph.set_port_default(circle, "frequency", 4.0).unwrap();
-    graph.set_port_default(circle, "amplitude", 0.8).unwrap();
-    graph.set_port_default(circle, "n1", 1.0).unwrap();
-    graph.set_port_default(circle, "n2", 1.0).unwrap();
-    graph.set_port_default(circle, "n3", 1.0).unwrap();
+    graph.set_port_default(shape, "frequency", 4.0).unwrap();
+    graph.set_port_default(shape, "amplitude", 0.8).unwrap();
+    graph.set_port_default(shape, "n1", 1.0).unwrap();
+    graph.set_port_default(shape, "n2", 1.0).unwrap();
+    graph.set_port_default(shape, "n3", 1.0).unwrap();
     graph
 }
 
@@ -160,7 +160,7 @@ fn render_at_angle(angle_rad: f32) -> Vec<u8> {
 
     // Seed `drawing_angle` directly — `seed_sensors` writes the raw
     // `info.drawing_angle` into the pen_input slot, which the wire then
-    // feeds into `circle.rotation_input` via the compiled WGSL.
+    // feeds into `shape.rotation_input` via the compiled WGSL.
     let mut info = PaintInformation {
         pos: [PREVIEW_SIDE as f32 * 0.5, PREVIEW_SIDE as f32 * 0.5],
         pressure: 1.0,
@@ -219,7 +219,7 @@ fn drawing_angle_rotates_preview_mask() {
     let diff = (sum_baseline as i32 - sum_rotated as i32).unsigned_abs();
     assert!(
         diff > 64,
-        "drawing_angle wired to circle.rotation_input should rotate the \
+        "drawing_angle wired to shape.rotation_input should rotate the \
          rendered shape; baseline on-axis alpha={sum_baseline}, rotated \
          on-axis alpha={sum_rotated} (diff={diff}). If these are equal, \
          the rotation wire is dead.",

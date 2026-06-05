@@ -7,7 +7,7 @@ nodes:
       spacing: 0.01
       stabilize: 0.4
   2:
-    type: circle
+    type: shape
     port_defaults:
       softness: 0.4
   3:

@@ -104,9 +104,9 @@ pub struct PortDef<W: WireKind> {
     /// Quantization step. `0.0` (the default) means continuous; any positive
     /// value snaps the slider, scrub, and typed-value commits to multiples of
     /// `step` from `min`. Used when the wire takes a value but only certain
-    /// quantized values produce well-defined behavior — e.g. the circle
+    /// quantized values produce well-defined behavior — e.g. the shape
     /// node's `frequency`, where only integer values yield a seam-free
-    /// closed shape. Frontend honors the snap; the engine should still
+    /// closed silhouette. Frontend honors the snap; the engine should still
     /// defend by quantizing inputs in the node evaluator (a wired-in float
     /// from a curve or pen-pressure modulator bypasses the slider).
     #[serde(default)]
@@ -176,7 +176,7 @@ pub struct PortDef<W: WireKind> {
     /// value is outside the allowed list. This is purely a UI affordance —
     /// the engine still accepts and reads the port's value normally; it
     /// just stops showing the user a control they wouldn't act on.
-    /// Used by the Circle node to hide algorithm-specific knobs (Perlin's
+    /// Used by the Shape node to hide algorithm-specific knobs (Perlin's
     /// `seed`, Superformula's `n1`/`n2`/`n3`) under the wrong algorithm.
     #[serde(default)]
     pub visible_when: Option<(String, Vec<i32>)>,

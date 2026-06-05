@@ -454,18 +454,18 @@ mod tests {
     fn port_overrides_survive() {
         let registry = registry();
         let mut graph = crate::brush::default_graph();
-        let circle = *graph
+        let shape = *graph
             .nodes()
             .iter()
-            .find(|(_, n)| n.type_id == "circle")
+            .find(|(_, n)| n.type_id == "shape")
             .map(|(id, _)| id)
-            .expect("default has a circle node");
-        graph.set_port_default(circle, "softness", 0.37).unwrap();
-        graph.expose_port(circle, "softness").unwrap();
-        let circle_key = exposed_port_key(circle, "softness");
+            .expect("default has a shape node");
+        graph.set_port_default(shape, "softness", 0.37).unwrap();
+        graph.expose_port(shape, "softness").unwrap();
+        let shape_key = exposed_port_key(shape, "softness");
         graph
             .set_exposed_port_meta(
-                &circle_key,
+                &shape_key,
                 "Softness".into(),
                 "Edge falloff".into(),
                 "fa-solid fa-circle-half-stroke".into(),
@@ -478,19 +478,19 @@ mod tests {
             .unwrap()
             .into_graph(registry)
             .unwrap();
-        let restored_circle = restored
+        let restored_shape = restored
             .nodes()
             .values()
-            .find(|n| n.type_id == "circle")
-            .expect("restored graph has a circle node");
-        let port = restored_circle
+            .find(|n| n.type_id == "shape")
+            .expect("restored graph has a shape node");
+        let port = restored_shape
             .ports
             .iter()
             .find(|p| p.name == "softness")
             .unwrap();
         assert!((port.default - 0.37).abs() < 1e-6);
-        assert!(restored.is_port_exposed(restored_circle.id, "softness"));
-        let restored_key = exposed_port_key(restored_circle.id, "softness");
+        assert!(restored.is_port_exposed(restored_shape.id, "softness"));
+        let restored_key = exposed_port_key(restored_shape.id, "softness");
         let meta = &restored.exposed_ports[&restored_key];
         assert_eq!(meta.label, "Softness");
         assert_eq!(meta.description, "Edge falloff");
@@ -521,7 +521,7 @@ nodes:
         let yaml = "\
 nodes:
   1:
-    type: circle
+    type: shape
     params:
       this_param_does_not_exist: 1
 ";
@@ -538,7 +538,7 @@ nodes:
         let yaml = "\
 nodes:
   1:
-    type: circle
+    type: shape
     params:
       algorithm: [[0.0, 0.0], [1.0, 1.0]]
 ";

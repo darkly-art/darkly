@@ -10,7 +10,7 @@ nodes:
   3:
     type: split_color
   4:
-    type: circle
+    type: shape
     params:
       algorithm: 2
     port_defaults:

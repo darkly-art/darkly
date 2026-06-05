@@ -1,6 +1,6 @@
 //! End-to-end tests for wire-boundary range remap (`PortDef::natural_range`).
 //!
-//! The bug that motivated this: `random.value → circle.seed` produced the
+//! The bug that motivated this: `random.value → shape.seed` produced the
 //! same seed every dab because random's output (`[-1, 1]`) collapsed to 0
 //! when seed cast it through `as u32` (range `[0, 1024]`). The fix is that
 //! when both ends of a wire declare a `natural_range`, the runner remaps
@@ -49,7 +49,7 @@ fn run_one_dab(runner: &mut BrushGraphRunner, pressure: f32, dab_index: u32) {
 /// natural PRNG range), no longer the old `[-1, 1]` remap, and produces a
 /// fresh value each dab. The previous behavior — `random` outputting in
 /// `[-1, 1]` and any downstream `as u32` cast collapsing it to 0 — is what
-/// caused `random → circle.seed` to repeat.
+/// caused `random → shape.seed` to repeat.
 #[test]
 fn random_outputs_unit_range_and_varies_per_dab() {
     let registry = registry();
@@ -87,7 +87,7 @@ fn random_outputs_unit_range_and_varies_per_dab() {
 /// `random → seed-style port (natural_range [0, 1024])` produces values
 /// spread across the destination range, varying per dab.
 ///
-/// We can't observe `circle.seed` directly without a GPU, but the runner's
+/// We can't observe `shape.seed` directly without a GPU, but the runner's
 /// remap step happens at `gather_inputs` — same code path for CPU and GPU
 /// nodes. So we exercise it through a CPU node (`multiply`) with a
 /// per-instance override on its `a` port: `natural_range = Some((0, 1024))`.
@@ -102,7 +102,7 @@ fn random_to_wide_range_input_remaps() {
     let random = graph.add_node("random", random_reg.ports.clone(), random_params());
 
     // Clone multiply's ports, then widen the `a` input's natural_range to
-    // simulate wiring random into something like `circle.seed`.
+    // simulate wiring random into something like `shape.seed`.
     let multiply_reg = registry.get("multiply").unwrap();
     let mut multiply_ports = multiply_reg.ports.clone();
     for p in multiply_ports.iter_mut() {
@@ -377,7 +377,7 @@ fn identity_range_is_a_noop() {
 /// Bipolar destination range: `random [0, 1] → [-100, 100]` spans both
 /// halves, verifying the affine remap handles a negative `dst_min`.
 ///
-/// Note: radian-typed ports (`circle.rotation`, `liquify.direction`, etc.)
+/// Note: radian-typed ports (`shape.rotation`, `liquify.direction`, etc.)
 /// deliberately do NOT have a `natural_range` — radians are a unit, not
 /// a normalized signal, and wires like `pen.drawing_angle → rotation`
 /// must preserve them exactly. This test uses an abstract `[-100, 100]`
