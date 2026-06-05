@@ -17,7 +17,6 @@ nodes:
       amplitude: 0.5
       frequency: 3.0
       rotation: 5.750458
-      rotation_input: 4.7
       softness: 0.32
   5:
     type: multiply

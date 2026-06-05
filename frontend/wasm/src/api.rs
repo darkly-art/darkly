@@ -2215,20 +2215,18 @@ fn js_f32_quad(obj: &JsValue, key: &str) -> Option<[f32; 4]> {
     ])
 }
 
-/// Serialize `engine.brush_cursor_preview_info()` as a JS `{ halfExtent, rotation }`
+/// Serialize `engine.brush_cursor_preview_info()` as a JS `{ halfExtent }`
 /// POJO, or `null` when the active graph has no preview source.
 fn brush_cursor_preview_info_as_js(engine: &DarklyEngine) -> JsValue {
     #[derive(serde::Serialize)]
     struct Info {
         #[serde(rename = "halfExtent")]
         half_extent: [f32; 2],
-        rotation: f32,
     }
     match engine.brush_cursor_preview_info() {
         Some(info) => {
             let payload = Info {
                 half_extent: info.half_extent_canvas_px,
-                rotation: info.rotation_rad,
             };
             serde_wasm_bindgen::to_value(&payload).unwrap_or(JsValue::NULL)
         }

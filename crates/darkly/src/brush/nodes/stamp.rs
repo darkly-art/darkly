@@ -27,6 +27,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "shape",
             display_name: "Stamp Tip",
+            description: "Combines a tip shape with a color to form a colored brush mark. Feed this into a Paint output to deposit it on the canvas.",
             ports: vec![
                 PortDef::input("tip", BrushWireType::Scalar)
                     .with_natural_range(0.0, 1.0)

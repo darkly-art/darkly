@@ -57,6 +57,7 @@ export interface NodeTypeInfo {
     type_id: string;
     category: string;
     display_name: string;
+    description: string;
     ports: PortDef[];
     params: any[];
     is_gpu: boolean;

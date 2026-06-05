@@ -29,6 +29,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "input",
             display_name: "Random",
+            description: "A new random value for every brush mark — useful for jittering size, color, angle, etc.",
             ports: vec![PortDef::output("value", BrushWireType::Scalar)
                 .with_natural_range(0.0, 1.0)
                 .with_description("Random value in [0, 1)")],

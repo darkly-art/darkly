@@ -49,6 +49,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "math",
             display_name: "Switch",
+            description: "Toggle that picks one of two inputs. Wire one side only and it acts as an on/off switch for that branch.",
             ports: vec![
                 PortDef::input("in_0_scalar", BrushWireType::Scalar)
                     .with_description("Routed to out_scalar when select=0"),

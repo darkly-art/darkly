@@ -33,7 +33,6 @@ const LARGE_ON_SCREEN = 40;
 
 interface BrushCursorPreviewInfo {
     halfExtent: [number, number];
-    rotation: number;
 }
 
 /** Scale strength with on-screen stamp size: tiny stamps get more contrast
@@ -118,7 +117,7 @@ export function pushHoverOverlay(handle: any, pose: PenPose, cx: number, cy: num
             FLAG_CANVAS_SPACE | FLAG_SOFT_CONTRAST,
             [cx, cy],
             info.halfExtent,
-            { modeParam: previewStrength(info.halfExtent), rotation: info.rotation },
+            { modeParam: previewStrength(info.halfExtent) },
         ),
     ]);
     lastHover = { cx, cy, pose };

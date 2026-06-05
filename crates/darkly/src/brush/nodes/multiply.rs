@@ -15,6 +15,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "math",
             display_name: "Multiply",
+            description: "Multiplies two values — use it to scale one signal by another, e.g. fade pressure by texture.",
             ports: vec![
                 PortDef::input("a", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)

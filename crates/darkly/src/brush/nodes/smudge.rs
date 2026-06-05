@@ -283,6 +283,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "output",
             display_name: "Smudge",
+            description: "Output that drags existing canvas pixels along the stroke, like smearing wet paint with a finger.",
             ports: vec![
                 PortDef::input("position", BrushWireType::Vec2)
                     .with_description("Canvas-pixel pen tip for this dab"),
@@ -607,15 +608,14 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
 
     /// Hover-cursor preview. Routes through the shared preview helper.
     /// Smudge has no rotation port — the cursor is symmetric, and
-    /// rotating it wouldn't carry meaningful information for the
-    /// user. Publishes `rotation_rad: 0.0`.
+    /// rotating it wouldn't carry meaningful information for the user.
     fn render_cursor_preview(
         &self,
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
-        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius, 0.0);
+        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius);
         vec![]
     }
 

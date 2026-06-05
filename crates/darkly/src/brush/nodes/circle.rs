@@ -45,6 +45,7 @@ pub fn register() -> BrushNodeRegistration {
         type_id: TYPE_ID,
         category: "shape",
         display_name: "Circle",
+        description: "Soft round shape used as the brush tip.",
         ports: vec![
             PortDef::input("softness", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)

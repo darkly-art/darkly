@@ -45,6 +45,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "texture",
             display_name: "Noise",
+            description: "Procedural noise sampled where the brush touches the canvas — for grain, jitter, and texture.",
             ports: vec![
                 PortDef::output("color", BrushWireType::Vec4).with_description(
                     "Grayscale RGBA value noise at the fragment's canvas-pixel position",

@@ -55,6 +55,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "input",
             display_name: "Pen Input",
+            description: "Live data from the stylus: pressure, tilt, velocity, and position along the stroke.",
             ports: vec![
             PortDef::output("pressure", BrushWireType::Scalar)
                 .with_natural_range(0.0, 1.0)
