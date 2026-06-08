@@ -134,6 +134,13 @@ class BrushGraphState {
     /** Whether the brush builder panel is open. */
     isOpen = $state(false);
 
+    /** Whether the brush builder panel is expanded to fill the window. The
+     *  fullscreen surface is the whole bottom area (tool-options strip +
+     *  builder), so the paint tool-options bar stays pinned at the top while
+     *  the builder fills the space below. Reset to `false` when the panel
+     *  collapses. */
+    fullscreen = $state(false);
+
     /** Node currently being dragged (for drag-to-connect). */
     draggingFrom = $state<{ node: number; port: string; dir: 'Input' | 'Output' } | null>(null);
 

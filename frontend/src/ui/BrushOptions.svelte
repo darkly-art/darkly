@@ -18,6 +18,9 @@
     function toggleBuilder() {
         ensureInit();
         brushGraph.isOpen = !brushGraph.isOpen;
+        // Leaving the builder also leaves fullscreen — otherwise reopening
+        // would silently spring back to a window-filling panel.
+        if (!brushGraph.isOpen) brushGraph.fullscreen = false;
     }
 
     function selectBrush(brush: BrushInfo) {

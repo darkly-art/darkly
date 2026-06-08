@@ -184,27 +184,9 @@
         // Prevent browser from synthesising fling/scroll gestures from pen
         // input — touch-action:none only covers touch, not pen (Chromium bug).
         e.preventDefault();
-        // TEMP cursor-bug diagnostic — remove once root cause is identified.
-        console.log('[onPointerDown]', {
-            pointerType: e.pointerType,
-            buttons: e.buttons,
-            pressure: e.pressure,
-            cursorBefore: canvas.style.cursor,
-            toolCursor: inst.toolCursor,
-            navCursor: nav.cursor,
-            activeTool: inst.activeToolId,
-        });
 
-        // Touch: always capture and track for gesture detection.
-        // Touchscreen pens on some Linux/Chromium setups report as 'touch'
-        // rather than 'pen'; force `cursor: none` imperatively here so the
-        // Chromium cursor-snapshot-at-setPointerCapture quirk doesn't leave
-        // the OS pointer stuck following the pen for the whole stroke.
-        // Touchscreens don't use a hover cursor anyway — Svelte's reactive
-        // style:cursor binding will reassert the correct value once capture
-        // ends.
+        // Touch: always capture and track for gesture detection
         if (e.pointerType === 'touch') {
-            canvas.style.cursor = 'none';
             canvas.setPointerCapture(e.pointerId);
             if (nav.onTouchPointerDown(e)) {
                 // Touch consumed by navigation — end any in-progress tool stroke
@@ -233,32 +215,29 @@
         // active tool sees it — unless the tool claimed it.
         if (!claimed && dispatchDrag('canvas', e, { x: pos.x, y: pos.y })) return;
 
+        canvas.setPointerCapture(e.pointerId);
+
         if (!ctx) return;
         tool?.onPointerDown(ctx, e, pos.x, pos.y);
-        // Chromium snapshots the element's CSS cursor at setPointerCapture
-        // time and ignores `style:` updates until capture ends or the
-        // captured pointer crosses the element boundary. Set the cursor
-        // imperatively here — Svelte's batched reactive binding for
-        // style:cursor won't have landed before capture, leaving the OS
-        // pointer stuck visible for the whole stroke. The reactive
-        // binding takes over again after capture ends.
-        canvas.style.cursor = inst.toolCursor ?? nav.cursor;
-        // EXPERIMENT 3 — skip setPointerCapture for pen entirely. If the
-        // visible cursor is Chromium's captured-pen-pointer cursor (locked
-        // at capture time), not calling capture should make it follow CSS
-        // normally. Trade-off: if the pen leaves the canvas mid-stroke,
-        // events stop reaching us until it returns. Acceptable for the
-        // diagnostic; we'll re-introduce capture properly once root cause
-        // is confirmed.
-        if (e.pointerType !== 'pen') {
-            canvas.setPointerCapture(e.pointerId);
-        }
-        inst.requestFrame();
-    }
 
-    function clearPenCursorOverride() {
-        document.documentElement.style.cursor = '';
-        document.body.style.cursor = '';
+        // Chromium/Linux touchscreen-pen quirk: when the pen starts a
+        // stroke AND the OS mouse cursor happens to be over the canvas,
+        // Chromium warps the mouse cursor to the pen position and keeps
+        // it following the pen for the whole stroke. CSS cursor:none on
+        // canvas/body/html doesn't suppress it; only a change to which
+        // element the cursor resolves against does. Drop canvas out of
+        // pointer hit-test for one frame at stroke start so Chromium
+        // re-resolves the cursor to the parent (.canvas-container) and
+        // doesn't latch it to the pen. The captured pen pointer continues
+        // to flow to canvas via setPointerCapture.
+        if (e.pointerType === 'pen') {
+            canvas.style.pointerEvents = 'none';
+            requestAnimationFrame(() => {
+                canvas.style.pointerEvents = '';
+            });
+        }
+
+        inst.requestFrame();
     }
 
     function onPointerMove(e: PointerEvent) {
@@ -294,7 +273,6 @@
 
     function onPointerUp(e: PointerEvent) {
         e.preventDefault();
-        clearPenCursorOverride();
 
         // Touch: clean up gesture state; skip tool dispatch if gesture occurred
         if (e.pointerType === 'touch') {
@@ -317,7 +295,6 @@
 
     function onPointerCancel(e: PointerEvent) {
         e.preventDefault();
-        clearPenCursorOverride();
 
         // Pen/touch can fire pointercancel instead of pointerup (pen lifted
         // out of range, system gesture, browser intervention).  Clean up

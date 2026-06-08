@@ -198,6 +198,9 @@ export const brushTool: Tool = {
     },
 
     onDeactivate(ctx) {
+        // Leaving the brush tool drops the builder's fullscreen mode so the
+        // pinned bottom-area overlay can't outlive the panel that owns it.
+        brushGraph.fullscreen = false;
         ctx.handle.clear_overlay();
         // Reset engine blend mode so a future paint-capable tool (or a
         // direct WASM call) doesn't inherit our erase state.

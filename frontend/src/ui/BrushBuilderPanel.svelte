@@ -26,9 +26,15 @@
 </script>
 
 {#if brushGraph.isOpen}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="resize-handle" onpointerdown={handleResizeStart}></div>
-    <div class="builder-panel" style="height: {builderHeight}vh">
+    {#if !brushGraph.fullscreen}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="resize-handle" onpointerdown={handleResizeStart}></div>
+    {/if}
+    <div
+        class="builder-panel"
+        class:fullscreen={brushGraph.fullscreen}
+        style={brushGraph.fullscreen ? '' : `height: ${builderHeight}vh`}
+    >
         <BrushBuilder />
     </div>
 {/if}
@@ -49,5 +55,14 @@
     .builder-panel {
         min-height: 100px;
         border-bottom: 1px solid var(--bg-hover);
+    }
+
+    /* In fullscreen the bottom-area is pinned to the window (see
+     * ToolOptionsBar); the builder fills everything below the tool-options
+     * strip rather than a fixed vh height. */
+    .builder-panel.fullscreen {
+        flex: 1;
+        min-height: 0;
+        border-bottom: none;
     }
 </style>
