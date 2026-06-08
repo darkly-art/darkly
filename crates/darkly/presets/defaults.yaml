@@ -2,14 +2,22 @@
 #
 #   user override → overlay[active editor] → defaults  (this file)
 #
-# Hotkeys / mouse_clicks inclusion rule: if all three reference editors
-# (Krita, Photoshop, GIMP) have a binding for an action — whether or not
-# they happen to agree on the key — the binding lives per-editor in
-# krita.yaml / photoshop.yaml / gimp.yaml, NOT here. defaults.yaml only
-# carries:
-#   - Darkly-original actions (no reference-editor prior art), and
-#   - actions where fewer than three reference editors have an opinion
-#     (Darkly picks a sensible default; an overlay may still override).
+# Hotkeys / mouse_clicks inclusion rule:
+#
+#   1. A binding lives here iff Krita, Photoshop, and GIMP all agree on its
+#      value. Verify against the actual editor sources (krita/, gimp/, and
+#      Photoshop docs) — not against memory or web claims — before adding.
+#
+#   2. Darkly-original actions (no reference editor has any prior art) also
+#      live here. Mark them explicitly so reviewers don't mistake them for #1.
+#
+#   3. Anything else — any binding where the editors disagree, or where some
+#      editors have an opinion and others don't — must be split into each
+#      per-editor overlay (krita.yaml / photoshop.yaml / gimp.yaml). The
+#      `user → overlay → defaults` fallthrough makes silent inheritance the
+#      default; this rule keeps the per-editor file authoritative for any
+#      action that any editor would assign a key to, so an overlay can't
+#      accidentally reuse the same key for a different action.
 #
 # Settings inclusion rule: Darkly-specific configuration (canvas size,
 # animation rates, theme, …) that has no direct reference-editor analog
@@ -17,53 +25,42 @@
 # tools.colorPickerSampleSource) are split into the per-editor overlays.
 
 hotkeys:
-  # Photoshop binds Edit > Preferences to $mod+K; Krita/GIMP have no
-  # default. Darkly picks the macOS preferences convention.
-  openSettings: $mod+Comma
-  # Photoshop & GIMP both have export (Photoshop: $mod+Alt+W for "Export
-  # As"; GIMP: $mod+Shift+E for "Export As…"). Krita's `file_export_file`
-  # is explicitly `none`. Darkly picks GIMP's binding.
-  exportImage: $mod+Shift+KeyE
-  # Photoshop binds Lasso to L and Polygonal Lasso to Shift+L; Krita's
-  # selection-tool .action files have empty <shortcut>; GIMP's analog is
-  # "Free Select" (KeyF) with no polygonal counterpart. Darkly inherits
-  # Photoshop's choice; per-editor overlays can override.
-  lassoSelectTool: KeyL
-  polygonSelectTool: Shift+KeyL
-  # Krita binds View > Mirror View to M; Photoshop/GIMP have no default.
-  mirrorViewH: KeyM
-  # Darkly-original (brush builder).
+  # Universal edit / clipboard / file bindings — all three editors agree.
+  # (redo, pasteInPlace differ between editors and live per-overlay.)
+  undo: $mod+KeyZ
+  copy: $mod+KeyC
+  cut: $mod+KeyX
+  paste: $mod+KeyV
+  saveDocument: $mod+KeyS
+  saveDocumentAs: $mod+Shift+KeyS
+  open: $mod+KeyO
+  selectAll: $mod+KeyA
+  # Floating-selection commit / cancel. Enter / Escape are the universal
+  # commit/cancel keys across PS, Krita, and GIMP's floating-selection
+  # handlers.
+  clearSelectionContents: Delete
+  commitFloating: Enter
+  cancelFloating: Escape
+  # Colors — all three editors use D to reset, X to swap.
+  resetColors: KeyD
+  swapColors: KeyX
+  # Brush parameter hotkeys — `[` / `]` is the universal sizing convention.
+  brushSizeUp: BracketRight
+  brushSizeDown: BracketLeft
+  # Darkly-original (brush builder) — no reference-editor prior art.
   addBrushNode: Shift+KeyA
-  # PS + Krita both bind Quick Group to Ctrl+G. GIMP has no default
-  # (the Layer menu's group commands aren't bound). With layers
-  # selected, the action handler wraps them in the new group; with
-  # nothing selected, creates an empty group.
-  newGroup: $mod+KeyG
-  # PS + Krita both bind Merge Down to Ctrl+E. GIMP's only layer-merge
-  # default is Ctrl+M for "Merge Visible Layers" — semantically
-  # different. The `mergeDown` action handler is selection-aware:
-  # with ≥2 selected it bakes the selection via merge_layers, with 1
-  # it does the classic single-layer merge-down. One hotkey, two ops.
-  mergeDown: $mod+KeyE
-  # `flatten` and `addMask` are intentionally left unbound here:
-  #   - addMask: no reference editor has a default key (PS, Krita,
-  #     and GIMP all expose mask creation through a button click).
-  #     Inventing a Darkly-only binding would surprise users with no
-  #     prior-art expectation, and commit a key slot we'd later have
-  #     to fight if we register e.g. GIMP's Ctrl+M "Merge Visible".
+  # `flatten` and `addMask` are intentionally left unbound:
+  #   - addMask: no reference editor has a default key (PS, Krita, and
+  #     GIMP all expose mask creation through a button click). Inventing
+  #     a Darkly-only binding would surprise users with no prior-art
+  #     expectation, and commit a key slot we'd later have to fight if
+  #     we register e.g. GIMP's Ctrl+M "Merge Visible".
   #   - flatten: Krita binds Ctrl+Shift+E to "Flatten image" (the
   #     whole-canvas composite, which is Darkly's `flatten_image`
   #     engine op — not yet a registered action). Borrowing that key
   #     for Darkly's single-layer flatten (apply-mask / flatten-group)
   #     would mislead Krita users. If someone registers `flattenImage`
   #     as an action, that's where Ctrl+Shift+E belongs.
-
-mouse_clicks:
-  # Photoshop and Krita both use Alt+click on a layer/mask thumbnail to
-  # isolate; GIMP has no direct equivalent.
-  isolateLayer:
-    - layerThumb:alt+click
-    - maskThumb:alt+click
 
 settings:
   # Canvas defaults.
@@ -89,7 +86,7 @@ settings:
   ui.brushBuilder.previewWidth: 320
   ui.brushBuilder.previewHeight: 120
   # Input.
-  input.fingerPainting: false
+  input.fingerPainting: true
   # Editing.
   edit.activateTransformAfterPaste: true
   # Colors.

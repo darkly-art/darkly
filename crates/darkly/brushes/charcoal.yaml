@@ -91,7 +91,7 @@ exposed_ports:
     description: Spin the shape around its centre. Wire a changing signal into Rotation Input instead if you want it to move as you draw.
     icon: fa-solid fa-rotate
   '13.select':
-    label: Freeze Rotation
+    label: Lock Rotation
     description: Routes one of two inputs to the output. If the chosen input is unconnected, downstream falls back to its own port default.
-    icon: fa-solid fa-snowflake
+    icon: fa-solid fa-lock
   '7.flow': {}
