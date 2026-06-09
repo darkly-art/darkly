@@ -50,6 +50,7 @@ use crate::gpu::readback::ReadbackScheduler;
 use crate::gpu::region_store::{EntryPixels, RegionScratch};
 use crate::gpu::selection::SelectionPipelines;
 use crate::gpu::transform::FloatingContent;
+use crate::gpu::veil_preview::VeilPreviewRenderer;
 use crate::gpu::view::ViewTransform;
 use crate::layer::LayerId;
 use crate::undo::UndoStack;
@@ -237,6 +238,16 @@ pub(crate) enum ReadbackContext {
     UndoRegionReady {
         cell: std::rc::Rc<std::cell::RefCell<EntryPixels>>,
     },
+    /// Async readback of one veil preview frame, rendered offscreen over the
+    /// bundled sample image (`gpu::veil_preview`). Completion drops the raw
+    /// RGBA bytes into `veil_preview_frames[type_id][frame_idx]`; the frontend
+    /// drains all `total` frames once they land and plays them as a loop. The
+    /// readback bytes are `PREVIEW_WIDTH × PREVIEW_HEIGHT` RGBA.
+    VeilPreviewFrame {
+        type_id: &'static str,
+        frame_idx: u32,
+        total: u32,
+    },
 }
 
 /// Cached thumbnail RGBA bytes per node id. Keyed uniformly across layers,
@@ -379,6 +390,17 @@ pub struct DarklyEngine {
     /// `set_preview_theme()` when the UI theme toggles.
     pub(crate) preview_theme_fg: [f32; 4],
     pub(crate) preview_theme_bg: [f32; 4],
+
+    // --- Veil picker preview ---
+    /// Offscreen renderer for the veil picker's looping thumbnail previews.
+    /// Reused across veils; holds its own preview-sized scratch textures and
+    /// is fully independent of the live veil chain and document.
+    pub(crate) veil_preview_renderer: VeilPreviewRenderer,
+    /// Completed preview frames per veil type. Slots fill in asynchronously as
+    /// `ReadbackContext::VeilPreviewFrame` readbacks land; `poll_veil_preview`
+    /// hands back the frames once every slot is `Some`. Keyed by the registry's
+    /// `&'static str` type id.
+    pub(crate) veil_preview_frames: HashMap<&'static str, Vec<Option<Vec<u8>>>>,
 
     // --- Brush Library ---
     pub(crate) brush_library: BrushLibrary,
@@ -542,6 +564,8 @@ impl DarklyEngine {
             // `set_preview_theme()` as soon as the UI loads.
             preview_theme_fg: [1.0, 1.0, 1.0, 1.0],
             preview_theme_bg: [0.0, 0.0, 0.0, 1.0],
+            veil_preview_renderer: VeilPreviewRenderer::new(),
+            veil_preview_frames: HashMap::new(),
             brush_library: {
                 let mut lib = BrushLibrary::new();
                 for brush in crate::brush::builtin_brushes::all() {

@@ -146,6 +146,10 @@ These are features that are helpful or essential to digital art workflows. They'
 - [ ] Posterize
 - [ ] Gradient map
 
+### Veils
+- [x] Veils system (stackable viewport post-process effects: frozen, grain, lens blur, monochrome, painting, pixelate, rainy glass, VHS, watercolor)
+- [x] Veil picker with live animated previews (rendered offscreen on the sample image, cached per session)
+
 ### Transform & canvas
 - [x] Affine transform tool (translate / scale / rotate via floating content)
 - [ ] Canvas resize

@@ -63,6 +63,7 @@ use darkly::engine::{DarklyEngine, PickSource, StrokeOp};
 use darkly::gpu::context::{GpuContext, GpuDevice};
 use darkly::gpu::overlay::OverlayPrimitive;
 use darkly::gpu::params::{ParamDef, ParamValue};
+use darkly::gpu::veil_preview::{PREVIEW_FPS, PREVIEW_HEIGHT, PREVIEW_WIDTH};
 use darkly::layer::LayerId;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsError;
@@ -1649,6 +1650,49 @@ impl DarklyHandle {
         };
         let pv = js_to_param_values(&params, e.veil_param_defs(&type_id));
         e.update_veil(index as usize, &pv)
+    }
+
+    /// Begin generating the veil picker's looping thumbnail preview for a veil
+    /// type, rendered offscreen over the bundled sample image. No-op if the
+    /// frames are already cached or a generation is in flight. The frontend
+    /// drives `render()` (its rAF loop) and polls `poll_veil_preview` until the
+    /// frames land.
+    pub fn start_veil_preview(&self, veil_type: &str) {
+        self.flush_if_needed();
+        self.engine.borrow_mut().start_veil_preview(veil_type);
+    }
+
+    /// Drain the completed preview for a veil type. Returns
+    /// `{ width, height, fps, frames: Uint8Array[] }` (each frame a tightly
+    /// packed RGBA buffer) once every frame has landed, or `null` while the
+    /// readbacks are still in flight.
+    pub fn poll_veil_preview(&self, veil_type: &str) -> JsValue {
+        self.flush_if_needed();
+        let Some(frames) = self.engine.borrow().poll_veil_preview(veil_type) else {
+            return JsValue::NULL;
+        };
+        let obj = js_sys::Object::new();
+        js_sys::Reflect::set(
+            &obj,
+            &"width".into(),
+            &JsValue::from_f64(PREVIEW_WIDTH as f64),
+        )
+        .ok();
+        js_sys::Reflect::set(
+            &obj,
+            &"height".into(),
+            &JsValue::from_f64(PREVIEW_HEIGHT as f64),
+        )
+        .ok();
+        js_sys::Reflect::set(&obj, &"fps".into(), &JsValue::from_f64(PREVIEW_FPS as f64)).ok();
+        let arr = js_sys::Array::new();
+        for frame in &frames {
+            let bytes = js_sys::Uint8Array::new_with_length(frame.len() as u32);
+            bytes.copy_from(frame);
+            arr.push(&bytes);
+        }
+        js_sys::Reflect::set(&obj, &"frames".into(), &arr).ok();
+        obj.into()
     }
 
     // --- Brush graph (direct — return results) ---

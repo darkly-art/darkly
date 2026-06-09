@@ -5,7 +5,11 @@ use super::types::{
     ParamInfo, ToolTypeInfo, VeilInfo, VeilTypeInfo,
 };
 use super::DarklyEngine;
+use super::ReadbackContext;
+use crate::coord::LayerRect;
 use crate::gpu::params::{ParamDef, ParamValue};
+use crate::gpu::veil::Veil;
+use crate::gpu::veil_preview::{ANIMATED_FRAMES, PREVIEW_HEIGHT, PREVIEW_WIDTH};
 
 impl DarklyEngine {
     // --- Veils ---
@@ -48,6 +52,129 @@ impl DarklyEngine {
             .registry_mut()
             .create_veil(type_id, params, &self.gpu.device, format);
         chain.update_veil(&self.gpu.device, &self.gpu.queue, index, new_veil);
+    }
+
+    // --- Picker previews ---
+
+    /// Begin generating the looping thumbnail preview for `type_id` — the veil
+    /// applied to the bundled sample image, captured as a sequence of frames.
+    /// Idempotent: a no-op if the frames are already cached or a generation is
+    /// already in flight. Frames land asynchronously; retrieve them with
+    /// [`poll_veil_preview`](Self::poll_veil_preview).
+    ///
+    /// Fully isolated from the live veil chain and the document: it builds a
+    /// fresh veil instance with default params and renders into the preview
+    /// renderer's own textures, so the user's active veils, compositor surface,
+    /// and canvas are never touched.
+    pub fn start_veil_preview(&mut self, type_id: &str) {
+        // Resolve to the registry's 'static id — it keys both the frame cache
+        // and the readback context.
+        let Some(static_id) = self
+            .compositor
+            .veil_chain()
+            .registry()
+            .static_type_id(type_id)
+        else {
+            return;
+        };
+
+        // Already complete? (non-empty and every slot filled)
+        if self
+            .veil_preview_frames
+            .get(static_id)
+            .is_some_and(|f| !f.is_empty() && f.iter().all(Option::is_some))
+        {
+            return;
+        }
+        // Already in flight? Don't queue a duplicate generation.
+        if self.readbacks.any(
+            |c| matches!(c, ReadbackContext::VeilPreviewFrame { type_id: t, .. } if *t == static_id),
+        ) {
+            return;
+        }
+
+        let format = self.compositor.veil_chain().accum_format();
+        let defaults: Vec<ParamValue> = self
+            .compositor
+            .veil_chain()
+            .registry()
+            .param_defs(static_id)
+            .iter()
+            .map(|d| d.default_value())
+            .collect();
+
+        // Build the veil + cache and upload the sample. Borrow-split the
+        // disjoint fields the preview touches (registry on the compositor, the
+        // GPU context, the renderer) so they don't alias `self`.
+        let (mut veil, cache) = {
+            let Self {
+                compositor,
+                gpu,
+                veil_preview_renderer,
+                ..
+            } = self;
+            let registry = compositor.veil_chain_mut().registry_mut();
+            veil_preview_renderer.prepare(
+                &gpu.device,
+                &gpu.queue,
+                registry,
+                static_id,
+                &defaults,
+                format,
+            )
+        };
+
+        let total = if veil.needs_animation() {
+            ANIMATED_FRAMES
+        } else {
+            1
+        };
+        let dt = self.veil_preview_renderer.frame_dt();
+        self.veil_preview_frames
+            .insert(static_id, vec![None; total as usize]);
+
+        let rect = LayerRect::from_xywh(0, 0, PREVIEW_WIDTH, PREVIEW_HEIGHT);
+        for frame_idx in 0..total {
+            // Frame 0 captures the initial state; advance animated veils between
+            // frames so the loop shows motion. Each frame renders into the same
+            // output texture and copies to its own staging buffer in the same
+            // submission, so the readback captures that frame before the next
+            // overwrites it.
+            if frame_idx > 0 && veil.needs_animation() {
+                veil.update_time(&self.gpu.queue, &cache, dt);
+            }
+            let veil_ref: &dyn Veil = veil.as_ref();
+            self.gpu.encode("veil-preview-frame", |encoder| {
+                self.veil_preview_renderer
+                    .encode_frame(encoder, veil_ref, &cache);
+                let request = crate::gpu::readback::request_readback(
+                    &self.gpu.device,
+                    encoder,
+                    self.veil_preview_renderer.output_texture(),
+                    format,
+                    rect,
+                );
+                self.readbacks.submit(
+                    request,
+                    ReadbackContext::VeilPreviewFrame {
+                        type_id: static_id,
+                        frame_idx,
+                        total,
+                    },
+                );
+            });
+        }
+    }
+
+    /// Return the completed preview frames for `type_id` once every frame has
+    /// landed, else `None`. Each frame is `PREVIEW_WIDTH × PREVIEW_HEIGHT`
+    /// tightly-packed RGBA8.
+    pub fn poll_veil_preview(&self, type_id: &str) -> Option<Vec<Vec<u8>>> {
+        let frames = self.veil_preview_frames.get(type_id)?;
+        if frames.is_empty() || frames.iter().any(Option::is_none) {
+            return None;
+        }
+        Some(frames.iter().map(|f| f.clone().unwrap()).collect())
     }
 
     // --- Queries ---
