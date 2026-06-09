@@ -39,7 +39,7 @@
                         <button
                             class="node-type-btn"
                             onclick={() => { onaddnode(nt.type_id); isOpen = false; }}
-                            title={nt.type_id}
+                            title={nt.description || nt.display_name}
                         >
                             {nt.display_name}
                         </button>

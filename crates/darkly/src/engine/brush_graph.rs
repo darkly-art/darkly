@@ -26,7 +26,7 @@ enum ChangeKind {
     /// Exposed-port scrub on a port marked `persist_in_thumbnail` — its
     /// value bleeds through to the dab thumbnail render, so both
     /// version counters need to bump to invalidate both preview caches.
-    /// Used for orientation knobs like `circle.rotation`.
+    /// Used for orientation knobs like `shape.rotation`.
     ThumbnailRelevantScrub,
     /// User-facing exposed-port scrub on a port the editor preview
     /// pipeline actually reads (size, opacity, hardness, …). Bumps only
@@ -889,108 +889,114 @@ impl DarklyEngine {
         self.brush_blend_mode = mode;
     }
 
-    /// Return info about all exposed ports in the active brush graph.
+    /// Return info about every brush-bar entry in the active brush graph,
+    /// in the dict's insertion order (which is the user-facing display
+    /// order — the brush-bar node lets the author drag-reorder).
     ///
-    /// Scans all nodes for input ports with `exposed == true`.
-    ///
-    /// The result is ordered by auto-layout position (top-to-bottom,
-    /// left-to-right) for a stable order in the properties panel.
+    /// Entries that reference a node/port no longer present, or whose
+    /// target port has an incoming connection (the user can't scrub a
+    /// wire-driven value), are skipped silently.
     pub fn brush_exposed_ports(&self) -> Vec<ExposedPortInfo> {
         let registry = crate::brush::registry();
         let tool = self.tool_session.read();
         let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
-        let layout = brush.graph.auto_layout();
-        let mut result: Vec<ExposedPortInfo> = Vec::new();
+        let mut result: Vec<ExposedPortInfo> = Vec::with_capacity(brush.graph.exposed_ports.len());
 
-        for node in brush.graph.nodes().values() {
+        for (key, meta) in &brush.graph.exposed_ports {
+            // Key shape: "<node_id>.<port_name>".
+            let Some((nid_str, port_name)) = key.split_once('.') else {
+                continue;
+            };
+            let Ok(node_id_raw) = nid_str.parse::<u64>() else {
+                continue;
+            };
+            let node_id = NodeId(node_id_raw);
+            let Some(node) = brush.graph.nodes().get(&node_id) else {
+                continue;
+            };
+            let Some(port) = node
+                .ports
+                .iter()
+                .find(|p| p.name == port_name && p.dir == PortDir::Input)
+            else {
+                continue;
+            };
+
+            // A connected input is driven by its wire, not the user.
+            if brush
+                .graph
+                .connections
+                .iter()
+                .any(|c| c.to.node == node_id && c.to.port == port_name)
+            {
+                continue;
+            }
+
             let reg = registry.get(&node.type_id);
-            let display_name = reg.map(|r| r.display_name).unwrap_or("");
-
-            for port in &node.ports {
-                if !port.exposed || port.dir != PortDir::Input {
-                    continue;
-                }
-
-                // Only Scalar ports for now.
-                if port.wire_type != BrushWireType::Scalar {
-                    continue;
-                }
-
-                // A connected input is driven by its wire, not the user.
-                let connected = brush
-                    .graph
-                    .connections
+            let reg_port = reg.and_then(|r| {
+                r.ports
                     .iter()
-                    .any(|c| c.to.node == node.id && c.to.port == port.name);
-                if connected {
-                    continue;
-                }
+                    .find(|rp| rp.name == port.name && rp.dir == port.dir)
+            });
 
-                // Display metadata comes from the registration (canonical),
-                // per-instance state (default, exposed) from the instance.
-                let reg_port = reg.and_then(|r| {
-                    r.ports
-                        .iter()
-                        .find(|rp| rp.name == port.name && rp.dir == port.dir)
-                });
-                let unit_type = reg_port.map_or(port.unit_type, |rp| rp.unit_type);
-                let label = reg_port
-                    .map(|rp| &rp.label)
-                    .filter(|l| !l.is_empty())
-                    .cloned()
-                    .unwrap_or_else(|| port.name.clone());
-                let icon = reg_port.map_or_else(|| port.icon.clone(), |rp| rp.icon.clone());
-                let description =
-                    reg_port.map_or_else(|| port.description.clone(), |rp| rp.description.clone());
-
-                // Reset target = the value snapshotted at brush load
-                // time. Falls back to the registration default for ports
-                // on nodes the user added after load (those weren't part
-                // of the brush, so registration default is the right
-                // baseline).
-                let reset_default = brush
-                    .defaults
-                    .get(&(node.id, port.name.clone()))
-                    .copied()
-                    .unwrap_or_else(|| reg_port.map(|rp| rp.default).unwrap_or(port.default));
-                result.push(ExposedPortInfo {
-                    node_id: node.id.0,
-                    port_name: port.name.clone(),
-                    label,
-                    icon,
-                    description,
-                    node_display_name: display_name.to_string(),
-                    data: ExposedValue::Scalar {
+            // Build the type-specific payload. Wire types without a
+            // toolbar widget (Int/Vec2/Vec4) are skipped — the entry
+            // stays in the dict but doesn't render until a widget exists.
+            let data = match port.wire_type {
+                BrushWireType::Scalar => {
+                    let unit_type = reg_port.map_or(port.unit_type, |rp| rp.unit_type);
+                    let reset_default = brush
+                        .defaults
+                        .get(&(node_id, port_name.to_string()))
+                        .copied()
+                        .unwrap_or_else(|| reg_port.map(|rp| rp.default).unwrap_or(port.default));
+                    ExposedValue::Scalar {
                         value: unit_type.to_display(port.default),
                         min: unit_type.to_display(port.min),
                         max: unit_type.to_display(port.max),
                         default: unit_type.to_display(reset_default),
                         unit_type,
-                    },
-                });
-            }
-        }
+                    }
+                }
+                BrushWireType::Bool => ExposedValue::Bool {
+                    value: port.default >= 0.5,
+                },
+                _ => continue,
+            };
 
-        // Sort by layout position: top-to-bottom (y), then left-to-right (x).
-        // Layout is computed above; entries for unknown nodes default to origin.
-        let key = |info: &ExposedPortInfo| -> [f32; 2] {
-            layout
-                .get(&NodeId(info.node_id))
-                .copied()
-                .unwrap_or([0.0, 0.0])
-        };
-        result.sort_by(|a, b| {
-            let ka = key(a);
-            let kb = key(b);
-            ka[1]
-                .partial_cmp(&kb[1])
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| {
-                    ka[0]
-                        .partial_cmp(&kb[0])
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-        });
+            // Brush-bar entry meta wins; fall back to registration label /
+            // description / icon, then to the port name.
+            let label = if !meta.label.is_empty() {
+                meta.label.clone()
+            } else {
+                reg_port
+                    .map(|rp| &rp.label)
+                    .filter(|l| !l.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| port_name.to_string())
+            };
+            let icon = if !meta.icon.is_empty() {
+                meta.icon.clone()
+            } else {
+                reg_port.map_or_else(String::new, |rp| rp.icon.clone())
+            };
+            let description = if !meta.description.is_empty() {
+                meta.description.clone()
+            } else {
+                reg_port.map_or_else(String::new, |rp| rp.description.clone())
+            };
+
+            result.push(ExposedPortInfo {
+                key: key.clone(),
+                node_id: node_id.0,
+                port_name: port_name.to_string(),
+                label,
+                icon,
+                description,
+                node_display_name: reg.map(|r| r.display_name).unwrap_or("").to_string(),
+                data,
+            });
+        }
 
         result
     }
@@ -1046,24 +1052,77 @@ impl DarklyEngine {
         })
     }
 
-    /// Toggle whether a port is exposed in the brush properties panel.
-    /// Metadata-only — no compile needed (exposed flag doesn't affect
-    /// rendered output) — but bump the topology version so the frontend
-    /// treats this as a structural change and clears the active preset
-    /// name. Bumping the graph version too keeps the editor preview
-    /// consistent with other graph mutations.
-    pub fn brush_graph_set_port_exposed(
+    /// Add a brush-bar entry. Idempotent. Bumps the topology version so
+    /// the frontend treats the change as structural and clears the active
+    /// preset name. No recompile — exposure doesn't affect render output.
+    pub fn brush_graph_expose_port(
         &mut self,
         node_id: u64,
         port_name: &str,
-        exposed: bool,
     ) -> Result<String, String> {
         self.tool_session
             .write()
             .get_mut::<BrushState>()
             .expect(NO_BRUSH_STATE)
             .graph
-            .set_port_exposed(NodeId(node_id), port_name, exposed)
+            .expose_port(NodeId(node_id), port_name)
+            .map_err(|e| format!("{e}"))?;
+        self.bump_brush_topology_version();
+        Ok(self.active_graph_json())
+    }
+
+    /// Remove a brush-bar entry. Idempotent (missing entries aren't an
+    /// error). Bumps the topology version so the frontend clears the
+    /// active preset name.
+    pub fn brush_graph_unexpose_port(
+        &mut self,
+        node_id: u64,
+        port_name: &str,
+    ) -> Result<String, String> {
+        self.tool_session
+            .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE)
+            .graph
+            .unexpose_port(NodeId(node_id), port_name);
+        self.bump_brush_topology_version();
+        Ok(self.active_graph_json())
+    }
+
+    /// Overwrite the meta (label / description / icon) on a brush-bar
+    /// entry — single batched call so the brush-bar modal hits the engine
+    /// once. Icon validation lives in `Graph::set_exposed_port_meta`.
+    pub fn brush_graph_set_exposed_port_meta(
+        &mut self,
+        key: &str,
+        label: String,
+        description: String,
+        icon: String,
+    ) -> Result<String, String> {
+        self.tool_session
+            .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE)
+            .graph
+            .set_exposed_port_meta(key, label, description, icon)
+            .map_err(|e| format!("{e}"))?;
+        self.bump_brush_topology_version();
+        Ok(self.active_graph_json())
+    }
+
+    /// Move a brush-bar entry to a target index. Backs the drag-reorder
+    /// UX in the brush-bar node.
+    pub fn brush_graph_reorder_exposed_port(
+        &mut self,
+        key: &str,
+        new_index: u32,
+    ) -> Result<String, String> {
+        self.tool_session
+            .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE)
+            .graph
+            .reorder_exposed_port(key, new_index as usize)
             .map_err(|e| format!("{e}"))?;
         self.bump_brush_topology_version();
         Ok(self.active_graph_json())
@@ -1094,9 +1153,14 @@ pub enum ExposedValue {
         #[serde(rename = "unitType")]
         unit_type: UnitType,
     },
+    /// Boolean toggle. Currently emitted by the Switch node's `select`
+    /// port; any other Bool input port marked `exposed` works too.
+    Bool {
+        /// Current value.
+        value: bool,
+    },
     // Future variants:
     // Int { value: i32, min: i32, max: i32 },
-    // Bool { value: bool },
     // Color { value: [f32; 4] },
 }
 
@@ -1104,6 +1168,11 @@ pub enum ExposedValue {
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExposedPortInfo {
+    /// `"<node_id>.<port_name>"` — the same string used to address the
+    /// entry in `Graph::exposed_ports`. Frontend passes it back to
+    /// `set_exposed_port_meta` / `reorder_exposed_port` without having
+    /// to reconstruct the format.
+    pub key: String,
     pub node_id: u64,
     pub port_name: String,
     pub label: String,

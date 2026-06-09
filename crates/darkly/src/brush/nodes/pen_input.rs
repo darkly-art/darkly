@@ -55,6 +55,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "input",
             display_name: "Pen Input",
+            description: "Live data from the stylus: pressure, tilt, velocity, and position along the stroke.",
             ports: vec![
             PortDef::output("pressure", BrushWireType::Scalar)
                 .with_natural_range(0.0, 1.0)
@@ -255,7 +256,7 @@ impl BrushNodeEvaluator for PenInputEvaluator {
             });
             // `drawing_angle` is `atan2(canvas_dy, canvas_dx)` — a
             // canvas-frame angle. The skeleton subtracts `view_rotation`
-            // from `theta`, so to keep `pen.drawing_angle → circle.rotation_input`
+            // from `theta`, so to keep `pen.drawing_angle → shape.rotation_input`
             // (the canonical stroke-follow wire) aligned with the on-
             // screen stroke direction, subtract `view_rotation` here too:
             // canvas-frame angle minus V = screen-frame angle. Both

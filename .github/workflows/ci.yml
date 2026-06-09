@@ -28,7 +28,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --exclude darkly-wasm --features darkly/testing -- -D warnings
 
   clippy-wasm:
@@ -40,7 +39,6 @@ jobs:
         with:
           components: clippy
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
       - run: cargo clippy -p darkly-wasm --target wasm32-unknown-unknown --all-targets -- -D warnings
 
   test:
@@ -56,7 +54,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
@@ -69,7 +66,14 @@ jobs:
         with:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: true
+          # Coverage upload is best-effort: tests are the gate, and we
+          # don't want a Codecov-side outage to redden a PR whose tests
+          # pass. The GPG signature check on Codecov's CLI binary stays
+          # ON — when their keyserver fails to serve the public key the
+          # upload step aborts before running the unverified binary
+          # (which has access to CODECOV_TOKEN and the repo), and CI
+          # surfaces it as a job-level warning instead of a failure.
+          fail_ci_if_error: false
           flags: rust
 
   wasm-build:
@@ -80,7 +84,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
       - uses: jetli/wasm-pack-action@v0.4.0
         with:
           version: latest
@@ -96,12 +99,9 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
       - uses: jetli/wasm-pack-action@v0.4.0
         with:
           version: latest

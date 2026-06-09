@@ -125,6 +125,6 @@ fn smudge_preview_shows_neutral_gray_footprint() {
             && (centre[1] as i32 - centre[2] as i32).abs() < 5,
         "Smudge preview should be neutral gray; got {centre:?}",
     );
-    // Smudge cursor is symmetric — rotation_rad is fixed at 0.0.
-    assert_eq!(published.rotation_rad, 0.0);
+    // Sanity: bbox publishes a non-zero footprint.
+    assert!(published.half_extent_canvas_px[0] > 0.0);
 }

@@ -122,8 +122,6 @@
         brushGraph.autoLayout(sizes);
     }
 
-    let fullscreen = $state(false);
-
     /** Brush preview visibility. Persisted via the unified config store
      *  (`ui.brushBuilder.previewVisible` — declared as `Hidden` in the Rust
      *  schema so it's stored but not exposed in the Settings modal). */
@@ -197,15 +195,15 @@
     }
 
     function onKeydown(e: KeyboardEvent) {
-        if (e.key === 'Escape' && fullscreen) {
-            fullscreen = false;
+        if (e.key === 'Escape' && brushGraph.fullscreen) {
+            brushGraph.fullscreen = false;
         }
     }
 </script>
 
 <svelte:window on:keydown={onKeydown} />
 
-<div class="brush-builder" class:fullscreen>
+<div class="brush-builder">
     <div class="canvas-wrapper">
         <NodeCanvas onaddrequest={openMenuAtCursor} />
         <div class="preview-dock">
@@ -243,10 +241,10 @@
         </div>
         <button
             class="fullscreen-btn"
-            onclick={() => fullscreen = !fullscreen}
-            title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+            onclick={() => brushGraph.fullscreen = !brushGraph.fullscreen}
+            title={brushGraph.fullscreen ? "Exit fullscreen" : "Fullscreen"}
         >
-            <i class={fullscreen ? 'fa-solid fa-compress' : 'fa-solid fa-expand'}></i>
+            <i class={brushGraph.fullscreen ? 'fa-solid fa-compress' : 'fa-solid fa-expand'}></i>
         </button>
     </div>
 
@@ -447,13 +445,5 @@
     .fullscreen-btn:hover {
         background: var(--accent);
         color: var(--text);
-    }
-    .brush-builder.fullscreen {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100vw;
-        height: 100vh;
-        z-index: 9999;
     }
 </style>

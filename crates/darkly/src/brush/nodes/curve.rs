@@ -26,6 +26,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "modulate",
             display_name: "Curve",
+            description: "Reshapes a value through an editable response curve — e.g. make pressure ramp up sharply or ease in.",
             ports: vec![
                 PortDef::input("input", BrushWireType::Scalar)
                     .with_natural_range(0.0, 1.0)

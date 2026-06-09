@@ -303,6 +303,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "output",
             display_name: "Liquify",
+            description: "Output that pushes existing canvas pixels around in the direction of the stroke, like a warp brush.",
             ports: vec![
                 PortDef::input("position", BrushWireType::Vec2)
                     .with_description("Where to apply the warp"),
@@ -366,7 +367,7 @@ pub fn register() -> BrushNodeRegistration {
                 // strength multiplies by the upstream coverage. If
                 // unwired, defaults to 1.0 (uniform inside the disc).
                 PortDef::input("mask", BrushWireType::Scalar).with_description(
-                    "Per-fragment shape mask (typically wired from circle.mask); \
+                    "Per-fragment shape mask (typically wired from shape.mask); \
                      defaults to 1.0 (uniform inside the disc) when unwired.",
                 ),
                 PortDef::output("dab_size", BrushWireType::Vec2)
@@ -644,7 +645,7 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
-        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius, 0.0);
+        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius);
         vec![]
     }
 

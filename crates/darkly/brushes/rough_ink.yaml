@@ -5,8 +5,6 @@ nodes:
     type: pen_input
     port_defaults:
       stabilize: 0.6
-    exposed:
-    - stabilize
   2:
     type: paint_color
   3:
@@ -26,7 +24,7 @@ nodes:
   6:
     type: random
   7:
-    type: circle
+    type: shape
     params:
       algorithm: 1
     port_defaults:
@@ -37,10 +35,6 @@ nodes:
     type: stamp
   9:
     type: paint
-    exposed:
-    - flow
-    - opacity
-    - size
 connections:
 - '1.position -> 9.position'
 - '1.pressure -> 3.input'
@@ -52,3 +46,8 @@ connections:
 - '6.value -> 7.seed'
 - '7.mask -> 8.tip'
 - '8.dab -> 9.rgba'
+exposed_ports:
+  "1.stabilize": {}
+  "9.size": {}
+  "9.flow": {}
+  "9.opacity": {}
