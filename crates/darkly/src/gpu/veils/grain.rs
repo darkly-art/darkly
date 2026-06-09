@@ -276,7 +276,7 @@ impl Veil for Grain {
         let apply_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("grain-apply-pipeline-layout"),
-                bind_group_layouts: &[&apply_bgl],
+                bind_group_layouts: &[Some(&apply_bgl)],
                 immediate_size: 0,
             });
 
@@ -478,7 +478,7 @@ fn create_evolve_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("grain-evolve-pipeline-layout"),
-        bind_group_layouts: &[&bind_group_layout],
+        bind_group_layouts: &[Some(&bind_group_layout)],
         immediate_size: 0,
     });
 

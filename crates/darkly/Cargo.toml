@@ -17,7 +17,7 @@ wgpu = { workspace = true }
 bytemuck = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yml = { workspace = true }
+serde_yaml_ng = { workspace = true }
 log = { workspace = true }
 web-time = { workspace = true }
 zip = { workspace = true }
@@ -31,7 +31,7 @@ smallvec = { workspace = true }
 
 [dev-dependencies]
 pollster = "0.4"
-naga = { version = "28.0", features = ["wgsl-in"] }
+naga = { version = "29.0", features = ["wgsl-in"] }
 syn = { version = "2", features = ["visit", "full"] }
 
 [[bin]]

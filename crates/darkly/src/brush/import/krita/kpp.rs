@@ -288,7 +288,9 @@ fn read_png(bytes: &[u8]) -> Result<ReadPng, ParseError> {
     // ignores). Both reads are cheap on these tiny preset PNGs.
     let chunks = walk_chunks(bytes);
 
-    let decoder = png::Decoder::new(bytes);
+    // png 0.18's `Decoder::read_info` requires `Read + Seek`; `&[u8]` is only
+    // `Read`, so wrap it in a `Cursor`.
+    let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     let reader = decoder.read_info()?;
     let info = reader.info();
 

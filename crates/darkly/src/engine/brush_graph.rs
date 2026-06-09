@@ -134,7 +134,7 @@ impl DarklyEngine {
             &self.active_brush_graph(),
             registry,
         )?;
-        serde_yml::to_string(&portable).map_err(|e| format!("YAML serialize error: {e}"))
+        serde_yaml_ng::to_string(&portable).map_err(|e| format!("YAML serialize error: {e}"))
     }
 
     /// Replace the active brush graph from a YAML string in the
@@ -143,7 +143,7 @@ impl DarklyEngine {
     /// graph is untouched and an error string describes the problem.
     pub fn set_brush_graph_yaml(&mut self, yaml: &str) -> Result<(), String> {
         let portable: crate::brush::portable::PortableBrush =
-            serde_yml::from_str(yaml).map_err(|e| format!("YAML parse error: {e}"))?;
+            serde_yaml_ng::from_str(yaml).map_err(|e| format!("YAML parse error: {e}"))?;
         let registry = crate::brush::registry();
         let graph = portable.into_graph(registry)?;
         self.tool_session

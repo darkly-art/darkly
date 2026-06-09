@@ -23,7 +23,7 @@ pub fn all() -> Vec<Brush> {
     BUILTIN_BRUSHES_YAML
         .iter()
         .map(|(filename, yaml)| {
-            let portable: PortableBrush = serde_yml::from_str(yaml)
+            let portable: PortableBrush = serde_yaml_ng::from_str(yaml)
                 .unwrap_or_else(|e| panic!("invalid built-in brush '{filename}': {e}"));
             portable
                 .into_brush(registry)

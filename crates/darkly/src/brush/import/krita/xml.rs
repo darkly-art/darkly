@@ -5,9 +5,19 @@
 //! a typed struct ready for higher-level decoding in [`super::kpp`].
 
 use base64::Engine;
-use quick_xml::events::Event;
-use quick_xml::Reader;
+use quick_xml::events::{BytesText, Event};
+use quick_xml::{Reader, XmlVersion};
 use serde::Serialize;
+
+/// Decode a text event and resolve predefined XML entities (`&amp;`, `&lt;`, …).
+///
+/// quick-xml 0.40 removed `BytesText::unescape()`; the equivalent is to decode
+/// the raw bytes ([`BytesText::decode`]) and then run the standalone entity
+/// unescaper. Both error types fold into [`quick_xml::Error`].
+fn unescape_text(t: &BytesText<'_>) -> Result<String, quick_xml::Error> {
+    let decoded = t.decode()?;
+    Ok(quick_xml::escape::unescape(&decoded)?.into_owned())
+}
 
 /// A node in a parsed XML tree. Used to surface structured contents of
 /// nested-XML param values (e.g. `brush_definition`) so the inspector can
@@ -62,7 +72,7 @@ pub fn parse_xml_node(xml: &str) -> Option<XmlNode> {
             }
             Event::Text(t) => {
                 if let Some(parent) = stack.last_mut() {
-                    let s = t.unescape().ok()?.trim().to_string();
+                    let s = unescape_text(&t).ok()?.trim().to_string();
                     if !s.is_empty() {
                         parent.text = match parent.text.take() {
                             Some(prev) => Some(format!("{prev}{s}")),
@@ -96,7 +106,10 @@ fn node_from_start(e: &quick_xml::events::BytesStart<'_>) -> Option<XmlNode> {
     for attr in e.attributes() {
         let attr = attr.ok()?;
         let key = std::str::from_utf8(attr.key.as_ref()).ok()?.to_string();
-        let val = attr.unescape_value().ok()?.into_owned();
+        let val = attr
+            .normalized_value(XmlVersion::Implicit1_0)
+            .ok()?
+            .into_owned();
         attrs.push((key, val));
     }
     Some(XmlNode {
@@ -174,7 +187,7 @@ pub fn parse_preset_xml(xml: &str) -> Result<ParsedPresetXml, XmlError> {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = std::str::from_utf8(attr.key.as_ref())?.to_string();
-                            let val = attr.unescape_value()?.into_owned();
+                            let val = attr.normalized_value(XmlVersion::Implicit1_0)?.into_owned();
                             match key.as_str() {
                                 "paintopid" => paintop_id = Some(val),
                                 "name" => preset_name = Some(val),
@@ -196,7 +209,7 @@ pub fn parse_preset_xml(xml: &str) -> Result<ParsedPresetXml, XmlError> {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = std::str::from_utf8(attr.key.as_ref())?.to_string();
-                            let val = attr.unescape_value()?.into_owned();
+                            let val = attr.normalized_value(XmlVersion::Implicit1_0)?.into_owned();
                             match key.as_str() {
                                 "name" => name = val,
                                 "filename" => filename = val,
@@ -220,7 +233,7 @@ pub fn parse_preset_xml(xml: &str) -> Result<ParsedPresetXml, XmlError> {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = std::str::from_utf8(attr.key.as_ref())?.to_string();
-                            let val = attr.unescape_value()?.into_owned();
+                            let val = attr.normalized_value(XmlVersion::Implicit1_0)?.into_owned();
                             match key.as_str() {
                                 "name" => name = val,
                                 "type" => raw_type = Some(val),
@@ -260,7 +273,7 @@ pub fn parse_preset_xml(xml: &str) -> Result<ParsedPresetXml, XmlError> {
                 }
             }
             Event::Text(t) => {
-                let s = t.unescape()?;
+                let s = unescape_text(&t)?;
                 text_buf.push_str(&s);
             }
             Event::CData(t) => {

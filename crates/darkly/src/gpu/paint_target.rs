@@ -706,14 +706,14 @@ impl PaintPipelines {
 
         let paint_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("paint-pipeline-layout"),
-            bind_group_layouts: &[&uniform_bgl, &selection_bgl],
+            bind_group_layouts: &[Some(&uniform_bgl), Some(&selection_bgl)],
             immediate_size: 0,
         });
 
         // Gradient uses the same layout (uniform + selection) but a different uniform buffer.
         let gradient_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("gradient-pipeline-layout"),
-            bind_group_layouts: &[&uniform_bgl, &selection_bgl],
+            bind_group_layouts: &[Some(&uniform_bgl), Some(&selection_bgl)],
             immediate_size: 0,
         });
 

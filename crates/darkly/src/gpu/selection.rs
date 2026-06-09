@@ -97,7 +97,7 @@ impl SelectionPipelines {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("sel-combine-layout"),
-            bind_group_layouts: &[&combine_bgl],
+            bind_group_layouts: &[Some(&combine_bgl)],
             immediate_size: 0,
         });
 

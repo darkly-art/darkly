@@ -180,7 +180,19 @@ Darkly is in pre-release / alpha. Until the first public release, breaking on-di
 
 ## PR Descriptions
 
-When you finish implementing a plan, emit a concise PR description in a fenced markdown code block as part of your reply. The description must cover the *entire* feature branch (everything since it diverged from its parent), not just the latest change — the user pastes it as the full PR body. On follow-up work, re-emit the complete, updated description as a single block that wholly replaces the previous one; never emit a delta or a partial revision.
+Fork every feature branch off `dev` and target PRs at `dev`, never `master` (which only receives release merges from `dev`, despite being GitHub's default branch).
+
+Every PR body has **two parts**: a human-written preamble explaining *why* the work was undertaken and who it's useful to, then the AI-generated technical description below a `---` separator. When you finish implementing a plan, emit the PR description in a fenced markdown code block as part of your reply, shaped like this — leave the top as a placeholder for the human to fill in:
+
+````markdown
+<insert human description here>
+
+---
+
+<AI PR description>
+````
+
+The AI portion must cover the *entire* feature branch (everything since it diverged from `dev`), not just the latest change — the user pastes the whole block as the PR body. On follow-up work, re-emit the complete, updated block as a single description that wholly replaces the previous one; never emit a delta or a partial revision.
 
 ## Lint / CI Checks
 

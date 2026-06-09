@@ -218,6 +218,8 @@ Great care is being taken to keep Darkly lean and clean. This means enforcing mo
 
 Note that while we allow AI for coding, we are **unlikely to accept any PR implementing generative AI in Darkly itself**. AI features are not off the table; however they must run fully offline and without any reliance on third party APIs. Additionally, any feature that speeds up generation while sacrificing creative input or control from the artist, will be immediately rejected.
 
+To keep that human in the loop, **every PR must open with a human-written description explaining _why_ the effort was undertaken and who it's useful to**, above the AI-generated technical description. A PR whose rationale is entirely machine-generated tells us nobody stopped to understand the change.
+
 We are not sensitive to AI-related questions. If you're unsure, please ask!
 
 ## Acknowledgments
