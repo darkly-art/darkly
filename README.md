@@ -156,6 +156,8 @@ These features are ordered roughly by importance. They will be implemented mostl
 - [x] Floating layers (transient paste / transform)
 
 ### Advanced & specialized — power-user, niche, and polish
+- [x] Veils (stackable viewport post-process effects: frozen, grain, lens blur, monochrome, painting, pixelate, rainy glass, VHS, watercolor)
+- [x] Veil picker with live animated previews
 - [x] Void layers (domain‑warped FBM noise)
 - [x] Camera void (live webcam with scale / rotation / pan)
 - [ ] Group blend mode / opacity (groups don't carry BlendProps yet)

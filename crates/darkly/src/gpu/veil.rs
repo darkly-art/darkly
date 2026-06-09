@@ -133,6 +133,14 @@ impl VeilRegistry {
         self.entries.get(type_id).map(|e| e.params).unwrap_or(&[])
     }
 
+    /// Resolve a runtime `&str` type id to the registry's `&'static str` key,
+    /// or `None` if the type is unknown. Callers that need to key long-lived
+    /// state by type id (e.g. the veil preview cache + its readback context)
+    /// use this to obtain a `'static` id without leaking.
+    pub fn static_type_id(&self, type_id: &str) -> Option<&'static str> {
+        self.entries.get_key_value(type_id).map(|(k, _)| *k)
+    }
+
     /// True when this registry knows the given `type_id`. Used by the
     /// `.darkly` load pre-check to refuse files that name veils the
     /// binary doesn't ship — see [`crate::format::error::LoadError`].

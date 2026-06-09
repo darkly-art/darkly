@@ -50,6 +50,7 @@ use crate::gpu::readback::ReadbackScheduler;
 use crate::gpu::region_store::{EntryPixels, RegionScratch};
 use crate::gpu::selection::SelectionPipelines;
 use crate::gpu::transform::FloatingContent;
+use crate::gpu::veil_preview::VeilPreviewRenderer;
 use crate::gpu::view::ViewTransform;
 use crate::layer::LayerId;
 use crate::undo::UndoStack;
@@ -237,6 +238,26 @@ pub(crate) enum ReadbackContext {
     UndoRegionReady {
         cell: std::rc::Rc<std::cell::RefCell<EntryPixels>>,
     },
+    /// Async readback of one veil preview frame, rendered offscreen over the
+    /// current canvas (`gpu::veil_preview`). Completion drops the raw RGBA bytes
+    /// into `veil_previews[type_id].frames[frame_idx]`; the frontend drains all
+    /// `total` frames once they land and plays them as a loop. Each frame is the
+    /// job's aspect-fit `width × height` RGBA.
+    VeilPreviewFrame {
+        type_id: &'static str,
+        frame_idx: u32,
+        total: u32,
+    },
+}
+
+/// One veil picker preview generation: the chosen preview dimensions plus the
+/// per-frame RGBA slots, each filled when its async readback lands. `width` /
+/// `height` are carried so `poll_veil_preview` and the WASM bridge report the
+/// real (aspect-fit) thumbnail size, which varies with the document's shape.
+pub(crate) struct VeilPreviewJob {
+    pub width: u32,
+    pub height: u32,
+    pub frames: Vec<Option<Vec<u8>>>,
 }
 
 /// Cached thumbnail RGBA bytes per node id. Keyed uniformly across layers,
@@ -379,6 +400,19 @@ pub struct DarklyEngine {
     /// `set_preview_theme()` when the UI theme toggles.
     pub(crate) preview_theme_fg: [f32; 4],
     pub(crate) preview_theme_bg: [f32; 4],
+
+    // --- Veil picker preview ---
+    /// Offscreen renderer for the veil picker's looping thumbnail previews.
+    /// Reused across veils; holds its own preview-sized scratch textures and
+    /// is fully independent of the live veil chain and document.
+    pub(crate) veil_preview_renderer: VeilPreviewRenderer,
+    /// In-flight + completed preview jobs per veil type. Frame slots fill in
+    /// asynchronously as `ReadbackContext::VeilPreviewFrame` readbacks land;
+    /// `poll_veil_preview` hands back the frames once every slot is `Some`.
+    /// Keyed by the registry's `&'static str` type id. Overwritten on each
+    /// `start_veil_preview` so the picker always reflects the current canvas
+    /// (no cross-open caching).
+    pub(crate) veil_previews: HashMap<&'static str, VeilPreviewJob>,
 
     // --- Brush Library ---
     pub(crate) brush_library: BrushLibrary,
@@ -542,6 +576,8 @@ impl DarklyEngine {
             // `set_preview_theme()` as soon as the UI loads.
             preview_theme_fg: [1.0, 1.0, 1.0, 1.0],
             preview_theme_bg: [0.0, 0.0, 0.0, 1.0],
+            veil_preview_renderer: VeilPreviewRenderer::new(),
+            veil_previews: HashMap::new(),
             brush_library: {
                 let mut lib = BrushLibrary::new();
                 for brush in crate::brush::builtin_brushes::all() {

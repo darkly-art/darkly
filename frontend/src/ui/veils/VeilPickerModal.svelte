@@ -1,5 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
+    import VeilPreview from './VeilPreview.svelte';
 
     let { onclose }: { onclose: () => void } = $props();
 
@@ -53,8 +54,7 @@
         <div class="grid">
             {#each veilTypes as vt (vt.type)}
                 <button class="card" onclick={() => pick(vt)}>
-                    <!-- TODO: replace with <video> preview when assets land -->
-                    <div class="preview"></div>
+                    <VeilPreview veilType={vt.type} />
                     <span class="card-name">{vt.displayName}</span>
                 </button>
             {/each}
@@ -145,17 +145,6 @@
     .card:hover {
         background: var(--bg-active);
         border-color: var(--accent);
-    }
-
-    .preview {
-        aspect-ratio: 16 / 9;
-        background: var(--bg);
-        border-radius: var(--radius-sm);
-        background-image: linear-gradient(
-            45deg,
-            color-mix(in srgb, var(--accent) 20%, transparent) 0%,
-            transparent 70%
-        );
     }
 
     .card-name {

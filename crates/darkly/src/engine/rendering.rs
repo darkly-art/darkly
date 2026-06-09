@@ -439,6 +439,23 @@ impl DarklyEngine {
                     self.compositor.mark_needs_present();
                 }
             }
+            ReadbackContext::VeilPreviewFrame {
+                type_id,
+                frame_idx,
+                total,
+            } => {
+                // Store the raw RGBA frame; the canvas consumes it directly via
+                // putImageData. Guard against a stale generation (frame count
+                // mismatch) so a superseded request can't write into a freshly
+                // sized buffer.
+                if let Some(job) = self.veil_previews.get_mut(type_id) {
+                    if job.frames.len() == total as usize {
+                        if let Some(slot) = job.frames.get_mut(frame_idx as usize) {
+                            *slot = Some(pixels);
+                        }
+                    }
+                }
+            }
             ReadbackContext::UndoRegionReady { cell } => {
                 // Flip the entry from VRAM-staging to DRAM-Vec, dropping the
                 // staging buffer. `pixels` here is unpadded (extract_pixels

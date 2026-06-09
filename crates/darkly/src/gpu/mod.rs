@@ -46,6 +46,7 @@ pub mod texture_registry;
 pub mod transform;
 pub mod veil;
 pub mod veil_chain;
+pub mod veil_preview;
 pub mod veils;
 pub mod view;
 pub mod void;
