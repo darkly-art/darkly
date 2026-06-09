@@ -88,21 +88,21 @@ These features are ordered roughly by importance. They will be implemented mostl
 - [x] Node-based brush engine
 - Brushes
     - [x] Simple round
-    - [ ] Calligraphy
     - [x] Ink pen
-    - [x] Liquify
-    - [x] Watercolor
-    - [ ] Clone
+    - [x] Charcoal (Pencil still TODO)
     - [x] Smudge
+    - [x] Watercolor
+    - [x] Liquify
+    - [ ] Clone
     - [ ] Blur
     - [ ] Dodge/burn
-    - [x] Charcoal (Pencil still TODO)
+    - [ ] Calligraphy
     - [ ] Oil / Impasto
 - [x] Brush tool, eraser, fill (flood), gradient (linear), color picker
 - [x] Pressure / tilt / spacing / distance / angle inputs
 - [x] Laplacian stabilizer
 - [x] HSV picker, foreground/background swatches
-- [x] Color picker (async GPU readback, Ctrl-held temporary pick)
+- [x] Color picker (Ctrl-held temporary pick)
 - [x] Raster layers + groups, drag‑reorder, visibility, lock, opacity, name, collapse, passthrough
 - [x] 16 blend modes (Normal → Luminosity, Krita‑compatible)
 - [x] Layer masks (one per host)
@@ -118,40 +118,37 @@ These features are ordered roughly by importance. They will be implemented mostl
 
 ### Important — expected for serious work
 - [x] Affine transform tool (translate / scale / rotate via floating content)
-- [x] Duplicate layer / group
 - [x] Merge down
-- [ ] Flatten image
+- [x] Duplicate layer / group
+- [ ] Crop tool / crop to selection
+- [ ] Canvas resize
+- [ ] Select All / Deselect / Invert as menu+hotkey actions
+- [ ] Invert selection (boolean op exists)
+- [ ] Autosave + crash recovery
+- [ ] Brightness / Contrast
+- [ ] Hue / Saturation / Lightness
+- [ ] Levels
+- [ ] Curves
+- [ ] Invert colors
+- [ ] Desaturate
 - [ ] Clipping mask
 - [ ] Adjustment layers
-- [ ] Canvas resize
-- [ ] Crop tool / crop to selection
+- [ ] Feather + antialias
+- [ ] Grow / Shrink / Border / Smooth as discrete commands
 - [ ] Flip canvas H / V
 - [ ] Rotate canvas 90° CW / CCW / 180°
 - [ ] Flip layer / selection H / V
-- [ ] Feather + antialias
-- [ ] Invert selection (boolean op exists)
-- [ ] Select All / Deselect / Invert as menu+hotkey actions
-- [ ] Grow / Shrink / Border / Smooth as discrete commands
-- [ ] Invert colors
-- [ ] Hue / Saturation / Lightness
-- [ ] Brightness / Contrast
-- [ ] Levels
-- [ ] Curves
-- [ ] Desaturate
+- [ ] Text tool / text layers
 - [ ] Recent colors
 - [ ] Saved swatches / palettes
+- [ ] History panel UI
 - [x] Mirror view
 - [ ] Fit to screen
 - [ ] 100% / zoom presets
 - [ ] Symmetry / mirror painting (X, Y, radial)
-- [ ] History panel UI
-- [ ] Text tool / text layers
-- [ ] Autosave + crash recovery
-- [x] Installable PWA — offline app shell (service worker), add to home screen
-- [x] Coalesced property edits, GPU region snapshots, compound actions
-- [x] Config schema with 8 sections, typed widgets, hotkey capture
+- [x] Installable PWA — offline app shell, add to home screen
 - [x] Krita / Photoshop / GIMP hotkey presets
-- [x] Settings modal, theme system
+- [x] Settings modal (8 config sections, typed widgets), theme system
 - [x] Hotkey system + searchable cheatsheet (80+ rebindable actions)
 - [x] Floating layers (transient paste / transform)
 
@@ -161,25 +158,25 @@ These features are ordered roughly by importance. They will be implemented mostl
 - [x] Void layers (domain‑warped FBM noise)
 - [x] Camera void (live webcam with scale / rotation / pan)
 - [ ] Group blend mode / opacity (groups don't carry BlendProps yet)
+- [ ] Brush save/load + editable nodes/wires (e.g. YAML)
+- [ ] Recent files
+- [ ] PSD / XCF / KRA import
+- [ ] Perspective, skew, free distort
+- [ ] Warp / mesh transform
+- [ ] Gradient map
 - [ ] Color balance
 - [ ] Channel mixer
 - [ ] Threshold
 - [ ] Posterize
-- [ ] Gradient map
 - [ ] Color harmonies
 - [ ] Palette file import (.aco, .gpl)
+- [ ] Palette Popup
+- [ ] Navigator / overview window
 - [ ] Trim to content / autocrop
-- [ ] Perspective, skew, free distort
-- [ ] Warp / mesh transform
 - [ ] Stroke selection (paint along marching ants)
 - [ ] Save / load selection to channel
-- [ ] Navigator / overview window
-- [ ] Palette Popup
 - [ ] Snap canvas to right angles (0, 90, 180, 270)
-- [ ] Recent files
-- [ ] PSD / XCF / KRA import
 - [ ] Branched history
-- [ ] Brush save/load + editable nodes/wires (e.g. YAML)
 
 ## Getting started
 
