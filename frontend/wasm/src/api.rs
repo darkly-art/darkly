@@ -363,9 +363,9 @@ impl DarklySession {
     /// `createHandle` call.
     #[wasm_bindgen(constructor)]
     pub fn new() -> DarklySession {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let tool_session = darkly::tool::SharedToolSession::new();
         tool_session
@@ -578,9 +578,9 @@ impl DarklyHandle {
         let initial_width = canvas.width();
         let initial_height = canvas.height();
 
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas))

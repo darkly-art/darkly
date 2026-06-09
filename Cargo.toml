@@ -22,7 +22,12 @@ wgpu = { version = "29.0", features = ["webgpu"] }
 bytemuck = { version = "1.13", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_yml = "0.0.13"
+# serde_yaml_ng, not serde_yml: the original `serde_yaml` (dtolnay) is archived,
+# and the `serde_yml` fork is unmaintained — its 0.0.13 release swapped to a
+# `noyalib` backend that can't round-trip integer-keyed maps (`BTreeMap<u64,_>`),
+# which silently breaks the brush portable format. serde_yaml_ng is the faithful
+# maintained fork and a drop-in for the original serde_yaml API.
+serde_yaml_ng = "0.10"
 log = "0.4"
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

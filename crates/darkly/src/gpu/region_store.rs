@@ -583,12 +583,13 @@ impl RegionScratch {
                     let padded_row = padded_row_bytes as usize;
                     if unpadded_row == padded_row {
                         let n = vec.len().min(mapped.len());
-                        mapped[..n].copy_from_slice(&vec[..n]);
+                        mapped.slice(..n).copy_from_slice(&vec[..n]);
                     } else {
                         for row in 0..height as usize {
                             let src_off = row * unpadded_row;
                             let dst_off = row * padded_row;
-                            mapped[dst_off..dst_off + unpadded_row]
+                            mapped
+                                .slice(dst_off..dst_off + unpadded_row)
                                 .copy_from_slice(&vec[src_off..src_off + unpadded_row]);
                         }
                     }

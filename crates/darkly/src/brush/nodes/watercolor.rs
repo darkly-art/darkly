@@ -157,10 +157,10 @@ impl PerBrushPipeline {
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("watercolor-composite-layout"),
                 bind_group_layouts: &[
-                    ctx.uniform_bgl,
-                    &dabs_bgl,
-                    ctx.selection_bgl,
-                    ctx.canvas_copy_bgl, // atlas: same texture+sampler layout
+                    Some(ctx.uniform_bgl),
+                    Some(&dabs_bgl),
+                    Some(ctx.selection_bgl),
+                    Some(ctx.canvas_copy_bgl), // atlas: same texture+sampler layout
                 ],
                 immediate_size: 0,
             });
@@ -171,9 +171,9 @@ impl PerBrushPipeline {
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("watercolor-pickup-layout"),
                 bind_group_layouts: &[
-                    ctx.uniform_bgl,
-                    &dabs_bgl,
-                    ctx.canvas_copy_bgl, // pre_stroke texture+sampler
+                    Some(ctx.uniform_bgl),
+                    Some(&dabs_bgl),
+                    Some(ctx.canvas_copy_bgl), // pre_stroke texture+sampler
                 ],
                 immediate_size: 0,
             });

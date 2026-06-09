@@ -435,7 +435,7 @@ impl BrushPipelines {
         // the blit's source texture binding.
         let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("brush-blit-layout"),
-            bind_group_layouts: &[&uniform_bgl, &canvas_copy_bgl],
+            bind_group_layouts: &[Some(&uniform_bgl), Some(&canvas_copy_bgl)],
             immediate_size: 0,
         });
         let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -496,7 +496,7 @@ impl BrushPipelines {
         });
         let mask_blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("brush-mask-blit-layout"),
-            bind_group_layouts: &[&canvas_copy_bgl],
+            bind_group_layouts: &[Some(&canvas_copy_bgl)],
             immediate_size: 0,
         });
         let mask_blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1006,12 +1006,17 @@ fn build_cursor_preview_pipeline(
     let layout = match &graph_layout {
         None => device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("brush-preview-layout"),
-            bind_group_layouts: &[uniform_bgl, dabs_bgl],
+            bind_group_layouts: &[Some(uniform_bgl), Some(dabs_bgl)],
             immediate_size: 0,
         }),
         Some(gl) => device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("brush-preview-layout-with-graph-textures"),
-            bind_group_layouts: &[uniform_bgl, dabs_bgl, empty_bgl, gl.as_ref()],
+            bind_group_layouts: &[
+                Some(uniform_bgl),
+                Some(dabs_bgl),
+                Some(empty_bgl),
+                Some(gl.as_ref()),
+            ],
             immediate_size: 0,
         }),
     };

@@ -570,8 +570,8 @@ impl Compositor {
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("mask-lerp-pipeline-layout"),
                 bind_group_layouts: &[
-                    &blend_pipelines.bind_group_layout,
-                    &blend_pipelines.mask_bind_group_layout,
+                    Some(&blend_pipelines.bind_group_layout),
+                    Some(&blend_pipelines.mask_bind_group_layout),
                 ],
                 immediate_size: 0,
             });
@@ -651,7 +651,7 @@ impl Compositor {
         let present_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("present-pipeline-layout"),
-                bind_group_layouts: &[&_present_bind_group_layout],
+                bind_group_layouts: &[Some(&_present_bind_group_layout)],
                 immediate_size: 0,
             });
 
@@ -2860,20 +2860,19 @@ impl Compositor {
         perf::time_end("offscreen");
 
         // Acquire surface and present composite_cache → veils → surface.
+        // wgpu 29 replaced `Result<SurfaceTexture, SurfaceError>` with the
+        // `CurrentSurfaceTexture` enum. `Suboptimal` still yields a usable
+        // texture; `Lost`/`Outdated` mean the swapchain must be reconfigured.
         let output = match surface.get_current_texture() {
-            Ok(output) => output,
-            Err(wgpu::SurfaceError::Lost) => {
+            wgpu::CurrentSurfaceTexture::Success(output)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
+            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                 surface.configure(device, surface_config);
                 perf::time_end("render-total");
                 return;
             }
-            Err(wgpu::SurfaceError::OutOfMemory) => {
-                log::error!("Out of GPU memory");
-                perf::time_end("render-total");
-                return;
-            }
-            Err(e) => {
-                log::warn!("Surface error: {e:?}");
+            other => {
+                log::warn!("Surface unavailable: {other:?}");
                 perf::time_end("render-total");
                 return;
             }
