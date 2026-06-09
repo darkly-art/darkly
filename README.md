@@ -82,9 +82,9 @@ Voids can live anywhere in your layer stack -- over or underneath any other laye
 
 ## Feature Roadmap
 
-These are features that are helpful or essential to digital art workflows. They're subject to change, and feel free to suggest new ones. They are always kept up-to-date so everyone can see the progress.
+These features are ordered roughly by importance. They will be implemented mostly in order from top to bottom, prioritizing ones most requested by the community.
 
-### Painting & brush engine
+### Essential / Must-Have
 - [x] Node-based brush engine
 - Brushes
     - [x] Simple round
@@ -101,98 +101,83 @@ These are features that are helpful or essential to digital art workflows. They'
 - [x] Brush tool, eraser, fill (flood), gradient (linear), color picker
 - [x] Pressure / tilt / spacing / distance / angle inputs
 - [x] Laplacian stabilizer
-
-### Color picking & swatches
 - [x] HSV picker, foreground/background swatches
 - [x] Color picker (async GPU readback, Ctrl-held temporary pick)
-- [ ] Recent colors
-- [ ] Saved swatches / palettes
-- [ ] Palette file import (.aco, .gpl)
-- [ ] Color harmonies
-
-### Layers
 - [x] Raster layers + groups, drag‑reorder, visibility, lock, opacity, name, collapse, passthrough
 - [x] 16 blend modes (Normal → Luminosity, Krita‑compatible)
 - [x] Layer masks (one per host)
+- [x] Rect, ellipse, lasso, polygon, magic wand selection
+- [x] Selection Replace / Add / Subtract / Intersect modes
+- [x] Pan / zoom / rotate view
+- [x] Undo / redo (configurable depth, defaults 100)
+- [x] New document (custom canvas size + background color)
+- [x] Open image from file
+- [x] Save / Open native `.darkly` document
+- [x] Export to PNG / JPEG / WebP file
+- [x] Clipboard copy / cut / paste (PNG via browser clipboard)
+
+### Important — expected for serious work
+- [x] Affine transform tool (translate / scale / rotate via floating content)
 - [x] Duplicate layer / group
 - [x] Merge down
-- [x] Void layers (domain‑warped FBM noise)
-- [x] Camera void (live webcam with scale / rotation / pan)
 - [ ] Flatten image
 - [ ] Clipping mask
 - [ ] Adjustment layers
-- [ ] Group blend mode / opacity (groups don't carry BlendProps yet)
-
-### Selection
-- [x] Rect, ellipse, lasso, polygon, magic wand
-- [x] Replace / Add / Subtract / Intersect modes
+- [ ] Canvas resize
+- [ ] Crop tool / crop to selection
+- [ ] Flip canvas H / V
+- [ ] Rotate canvas 90° CW / CCW / 180°
+- [ ] Flip layer / selection H / V
 - [ ] Feather + antialias
-- [ ] Invert (boolean op exists)
+- [ ] Invert selection (boolean op exists)
 - [ ] Select All / Deselect / Invert as menu+hotkey actions
 - [ ] Grow / Shrink / Border / Smooth as discrete commands
-- [ ] Stroke selection (paint along marching ants)
-- [ ] Save / load selection to channel
-
-### Color adjustments
 - [ ] Invert colors
 - [ ] Hue / Saturation / Lightness
 - [ ] Brightness / Contrast
 - [ ] Levels
 - [ ] Curves
-- [ ] Color balance
-- [ ] Channel mixer
 - [ ] Desaturate
-- [ ] Threshold
-- [ ] Posterize
-- [ ] Gradient map
-
-### Transform & canvas
-- [x] Affine transform tool (translate / scale / rotate via floating content)
-- [ ] Canvas resize
-- [ ] Crop tool / crop to selection
-- [ ] Trim to content / autocrop
-- [ ] Flip canvas H / V
-- [ ] Rotate canvas 90° CW / CCW / 180°
-- [ ] Flip layer / selection H / V
-- [ ] Perspective, skew, free distort
-- [ ] Warp / mesh transform
-
-### View
-- [x] Pan / zoom / rotate view
+- [ ] Recent colors
+- [ ] Saved swatches / palettes
 - [x] Mirror view
 - [ ] Fit to screen
 - [ ] 100% / zoom presets
 - [ ] Symmetry / mirror painting (X, Y, radial)
-- [ ] Navigator / overview window
-- [ ] Palette Popup
-- [ ] Snap canvas to right angles (0, 90, 180, 270)
-
-### File I/O
-- [x] New document (custom canvas size + background color)
-- [x] Clipboard copy / cut / paste (PNG via browser clipboard)
-- [x] Export to PNG / JPEG / WebP file
-- [x] Open image from file
-- [x] Save / Open native `.darkly` document
-- [ ] Recent files
-- [ ] PSD / XCF / KRA import
-
-### Undo & history
-- [x] Undo / redo (configurable depth, defaults 100)
-- [x] Coalesced property edits, GPU region snapshots, compound actions
 - [ ] History panel UI
-- [ ] Branched history
-
-### Brush settings & config
+- [ ] Text tool / text layers
+- [ ] Autosave + crash recovery
+- [x] Installable PWA — offline app shell (service worker), add to home screen
+- [x] Coalesced property edits, GPU region snapshots, compound actions
 - [x] Config schema with 8 sections, typed widgets, hotkey capture
 - [x] Krita / Photoshop / GIMP hotkey presets
 - [x] Settings modal, theme system
-- [ ] Brush save/load + editable nodes/wires (e.g. YAML) 
-
-### Misc
-- [ ] Text tool / text layers
 - [x] Hotkey system + searchable cheatsheet (80+ rebindable actions)
 - [x] Floating layers (transient paste / transform)
-- [ ] Autosave + crash recovery
+
+### Advanced & specialized — power-user, niche, and polish
+- [x] Void layers (domain‑warped FBM noise)
+- [x] Camera void (live webcam with scale / rotation / pan)
+- [ ] Group blend mode / opacity (groups don't carry BlendProps yet)
+- [ ] Color balance
+- [ ] Channel mixer
+- [ ] Threshold
+- [ ] Posterize
+- [ ] Gradient map
+- [ ] Color harmonies
+- [ ] Palette file import (.aco, .gpl)
+- [ ] Trim to content / autocrop
+- [ ] Perspective, skew, free distort
+- [ ] Warp / mesh transform
+- [ ] Stroke selection (paint along marching ants)
+- [ ] Save / load selection to channel
+- [ ] Navigator / overview window
+- [ ] Palette Popup
+- [ ] Snap canvas to right angles (0, 90, 180, 270)
+- [ ] Recent files
+- [ ] PSD / XCF / KRA import
+- [ ] Branched history
+- [ ] Brush save/load + editable nodes/wires (e.g. YAML)
 
 ## Getting started
 
