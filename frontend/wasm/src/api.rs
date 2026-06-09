@@ -63,7 +63,7 @@ use darkly::engine::{DarklyEngine, PickSource, StrokeOp};
 use darkly::gpu::context::{GpuContext, GpuDevice};
 use darkly::gpu::overlay::OverlayPrimitive;
 use darkly::gpu::params::{ParamDef, ParamValue};
-use darkly::gpu::veil_preview::{PREVIEW_FPS, PREVIEW_HEIGHT, PREVIEW_WIDTH};
+use darkly::gpu::veil_preview::PREVIEW_FPS;
 use darkly::layer::LayerId;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsError;
@@ -1653,10 +1653,10 @@ impl DarklyHandle {
     }
 
     /// Begin generating the veil picker's looping thumbnail preview for a veil
-    /// type, rendered offscreen over the bundled sample image. No-op if the
-    /// frames are already cached or a generation is in flight. The frontend
-    /// drives `render()` (its rAF loop) and polls `poll_veil_preview` until the
-    /// frames land.
+    /// type, rendered offscreen over the current canvas. Regenerates on each
+    /// call (no-op only while a generation is already in flight) so the preview
+    /// tracks the live document. The frontend drives `render()` (its rAF loop)
+    /// and polls `poll_veil_preview` until the frames land.
     pub fn start_veil_preview(&self, veil_type: &str) {
         self.flush_if_needed();
         self.engine.borrow_mut().start_veil_preview(veil_type);
@@ -1668,22 +1668,13 @@ impl DarklyHandle {
     /// readbacks are still in flight.
     pub fn poll_veil_preview(&self, veil_type: &str) -> JsValue {
         self.flush_if_needed();
-        let Some(frames) = self.engine.borrow().poll_veil_preview(veil_type) else {
+        let Some((width, height, frames)) = self.engine.borrow().poll_veil_preview(veil_type)
+        else {
             return JsValue::NULL;
         };
         let obj = js_sys::Object::new();
-        js_sys::Reflect::set(
-            &obj,
-            &"width".into(),
-            &JsValue::from_f64(PREVIEW_WIDTH as f64),
-        )
-        .ok();
-        js_sys::Reflect::set(
-            &obj,
-            &"height".into(),
-            &JsValue::from_f64(PREVIEW_HEIGHT as f64),
-        )
-        .ok();
+        js_sys::Reflect::set(&obj, &"width".into(), &JsValue::from_f64(width as f64)).ok();
+        js_sys::Reflect::set(&obj, &"height".into(), &JsValue::from_f64(height as f64)).ok();
         js_sys::Reflect::set(&obj, &"fps".into(), &JsValue::from_f64(PREVIEW_FPS as f64)).ok();
         let arr = js_sys::Array::new();
         for frame in &frames {

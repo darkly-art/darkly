@@ -448,9 +448,9 @@ impl DarklyEngine {
                 // putImageData. Guard against a stale generation (frame count
                 // mismatch) so a superseded request can't write into a freshly
                 // sized buffer.
-                if let Some(frames) = self.veil_preview_frames.get_mut(type_id) {
-                    if frames.len() == total as usize {
-                        if let Some(slot) = frames.get_mut(frame_idx as usize) {
+                if let Some(job) = self.veil_previews.get_mut(type_id) {
+                    if job.frames.len() == total as usize {
+                        if let Some(slot) = job.frames.get_mut(frame_idx as usize) {
                             *slot = Some(pixels);
                         }
                     }

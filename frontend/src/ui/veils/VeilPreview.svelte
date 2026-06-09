@@ -1,11 +1,7 @@
 <script lang="ts">
     import { onDestroy } from 'svelte';
     import { app } from '../../state/app.svelte';
-    import {
-        getOrStartPreview,
-        pollPreview,
-        type PreviewData,
-    } from './veil_preview_cache';
+    import { pollPreview, type PreviewData } from './veil_preview_frames';
 
     let { veilType }: { veilType: string } = $props();
 
@@ -70,20 +66,17 @@
         rafHandle = requestAnimationFrame(tick);
     }
 
-    // Kick off (or adopt the cache for) the preview whenever the type changes.
+    // Kick off a fresh render whenever the type changes. No caching — the
+    // engine re-renders against the current canvas each time the picker opens.
     $effect(() => {
         void veilType;
         frameIdx = 0;
         lastDrawn = -1;
         accum = 0;
         prevTime = 0;
-        const cached = app.handle ? getOrStartPreview(app.handle, veilType) : null;
-        if (cached) {
-            data = cached;
-        } else {
-            data = null;
-            framesRemaining = POLL_FRAMES;
-        }
+        data = null;
+        framesRemaining = POLL_FRAMES;
+        app.handle?.start_veil_preview(veilType);
         schedule();
     });
 
@@ -92,11 +85,14 @@
     });
 </script>
 
+<!-- Intrinsic size follows the document so the card holds the canvas aspect
+     ratio from the start (placeholder uses doc dims, real frames match). The
+     element scales to the card width; height follows proportionally. -->
 <canvas
     class="veil-preview"
     bind:this={canvasEl}
-    width={data?.width ?? 256}
-    height={data?.height ?? 144}
+    width={data?.width ?? app.docW}
+    height={data?.height ?? app.docH}
     class:loading={!data}
 ></canvas>
 
@@ -104,7 +100,7 @@
     .veil-preview {
         display: block;
         width: 100%;
-        aspect-ratio: 16 / 9;
+        height: auto;
         border-radius: var(--radius-sm);
         background: var(--bg);
         image-rendering: auto;
