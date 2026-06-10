@@ -65,7 +65,7 @@ jobs:
           WGPU_BACKEND: vulkan
         run: cargo llvm-cov --workspace --exclude darkly-wasm --features darkly/testing --lcov --output-path lcov.info -- --test-threads=1
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
