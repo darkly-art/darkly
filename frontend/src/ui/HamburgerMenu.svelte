@@ -1,6 +1,7 @@
 <script lang="ts">
     import { theme, type ThemePreference } from '../state/theme.svelte';
     import { settings } from '../state/settings.svelte';
+    import { about } from '../state/about.svelte';
     import { config, formatHotkey } from '../config/store.svelte';
     import { openCheatsheet } from './cheatsheet';
     import { actions } from '../actions/registry';
@@ -17,6 +18,11 @@
 
     function openSettings() {
         settings.open = true;
+        close();
+    }
+
+    function openAbout() {
+        about.open = true;
         close();
     }
 
@@ -120,6 +126,11 @@
                     >Light</button>
                 </div>
             </div>
+            <div class="sep"></div>
+            <button class="menu-item" onclick={openAbout}>
+                <i class="fa-solid fa-circle-info"></i>
+                <span>About Darkly</span>
+            </button>
         </div>
     {/if}
 </div>

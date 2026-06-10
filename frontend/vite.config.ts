@@ -1,12 +1,38 @@
+// vite.config runs under esbuild/node at build time and is outside the
+// `tsc --noEmit` scope (tsconfig only includes src/**), so we don't pull
+// @types/node into the project just to type one Node builtin here.
+// @ts-ignore — Node builtin; no @types/node dependency.
+import { execSync } from 'node:child_process';
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 import { VitePWA } from 'vite-plugin-pwa';
 
+// Darkly's version is the latest git tag plus the commit height since it — the
+// same v* tags the deploy pipeline (darkly-deploy/) builds releases from.
+// `--long` always emits `TAG-COMMITS-gSHA` (height 0 when HEAD *is* the tag).
+// No `--always`: on a tagless/shallow checkout we want describe to THROW so the
+// catch yields the parseable fallback, not a bare SHA. Surfaced to the app as
+// the `__DARKLY_VERSION__` compile-time constant; parsed in src/version.ts.
+//
+// CANONICAL TWIN: crates/darkly/build.rs bakes the Rust crate's version with the
+// identical command and identical "0.0.0-0-gunknown" fallback (a documented DRY
+// exception — Cargo and Vite share no runtime). Change one, change the other.
+function gitVersion(): string {
+    try {
+        return execSync('git describe --tags --long', { encoding: 'utf8' }).trim();
+    } catch {
+        return '0.0.0-0-gunknown';
+    }
+}
+
 export default defineConfig({
     // Relative asset paths so the same dist/ works when served from a web root
     // ("/") and when loaded via file:// from a packaged desktop bundle.
     base: './',
+    define: {
+        __DARKLY_VERSION__: JSON.stringify(gitVersion()),
+    },
     plugins: [
         svelte(),
         basicSsl(),

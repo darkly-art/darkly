@@ -37,9 +37,20 @@ const SAVE_TYPES = [
 /** Open picker filter — accepts any file the unified Open flow knows
  *  how to ingest. Documents and raster images share one picker; the
  *  caller's `detectKind(bytes)` routes by magic-byte sniff (see
- *  `actions/index.ts::openFlow`). Two entries appear in the picker's
- *  filter dropdown so the user can narrow to one type if they want. */
+ *  `actions/index.ts::openFlow`). The first entry is the picker's
+ *  default-selected filter, so it's a combined "Supported Files" that
+ *  shows documents and images at once — the user can still narrow to a
+ *  single type via the dropdown's later entries. */
 const OPEN_TYPES = [
+    {
+        description: 'Supported Files',
+        accept: {
+            'application/x-darkly': ['.darkly'] as readonly string[],
+            'image/png': ['.png'] as readonly string[],
+            'image/jpeg': ['.jpg', '.jpeg'] as readonly string[],
+            'image/webp': ['.webp'] as readonly string[],
+        },
+    },
     {
         description: 'Darkly Document',
         accept: { 'application/x-darkly': ['.darkly'] as readonly string[] },

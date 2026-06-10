@@ -9,6 +9,7 @@
     import ExportImageModal from './ui/ExportImageModal.svelte';
     import NewDocumentModal from './ui/NewDocumentModal.svelte';
     import ConfirmDiscardModal from './ui/ConfirmDiscardModal.svelte';
+    import AboutModal from './ui/AboutModal.svelte';
     import TabStrip from './multi_tab/TabStrip.svelte';
     import CanvasStack from './multi_tab/CanvasStack.svelte';
     import { shell } from './multi_tab/shell.svelte';
@@ -52,6 +53,7 @@
 <ExportImageModal />
 <NewDocumentModal />
 <ConfirmDiscardModal />
+<AboutModal />
 
 <style>
     .app-layout {
