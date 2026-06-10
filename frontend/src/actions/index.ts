@@ -850,10 +850,11 @@ export function registerActions() {
     // -- View --
     actions.register({
         id: 'openSettings',
-        displayName: 'Open Settings',
+        displayName: 'Settings',
         category: 'view',
         description: 'Show the preferences modal.',
-        menuPath: ['View'],
+        // No `menuPath`: surfaced as the gear button on the menu bar and a
+        // root courtesy item in the hamburger, not as a View submenu row.
         handler: () => { settings.open = true; },
     });
 
@@ -875,7 +876,8 @@ export function registerActions() {
         displayName: 'Command Palette',
         category: 'view',
         description: 'Search and run any command.',
-        menuPath: ['View'],
+        // No `menuPath`: surfaced as the prominent "Find" item at the top of
+        // the hamburger / on the menu bar, not as a buried submenu row.
         handler: () => { commandPalette.open = true; },
     });
 
@@ -884,7 +886,7 @@ export function registerActions() {
         displayName: 'Hotkey Cheat Sheet',
         category: 'view',
         description: 'Open a searchable, printable list of every keyboard shortcut.',
-        menuPath: ['View'],
+        menuPath: ['Help'],
         handler: () => openCheatsheet(),
     });
 
@@ -893,7 +895,7 @@ export function registerActions() {
         displayName: 'About Darkly',
         category: 'view',
         description: 'Show version and credits.',
-        menuPath: ['View'],
+        menuPath: ['Help'],
         handler: () => { about.open = true; },
     });
 

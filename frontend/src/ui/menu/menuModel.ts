@@ -1,56 +1,100 @@
 import type { ActionRegistration } from '../../actions/registry';
 
-/** One leaf row in a menu. Hotkey, `enabled`, and `checked` are resolved
- *  reactively at render time (the renderer looks the action up by id) rather
- *  than baked in here, so the model stays a pure function of the registry. */
-export interface MenuItem {
-    actionId: string;
-    label: string;
-    description?: string;
-}
+/**
+ * A menu is a tree of entries rendered by `MenuItems.svelte`. An entry is one
+ * of: an action row, a submenu (with its own entries — rendered as a hover
+ * flyout), a named widget slot (e.g. the theme switcher, which isn't an
+ * action), or a separator.
+ *
+ * `label` / `icon` on an action entry override the action's own displayName /
+ * (no) icon for that placement — used to surface the command palette as a
+ * prominent "Find" item without renaming the action everywhere else.
+ */
+export type MenuEntry =
+    | { kind: 'action'; actionId: string; label?: string; icon?: string }
+    | { kind: 'submenu'; title: string; entries: MenuEntry[] }
+    | { kind: 'widget'; widget: 'theme' }
+    | { kind: 'separator' };
 
-/** A top-level menu (File, Edit, …) and its items. */
-export interface MenuGroup {
+/** A top-level menu (File, Edit, …, Help) and its entries. */
+export interface TopMenu {
     title: string;
-    items: MenuItem[];
+    entries: MenuEntry[];
 }
 
 /** Fixed ordering for the known top-level menus. Any group not in this list
  *  (forward-compat for a new `menuPath[0]`) is appended after, in first-seen
  *  order. */
-const MENU_ORDER = ['File', 'Edit', 'Select', 'Layer', 'Colors', 'View'];
+const MENU_ORDER = ['File', 'Edit', 'Select', 'Layer', 'Colors', 'View', 'Help'];
 
-/**
- * Group menu-eligible actions by `menuPath[0]` into ordered top-level menus.
- *
- * FLAT (v1): only the first path segment is used; there is no nesting. Actions
- * without a `menuPath` are excluded (they remain hotkey- and palette-only).
- * Item order within a group follows registration order.
- */
-export function buildMenu(regs: ActionRegistration[]): MenuGroup[] {
-    const byTitle = new Map<string, MenuItem[]>();
+function groupByTop(regs: ActionRegistration[]): Map<string, ActionRegistration[]> {
+    const m = new Map<string, ActionRegistration[]>();
     for (const reg of regs) {
         const title = reg.menuPath?.[0];
         if (!title) continue;
-        let items = byTitle.get(title);
-        if (!items) {
-            items = [];
-            byTitle.set(title, items);
+        let arr = m.get(title);
+        if (!arr) {
+            arr = [];
+            m.set(title, arr);
         }
-        items.push({ actionId: reg.id, label: reg.displayName, description: reg.description });
+        arr.push(reg);
     }
+    return m;
+}
 
-    const groups: MenuGroup[] = [];
+function orderedTitles(present: Map<string, unknown>): string[] {
     const placed = new Set<string>();
-    for (const title of MENU_ORDER) {
-        const items = byTitle.get(title);
-        if (items) {
-            groups.push({ title, items });
-            placed.add(title);
+    const out: string[] = [];
+    for (const t of MENU_ORDER) {
+        if (present.has(t)) {
+            out.push(t);
+            placed.add(t);
         }
     }
-    for (const [title, items] of byTitle) {
-        if (!placed.has(title)) groups.push({ title, items });
+    for (const t of present.keys()) {
+        if (!placed.has(t)) out.push(t);
     }
-    return groups;
+    return out;
+}
+
+/**
+ * Build the ordered top-level menus from the action registry. Action grouping
+ * is FLAT (by `menuPath[0]`); the resulting `entries` are all leaf action
+ * rows, except the View menu which also carries the theme switcher widget
+ * (the theme control isn't an action). Used directly by the pinned MenuBar
+ * and composed into the hamburger's root list.
+ */
+export function buildTopMenus(regs: ActionRegistration[]): TopMenu[] {
+    const grouped = groupByTop(regs);
+    const result: TopMenu[] = [];
+    for (const title of orderedTitles(grouped)) {
+        const entries: MenuEntry[] = grouped
+            .get(title)!
+            .map((r): MenuEntry => ({ kind: 'action', actionId: r.id }));
+        if (title === 'View') entries.push({ kind: 'widget', widget: 'theme' });
+        result.push({ title, entries });
+    }
+    return result;
+}
+
+/**
+ * The hamburger's root entry list: a prominent "Find" (command palette) item
+ * up top, the top-level menus as submenu flyouts, then a courtesy block that
+ * duplicates the globally-useful commands at the root for one-click access
+ * (deliberate duplication — those live in their submenus too). The theme
+ * switcher is intentionally NOT duplicated here; it lives in the View menu.
+ */
+export function buildHamburgerEntries(regs: ActionRegistration[]): MenuEntry[] {
+    const submenus = buildTopMenus(regs).map(
+        (t): MenuEntry => ({ kind: 'submenu', title: t.title, entries: t.entries }),
+    );
+    return [
+        { kind: 'action', actionId: 'commandPalette', label: 'Find', icon: 'fa-magnifying-glass' },
+        { kind: 'separator' },
+        ...submenus,
+        { kind: 'separator' },
+        { kind: 'action', actionId: 'openSettings', icon: 'fa-gear' },
+        { kind: 'action', actionId: 'openCheatsheet' },
+        { kind: 'action', actionId: 'aboutDarkly' },
+    ];
 }

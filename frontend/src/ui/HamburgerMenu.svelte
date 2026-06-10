@@ -1,23 +1,21 @@
 <script lang="ts">
-    import { theme, type ThemePreference } from '../state/theme.svelte';
     import { actions } from '../actions/registry';
     import { registryEpoch } from '../actions/registryEpoch.svelte';
-    import { buildMenu } from './menu/menuModel';
-    import MenuList from './menu/MenuList.svelte';
+    import { buildHamburgerEntries } from './menu/menuModel';
+    import MenuItems from './menu/MenuItems.svelte';
     import { menuBar } from '../state/menuBar.svelte';
 
-    // Same data-driven groups the pinned MenuBar renders. Keyed on the registry
-    // epoch since actions register asynchronously, after this component mounts.
-    const groups = $derived.by(() => { registryEpoch(); return buildMenu(actions.all()); });
+    // Keyed on the registry epoch since actions register asynchronously, after
+    // this component mounts.
+    const entries = $derived.by(() => {
+        registryEpoch();
+        return buildHamburgerEntries(actions.all());
+    });
 
     let open = $state(false);
 
     function toggle() { open = !open; }
     function close() { open = false; }
-
-    function setTheme(pref: ThemePreference) {
-        theme.set(pref);
-    }
 
     function pin() {
         menuBar.toggle();
@@ -40,32 +38,10 @@
 
     {#if open}
         <div class="menu">
-            {#each groups as group, i (group.title)}
-                {#if i > 0}<div class="sep"></div>{/if}
-                <div class="group-label">{group.title}</div>
-                <MenuList items={group.items} onrun={close} />
-            {/each}
-
-            <div class="sep"></div>
-            <div class="menu-section">
-                <span class="menu-label">Theme</span>
-                <div class="theme-options">
-                    <button
-                        class="theme-btn"
-                        class:active={theme.preference === 'dark'}
-                        onclick={() => setTheme('dark')}
-                    >Dark</button>
-                    <button
-                        class="theme-btn"
-                        class:active={theme.preference === 'light'}
-                        onclick={() => setTheme('light')}
-                    >Light</button>
-                </div>
-            </div>
-
+            <MenuItems {entries} onrun={close} />
             <div class="sep"></div>
             <button class="pin-item" onclick={pin}>
-                <i class="fa-solid fa-thumbtack"></i>
+                <span class="icon"><i class="fa-solid fa-thumbtack"></i></span>
                 <span>Pin menu to top bar</span>
             </button>
         </div>
@@ -103,8 +79,9 @@
         left: 0;
         z-index: 100;
         min-width: 220px;
-        max-height: 80vh;
-        overflow-y: auto;
+        /* `visible` (not auto) so submenu flyouts aren't clipped. The root
+           list is short enough not to need its own scroll. */
+        overflow: visible;
         background: var(--bg-surface, var(--bg));
         border: 1px solid var(--bg-hover);
         border-radius: 6px;
@@ -113,19 +90,10 @@
         margin-top: 4px;
     }
 
-    .group-label {
-        padding: 6px 14px 2px;
-        font-size: 10px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        color: var(--text-muted);
-    }
-
     .pin-item {
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 8px;
         width: 100%;
         padding: 7px 14px;
         background: none;
@@ -136,52 +104,17 @@
         cursor: pointer;
     }
     .pin-item:hover { background: var(--bg-hover); }
-    .pin-item i { width: 14px; color: var(--text-muted); }
+    .pin-item .icon {
+        width: 14px;
+        flex-shrink: 0;
+        text-align: center;
+        color: var(--text-muted);
+        font-size: 12px;
+    }
 
     .sep {
         height: 1px;
         background: var(--bg-hover);
         margin: 4px 0;
-    }
-
-    .menu-section {
-        padding: 4px 12px 6px;
-    }
-
-    .menu-label {
-        font-size: 10px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        color: var(--text-muted);
-    }
-
-    .theme-options {
-        display: flex;
-        gap: 4px;
-        margin-top: 6px;
-    }
-
-    .theme-btn {
-        flex: 1;
-        padding: 5px 0;
-        background: none;
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-        color: var(--text-muted);
-        font-size: 12px;
-        cursor: pointer;
-        transition: background 0.1s, color 0.1s, border-color 0.1s;
-    }
-
-    .theme-btn:hover {
-        background: var(--bg-hover);
-        color: var(--text);
-    }
-
-    .theme-btn.active {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: #ffffff;
     }
 </style>

@@ -1,48 +1,72 @@
 <script lang="ts">
     import { actions } from '../../actions/registry';
     import { registryEpoch } from '../../actions/registryEpoch.svelte';
-    import { buildMenu } from './menuModel';
-    import MenuList from './MenuList.svelte';
+    import { buildTopMenus } from './menuModel';
+    import MenuItems from './MenuItems.svelte';
     import { menuBar } from '../../state/menuBar.svelte';
-    import { theme, type ThemePreference } from '../../state/theme.svelte';
+    import { commandPalette } from '../../state/commandPalette.svelte';
+    import { config, formatHotkey } from '../../config/store.svelte';
+
+    const settingsHotkey = $derived(formatHotkey(config.get('hotkeys.openSettings') as string | undefined));
+    const paletteHotkey = $derived(formatHotkey(config.get('hotkeys.commandPalette') as string | undefined));
 
     // Actions register asynchronously (after the editor handle boots), so the
     // menu structure is keyed on the registry epoch to recompute once it's
-    // populated. Per-row hotkey/enabled/checked state is resolved reactively
-    // inside MenuList.
-    const groups = $derived.by(() => { registryEpoch(); return buildMenu(actions.all()); });
+    // populated.
+    const topMenus = $derived.by(() => {
+        registryEpoch();
+        return buildTopMenus(actions.all());
+    });
 
-    let openGroup = $state<string | null>(null);
+    let openTitle = $state<string | null>(null);
 
-    function toggleGroup(title: string) {
-        openGroup = openGroup === title ? null : title;
+    function toggle(title: string) {
+        openTitle = openTitle === title ? null : title;
+    }
+    // Hover-switch: once a menu is open, sweeping onto another opens it without
+    // a click. Hovering when nothing is open does nothing.
+    function hoverEnter(title: string) {
+        if (openTitle !== null) openTitle = title;
     }
     function close() {
-        openGroup = null;
+        openTitle = null;
     }
     function onWindowClick(e: MouseEvent) {
-        if (openGroup && !(e.target as HTMLElement).closest('.menu-bar')) {
-            openGroup = null;
+        if (openTitle && !(e.target as HTMLElement).closest('.menu-bar')) {
+            openTitle = null;
         }
-    }
-    function setTheme(pref: ThemePreference) {
-        theme.set(pref);
     }
 </script>
 
 <svelte:window onclick={onWindowClick} />
 
 <div class="menu-bar">
-    {#each groups as group (group.title)}
+    <button
+        class="icon-btn"
+        title={settingsHotkey ? `Settings (${settingsHotkey})` : 'Settings'}
+        onclick={() => actions.dispatch('openSettings', {})}
+    >
+        <i class="fa-solid fa-gear"></i>
+    </button>
+    <button
+        class="icon-btn"
+        title={paletteHotkey ? `Find (${paletteHotkey})` : 'Find'}
+        onclick={() => (commandPalette.open = true)}
+    >
+        <i class="fa-solid fa-magnifying-glass"></i>
+    </button>
+
+    {#each topMenus as menu (menu.title)}
         <div class="menu-group">
             <button
                 class="group-btn"
-                class:active={openGroup === group.title}
-                onclick={() => toggleGroup(group.title)}
-            >{group.title}</button>
-            {#if openGroup === group.title}
+                class:active={openTitle === menu.title}
+                onclick={() => toggle(menu.title)}
+                onmouseenter={() => hoverEnter(menu.title)}
+            >{menu.title}</button>
+            {#if openTitle === menu.title}
                 <div class="dropdown-surface">
-                    <MenuList items={group.items} onrun={close} />
+                    <MenuItems entries={menu.entries} onrun={close} />
                 </div>
             {/if}
         </div>
@@ -50,19 +74,7 @@
 
     <div class="spacer"></div>
 
-    <div class="theme-options">
-        <button
-            class="theme-btn"
-            class:active={theme.preference === 'dark'}
-            onclick={() => setTheme('dark')}
-        >Dark</button>
-        <button
-            class="theme-btn"
-            class:active={theme.preference === 'light'}
-            onclick={() => setTheme('light')}
-        >Light</button>
-    </div>
-    <button class="pin-btn" title="Unpin menu" onclick={() => menuBar.toggle()}>
+    <button class="icon-btn" title="Unpin menu" onclick={() => menuBar.toggle()}>
         <i class="fa-solid fa-thumbtack"></i>
     </button>
 </div>
@@ -110,32 +122,7 @@
 
     .spacer { flex: 1; }
 
-    .theme-options {
-        display: flex;
-        gap: 4px;
-    }
-
-    .theme-btn {
-        padding: 4px 10px;
-        background: none;
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-        color: var(--text-muted);
-        font-size: 12px;
-        cursor: pointer;
-        transition: background 0.1s, color 0.1s, border-color 0.1s;
-    }
-    .theme-btn:hover {
-        background: var(--bg-hover);
-        color: var(--text);
-    }
-    .theme-btn.active {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: #ffffff;
-    }
-
-    .pin-btn {
+    .icon-btn {
         width: 28px;
         height: 24px;
         display: flex;
@@ -148,7 +135,7 @@
         cursor: pointer;
         font-size: 12px;
     }
-    .pin-btn:hover {
+    .icon-btn:hover {
         background: var(--bg-hover);
         color: var(--text);
     }

@@ -11,12 +11,12 @@ beforeAll(() => {
 });
 
 describe('menu action registrations', () => {
-    it('registers the new View commands with menuPath', () => {
-        for (const id of ['commandPalette', 'openCheatsheet', 'aboutDarkly']) {
-            const reg = actions.get(id);
-            expect(reg, id).toBeTruthy();
-            expect(reg!.menuPath, id).toEqual(['View']);
-        }
+    it('registers the new commands; cheatsheet + about live under Help', () => {
+        expect(actions.get('commandPalette')).toBeTruthy();
+        // The command palette is surfaced as "Find", not as a submenu row.
+        expect(actions.get('commandPalette')?.menuPath).toBeUndefined();
+        expect(actions.get('openCheatsheet')?.menuPath).toEqual(['Help']);
+        expect(actions.get('aboutDarkly')?.menuPath).toEqual(['Help']);
     });
 
     it('puts the selection commands under Select', () => {
