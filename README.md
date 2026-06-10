@@ -126,8 +126,10 @@ For a feature to count, it must be:
 - [x] Duplicate layer / group
 - [ ] Crop tool / crop to selection
 - [ ] Canvas resize
-- [ ] Select All / Deselect / Invert as menu+hotkey actions
-- [ ] Invert selection (boolean op exists)
+- [x] Select All / Deselect / Invert as menu+hotkey actions
+- [x] Invert selection (boolean op exists)
+- [x] Command palette (Ctrl+Shift+P)
+- [x] Application menu (File/Edit/Select/… , pinnable to top bar)
 - [ ] Autosave + crash recovery
 - [ ] Brightness / Contrast
 - [ ] Hue / Saturation / Lightness

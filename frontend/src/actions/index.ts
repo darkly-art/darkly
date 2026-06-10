@@ -16,7 +16,17 @@ import { screenToCanvas } from '../canvas/coordinates';
 import { pickOpenFile, type OpenedFile } from '../storage/fileHandle';
 import { detectKind, isImageKind, type FileKind } from '../storage/detectKind';
 import { saveDocument } from '../storage/saveDocument';
+import { canSave } from '../storage/fileHandle';
 import { shell } from '../multi_tab/shell.svelte';
+import { about } from '../state/about.svelte';
+import { commandPalette } from '../state/commandPalette.svelte';
+import { openCheatsheet } from '../ui/cheatsheet';
+
+// Tooltip explaining why Save / Save As are disabled when the browser lacks
+// the File System Access API (Firefox). Surfaced as the menu row's `title`
+// via each save action's `disabledReason`.
+const NO_SAVE_TOOLTIP =
+    "Filesystem save isn't supported in this browser — try Chrome, Edge, or Safari.";
 
 /** Walk the layer tree to find a node by id. The layer tree is the
  *  JSON shape produced by `app.refreshLayerTree`, with `children` on
@@ -242,12 +252,16 @@ export function registerActions() {
         id: 'undo',
         displayName: 'Undo',
         category: 'edit',
+        description: 'Undo the last action.',
+        menuPath: ['Edit'],
         handler: () => { app.handle?.undo(); app.refreshLayerTree(); },
     });
     actions.register({
         id: 'redo',
         displayName: 'Redo',
         category: 'edit',
+        description: 'Redo the last undone action.',
+        menuPath: ['Edit'],
         handler: () => { app.handle?.redo(); app.refreshLayerTree(); },
     });
 
@@ -256,12 +270,16 @@ export function registerActions() {
         id: 'resetColors',
         displayName: 'Reset Colors',
         category: 'colors',
+        description: 'Reset the foreground/background to black and white.',
+        menuPath: ['Colors'],
         handler: () => app.resetColors(),
     });
     actions.register({
         id: 'swapColors',
         displayName: 'Swap Colors',
         category: 'colors',
+        description: 'Swap the foreground and background colors.',
+        menuPath: ['Colors'],
         handler: () => app.swapColors(),
     });
 
@@ -270,18 +288,24 @@ export function registerActions() {
         id: 'selectAll',
         displayName: 'Select All',
         category: 'selection',
+        description: 'Select the entire canvas.',
+        menuPath: ['Select'],
         handler: () => app.handle?.select_all(),
     });
     actions.register({
         id: 'clearSelection',
-        displayName: 'Clear Selection',
+        displayName: 'Deselect',
         category: 'selection',
+        description: 'Clear the active selection.',
+        menuPath: ['Select'],
         handler: () => app.handle?.clear_selection(),
     });
     actions.register({
         id: 'clearSelectionContents',
         displayName: 'Clear Selection Contents',
         category: 'selection',
+        description: 'Erase the pixels inside the selection.',
+        menuPath: ['Select'],
         handler: () => {
             if (app.activeLayerId != null) {
                 app.handle?.clear_selection_contents(app.activeLayerId);
@@ -292,6 +316,8 @@ export function registerActions() {
         id: 'invertSelection',
         displayName: 'Invert Selection',
         category: 'selection',
+        description: 'Invert the current selection.',
+        menuPath: ['Select'],
         handler: () => app.handle?.invert_selection(),
     });
 
@@ -300,6 +326,8 @@ export function registerActions() {
         id: 'copy',
         displayName: 'Copy',
         category: 'edit',
+        description: 'Copy the active layer to the clipboard.',
+        menuPath: ['Edit'],
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
             const handle = app.handle;
@@ -321,6 +349,8 @@ export function registerActions() {
         id: 'cut',
         displayName: 'Cut',
         category: 'edit',
+        description: 'Cut the active layer to the clipboard.',
+        menuPath: ['Edit'],
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
             const handle = app.handle;
@@ -341,6 +371,8 @@ export function registerActions() {
         id: 'paste',
         displayName: 'Paste',
         category: 'edit',
+        description: 'Paste an image or layer from the clipboard.',
+        menuPath: ['Edit'],
         handler: async () => {
             if (!app.handle) return;
 
@@ -423,6 +455,8 @@ export function registerActions() {
         id: 'pasteInPlace',
         displayName: 'Paste in Place',
         category: 'edit',
+        description: 'Paste from the clipboard at its original position.',
+        menuPath: ['Edit'],
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
             const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
@@ -451,6 +485,9 @@ export function registerActions() {
         description:
             'Save the current document as a `.darkly` file. ' +
             'Re-saves to the same file after the first Save As; otherwise prompts.',
+        menuPath: ['File'],
+        enabled: () => canSave,
+        disabledReason: () => (canSave ? undefined : NO_SAVE_TOOLTIP),
         handler: () => {
             if (!app.handle) return;
             void saveDocument({ forceAs: false });
@@ -461,6 +498,9 @@ export function registerActions() {
         displayName: 'Save As',
         category: 'file',
         description: 'Save the current document to a new `.darkly` file.',
+        menuPath: ['File'],
+        enabled: () => canSave,
+        disabledReason: () => (canSave ? undefined : NO_SAVE_TOOLTIP),
         handler: () => {
             if (!app.handle) return;
             void saveDocument({ forceAs: true });
@@ -472,6 +512,7 @@ export function registerActions() {
         category: 'file',
         description:
             'Open a fresh document in a new tab. Prompts for canvas size and background color.',
+        menuPath: ['File'],
         // No default hotkey — `$mod+KeyN` is reserved by every major browser
         // for "new window" and cannot be intercepted by the page. Users can
         // still bind it via the Hotkeys tab if their browser/OS allows.
@@ -485,6 +526,7 @@ export function registerActions() {
         category: 'file',
         description:
             'Open a `.darkly` document or image (PNG / JPEG / WebP) in a new tab.',
+        menuPath: ['File'],
         handler: () => {
             void openFlow();
         },
@@ -494,6 +536,7 @@ export function registerActions() {
         displayName: 'Export Image…',
         category: 'file',
         description: 'Export the canvas composite as PNG, JPEG, or WebP.',
+        menuPath: ['File'],
         handler: () => {
             if (!app.handle) return;
             exportImage.open = true;
@@ -548,6 +591,7 @@ export function registerActions() {
         displayName: 'Toggle Erase Mode',
         category: 'tools',
         description: 'Toggle erase mode on the brush tool. Switches to the brush tool first if another tool is active.',
+        checked: () => brushSession.eraseMode,
         handler: () => {
             if (app.activeToolId !== 'brush') {
                 app.activeToolId = 'brush';
@@ -570,6 +614,7 @@ export function registerActions() {
         displayName: 'New Layer',
         category: 'layers',
         description: 'Add a new layer above the active one.',
+        menuPath: ['Layer'],
         handler: () => {
             if (!app.handle) return;
             const id = app.handle.add_raster_layer(app.activeLayerId ?? -1);
@@ -583,6 +628,7 @@ export function registerActions() {
         displayName: 'New Group',
         category: 'layers',
         description: 'Group the selected layers together, or add an empty group if nothing is selected.',
+        menuPath: ['Layer'],
         handler: () => {
             if (!app.handle) return;
             if (app.selectedLayerIds.size > 0) {
@@ -606,6 +652,8 @@ export function registerActions() {
         id: 'toggleVisibility',
         displayName: 'Toggle Layer Visibility',
         category: 'layers',
+        description: 'Show or hide the active layer.',
+        menuPath: ['Layer'],
         accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
@@ -621,6 +669,8 @@ export function registerActions() {
         id: 'toggleLock',
         displayName: 'Toggle Layer Lock',
         category: 'layers',
+        description: 'Lock or unlock the active layer.',
+        menuPath: ['Layer'],
         accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
@@ -637,6 +687,7 @@ export function registerActions() {
         displayName: 'Isolate Layer',
         category: 'layers',
         description: 'Solo a layer so only it shows in the canvas. Press again to bring everything else back.',
+        menuPath: ['Layer'],
         accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
@@ -650,6 +701,7 @@ export function registerActions() {
         displayName: 'Delete Layer',
         category: 'layers',
         description: 'Delete the selected layers (or remove the active veil).',
+        menuPath: ['Layer'],
         handler: () => {
             if (!app.handle) return;
             // Veil takes priority: the trash button on the layer panel
@@ -697,6 +749,7 @@ export function registerActions() {
         displayName: 'Duplicate Layer',
         category: 'layers',
         description: 'Make a copy of each selected layer.',
+        menuPath: ['Layer'],
         handler: () => {
             if (!app.handle) return;
             const targets = app.selectedLayerIds.size > 0
@@ -722,6 +775,7 @@ export function registerActions() {
         displayName: 'Merge Down',
         category: 'layers',
         description: 'Merge the active layer into the one below it, or combine multiple selected layers into a single layer.',
+        menuPath: ['Layer'],
         handler: () => {
             if (!app.handle) return;
             if (app.selectedLayerIds.size >= 2) {
@@ -754,6 +808,7 @@ export function registerActions() {
         category: 'layers',
         description:
             'Bake modifiers into the layer (apply mask), or flatten a group into a single raster that inherits the group’s blend props.',
+        menuPath: ['Layer'],
         accepts: ['layerId'],
         handler: (ctx) => {
             if (!app.handle) return;
@@ -774,6 +829,7 @@ export function registerActions() {
         displayName: 'Add Mask',
         category: 'layers',
         description: 'Add a mask modifier to the active layer or group and activate it for painting.',
+        menuPath: ['Layer'],
         accepts: ['layerId'],
         handler: (ctx) => {
             if (!app.handle) return;
@@ -797,6 +853,7 @@ export function registerActions() {
         displayName: 'Open Settings',
         category: 'view',
         description: 'Show the preferences modal.',
+        menuPath: ['View'],
         handler: () => { settings.open = true; },
     });
 
@@ -805,10 +862,39 @@ export function registerActions() {
         displayName: 'Mirror View',
         category: 'view',
         description: 'Flip the canvas horizontally for fresh-eyes review. View-only — the document is unchanged.',
+        menuPath: ['View'],
+        checked: () => app.mirrorH,
         handler: () => {
             app.mirrorH = !app.mirrorH;
             app.requestFrame();
         },
+    });
+
+    actions.register({
+        id: 'commandPalette',
+        displayName: 'Command Palette',
+        category: 'view',
+        description: 'Search and run any command.',
+        menuPath: ['View'],
+        handler: () => { commandPalette.open = true; },
+    });
+
+    actions.register({
+        id: 'openCheatsheet',
+        displayName: 'Hotkey Cheat Sheet',
+        category: 'view',
+        description: 'Open a searchable, printable list of every keyboard shortcut.',
+        menuPath: ['View'],
+        handler: () => openCheatsheet(),
+    });
+
+    actions.register({
+        id: 'aboutDarkly',
+        displayName: 'About Darkly',
+        category: 'view',
+        description: 'Show version and credits.',
+        menuPath: ['View'],
+        handler: () => { about.open = true; },
     });
 
     // -- Brush parameters (size hotkeys + shift+drag scrub) --

@@ -6,6 +6,7 @@
     import ColorPicker from './ColorPicker.svelte';
     import HamburgerMenu from './HamburgerMenu.svelte';
     import ToolCluster from './ToolCluster.svelte';
+    import { menuBar } from '../state/menuBar.svelte';
 
     let showColorPicker = $state(false);
     let pickerEl: HTMLDivElement | undefined = $state();
@@ -91,7 +92,9 @@
 </script>
 
 <div class="toolbar">
-    <HamburgerMenu />
+    {#if !menuBar.pinned}
+        <HamburgerMenu />
+    {/if}
 
     <div class="toolbar-spacer"></div>
 

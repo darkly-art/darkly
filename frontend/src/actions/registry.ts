@@ -1,3 +1,5 @@
+import { bumpRegistryEpoch } from './registryEpoch.svelte';
+
 export type ActionContext = Record<string, any>;
 export type ActionType = 'instant' | 'hold';
 
@@ -13,6 +15,20 @@ export interface ActionRegistration {
     requires?: string[];
     accepts?: string[];
     type?: ActionType;
+    /** Top-level menu this action appears under, e.g. ['Select']. Absent →
+     *  not in the click-through menu (still available via hotkey + palette).
+     *  v1 is FLAT: only the first segment is used; the renderer is
+     *  non-recursive (no submenu flyouts). The array shape is kept for
+     *  forward-compat, but multi-segment nesting is deferred. */
+    menuPath?: string[];
+    /** Menu/palette enablement. Absent → always enabled. When it returns
+     *  false the menu row is greyed + non-dispatchable; `disabledReason?`
+     *  supplies a tooltip. */
+    enabled?: () => boolean;
+    disabledReason?: () => string | undefined;
+    /** On/off toggles show a checkmark when this returns true (e.g. erase
+     *  mode, mirror). */
+    checked?: () => boolean;
     handler: (ctx: ActionContext) => void;
     /** For drag-bound actions: receives the live pointer event plus the
      *  total displacement from the pointerdown position (client pixels)
@@ -55,6 +71,7 @@ class ActionRegistry {
 
     register(reg: ActionRegistration) {
         this.actions.set(reg.id, reg);
+        bumpRegistryEpoch();
     }
 
     get(id: string): ActionRegistration | undefined {

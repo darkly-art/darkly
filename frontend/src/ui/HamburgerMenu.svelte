@@ -1,11 +1,14 @@
 <script lang="ts">
     import { theme, type ThemePreference } from '../state/theme.svelte';
-    import { settings } from '../state/settings.svelte';
-    import { about } from '../state/about.svelte';
-    import { config, formatHotkey } from '../config/store.svelte';
-    import { openCheatsheet } from './cheatsheet';
     import { actions } from '../actions/registry';
-    import { canSave } from '../storage/fileHandle';
+    import { registryEpoch } from '../actions/registryEpoch.svelte';
+    import { buildMenu } from './menu/menuModel';
+    import MenuList from './menu/MenuList.svelte';
+    import { menuBar } from '../state/menuBar.svelte';
+
+    // Same data-driven groups the pinned MenuBar renders. Keyed on the registry
+    // epoch since actions register asynchronously, after this component mounts.
+    const groups = $derived.by(() => { registryEpoch(); return buildMenu(actions.all()); });
 
     let open = $state(false);
 
@@ -16,18 +19,8 @@
         theme.set(pref);
     }
 
-    function openSettings() {
-        settings.open = true;
-        close();
-    }
-
-    function openAbout() {
-        about.open = true;
-        close();
-    }
-
-    function runAction(id: string) {
-        actions.dispatch(id, {});
+    function pin() {
+        menuBar.toggle();
         close();
     }
 
@@ -36,17 +29,6 @@
             open = false;
         }
     }
-
-    const newDocHotkey = $derived(formatHotkey(config.get('hotkeys.newDocument') as string | undefined));
-    const settingsHotkey = $derived(formatHotkey(config.get('hotkeys.openSettings') as string | undefined));
-    const exportHotkey = $derived(formatHotkey(config.get('hotkeys.exportImage') as string | undefined));
-    const saveHotkey = $derived(formatHotkey(config.get('hotkeys.saveDocument') as string | undefined));
-    const saveAsHotkey = $derived(formatHotkey(config.get('hotkeys.saveDocumentAs') as string | undefined));
-    const openHotkey = $derived(formatHotkey(config.get('hotkeys.open') as string | undefined));
-
-    // Tooltip explaining why Save/Save As are disabled on Firefox.
-    const noSaveTooltip =
-        "Filesystem save isn't supported in this browser — try Chrome, Edge, or Safari.";
 </script>
 
 <svelte:window onclick={onWindowClick} />
@@ -58,58 +40,12 @@
 
     {#if open}
         <div class="menu">
-            <button
-                class="menu-item"
-                onclick={() => runAction('newDocument')}
-            >
-                <i class="fa-solid fa-file"></i>
-                <span>New</span>
-                {#if newDocHotkey}<span class="kbd">{newDocHotkey}</span>{/if}
-            </button>
-            <button
-                class="menu-item"
-                onclick={() => runAction('open')}
-            >
-                <i class="fa-solid fa-folder-open"></i>
-                <span>Open</span>
-                {#if openHotkey}<span class="kbd">{openHotkey}</span>{/if}
-            </button>
-            <button
-                class="menu-item"
-                disabled={!canSave}
-                title={canSave ? undefined : noSaveTooltip}
-                onclick={() => runAction('saveDocument')}
-            >
-                <i class="fa-solid fa-floppy-disk"></i>
-                <span>Save</span>
-                {#if saveHotkey}<span class="kbd">{saveHotkey}</span>{/if}
-            </button>
-            <button
-                class="menu-item"
-                disabled={!canSave}
-                title={canSave ? undefined : noSaveTooltip}
-                onclick={() => runAction('saveDocumentAs')}
-            >
-                <i class="fa-solid fa-floppy-disk"></i>
-                <span>Save As</span>
-                {#if saveAsHotkey}<span class="kbd">{saveAsHotkey}</span>{/if}
-            </button>
-            <div class="sep"></div>
-            <button class="menu-item" onclick={() => runAction('exportImage')}>
-                <i class="fa-solid fa-file-export"></i>
-                <span>Export Image</span>
-                {#if exportHotkey}<span class="kbd">{exportHotkey}</span>{/if}
-            </button>
-            <div class="sep"></div>
-            <button class="menu-item" onclick={() => { openCheatsheet(); close(); }}>
-                <i class="fa-solid fa-keyboard"></i>
-                <span>Hotkey Cheat Sheet</span>
-            </button>
-            <button class="menu-item" onclick={openSettings}>
-                <i class="fa-solid fa-gear"></i>
-                <span>Settings</span>
-                {#if settingsHotkey}<span class="kbd">{settingsHotkey}</span>{/if}
-            </button>
+            {#each groups as group, i (group.title)}
+                {#if i > 0}<div class="sep"></div>{/if}
+                <div class="group-label">{group.title}</div>
+                <MenuList items={group.items} onrun={close} />
+            {/each}
+
             <div class="sep"></div>
             <div class="menu-section">
                 <span class="menu-label">Theme</span>
@@ -126,10 +62,11 @@
                     >Light</button>
                 </div>
             </div>
+
             <div class="sep"></div>
-            <button class="menu-item" onclick={openAbout}>
-                <i class="fa-solid fa-circle-info"></i>
-                <span>About Darkly</span>
+            <button class="pin-item" onclick={pin}>
+                <i class="fa-solid fa-thumbtack"></i>
+                <span>Pin menu to top bar</span>
             </button>
         </div>
     {/if}
@@ -165,7 +102,9 @@
         top: 100%;
         left: 0;
         z-index: 100;
-        min-width: 200px;
+        min-width: 220px;
+        max-height: 80vh;
+        overflow-y: auto;
         background: var(--bg-surface, var(--bg));
         border: 1px solid var(--bg-hover);
         border-radius: 6px;
@@ -174,7 +113,16 @@
         margin-top: 4px;
     }
 
-    .menu-item {
+    .group-label {
+        padding: 6px 14px 2px;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: var(--text-muted);
+    }
+
+    .pin-item {
         display: flex;
         align-items: center;
         gap: 10px;
@@ -187,18 +135,8 @@
         text-align: left;
         cursor: pointer;
     }
-    .menu-item:hover:not(:disabled) { background: var(--bg-hover); }
-    .menu-item:disabled {
-        opacity: 0.45;
-        cursor: not-allowed;
-    }
-    .menu-item i { width: 14px; color: var(--text-muted); }
-    .kbd {
-        margin-left: auto;
-        font-family: var(--font-mono, monospace);
-        font-size: 11px;
-        color: var(--text-muted);
-    }
+    .pin-item:hover { background: var(--bg-hover); }
+    .pin-item i { width: 14px; color: var(--text-muted); }
 
     .sep {
         height: 1px;
