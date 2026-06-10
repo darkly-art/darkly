@@ -98,12 +98,12 @@ pub struct ManifestWriter {
 }
 
 impl ManifestWriter {
-    /// Writer block for the running build — `name = "darkly"`, `version`
-    /// from the crate's `Cargo.toml`.
+    /// Writer block for the running build — `name = "darkly"`, `version` from
+    /// the git-derived [`crate::VERSION`].
     pub fn current() -> Self {
         ManifestWriter {
             name: "darkly".to_string(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
+            version: crate::VERSION.to_string(),
         }
     }
 }
@@ -216,6 +216,13 @@ pub fn texture_format_from_str(slug: &str) -> Option<wgpu::TextureFormat> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writer_version_is_crate_version() {
+        // The saved-file breadcrumb is the git-derived crate version, not the
+        // stale Cargo semver.
+        assert_eq!(ManifestWriter::current().version, crate::VERSION);
+    }
 
     #[test]
     fn texture_format_slug_round_trip() {

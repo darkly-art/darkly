@@ -46,7 +46,7 @@ pub struct Brush {
 }
 
 fn default_engine_version() -> String {
-    env!("CARGO_PKG_VERSION").to_string()
+    crate::VERSION.to_string()
 }
 
 impl BrushMetadata {
@@ -166,6 +166,13 @@ impl Brush {
 mod tests {
     use super::*;
     use crate::brush;
+
+    #[test]
+    fn engine_version_default_is_crate_version() {
+        // Lives here because `default_engine_version` is private to this module.
+        // The brush-bundle breadcrumb is the git-derived crate version.
+        assert_eq!(default_engine_version(), crate::VERSION);
+    }
 
     #[test]
     fn round_trip_no_resources() {

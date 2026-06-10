@@ -138,18 +138,6 @@ We do not blindly copy prior art; we use it to inform our own decisions. Our imp
 
 When an idea, algorithm, shader, or implementation comes from an external source — open source code, Shadertoy, papers, blog posts, video tutorials, etc. — credit the source and author at the top of the file (or inline next to the borrowed fragment, if it's smaller than file-scope). Include the author's name or handle and a link to the original.
 
-## Performance Principle
-
-Performance is king. If a feature can't be fast, it doesn't ship. There is almost always a fast way to do something — find it before writing the naive version. Think about data access patterns, per-frame costs, and batch granularity up front, not after the profiler screams.
-
-Past lessons that illustrate the pattern:
-
-- **Flood fill** was doing per-pixel HashMap lookups across a tiled image (~8M hash ops). Fix: batch at the tile level — one lookup per tile, direct array indexing within. Orders of magnitude faster.
-- **Selection overlay** generated one GPU primitive per boundary pixel (~800 instances for a rectangle). Fix: merge collinear segments and simplify polylines once when the selection changes — down to ~4-30 primitives.
-- **Animation scheduling** had independent per-system timers that forced extra frame renders. Fix: a single master clock with integer divisors so slower systems' ticks always align with faster ones — zero extra renders.
-
-See `docs/lessons-learned/gpu-lessons-learned.md` for full details.
-
 ## Testing Principle
 
 **Every feature must have a test.** Verify the feature works. The test exists; it passes. That's it.
