@@ -1,6 +1,6 @@
 <script lang="ts">
     import { commandPalette } from '../../state/commandPalette.svelte';
-    import { actions, type ActionRegistration } from '../../actions/registry';
+    import { actions, actionEnablement, type ActionRegistration } from '../../actions/registry';
     import { registryEpoch } from '../../actions/registryEpoch.svelte';
     import { config, formatHotkey } from '../../config/store.svelte';
     import { filterPalette } from './paletteFilter';
@@ -40,7 +40,7 @@
 
     function enabledOf(id: string): boolean {
         const r = actions.get(id);
-        return r?.enabled ? r.enabled() : true;
+        return r ? actionEnablement(r).enabled : true;
     }
 
     function run(reg: ActionRegistration) {

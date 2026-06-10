@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { registerActions } from '../index';
-import { actions } from '../registry';
+import { actions, actionEnablement } from '../registry';
+import { app } from '../../state/app.svelte';
 
 // Populate the real registry once. `registerActions` is idempotent enough for
 // our purposes (re-registering overwrites by id), and tool actions are absent
@@ -29,15 +30,22 @@ describe('menu action registrations', () => {
         expect(actions.get('clearSelection')?.displayName).toBe('Deselect');
     });
 
-    it("save actions' enabled() follows canSave (false in this environment)", () => {
+    it("save actions' enabled() follows canSave (disabled-with-reason here)", () => {
         // The test environment has no File System Access API, so canSave is
-        // false and Save / Save As report disabled with a reason.
+        // false; enabled() returns the disabled-reason string (not `true`).
         const save = actions.get('saveDocument');
-        expect(save?.enabled?.()).toBe(false);
-        expect(save?.disabledReason?.()).toBeTruthy();
+        const e = save?.enabled?.();
+        expect(e).not.toBe(true);
+        expect(typeof e).toBe('string');
+        expect(actionEnablement(save!)).toMatchObject({ enabled: false });
+        expect(actionEnablement(save!).reason).toBeTruthy();
     });
 
-    it('mirrorViewH exposes a checked() predicate', () => {
-        expect(typeof actions.get('mirrorViewH')?.checked).toBe('function');
+    it('mirrorViewH exposes a status() indicator (icon class, not a bare bool)', () => {
+        const status = actions.get('mirrorViewH')?.status;
+        expect(typeof status).toBe('function');
+        // No active engine instance here, so mirror is off → no status icon.
+        expect(app.mirrorH).toBeFalsy();
+        expect(status!()).toBeUndefined();
     });
 });

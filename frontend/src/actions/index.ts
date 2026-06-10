@@ -23,8 +23,8 @@ import { commandPalette } from '../state/commandPalette.svelte';
 import { openCheatsheet } from '../ui/cheatsheet';
 
 // Tooltip explaining why Save / Save As are disabled when the browser lacks
-// the File System Access API (Firefox). Surfaced as the menu row's `title`
-// via each save action's `disabledReason`.
+// the File System Access API (Firefox). Returned from each save action's
+// `enabled()` as the disabled-reason string, surfaced as the menu row's `title`.
 const NO_SAVE_TOOLTIP =
     "Filesystem save isn't supported in this browser — try Chrome, Edge, or Safari.";
 
@@ -486,8 +486,7 @@ export function registerActions() {
             'Save the current document as a `.darkly` file. ' +
             'Re-saves to the same file after the first Save As; otherwise prompts.',
         menuPath: ['File'],
-        enabled: () => canSave,
-        disabledReason: () => (canSave ? undefined : NO_SAVE_TOOLTIP),
+        enabled: () => canSave || NO_SAVE_TOOLTIP,
         handler: () => {
             if (!app.handle) return;
             void saveDocument({ forceAs: false });
@@ -499,8 +498,7 @@ export function registerActions() {
         category: 'file',
         description: 'Save the current document to a new `.darkly` file.',
         menuPath: ['File'],
-        enabled: () => canSave,
-        disabledReason: () => (canSave ? undefined : NO_SAVE_TOOLTIP),
+        enabled: () => canSave || NO_SAVE_TOOLTIP,
         handler: () => {
             if (!app.handle) return;
             void saveDocument({ forceAs: true });
@@ -591,7 +589,7 @@ export function registerActions() {
         displayName: 'Toggle Erase Mode',
         category: 'tools',
         description: 'Toggle erase mode on the brush tool. Switches to the brush tool first if another tool is active.',
-        checked: () => brushSession.eraseMode,
+        status: () => (brushSession.eraseMode ? 'fa-check' : undefined),
         handler: () => {
             if (app.activeToolId !== 'brush') {
                 app.activeToolId = 'brush';
@@ -864,7 +862,7 @@ export function registerActions() {
         category: 'view',
         description: 'Flip the canvas horizontally for fresh-eyes review. View-only — the document is unchanged.',
         menuPath: ['View'],
-        checked: () => app.mirrorH,
+        status: () => (app.mirrorH ? 'fa-check' : undefined),
         handler: () => {
             app.mirrorH = !app.mirrorH;
             app.requestFrame();

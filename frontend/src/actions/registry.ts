@@ -21,14 +21,18 @@ export interface ActionRegistration {
      *  non-recursive (no submenu flyouts). The array shape is kept for
      *  forward-compat, but multi-segment nesting is deferred. */
     menuPath?: string[];
-    /** Menu/palette enablement. Absent → always enabled. When it returns
-     *  false the menu row is greyed + non-dispatchable; `disabledReason?`
-     *  supplies a tooltip. */
-    enabled?: () => boolean;
-    disabledReason?: () => string | undefined;
-    /** On/off toggles show a checkmark when this returns true (e.g. erase
-     *  mode, mirror). */
-    checked?: () => boolean;
+    /** Menu/palette enablement. Absent or `true` → enabled. Return `false` to
+     *  disable with no explanation, or a string to disable *and* use that
+     *  string as the row's tooltip (the disabled-reason). Resolve via
+     *  `actionEnablement` rather than calling this directly. */
+    enabled?: () => boolean | string;
+    /** Leading status indicator for menu/palette rows. Returns a FontAwesome
+     *  icon class to display in the row's gutter (e.g. 'fa-check' for an active
+     *  toggle), or undefined for no status. The action owns its own
+     *  representation — the renderer just displays whatever class it returns.
+     *  An action that defines `status` always reserves gutter space, so the
+     *  label doesn't shift when the indicator toggles on/off. */
+    status?: () => string | undefined;
     handler: (ctx: ActionContext) => void;
     /** For drag-bound actions: receives the live pointer event plus the
      *  total displacement from the pointerdown position (client pixels)
@@ -44,6 +48,18 @@ export interface BindingSiteRegistration {
     /** Human-readable label shown in the cheatsheet scope chip and the
      *  settings UI's site dropdown. Defaults to a title-cased `name`. */
     displayName?: string;
+}
+
+/** Resolve an action's menu/palette enablement into a flag plus optional
+ *  tooltip reason. `enabled` absent or returning `true` → enabled; a string →
+ *  disabled with that string as the reason; `false` → disabled, no reason. */
+export function actionEnablement(
+    action: ActionRegistration,
+): { enabled: boolean; reason?: string } {
+    const e = action.enabled?.();
+    if (e === undefined || e === true) return { enabled: true };
+    if (typeof e === 'string') return { enabled: false, reason: e };
+    return { enabled: false };
 }
 
 /** Check if an action's hard requirements are satisfied by a set of provided keys. */

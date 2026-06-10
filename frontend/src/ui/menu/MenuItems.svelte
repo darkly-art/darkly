@@ -1,6 +1,6 @@
 <script lang="ts">
     import type { MenuEntry } from './menuModel';
-    import { actions } from '../../actions/registry';
+    import { actions, actionEnablement } from '../../actions/registry';
     import { config, formatHotkey } from '../../config/store.svelte';
     import ThemeControl from './ThemeControl.svelte';
     import MenuItemsSelf from './MenuItems.svelte';
@@ -16,23 +16,24 @@
     function hotkey(id: string): string | undefined {
         return formatHotkey(config.get('hotkeys.' + id) as string | undefined);
     }
-    function enabledOf(id: string): boolean {
+    function enablement(id: string): { enabled: boolean; reason?: string } {
         const r = actions.get(id);
-        return r?.enabled ? r.enabled() : true;
+        return r ? actionEnablement(r) : { enabled: true };
     }
-    function checkedOf(id: string): boolean {
-        const r = actions.get(id);
-        return r?.checked ? r.checked() : false;
+    function statusCapable(id: string): boolean {
+        return actions.get(id)?.status !== undefined;
     }
-    function tooltipOf(id: string, enabled: boolean): string | undefined {
-        const r = actions.get(id);
-        return enabled ? r?.description : r?.disabledReason?.();
+    function statusIcon(id: string): string | undefined {
+        return actions.get(id)?.status?.();
+    }
+    function tooltipOf(id: string, status: { enabled: boolean; reason?: string }): string | undefined {
+        return status.enabled ? actions.get(id)?.description : status.reason;
     }
     function labelOf(id: string, override: string | undefined): string {
         return override ?? actions.get(id)?.displayName ?? id;
     }
     function runAction(id: string) {
-        if (!enabledOf(id)) return;
+        if (!enablement(id).enabled) return;
         actions.dispatch(id, {});
         onrun?.();
     }
@@ -57,7 +58,6 @@
                 onmouseenter={() => (openSubmenu = entry.title)}
                 onclick={() => (openSubmenu = openSubmenu === entry.title ? null : entry.title)}
             >
-                <span class="icon"></span>
                 <span class="label">{entry.title}</span>
                 <i class="chevron fa-solid fa-chevron-right"></i>
                 {#if openSubmenu === entry.title}
@@ -67,21 +67,23 @@
                 {/if}
             </div>
         {:else if actions.get(entry.actionId)}
-            {@const enabled = enabledOf(entry.actionId)}
+            {@const status = enablement(entry.actionId)}
             <button
                 class="row action-row"
-                disabled={!enabled}
-                title={tooltipOf(entry.actionId, enabled)}
+                disabled={!status.enabled}
+                title={tooltipOf(entry.actionId, status)}
                 onmouseenter={() => (openSubmenu = null)}
                 onclick={() => runAction(entry.actionId)}
             >
-                <span class="icon">
-                    {#if entry.icon}
-                        <i class="fa-solid {entry.icon}"></i>
-                    {:else if checkedOf(entry.actionId)}
-                        <i class="fa-solid fa-check check"></i>
-                    {/if}
-                </span>
+                {#if entry.icon || statusCapable(entry.actionId)}
+                    <span class="icon">
+                        {#if entry.icon}
+                            <i class="fa-solid {entry.icon}"></i>
+                        {:else if statusIcon(entry.actionId)}
+                            <i class="fa-solid {statusIcon(entry.actionId)} status"></i>
+                        {/if}
+                    </span>
+                {/if}
                 <span class="label">{labelOf(entry.actionId, entry.label)}</span>
                 {#if hotkey(entry.actionId)}<span class="kbd">{hotkey(entry.actionId)}</span>{/if}
             </button>
@@ -127,7 +129,7 @@
         color: var(--text-muted);
         font-size: 12px;
     }
-    .icon .check { color: var(--accent); font-size: 11px; }
+    .icon .status { color: var(--accent); font-size: 11px; }
 
     .label { flex: 1; }
 
