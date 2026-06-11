@@ -199,10 +199,11 @@ cargo test --workspace --exclude darkly-wasm --features darkly/testing -- --test
 # `vite build` only transpiles — `tsc --noEmit` is the actual TS gate.
 (cd frontend && npx tsc --noEmit)
 (cd frontend && npm run build)
-# Vitest runs in the node environment by default — DOM globals like
-# `KeyboardEvent` / `PointerEvent` are not defined. Use plain object
-# fakes (`{ key, shiftKey } as KeyboardEvent`) or opt a test file into
-# jsdom via `// @vitest-environment jsdom`.
+# Vitest runs in the node environment — there is no DOM, so globals like
+# `KeyboardEvent` / `PointerEvent` / `window` are undefined. Test against
+# plain object fakes (`{ key, shiftKey } as KeyboardEvent`), and for code
+# that touches `window`, stub it with `vi.stubGlobal('window', …)` and a
+# fake node — see `src/lib/__tests__/clickOutside.test.ts`.
 (cd frontend && npm test)
 ```
 

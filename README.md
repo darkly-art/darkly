@@ -86,7 +86,7 @@ These features are ordered roughly by importance. They will be implemented mostl
 
 For a feature to count, it must be:
 1) Implemented in Rust backend
-2) Implemented in frontend. Typically this means having a proper action, menu path, and hotkey in every editor preset.
+2) Have a proper frontend action, with a menu path and hotkey in each editor preset, if applicable
 
 ### Essential / Must-Have
 - [x] Node-based brush engine
@@ -126,8 +126,10 @@ For a feature to count, it must be:
 - [x] Duplicate layer / group
 - [ ] Crop tool / crop to selection
 - [ ] Canvas resize
-- [ ] Select All / Deselect / Invert as menu+hotkey actions
-- [ ] Invert selection (boolean op exists)
+- [x] Select All / Deselect / Invert as menu+hotkey actions
+- [x] Invert selection (boolean op exists)
+- [x] Command palette (Ctrl+Shift+P)
+- [x] Application menu (File/Edit/Select/… , pinnable to top bar)
 - [ ] Autosave + crash recovery
 - [ ] Brightness / Contrast
 - [ ] Hue / Saturation / Lightness

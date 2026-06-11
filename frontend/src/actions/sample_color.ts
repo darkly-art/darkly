@@ -16,6 +16,7 @@ export function registerSampleColorAction(): void {
         category: 'colors',
         description:
             'Hold the modifier and drag on the canvas to sample a color into the foreground swatch.',
+        icon: 'fa-eye-dropper',
         type: 'hold',
         handler: (ctx) => {
             if (!app.handle) return;
