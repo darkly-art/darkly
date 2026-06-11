@@ -126,6 +126,7 @@
         </button>
         <button
             class="footer-btn split-chevron new-layer-trigger"
+            data-keep-open="new-layer"
             onclick={() => (menuOpen = !menuOpen)}
             title="New layer type…"
         >

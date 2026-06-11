@@ -1,4 +1,4 @@
-import type { ActionRegistration } from '../../actions/registry';
+import { parseMenuSegment, type ActionRegistration } from '../../actions/registry';
 
 /**
  * A menu is a tree of entries rendered by `MenuItems.svelte`. An entry is one
@@ -30,8 +30,9 @@ const MENU_ORDER = ['File', 'Edit', 'Select', 'Layer', 'Colors', 'View', 'Help']
 function groupByTop(regs: ActionRegistration[]): Map<string, ActionRegistration[]> {
     const m = new Map<string, ActionRegistration[]>();
     for (const reg of regs) {
-        const title = reg.menuPath?.[0];
-        if (!title) continue;
+        const seg = reg.menuPath?.[0];
+        if (!seg) continue;
+        const { title } = parseMenuSegment(seg);
         let arr = m.get(title);
         if (!arr) {
             arr = [];
@@ -40,6 +41,13 @@ function groupByTop(regs: ActionRegistration[]): Map<string, ActionRegistration[
         arr.push(reg);
     }
     return m;
+}
+
+/** An action's position within its top-level menu, parsed from the order
+ *  suffix on `menuPath[0]` (e.g. `'Edit:10'` → 10). Unordered actions sort
+ *  to the end. */
+function menuOrder(reg: ActionRegistration): number {
+    return parseMenuSegment(reg.menuPath?.[0] ?? '').order ?? Infinity;
 }
 
 function orderedTitles(present: Map<string, unknown>): string[] {
@@ -59,10 +67,13 @@ function orderedTitles(present: Map<string, unknown>): string[] {
 
 /**
  * Build the ordered top-level menus from the action registry. Action grouping
- * is FLAT (by `menuPath[0]`); the resulting `entries` are all leaf action
- * rows, except the View menu which also carries the theme switcher widget
- * (the theme control isn't an action). Used directly by the pinned MenuBar
- * and composed into the hamburger's root list.
+ * is FLAT (by `menuPath[0]`'s title); within each menu items sort by the
+ * order suffix on `menuPath[0]` (e.g. `'Edit:10'`; lower first, unordered
+ * actions fall to the end in registration order). The
+ * resulting `entries` are all leaf action rows, except the View menu which
+ * also carries the theme switcher widget (the theme control isn't an action).
+ * Used directly by the pinned MenuBar and composed into the hamburger's root
+ * list.
  */
 export function buildTopMenus(regs: ActionRegistration[]): TopMenu[] {
     const grouped = groupByTop(regs);
@@ -70,6 +81,8 @@ export function buildTopMenus(regs: ActionRegistration[]): TopMenu[] {
     for (const title of orderedTitles(grouped)) {
         const entries: MenuEntry[] = grouped
             .get(title)!
+            .slice()
+            .sort((a, b) => menuOrder(a) - menuOrder(b))
             .map((r): MenuEntry => ({ kind: 'action', actionId: r.id }));
         if (title === 'View') entries.push({ kind: 'widget', widget: 'theme' });
         result.push({ title, entries });

@@ -69,6 +69,12 @@
     function hotkey(id: string): string | undefined {
         return formatHotkey(config.get('hotkeys.' + id) as string | undefined);
     }
+
+    // An active status() icon (e.g. the toggle check) takes precedence over the
+    // action's base icon, mirroring the menu gutter's precedence.
+    function rowIcon(reg: ActionRegistration): string {
+        return reg.status?.() ?? reg.icon;
+    }
 </script>
 
 <dialog
@@ -101,6 +107,7 @@
                     onclick={() => run(reg)}
                     onmousemove={() => (selected = i)}
                 >
+                    <span class="icon"><i class="fa-solid {rowIcon(reg)}"></i></span>
                     <span class="name">{reg.displayName}</span>
                     {#if reg.description}<span class="desc">{reg.description}</span>{/if}
                     {#if hotkey(reg.id)}<span class="kbd">{hotkey(reg.id)}</span>{/if}
@@ -170,6 +177,14 @@
     }
     .result.active { background: var(--bg-hover); }
     .result.disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .icon {
+        flex-shrink: 0;
+        width: 16px;
+        text-align: center;
+        color: var(--text-muted);
+        font-size: 12px;
+    }
 
     .name { flex-shrink: 0; font-size: 13px; }
 

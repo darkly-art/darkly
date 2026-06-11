@@ -1,24 +1,24 @@
 <script lang="ts">
+    import { watchDismiss } from '../../lib/dismiss';
+
     let { onpick, onclose }: {
         onpick: (kind: 'layer' | 'group' | 'veil' | 'void') => void;
         onclose: () => void;
     } = $props();
 
-    function onWindowClick(e: MouseEvent) {
-        const target = e.target as HTMLElement;
-        if (!target.closest('.new-layer-menu') && !target.closest('.new-layer-trigger')) {
-            onclose();
-        }
-    }
-
     function onKeyDown(e: KeyboardEvent) {
         if (e.key === 'Escape') onclose();
     }
+
+    // A pointerdown outside the menu (panel + its trigger, both tagged
+    // data-keep-open="new-layer") closes it. This component only mounts while
+    // open, so the listener is scoped to the open lifetime.
+    $effect(() => watchDismiss('new-layer', onclose));
 </script>
 
-<svelte:window onclick={onWindowClick} onkeydown={onKeyDown} />
+<svelte:window onkeydown={onKeyDown} />
 
-<div class="new-layer-menu" role="menu">
+<div class="new-layer-menu" data-keep-open="new-layer" role="menu">
     <button class="item" role="menuitem" onclick={() => onpick('layer')}>
         <i class="fa-solid fa-image"></i>
         <span>Normal Layer</span>

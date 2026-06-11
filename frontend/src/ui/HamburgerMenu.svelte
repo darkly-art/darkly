@@ -4,6 +4,7 @@
     import { buildHamburgerEntries } from './menu/menuModel';
     import MenuItems from './menu/MenuItems.svelte';
     import { menuBar } from '../state/menuBar.svelte';
+    import { watchDismiss } from '../lib/dismiss';
 
     // Keyed on the registry epoch since actions register asynchronously, after
     // this component mounts.
@@ -22,17 +23,22 @@
         close();
     }
 
-    function onWindowClick(e: MouseEvent) {
-        if (open && !(e.target as HTMLElement).closest('.hamburger-container')) {
-            open = false;
+    function onKeydown(e: KeyboardEvent) {
+        if (open && e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            close();
         }
     }
+
+    // A pointerdown anywhere that isn't a keep-open menu control closes it.
+    $effect(() => watchDismiss('menu', close));
 </script>
 
-<svelte:window onclick={onWindowClick} />
+<svelte:window onkeydown={onKeydown} />
 
 <div class="hamburger-container">
-    <button class="hamburger-btn" onclick={toggle} title="Menu">
+    <button class="hamburger-btn" data-keep-open="menu" onclick={toggle} title="Menu">
         <i class="fa-solid fa-bars"></i>
     </button>
 
@@ -40,7 +46,7 @@
         <div class="menu">
             <MenuItems {entries} onrun={close} />
             <div class="sep"></div>
-            <button class="pin-item" onclick={pin}>
+            <button class="pin-item" data-keep-open="menu" onclick={pin}>
                 <span class="icon"><i class="fa-solid fa-thumbtack"></i></span>
                 <span>Pin menu to top bar</span>
             </button>

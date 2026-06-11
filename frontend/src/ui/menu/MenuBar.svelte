@@ -6,6 +6,7 @@
     import { menuBar } from '../../state/menuBar.svelte';
     import { commandPalette } from '../../state/commandPalette.svelte';
     import { config, formatHotkey } from '../../config/store.svelte';
+    import { watchDismiss } from '../../lib/dismiss';
 
     const settingsHotkey = $derived(formatHotkey(config.get('hotkeys.openSettings') as string | undefined));
     const paletteHotkey = $derived(formatHotkey(config.get('hotkeys.commandPalette') as string | undefined));
@@ -31,14 +32,19 @@
     function close() {
         openTitle = null;
     }
-    function onWindowClick(e: MouseEvent) {
-        if (openTitle && !(e.target as HTMLElement).closest('.menu-bar')) {
-            openTitle = null;
+    function onKeydown(e: KeyboardEvent) {
+        if (openTitle && e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            close();
         }
     }
+
+    // A pointerdown anywhere that isn't a keep-open menu control closes it.
+    $effect(() => watchDismiss('menu', close));
 </script>
 
-<svelte:window onclick={onWindowClick} />
+<svelte:window onkeydown={onKeydown} />
 
 <div class="menu-bar">
     <button
@@ -61,6 +67,7 @@
             <button
                 class="group-btn"
                 class:active={openTitle === menu.title}
+                data-keep-open="menu"
                 onclick={() => toggle(menu.title)}
                 onmouseenter={() => hoverEnter(menu.title)}
             >{menu.title}</button>

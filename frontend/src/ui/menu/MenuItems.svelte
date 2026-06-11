@@ -20,11 +20,11 @@
         const r = actions.get(id);
         return r ? actionEnablement(r) : { enabled: true };
     }
-    function statusCapable(id: string): boolean {
-        return actions.get(id)?.status !== undefined;
-    }
     function statusIcon(id: string): string | undefined {
         return actions.get(id)?.status?.();
+    }
+    function baseIcon(id: string): string | undefined {
+        return actions.get(id)?.icon;
     }
     function tooltipOf(id: string, status: { enabled: boolean; reason?: string }): string | undefined {
         return status.enabled ? actions.get(id)?.description : status.reason;
@@ -46,7 +46,7 @@
         {:else if entry.kind === 'widget'}
             {#if entry.widget === 'theme'}
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <div onmouseenter={() => (openSubmenu = null)}>
+                <div data-keep-open="menu" onmouseenter={() => (openSubmenu = null)}>
                     <ThemeControl />
                 </div>
             {/if}
@@ -55,6 +55,7 @@
             <div
                 class="row submenu-row"
                 class:open={openSubmenu === entry.title}
+                data-keep-open="menu"
                 onmouseenter={() => (openSubmenu = entry.title)}
                 onclick={() => (openSubmenu = openSubmenu === entry.title ? null : entry.title)}
             >
@@ -70,20 +71,23 @@
             {@const status = enablement(entry.actionId)}
             <button
                 class="row action-row"
+                data-keep-open="menu"
                 disabled={!status.enabled}
                 title={tooltipOf(entry.actionId, status)}
                 onmouseenter={() => (openSubmenu = null)}
                 onclick={() => runAction(entry.actionId)}
             >
-                {#if entry.icon || statusCapable(entry.actionId)}
-                    <span class="icon">
-                        {#if entry.icon}
-                            <i class="fa-solid {entry.icon}"></i>
-                        {:else if statusIcon(entry.actionId)}
-                            <i class="fa-solid {statusIcon(entry.actionId)} status"></i>
-                        {/if}
-                    </span>
-                {/if}
+                <!-- Gutter precedence: per-placement override → dynamic status
+                     icon (accented) → the action's own base icon. -->
+                <span class="icon">
+                    {#if entry.icon}
+                        <i class="fa-solid {entry.icon}"></i>
+                    {:else if statusIcon(entry.actionId)}
+                        <i class="fa-solid {statusIcon(entry.actionId)} status"></i>
+                    {:else if baseIcon(entry.actionId)}
+                        <i class="fa-solid {baseIcon(entry.actionId)}"></i>
+                    {/if}
+                </span>
                 <span class="label">{labelOf(entry.actionId, entry.label)}</span>
                 {#if hotkey(entry.actionId)}<span class="kbd">{hotkey(entry.actionId)}</span>{/if}
             </button>

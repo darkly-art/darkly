@@ -6,7 +6,7 @@ import { newDocument } from '../state/newDocument.svelte';
 import { exportImage } from '../state/exportImage.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
 import { toast } from '../state/toast.svelte';
-import { toolRegistry } from '../tools/registry';
+import { toolRegistry, type Tool } from '../tools/registry';
 import { copyToSystemClipboard, readImageFromClipboard, readLayerFromClipboard } from '../clipboard';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { brushSession } from '../tools/brush.svelte';
@@ -49,6 +49,22 @@ function findNodeInTree(nodes: any[], id: number): any | null {
 function tabNameFromFile(fileName: string): string {
     const stripped = fileName.replace(/\.[^./]+$/, '');
     return stripped || 'Untitled';
+}
+
+/** Derive a bare Font Awesome glyph class for a tool-switch action from the
+ *  tool's own `faIcon` (e.g. 'fa-solid fa-fill-drip' → 'fa-fill-drip'). The
+ *  action renderers re-add the `fa-solid` style prefix, so we strip the
+ *  style token here. Tools that ship only an inline `iconSvg` (no `faIcon`)
+ *  fall back to a generic glyph — the toolbar shows their SVG, but the menu
+ *  and command palette are Font-Awesome-only. */
+const FA_STYLE_TOKENS = new Set([
+    'fa-solid', 'fa-regular', 'fa-light', 'fa-thin', 'fa-duotone', 'fa-brands',
+]);
+function glyphFromTool(tool: Tool): string {
+    const faIcon = tool.faIcon;
+    if (!faIcon) return 'fa-wrench';
+    const glyph = faIcon.split(/\s+/).find(t => t.startsWith('fa-') && !FA_STYLE_TOKENS.has(t));
+    return glyph ?? 'fa-wrench';
 }
 
 /** Unified Open. Pick any supported file, sniff its kind, and route to
@@ -253,7 +269,8 @@ export function registerActions() {
         displayName: 'Undo',
         category: 'edit',
         description: 'Undo the last action.',
-        menuPath: ['Edit'],
+        icon: 'fa-rotate-left',
+        menuPath: ['Edit:10'],
         handler: () => { app.handle?.undo(); app.refreshLayerTree(); },
     });
     actions.register({
@@ -261,7 +278,8 @@ export function registerActions() {
         displayName: 'Redo',
         category: 'edit',
         description: 'Redo the last undone action.',
-        menuPath: ['Edit'],
+        icon: 'fa-rotate-right',
+        menuPath: ['Edit:20'],
         handler: () => { app.handle?.redo(); app.refreshLayerTree(); },
     });
 
@@ -271,7 +289,8 @@ export function registerActions() {
         displayName: 'Reset Colors',
         category: 'colors',
         description: 'Reset the foreground/background to black and white.',
-        menuPath: ['Colors'],
+        icon: 'fa-circle-half-stroke',
+        menuPath: ['Colors:20'],
         handler: () => app.resetColors(),
     });
     actions.register({
@@ -279,7 +298,8 @@ export function registerActions() {
         displayName: 'Swap Colors',
         category: 'colors',
         description: 'Swap the foreground and background colors.',
-        menuPath: ['Colors'],
+        icon: 'fa-right-left',
+        menuPath: ['Colors:10'],
         handler: () => app.swapColors(),
     });
 
@@ -289,7 +309,8 @@ export function registerActions() {
         displayName: 'Select All',
         category: 'selection',
         description: 'Select the entire canvas.',
-        menuPath: ['Select'],
+        icon: 'fa-vector-square',
+        menuPath: ['Select:10'],
         handler: () => app.handle?.select_all(),
     });
     actions.register({
@@ -297,7 +318,8 @@ export function registerActions() {
         displayName: 'Deselect',
         category: 'selection',
         description: 'Clear the active selection.',
-        menuPath: ['Select'],
+        icon: 'fa-ban',
+        menuPath: ['Select:20'],
         handler: () => app.handle?.clear_selection(),
     });
     actions.register({
@@ -305,7 +327,8 @@ export function registerActions() {
         displayName: 'Clear Selection Contents',
         category: 'selection',
         description: 'Erase the pixels inside the selection.',
-        menuPath: ['Select'],
+        icon: 'fa-eraser',
+        menuPath: ['Select:40'],
         handler: () => {
             if (app.activeLayerId != null) {
                 app.handle?.clear_selection_contents(app.activeLayerId);
@@ -317,7 +340,8 @@ export function registerActions() {
         displayName: 'Invert Selection',
         category: 'selection',
         description: 'Invert the current selection.',
-        menuPath: ['Select'],
+        icon: 'fa-reflect-both',
+        menuPath: ['Select:30'],
         handler: () => app.handle?.invert_selection(),
     });
 
@@ -327,7 +351,8 @@ export function registerActions() {
         displayName: 'Copy',
         category: 'edit',
         description: 'Copy the active layer to the clipboard.',
-        menuPath: ['Edit'],
+        icon: 'fa-copy',
+        menuPath: ['Edit:40'],
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
             const handle = app.handle;
@@ -350,7 +375,8 @@ export function registerActions() {
         displayName: 'Cut',
         category: 'edit',
         description: 'Cut the active layer to the clipboard.',
-        menuPath: ['Edit'],
+        icon: 'fa-scissors',
+        menuPath: ['Edit:30'],
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
             const handle = app.handle;
@@ -372,7 +398,8 @@ export function registerActions() {
         displayName: 'Paste',
         category: 'edit',
         description: 'Paste an image or layer from the clipboard.',
-        menuPath: ['Edit'],
+        icon: 'fa-paste',
+        menuPath: ['Edit:50'],
         handler: async () => {
             if (!app.handle) return;
 
@@ -456,7 +483,8 @@ export function registerActions() {
         displayName: 'Paste in Place',
         category: 'edit',
         description: 'Paste from the clipboard at its original position.',
-        menuPath: ['Edit'],
+        icon: 'fa-clipboard',
+        menuPath: ['Edit:60'],
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
             const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
@@ -485,7 +513,8 @@ export function registerActions() {
         description:
             'Save the current document as a `.darkly` file. ' +
             'Re-saves to the same file after the first Save As; otherwise prompts.',
-        menuPath: ['File'],
+        icon: 'fa-floppy-disk',
+        menuPath: ['File:30'],
         enabled: () => canSave || NO_SAVE_TOOLTIP,
         handler: () => {
             if (!app.handle) return;
@@ -497,7 +526,8 @@ export function registerActions() {
         displayName: 'Save As',
         category: 'file',
         description: 'Save the current document to a new `.darkly` file.',
-        menuPath: ['File'],
+        icon: 'fa-file-export',
+        menuPath: ['File:40'],
         enabled: () => canSave || NO_SAVE_TOOLTIP,
         handler: () => {
             if (!app.handle) return;
@@ -510,7 +540,8 @@ export function registerActions() {
         category: 'file',
         description:
             'Open a fresh document in a new tab. Prompts for canvas size and background color.',
-        menuPath: ['File'],
+        icon: 'fa-file',
+        menuPath: ['File:10'],
         // No default hotkey — `$mod+KeyN` is reserved by every major browser
         // for "new window" and cannot be intercepted by the page. Users can
         // still bind it via the Hotkeys tab if their browser/OS allows.
@@ -524,7 +555,8 @@ export function registerActions() {
         category: 'file',
         description:
             'Open a `.darkly` document or image (PNG / JPEG / WebP) in a new tab.',
-        menuPath: ['File'],
+        icon: 'fa-folder-open',
+        menuPath: ['File:20'],
         handler: () => {
             void openFlow();
         },
@@ -534,7 +566,8 @@ export function registerActions() {
         displayName: 'Export Image…',
         category: 'file',
         description: 'Export the canvas composite as PNG, JPEG, or WebP.',
-        menuPath: ['File'],
+        icon: 'fa-image',
+        menuPath: ['File:50'],
         handler: () => {
             if (!app.handle) return;
             exportImage.open = true;
@@ -545,6 +578,7 @@ export function registerActions() {
         id: 'commitFloating',
         displayName: 'Commit Floating',
         category: 'transform',
+        icon: 'fa-check',
         handler: () => {
             if (!app.handle) return;
             app.handle.commit_floating();
@@ -555,6 +589,7 @@ export function registerActions() {
         id: 'cancelFloating',
         displayName: 'Cancel Floating',
         category: 'transform',
+        icon: 'fa-xmark',
         handler: () => {
             if (!app.handle) return;
             app.handle.cancel_floating();
@@ -577,6 +612,7 @@ export function registerActions() {
             displayName: name,
             category: 'tools',
             description: `Switch to ${name} tool`,
+            icon: glyphFromTool(tool),
             handler: () => { app.activeToolId = tool.id; },
         });
     }
@@ -589,6 +625,7 @@ export function registerActions() {
         displayName: 'Toggle Erase Mode',
         category: 'tools',
         description: 'Toggle erase mode on the brush tool. Switches to the brush tool first if another tool is active.',
+        icon: 'fa-eraser',
         status: () => (brushSession.eraseMode ? 'fa-check' : undefined),
         handler: () => {
             if (app.activeToolId !== 'brush') {
@@ -612,7 +649,8 @@ export function registerActions() {
         displayName: 'New Layer',
         category: 'layers',
         description: 'Add a new layer above the active one.',
-        menuPath: ['Layer'],
+        icon: 'fa-square-plus',
+        menuPath: ['Layer:10'],
         handler: () => {
             if (!app.handle) return;
             const id = app.handle.add_raster_layer(app.activeLayerId ?? -1);
@@ -626,7 +664,8 @@ export function registerActions() {
         displayName: 'New Group',
         category: 'layers',
         description: 'Group the selected layers together, or add an empty group if nothing is selected.',
-        menuPath: ['Layer'],
+        icon: 'fa-folder-plus',
+        menuPath: ['Layer:20'],
         handler: () => {
             if (!app.handle) return;
             if (app.selectedLayerIds.size > 0) {
@@ -651,7 +690,8 @@ export function registerActions() {
         displayName: 'Toggle Layer Visibility',
         category: 'layers',
         description: 'Show or hide the active layer.',
-        menuPath: ['Layer'],
+        icon: 'fa-eye',
+        menuPath: ['Layer:50'],
         accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
@@ -668,7 +708,8 @@ export function registerActions() {
         displayName: 'Toggle Layer Lock',
         category: 'layers',
         description: 'Lock or unlock the active layer.',
-        menuPath: ['Layer'],
+        icon: 'fa-lock',
+        menuPath: ['Layer:60'],
         accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
@@ -685,7 +726,8 @@ export function registerActions() {
         displayName: 'Isolate Layer',
         category: 'layers',
         description: 'Solo a layer so only it shows in the canvas. Press again to bring everything else back.',
-        menuPath: ['Layer'],
+        icon: 'fa-circle-dot',
+        menuPath: ['Layer:70'],
         accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
@@ -699,7 +741,8 @@ export function registerActions() {
         displayName: 'Delete Layer',
         category: 'layers',
         description: 'Delete the selected layers (or remove the active veil).',
-        menuPath: ['Layer'],
+        icon: 'fa-trash',
+        menuPath: ['Layer:40'],
         handler: () => {
             if (!app.handle) return;
             // Veil takes priority: the trash button on the layer panel
@@ -747,7 +790,8 @@ export function registerActions() {
         displayName: 'Duplicate Layer',
         category: 'layers',
         description: 'Make a copy of each selected layer.',
-        menuPath: ['Layer'],
+        icon: 'fa-clone',
+        menuPath: ['Layer:30'],
         handler: () => {
             if (!app.handle) return;
             const targets = app.selectedLayerIds.size > 0
@@ -773,7 +817,8 @@ export function registerActions() {
         displayName: 'Merge Down',
         category: 'layers',
         description: 'Merge the active layer into the one below it, or combine multiple selected layers into a single layer.',
-        menuPath: ['Layer'],
+        icon: 'fa-arrows-down-to-line',
+        menuPath: ['Layer:90'],
         handler: () => {
             if (!app.handle) return;
             if (app.selectedLayerIds.size >= 2) {
@@ -806,7 +851,8 @@ export function registerActions() {
         category: 'layers',
         description:
             'Bake modifiers into the layer (apply mask), or flatten a group into a single raster that inherits the group’s blend props.',
-        menuPath: ['Layer'],
+        icon: 'fa-layer-group',
+        menuPath: ['Layer:100'],
         accepts: ['layerId'],
         handler: (ctx) => {
             if (!app.handle) return;
@@ -827,7 +873,8 @@ export function registerActions() {
         displayName: 'Add Mask',
         category: 'layers',
         description: 'Add a mask modifier to the active layer or group and activate it for painting.',
-        menuPath: ['Layer'],
+        icon: 'fa-mask',
+        menuPath: ['Layer:80'],
         accepts: ['layerId'],
         handler: (ctx) => {
             if (!app.handle) return;
@@ -851,6 +898,7 @@ export function registerActions() {
         displayName: 'Settings',
         category: 'view',
         description: 'Show the preferences modal.',
+        icon: 'fa-gear',
         // No `menuPath`: surfaced as the gear button on the menu bar and a
         // root courtesy item in the hamburger, not as a View submenu row.
         handler: () => { settings.open = true; },
@@ -861,7 +909,8 @@ export function registerActions() {
         displayName: 'Mirror View',
         category: 'view',
         description: 'Flip the canvas horizontally for fresh-eyes review. View-only — the document is unchanged.',
-        menuPath: ['View'],
+        icon: 'fa-left-right',
+        menuPath: ['View:10'],
         status: () => (app.mirrorH ? 'fa-check' : undefined),
         handler: () => {
             app.mirrorH = !app.mirrorH;
@@ -874,6 +923,7 @@ export function registerActions() {
         displayName: 'Command Palette',
         category: 'view',
         description: 'Search and run any command.',
+        icon: 'fa-magnifying-glass',
         // No `menuPath`: surfaced as the prominent "Find" item at the top of
         // the hamburger / on the menu bar, not as a buried submenu row.
         handler: () => { commandPalette.open = true; },
@@ -884,7 +934,8 @@ export function registerActions() {
         displayName: 'Hotkey Cheat Sheet',
         category: 'view',
         description: 'Open a searchable, printable list of every keyboard shortcut.',
-        menuPath: ['Help'],
+        icon: 'fa-keyboard',
+        menuPath: ['Help:10'],
         handler: () => openCheatsheet(),
     });
 
@@ -893,7 +944,8 @@ export function registerActions() {
         displayName: 'About Darkly',
         category: 'view',
         description: 'Show version and credits.',
-        menuPath: ['Help'],
+        icon: 'fa-circle-info',
+        menuPath: ['Help:20'],
         handler: () => { about.open = true; },
     });
 
@@ -909,6 +961,7 @@ export function registerActions() {
         displayName: 'Add Brush Node',
         category: 'brush',
         description: 'Open the add-node menu at the cursor (brush builder).',
+        icon: 'fa-diagram-project',
         handler: () => {
             // No-op if the brush builder isn't visible. The actual placement
             // — at the cursor in canvas coords — happens in NodeCanvas, which

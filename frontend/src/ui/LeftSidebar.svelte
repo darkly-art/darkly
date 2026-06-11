@@ -7,10 +7,9 @@
     import HamburgerMenu from './HamburgerMenu.svelte';
     import ToolCluster from './ToolCluster.svelte';
     import { menuBar } from '../state/menuBar.svelte';
+    import { watchDismiss } from '../lib/dismiss';
 
     let showColorPicker = $state(false);
-    let pickerEl: HTMLDivElement | undefined = $state();
-    let swatchEl: HTMLButtonElement | undefined = $state();
 
     // Track the last-activated sub-tool per cluster id so a cluster-button
     // click can restore the user's previous choice. The mutation is wrapped
@@ -33,18 +32,9 @@
         showColorPicker = !showColorPicker;
     }
 
-    $effect(() => {
-        if (!showColorPicker) return;
-        const onPointerDown = (e: PointerEvent) => {
-            const t = e.target as Node | null;
-            if (!t) return;
-            if (pickerEl?.contains(t)) return;
-            if (swatchEl?.contains(t)) return;
-            showColorPicker = false;
-        };
-        window.addEventListener('pointerdown', onPointerDown, true);
-        return () => window.removeEventListener('pointerdown', onPointerDown, true);
-    });
+    // A pointerdown outside the picker (swatch + panel, both tagged
+    // data-keep-open="color-picker") closes it.
+    $effect(() => watchDismiss('color-picker', () => (showColorPicker = false)));
 
     // Build a flat list of toolbar items (individual tool buttons OR cluster
     // flyouts), then split into groups by tool.group for visual separators.
@@ -127,7 +117,7 @@
     <!-- Color swatches + swap (bottom) -->
     <div class="toolbar-bottom">
         <div class="color-swatches">
-            <button bind:this={swatchEl} class="swatch-stack" onclick={toggleColorPicker} title="Pick color">
+            <button class="swatch-stack" data-keep-open="color-picker" onclick={toggleColorPicker} title="Pick color">
                 <div
                     class="swatch bg"
                     style="background: {colorStyle(app.background)}"
@@ -144,7 +134,7 @@
     </div>
 
     {#if showColorPicker}
-        <div bind:this={pickerEl} class="color-picker-wrapper">
+        <div class="color-picker-wrapper" data-keep-open="color-picker">
             <ColorPicker onclose={() => showColorPicker = false} />
         </div>
     {/if}

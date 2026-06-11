@@ -1,4 +1,4 @@
-import type { ActionRegistration } from '../../actions/registry';
+import { parseMenuSegment, type ActionRegistration } from '../../actions/registry';
 
 /** Actions eligible for the command palette: everything except `type:'hold'`
  *  actions (drag-bound primitives like `sampleColor` / `brushSizeAdjust`
@@ -26,7 +26,7 @@ export function filterPalette(regs: ActionRegistration[], query: string): Action
         const haystack = [
             reg.displayName,
             reg.description ?? '',
-            ...(reg.menuPath ?? []),
+            ...(reg.menuPath ?? []).map(s => parseMenuSegment(s).title),
             reg.category,
         ].join(' ').toLowerCase();
         if (!haystack.includes(q)) continue;
