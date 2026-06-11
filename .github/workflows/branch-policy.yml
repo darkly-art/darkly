@@ -1,0 +1,16 @@
+name: Branch policy
+
+on:
+  pull_request:
+    branches: [master]
+
+jobs:
+  source-branch:
+    name: master only from dev
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce dev → master
+        if: github.head_ref != 'dev'
+        run: |
+          echo "::error::PRs into master must come from 'dev' (got '${{ github.head_ref }}'). Merge your branch into dev first."
+          exit 1
