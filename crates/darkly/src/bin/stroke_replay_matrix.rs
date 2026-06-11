@@ -68,19 +68,19 @@ const STABILIZE: f32 = 1.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Topology {
     /// Ink Pen brush through the `paint` terminal —
-    /// `pen → paint_color → circle (disc) → stamp → paint`.
+    /// `pen → paint_color → shape (disc) → stamp → paint`.
     /// Single instanced render pass per phase.
     Paint,
-    /// Wet Media (`Smooth Watercolor`) — `pen → paint_color → circle
+    /// Wet Media (`Smooth Watercolor`) — `pen → paint_color → shape
     /// (sine) → watercolor`. Two-pass per phase (pickup atlas
     /// + composite), composite shader is per-brush compiled.
     Watercolor,
-    /// Rough Ink — `pen + 3×random → circle(perlin) → stamp →
+    /// Rough Ink — `pen + 3×random → shape(perlin) → stamp →
     /// paint`. The original demo brush for the compiled
     /// framework; same terminal as Paint but a more elaborate upstream
-    /// graph (per-dab random nodes drive the perlin shape).
+    /// graph (per-dab random nodes drive the perlin silhouette).
     RoughInk,
-    /// Smudge — `pen → circle → smudge`. Per-dab fragment
+    /// Smudge — `pen → shape → smudge`. Per-dab fragment
     /// pass with a `copy_texture_to_texture` barrier between dabs so
     /// each dab reads the prior dab's writeback. Stresses the per-dab
     /// serialization path; expected dab counts per event are tens

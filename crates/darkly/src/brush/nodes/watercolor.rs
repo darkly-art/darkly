@@ -13,7 +13,7 @@
 //!    atlas_w)`.
 //! 2. **Composite pass.** One instanced draw, N quads. The fragment
 //!    shader is the framework-assembled per-brush WGSL: upstream
-//!    nodes (`circle`, `paint_color`, etc.) compile inline; this
+//!    nodes (`shape`, `paint_color`, etc.) compile inline; this
 //!    terminal contributes the watercolor blend math (atlas pickup +
 //!    deposit/wetness load) and the extra atlas bind group.
 //!
@@ -23,12 +23,12 @@
 //!   `amplitude`, `frequency`, etc. as ports on the terminal and
 //!   evaluated the procedural shape inline. Here the upstream graph
 //!   provides a scalar `mask` input (typically wired from
-//!   `circle.texture`), and the composite's fragment shader inlines
-//!   whatever WGSL the circle node emits.
+//!   `shape.mask`), and the composite's fragment shader inlines
+//!   whatever WGSL the shape node emits.
 //! - **No CPU centroid integration.** `watercolor_batched` integrated
 //!   the asymmetric shape's centroid on the CPU and packed it into
 //!   the dab record to pin the shape to the pen tip. The compiled
-//!   `circle` currently emits its shape centered on the local origin
+//!   `shape` currently emits its silhouette centered on the local origin
 //!   without translation. If the compiled shape's centroid drifts off
 //!   the pen tip noticeably, restoring a centroid step is a focused
 //!   follow-up.
@@ -557,6 +557,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "output",
             display_name: "Watercolor",
+            description: "Output for wet-on-wet watercolor: pigment bleeds, pools, and darkens at the edges.",
             ports: vec![
                 PortDef::input("position", BrushWireType::Vec2)
                     .with_description("Canvas-pixel pen tip for this dab"),
@@ -597,6 +598,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(0.0, 1.0)
                     .with_label("Deposit")
                     .with_unit(UnitType::Percent)
+                    .with_icon("fa-solid fa-circle")
                     .exposed()
                     .with_description(
                         "How strongly the brush color replaces the pickup canvas color",
@@ -622,16 +624,8 @@ pub fn register() -> BrushNodeRegistration {
                     ),
                 PortDef::input("color", BrushWireType::Vec4)
                     .with_description("Brush color (typically wired from paint_color)"),
-                // Cursor-preview rotation in radians. Read only by
-                // `render_cursor_preview` and published into
-                // `BrushCursorPreviewInfo.rotation_rad`; the stroke shader
-                // doesn't apply it (rotation in stroke deposit is a
-                // separate concern). Defaults to 0.
-                PortDef::input("rotation", BrushWireType::Scalar)
-                    .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
-                    .with_description("Cursor-preview rotation (radians)"),
                 PortDef::input("mask", BrushWireType::Scalar).with_description(
-                    "Per-fragment shape mask (typically wired from circle.mask)",
+                    "Per-fragment shape mask (typically wired from shape.mask)",
                 ),
                 PortDef::output("dab_size", BrushWireType::Vec2)
                     .with_description("Brush mark size in canvas pixels"),
@@ -902,8 +896,7 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
-        let rotation_rad = ctx.input_f32("rotation");
-        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius, rotation_rad);
+        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius);
         vec![]
     }
 

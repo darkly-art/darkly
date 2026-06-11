@@ -24,6 +24,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "math",
             display_name: "Split Color",
+            description: "Breaks a color into its red, green, blue, and opacity channels for separate processing.",
             ports: vec![
                 PortDef::input("color", BrushWireType::Vec4)
                     .with_description("The RGBA color to decompose into channels"),

@@ -2,7 +2,7 @@
 //!
 //! Inlines `color × mask` into the brush's WGSL via [`compile_wgsl`].
 //! The upstream `tip` input is a scalar coverage expression (typically
-//! from `circle.texture`'s compile output); the emitted `dab` output is
+//! from `shape.mask`'s compile output); the emitted `dab` output is
 //! premultiplied RGBA that downstream paint terminals consume.
 //!
 //! Flow lives on the `paint` terminal — that is the single, authoritative
@@ -27,6 +27,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "shape",
             display_name: "Stamp Tip",
+            description: "Combines a tip shape with a color to form a colored brush mark. Feed this into a Paint output to deposit it on the canvas.",
             ports: vec![
                 PortDef::input("tip", BrushWireType::Scalar)
                     .with_natural_range(0.0, 1.0)

@@ -28,6 +28,7 @@ base64 = { workspace = true }
 thiserror = { workspace = true }
 slotmap = { workspace = true }
 smallvec = { workspace = true }
+indexmap = { version = "2", features = ["serde"] }
 
 [dev-dependencies]
 pollster = "0.4"

@@ -6,17 +6,11 @@ nodes:
   2:
     type: paint_color
   3:
-    type: circle
-    exposed:
-    - softness
+    type: shape
   4:
     type: stamp
   5:
     type: paint
-    exposed:
-    - flow
-    - opacity
-    - size
   6:
     type: curve
 connections:
@@ -27,3 +21,9 @@ connections:
 - '3.mask -> 4.tip'
 - '4.dab -> 5.rgba'
 - '6.output -> 5.size_input'
+exposed_ports:
+  "1.stabilize": {}
+  "5.size": {}
+  "3.softness": {}
+  "5.flow": {}
+  "5.opacity": {}

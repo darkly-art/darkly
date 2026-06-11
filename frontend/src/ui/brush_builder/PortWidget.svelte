@@ -169,14 +169,19 @@
     }
 
     /** Whether this port can be exposed in the brush bar. */
-    const EXPOSABLE_TYPES = new Set(['Scalar']);
+    const EXPOSABLE_TYPES = new Set(['Scalar', 'Bool']);
     let canExpose = $derived(
         port.dir === 'Input' && !connected && EXPOSABLE_TYPES.has(port.wire_type)
     );
+    let isExposed = $derived(brushGraph.isPortExposed(nodeId, port.name));
 
     function toggleExposed(e: MouseEvent) {
         e.stopPropagation();
-        brushGraph.togglePortExposed(nodeId, port.name, !port.exposed);
+        if (isExposed) {
+            brushGraph.unexposePort(nodeId, port.name);
+        } else {
+            brushGraph.exposePort(nodeId, port.name);
+        }
     }
 
     let sliderPercent = $derived(
@@ -244,7 +249,7 @@
 <div
     class="port-row"
     class:port-right={side === 'right'}
-    title={regPort?.description || port.description || ''}
+    title={regPort?.description || ''}
 >
     <div
         class="port-dot"
@@ -291,13 +296,13 @@
             </div>
         {/if}
     {:else}
-        <span class="port-label">{port.name}</span>
+        <span class="port-label">{regPort?.label || port.name}</span>
     {/if}
     {#if canExpose}
         <button
             class="expose-toggle"
-            class:exposed={port.exposed}
-            title={port.exposed ? 'Hide from brush bar' : 'Expose in brush bar'}
+            class:exposed={isExposed}
+            title={isExposed ? 'Hide from brush bar' : 'Expose in brush bar'}
             onclick={toggleExposed}
         >
             <i class="fa-solid fa-eye"></i>

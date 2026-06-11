@@ -2033,18 +2033,47 @@ impl DarklyHandle {
         ))
     }
 
-    pub fn brush_graph_set_port_exposed(
+    pub fn brush_graph_expose_port(&self, node_id: u32, port_name: &str) -> JsValue {
+        self.flush_if_needed();
+        graph_result(
+            self.engine
+                .borrow_mut()
+                .brush_graph_expose_port(node_id as u64, port_name),
+        )
+    }
+
+    pub fn brush_graph_unexpose_port(&self, node_id: u32, port_name: &str) -> JsValue {
+        self.flush_if_needed();
+        graph_result(
+            self.engine
+                .borrow_mut()
+                .brush_graph_unexpose_port(node_id as u64, port_name),
+        )
+    }
+
+    pub fn brush_graph_set_exposed_port_meta(
         &self,
-        node_id: u32,
-        port_name: &str,
-        exposed: bool,
+        key: &str,
+        label: &str,
+        description: &str,
+        icon: &str,
     ) -> JsValue {
         self.flush_if_needed();
-        graph_result(self.engine.borrow_mut().brush_graph_set_port_exposed(
-            node_id as u64,
-            port_name,
-            exposed,
+        graph_result(self.engine.borrow_mut().brush_graph_set_exposed_port_meta(
+            key,
+            label.to_string(),
+            description.to_string(),
+            icon.to_string(),
         ))
+    }
+
+    pub fn brush_graph_reorder_exposed_port(&self, key: &str, new_index: u32) -> JsValue {
+        self.flush_if_needed();
+        graph_result(
+            self.engine
+                .borrow_mut()
+                .brush_graph_reorder_exposed_port(key, new_index),
+        )
     }
 
     pub fn brush_list(&self) -> String {
@@ -2221,20 +2250,18 @@ fn js_f32_quad(obj: &JsValue, key: &str) -> Option<[f32; 4]> {
     ])
 }
 
-/// Serialize `engine.brush_cursor_preview_info()` as a JS `{ halfExtent, rotation }`
+/// Serialize `engine.brush_cursor_preview_info()` as a JS `{ halfExtent }`
 /// POJO, or `null` when the active graph has no preview source.
 fn brush_cursor_preview_info_as_js(engine: &DarklyEngine) -> JsValue {
     #[derive(serde::Serialize)]
     struct Info {
         #[serde(rename = "halfExtent")]
         half_extent: [f32; 2],
-        rotation: f32,
     }
     match engine.brush_cursor_preview_info() {
         Some(info) => {
             let payload = Info {
                 half_extent: info.half_extent_canvas_px,
-                rotation: info.rotation_rad,
             };
             serde_wasm_bindgen::to_value(&payload).unwrap_or(JsValue::NULL)
         }

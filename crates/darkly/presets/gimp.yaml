@@ -1,33 +1,26 @@
-# GIMP overlay. Self-contained: every binding that any of the three
-# reference editors has an opinion on is spelled out here explicitly.
+# GIMP overlay. Carries every binding where GIMP's choice differs from
+# at least one other reference editor, plus Darkly fallbacks for actions
+# where GIMP has no opinion but some other editor does. Unanimous
+# bindings live in defaults.yaml; see the rule in defaults.yaml.
 name: GIMP
 description: GIMP-style keybindings
 
 hotkeys:
-  # Edit / clipboard / file.
-  undo: $mod+KeyZ
+  # Edit / clipboard (non-unanimous slice).
   # GIMP binds Redo to <primary>Y; <primary><shift>Z is "Strong Undo".
   # See gimp/app/actions/edit-actions.c.
   redo: $mod+KeyY
-  copy: $mod+KeyC
-  cut: $mod+KeyX
-  paste: $mod+KeyV
   # GIMP's edit-paste-in-place is <primary><alt>V (NOT <shift>V).
   # See gimp/app/actions/edit-actions.c.
   pasteInPlace: $mod+Alt+KeyV
-  saveDocument: $mod+KeyS
-  saveDocumentAs: $mod+Shift+KeyS
-  open: $mod+KeyO
-  selectAll: $mod+KeyA
-  clearSelectionContents: Delete
-  commitFloating: Enter
-  cancelFloating: Escape
-  # Colors.
-  resetColors: KeyD
-  swapColors: KeyX
-  # Brush size.
-  brushSizeUp: BracketRight
-  brushSizeDown: BracketLeft
+  # GIMP has no native Preferences hotkey. Fall through to Darkly's pick.
+  openSettings: $mod+Comma
+  # GIMP binds File > Export As… to <primary><shift>E (see
+  # gimp/app/actions/file-actions.c — `file-export-as`).
+  exportImage: $mod+Shift+KeyE
+  # mirrorViewH: intentionally unbound. GIMP has no native mirror-view
+  # hotkey, and Krita's M would set no established GIMP-user expectation
+  # — leave it for explicit user binding rather than invent a default.
   # Tools.
   brushTool: KeyP
   fillTool: Shift+KeyB
@@ -38,6 +31,12 @@ hotkeys:
   magicWandTool: KeyU
   transformTool: KeyT
   toggleEraseMode: Shift+KeyE
+  # GIMP's "Free Select" tool is the closest analog to Lasso — it handles
+  # both free-form and polygonal segments via mode within one tool.
+  # Registered with `F` in gimp/app/tools/gimpfreeselecttool.c
+  # (`gimp_free_select_tool_register`). polygonSelectTool is left unbound
+  # because GIMP has no separate polygonal tool.
+  lassoSelectTool: KeyF
   # Layers.
   isolateLayer: KeyI
   # GIMP's layers-delete action has no global accelerator (its accel slot is
@@ -46,8 +45,16 @@ hotkeys:
   deleteLayer: layerPanel:Delete
   # GIMP binds Layer > Duplicate Layer(s) to Ctrl+Shift+D.
   duplicateLayer: $mod+Shift+KeyD
-  # GIMP's "New Layer…" is bound to Ctrl+Shift+N (host docs line 298).
+  # GIMP's "New Layer…" is bound to Ctrl+Shift+N (layers-actions.c).
   newLayer: $mod+Shift+KeyN
+  # GIMP's `layers-new-group` has no global accelerator (layers-actions.c
+  # accel slot is { NULL }). Fall through to PS+Krita's Ctrl+G; this
+  # doesn't collide with any GIMP-side binding.
+  newGroup: $mod+KeyG
+  # GIMP's `layers-merge-down` has no global accelerator either; GIMP's
+  # only layer-merge default is Ctrl+M for "Merge Visible Layers" — a
+  # different op. Fall through to PS+Krita's Ctrl+E.
+  mergeDown: $mod+KeyE
   # Selection.
   clearSelection: $mod+Shift+KeyA
   invertSelection: $mod+KeyI
@@ -58,6 +65,9 @@ mouse_clicks:
   # modifier role. Darkly uses drag (continuous sample while held) instead of
   # click; `$mod` carries the platform swap.
   sampleColor: canvas@paint:$mod+drag
+  # isolateLayer mouse_click: GIMP has no thumbnail-modifier equivalent,
+  # so intentionally unbound here. The hotkey form (KeyI above) is the
+  # GIMP-native path.
 
 settings:
   tools.colorPickerSampleSource: merged
