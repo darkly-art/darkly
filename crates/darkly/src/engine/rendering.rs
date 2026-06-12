@@ -7,7 +7,7 @@ use crate::gpu::compositor::Compositor;
 use crate::gpu::context::GpuContext;
 use crate::gpu::readback::{self, ReadbackScheduler};
 use crate::gpu::region_store::{EntryPixels, RegionScratch, Snapshot, UndoRegionEntry};
-use crate::gpu::view::ViewTransform;
+use crate::gpu::view::{ViewParams, ViewTransform};
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
@@ -71,7 +71,8 @@ impl DarklyEngine {
         screen_w: f32,
         screen_h: f32,
     ) {
-        let transform = ViewTransform::from_pan_zoom_rotate(
+        let rotation_changed = self.view_params.rotation != rotation;
+        self.view_params = ViewParams {
             pan_x,
             pan_y,
             zoom,
@@ -79,15 +80,8 @@ impl DarklyEngine {
             mirror_h,
             screen_w,
             screen_h,
-            self.doc.width as f32,
-            self.doc.height as f32,
-        );
-        let rotation_changed = self.view_rotation != rotation;
-        self.view_transform = transform;
-        self.view_rotation = rotation;
-        self.compositor
-            .update_view_transform(&self.gpu.queue, &transform);
-        self.compositor.mark_needs_present();
+        };
+        self.rebuild_view_transform();
         // The cursor-preview mask was baked with the old view rotation;
         // re-render at the cached hover pose so the on-canvas silhouette
         // matches what the next stroke would actually paint. No-op when
@@ -98,6 +92,32 @@ impl DarklyEngine {
                 self.regenerate_brush_cursor_preview_with_pen_internal(pose);
             }
         }
+    }
+
+    /// Re-derive the present view matrix from the stored `view_params` and the
+    /// **current** `doc.width/height`, and upload it. The matrix bakes in the
+    /// canvas dimensions, so this must run on every canvas-dimension change
+    /// (resize / crop / undo) as well as on pointer-driven view updates —
+    /// otherwise the present pass samples a resized composite through a
+    /// stale-dim matrix and the image shows stretched/offset. Single chokepoint
+    /// for "view params + canvas dims → cached matrix".
+    pub(crate) fn rebuild_view_transform(&mut self) {
+        let p = self.view_params;
+        let transform = ViewTransform::from_pan_zoom_rotate(
+            p.pan_x,
+            p.pan_y,
+            p.zoom,
+            p.rotation,
+            p.mirror_h,
+            p.screen_w,
+            p.screen_h,
+            self.doc.width as f32,
+            self.doc.height as f32,
+        );
+        self.view_transform = transform;
+        self.compositor
+            .update_view_transform(&self.gpu.queue, &transform);
+        self.compositor.mark_needs_present();
     }
 
     pub fn screen_to_canvas(&self, screen_x: f32, screen_y: f32) -> (f32, f32) {

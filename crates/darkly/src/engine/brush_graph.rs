@@ -313,7 +313,7 @@ impl DarklyEngine {
             canvas_height: 0,
             canvas_origin: [0, 0],
             blend_mode: 0,
-            view_rotation: self.view_rotation,
+            view_rotation: self.view_params.rotation,
             perf: BrushPerfCounters::default(),
             // The preview pipeline doesn't touch the stroke scratch / paint
             // target — the terminal's `render_preview` writes to the

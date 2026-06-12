@@ -5,6 +5,38 @@
 /// Fallback workspace color used until the frontend pushes the theme-sourced
 /// color via `set_viewport_bg()`.
 pub const DEFAULT_WORKSPACE_BG: [f32; 4] = [0.11, 0.11, 0.11, 1.0];
+/// Decomposed view parameters — the session-state inputs from which the
+/// present [`ViewTransform`] is derived. Retained so the matrix can be rebuilt
+/// whenever *either* input changes: pointer-driven pan/zoom/rotation (via
+/// `set_view_transform`) **or** a canvas-dimension change (resize / crop /
+/// undo). The matrix bakes in `canvas_w/h` (both the present shader's
+/// sampling-normalization and the canvas center), so a dims change with stale
+/// params would present a stretched/offset image until the next pointer event.
+#[derive(Copy, Clone, Debug)]
+pub struct ViewParams {
+    pub pan_x: f32,
+    pub pan_y: f32,
+    pub zoom: f32,
+    pub rotation: f32,
+    pub mirror_h: bool,
+    pub screen_w: f32,
+    pub screen_h: f32,
+}
+
+impl Default for ViewParams {
+    fn default() -> Self {
+        ViewParams {
+            pan_x: 0.0,
+            pan_y: 0.0,
+            zoom: 1.0,
+            rotation: 0.0,
+            mirror_h: false,
+            screen_w: 1.0,
+            screen_h: 1.0,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ViewTransform {

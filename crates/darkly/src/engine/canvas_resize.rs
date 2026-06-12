@@ -137,6 +137,12 @@ impl DarklyEngine {
             rect.width,
             rect.height,
         );
+        // The present view matrix bakes in the canvas dimensions (both the
+        // sampling-normalization and the canvas center). `set_canvas_rect`
+        // reallocated the composite cache at the new size but left the cached
+        // matrix encoding the old dims — re-derive it from the unchanged view
+        // params + the new dims so the next present isn't stretched/offset.
+        self.rebuild_view_transform();
     }
 }
 

@@ -128,6 +128,60 @@ fn resize_canvas_undo_restores_window() {
     assert_eq!(engine.canvas_rect(), CanvasRect::from_xywh(12, 8, 30, 40));
 }
 
+/// PRESENT-PATH regression: the cached view transform embeds the canvas
+/// dimensions (`canvas_w/h` as the present shader's sampling-normalization +
+/// the canvas center). A resize/crop changes the dims but is otherwise
+/// document-only, so the view matrix must be **rebuilt** to match — otherwise
+/// the present pass samples the new-size composite through a stale-dim matrix
+/// and the image shows stretched/offset until the next pointer event re-pushes
+/// the view (the reported "glitch that heals on interaction" / "stretched
+/// content" bugs).
+///
+/// `screen_to_canvas` reads the same cached `view_transform` the present pass
+/// consumes, so probing it is the present-path invariant without GPU-readback
+/// flakiness. With an identity-fit view (pan 0, zoom 1), the screen center
+/// resolves to the canvas center `(canvas_w/2, canvas_h/2)` — which tracks the
+/// matrix's embedded dims.
+#[test]
+fn resize_rebuilds_view_transform_for_new_dims() {
+    let (w, h) = (64u32, 64u32);
+    let mut engine = test_engine(w, h);
+    let _layer = engine.add_raster_layer(None);
+
+    let (sw, sh) = (200.0_f32, 200.0_f32);
+    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, sw, sh);
+
+    // Sanity: screen center maps to the original canvas center (32, 32).
+    let (cx0, cy0) = engine.screen_to_canvas(sw / 2.0, sh / 2.0);
+    assert!(
+        (cx0 - 32.0).abs() < 1e-2 && (cy0 - 32.0).abs() < 1e-2,
+        "pre-resize screen center should map to (32, 32), got ({cx0}, {cy0})"
+    );
+
+    // Grow the canvas WITHOUT any intervening set_view_transform.
+    engine.resize_canvas(CanvasRect::from_xywh(0, 0, 128, 96));
+
+    let (cx1, cy1) = engine.screen_to_canvas(sw / 2.0, sh / 2.0);
+    assert!(
+        (cx1 - 64.0).abs() < 1e-2,
+        "screen center must map to the NEW canvas center x (64) after resize, got {cx1}"
+    );
+    assert!(
+        (cy1 - 48.0).abs() < 1e-2,
+        "screen center must map to the NEW canvas center y (48) after resize, got {cy1}"
+    );
+
+    // Undo reconciles dims back to 64×64 via the same chokepoint — the view
+    // matrix must rebuild on undo too (bug #3: undo restores dims but shows
+    // stretched).
+    engine.undo();
+    let (cx2, cy2) = engine.screen_to_canvas(sw / 2.0, sh / 2.0);
+    assert!(
+        (cx2 - 32.0).abs() < 1e-2 && (cy2 - 32.0).abs() < 1e-2,
+        "after undo, screen center must map back to (32, 32), got ({cx2}, {cy2})"
+    );
+}
+
 /// Crop-to-selection sets the canvas window to the selection's plane bounds.
 #[test]
 fn crop_to_selection_matches_selection_bounds() {

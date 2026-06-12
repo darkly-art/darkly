@@ -864,7 +864,7 @@ impl DarklyEngine {
                         // scratch is a coverage accumulator, and only the
                         // commit composite reads this value.
                         blend_mode: self.brush_blend_mode,
-                        view_rotation: self.view_rotation,
+                        view_rotation: self.view_params.rotation,
                         perf: BrushPerfCounters::default(),
                         stroke: Some(StrokeResources {
                             scratch,
@@ -1059,7 +1059,7 @@ impl DarklyEngine {
                     canvas_height: canvas_h,
                     canvas_origin: [self.doc.canvas_origin.x, self.doc.canvas_origin.y],
                     blend_mode: self.brush_blend_mode,
-                    view_rotation: self.view_rotation,
+                    view_rotation: self.view_params.rotation,
                     perf: BrushPerfCounters::default(),
                     // No stroke buffer in this defensive fallback — `move_to`
                     // only updates stabilizer state and never reaches into
