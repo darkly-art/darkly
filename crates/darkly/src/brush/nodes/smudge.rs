@@ -301,7 +301,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_range(0.0, 4.0, 0.1)
                     .with_label("Size")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-up-right-and-down-left-from-center")
+                    .with_icon("fa6-solid:up-right-and-down-left-from-center")
                     .exposed()
                     .with_preview_value(0.1)
                     .with_description("Overall brush size"),
@@ -310,7 +310,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(0.0, 1.0)
                     .with_label("Smudge")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-paint-roller")
+                    .with_icon("fa6-solid:paint-roller")
                     .exposed()
                     .with_description(
                         "How strongly each touch drags the canvas along the stroke. \
@@ -322,7 +322,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(0.0, 1.0)
                     .with_label("Opacity")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-droplet")
+                    .with_icon("fa6-solid:droplet")
                     .exposed()
                     .with_description(
                         "Overall stroke strength. Lower values reduce how much the smudge affects the canvas.",

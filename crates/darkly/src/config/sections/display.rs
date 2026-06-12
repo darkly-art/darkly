@@ -24,7 +24,7 @@ pub fn register() -> SchemaSection {
         id: "display",
         display_name: "Display",
         description: Some("Viewport display options."),
-        icon: Some("fa-solid fa-eye"),
+        icon: Some("fa6-solid:eye"),
         order: 35,
         prefs: PREFS,
     }

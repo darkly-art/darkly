@@ -1,5 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
+    import Icon from '../../icons/Icon.svelte';
 
     let { onclose }: { onclose: () => void } = $props();
 
@@ -56,7 +57,7 @@
         <div class="modal-header">
             <span class="modal-title">Add Void</span>
             <button class="close-btn" onclick={onclose} title="Close">
-                <i class="fa-solid fa-xmark"></i>
+                <Icon name="fa6-solid:xmark" />
             </button>
         </div>
         <div class="grid">

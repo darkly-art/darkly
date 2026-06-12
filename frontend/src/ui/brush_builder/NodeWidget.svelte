@@ -4,6 +4,7 @@
     import { app } from '../../state/app.svelte';
     import PortWidget from './PortWidget.svelte';
     import CurveEditor from '../CurveEditor.svelte';
+    import Icon from '../../icons/Icon.svelte';
     import NodePreview from './NodePreview.svelte';
     import type { NodeCanvasContext } from './NodeCanvas.svelte';
 
@@ -365,7 +366,7 @@
                                 onclick={(e) => toggleIconPicker(e, i)}
                             >
                                 {#if node.params[i]}
-                                    <i class="{node.params[i]} icon-picker-current"></i>
+                                    <Icon name={node.params[i]} class="icon-picker-current" />
                                 {:else}
                                     <span class="icon-picker-none">None</span>
                                 {/if}
@@ -382,7 +383,7 @@
                                             onclick={(e) => { e.stopPropagation(); selectIcon(i, iconClass); }}
                                         >
                                             {#if iconClass}
-                                                <i class="{iconClass} icon-picker-item-icon"></i>
+                                                <Icon name={iconClass} class="icon-picker-item-icon" />
                                             {:else}
                                                 <span class="icon-picker-item-icon" style="width:14px"></span>
                                             {/if}

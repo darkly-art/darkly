@@ -22,7 +22,7 @@ pub fn register() -> SchemaSection {
         id: "colors",
         display_name: "Colors",
         description: Some("Starting foreground and background swatches."),
-        icon: Some("fa-solid fa-palette"),
+        icon: Some("fa6-solid:palette"),
         order: 20,
         prefs: PREFS,
     }

@@ -13,7 +13,7 @@ pub fn register() -> SchemaSection {
         id: "input",
         display_name: "Input",
         description: Some("Stylus and touch behavior."),
-        icon: Some("fa-solid fa-pen-to-square"),
+        icon: Some("fa6-solid:pen-to-square"),
         order: 40,
         prefs: PREFS,
     }

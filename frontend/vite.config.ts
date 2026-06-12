@@ -7,6 +7,8 @@ import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 import { VitePWA } from 'vite-plugin-pwa';
+// @ts-ignore — plain .mjs build tooling, outside the tsc src scope.
+import { iconBundlePlugin } from './scripts/gen-icon-bundle.mjs';
 
 // Darkly's version is the latest git tag plus the commit height since it — the
 // same v* tags the deploy pipeline (darkly-deploy/) builds releases from.
@@ -34,6 +36,9 @@ export default defineConfig({
         __DARKLY_VERSION__: JSON.stringify(gitVersion()),
     },
     plugins: [
+        // Regenerates src/icons/bundle.generated.ts from the icon names found in
+        // source — on buildStart (dev + prod) and live on file change in dev.
+        iconBundlePlugin(),
         svelte(),
         basicSsl(),
         VitePWA({
@@ -42,12 +47,11 @@ export default defineConfig({
             // rather than auto-activating.
             registerType: 'prompt',
             // Bundled assets the SW must precache that aren't reachable from the
-            // module graph (favicon, iOS icon, and the FontAwesome webfonts the
-            // UI icon font depends on offline).
+            // module graph (favicon, iOS icon). UI icons are inlined SVGs
+            // (Iconify offline bundle) and ship inside the JS module graph.
             includeAssets: [
                 'darkly-favicon.png',
                 'icons/apple-touch-icon.png',
-                'fontawesome/webfonts/*.woff2',
             ],
             manifest: {
                 name: 'Darkly',

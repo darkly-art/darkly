@@ -41,7 +41,7 @@ function clearPreviewOverlay() {
 
 export const rectSelectTool: Tool = {
     id: 'rect_select',
-    faIcon: 'fa-solid fa-square-dashed',
+    icon: 'tabler:square-dashed',
     group: 'select',
     cluster: 'select',
     hotkeyAction: 'rectSelectTool',

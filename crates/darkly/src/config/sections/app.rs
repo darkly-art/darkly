@@ -19,7 +19,7 @@ pub fn register() -> SchemaSection {
         id: "app",
         display_name: "Application",
         description: Some("Application-wide preferences."),
-        icon: Some("fa-solid fa-gear"),
+        icon: Some("fa6-solid:gear"),
         order: -100,
         prefs: PREFS,
     }

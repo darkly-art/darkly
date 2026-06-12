@@ -10,7 +10,7 @@ export const fillSession = new FillSession();
 
 export const fillTool: Tool = {
     id: 'fill',
-    faIcon: 'fa-solid fa-fill-drip',
+    icon: 'fa6-solid:fill-drip',
     group: 'paint',
     cluster: 'fill',
     hotkeyAction: 'fillTool',

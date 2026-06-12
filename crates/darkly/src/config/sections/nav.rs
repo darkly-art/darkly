@@ -39,7 +39,7 @@ pub fn register() -> SchemaSection {
         id: "nav",
         display_name: "Navigation",
         description: Some("Canvas pan, zoom, and rotate controls."),
-        icon: Some("fa-solid fa-arrows-up-down-left-right"),
+        icon: Some("fa6-solid:arrows-up-down-left-right"),
         order: 50,
         prefs: PREFS,
     }

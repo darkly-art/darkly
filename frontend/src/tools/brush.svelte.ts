@@ -172,10 +172,10 @@ export const brushTool: Tool = {
      *  giving the toolbar button a visible mode indicator. Reactive because
      *  Svelte's template re-reads the getter when `brushSession.eraseMode`
      *  ($state) changes. */
-    get faIcon() {
+    get icon() {
         return brushSession.eraseMode
-            ? 'fa-solid fa-eraser'
-            : 'fa-solid fa-paint-brush';
+            ? 'fa6-solid:eraser'
+            : 'fa6-solid:paintbrush';
     },
     group: 'paint',
     hotkeyAction: 'brushTool',

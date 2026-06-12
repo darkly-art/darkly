@@ -159,7 +159,7 @@ pub struct ParamInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<ParamValue>,
     /// Enum: `["Label1", "Label2", ...]`.
-    /// Icon: `[["fa-class", "Label"], ...]`.
+    /// Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<serde_json::Value>,
 }

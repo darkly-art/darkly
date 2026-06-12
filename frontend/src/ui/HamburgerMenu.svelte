@@ -5,6 +5,7 @@
     import MenuItems from './menu/MenuItems.svelte';
     import { menuBar } from '../state/menuBar.svelte';
     import { watchDismiss } from '../lib/dismiss';
+    import Icon from '../icons/Icon.svelte';
 
     // Keyed on the registry epoch since actions register asynchronously, after
     // this component mounts.
@@ -39,7 +40,7 @@
 
 <div class="hamburger-container">
     <button class="hamburger-btn" data-keep-open="menu" onclick={toggle} title="Menu">
-        <i class="fa-solid fa-bars"></i>
+        <Icon name="fa6-solid:bars" />
     </button>
 
     {#if open}
@@ -47,7 +48,7 @@
             <MenuItems {entries} onrun={close} />
             <div class="sep"></div>
             <button class="pin-item" data-keep-open="menu" onclick={pin}>
-                <span class="icon"><i class="fa-solid fa-thumbtack"></i></span>
+                <span class="icon"><Icon name="fa6-solid:thumbtack" /></span>
                 <span>Pin menu to top bar</span>
             </button>
         </div>

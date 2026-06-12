@@ -468,7 +468,7 @@ mod tests {
                 &shape_key,
                 "Softness".into(),
                 "Edge falloff".into(),
-                "fa-solid fa-circle-half-stroke".into(),
+                "fa6-solid:circle-half-stroke".into(),
             )
             .unwrap();
 
@@ -494,7 +494,7 @@ mod tests {
         let meta = &restored.exposed_ports[&restored_key];
         assert_eq!(meta.label, "Softness");
         assert_eq!(meta.description, "Edge falloff");
-        assert_eq!(meta.icon, "fa-solid fa-circle-half-stroke");
+        assert_eq!(meta.icon, "fa6-solid:circle-half-stroke");
     }
 
     /// Unknown node `type:` must fail import with a clear error,

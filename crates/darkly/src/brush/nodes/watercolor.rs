@@ -573,7 +573,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_range(0.0, 4.0, 0.1)
                     .with_label("Size")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-up-right-and-down-left-from-center")
+                    .with_icon("fa6-solid:up-right-and-down-left-from-center")
                     .exposed()
                     .with_preview_value(0.1)
                     .with_description("Overall brush size"),
@@ -582,7 +582,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(0.0, 1.0)
                     .with_label("Flow")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-droplet")
+                    .with_icon("fa6-solid:droplet")
                     .exposed()
                     .with_description("Per-dab flow (folded into color alpha → max-deposit ceiling)"),
                 PortDef::input("opacity", BrushWireType::Scalar)
@@ -590,7 +590,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(0.0, 1.0)
                     .with_label("Opacity")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-fill-drip")
+                    .with_icon("fa6-solid:fill-drip")
                     .exposed()
                     .with_description("Stroke-level opacity cap (applied at commit)"),
                 PortDef::input("deposit", BrushWireType::Scalar)
@@ -598,7 +598,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(0.0, 1.0)
                     .with_label("Deposit")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-circle")
+                    .with_icon("fa6-solid:circle")
                     .exposed()
                     .with_description(
                         "How strongly the brush color replaces the pickup canvas color",
@@ -615,7 +615,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(0.0, 2.0)
                     .with_label("Pickup Size")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-eye-dropper")
+                    .with_icon("fa6-solid:eye-dropper")
                     .exposed()
                     .with_description(
                         "Radius of the canvas-sampling neighborhood as a fraction of the dab radius. \

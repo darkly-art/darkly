@@ -1,5 +1,6 @@
 <script lang="ts">
     import Modal from './Modal.svelte';
+    import Icon from '../icons/Icon.svelte';
     import { about } from '../state/about.svelte';
     import { darklyVersion } from '../version';
 
@@ -37,20 +38,20 @@
                 aria-label="Copy version {darklyVersion}"
             >
                 <code>{darklyVersion}</code>
-                <i class="fa-solid {copied ? 'fa-check' : 'fa-copy'}"></i>
+                <Icon name={copied ? 'fa6-solid:check' : 'fa6-solid:copy'} class={copied ? 'copied' : ''} />
             </button>
         </div>
 
         <div class="links">
             <a class="link" href={WEBSITE} target="_blank" rel="noopener noreferrer">
-                <i class="fa-solid fa-globe"></i>
+                <Icon name="fa6-solid:globe" />
                 <span>Website</span>
-                <i class="fa-solid fa-arrow-up-right-from-square external"></i>
+                <Icon name="fa6-solid:arrow-up-right-from-square" class="external" />
             </a>
             <a class="link" href={GITHUB} target="_blank" rel="noopener noreferrer">
-                <i class="fa-brands fa-github"></i>
+                <Icon name="fa6-brands:github" />
                 <span>GitHub</span>
-                <i class="fa-solid fa-arrow-up-right-from-square external"></i>
+                <Icon name="fa6-solid:arrow-up-right-from-square" class="external" />
             </a>
         </div>
 
@@ -106,12 +107,12 @@
         font-family: inherit;
     }
 
-    .version-copy i {
+    .version-copy :global(svg) {
         font-size: 11px;
         color: var(--text-muted);
     }
 
-    .version-copy .fa-check {
+    .version-copy :global(.copied) {
         color: var(--accent);
     }
 
@@ -138,8 +139,8 @@
         background: var(--bg-hover);
     }
 
-    .link i { color: var(--text-muted); }
-    .link .external { font-size: 10px; }
+    .link :global(svg) { color: var(--text-muted); }
+    .link :global(.external) { font-size: 10px; }
 
     .license {
         margin: 4px 0 0;
