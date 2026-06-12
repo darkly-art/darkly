@@ -8,6 +8,7 @@
     import Scrub from './Scrub.svelte';
     import ToolBarLayout from './ToolBarLayout.svelte';
     import { tooltipForAction } from '../config/store.svelte';
+    import { watchDismiss } from '../lib/dismiss';
 
     let brushPickerOpen = $state(false);
 
@@ -52,11 +53,9 @@
         }
     }
 
-    function handleClickOutside(_e: MouseEvent) {
-        if (brushPickerOpen) {
-            brushPickerOpen = false;
-        }
-    }
+    // A pointerdown outside the brush picker (trigger + panel, both tagged
+    // data-keep-open="brush-picker") closes it.
+    $effect(() => watchDismiss('brush-picker', () => (brushPickerOpen = false)));
 
     function toggleEraseMode() {
         brushSession.eraseMode = !brushSession.eraseMode;
@@ -77,14 +76,13 @@
     });
 </script>
 
-<svelte:window onclick={handleClickOutside} />
-
 <ToolBarLayout>
     {#snippet left()}
         <div class="brush-picker-section">
             <button
                 class="brush-picker-button"
-                onclick={(e) => { e.stopPropagation(); ensureInit(); brushPickerOpen = !brushPickerOpen; }}
+                data-keep-open="brush-picker"
+                onclick={() => { ensureInit(); brushPickerOpen = !brushPickerOpen; }}
                 title="Select brush"
             >
                 <!-- Live preview of the active graph — same component the
@@ -101,7 +99,7 @@
             </button>
 
             {#if brushPickerOpen}
-                <BrushPicker onSelect={selectBrush} />
+                <BrushPicker onSelect={selectBrush} onClose={() => (brushPickerOpen = false)} />
             {/if}
         </div>
     {/snippet}

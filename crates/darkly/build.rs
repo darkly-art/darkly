@@ -1,8 +1,64 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// Bake Darkly's version into the crate as the `DARKLY_VERSION` compile-time
+/// env, read through `crate::VERSION`. The value is the latest git tag plus the
+/// commit height since it (`git describe --tags --long`, e.g. `v0.3.0-1-gf0c3ea9`)
+/// — the same v* tags the deploy pipeline (darkly-deploy/) releases from.
+///
+/// CANONICAL TWIN: frontend/vite.config.ts derives the frontend's version with
+/// the identical command and the identical `"0.0.0-0-gunknown"` fallback. The
+/// two build systems (Cargo vs. Vite) share no runtime, so this is a documented
+/// DRY exception — if you change the command or fallback here, change it there.
+///
+/// Note: baking the commit SHA makes the crate's output non-deterministic across
+/// commits (as is already true for the frontend bundle). Best-effort and never
+/// panics — a tagless/git-less build just gets the fallback.
+fn emit_darkly_version() {
+    // No `--always`: on a tagless/shallow checkout we want this to FAIL so the
+    // fallback kicks in, rather than emit a bare SHA that isn't `TAG-N-gSHA`.
+    let version = Command::new("git")
+        .args(["describe", "--tags", "--long"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "0.0.0-0-gunknown".to_string());
+
+    println!("cargo:rustc-env=DARKLY_VERSION={version}");
+
+    // Re-stamp when git state moves — best-effort and footgun-free: emit a hint
+    // ONLY for a path that exists, because a hint pointing at a missing file
+    // makes cargo treat it as perpetually-changed (rebuild every time). These
+    // hints only reduce dev staleness; release correctness comes from the
+    // deploy pipeline's fresh clone-at-tag, not from here. Tag-at-HEAD and
+    // `git gc` repacks are imperfectly covered by design.
+    let git_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../.git");
+    let mut candidates = vec![
+        git_dir.join("HEAD"),
+        git_dir.join("packed-refs"),
+        git_dir.join("refs/tags"),
+    ];
+    // If HEAD is a symref (`ref: refs/heads/x`), watch the loose branch ref too.
+    if let Ok(head) = fs::read_to_string(git_dir.join("HEAD")) {
+        if let Some(r) = head.trim().strip_prefix("ref: ") {
+            candidates.push(git_dir.join(r));
+        }
+    }
+    for path in candidates {
+        if path.exists() {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
+}
 
 fn main() {
+    emit_darkly_version();
+
     let src = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("src");
 
     generate_registry(&src.join("gpu/veils"), "crate::gpu::veil::VeilRegistration");

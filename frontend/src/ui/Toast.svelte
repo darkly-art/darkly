@@ -19,7 +19,18 @@
                 style:border-left-color={levelColors[t.level]}
                 onclick={() => toast.dismiss(t.id)}
             >
-                {t.message}
+                <span class="toast-message">{t.message}</span>
+                {#if t.action}
+                    <button
+                        class="toast-action"
+                        onclick={e => {
+                            e.stopPropagation();
+                            t.action!.onClick();
+                        }}
+                    >
+                        {t.action.label}
+                    </button>
+                {/if}
             </div>
         {/each}
     </div>
@@ -39,6 +50,9 @@
     }
 
     .toast {
+        display: flex;
+        align-items: center;
+        gap: 12px;
         background: var(--bg-active);
         color: var(--text);
         border: 1px solid var(--bg-hover);
@@ -51,5 +65,25 @@
         cursor: pointer;
         min-width: 240px;
         max-width: 480px;
+    }
+
+    .toast-message {
+        flex: 1;
+    }
+
+    .toast-action {
+        flex-shrink: 0;
+        background: #9500ff;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        padding: 4px 12px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+    }
+
+    .toast-action:hover {
+        background: #a929ff;
     }
 </style>

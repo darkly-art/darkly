@@ -137,7 +137,11 @@ impl PerBrushPipeline {
                 .device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("paint-layout"),
-                    bind_group_layouts: &[ctx.uniform_bgl, &dabs_bgl, ctx.selection_bgl],
+                    bind_group_layouts: &[
+                        Some(ctx.uniform_bgl),
+                        Some(&dabs_bgl),
+                        Some(ctx.selection_bgl),
+                    ],
                     immediate_size: 0,
                 }),
             Some(gl) => ctx
@@ -145,10 +149,10 @@ impl PerBrushPipeline {
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("paint-layout-with-graph-textures"),
                     bind_group_layouts: &[
-                        ctx.uniform_bgl,
-                        &dabs_bgl,
-                        ctx.selection_bgl,
-                        gl.as_ref(),
+                        Some(ctx.uniform_bgl),
+                        Some(&dabs_bgl),
+                        Some(ctx.selection_bgl),
+                        Some(gl.as_ref()),
                     ],
                     immediate_size: 0,
                 }),

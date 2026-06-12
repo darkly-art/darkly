@@ -78,10 +78,10 @@ impl CompositePipeline {
                 // after the dab_pool removal — the shape is identical
                 // (`texture_2d<f32> + sampler`).
                 bind_group_layouts: &[
-                    ctx.uniform_bgl,
-                    ctx.canvas_copy_bgl,
-                    ctx.selection_bgl,
-                    ctx.canvas_copy_bgl,
+                    Some(ctx.uniform_bgl),
+                    Some(ctx.canvas_copy_bgl),
+                    Some(ctx.selection_bgl),
+                    Some(ctx.canvas_copy_bgl),
                 ],
                 immediate_size: 0,
             });

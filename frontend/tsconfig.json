@@ -12,7 +12,7 @@
         "noUnusedLocals": false,
         "noUnusedParameters": false,
         "skipLibCheck": true,
-        "types": ["@webgpu/types", "vite/client"]
+        "types": ["@webgpu/types", "vite/client", "vite-plugin-pwa/client"]
     },
     "include": ["src/**/*.ts", "src/**/*.svelte"]
 }

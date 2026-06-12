@@ -154,10 +154,10 @@ impl PerBrushPipeline {
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("liquify-layout"),
                 bind_group_layouts: &[
-                    ctx.uniform_bgl,
-                    &dabs_bgl,
-                    ctx.selection_bgl,
-                    ctx.canvas_copy_bgl,
+                    Some(ctx.uniform_bgl),
+                    Some(&dabs_bgl),
+                    Some(ctx.selection_bgl),
+                    Some(ctx.canvas_copy_bgl),
                 ],
                 immediate_size: 0,
             });

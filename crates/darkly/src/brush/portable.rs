@@ -409,8 +409,8 @@ mod tests {
         let registry = registry();
         let graph = crate::brush::default_graph();
         let portable = PortableBrush::from_graph_only(&graph, registry).expect("serialize");
-        let yaml = serde_yml::to_string(&portable).expect("yaml");
-        let parsed: PortableBrush = serde_yml::from_str(&yaml).expect("parse");
+        let yaml = serde_yaml_ng::to_string(&portable).expect("yaml");
+        let parsed: PortableBrush = serde_yaml_ng::from_str(&yaml).expect("parse");
         let restored = parsed.into_graph(registry).expect("import");
 
         assert_eq!(graph.nodes().len(), restored.nodes().len());
@@ -473,8 +473,8 @@ mod tests {
             .unwrap();
 
         let portable = PortableBrush::from_graph_only(&graph, registry).unwrap();
-        let yaml = serde_yml::to_string(&portable).unwrap();
-        let restored = serde_yml::from_str::<PortableBrush>(&yaml)
+        let yaml = serde_yaml_ng::to_string(&portable).unwrap();
+        let restored = serde_yaml_ng::from_str::<PortableBrush>(&yaml)
             .unwrap()
             .into_graph(registry)
             .unwrap();
@@ -507,7 +507,7 @@ nodes:
   1:
     type: never_was_a_node
 ";
-        let portable: PortableBrush = serde_yml::from_str(yaml).unwrap();
+        let portable: PortableBrush = serde_yaml_ng::from_str(yaml).unwrap();
         let err = portable.into_graph(registry).unwrap_err();
         assert!(err.contains("unknown node type"), "got: {err}");
     }
@@ -525,7 +525,7 @@ nodes:
     params:
       this_param_does_not_exist: 1
 ";
-        let portable: PortableBrush = serde_yml::from_str(yaml).unwrap();
+        let portable: PortableBrush = serde_yaml_ng::from_str(yaml).unwrap();
         let err = portable.into_graph(registry).unwrap_err();
         assert!(err.contains("unknown param"), "got: {err}");
     }
@@ -542,7 +542,7 @@ nodes:
     params:
       algorithm: [[0.0, 0.0], [1.0, 1.0]]
 ";
-        let portable: PortableBrush = serde_yml::from_str(yaml).unwrap();
+        let portable: PortableBrush = serde_yaml_ng::from_str(yaml).unwrap();
         let err = portable.into_graph(registry).unwrap_err();
         assert!(err.contains("expected integer"), "got: {err}");
     }
@@ -556,7 +556,7 @@ name: Test
 made_up_field: 1
 nodes: {}
 ";
-        let err = serde_yml::from_str::<PortableBrush>(yaml).unwrap_err();
+        let err = serde_yaml_ng::from_str::<PortableBrush>(yaml).unwrap_err();
         assert!(err.to_string().contains("unknown field"), "got: {err}");
     }
 
@@ -572,7 +572,7 @@ nodes: {}
 
         // Default stabilizer → elided from YAML.
         let portable = PortableBrush::from_brush(&brush, registry).unwrap();
-        let yaml = serde_yml::to_string(&portable).unwrap();
+        let yaml = serde_yaml_ng::to_string(&portable).unwrap();
         assert!(
             !yaml.contains("stabilizer"),
             "default stabilizer should be elided\n{yaml}"
@@ -584,8 +584,8 @@ nodes: {}
             params: vec![ParamValue::Float(0.6)],
         };
         let portable = PortableBrush::from_brush(&brush, registry).unwrap();
-        let yaml = serde_yml::to_string(&portable).unwrap();
-        let parsed: PortableBrush = serde_yml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&portable).unwrap();
+        let parsed: PortableBrush = serde_yaml_ng::from_str(&yaml).unwrap();
         let restored = parsed.into_brush(registry).unwrap();
         assert_eq!(restored.metadata.stabilizer.algorithm, "laplacian");
         assert_eq!(restored.metadata.stabilizer.params.len(), 1);

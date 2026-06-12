@@ -9,6 +9,10 @@
     import ExportImageModal from './ui/ExportImageModal.svelte';
     import NewDocumentModal from './ui/NewDocumentModal.svelte';
     import ConfirmDiscardModal from './ui/ConfirmDiscardModal.svelte';
+    import AboutModal from './ui/AboutModal.svelte';
+    import MenuBar from './ui/menu/MenuBar.svelte';
+    import CommandPalette from './ui/menu/CommandPalette.svelte';
+    import { menuBar } from './state/menuBar.svelte';
     import TabStrip from './multi_tab/TabStrip.svelte';
     import CanvasStack from './multi_tab/CanvasStack.svelte';
     import { shell } from './multi_tab/shell.svelte';
@@ -36,14 +40,19 @@
 
 <svelte:window onbeforeunload={onBeforeUnload} />
 
-<div class="app-layout">
-    <LeftSidebar />
-    <div class="center-column">
-        <TabStrip />
-        <CanvasStack />
-        <ToolOptionsBar />
+<div class="app-root">
+    {#if menuBar.pinned}
+        <MenuBar />
+    {/if}
+    <div class="app-layout">
+        <LeftSidebar />
+        <div class="center-column">
+            <TabStrip />
+            <CanvasStack />
+            <ToolOptionsBar />
+        </div>
+        <RightSidebar />
     </div>
-    <RightSidebar />
 </div>
 <Toast />
 <LoadErrorToast />
@@ -52,12 +61,22 @@
 <ExportImageModal />
 <NewDocumentModal />
 <ConfirmDiscardModal />
+<AboutModal />
+<CommandPalette />
 
 <style>
-    .app-layout {
+    .app-root {
         display: flex;
+        flex-direction: column;
         width: 100vw;
         height: 100vh;
+        overflow: hidden;
+    }
+
+    .app-layout {
+        display: flex;
+        flex: 1;
+        min-height: 0;
         overflow: hidden;
     }
 

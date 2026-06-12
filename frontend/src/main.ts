@@ -10,6 +10,7 @@ import { checkGpu } from './gpu';
 import { detectPlatform } from './platform';
 import { suppressButtonKeyboardFocus } from './lib/suppressButtonKeyboardFocus';
 import { strokeRecorder } from './lib/strokeRecorder';
+import { registerPwa } from './pwa';
 
 suppressButtonKeyboardFocus();
 strokeRecorder.init();
@@ -28,6 +29,10 @@ async function boot() {
     target.replaceChildren();
 
     if (check.ok) {
+        // Register the service worker only on the full-app path: the update
+        // prompt renders via <Toast /> inside App, and a no-op in dev (SW
+        // disabled in vite.config.ts) keeps this harmless during `vite`.
+        registerPwa();
         return mount(App, { target });
     }
 

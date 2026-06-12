@@ -49,12 +49,27 @@ hotkeys:
   brushSizeDown: BracketLeft
   # Darkly-original (brush builder) — no reference-editor prior art.
   addBrushNode: Shift+KeyA
-  # `flatten` and `addMask` are intentionally left unbound:
-  #   - addMask: no reference editor has a default key (PS, Krita, and
-  #     GIMP all expose mask creation through a button click). Inventing
-  #     a Darkly-only binding would surprise users with no prior-art
-  #     expectation, and commit a key slot we'd later have to fight if
-  #     we register e.g. GIMP's Ctrl+M "Merge Visible".
+  # Darkly-original (command palette). No Krita/PS/GIMP prior art, so it
+  # belongs here rather than a per-editor overlay. Follows the VS Code
+  # convention for a command palette.
+  commandPalette: $mod+Shift+KeyP
+  # PS + Krita both bind Quick Group to Ctrl+G. GIMP has no default
+  # (the Layer menu's group commands aren't bound). With layers
+  # selected, the action handler wraps them in the new group; with
+  # nothing selected, creates an empty group.
+  newGroup: $mod+KeyG
+  # PS + Krita both bind Merge Down to Ctrl+E. GIMP's only layer-merge
+  # default is Ctrl+M for "Merge Visible Layers" — semantically
+  # different. The `mergeDown` action handler is selection-aware:
+  # with ≥2 selected it bakes the selection via merge_layers, with 1
+  # it does the classic single-layer merge-down. One hotkey, two ops.
+  mergeDown: $mod+KeyE
+  # `flatten` and `addMask` are intentionally left unbound here:
+  #   - addMask: no reference editor has a default key (PS, Krita,
+  #     and GIMP all expose mask creation through a button click).
+  #     Inventing a Darkly-only binding would surprise users with no
+  #     prior-art expectation, and commit a key slot we'd later have
+  #     to fight if we register e.g. GIMP's Ctrl+M "Merge Visible".
   #   - flatten: Krita binds Ctrl+Shift+E to "Flatten image" (the
   #     whole-canvas composite, which is Darkly's `flatten_image`
   #     engine op — not yet a registered action). Borrowing that key

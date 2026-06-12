@@ -7,8 +7,9 @@
 
     interface Props {
         onSelect: (brush: BrushInfo) => void;
+        onClose: () => void;
     }
-    let { onSelect }: Props = $props();
+    let { onSelect, onClose }: Props = $props();
 
     let query = $state('');
     let searchInput: HTMLInputElement | undefined = $state();
@@ -67,6 +68,13 @@
     });
 
     function handleKey(e: KeyboardEvent) {
+        // Escape closes regardless of whether any brushes match the filter,
+        // so it must come before the empty-list early return below.
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            onClose();
+            return;
+        }
         const cols = 2; // matches grid-template-columns: repeat(2, 1fr)
         const len = filtered.length;
         if (len === 0) return;
@@ -96,8 +104,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<div class="brush-picker dropdown-surface" onclick={(e) => e.stopPropagation()} onkeydown={handleKey}>
+<div class="brush-picker dropdown-surface" data-keep-open="brush-picker" onkeydown={handleKey}>
     <!-- Non-scrolling header: search + active brush stay visible while
          the user scans the grid below. -->
     <div class="picker-header">

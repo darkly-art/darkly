@@ -106,12 +106,12 @@ impl Config {
 // ---------------------------------------------------------------------------
 
 fn parse_yaml_preset(yaml: &str) -> Result<HashMap<String, ConfigValue>, String> {
-    let value: serde_yml::Value = serde_yml::from_str(yaml).map_err(|e| e.to_string())?;
+    let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml).map_err(|e| e.to_string())?;
     let map = match value {
-        serde_yml::Value::Mapping(m) => m,
+        serde_yaml_ng::Value::Mapping(m) => m,
         // Empty doc: zero entries (legitimately allowed for overlays that
         // only define a `name:` field and nothing else).
-        serde_yml::Value::Null => return Ok(HashMap::new()),
+        serde_yaml_ng::Value::Null => return Ok(HashMap::new()),
         other => return Err(format!("expected top-level mapping, got {other:?}")),
     };
 
@@ -146,26 +146,26 @@ fn parse_yaml_preset(yaml: &str) -> Result<HashMap<String, ConfigValue>, String>
 /// to split on it. (Legacy: the only known multi-binding action is
 /// `isolateLayer` with `[layerThumb:alt+click, maskThumb:alt+click]`.)
 fn collect_string_facet(
-    v: &serde_yml::Value,
+    v: &serde_yaml_ng::Value,
     prefix: &str,
     out: &mut HashMap<String, ConfigValue>,
 ) -> Result<(), String> {
     let m = match v {
-        serde_yml::Value::Mapping(m) => m,
-        serde_yml::Value::Null => return Ok(()),
+        serde_yaml_ng::Value::Mapping(m) => m,
+        serde_yaml_ng::Value::Null => return Ok(()),
         other => return Err(format!("{prefix} expected a mapping, got {other:?}")),
     };
     for (k, v) in m {
         let Some(key) = k.as_str() else { continue };
         let full_key = format!("{prefix}{key}");
         match v {
-            serde_yml::Value::String(s) => {
+            serde_yaml_ng::Value::String(s) => {
                 out.insert(full_key, ConfigValue::Str(s.clone()));
             }
-            serde_yml::Value::Sequence(seq) => {
+            serde_yaml_ng::Value::Sequence(seq) => {
                 let mut parts: Vec<String> = Vec::with_capacity(seq.len());
                 for item in seq {
-                    if let serde_yml::Value::String(s) = item {
+                    if let serde_yaml_ng::Value::String(s) = item {
                         parts.push(s.clone());
                     } else {
                         return Err(format!("{full_key}: list item is not a string"));
@@ -173,7 +173,7 @@ fn collect_string_facet(
                 }
                 out.insert(full_key, ConfigValue::Str(parts.join("|")));
             }
-            serde_yml::Value::Null => {
+            serde_yaml_ng::Value::Null => {
                 // Tolerate `key: ` with no value as "empty string" — a key
                 // explicitly unbinds the action.
                 out.insert(full_key, ConfigValue::Str(String::new()));
@@ -187,12 +187,12 @@ fn collect_string_facet(
 /// `settings` facet: keys are already fully-qualified dot-paths; values are
 /// bool/int/float/string.
 fn collect_settings_facet(
-    v: &serde_yml::Value,
+    v: &serde_yaml_ng::Value,
     out: &mut HashMap<String, ConfigValue>,
 ) -> Result<(), String> {
     let m = match v {
-        serde_yml::Value::Mapping(m) => m,
-        serde_yml::Value::Null => return Ok(()),
+        serde_yaml_ng::Value::Mapping(m) => m,
+        serde_yaml_ng::Value::Null => return Ok(()),
         other => return Err(format!("settings expected a mapping, got {other:?}")),
     };
     for (k, v) in m {
@@ -206,18 +206,18 @@ fn collect_settings_facet(
     Ok(())
 }
 
-fn yaml_to_config_value(v: &serde_yml::Value) -> Option<ConfigValue> {
+fn yaml_to_config_value(v: &serde_yaml_ng::Value) -> Option<ConfigValue> {
     match v {
-        serde_yml::Value::Bool(b) => Some(ConfigValue::Bool(*b)),
-        serde_yml::Value::Number(n) => {
+        serde_yaml_ng::Value::Bool(b) => Some(ConfigValue::Bool(*b)),
+        serde_yaml_ng::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
                 Some(ConfigValue::Int(i))
             } else {
                 n.as_f64().map(ConfigValue::Float)
             }
         }
-        serde_yml::Value::String(s) => Some(ConfigValue::Str(s.clone())),
-        serde_yml::Value::Null => None,
+        serde_yaml_ng::Value::String(s) => Some(ConfigValue::Str(s.clone())),
+        serde_yaml_ng::Value::Null => None,
         _ => None,
     }
 }

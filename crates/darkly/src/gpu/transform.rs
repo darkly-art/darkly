@@ -304,7 +304,7 @@ impl TransformPass {
 
         let commit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("transform-commit-layout"),
-            bind_group_layouts: &[&commit_bind_group_layout, &single_tex_bgl],
+            bind_group_layouts: &[Some(&commit_bind_group_layout), Some(&single_tex_bgl)],
             immediate_size: 0,
         });
 
@@ -368,7 +368,7 @@ impl TransformPass {
 
         let premultiply_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("premultiply-layout"),
-            bind_group_layouts: &[&single_tex_bgl],
+            bind_group_layouts: &[Some(&single_tex_bgl)],
             immediate_size: 0,
         });
 

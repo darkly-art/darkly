@@ -8,7 +8,7 @@
 /// Uses wgpu's automatic backend selection — Vulkan, Metal, DX12, or software
 /// fallback depending on the platform. No window surface required.
 pub fn test_device() -> (wgpu::Device, wgpu::Queue) {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower,
         compatible_surface: None,
@@ -38,7 +38,7 @@ pub fn test_device() -> (wgpu::Device, wgpu::Queue) {
 /// that record timestamps check the device's features at build time and
 /// degrade gracefully on adapters that don't expose the features.
 pub fn bench_device() -> (wgpu::Device, wgpu::Queue) {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: None,

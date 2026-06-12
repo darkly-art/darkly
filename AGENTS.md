@@ -138,18 +138,6 @@ We do not blindly copy prior art; we use it to inform our own decisions. Our imp
 
 When an idea, algorithm, shader, or implementation comes from an external source — open source code, Shadertoy, papers, blog posts, video tutorials, etc. — credit the source and author at the top of the file (or inline next to the borrowed fragment, if it's smaller than file-scope). Include the author's name or handle and a link to the original.
 
-## Performance Principle
-
-Performance is king. If a feature can't be fast, it doesn't ship. There is almost always a fast way to do something — find it before writing the naive version. Think about data access patterns, per-frame costs, and batch granularity up front, not after the profiler screams.
-
-Past lessons that illustrate the pattern:
-
-- **Flood fill** was doing per-pixel HashMap lookups across a tiled image (~8M hash ops). Fix: batch at the tile level — one lookup per tile, direct array indexing within. Orders of magnitude faster.
-- **Selection overlay** generated one GPU primitive per boundary pixel (~800 instances for a rectangle). Fix: merge collinear segments and simplify polylines once when the selection changes — down to ~4-30 primitives.
-- **Animation scheduling** had independent per-system timers that forced extra frame renders. Fix: a single master clock with integer divisors so slower systems' ticks always align with faster ones — zero extra renders.
-
-See `docs/lessons-learned/gpu-lessons-learned.md` for full details.
-
 ## Testing Principle
 
 **Every feature must have a test.** Verify the feature works. The test exists; it passes. That's it.
@@ -180,7 +168,19 @@ Darkly is in pre-release / alpha. Until the first public release, breaking on-di
 
 ## PR Descriptions
 
-When you finish implementing a plan, emit a concise PR description in a fenced markdown code block as part of your reply. The description must cover the *entire* feature branch (everything since it diverged from its parent), not just the latest change — the user pastes it as the full PR body. On follow-up work, re-emit the complete, updated description as a single block that wholly replaces the previous one; never emit a delta or a partial revision.
+Fork every feature branch off `dev` and target PRs at `dev`, never `master` (which only receives release merges from `dev`, despite being GitHub's default branch).
+
+Every PR body has **two parts**: a human-written preamble explaining *why* the work was undertaken and who it's useful to, then the AI-generated technical description below a `---` separator. When you finish implementing a plan, emit the PR description in a fenced markdown code block as part of your reply, shaped like this — leave the top as a placeholder for the human to fill in:
+
+````markdown
+<insert human description here>
+
+---
+
+<AI PR description>
+````
+
+The AI portion must cover the *entire* feature branch (everything since it diverged from `dev`), not just the latest change — the user pastes the whole block as the PR body. On follow-up work, re-emit the complete, updated block as a single description that wholly replaces the previous one; never emit a delta or a partial revision.
 
 ## Lint / CI Checks
 
@@ -199,10 +199,11 @@ cargo test --workspace --exclude darkly-wasm --features darkly/testing -- --test
 # `vite build` only transpiles — `tsc --noEmit` is the actual TS gate.
 (cd frontend && npx tsc --noEmit)
 (cd frontend && npm run build)
-# Vitest runs in the node environment by default — DOM globals like
-# `KeyboardEvent` / `PointerEvent` are not defined. Use plain object
-# fakes (`{ key, shiftKey } as KeyboardEvent`) or opt a test file into
-# jsdom via `// @vitest-environment jsdom`.
+# Vitest runs in the node environment — there is no DOM, so globals like
+# `KeyboardEvent` / `PointerEvent` / `window` are undefined. Test against
+# plain object fakes (`{ key, shiftKey } as KeyboardEvent`), and for code
+# that touches `window`, stub it with `vi.stubGlobal('window', …)` and a
+# fake node — see `src/lib/__tests__/clickOutside.test.ts`.
 (cd frontend && npm test)
 ```
 
