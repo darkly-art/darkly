@@ -1276,13 +1276,8 @@ mod tests {
         let key = exposed_port_key(id, "val");
 
         // Safe icon class — accepted.
-        g.set_exposed_port_meta(
-            &key,
-            "Label".into(),
-            "Desc".into(),
-            "fa6-solid:sun".into(),
-        )
-        .unwrap();
+        g.set_exposed_port_meta(&key, "Label".into(), "Desc".into(), "fa6-solid:sun".into())
+            .unwrap();
         assert_eq!(g.exposed_ports[&key].icon, "fa6-solid:sun");
 
         // Unsafe icon (contains `<`) — rejected; previous value retained.
