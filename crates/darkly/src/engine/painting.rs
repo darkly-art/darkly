@@ -1348,12 +1348,7 @@ impl DarklyEngine {
 
         // Clear the full canvas.
         self.gpu.encode("clear-layer", |encoder| {
-            pt_for!().clear_rect(
-                encoder,
-                &self.paint_pipelines,
-                &self.gpu.queue,
-                rect,
-            );
+            pt_for!().clear_rect(encoder, &self.paint_pipelines, &self.gpu.queue, rect);
         });
 
         // Commit for undo.

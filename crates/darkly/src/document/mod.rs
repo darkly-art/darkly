@@ -942,9 +942,7 @@ impl Document {
             LayerNode::Layer(Layer::Raster(r)) => Some(r.pixels.bounds),
             // Voids and groups have no pixel buffer — masks on them default
             // to the full canvas, matching how group masks already behave.
-            LayerNode::Layer(Layer::Void(_)) | LayerNode::Group(_) => {
-                Some(self.canvas_rect())
-            }
+            LayerNode::Layer(Layer::Void(_)) | LayerNode::Group(_) => Some(self.canvas_rect()),
         }
     }
 }

@@ -105,6 +105,19 @@ enum Command {
     FillBackground(u64),
     FillBackgroundColor(u64, [u8; 4]),
 
+    // Canvas
+    /// Anchored canvas resize: new dimensions + 9-point anchor (`ax`/`ay` ∈
+    /// {0, 0.5, 1}). The plane-space window rect is resolved engine-side from
+    /// the current canvas, so this carries no origin.
+    ResizeCanvas {
+        new_w: u32,
+        new_h: u32,
+        ax: f32,
+        ay: f32,
+    },
+    /// Crop the canvas window to the active selection's plane bounds.
+    CropToSelection,
+
     // Selection
     SelectRect {
         x: f32,
@@ -226,6 +239,15 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
                 engine.set_isolated_node(target);
             }
 
+            Command::ResizeCanvas {
+                new_w,
+                new_h,
+                ax,
+                ay,
+            } => {
+                engine.resize_canvas_anchored(new_w, new_h, ax, ay);
+            }
+            Command::CropToSelection => engine.crop_to_selection(),
             Command::FillBackground(id) => engine.fill_background(LayerId::from_ffi(id)),
             Command::FillBackgroundColor(id, c) => {
                 engine.fill_background_color(LayerId::from_ffi(id), c)
@@ -1421,6 +1443,35 @@ impl DarklyHandle {
         self.flush_if_needed();
         let (w, h) = self.engine.borrow().canvas_dimensions();
         vec![w, h].into_boxed_slice()
+    }
+
+    /// The canvas window as `[origin_x, origin_y, width, height]` in plane
+    /// pixels. `origin` is `(0, 0)` for an un-cropped document and moves with
+    /// crop / resize. The JS side caches this so canvas↔screen transforms map
+    /// through the plane (see `coordinates.ts`).
+    pub fn canvas_rect(&self) -> Box<[i32]> {
+        self.flush_if_needed();
+        let r = self.engine.borrow().canvas_rect();
+        vec![r.origin.x, r.origin.y, r.width as i32, r.height as i32].into_boxed_slice()
+    }
+
+    /// Anchored canvas resize. `(anchor_x, anchor_y)` are the 9-point anchor,
+    /// each in `{0.0, 0.5, 1.0}` (the fraction of the size delta taken off the
+    /// top/left). Queued; applied on the next drain.
+    pub fn resize_canvas(&self, new_w: u32, new_h: u32, anchor_x: f32, anchor_y: f32) {
+        self.push(Command::ResizeCanvas {
+            new_w,
+            new_h,
+            ax: anchor_x,
+            ay: anchor_y,
+        });
+    }
+
+    /// Crop the canvas window to the active selection's plane bounds. No-op if
+    /// there is no active selection. (Selection-active state for the
+    /// `cropToSelection` action's enablement is read via `has_selection()`.)
+    pub fn crop_to_selection(&self) {
+        self.push(Command::CropToSelection);
     }
 
     /// Rename the document. Not undoable — matches every other editor's

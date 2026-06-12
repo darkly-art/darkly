@@ -105,7 +105,7 @@ fn crop_preserves_off_window_layer_pixels() {
     // The painted pixel is now outside the window, but still on the layer.
     let after = engine.test_readback_layer(layer_id);
     assert!(
-        alpha_at(&after, w, painted_x as u32, 10) > 0,
+        alpha_at(&after, w, painted_x, 10) > 0,
         "off-window layer pixels must be preserved on the layer across a crop"
     );
 }

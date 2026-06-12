@@ -32,6 +32,19 @@ describe('menu action registrations', () => {
         expect(actions.get('clearSelection')?.displayName).toBe('Deselect');
     });
 
+    it('puts canvas resize + crop under the Image menu', () => {
+        expect(actions.get('resizeCanvas')?.menuPath).toEqual(['Image:10']);
+        expect(actions.get('cropToSelection')?.menuPath).toEqual(['Image:20']);
+    });
+
+    it('disables cropToSelection with a reason when no selection is active', () => {
+        // No WASM handle in this environment → no active selection.
+        const crop = actions.get('cropToSelection')!;
+        expect(crop.enabled?.()).not.toBe(true);
+        expect(actionEnablement(crop)).toMatchObject({ enabled: false });
+        expect(actionEnablement(crop).reason).toBe('No active selection');
+    });
+
     it("save actions' enabled() follows canSave (disabled-with-reason here)", () => {
         // The test environment has no File System Access API, so canSave is
         // false; enabled() returns the disabled-reason string (not `true`).

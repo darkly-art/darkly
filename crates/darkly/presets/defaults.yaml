@@ -32,6 +32,11 @@ hotkeys:
   polygonSelectTool: Shift+KeyL
   # Krita binds View > Mirror View to M; Photoshop/GIMP have no default.
   mirrorViewH: KeyM
+  # Canvas resize. Photoshop binds Image Size to $mod+Alt+I and Canvas Size
+  # to $mod+Alt+C; GIMP/Krita have no default for canvas size. Darkly takes
+  # Photoshop's Canvas Size binding. `cropToSelection` stays menu-only (no
+  # reference editor binds it).
+  resizeCanvas: $mod+Alt+KeyC
   # Darkly-original (brush builder).
   addBrushNode: Shift+KeyA
   # Darkly-original (command palette). No Krita/PS/GIMP prior art, so it

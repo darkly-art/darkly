@@ -30,7 +30,12 @@ fn paint_target_composite_circle() {
 
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
     let pipelines = PaintPipelines::new(&device, &queue);
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
+    let target = GpuPaintTarget::from_canvas_texture(
+        &tex,
+        &view,
+        fmt,
+        darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
+    );
 
     let mut enc = encoder(&device);
     target.composite_circle(
@@ -89,7 +94,12 @@ fn paint_target_alpha_blending() {
     let bg: Vec<u8> = (0..w * h).flat_map(|_| [0u8, 0, 255, 128]).collect();
     let (tex, view) = create_test_texture(&device, &queue, w, h, &bg);
     let pipelines = PaintPipelines::new(&device, &queue);
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
+    let target = GpuPaintTarget::from_canvas_texture(
+        &tex,
+        &view,
+        fmt,
+        darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
+    );
 
     // Paint red circle at center with 50% alpha.
     let mut enc = encoder(&device);
@@ -126,7 +136,12 @@ fn paint_target_r8_mask() {
     let white: Vec<u8> = vec![255u8; (w * h) as usize];
     let (tex, view) = create_test_texture_with_format(&device, &queue, w, h, &white, fmt);
     let pipelines = PaintPipelines::new(&device, &queue);
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
+    let target = GpuPaintTarget::from_canvas_texture(
+        &tex,
+        &view,
+        fmt,
+        darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
+    );
 
     // Composite black → luminance 0 → mask toward 0.
     let mut enc = encoder(&device);
@@ -191,7 +206,12 @@ fn paint_target_selection_masking() {
     });
     let sel_bind_group = pipelines.create_selection_bind_group(&device, &sel_view, &sampler);
 
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
+    let target = GpuPaintTarget::from_canvas_texture(
+        &tex,
+        &view,
+        fmt,
+        darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
+    );
 
     let mut enc = encoder(&device);
     target.composite_circle_with_selection(

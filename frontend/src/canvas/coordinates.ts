@@ -30,8 +30,10 @@ export function canvasToScreen(
     const cos_r = Math.cos(app.rotation);
     const sin_r = Math.sin(app.rotation);
 
-    let dx = cx - app.docW / 2;
-    const dy = cy - app.docH / 2;
+    // Input is plane space; the view transform is window-local (the present
+    // path renders the canvas window). Shift into window-local first.
+    let dx = (cx - app.canvasOriginX) - app.docW / 2;
+    const dy = (cy - app.canvasOriginY) - app.docH / 2;
 
     // Mirror is a scale(-1, 1) in canvas-centered space, before zoom/rotate.
     if (app.mirrorH) dx = -dx;
@@ -94,8 +96,10 @@ export function screenToCanvas(
         tx = canvas_w - tx;
     }
 
+    // The matrix maps to window-local canvas coords; shift to plane space so
+    // every consumer (paint, selection, fill) works in one frame.
     return {
-        x: m00 * buf_x + m10 * buf_y + tx,
-        y: m01 * buf_x + m11 * buf_y + ty,
+        x: m00 * buf_x + m10 * buf_y + tx + app.canvasOriginX,
+        y: m01 * buf_x + m11 * buf_y + ty + app.canvasOriginY,
     };
 }

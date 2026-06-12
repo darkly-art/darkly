@@ -181,6 +181,10 @@ impl DarklyEngine {
         antialias: bool,
         feather: f32,
     ) {
+        // Tool input is in plane space; the selection mask is window-sized, so
+        // shift into window-local coords before rasterizing (identity for an
+        // un-cropped canvas where `canvas_origin == (0, 0)`).
+        let (x, y) = self.plane_to_window_local(x, y);
         let cx = x + w * 0.5;
         let cy = y + h * 0.5;
         let half_w = w * 0.5;
@@ -207,6 +211,7 @@ impl DarklyEngine {
         antialias: bool,
         feather: f32,
     ) {
+        let (x, y) = self.plane_to_window_local(x, y);
         let cx = x + w * 0.5;
         let cy = y + h * 0.5;
         let rx = w * 0.5;
@@ -234,9 +239,23 @@ impl DarklyEngine {
             return;
         }
 
+        // Plane → window-local for the window-sized mask (see `select_rect`).
+        let o = self.doc.canvas_origin;
+        let local: Vec<[f32; 2]> = vertices
+            .iter()
+            .map(|[vx, vy]| [vx - o.x as f32, vy - o.y as f32])
+            .collect();
         let mask =
-            crate::mask::rasterize_polygon_r8(self.doc.width, self.doc.height, vertices, antialias);
+            crate::mask::rasterize_polygon_r8(self.doc.width, self.doc.height, &local, antialias);
         self.apply_selection_mask(mask, mode);
+    }
+
+    /// Convert a plane-space point to the window-local coordinates the
+    /// window-sized selection mask is rasterized in. Identity for an
+    /// un-cropped canvas (`canvas_origin == (0, 0)`).
+    fn plane_to_window_local(&self, x: f32, y: f32) -> (f32, f32) {
+        let o = self.doc.canvas_origin;
+        (x - o.x as f32, y - o.y as f32)
     }
 
     pub fn select_magic_wand(

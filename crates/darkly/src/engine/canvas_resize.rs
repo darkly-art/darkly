@@ -1,10 +1,11 @@
 //! Canvas resize & crop-to-selection.
 //!
-//! Both features move (and optionally rescale) the **canvas window** within
-//! the fixed canvas/plane. Translate/crop leaves content untouched and is
-//! document-only-undoable; content-scaling resamples every pixel-bearing node
-//! and is lossy (pixel-snapshot undo). See `tingly-tickling-kay.md` and the
-//! `Document::canvas_origin` doc for the coordinate model.
+//! Both features move the **canvas window** within the fixed canvas/plane.
+//! Content, layer extents, and the undo stack stay put in the plane; only the
+//! window moves, so undo is exact and document-only. See the
+//! `Document::canvas_origin` doc for the coordinate model. (Content-*scaling*
+//! resize is a planned follow-up — it needs lossy per-node pixel-snapshot
+//! undo, distinct from this document-only path.)
 
 use super::DarklyEngine;
 use crate::coord::{CanvasPoint, CanvasRect};
@@ -46,6 +47,22 @@ impl DarklyEngine {
     /// `canvas_rect()` query and tests read through this).
     pub fn canvas_rect(&self) -> CanvasRect {
         self.doc.canvas_rect()
+    }
+
+    /// Anchored resize from the resize modal: resolve the new window rect from
+    /// the 9-point anchor `(ax, ay)` (each in `{0.0, 0.5, 1.0}`) and apply it.
+    /// No content scaling — see [`Self::resize_canvas`].
+    pub fn resize_canvas_anchored(&mut self, new_w: u32, new_h: u32, ax: f32, ay: f32) {
+        let rect = Self::resize_anchor_rect(
+            self.doc.canvas_origin,
+            self.doc.width,
+            self.doc.height,
+            new_w,
+            new_h,
+            ax,
+            ay,
+        );
+        self.resize_canvas(rect);
     }
 
     /// Moves/crops the canvas window: content, layer extents, and the undo
@@ -99,7 +116,12 @@ impl DarklyEngine {
         // Lift window-local bounds into the plane: the crop window is a plane
         // rect anchored at the current window origin.
         let o = self.doc.canvas_origin;
-        let plane = CanvasRect::from_xywh(o.x + local.x0(), o.y + local.y0(), local.width, local.height);
+        let plane = CanvasRect::from_xywh(
+            o.x + local.x0(),
+            o.y + local.y0(),
+            local.width,
+            local.height,
+        );
         self.resize_canvas(plane);
     }
 
@@ -119,5 +141,68 @@ impl DarklyEngine {
             brush_bgl,
             paint_bgl,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn anchor(ax: f32, ay: f32, new_w: u32, new_h: u32) -> CanvasRect {
+        // From a 100×100 canvas at the plane origin.
+        DarklyEngine::resize_anchor_rect(CanvasPoint::new(0, 0), 100, 100, new_w, new_h, ax, ay)
+    }
+
+    #[test]
+    fn anchor_top_left_keeps_origin_when_growing() {
+        // (0,0) anchor removes none of the delta from the top/left.
+        assert_eq!(
+            anchor(0.0, 0.0, 140, 160),
+            CanvasRect::from_xywh(0, 0, 140, 160)
+        );
+    }
+
+    #[test]
+    fn anchor_bottom_right_grows_up_and_left() {
+        // (1,1) anchor removes the whole delta from the top/left, so the window
+        // origin moves to -(delta).
+        assert_eq!(
+            anchor(1.0, 1.0, 140, 160),
+            CanvasRect::from_xywh(-40, -60, 140, 160)
+        );
+    }
+
+    #[test]
+    fn anchor_center_splits_the_delta() {
+        // (0.5,0.5) centers: half the delta off each edge.
+        assert_eq!(
+            anchor(0.5, 0.5, 140, 160),
+            CanvasRect::from_xywh(-20, -30, 140, 160)
+        );
+    }
+
+    #[test]
+    fn anchor_center_shrink_pulls_inward() {
+        // Shrinking with a center anchor moves the origin inward (positive).
+        assert_eq!(
+            anchor(0.5, 0.5, 60, 40),
+            CanvasRect::from_xywh(20, 30, 60, 40)
+        );
+    }
+
+    #[test]
+    fn anchor_top_left_shrink_keeps_origin() {
+        assert_eq!(
+            anchor(0.0, 0.0, 60, 40),
+            CanvasRect::from_xywh(0, 0, 60, 40)
+        );
+    }
+
+    #[test]
+    fn anchor_respects_existing_origin() {
+        // A non-zero starting origin offsets the result by the same amount.
+        let r =
+            DarklyEngine::resize_anchor_rect(CanvasPoint::new(10, 5), 100, 100, 140, 160, 0.5, 0.5);
+        assert_eq!(r, CanvasRect::from_xywh(-10, -25, 140, 160));
     }
 }

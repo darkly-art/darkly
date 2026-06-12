@@ -216,8 +216,10 @@ impl DarklyEngine {
             self.compositor.node_texture(host_id),
             mask_bind_group.as_ref(),
         ) {
-            let target =
-                crate::gpu::paint_target::GpuPaintTarget::from_node(layer_tex, self.doc.canvas_rect());
+            let target = crate::gpu::paint_target::GpuPaintTarget::from_node(
+                layer_tex,
+                self.doc.canvas_rect(),
+            );
             self.gpu.encode("apply-mask-multiply", |encoder| {
                 target.multiply_alpha_by_mask(
                     encoder,

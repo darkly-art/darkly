@@ -198,6 +198,14 @@ export class DarklyInstance {
     docW = $state(1);
     docH = $state(1);
 
+    /** Plane-space offset of the canvas window (`Document::canvas_origin`),
+     *  mirrored from the engine's `canvas_rect()` query. `(0, 0)` until the
+     *  document is cropped/resized with a moved window. `screenToCanvas`
+     *  returns plane coords (adds this); `canvasToScreen` subtracts it. Kept
+     *  in sync at the same join points as `docW`/`docH`. */
+    canvasOriginX = $state(0);
+    canvasOriginY = $state(0);
+
     // Tool cursor — when non-null, overrides nav cursor on the canvas element.
     toolCursor = $state<string | null>(null);
 
@@ -596,6 +604,21 @@ export class DarklyInstance {
     resetColors() {
         this.foreground = { r: 0, g: 0, b: 0, a: 255 };
         this.background = { r: 255, g: 255, b: 255, a: 255 };
+    }
+
+    /** Sync the JS canvas-window mirror (`docW`/`docH`/`canvasOriginX`/
+     *  `canvasOriginY`) from the engine's `canvas_rect()`. Call after any op
+     *  that moves or resizes the canvas window (load, resize, crop) so the
+     *  coordinate transforms in `coordinates.ts` recenter around the real
+     *  window. Returns the `[ox, oy, w, h]` rect for callers that need it. */
+    syncCanvasRect(): [number, number, number, number] | null {
+        if (!this.handle) return null;
+        const r = this.handle.canvas_rect();
+        this.canvasOriginX = r[0];
+        this.canvasOriginY = r[1];
+        this.docW = r[2];
+        this.docH = r[3];
+        return [r[0], r[1], r[2], r[3]];
     }
 
     refreshLayerTree() {
