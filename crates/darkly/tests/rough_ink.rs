@@ -139,7 +139,11 @@ fn harness(initial: &[u8], graph: Graph<BrushWireType>) -> Harness {
     let (device, queue) = shared_device();
     let (layer_texture, layer_view) = create_test_texture(&device, &queue, CANVAS, CANVAS, initial);
 
-    let pipelines = BrushPipelines::new(&device, &queue);
+    let pipelines = BrushPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
 
     let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
@@ -355,7 +359,11 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
     let (device, queue) = shared_device();
     let (layer_texture, layer_view) =
         create_test_texture(&device, &queue, CANVAS, CANVAS, &black_canvas());
-    let pipelines = BrushPipelines::new(&device, &queue);
+    let pipelines = BrushPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
     let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
         &layer_texture,

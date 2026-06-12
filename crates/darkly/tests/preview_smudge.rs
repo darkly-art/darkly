@@ -57,7 +57,11 @@ fn smudge_preview_shows_neutral_gray_footprint() {
     let (device, queue) = test_device();
     let device = Arc::new(device);
     let queue = Arc::new(queue);
-    let pipelines = BrushPipelines::new(&device, &queue);
+    let pipelines = BrushPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let (target_tex, target_view) = preview_target(&device);
 
     let mut runner: BrushGraphRunner = compile_graph(&graph).expect("brush compiles");

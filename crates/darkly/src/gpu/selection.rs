@@ -1,15 +1,17 @@
 //! GPU-side state for the document's global selection: ping-pong R8 textures,
-//! the brush+paint pipeline bind groups, and the boolean-op render pipelines.
+//! the shared selection-mask bind group, and the boolean-op render pipelines.
 //!
 //! The selection itself is a typed [`crate::document::Modifier`] attached at
 //! the document root, with its pixel-level metadata (`active`, `pixel_bounds`,
 //! `cpu_cache`) on [`SelectionModifier`]. What lives here is purely the GPU
-//! realisation: textures, bind groups, and the shaders that mutate them.
+//! realisation: textures, bind group, and the shaders that mutate them.
+//!
+//! Both the brush and paint pipelines sample the mask through a single shared
+//! [`selection_mask_bgl`], so one bind group serves every consumer.
 //!
 //! Ping-pong: combine/invert ops can't read+write the same texture in a single
 //! render pass, so we keep two R8 textures and swap which is "current". The
-//! brush+paint bind groups always reference the current one and are rebuilt
-//! after a swap.
+//! bind group always references the current one and is rebuilt after a swap.
 
 use crate::document::SelectionMode;
 use crate::layer::LayerId;
@@ -200,8 +202,6 @@ impl SelectionPipelines {
         state: &mut SelectionState,
         shape_data: &[u8],
         mode: CombineMode,
-        brush_bgl: &wgpu::BindGroupLayout,
-        paint_bgl: &wgpu::BindGroupLayout,
     ) {
         let w = state.width;
         let h = state.height;
@@ -283,7 +283,7 @@ impl SelectionPipelines {
         }
 
         state.current = dst;
-        state.rebuild_bind_groups(device, brush_bgl, paint_bgl, &self.sampler);
+        state.rebuild_bind_group(device);
     }
 
     /// Run the combine shader in "invert" mode.
@@ -293,8 +293,6 @@ impl SelectionPipelines {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         state: &mut SelectionState,
-        brush_bgl: &wgpu::BindGroupLayout,
-        paint_bgl: &wgpu::BindGroupLayout,
     ) {
         queue.write_buffer(
             &self.mode_buf,
@@ -350,7 +348,7 @@ impl SelectionPipelines {
         }
 
         state.current = dst;
-        state.rebuild_bind_groups(device, brush_bgl, paint_bgl, &self.sampler);
+        state.rebuild_bind_group(device);
     }
 }
 
@@ -377,18 +375,58 @@ impl CombineMode {
 // SelectionState — GPU resources for the global selection (compositor-owned)
 // ---------------------------------------------------------------------------
 
-/// Ping-pong R8 textures + brush/paint bind groups for the document's global
-/// selection. Allocated by the compositor when the selection modifier is first
-/// needed; lives until the document is dropped.
+/// The single bind group layout for sampling the selection mask, shared by
+/// every consumer (brush + paint pipelines, and the cached [`SelectionState`]
+/// bind group). One layout means one bind group: a `wgpu::BindGroup` is tied to
+/// the exact layout it was built against, so without sharing each pipeline would
+/// need its own (structurally identical) copy.
+///
+/// Visibility is `FRAGMENT | COMPUTE` — the union of where the mask is sampled:
+/// paint reads it in a fragment shader, brush nodes also read it from compute
+/// shaders. A render pipeline may legally use a layout whose visibility is a
+/// superset of the stages it actually uses, so this single layout serves both.
+pub fn selection_mask_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("selection-mask-bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    })
+}
+
+/// Ping-pong R8 textures + the selection mask bind group for the document's
+/// global selection. Allocated by the compositor when the selection modifier is
+/// first needed; lives until the document is dropped.
 pub struct SelectionState {
     pub textures: [wgpu::Texture; 2],
     pub views: [wgpu::TextureView; 2],
     /// Index into `textures` for the current (read) selection data.
     pub current: usize,
-    /// Bind group for the brush pipeline's selection BGL.
-    brush_bind_group: wgpu::BindGroup,
-    /// Bind group for the paint pipeline's selection BGL.
-    paint_bind_group: wgpu::BindGroup,
+    /// The selection mask is consumed by both the brush and paint pipelines.
+    /// Both share a single [`selection_mask_bgl`] layout, so one bind group
+    /// serves every consumer — see that function's note on visibility.
+    bind_group: wgpu::BindGroup,
+    /// Cloned at construction (cheap, Arc-backed) so reallocating ops can
+    /// rebuild `bind_group` against the new texture view without the caller
+    /// threading the layout through.
+    bgl: wgpu::BindGroupLayout,
+    /// Constant across the state's lifetime; built once instead of per-rebuild.
+    sampler: wgpu::Sampler,
     /// Modifier id this state is paired with (for region-store and undo
     /// keying — the document's selection modifier id).
     pub modifier_id: LayerId,
@@ -402,8 +440,7 @@ impl SelectionState {
         modifier_id: LayerId,
         width: u32,
         height: u32,
-        brush_bgl: &wgpu::BindGroupLayout,
-        paint_bgl: &wgpu::BindGroupLayout,
+        bgl: &wgpu::BindGroupLayout,
     ) -> Self {
         let textures = std::array::from_fn(|i| {
             device.create_texture(&wgpu::TextureDescriptor {
@@ -438,15 +475,15 @@ impl SelectionState {
             ..Default::default()
         });
 
-        let brush_bind_group = Self::make_brush_bg(device, &views[0], &sampler, brush_bgl);
-        let paint_bind_group = Self::make_paint_bg(device, &views[0], &sampler, paint_bgl);
+        let bind_group = Self::make_bg(device, &views[0], &sampler, bgl);
 
         SelectionState {
             textures,
             views,
             current: 0,
-            brush_bind_group,
-            paint_bind_group,
+            bind_group,
+            bgl: bgl.clone(),
+            sampler,
             modifier_id,
             width,
             height,
@@ -457,12 +494,10 @@ impl SelectionState {
         &self.textures[self.current]
     }
 
-    pub fn brush_bind_group(&self) -> &wgpu::BindGroup {
-        &self.brush_bind_group
-    }
-
-    pub fn paint_bind_group(&self) -> &wgpu::BindGroup {
-        &self.paint_bind_group
+    /// The selection mask bind group, usable by both the brush and paint
+    /// pipelines (they share [`selection_mask_bgl`]).
+    pub fn selection_bind_group(&self) -> &wgpu::BindGroup {
+        &self.bind_group
     }
 
     /// Borrow the current selection texture as a `CanvasFrame`. The selection
@@ -493,8 +528,6 @@ impl SelectionState {
         queue: &wgpu::Queue,
         old_origin: crate::coord::CanvasPoint,
         new_rect: crate::coord::CanvasRect,
-        brush_bgl: &wgpu::BindGroupLayout,
-        paint_bgl: &wgpu::BindGroupLayout,
     ) {
         use crate::coord::CanvasRect;
         let new_w = new_rect.width;
@@ -587,15 +620,7 @@ impl SelectionState {
         self.width = new_w;
         self.height = new_h;
 
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("sel-sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            ..Default::default()
-        });
-        self.rebuild_bind_groups(device, brush_bgl, paint_bgl, &sampler);
+        self.rebuild_bind_group(device);
     }
 
     /// Replace the selection with a tight-bounds rasterized R8 region. Clears
@@ -606,8 +631,6 @@ impl SelectionState {
         queue: &wgpu::Queue,
         old_bounds: Option<crate::coord::CanvasRect>,
         mask: &crate::mask::RasterizedMask,
-        brush_bgl: &wgpu::BindGroupLayout,
-        paint_bgl: &wgpu::BindGroupLayout,
     ) {
         if let Some(bounds) = old_bounds {
             let ow = bounds.width;
@@ -664,27 +687,12 @@ impl SelectionState {
             );
         }
 
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("sel-sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            ..Default::default()
-        });
-        self.rebuild_bind_groups(device, brush_bgl, paint_bgl, &sampler);
+        self.rebuild_bind_group(device);
     }
 
     /// Replace the selection with a full-canvas R8 buffer (magic wand, mask-
     /// to-selection).
-    pub fn upload_replace_full(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        data: &[u8],
-        brush_bgl: &wgpu::BindGroupLayout,
-        paint_bgl: &wgpu::BindGroupLayout,
-    ) {
+    pub fn upload_replace_full(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, data: &[u8]) {
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.textures[self.current],
@@ -705,15 +713,7 @@ impl SelectionState {
             },
         );
 
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("sel-sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            ..Default::default()
-        });
-        self.rebuild_bind_groups(device, brush_bgl, paint_bgl, &sampler);
+        self.rebuild_bind_group(device);
     }
 
     /// Zero out the previously-active region (clear).
@@ -748,50 +748,22 @@ impl SelectionState {
         }
     }
 
-    /// Rebuild bind groups after a ping-pong swap.
-    fn rebuild_bind_groups(
-        &mut self,
-        device: &wgpu::Device,
-        brush_bgl: &wgpu::BindGroupLayout,
-        paint_bgl: &wgpu::BindGroupLayout,
-        sampler: &wgpu::Sampler,
-    ) {
-        self.brush_bind_group =
-            Self::make_brush_bg(device, &self.views[self.current], sampler, brush_bgl);
-        self.paint_bind_group =
-            Self::make_paint_bg(device, &self.views[self.current], sampler, paint_bgl);
+    /// Rebuild the bind group after a ping-pong swap or texture reallocation,
+    /// re-pointing it at the now-current view. Uses the layout + sampler the
+    /// state owns, so callers never thread them through.
+    fn rebuild_bind_group(&mut self, device: &wgpu::Device) {
+        self.bind_group =
+            Self::make_bg(device, &self.views[self.current], &self.sampler, &self.bgl);
     }
 
-    fn make_brush_bg(
+    fn make_bg(
         device: &wgpu::Device,
         view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
         layout: &wgpu::BindGroupLayout,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("sel-brush-bg"),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
-        })
-    }
-
-    fn make_paint_bg(
-        device: &wgpu::Device,
-        view: &wgpu::TextureView,
-        sampler: &wgpu::Sampler,
-        layout: &wgpu::BindGroupLayout,
-    ) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("sel-paint-bg"),
+            label: Some("sel-bg"),
             layout,
             entries: &[
                 wgpu::BindGroupEntry {

@@ -89,7 +89,11 @@ fn gpu_gradient_with_selection() {
     let fmt = wgpu::TextureFormat::Rgba8Unorm;
 
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
 
     // Create selection mask: left half = 255, right half = 0.
     let mut sel_data = vec![0u8; (w * h) as usize];
@@ -160,7 +164,11 @@ fn gpu_clear_selection_contents() {
     // Fill with red.
     let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
     let (tex, view) = create_test_texture(&device, &queue, w, h, &red);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
 
     // Create selection mask: left half = 255.
     let mut sel_data = vec![0u8; (w * h) as usize];
@@ -222,7 +230,11 @@ fn gpu_clear_selection_undo() {
 
     let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
     let (tex, view) = create_test_texture(&device, &queue, w, h, &red);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let mut store = darkly::gpu::region_store::RegionScratch::new(&device, w, h);
 
     // Selection: full canvas.
@@ -296,7 +308,11 @@ fn gpu_flood_fill_respects_selection() {
 
     // Transparent canvas.
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
 
     // CPU flood fill from (16, 32) on the transparent canvas — should fill everything.
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);

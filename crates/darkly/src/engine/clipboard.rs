@@ -163,7 +163,7 @@ impl DarklyEngine {
                 .selection_state()
                 .expect("has_selection true → selection_state allocated");
             let sel_tex = selection_state.texture();
-            let sel_paint_bg = selection_state.paint_bind_group();
+            let sel_paint_bg = selection_state.selection_bind_group();
 
             // Compute overlap for selection crop (selection and layer are same canvas size).
             let sel_copy_w = rw.min(self.doc.width.saturating_sub(rx));

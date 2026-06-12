@@ -15,7 +15,11 @@ use darkly::gpu::test_utils::{readback_texture, test_device};
 #[test]
 fn renders_s_curve_over_black_background() {
     let (device, queue) = test_device();
-    let pipelines = BrushPipelines::new(&device, &queue);
+    let pipelines = BrushPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let mut renderer = BrushStrokePreviewRenderer::new();
     let graph = default_graph();
 
@@ -91,7 +95,11 @@ fn renders_s_curve_over_black_background() {
 #[test]
 fn renderer_reuses_target_across_renders_of_same_size() {
     let (device, queue) = test_device();
-    let pipelines = BrushPipelines::new(&device, &queue);
+    let pipelines = BrushPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let mut renderer = BrushStrokePreviewRenderer::new();
     let graph = default_graph();
     let path = synthesize_stroke_path(320.0, 120.0, 20, 0.0);
@@ -488,7 +496,11 @@ fn size_scrub_does_not_bump_editor_preview_version() {
 #[test]
 fn empty_path_returns_none() {
     let (device, queue) = test_device();
-    let pipelines = BrushPipelines::new(&device, &queue);
+    let pipelines = BrushPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let mut renderer = BrushStrokePreviewRenderer::new();
     let graph = default_graph();
 

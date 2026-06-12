@@ -662,7 +662,15 @@ pub struct PaintPipelines {
 }
 
 impl PaintPipelines {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        selection_bgl: &wgpu::BindGroupLayout,
+    ) -> Self {
+        // Shared with the brush pipeline + the cached selection bind group;
+        // owned here (cheap Arc clone) so the rest of `new` reads as before.
+        // See [`crate::gpu::selection::selection_mask_bgl`].
+        let selection_bgl = selection_bgl.clone();
         let paint_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("paint-circle"),
             source: wgpu::ShaderSource::Wgsl(
@@ -696,28 +704,6 @@ impl PaintPipelines {
                 },
                 count: None,
             }],
-        });
-
-        let selection_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("paint-selection-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
         });
 
         let paint_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

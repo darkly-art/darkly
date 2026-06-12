@@ -790,7 +790,7 @@ impl DarklyEngine {
         let sel_bg = if self.has_selection() {
             self.compositor
                 .selection_state()
-                .map(|s| s.brush_bind_group())
+                .map(|s| s.selection_bind_group())
                 .unwrap_or(&self.brush_pipelines.default_selection_bind_group)
         } else {
             &self.brush_pipelines.default_selection_bind_group
@@ -1298,7 +1298,7 @@ impl DarklyEngine {
         let sel_bg = self
             .compositor
             .selection_state()
-            .map(|s| s.paint_bind_group())
+            .map(|s| s.selection_bind_group())
             .expect("has_selection true → selection_state allocated");
         self.gpu.encode("clear-sel-erase", |encoder| {
             pt_for!().erase_with_selection(encoder, &self.paint_pipelines, &self.gpu.queue, sel_bg);

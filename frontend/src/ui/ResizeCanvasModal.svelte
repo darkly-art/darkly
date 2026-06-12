@@ -134,12 +134,18 @@
                     <span class="unit">px</span>
                 </div>
             </label>
+            <button
+                type="button"
+                class="link-toggle"
+                class:active={linkAspect}
+                aria-pressed={linkAspect}
+                aria-label={linkAspect ? 'Unlock aspect ratio' : 'Lock aspect ratio'}
+                title={linkAspect ? 'Unlock aspect ratio' : 'Lock aspect ratio'}
+                onclick={() => (linkAspect = !linkAspect)}
+            >
+                <i class={linkAspect ? 'fa-solid fa-link' : 'fa-solid fa-link-slash'}></i>
+            </button>
         </div>
-
-        <label class="link-row">
-            <input type="checkbox" bind:checked={linkAspect} />
-            <span>Lock aspect ratio</span>
-        </label>
 
         <div class="anchor-preview">
             <div class="anchor">
@@ -192,8 +198,9 @@
 
     .dim-row {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: 1fr 1fr auto;
         gap: 12px;
+        align-items: end;
     }
 
     .field {
@@ -236,13 +243,29 @@
         font-size: 12px;
     }
 
-    .link-row {
+    .link-toggle {
         display: flex;
         align-items: center;
-        gap: 8px;
-        font-size: 13px;
-        color: var(--text);
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        background: var(--bg);
+        border: 1px solid var(--bg-hover);
+        border-radius: 4px;
+        color: var(--text-muted);
+        font-size: 14px;
         cursor: pointer;
+    }
+
+    .link-toggle:hover {
+        background: var(--bg-hover);
+        color: var(--text);
+    }
+
+    .link-toggle.active {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
     }
 
     .anchor-preview {

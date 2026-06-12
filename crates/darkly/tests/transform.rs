@@ -1080,7 +1080,11 @@ fn cancel_floating_after_layer_grow() {
     // Stomp the layer at the saved canvas region with green to prove that
     // restore_from_scratch puts the saved red pixels back at the right
     // canvas position (not the wrong layer-local origin).
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let new_view = new_tex.create_view(&wgpu::TextureViewDescriptor::default());
     let target = GpuPaintTarget::from_extent(
         &new_tex,

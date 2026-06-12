@@ -7,7 +7,7 @@
 //!   visibility (active toggle), lock, [`crate::layer::PixelBuffer`] bounds,
 //!   tight pixel bounds, and the CPU readback cache via [`SelectionModifier`].
 //! - **Compositor**: `compositor.selection_state` carries the ping-pong R8
-//!   textures, the brush+paint pipeline bind groups, and the modifier id used
+//!   textures, the shared selection-mask bind group, and the modifier id used
 //!   for region-store / undo keying.
 //! - **Engine**: this file. The high-level ops the user invokes (select_rect,
 //!   apply_selection_mask, invert, clear, magic wand, …) plus the bridge
@@ -362,18 +362,10 @@ impl DarklyEngine {
         self.save_selection_for_undo(rect);
         let was_active = self.has_selection();
 
-        let brush_bgl = self.brush_pipelines.selection_bind_group_layout();
-        let paint_bgl = &self.paint_pipelines.selection_bind_group_layout;
         if let Some(state) = self.compositor.selection_state_mut() {
             self.gpu.encode("invert-sel", |encoder| {
-                self.selection_pipelines.invert(
-                    encoder,
-                    &self.gpu.device,
-                    &self.gpu.queue,
-                    state,
-                    brush_bgl,
-                    paint_bgl,
-                );
+                self.selection_pipelines
+                    .invert(encoder, &self.gpu.device, &self.gpu.queue, state);
             });
         }
         self.set_selection_pixel_bounds(None);
@@ -474,8 +466,6 @@ impl DarklyEngine {
     /// Run the GPU combine shader for boolean modes.
     fn apply_combine(&mut self, shape_pixels: &[u8], mode: SelectionMode) {
         let combine_mode = CombineMode::from_selection_mode(&mode);
-        let brush_bgl = self.brush_pipelines.selection_bind_group_layout();
-        let paint_bgl = &self.paint_pipelines.selection_bind_group_layout;
         if let Some(state) = self.compositor.selection_state_mut() {
             self.gpu.encode("sel-combine", |encoder| {
                 self.selection_pipelines.combine(
@@ -485,8 +475,6 @@ impl DarklyEngine {
                     state,
                     shape_pixels,
                     combine_mode,
-                    brush_bgl,
-                    paint_bgl,
                 );
             });
         }
@@ -500,17 +488,8 @@ impl DarklyEngine {
     /// cache. Used by `Replace` shape ops and `select_all`.
     fn upload_selection_replace(&mut self, mask: &RasterizedMask) {
         let old_bounds = self.selection_pixel_bounds();
-        let brush_bgl = self.brush_pipelines.selection_bind_group_layout();
-        let paint_bgl = &self.paint_pipelines.selection_bind_group_layout;
         if let Some(state) = self.compositor.selection_state_mut() {
-            state.upload_replace(
-                &self.gpu.device,
-                &self.gpu.queue,
-                old_bounds,
-                mask,
-                brush_bgl,
-                paint_bgl,
-            );
+            state.upload_replace(&self.gpu.device, &self.gpu.queue, old_bounds, mask);
         }
 
         // Doc-side: tight bounds, CPU cache, active. The raster buffer is
@@ -542,16 +521,8 @@ impl DarklyEngine {
     /// Full-canvas R8 replace — sets bounds from the buffer's non-zero region
     /// and seeds the CPU cache directly.
     pub(crate) fn upload_selection_replace_full(&mut self, data: &[u8]) {
-        let brush_bgl = self.brush_pipelines.selection_bind_group_layout();
-        let paint_bgl = &self.paint_pipelines.selection_bind_group_layout;
         if let Some(state) = self.compositor.selection_state_mut() {
-            state.upload_replace_full(
-                &self.gpu.device,
-                &self.gpu.queue,
-                data,
-                brush_bgl,
-                paint_bgl,
-            );
+            state.upload_replace_full(&self.gpu.device, &self.gpu.queue, data);
         }
 
         let bounds = crate::mask::pixel_bounds_r8(data, self.doc.width, self.doc.height)

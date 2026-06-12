@@ -29,7 +29,11 @@ fn paint_target_composite_circle() {
     let fmt = wgpu::TextureFormat::Rgba8Unorm;
 
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let target = GpuPaintTarget::from_canvas_texture(
         &tex,
         &view,
@@ -93,7 +97,11 @@ fn paint_target_alpha_blending() {
 
     let bg: Vec<u8> = (0..w * h).flat_map(|_| [0u8, 0, 255, 128]).collect();
     let (tex, view) = create_test_texture(&device, &queue, w, h, &bg);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let target = GpuPaintTarget::from_canvas_texture(
         &tex,
         &view,
@@ -135,7 +143,11 @@ fn paint_target_r8_mask() {
 
     let white: Vec<u8> = vec![255u8; (w * h) as usize];
     let (tex, view) = create_test_texture_with_format(&device, &queue, w, h, &white, fmt);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let target = GpuPaintTarget::from_canvas_texture(
         &tex,
         &view,
@@ -180,7 +192,11 @@ fn paint_target_selection_masking() {
     let fmt = wgpu::TextureFormat::Rgba8Unorm;
 
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
 
     // Selection mask: left half = 255, right half = 0.
     let mut sel_data = vec![0u8; (w * h) as usize];
@@ -344,7 +360,11 @@ fn paint_target_composite_circle_on_offset_layer() {
 
     let (tex, view) =
         create_test_texture(&device, &queue, lw, lh, &vec![0u8; (lw * lh * 4) as usize]);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let target = GpuPaintTarget::from_extent(
         &tex,
         &view,
@@ -407,7 +427,11 @@ fn paint_target_fill_rect_canvas_space_on_offset_layer() {
     let off_y: i32 = -50;
     let (tex, view) =
         create_test_texture(&device, &queue, lw, lh, &vec![0u8; (lw * lh * 4) as usize]);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let target = GpuPaintTarget::from_extent(
         &tex,
         &view,
@@ -463,7 +487,11 @@ fn paint_target_fill_rect_canvas_negative_origin_on_offset_layer() {
     let off_y: i32 = -50;
     let (tex, view) =
         create_test_texture(&device, &queue, lw, lh, &vec![0u8; (lw * lh * 4) as usize]);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let target = GpuPaintTarget::from_extent(
         &tex,
         &view,

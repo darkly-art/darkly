@@ -540,8 +540,11 @@ impl DarklyEngine {
         );
         let undo_stack = UndoStack::new(50);
         let region_scratch = RegionScratch::new(&gpu.device, doc_width, doc_height);
-        let paint_pipelines = PaintPipelines::new(&gpu.device, &gpu.queue);
-        let brush_pipelines = BrushPipelines::new(&gpu.device, &gpu.queue);
+        // One selection-mask layout shared by both pipelines (and the cached
+        // selection bind group), so a single bind group serves every consumer.
+        let selection_mask_bgl = crate::gpu::selection::selection_mask_bgl(&gpu.device);
+        let paint_pipelines = PaintPipelines::new(&gpu.device, &gpu.queue, &selection_mask_bgl);
+        let brush_pipelines = BrushPipelines::new(&gpu.device, &gpu.queue, &selection_mask_bgl);
         let selection_pipelines = SelectionPipelines::new(&gpu.device);
         let diff_rect = DiffRectPass::new(&gpu.device);
 
@@ -630,7 +633,6 @@ impl DarklyEngine {
             &engine.gpu.device,
             selection_mod_id,
             engine.brush_pipelines.selection_bind_group_layout(),
-            &engine.paint_pipelines.selection_bind_group_layout,
         );
 
         engine

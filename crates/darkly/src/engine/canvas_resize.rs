@@ -130,16 +130,12 @@ impl DarklyEngine {
     /// the resize op and the undo-reconcile hook.
     pub(crate) fn apply_canvas_rect_to_compositor(&mut self) {
         let rect = self.doc.canvas_rect();
-        let brush_bgl = self.brush_pipelines.selection_bind_group_layout();
-        let paint_bgl = &self.paint_pipelines.selection_bind_group_layout;
         self.compositor.set_canvas_rect(
             &self.gpu.device,
             &self.gpu.queue,
             rect.origin,
             rect.width,
             rect.height,
-            brush_bgl,
-            paint_bgl,
         );
     }
 }

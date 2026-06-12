@@ -291,7 +291,7 @@ impl DarklyEngine {
         let has_selection = selection.is_some();
         let sel_bg = if has_selection {
             selection
-                .map(|s| s.brush_bind_group())
+                .map(|s| s.selection_bind_group())
                 .unwrap_or(&self.brush_pipelines.default_selection_bind_group)
         } else {
             &self.brush_pipelines.default_selection_bind_group

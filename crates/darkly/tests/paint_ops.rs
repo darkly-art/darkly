@@ -49,7 +49,11 @@ fn gpu_gradient_linear_interpolation() {
     let fmt = wgpu::TextureFormat::Rgba8Unorm;
 
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
 
     let target = GpuPaintTarget::from_canvas_texture(
         &tex,
@@ -102,7 +106,11 @@ fn gpu_gradient_undo() {
     let fmt = wgpu::TextureFormat::Rgba8Unorm;
 
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let mut store = RegionScratch::new(&device, w, h);
 
     // Save pre-gradient state.
@@ -183,7 +191,11 @@ fn gpu_flood_fill_interior() {
 
     // Start with transparent canvas.
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
 
     // Paint a red border rectangle (10,10)-(50,50) by filling 4 sides.
     let target = GpuPaintTarget::from_canvas_texture(
@@ -338,7 +350,11 @@ fn gpu_flood_fill_undo() {
     let fmt = wgpu::TextureFormat::Rgba8Unorm;
 
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let mut store = RegionScratch::new(&device, w, h);
 
     // Save region for undo.
@@ -453,7 +469,11 @@ fn gpu_color_pick_readback() {
 
     // Paint red at (10,10), blue at (50,50), rest transparent.
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
 
     let target = GpuPaintTarget::from_canvas_texture(
         &tex,
@@ -536,7 +556,11 @@ fn gpu_gradient_on_mask() {
     // Start with fully-revealed mask (255).
     let white = vec![255u8; (w * h) as usize];
     let (tex, view) = create_test_texture_with_format(&device, &queue, w, h, &white, fmt);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
 
     let target = GpuPaintTarget::from_canvas_texture(
         &tex,
@@ -590,7 +614,11 @@ fn gpu_fill_rect_with_mask() {
     let fmt = wgpu::TextureFormat::Rgba8Unorm;
 
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
 
     // Mask: circle in center (simple: 32×32 block at center).
     let mut mask_data = vec![0u8; (w * h) as usize];
@@ -669,7 +697,11 @@ fn gpu_gradient_on_offset_layer_uses_canvas_endpoints() {
 
     let (tex, view) =
         create_test_texture(&device, &queue, lw, lh, &vec![0u8; (lw * lh * 4) as usize]);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
 
     let target = GpuPaintTarget::from_extent(
         &tex,

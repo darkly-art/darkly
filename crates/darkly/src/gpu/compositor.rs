@@ -1043,7 +1043,6 @@ impl Compositor {
     ///
     /// Group blend uniforms reset to defaults here; `sync_compositor_layers`
     /// rewrites them before the next composite. Marks a full recomposite.
-    #[allow(clippy::too_many_arguments)]
     pub fn set_canvas_rect(
         &mut self,
         device: &wgpu::Device,
@@ -1051,8 +1050,6 @@ impl Compositor {
         origin: crate::coord::CanvasPoint,
         width: u32,
         height: u32,
-        sel_brush_bgl: &wgpu::BindGroupLayout,
-        sel_paint_bgl: &wgpu::BindGroupLayout,
     ) {
         let old_origin = self.canvas_origin;
         self.canvas_width = width;
@@ -1090,8 +1087,6 @@ impl Compositor {
                 queue,
                 old_origin,
                 CanvasRect::new(origin, width, height),
-                sel_brush_bgl,
-                sel_paint_bgl,
             );
         }
 
@@ -1519,8 +1514,7 @@ impl Compositor {
         &mut self,
         device: &wgpu::Device,
         modifier_id: LayerId,
-        brush_bgl: &wgpu::BindGroupLayout,
-        paint_bgl: &wgpu::BindGroupLayout,
+        bgl: &wgpu::BindGroupLayout,
     ) {
         if self.selection_state.is_some() {
             return;
@@ -1530,8 +1524,7 @@ impl Compositor {
             modifier_id,
             self.canvas_width,
             self.canvas_height,
-            brush_bgl,
-            paint_bgl,
+            bgl,
         ));
     }
 

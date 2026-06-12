@@ -637,7 +637,6 @@ fn ensure_selection_state(engine: &mut DarklyEngine) {
         &engine.gpu.device,
         id,
         engine.brush_pipelines.selection_bind_group_layout(),
-        &engine.paint_pipelines.selection_bind_group_layout,
     );
 }
 

@@ -28,7 +28,11 @@ fn probe_softness_zero() {
     let (device, queue) = test_device();
     let device = Arc::new(device);
     let queue = Arc::new(queue);
-    let pipelines = BrushPipelines::new(&device, &queue);
+    let pipelines = BrushPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("probe"),
         size: wgpu::Extent3d {
