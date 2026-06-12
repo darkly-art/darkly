@@ -90,7 +90,7 @@ impl DarklyEngine {
 
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
-        let rect = crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h);
+        let rect = self.doc.canvas_rect();
         let format = wgpu::TextureFormat::Rgba8Unorm;
 
         let layer_tex = match self.compositor.node_texture(layer_id) {
@@ -178,9 +178,7 @@ impl DarklyEngine {
         if !self.is_node_paintable(layer_id) {
             return;
         }
-        let canvas_w = self.compositor.canvas_width();
-        let canvas_h = self.compositor.canvas_height();
-        let rect = crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h);
+        let rect = self.doc.canvas_rect();
         let format = wgpu::TextureFormat::Rgba8Unorm;
 
         let layer_tex = match self.compositor.node_texture(layer_id) {
@@ -200,7 +198,7 @@ impl DarklyEngine {
             if let Some(target) = self
                 .compositor
                 .node_texture(layer_id)
-                .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
+                .map(|t| GpuPaintTarget::from_node(t, self.doc.canvas_rect()))
             {
                 target.fill_rect(encoder, &self.paint_pipelines, &self.gpu.queue, rect, color);
             }
@@ -745,7 +743,7 @@ impl DarklyEngine {
                     layer_extent.height,
                     &self.brush_pipelines,
                 );
-                let paint_target = GpuPaintTarget::from_node(layer_tex, canvas_w, canvas_h);
+                let paint_target = GpuPaintTarget::from_node(layer_tex, self.doc.canvas_rect());
                 self.gpu.encode("stroke-buffer-init", |encoder| {
                     stroke_buffer.save_pre_stroke(
                         &self.gpu.device,
@@ -783,7 +781,7 @@ impl DarklyEngine {
             Some(t) => t,
             None => return,
         };
-        let paint_target = GpuPaintTarget::from_node(layer_tex, canvas_w, canvas_h);
+        let paint_target = GpuPaintTarget::from_node(layer_tex, self.doc.canvas_rect());
 
         // Take the stroke engine and buffer out to avoid borrow conflicts.
         let mut engine = self.brush_stroke_engine.take().unwrap();
@@ -860,6 +858,7 @@ impl DarklyEngine {
                         selection_bind_group: sel_bg,
                         canvas_width: canvas_w,
                         canvas_height: canvas_h,
+                        canvas_origin: [self.doc.canvas_origin.x, self.doc.canvas_origin.y],
                         // blend_mode applies at commit (paint vs. erase).
                         // Per-dab passes hard-code source-over — the
                         // scratch is a coverage accumulator, and only the
@@ -1045,7 +1044,7 @@ impl DarklyEngine {
             // field level, leaving `&mut self.dab_pool` free.
             let layer_tex = self.compositor.node_texture(layer_id);
             if let Some(layer_tex) = layer_tex {
-                let _paint_target = GpuPaintTarget::from_node(layer_tex, canvas_w, canvas_h);
+                let _paint_target = GpuPaintTarget::from_node(layer_tex, self.doc.canvas_rect());
                 let mut gpu_ctx = BrushGpuContext {
                     encoder: self.gpu.device.create_command_encoder(
                         &wgpu::CommandEncoderDescriptor {
@@ -1058,6 +1057,7 @@ impl DarklyEngine {
                     selection_bind_group: sel_bg,
                     canvas_width: canvas_w,
                     canvas_height: canvas_h,
+                    canvas_origin: [self.doc.canvas_origin.x, self.doc.canvas_origin.y],
                     blend_mode: self.brush_blend_mode,
                     view_rotation: self.view_rotation,
                     perf: BrushPerfCounters::default(),
@@ -1166,7 +1166,7 @@ impl DarklyEngine {
                 encoder,
                 &self.paint_pipelines,
                 &self.gpu.queue,
-                crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h),
+                self.doc.canvas_rect(),
                 color,
                 &mask_bind_group,
             );
@@ -1193,7 +1193,7 @@ impl DarklyEngine {
                 return;
             }
         };
-        let rect = crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h);
+        let rect = self.doc.canvas_rect();
         let entry = commit_undo_region(
             &self.gpu,
             &self.region_scratch,
@@ -1267,13 +1267,11 @@ impl DarklyEngine {
             return;
         }
 
-        let canvas_w = self.compositor.canvas_width();
-        let canvas_h = self.compositor.canvas_height();
         let format = match self.paint_target(layer_id) {
             Some(t) => t.format(),
             None => return,
         };
-        let rect = crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h);
+        let rect = self.doc.canvas_rect();
 
         // Inline dispatch helper for use INSIDE the gpu.encode closures.
         // `paint_target()` is a method call which the closure-capture
@@ -1284,8 +1282,7 @@ impl DarklyEngine {
             () => {
                 GpuPaintTarget::from_node(
                     self.compositor.node_texture(layer_id).unwrap(),
-                    canvas_w,
-                    canvas_h,
+                    self.doc.canvas_rect(),
                 )
             };
         }
@@ -1325,13 +1322,11 @@ impl DarklyEngine {
 
     /// Clear entire layer to transparent via GPU.
     pub(crate) fn gpu_clear_layer(&mut self, layer_id: LayerId) {
-        let canvas_w = self.compositor.canvas_width();
-        let canvas_h = self.compositor.canvas_height();
         let format = match self.paint_target(layer_id) {
             Some(t) => t.format(),
             None => return,
         };
-        let rect = crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h);
+        let rect = self.doc.canvas_rect();
 
         // Inline dispatch helper — see `gpu_clear_selection` for why a macro
         // is needed instead of calling `self.paint_target(...)` directly.
@@ -1339,8 +1334,7 @@ impl DarklyEngine {
             () => {
                 GpuPaintTarget::from_node(
                     self.compositor.node_texture(layer_id).unwrap(),
-                    canvas_w,
-                    canvas_h,
+                    self.doc.canvas_rect(),
                 )
             };
         }
@@ -1358,7 +1352,7 @@ impl DarklyEngine {
                 encoder,
                 &self.paint_pipelines,
                 &self.gpu.queue,
-                crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h),
+                rect,
             );
         });
 
@@ -1385,11 +1379,9 @@ impl DarklyEngine {
     /// callers don't branch on the kind. Returns `None` for groups, unknown
     /// ids, or any node without a `PixelBuffer`.
     pub(crate) fn paint_target(&self, node_id: LayerId) -> Option<GpuPaintTarget<'_>> {
-        let canvas_w = self.compositor.canvas_width();
-        let canvas_h = self.compositor.canvas_height();
         self.compositor
             .node_texture(node_id)
-            .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
+            .map(|t| GpuPaintTarget::from_node(t, self.doc.canvas_rect()))
     }
 
     /// Upload a cropped region of the GPU selection as an R8 texture bind group.

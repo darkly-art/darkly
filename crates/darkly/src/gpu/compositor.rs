@@ -252,7 +252,11 @@ pub(super) struct BlendUniforms {
     pub(super) layer_size: [f32; 2],
     /// Canvas dimensions in pixels.
     pub(super) canvas_size: [f32; 2],
-    pub(super) _pad2: [f32; 2],
+    /// Plane-space offset of the canvas window (`Document::canvas_origin`).
+    /// Lets the fragment shader map window UV → plane position before the
+    /// `- layer_offset` translation, so off-origin (cropped) canvases sample
+    /// plane-anchored layer textures correctly.
+    pub(super) canvas_origin: [f32; 2],
 }
 
 /// GPU state for a passthrough group that has a mask (Photoshop-style).
@@ -344,6 +348,11 @@ pub struct Compositor {
 
     pub(super) canvas_width: u32,
     pub(super) canvas_height: u32,
+    /// Plane-space offset of the canvas window, mirrored from
+    /// `Document::canvas_origin`. Drives the selection-mask UV seam and the
+    /// window→plane mapping in the layer composite shader. Updated together
+    /// with `canvas_width`/`canvas_height` by `set_canvas_rect`.
+    pub(super) canvas_origin: crate::coord::CanvasPoint,
     /// Padded (tile-aligned) render target dimensions — used for shader UV
     /// computations in the transform pass, which must match the actual
     /// accumulator texture size.
@@ -464,7 +473,7 @@ impl Compositor {
             layer_offset: [0.0, 0.0],
             layer_size: canvas,
             canvas_size: canvas,
-            _pad2: [0.0, 0.0],
+            canvas_origin: [0.0, 0.0],
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&format!("group-uniforms-{group_id:?}")),
@@ -485,6 +494,36 @@ impl Compositor {
             cache_valid_through: None,
             uniform_buf,
         }
+    }
+
+    /// Build the present bind group that samples the root composite cache.
+    /// Shared by `new` and `set_canvas_rect` so the binding layout lives in
+    /// exactly one place.
+    fn make_present_cache_bind_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        cache_view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+        view_uniform_buf: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("present-bg-cache"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(cache_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: view_uniform_buf.as_entire_binding(),
+                },
+            ],
+        })
     }
 
     pub fn new(
@@ -726,24 +765,13 @@ impl Compositor {
         let root_state = Self::create_group_state(device, queue, padded_w, padded_h, root_id);
 
         // Present bind group reads from root's composite cache
-        let present_cache_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("present-bg-cache"),
-            layout: &_present_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&root_state.composite_cache_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: view_uniform_buf.as_entire_binding(),
-                },
-            ],
-        });
+        let present_cache_bind_group = Self::make_present_cache_bind_group(
+            device,
+            &_present_bind_group_layout,
+            &root_state.composite_cache_view,
+            &sampler,
+            &view_uniform_buf,
+        );
 
         let mut group_state = HashMap::new();
         group_state.insert(root_id, root_state);
@@ -777,6 +805,7 @@ impl Compositor {
             dirty_node_pixels: HashSet::new(),
             canvas_width: width,
             canvas_height: height,
+            canvas_origin: crate::coord::CanvasPoint::new(0, 0),
             padded_width: padded_w,
             padded_height: padded_h,
             veil_chain,
@@ -853,7 +882,7 @@ impl Compositor {
             layer_offset: [bounds.origin.x as f32, bounds.origin.y as f32],
             layer_size: [bounds.width as f32, bounds.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
-            _pad2: [0.0, 0.0],
+            canvas_origin: [self.canvas_origin.x as f32, self.canvas_origin.y as f32],
         };
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1002,6 +1031,74 @@ impl Compositor {
         self.group_state.insert(group_id, gs);
     }
 
+    /// Move / resize the canvas window, recreating every window-sized GPU
+    /// resource at the new dimensions and plane origin.
+    ///
+    /// Window-sized resources: every group's ping-pong accumulators + composite
+    /// cache, the passthrough-mask snapshots, the present bind group, and the
+    /// selection mask (re-realized at the moved window, preserving its plane
+    /// anchor). Node textures (layers, masks) are plane-anchored and left
+    /// untouched — crop/resize preserves off-window pixels. Pipelines are
+    /// format- not dimension-dependent, so they are not rebuilt.
+    ///
+    /// Group blend uniforms reset to defaults here; `sync_compositor_layers`
+    /// rewrites them before the next composite. Marks a full recomposite.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_canvas_rect(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        origin: crate::coord::CanvasPoint,
+        width: u32,
+        height: u32,
+        sel_brush_bgl: &wgpu::BindGroupLayout,
+        sel_paint_bgl: &wgpu::BindGroupLayout,
+    ) {
+        let old_origin = self.canvas_origin;
+        self.canvas_width = width;
+        self.canvas_height = height;
+        self.canvas_origin = origin;
+        // Accumulators match canvas dimensions exactly (no tile padding).
+        self.padded_width = width;
+        self.padded_height = height;
+
+        // Recreate every group's accumulators + cache at the new size.
+        let group_ids: Vec<LayerId> = self.group_state.keys().copied().collect();
+        for gid in group_ids {
+            let gs = Self::create_group_state(device, queue, width, height, gid);
+            self.group_state.insert(gid, gs);
+        }
+
+        // Passthrough-mask snapshots are parent-accumulator-sized and the
+        // blend bind groups reference now-replaced accumulator views.
+        self.passthrough_mask_state.clear();
+        self.blend_bind_groups.clear();
+
+        // Present samples the root composite cache — rebind to the fresh view.
+        self.present_cache_bind_group = Self::make_present_cache_bind_group(
+            device,
+            &self._present_bind_group_layout,
+            &self.group_state[&self.root_id].composite_cache_view,
+            &self.sampler,
+            &self.view_uniform_buf,
+        );
+
+        // Re-realize the window-sized selection mask at the moved window.
+        if let Some(sel) = self.selection_state.as_mut() {
+            sel.resize(
+                device,
+                queue,
+                old_origin,
+                CanvasRect::new(origin, width, height),
+                sel_brush_bgl,
+                sel_paint_bgl,
+            );
+        }
+
+        self.needs_composite = true;
+        self.needs_present = true;
+    }
+
     /// Update a group's blend uniforms (opacity, blend_mode).
     ///
     /// `blend_mode_gpu` is the registry-resolved gpu_value (i.e.
@@ -1028,7 +1125,7 @@ impl Compositor {
                 layer_offset: [0.0, 0.0],
                 layer_size: canvas,
                 canvas_size: canvas,
-                _pad2: [0.0, 0.0],
+                canvas_origin: [0.0, 0.0],
             };
             queue.write_buffer(&gs.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         }
@@ -1544,7 +1641,7 @@ impl Compositor {
         }
         // Canvas-sized texture so the procedural output composites against
         // the same coordinate system as raster layers.
-        let bounds = CanvasRect::from_xywh(0, 0, self.canvas_width, self.canvas_height);
+        let bounds = self.canvas_rect();
         let layer_tex = LayerTexture::with_bounds(device, bounds);
 
         let cache = void.create_cache(
@@ -1567,7 +1664,7 @@ impl Compositor {
             layer_offset: [bounds.origin.x as f32, bounds.origin.y as f32],
             layer_size: [bounds.width as f32, bounds.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
-            _pad2: [0.0, 0.0],
+            canvas_origin: [self.canvas_origin.x as f32, self.canvas_origin.y as f32],
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&format!("blend-uniforms-{layer_id:?}")),
@@ -1745,6 +1842,12 @@ impl Compositor {
         self.canvas_height
     }
 
+    /// The canvas window as a plane-space rect — `(canvas_origin, width,
+    /// height)`. Mirrors `Document::canvas_rect()` on the compositor side.
+    pub fn canvas_rect(&self) -> CanvasRect {
+        CanvasRect::new(self.canvas_origin, self.canvas_width, self.canvas_height)
+    }
+
     /// Master rAF tick counter. Advances exactly once per `update_animations`
     /// call (i.e. once per `engine.render`), starting at 0. This is the same
     /// counter every divisor-throttled subsystem inside the compositor checks
@@ -1907,7 +2010,7 @@ impl Compositor {
             layer_offset: [canvas_extent.x0() as f32, canvas_extent.y0() as f32],
             layer_size: [canvas_extent.width as f32, canvas_extent.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
-            _pad2: [0.0, 0.0],
+            canvas_origin: [self.canvas_origin.x as f32, self.canvas_origin.y as f32],
         };
         let cache = match self.layer_cache.get_mut(&layer_id) {
             Some(c) => c,

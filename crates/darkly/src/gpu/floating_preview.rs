@@ -301,8 +301,7 @@ impl Compositor {
                 &state.preview_texture,
                 &state.preview_view,
                 state.target_format,
-                self.canvas_width,
-                self.canvas_height,
+                self.canvas_rect(),
             );
             match cs {
                 crate::gpu::transform::ClearShape::Rect(rect) => {
@@ -410,7 +409,7 @@ impl Compositor {
             layer_offset: [0.0, 0.0],
             layer_size: [self.canvas_width as f32, self.canvas_height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
-            _pad2: [0.0, 0.0],
+            canvas_origin: [0.0, 0.0],
         };
         queue.write_buffer(
             &state.preview_blend_uniform_buf,

@@ -3,7 +3,6 @@
 //! ones are baked into a single "Background" layer at the root.
 
 use super::DarklyEngine;
-use crate::coord::CanvasRect;
 use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::{BakeLayersAction, BakeSourceSlot};
 
@@ -34,7 +33,7 @@ impl DarklyEngine {
 
         // Allocate the result at root, canvas-sized, Normal/100%, named
         // "Background" (Photoshop convention).
-        let canvas_bounds = CanvasRect::from_xywh(0, 0, self.doc.width, self.doc.height);
+        let canvas_bounds = self.doc.canvas_rect();
         let result_id = self.doc.add_raster_layer(None);
         if let Some(LayerNode::Layer(Layer::Raster(r))) = self.doc.find_node_mut(result_id) {
             r.pixels.bounds = canvas_bounds;
@@ -169,7 +168,7 @@ impl DarklyEngine {
         // Allocate the result raster, canvas-sized, inheriting the group's
         // identity props so it composites into the parent the same way the
         // group did (modulo the internal child structure now being baked).
-        let canvas_bounds = CanvasRect::from_xywh(0, 0, self.doc.width, self.doc.height);
+        let canvas_bounds = self.doc.canvas_rect();
         let result_id = self.doc.add_raster_layer(Some(group_id));
         if let Some(LayerNode::Layer(Layer::Raster(r))) = self.doc.find_node_mut(result_id) {
             r.pixels.bounds = canvas_bounds;

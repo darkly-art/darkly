@@ -29,7 +29,8 @@ struct Uniforms {
     layer_size: vec2f,
     // Canvas dimensions in pixels.
     canvas_size: vec2f,
-    _pad2: vec2f,
+    // Plane-space offset of the canvas window — window UV → plane position.
+    canvas_origin: vec2f,
 }
 @group(0) @binding(3) var<uniform> uniforms: Uniforms;
 
@@ -136,7 +137,7 @@ fn blend(fg: vec4f, bg: vec4f, mode: u32) -> vec4f {
     // coords. When the layer's bounds match the canvas (the default), this
     // collapses to layer_uv == in.uv. The mask shares the layer's bounds,
     // so the same UV samples both textures.
-    let canvas_pos = in.uv * uniforms.canvas_size;
+    let canvas_pos = window_uv_to_plane(in.uv, uniforms.canvas_origin, uniforms.canvas_size);
     let layer_pos = canvas_pos - uniforms.layer_offset;
     let layer_uv = layer_pos / uniforms.layer_size;
     let in_bounds = all(layer_uv >= vec2f(0.0)) && all(layer_uv <= vec2f(1.0));

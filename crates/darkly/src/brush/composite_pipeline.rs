@@ -39,6 +39,8 @@ pub struct CompositeUniforms {
     pub target_offset: [f32; 2],
     pub target_size: [f32; 2],
     pub canvas_size: [f32; 2],
+    /// Plane-space offset of the canvas window (selection-mask anchor).
+    pub canvas_origin: [f32; 2],
     pub uv_min: [f32; 2],
     pub uv_max: [f32; 2],
     pub blend_mode: u32,
@@ -61,11 +63,11 @@ impl CompositePipeline {
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("brush-composite"),
                 source: wgpu::ShaderSource::Wgsl(
-                    concat!(
+                    crate::gpu::canvas_lib::with_canvas_lib(concat!(
                         include_str!("../../../../shaders/source_over.wgsl"),
                         "\n",
                         include_str!("../../../../shaders/brush/composite.wgsl"),
-                    )
+                    ))
                     .into(),
                 ),
             });

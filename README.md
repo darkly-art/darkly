@@ -124,8 +124,10 @@ For a feature to count, it must be:
 - [x] Affine transform tool (translate / scale / rotate via floating content)
 - [x] Merge down
 - [x] Duplicate layer / group
-- [ ] Crop tool / crop to selection
-- [ ] Canvas resize
+- [x] Crop to selection
+- [ ] Interactive crop tool
+- [x] Canvas resize (dimensions + 9-point anchor)
+- [ ] Canvas resize with content scaling
 - [x] Select All / Deselect / Invert as menu+hotkey actions
 - [x] Invert selection (boolean op exists)
 - [x] Command palette (Ctrl+Shift+P)
@@ -163,7 +165,7 @@ For a feature to count, it must be:
 - [x] Veil picker with live animated previews
 - [x] Void layers (domain‑warped FBM noise)
 - [x] Camera void (live webcam with scale / rotation / pan)
-- [ ] Group blend mode / opacity (groups don't carry BlendProps yet)
+- [x] Group blend mode / opacity (isolated + passthrough compositing)
 - [ ] Brush save/load + editable nodes/wires (e.g. YAML)
 - [ ] Recent files
 - [ ] PSD / XCF / KRA import

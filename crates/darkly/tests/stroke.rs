@@ -60,7 +60,7 @@ fn gpu_stroke_paint_undo_redo() {
     submit(&queue, enc);
 
     // --- stroke_to: two circles ---
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
 
     let mut enc = encoder(&device);
     target.composite_circle(
@@ -273,7 +273,7 @@ fn gpu_stroke_on_mask_undo() {
     submit(&queue, enc);
 
     // stroke_to: paint black circles → mask toward 0.
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
 
     let mut enc = encoder(&device);
     target.composite_circle(
@@ -343,7 +343,7 @@ fn gpu_two_strokes_sequential_undo() {
     let snap1 = store.save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
     let mut enc = encoder(&device);
     target.composite_circle(
         &mut enc,
@@ -375,7 +375,7 @@ fn gpu_two_strokes_sequential_undo() {
     let snap2 = store.save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
     let mut enc = encoder(&device);
     target.composite_circle(
         &mut enc,
@@ -516,7 +516,7 @@ fn gpu_region_action_undo_stack() {
     let snap = store.save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
     let mut enc = encoder(&device);
     target.composite_circle(
         &mut enc,
@@ -623,7 +623,7 @@ fn gpu_cpu_undo_interleaved() {
     let snap = store.save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
     let mut enc = encoder(&device);
     target.composite_circle(
         &mut enc,
@@ -747,7 +747,7 @@ fn diff_rect_finds_painted_region() {
     // Paint a circle at (100, 100) on the canvas only — simulating a
     // scattered dab that landed far from where the stroke engine tracked.
     let pipelines = PaintPipelines::new(&device, &queue);
-    let target = GpuPaintTarget::from_canvas_texture(&canvas_tex, &canvas_view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(&canvas_tex, &canvas_view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
     let mut enc = encoder(&device);
     target.composite_circle(
         &mut enc,
@@ -819,7 +819,7 @@ fn diff_rect_undo_restores_offset_paint() {
     submit(&queue, enc);
 
     // Paint a circle at (100, 100) — far from origin, simulating scatter.
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
     let mut enc = encoder(&device);
     target.composite_circle(
         &mut enc,
@@ -999,8 +999,7 @@ fn negative_direction_grow_crosses_zero() {
         &new_view,
         fmt,
         darkly::coord::CanvasRect::from_xywh(-256, -256, new_w, new_h),
-        new_w,
-        new_h,
+        darkly::coord::CanvasRect::from_xywh(0, 0, new_w, new_h),
     );
     let mut enc = encoder(&device);
     target.composite_circle(

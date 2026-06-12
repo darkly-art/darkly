@@ -83,7 +83,10 @@ impl BlendPipelines {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("composite-shader"),
             source: wgpu::ShaderSource::Wgsl(
-                crate::gpu::blend_mode::build_composite_source().into(),
+                crate::gpu::canvas_lib::with_canvas_lib(
+                    &crate::gpu::blend_mode::build_composite_source(),
+                )
+                .into(),
             ),
         });
 

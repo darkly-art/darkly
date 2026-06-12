@@ -51,7 +51,7 @@ fn gpu_gradient_linear_interpolation() {
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
     let pipelines = PaintPipelines::new(&device, &queue);
 
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
 
     let mut enc = encoder(&device);
     target.linear_gradient(
@@ -106,7 +106,7 @@ fn gpu_gradient_undo() {
     submit(&queue, enc);
 
     // Render gradient.
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
     let mut enc = encoder(&device);
     target.linear_gradient(
         &mut enc,
@@ -176,7 +176,7 @@ fn gpu_flood_fill_interior() {
     let pipelines = PaintPipelines::new(&device, &queue);
 
     // Paint a red border rectangle (10,10)-(50,50) by filling 4 sides.
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
 
     // Use fill_rect to paint 4 border strips.
     let red = [255u8, 0, 0, 255];
@@ -376,7 +376,7 @@ fn gpu_flood_fill_undo() {
     });
     let mask_bg = pipelines.create_selection_bind_group(&device, &mask_view, &sampler);
 
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
     let mut enc = encoder(&device);
     target.fill_rect_with_selection(
         &mut enc,
@@ -435,7 +435,7 @@ fn gpu_color_pick_readback() {
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
     let pipelines = PaintPipelines::new(&device, &queue);
 
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
 
     let mut enc = encoder(&device);
     target.fill_rect(
@@ -513,7 +513,7 @@ fn gpu_gradient_on_mask() {
     let (tex, view) = create_test_texture_with_format(&device, &queue, w, h, &white, fmt);
     let pipelines = PaintPipelines::new(&device, &queue);
 
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
 
     // Gradient from white to black (left to right).
     let mut enc = encoder(&device);
@@ -585,7 +585,7 @@ fn gpu_fill_rect_with_mask() {
     });
     let mask_bg = pipelines.create_selection_bind_group(&device, &mask_view, &sampler);
 
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, darkly::coord::CanvasRect::from_xywh(0, 0, w, h));
     let mut enc = encoder(&device);
     target.fill_rect_with_selection(
         &mut enc,
@@ -641,8 +641,7 @@ fn gpu_gradient_on_offset_layer_uses_canvas_endpoints() {
         &view,
         fmt,
         darkly::coord::CanvasRect::from_xywh(off_x, off_y, lw, lh),
-        canvas_w,
-        canvas_h,
+        darkly::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h),
     );
 
     // Gradient from canvas (0, 0) → canvas (100, 0): white to black along x.

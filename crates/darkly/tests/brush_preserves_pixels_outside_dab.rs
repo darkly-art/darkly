@@ -61,8 +61,7 @@ fn render_one_dab(brush_name: &str, color: [f32; 4], canvas: &[u8]) -> Vec<u8> {
         &layer_texture,
         &layer_view,
         wgpu::TextureFormat::Rgba8Unorm,
-        CANVAS,
-        CANVAS,
+        darkly::coord::CanvasRect::from_xywh(0, 0, CANVAS, CANVAS),
     );
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("brush-untouched-pre-stroke"),
@@ -84,6 +83,7 @@ fn render_one_dab(brush_name: &str, color: [f32; 4], canvas: &[u8]) -> Vec<u8> {
                 selection_bind_group: pipelines.default_selection_bind_group(),
                 canvas_width: CANVAS,
                 canvas_height: CANVAS,
+                canvas_origin: [0, 0],
                 blend_mode: 0,
                 view_rotation: 0.0,
                 perf: BrushPerfCounters::default(),
@@ -93,8 +93,7 @@ fn render_one_dab(brush_name: &str, color: [f32; 4], canvas: &[u8]) -> Vec<u8> {
                         &layer_texture,
                         &layer_view,
                         wgpu::TextureFormat::Rgba8Unorm,
-                        CANVAS,
-                        CANVAS,
+                        darkly::coord::CanvasRect::from_xywh(0, 0, CANVAS, CANVAS),
                     ),
                     pre_stroke_texture: pre_stroke_tex,
                     pre_stroke_bind_group: pre_stroke_bg,

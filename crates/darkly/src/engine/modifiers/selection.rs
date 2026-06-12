@@ -591,6 +591,12 @@ impl DarklyEngine {
     }
 
     /// Full-canvas undo rect — used when post-op extent isn't known up-front.
+    ///
+    /// Window-local `(0, 0, w, h)`: the selection mask is a window-sized R8
+    /// texture and its `canvas_frame` is window-local, so selection undo rects
+    /// (saved/restored against that frame) stay window-local too. The plane
+    /// anchoring of the selection is realized physically by re-copying the
+    /// mask on crop/resize (`set_canvas_rect`), not by plane-space undo rects.
     pub(crate) fn selection_full_canvas_rect(&self) -> CanvasRect {
         CanvasRect::from_xywh(0, 0, self.doc.width, self.doc.height)
     }

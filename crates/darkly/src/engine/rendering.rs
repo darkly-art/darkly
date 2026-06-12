@@ -640,6 +640,15 @@ impl DarklyEngine {
         // textures are (re)created if needed by the undo action.
         self.sync_compositor_layers();
 
+        // Canvas resize/crop reconcile: a `CanvasResizeAction` swaps the
+        // document's canvas window (origin + dims) but is document-only, so
+        // the compositor's window-sized resources need rebuilding to match.
+        // Detecting divergence here keeps the undo action GPU-free and covers
+        // both undo and redo uniformly.
+        if self.doc.canvas_rect() != self.compositor.canvas_rect() {
+            self.apply_canvas_rect_to_compositor();
+        }
+
         // If this is a GPU region action, execute the texture restore.
         // Node id resolves to the right texture via the unified node-texture
         // pool — caller no longer dispatches by format.

@@ -96,6 +96,7 @@ fn render_big_round() -> Out {
         selection_bind_group: pipelines.default_selection_bind_group(),
         canvas_width: PREVIEW_SIDE,
         canvas_height: PREVIEW_SIDE,
+        canvas_origin: [0, 0],
         blend_mode: 0,
         view_rotation: 0.0,
         perf: BrushPerfCounters::default(),

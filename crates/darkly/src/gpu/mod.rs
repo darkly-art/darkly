@@ -24,6 +24,7 @@ pub fn clear_view_transparent(
 
 pub mod atlas;
 pub mod blend;
+pub mod canvas_lib;
 pub mod blend_mode;
 pub mod blend_modes;
 pub mod compositor;

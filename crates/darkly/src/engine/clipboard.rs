@@ -87,7 +87,7 @@ impl DarklyEngine {
             .map(|t| t.canvas_frame());
         let undo_rect = target_frame
             .map(|f| f.canvas_extent)
-            .unwrap_or_else(|| crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h));
+            .unwrap_or_else(|| self.doc.canvas_rect());
 
         if has_selection {
             // --- GPU extraction path ---
@@ -221,8 +221,7 @@ impl DarklyEngine {
                     &staging_tex,
                     &staging_view,
                     format,
-                    rw,
-                    rh,
+                    crate::coord::CanvasRect::from_xywh(0, 0, rw, rh),
                 );
                 staging_target.multiply_alpha_by_mask(
                     encoder,
@@ -237,7 +236,7 @@ impl DarklyEngine {
                     let layer_target = self
                         .compositor
                         .node_texture(layer_id)
-                        .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
+                        .map(|t| GpuPaintTarget::from_node(t, self.doc.canvas_rect()))
                         .expect("node texture missing for cut target");
                     layer_target.multiply_alpha_by_inverse_mask(
                         encoder,

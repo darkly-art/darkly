@@ -1,3 +1,4 @@
+mod canvas_resize;
 mod compound;
 mod gpu_region;
 mod layer;
@@ -6,6 +7,7 @@ pub mod property;
 mod selection;
 mod tombstones;
 
+pub use canvas_resize::CanvasResizeAction;
 pub use compound::CompoundAction;
 pub use gpu_region::GpuRegionAction;
 pub use layer::{

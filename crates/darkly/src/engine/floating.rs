@@ -340,8 +340,7 @@ impl DarklyEngine {
                         source_tex.0,
                         source_tex.1,
                         format,
-                        source_width,
-                        source_height,
+                        crate::coord::CanvasRect::from_xywh(0, 0, source_width, source_height),
                     );
                     self.gpu.encode("transform-sel-mask", |encoder| {
                         target.multiply_by_mask(
@@ -639,7 +638,7 @@ impl DarklyEngine {
                 let target = self
                     .compositor
                     .node_texture(layer_id)
-                    .map(|t| GpuPaintTarget::from_node(t, self.doc.width, self.doc.height));
+                    .map(|t| GpuPaintTarget::from_node(t, self.doc.canvas_rect()));
                 if let Some(target) = target {
                     match clear_shape {
                         ClearShape::Rect(rect) => {

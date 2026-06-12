@@ -1087,8 +1087,7 @@ fn cancel_floating_after_layer_grow() {
         &new_view,
         fmt,
         CanvasRect::from_xywh(-256, -256, new_w, new_h),
-        new_w,
-        new_h,
+        CanvasRect::from_xywh(0, 0, new_w, new_h),
     );
     let mut enc = encoder(&device);
     target.fill_rect(

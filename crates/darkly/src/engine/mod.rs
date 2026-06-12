@@ -1,6 +1,7 @@
 mod bake_common;
 mod brush_graph;
 mod brush_library;
+mod canvas_resize;
 mod clipboard;
 mod duplicate;
 mod export;

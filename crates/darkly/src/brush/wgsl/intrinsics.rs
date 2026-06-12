@@ -23,6 +23,8 @@ pub struct IntrinsicUniforms {
     pub layer_offset: [i32; 2],
     pub layer_size: [u32; 2],
     pub canvas_size: [u32; 2],
+    /// Plane-space offset of the canvas window (selection-mask anchor).
+    pub canvas_origin: [i32; 2],
     pub cursor_preview_centre: [f32; 2],
     pub cursor_preview_size: [u32; 2],
     /// Active view rotation in radians (the `rotation` parameter passed to
@@ -31,7 +33,10 @@ pub struct IntrinsicUniforms {
     /// rotation — on-screen orientation stays put as the user rotates the
     /// view. See `_prelude.wgsl` and `wgsl/mod.rs::assemble_shader`.
     pub view_rotation: f32,
-    pub _pad: [u32; 1],
+    /// Pads `IntrinsicUniforms` to 64 bytes (a multiple of 16) so the
+    /// node-contributed uniforms packed after `intrinsic` keep 16-byte
+    /// alignment. See the matching note in `_prelude.wgsl`.
+    pub _pad: [u32; 3],
 }
 
 /// Size in bytes of the WGSL/Rust `IntrinsicUniforms` struct. Read by

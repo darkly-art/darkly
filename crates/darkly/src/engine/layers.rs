@@ -15,7 +15,7 @@ impl DarklyEngine {
         let id = self.doc.add_raster_layer(anchor);
         let bounds = match self.doc.layer(id) {
             Some(Layer::Raster(r)) => r.pixels.bounds,
-            _ => crate::coord::CanvasRect::from_xywh(0, 0, self.doc.width, self.doc.height),
+            _ => self.doc.canvas_rect(),
         };
         self.compositor
             .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id, bounds);

@@ -466,12 +466,136 @@ impl SelectionState {
     }
 
     /// Borrow the current selection texture as a `CanvasFrame`. The selection
-    /// is canvas-sized at offset (0, 0).
+    /// texture is window-sized; its `canvas_extent` is window-local `(0, 0,
+    /// w, h)` (the plane anchoring is realized by [`Self::resize`], not by a
+    /// non-zero extent origin — see CLAUDE.md selection notes).
     pub fn canvas_frame(&self) -> crate::gpu::atlas::CanvasFrame<'_> {
         crate::gpu::atlas::CanvasFrame {
             texture: self.texture(),
             canvas_extent: crate::coord::CanvasRect::from_xywh(0, 0, self.width, self.height),
         }
+    }
+
+    /// Re-realize the window-sized selection mask for a moved/resized canvas
+    /// window (crop / canvas resize).
+    ///
+    /// The mask is a window-sized R8 texture whose pixel `(0, 0)` represents
+    /// the plane position `old_origin`. When the window moves to `new_rect`,
+    /// allocate fresh ping-pong textures at the new dimensions, clear them to
+    /// "unselected", and copy the **plane-overlap** of the old and new windows
+    /// — preserving which *plane* pixels stay selected. Selection outside the
+    /// new window is clipped away. Same overlap-anchored copy as
+    /// [`Compositor::resize_node_texture`], generalized to a window that may
+    /// move in any direction (so the overlap is clipped, not assumed to grow).
+    pub fn resize(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        old_origin: crate::coord::CanvasPoint,
+        new_rect: crate::coord::CanvasRect,
+        brush_bgl: &wgpu::BindGroupLayout,
+        paint_bgl: &wgpu::BindGroupLayout,
+    ) {
+        use crate::coord::CanvasRect;
+        let new_w = new_rect.width;
+        let new_h = new_rect.height;
+
+        let new_textures: [wgpu::Texture; 2] = std::array::from_fn(|i| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(if i == 0 { "sel-tex-0" } else { "sel-tex-1" }),
+                size: wgpu::Extent3d {
+                    width: new_w,
+                    height: new_h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        });
+        let new_views = [
+            new_textures[0].create_view(&wgpu::TextureViewDescriptor::default()),
+            new_textures[1].create_view(&wgpu::TextureViewDescriptor::default()),
+        ];
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("sel-resize"),
+        });
+        // Clear the new "current" texture (index 0) to unselected (0). The
+        // other ping-pong side is overwritten by the next combine pass.
+        {
+            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("sel-resize-clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &new_views[0],
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+        }
+
+        let old_rect = CanvasRect::new(old_origin, self.width, self.height);
+        if let Some(ov) = old_rect.intersect(new_rect) {
+            let src_x = (ov.origin.x - old_origin.x) as u32;
+            let src_y = (ov.origin.y - old_origin.y) as u32;
+            let dst_x = (ov.origin.x - new_rect.origin.x) as u32;
+            let dst_y = (ov.origin.y - new_rect.origin.y) as u32;
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.textures[self.current],
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: src_x,
+                        y: src_y,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &new_textures[0],
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: dst_x,
+                        y: dst_y,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: ov.width,
+                    height: ov.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        queue.submit([encoder.finish()]);
+
+        self.textures = new_textures;
+        self.views = new_views;
+        self.current = 0;
+        self.width = new_w;
+        self.height = new_h;
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("sel-sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
+        self.rebuild_bind_groups(device, brush_bgl, paint_bgl, &sampler);
     }
 
     /// Replace the selection with a tight-bounds rasterized R8 region. Clears

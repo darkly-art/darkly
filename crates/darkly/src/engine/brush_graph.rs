@@ -311,6 +311,7 @@ impl DarklyEngine {
             selection_bind_group: sel_bg,
             canvas_width: 0,
             canvas_height: 0,
+            canvas_origin: [0, 0],
             blend_mode: 0,
             view_rotation: self.view_rotation,
             perf: BrushPerfCounters::default(),
