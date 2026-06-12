@@ -3,7 +3,7 @@
 //! Outputs a single scalar random value in `[0, 1)` — the raw PRNG natural
 //! range. Declares this as its wire-side `natural_range` so the runner
 //! remaps to whichever range the downstream port wants (e.g. `[0, 1024]`
-//! for `circle.seed`, `[-TAU, TAU]` for `circle.rotation`). A consumer that
+//! for `shape.seed`, `[-TAU, TAU]` for `shape.rotation`). A consumer that
 //! wants bipolar values just declares a `[-x, x]` natural range on its
 //! input — no special casing in this node.
 //!
@@ -29,6 +29,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "input",
             display_name: "Random",
+            description: "A new random value for every brush mark — useful for jittering size, color, angle, etc.",
             ports: vec![PortDef::output("value", BrushWireType::Scalar)
                 .with_natural_range(0.0, 1.0)
                 .with_description("Random value in [0, 1)")],

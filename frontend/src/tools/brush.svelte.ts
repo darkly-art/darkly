@@ -33,7 +33,6 @@ const LARGE_ON_SCREEN = 40;
 
 interface BrushCursorPreviewInfo {
     halfExtent: [number, number];
-    rotation: number;
 }
 
 /** Scale strength with on-screen stamp size: tiny stamps get more contrast
@@ -118,7 +117,7 @@ export function pushHoverOverlay(handle: any, pose: PenPose, cx: number, cy: num
             FLAG_CANVAS_SPACE | FLAG_SOFT_CONTRAST,
             [cx, cy],
             info.halfExtent,
-            { modeParam: previewStrength(info.halfExtent), rotation: info.rotation },
+            { modeParam: previewStrength(info.halfExtent) },
         ),
     ]);
     lastHover = { cx, cy, pose };
@@ -199,6 +198,9 @@ export const brushTool: Tool = {
     },
 
     onDeactivate(ctx) {
+        // Leaving the brush tool drops the builder's fullscreen mode so the
+        // pinned bottom-area overlay can't outlive the panel that owns it.
+        brushGraph.fullscreen = false;
         ctx.handle.clear_overlay();
         // Reset engine blend mode so a future paint-capable tool (or a
         // direct WASM call) doesn't inherit our erase state.

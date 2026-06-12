@@ -124,6 +124,13 @@ function renderBundle() {
     let out = `${banner}/* eslint-disable */\n// @ts-nocheck\nimport { addCollection } from '@iconify/svelte/dist/offline-functions.js';\n\n`;
     for (const data of collections) out += `addCollection(${JSON.stringify(data)});\n`;
 
+    // The full set of names that resolve offline — the source of truth for the
+    // curated icon picker (e.g. custom brush-bar entries). Sorted for stable diffs.
+    const bundledNames = [...byPrefix.entries()]
+        .flatMap(([prefix, set]) => [...set].map((n) => `${prefix}:${n}`))
+        .sort();
+    out += `\nexport const BUNDLED_ICON_NAMES = ${JSON.stringify(bundledNames)};\n`;
+
     return { out, total, collections: collections.length };
 }
 

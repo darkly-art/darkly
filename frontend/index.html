@@ -3,21 +3,38 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Darkly</title>
+    <title>Darkly - Entropic Editor for Artists</title>
+    <meta name="description" content="Darkly is a GPU-native paint program written in Rust, geared towards digital artists." />
+    <link rel="canonical" href="https://darkly.art" />
     <link rel="icon" type="image/png" href="./darkly-favicon.png" />
     <!-- iOS reads the home-screen icon only from this link, never the manifest. -->
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
     <meta name="theme-color" content="#000000" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Darkly" />
+    <meta property="og:title" content="Darkly - Entropic Editor for Artists" />
+    <meta property="og:description" content="A GPU-native paint program written in Rust. Runs offline, no login, free and open source forever." />
+    <meta property="og:url" content="https://darkly.art" />
+    <meta property="og:image" content="https://darkly.art/darkly-banner.png" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Darkly - Entropic Editor for Artists" />
+    <meta name="twitter:description" content="A GPU-native paint program written in Rust. Runs offline, no login, free and open source forever." />
+    <meta name="twitter:image" content="https://demo.darkly.art/darkly-banner.png" />
+
     <style>
         html, body { margin: 0; background: #000; color: #666; }
         #boot-splash {
             position: fixed;
             inset: 0;
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
             padding: 2rem;
             box-sizing: border-box;
+            text-align: center;
+            font-family: system-ui, sans-serif;
         }
         #boot-splash img {
             max-width: min(60vw, 600px);
@@ -27,6 +44,9 @@
             opacity: 0.9;
             animation: boot-pulse 1.6s ease-in-out infinite;
         }
+        #boot-splash p { margin: 1.5rem 0 0.5rem; max-width: 40rem; }
+        #boot-splash a { color: #9500ff; text-decoration: none; margin: 0 0.5rem; }
+        #boot-splash a:hover { text-decoration: underline; }
         @keyframes boot-pulse {
             0%, 100% { opacity: 0.55; }
             50%      { opacity: 1; }
@@ -35,8 +55,22 @@
 </head>
 <body class="dark">
     <div id="app">
-        <div id="boot-splash"><img src="./darkly-banner.png" alt="Darkly" /></div>
+        <div id="boot-splash">
+            <img src="./darkly-banner.png" alt="Darkly" />
+            <p>Entropic Editor for Artists</p>
+            <p>
+                <a href="https://darkly.art">darkly.art</a> ·
+                <a href="https://github.com/darkly-art/darkly">GitHub</a>
+            </p>
+        </div>
     </div>
+    <noscript>
+        <p style="color:#aaa;font-family:system-ui,sans-serif;text-align:center;padding:2rem;">
+            Darkly is a GPU-native paint program that requires JavaScript and WebGPU to run.
+            Learn more at <a href="https://darkly.art" style="color:#9500ff;">darkly.art</a>
+            or visit the <a href="https://github.com/darkly-art/darkly" style="color:#9500ff;">GitHub repo</a>.
+        </p>
+    </noscript>
     <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

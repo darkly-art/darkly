@@ -352,7 +352,7 @@ mod tests {
         assert_eq!(get_i64("animation.veil_divisor"), 2);
         assert_eq!(get_i64("canvas.width"), 1920);
         assert_eq!(get_str("hotkeys.nav.trigger"), "Space");
-        assert!(!get_bool("input.fingerPainting"));
+        assert!(get_bool("input.fingerPainting"));
         // Darkly-original hotkey defined in defaults.yaml (no reference-editor
         // prior art, so it stays in the agnostic baseline).
         assert_eq!(get_str("hotkeys.addBrushNode"), "Shift+KeyA");

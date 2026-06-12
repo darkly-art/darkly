@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use super::registration::NodeRegistration;
@@ -103,9 +104,9 @@ pub struct PortDef<W: WireKind> {
     /// Quantization step. `0.0` (the default) means continuous; any positive
     /// value snaps the slider, scrub, and typed-value commits to multiples of
     /// `step` from `min`. Used when the wire takes a value but only certain
-    /// quantized values produce well-defined behavior — e.g. the circle
+    /// quantized values produce well-defined behavior — e.g. the shape
     /// node's `frequency`, where only integer values yield a seam-free
-    /// closed shape. Frontend honors the snap; the engine should still
+    /// closed silhouette. Frontend honors the snap; the engine should still
     /// defend by quantizing inputs in the node evaluator (a wired-in float
     /// from a curve or pen-pressure modulator bypasses the slider).
     #[serde(default)]
@@ -175,7 +176,7 @@ pub struct PortDef<W: WireKind> {
     /// value is outside the allowed list. This is purely a UI affordance —
     /// the engine still accepts and reads the port's value normally; it
     /// just stops showing the user a control they wouldn't act on.
-    /// Used by the Circle node to hide algorithm-specific knobs (Perlin's
+    /// Used by the Shape node to hide algorithm-specific knobs (Perlin's
     /// `seed`, Superformula's `n1`/`n2`/`n3`) under the wrong algorithm.
     #[serde(default)]
     pub visible_when: Option<(String, Vec<i32>)>,
@@ -406,6 +407,26 @@ pub enum GraphError {
         node: NodeId,
         port: String,
     },
+    /// `exposed_ports` lookup by key (`"<node_id>.<port>"`) failed.
+    ExposedPortNotFound {
+        key: String,
+    },
+    /// Icon string contained a character outside the Iconify-name
+    /// shape (`[a-zA-Z0-9-: ]`). Rejected so the value stays a safe,
+    /// inert token (it is passed to `<Icon name={...}>`, never `{@html}`).
+    InvalidIcon {
+        icon: String,
+    },
+}
+
+/// Accept only the byte shape Iconify names use (`prefix:name`):
+/// letters, digits, hyphens, and the `:` separator (spaces tolerated for
+/// legacy values). Keeping the value within this alphabet means the stored
+/// string is an inert token — the frontend hands it to `<Icon name={...}>`,
+/// which resolves it against the offline bundle and renders nothing for an
+/// unknown name, so a hostile value can never become markup.
+fn is_safe_icon_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'-' || b == b':' || b == b' '
 }
 
 impl std::fmt::Display for GraphError {
@@ -421,6 +442,16 @@ impl std::fmt::Display for GraphError {
             Self::NodeNotFound(id) => write!(f, "node {:?} not found", id),
             Self::InputAlreadyConnected { node, port } => {
                 write!(f, "input '{}' on {:?} already connected", port, node)
+            }
+            Self::ExposedPortNotFound { key } => {
+                write!(f, "exposed-port entry '{}' not found", key)
+            }
+            Self::InvalidIcon { icon } => {
+                write!(
+                    f,
+                    "icon '{}' contains characters outside [a-zA-Z0-9- ]",
+                    icon
+                )
             }
         }
     }
@@ -454,6 +485,35 @@ impl std::fmt::Display for FindTerminalError {
 
 impl std::error::Error for FindTerminalError {}
 
+// ── Exposed port metadata ────────────────────────────────────────────
+
+/// Per-placement metadata for an entry in a graph's `exposed_ports` map.
+/// All fields are optional: empty strings fall back to the registration's
+/// `PortDef::label` / `PortDef::description` / `PortDef::icon` when the
+/// brush bar renders the entry.
+///
+/// Lives in `Graph::exposed_ports` rather than on `PortDef` per instance
+/// because the brush bar is a single user-facing surface — centralizing
+/// "what the user sees" in one ordered dict makes display order natural
+/// (map iteration order is the brush-bar order) and gives the
+/// brush-author editor one canonical place to read and write.
+#[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExposedPortMeta {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub icon: String,
+}
+
+/// Format the canonical key for an exposed-port entry. Keys are
+/// `"<node_id>.<port_name>"` strings so the dict round-trips through
+/// JSON/YAML without needing tuple-key encoding.
+pub fn exposed_port_key(node: NodeId, port: &str) -> String {
+    format!("{}.{}", node.0, port)
+}
+
 // ── Graph ────────────────────────────────────────────────────────────
 
 /// A directed acyclic graph of nodes connected by typed wires.
@@ -463,6 +523,12 @@ pub struct Graph<W: WireKind> {
     nodes: HashMap<NodeId, NodeInstance<W>>,
     pub connections: Vec<Connection>,
     next_id: u64,
+    /// Ordered set of exposed-port entries. Insertion order is the
+    /// brush-bar display order — `IndexMap` preserves it through every
+    /// mutation and JSON/YAML round-trip. Keys come from
+    /// [`exposed_port_key`].
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub exposed_ports: IndexMap<String, ExposedPortMeta>,
 }
 
 impl<W: WireKind> Default for Graph<W> {
@@ -477,6 +543,7 @@ impl<W: WireKind> Graph<W> {
             nodes: HashMap::new(),
             connections: Vec::new(),
             next_id: 1,
+            exposed_ports: IndexMap::new(),
         }
     }
 
@@ -488,7 +555,10 @@ impl<W: WireKind> Graph<W> {
         &self.nodes
     }
 
-    /// Add a node and return its assigned id.
+    /// Add a node and return its assigned id. Any input port whose
+    /// registration `PortDef` declares `.exposed()` is auto-appended to
+    /// `exposed_ports` with empty meta — preserves the "size etc. are
+    /// exposed by default" affordance.
     pub fn add_node(
         &mut self,
         type_id: impl Into<String>,
@@ -497,6 +567,14 @@ impl<W: WireKind> Graph<W> {
     ) -> NodeId {
         let id = NodeId(self.next_id);
         self.next_id += 1;
+        // Walk before move: every input port flagged exposed gets a
+        // default brush-bar entry.
+        for port in ports.iter() {
+            if port.dir == PortDir::Input && port.exposed {
+                let key = exposed_port_key(id, &port.name);
+                self.exposed_ports.insert(key, ExposedPortMeta::default());
+            }
+        }
         self.nodes.insert(
             id,
             NodeInstance {
@@ -509,13 +587,95 @@ impl<W: WireKind> Graph<W> {
         id
     }
 
-    /// Remove a node and all its connections.
+    /// Remove a node, all its connections, and every brush-bar entry
+    /// referencing one of its ports.
     pub fn remove_node(&mut self, id: NodeId) -> Result<(), GraphError> {
         if self.nodes.remove(&id).is_none() {
             return Err(GraphError::NodeNotFound(id));
         }
         self.connections
             .retain(|c| c.from.node != id && c.to.node != id);
+        let prefix = format!("{}.", id.0);
+        self.exposed_ports
+            .retain(|key, _| !key.starts_with(&prefix));
+        Ok(())
+    }
+
+    /// Add a brush-bar entry for an input port, no-op if already present.
+    /// The entry starts with empty meta (registration values are used as
+    /// fallback at render time).
+    pub fn expose_port(&mut self, id: NodeId, port_name: &str) -> Result<(), GraphError> {
+        // Validate that the port exists and is an input.
+        let node = self.nodes.get(&id).ok_or(GraphError::NodeNotFound(id))?;
+        if !node
+            .ports
+            .iter()
+            .any(|p| p.name == port_name && p.dir == PortDir::Input)
+        {
+            return Err(GraphError::PortNotFound {
+                node: id,
+                port: port_name.to_string(),
+            });
+        }
+        let key = exposed_port_key(id, port_name);
+        self.exposed_ports.entry(key).or_default();
+        Ok(())
+    }
+
+    /// Drop a brush-bar entry by `(node, port)`. Idempotent — missing
+    /// entries are not an error.
+    pub fn unexpose_port(&mut self, id: NodeId, port_name: &str) {
+        let key = exposed_port_key(id, port_name);
+        self.exposed_ports.shift_remove(&key);
+    }
+
+    /// Returns true when the named input port has a live brush-bar entry.
+    pub fn is_port_exposed(&self, id: NodeId, port_name: &str) -> bool {
+        self.exposed_ports
+            .contains_key(&exposed_port_key(id, port_name))
+    }
+
+    /// Overwrite all three meta fields on a brush-bar entry in one call.
+    /// The icon field is restricted to FontAwesome-friendly characters
+    /// (`[a-zA-Z0-9- ]*`) — keeps the value safe to bind directly into
+    /// an HTML `class=` attribute on the frontend without further
+    /// sanitization. Out-of-shape icon strings are rejected loudly so
+    /// the caller learns about the constraint rather than seeing the
+    /// icon silently dropped.
+    pub fn set_exposed_port_meta(
+        &mut self,
+        key: &str,
+        label: String,
+        description: String,
+        icon: String,
+    ) -> Result<(), GraphError> {
+        if !icon.bytes().all(is_safe_icon_byte) {
+            return Err(GraphError::InvalidIcon { icon });
+        }
+        let entry =
+            self.exposed_ports
+                .get_mut(key)
+                .ok_or_else(|| GraphError::ExposedPortNotFound {
+                    key: key.to_string(),
+                })?;
+        entry.label = label;
+        entry.description = description;
+        entry.icon = icon;
+        Ok(())
+    }
+
+    /// Move an exposed-port entry to position `new_index`. The map's
+    /// iteration order is the brush-bar display order, so this is how
+    /// drag-reorder is realised. `new_index` is clamped to the map's
+    /// length.
+    pub fn reorder_exposed_port(&mut self, key: &str, new_index: usize) -> Result<(), GraphError> {
+        let from = self.exposed_ports.get_index_of(key).ok_or_else(|| {
+            GraphError::ExposedPortNotFound {
+                key: key.to_string(),
+            }
+        })?;
+        let target = new_index.min(self.exposed_ports.len().saturating_sub(1));
+        self.exposed_ports.move_index(from, target);
         Ok(())
     }
 
@@ -637,28 +797,9 @@ impl<W: WireKind> Graph<W> {
         Ok(())
     }
 
-    /// Toggle whether an input port is exposed in the brush properties panel.
-    pub fn set_port_exposed(
-        &mut self,
-        id: NodeId,
-        port_name: &str,
-        exposed: bool,
-    ) -> Result<(), GraphError> {
-        let node = self
-            .nodes
-            .get_mut(&id)
-            .ok_or(GraphError::NodeNotFound(id))?;
-        let port = node
-            .ports
-            .iter_mut()
-            .find(|p| p.name == port_name && p.dir == PortDir::Input)
-            .ok_or_else(|| GraphError::PortNotFound {
-                node: id,
-                port: port_name.to_string(),
-            })?;
-        port.exposed = exposed;
-        Ok(())
-    }
+    // Note: brush-bar exposure / label / description / icon overrides
+    // live in `Graph::exposed_ports` now. Use `expose_port`,
+    // `unexpose_port`, `set_exposed_port_meta`, and `reorder_exposed_port`.
 
     /// Update a single parameter value on a node.
     pub fn set_param(
@@ -1044,26 +1185,136 @@ mod tests {
         assert_eq!(back.description, "Per-dab opacity");
     }
 
-    // ── set_port_exposed ────────────────────────────────────────────
+    // ── exposed_ports ──────────────────────────────────────────────
 
     #[test]
-    fn set_port_exposed_toggles() {
+    fn expose_then_unexpose_round_trips() {
         let mut g = Graph::<TestWireKind>::new();
         let id = g.add_node("node", vec![scalar_in("val")], vec![]);
 
-        assert!(!g.nodes[&id].ports[0].exposed);
-        g.set_port_exposed(id, "val", true).unwrap();
-        assert!(g.nodes[&id].ports[0].exposed);
-        g.set_port_exposed(id, "val", false).unwrap();
-        assert!(!g.nodes[&id].ports[0].exposed);
+        assert!(!g.is_port_exposed(id, "val"));
+        g.expose_port(id, "val").unwrap();
+        assert!(g.is_port_exposed(id, "val"));
+        // Idempotent — double-expose doesn't add a duplicate.
+        g.expose_port(id, "val").unwrap();
+        assert_eq!(g.exposed_ports.len(), 1);
+        g.unexpose_port(id, "val");
+        assert!(!g.is_port_exposed(id, "val"));
     }
 
     #[test]
-    fn set_port_exposed_wrong_port() {
+    fn expose_port_rejects_output_port() {
         let mut g = Graph::<TestWireKind>::new();
         let id = g.add_node("node", vec![scalar_out("out")], vec![]);
-        // Output ports can't be exposed (set_port_exposed looks for Input).
-        let err = g.set_port_exposed(id, "out", true).unwrap_err();
-        matches!(err, GraphError::PortNotFound { .. });
+        let err = g.expose_port(id, "out").unwrap_err();
+        assert!(matches!(err, GraphError::PortNotFound { .. }));
+    }
+
+    #[test]
+    fn add_node_seeds_exposed_from_registration_flag() {
+        let mut g = Graph::<TestWireKind>::new();
+        // Two inputs: only the second is flagged `.exposed()` at the
+        // registration level. add_node should auto-append it to
+        // exposed_ports with empty meta.
+        let mut a = scalar_in("a");
+        let mut b = scalar_in("b");
+        a.exposed = false;
+        b.exposed = true;
+        let id = g.add_node("node", vec![a, b], vec![]);
+        assert!(!g.is_port_exposed(id, "a"));
+        assert!(g.is_port_exposed(id, "b"));
+        // Empty meta — falls back to registration at render time.
+        let key = exposed_port_key(id, "b");
+        assert_eq!(g.exposed_ports[&key], ExposedPortMeta::default());
+    }
+
+    #[test]
+    fn remove_node_drops_exposed_entries() {
+        let mut g = Graph::<TestWireKind>::new();
+        let a = g.add_node("node", vec![scalar_in("x"), scalar_in("y")], vec![]);
+        let b = g.add_node("node", vec![scalar_in("x")], vec![]);
+        g.expose_port(a, "x").unwrap();
+        g.expose_port(a, "y").unwrap();
+        g.expose_port(b, "x").unwrap();
+        assert_eq!(g.exposed_ports.len(), 3);
+
+        g.remove_node(a).unwrap();
+        // Only b.x survives.
+        assert_eq!(g.exposed_ports.len(), 1);
+        assert!(g.is_port_exposed(b, "x"));
+    }
+
+    #[test]
+    fn reorder_moves_entry_to_target_index() {
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node(
+            "node",
+            vec![scalar_in("a"), scalar_in("b"), scalar_in("c")],
+            vec![],
+        );
+        g.expose_port(id, "a").unwrap();
+        g.expose_port(id, "b").unwrap();
+        g.expose_port(id, "c").unwrap();
+        let keys: Vec<&str> = g.exposed_ports.keys().map(String::as_str).collect();
+        assert_eq!(keys.len(), 3);
+
+        // Move b to index 0.
+        let b_key = exposed_port_key(id, "b");
+        g.reorder_exposed_port(&b_key, 0).unwrap();
+
+        let order: Vec<&str> = g.exposed_ports.keys().map(String::as_str).collect();
+        let a_key = exposed_port_key(id, "a");
+        let c_key = exposed_port_key(id, "c");
+        assert_eq!(order, vec![b_key.as_str(), a_key.as_str(), c_key.as_str()]);
+    }
+
+    #[test]
+    fn set_meta_rejects_unsafe_icon() {
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node("node", vec![scalar_in("val")], vec![]);
+        g.expose_port(id, "val").unwrap();
+        let key = exposed_port_key(id, "val");
+
+        // Safe icon class — accepted.
+        g.set_exposed_port_meta(
+            &key,
+            "Label".into(),
+            "Desc".into(),
+            "fa6-solid:sun".into(),
+        )
+        .unwrap();
+        assert_eq!(g.exposed_ports[&key].icon, "fa6-solid:sun");
+
+        // Unsafe icon (contains `<`) — rejected; previous value retained.
+        let err = g
+            .set_exposed_port_meta(
+                &key,
+                "Label2".into(),
+                "Desc2".into(),
+                "<script>x</script>".into(),
+            )
+            .unwrap_err();
+        assert!(matches!(err, GraphError::InvalidIcon { .. }));
+        assert_eq!(g.exposed_ports[&key].icon, "fa6-solid:sun");
+        assert_eq!(g.exposed_ports[&key].label, "Label");
+    }
+
+    #[test]
+    fn exposed_ports_round_trip_preserves_order() {
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node(
+            "node",
+            vec![scalar_in("a"), scalar_in("b"), scalar_in("c")],
+            vec![],
+        );
+        g.expose_port(id, "c").unwrap();
+        g.expose_port(id, "a").unwrap();
+        g.expose_port(id, "b").unwrap();
+        let before: Vec<String> = g.exposed_ports.keys().cloned().collect();
+
+        let json = serde_json::to_string(&g).unwrap();
+        let back: Graph<TestWireKind> = serde_json::from_str(&json).unwrap();
+        let after: Vec<String> = back.exposed_ports.keys().cloned().collect();
+        assert_eq!(before, after);
     }
 }

@@ -1,19 +1,18 @@
 // Procedural `r(θ)` shape prelude — shared by compute-path brushes that
-// stamp the same family of polar-radius silhouettes the `circle` fragment
+// stamp the same family of polar-radius silhouettes the `shape` fragment
 // node produces.
 //
 // Functions here are parameterised on a `ShapeParams` struct so the same
 // math can be reused by multiple terminals without a tight coupling to a
-// shader-global `u` (the way `shaders/brush/circle.wgsl` does it). The
-// terminal that includes this prelude is responsible for building a
-// `ShapeParams` for each dab (typically from its own dab record).
+// shader-global `u`. The terminal that includes this prelude is
+// responsible for building a `ShapeParams` for each dab (typically from
+// its own dab record).
 //
-// **Bit-exact parity with `crates/darkly/src/brush/nodes/circle.rs`** is
+// **Bit-exact parity with `crates/darkly/src/brush/nodes/shape.rs`** is
 // load-bearing — the CPU-side `integrate_centroid` walks the same `r(θ)`
-// at a finer resolution, and the centroid alignment test in
-// `tests/circle_node.rs` catches drift as a per-pixel mismatch. Keep the
-// `hash1d` / `fbm_1d` / `r_sine` / `r_perlin` / `r_superformula` formulas
-// here byte-equivalent to `circle.wgsl` and `circle.rs`.
+// at a finer resolution, and per-pixel render tests catch drift as a
+// mismatch. Keep the `hash1d` / `fbm_1d` / `r_sine` / `r_perlin` /
+// `r_superformula` formulas here byte-equivalent to `shape.rs`.
 //
 // Include via `concat!()` at the consumer site:
 //
@@ -30,14 +29,14 @@
 // inlines its own copy. Coverage *math* is per-terminal; *radius* math is
 // shared.
 //
-// Credits — same as `circle.wgsl`:
+// Credits:
 //   - Gielis superformula: Johan Gielis, AJB 90(3), 2003.
 //   - 1D value-noise / fBm fundamentals: Ken Perlin; Inigo Quilez
 //     (https://iquilezles.org/articles/morenoise/).
 
 struct ShapeParams {
     /// 0 = sine harmonic, 1 = periodic 1D Perlin fBm, 2 = Gielis
-    /// superformula. Matches `ALGO_*` constants in `nodes/circle.rs`.
+    /// superformula. Matches `ALGO_*` constants in `nodes/shape.rs`.
     algorithm: u32,
     /// Modulation strength on top of the unit-radius reference disc.
     amplitude: f32,
@@ -47,7 +46,7 @@ struct ShapeParams {
     /// Subtracted from `θ` so positive values rotate clockwise in
     /// screen-y-down space, matching `pen.drawing_angle`'s
     /// `atan2(dy, dx)` convention — wiring drawing_angle into the
-    /// circle node's rotation port orients the shape along the stroke.
+    /// shape node's rotation port orients the silhouette along the stroke.
     rotation: f32,
     /// Perlin fBm amplitude falloff per octave.
     persistence: f32,
@@ -63,8 +62,8 @@ struct ShapeParams {
 
 const SHAPE_TAU: f32 = 6.28318530717958647692;
 
-/// Integer bit-mix hash — bit-identical to `hash1d` in `circle.rs` and
-/// `circle.wgsl`. We avoid `fract(sin(x*K)*M)` because `sin` precision
+/// Integer bit-mix hash — bit-identical to `hash1d` in `shape.rs`.
+/// We avoid `fract(sin(x*K)*M)` because `sin` precision
 /// differs between CPU and GPU and the `*43758` amplification turns
 /// sub-ULP drift into a totally different noise array — which the
 /// centroid alignment test would flag.
@@ -80,7 +79,7 @@ fn shape_hash1d(x: f32, seed: f32) -> f32 {
     return f32(h) / 4294967295.0;
 }
 
-/// Periodic 1D value-noise fBm — mirrors `fbm_1d` in `circle.rs`.
+/// Periodic 1D value-noise fBm — mirrors `fbm_1d` in `shape.rs`.
 fn shape_fbm_1d(t: f32, p: ShapeParams) -> f32 {
     var sum: f32 = 0.0;
     var norm: f32 = 0.0;
@@ -132,7 +131,7 @@ fn shape_r_superformula(p: ShapeParams, theta: f32) -> f32 {
 
 /// Polar radius `r(θ)` in the shape's natural units (unmodulated disc has
 /// `r = 1`). Branches on `p.algorithm`. Same dispatch table as
-/// `circle.rs::r_theta` and `circle.wgsl::r_theta`.
+/// `shape.rs::r_theta`.
 fn shape_r_theta(p: ShapeParams, theta: f32) -> f32 {
     let phased = theta - p.rotation;
     switch p.algorithm {

@@ -35,12 +35,23 @@
         // sits inside. A click whose target is the dialog itself == backdrop.
         if (e.target === dialogEl) open = false;
     }
+
+    function onKeydown(e: KeyboardEvent) {
+        // Stop every keydown inside the modal from bubbling to the
+        // window-level hotkey handlers (pan-tool space, brush-builder
+        // Escape, tool shortcuts, etc.). Without this, typing a space
+        // into a text input fires the pan-tool toggle and the input
+        // never sees the character. The dialog's own browser-default
+        // Escape handling still runs (it doesn't depend on bubbling).
+        e.stopPropagation();
+    }
 </script>
 
 <dialog
     bind:this={dialogEl}
     onclose={onClose}
     onclick={onBackdropClick}
+    onkeydown={onKeydown}
     class="modal size-{size}"
     class:bare
 >

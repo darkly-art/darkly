@@ -100,7 +100,17 @@ impl PaintInformation {
 
         let dx = self.pos[0] - prev.pos[0];
         let dy = self.pos[1] - prev.pos[1];
-        self.drawing_angle = dy.atan2(dx);
+        // Coalesced pointer events at the same coords would make
+        // `atan2(0, 0) = 0` snap drawing_angle to 0 on stationary
+        // frames, flickering the cursor preview between the real
+        // direction and 0. Mirrors `stroke_engine.rs`'s 0.001 px
+        // arc-length floor: preserve prev's direction across a
+        // stationary segment.
+        if segment_length > 1.0e-3 {
+            self.drawing_angle = dy.atan2(dx);
+        } else {
+            self.drawing_angle = prev.drawing_angle;
+        }
         self.distance = prev.distance + segment_length;
 
         let dt = self.time - prev.time;

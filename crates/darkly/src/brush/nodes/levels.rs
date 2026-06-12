@@ -32,6 +32,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "modulate",
             display_name: "Levels",
+            description: "Adjusts a value's low end, high end, and midpoint — the same idea as the image-editing Levels filter.",
             ports: vec![
                 PortDef::input("input", BrushWireType::Scalar)
                     .with_natural_range(0.0, 1.0)

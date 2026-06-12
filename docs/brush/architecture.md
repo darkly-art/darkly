@@ -126,7 +126,7 @@ job is to put something on the layer (stroke mode) or on the preview mask
 (preview mode). Terminals participate in the stroke *lifecycle* by
 overriding `begin_stroke` / `commit` in addition to per-dab `evaluate_gpu`.
 
-Non-terminal nodes (`stamp`, `circle`, `user_input`, …) don't override the
+Non-terminal nodes (`stamp`, `shape`, `user_input`, …) don't override the
 lifecycle hooks — their default impls are no-ops.
 
 ### `color_output` (paint terminal)
@@ -193,7 +193,7 @@ secretly swaps resources behind a single misleading name.
 |---|---|
 | `encoder` | Command encoder shared across all dabs in a segment |
 | `device`, `queue` | Standard wgpu handles |
-| `dab_pool` | Pre-allocated 512×512 RTs for stamp / circle outputs |
+| `dab_pool` | Pre-allocated 512×512 RTs for stamp / shape outputs |
 | `pipelines` | `BrushPipelines` with shaders + uniform rings |
 | `layer_view`, `layer_texture` | The actual layer.  Warp terminals read/write it; paint terminals use it only at `commit`. |
 | `stroke_scratch_view`, `stroke_scratch_texture` | Stroke-scoped scratch.  `Some` during a stroke, `None` in preview mode. |

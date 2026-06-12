@@ -242,6 +242,7 @@ mod tests {
                 type_id: "source",
                 category: "test",
                 display_name: "Source",
+                description: "",
                 ports: vec![PortDef::output("out", TestWireKind::Scalar)],
                 params: &[],
                 is_gpu: false,
@@ -255,6 +256,7 @@ mod tests {
                 type_id: "passthrough",
                 category: "test",
                 display_name: "Passthrough",
+                description: "",
                 ports: vec![
                     PortDef::input("in", TestWireKind::Scalar),
                     PortDef::output("out", TestWireKind::Scalar),
@@ -271,6 +273,7 @@ mod tests {
                 type_id: "sink",
                 category: "test",
                 display_name: "Sink",
+                description: "",
                 ports: vec![PortDef::input("in", TestWireKind::Scalar)],
                 params: &[],
                 is_gpu: false,
@@ -525,6 +528,7 @@ mod tests {
                 type_id: "source",
                 category: "test",
                 display_name: "Source",
+                description: "",
                 ports: vec![
                     PortDef::output("out1", TestWireKind::Scalar),
                     PortDef::output("out2", TestWireKind::Scalar),
@@ -541,6 +545,7 @@ mod tests {
                 type_id: "sink",
                 category: "test",
                 display_name: "Sink",
+                description: "",
                 ports: vec![
                     PortDef::input("in1", TestWireKind::Scalar),
                     PortDef::input("in2", TestWireKind::Scalar),

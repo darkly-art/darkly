@@ -14,7 +14,7 @@
 //! - **The uniform buffer carries stroke-constant values** from any
 //!   upstream nodes that declared `uniform_fields` (e.g. `paint_color`).
 //!
-//! Upstream nodes (`circle`, `stamp`, etc.) compile inline into the
+//! Upstream nodes (`shape`, `stamp`, etc.) compile inline into the
 //! fragment shader and evaluate per-fragment-per-dab — no intermediate
 //! textures.
 //!
@@ -355,6 +355,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "output",
             display_name: "Paint",
+            description: "Output that deposits a brush mark onto the canvas. Plug a Stamp Tip (or any colored mark) into the dab input — this is where paint actually lands.",
             ports: vec![
                 PortDef::input("position", BrushWireType::Vec2)
                     .with_description("Canvas-pixel pen tip for this dab"),
@@ -390,16 +391,6 @@ pub fn register() -> BrushNodeRegistration {
                     .with_icon("fa6-solid:fill-drip")
                     .exposed()
                     .with_description("Stroke-level opacity cap (applied at commit)"),
-                // Cursor-preview rotation in radians. Wire from
-                // `pen.tilt_direction` or `pen.drawing_angle` to make
-                // the hover-cursor mask rotate with the pen. The
-                // current paint shader doesn't apply this to the
-                // stroke deposit — it's read only by
-                // `render_cursor_preview` for the overlay. Defaults to 0
-                // (no rotation).
-                PortDef::input("rotation", BrushWireType::Scalar)
-                    .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
-                    .with_description("Cursor-preview rotation (radians)"),
                 // Typed as `Texture` to match the upstream `stamp.dab`
                 // output's wire type — the wire-type label is shared
                 // with the per-dab dispatch model where it'd be a
@@ -648,8 +639,7 @@ impl BrushNodeEvaluator for PaintEvaluator {
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
-        let rotation_rad = ctx.input_f32("rotation");
-        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius, rotation_rad);
+        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius);
         vec![]
     }
 

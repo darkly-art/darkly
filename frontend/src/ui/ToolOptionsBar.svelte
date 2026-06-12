@@ -1,6 +1,7 @@
 <script lang="ts">
     import { app } from '../state/app.svelte';
     import { toolRegistry } from '../tools/registry';
+    import { brushGraph } from '../state/brush_graph.svelte';
 
     // The strip itself is always mounted — only the content inside (and
     // any optional panel above) varies per tool. Keeping the same DOM
@@ -10,7 +11,7 @@
     let Panel = $derived(tool?.panelComponent);
 </script>
 
-<div class="bottom-area">
+<div class="bottom-area" class:fullscreen={brushGraph.fullscreen}>
     <div class="tool-options">
         {#if Options}
             <Options />
@@ -29,6 +30,17 @@
         display: flex;
         flex-direction: column;
         flex-shrink: 0;
+    }
+
+    /* Fullscreen brush builder: pin the whole bottom area to the window so
+     * the tool-options strip stays at the top and the builder fills the
+     * space below it. The builder panel switches to flex:1 in this mode
+     * (see BrushBuilderPanel). */
+    .bottom-area.fullscreen {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        background: var(--bg);
     }
 
     .tool-options {

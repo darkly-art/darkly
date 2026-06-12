@@ -340,17 +340,17 @@ fn size_scrub_does_not_change_active_dab_pixels() {
     );
 
     // Conversely, a structural change MUST advance the topology version,
-    // so the frontend correctly clears the preset name. Toggle a port's
-    // exposed flag — cheaper than brush_load and avoids extra GPU work
-    // (no compile_active call), but still classified as topology.
+    // so the frontend correctly clears the preset name. Unexpose a port
+    // — cheaper than brush_load and avoids extra GPU work (no
+    // compile_active call), but still classified as topology.
     let topo_before_toggle = engine.brush_topology_version();
     engine
-        .brush_graph_set_port_exposed(size.node_id, "size", false)
-        .expect("toggle exposed");
+        .brush_graph_unexpose_port(size.node_id, "size")
+        .expect("unexpose size port");
     assert_ne!(
         engine.brush_topology_version(),
         topo_before_toggle,
-        "set_port_exposed is a structural change and must advance the topology version"
+        "exposing/unexposing a port is a structural change and must advance the topology version"
     );
 }
 

@@ -45,7 +45,7 @@ Darkly features a unified node-based brush system. Every brush type -- clone, li
 
 <img src="https://github.com/user-attachments/assets/63544586-f006-4616-b378-97dd54e321d3" width="400"/>
 
-On first launch, Darkly will ask you which editor preset you want.  Currently we support GIMP, Krita, and Photoshop. I come from Krita, so that one's gotten the most TLC. We want them all to feel natural to new users. If you find any gaps, please let us know!
+On first launch, Darkly will ask you which editor preset you want.  Currently we support GIMP, Krita, and Photoshop. I come from Krita, so that one's gotten the most TLC. But we want everyone to feel at home no matter which editor they come from. If you find any gaps, please let us know!
 
 ### Hotkey Cheatsheet
 
