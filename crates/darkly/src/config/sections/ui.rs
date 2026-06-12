@@ -43,7 +43,7 @@ pub fn register() -> SchemaSection {
         id: "ui",
         display_name: "Interface",
         description: None,
-        icon: Some("fa-solid fa-display"),
+        icon: Some("fa6-solid:display"),
         order: 30,
         prefs: PREFS,
     }

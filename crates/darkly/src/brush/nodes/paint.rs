@@ -370,7 +370,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_range(0.0, 4.0, 0.1)
                     .with_label("Size")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-up-right-and-down-left-from-center")
+                    .with_icon("fa6-solid:up-right-and-down-left-from-center")
                     .exposed()
                     .with_preview_value(0.1)
                     .with_description("Overall brush size"),
@@ -379,7 +379,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(0.0, 1.0)
                     .with_label("Flow")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-droplet")
+                    .with_icon("fa6-solid:droplet")
                     .exposed()
                     .with_description("Stroke-level flow cap (folded into rgba alpha)"),
                 PortDef::input("opacity", BrushWireType::Scalar)
@@ -387,7 +387,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(0.0, 1.0)
                     .with_label("Opacity")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-fill-drip")
+                    .with_icon("fa6-solid:fill-drip")
                     .exposed()
                     .with_description("Stroke-level opacity cap (applied at commit)"),
                 // Cursor-preview rotation in radians. Wire from

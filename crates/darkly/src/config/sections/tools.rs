@@ -26,7 +26,7 @@ pub fn register() -> SchemaSection {
         id: "tools",
         display_name: "Tools",
         description: Some("Tool-specific behavior."),
-        icon: Some("fa-solid fa-screwdriver-wrench"),
+        icon: Some("fa6-solid:screwdriver-wrench"),
         order: 35,
         prefs: PREFS,
     }

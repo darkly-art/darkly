@@ -116,7 +116,7 @@ pub struct PortDef<W: WireKind> {
     /// Display unit for numeric ports (controls UI conversion and suffix).
     #[serde(default)]
     pub unit_type: UnitType,
-    /// Font Awesome icon class (e.g. `"fa-solid fa-circle"`), or empty.
+    /// Iconify icon name (e.g. `"fa6-solid:circle"`), or empty.
     #[serde(default)]
     pub icon: String,
     /// User-facing display label.  Falls back to `name` if empty.
@@ -1030,7 +1030,7 @@ mod tests {
         let port = PortDef::input("opacity", TestWireKind::Scalar)
             .with_range(0.0, 1.0, 1.0)
             .with_unit(UnitType::Percent)
-            .with_icon("fa-solid fa-sun")
+            .with_icon("fa6-solid:sun")
             .with_label("Opacity")
             .exposed()
             .with_description("Per-dab opacity");
@@ -1038,7 +1038,7 @@ mod tests {
         let json = serde_json::to_string(&port).unwrap();
         let back: PortDef<TestWireKind> = serde_json::from_str(&json).unwrap();
         assert_eq!(back.unit_type, UnitType::Percent);
-        assert_eq!(back.icon, "fa-solid fa-sun");
+        assert_eq!(back.icon, "fa6-solid:sun");
         assert_eq!(back.label, "Opacity");
         assert!(back.exposed);
         assert_eq!(back.description, "Per-dab opacity");

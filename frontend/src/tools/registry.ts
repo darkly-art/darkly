@@ -9,13 +9,9 @@ export interface ToolContext {
 
 export interface Tool {
     readonly id: string;
-    /** Font Awesome icon class (e.g. 'fa-solid fa-paint-brush'). Optional —
-     *  if a tool provides {@link iconSvg} that takes precedence. */
-    readonly faIcon?: string;
-    /** Inline SVG markup, used when no Font Awesome glyph fits. Authors are
-     *  expected to size with `width="1em" height="1em"` and paint with
-     *  `currentColor` so the icon inherits the toolbar's active/hover states. */
-    readonly iconSvg?: string;
+    /** Iconify icon name (e.g. 'fa6-solid:paintbrush', 'local:gradient').
+     *  Rendered via the shared `<Icon>` component. */
+    readonly icon?: string;
     /** Tool group for toolbar visual separation (e.g. 'paint', 'select'). */
     readonly group: string;
 

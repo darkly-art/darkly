@@ -5,6 +5,7 @@
     import VoidPickerModal from '../voids/VoidPickerModal.svelte';
     import { actions } from '../../actions/registry';
     import { tooltipForAction } from '../../config/store.svelte';
+    import Icon from '../../icons/Icon.svelte';
 
     let { onupdate }: { onupdate: () => void } = $props();
 
@@ -122,7 +123,7 @@
             onclick={addNormalLayer}
             title="New layer"
         >
-            <i class="fa-solid fa-plus"></i>
+            <Icon name="fa6-solid:plus" />
         </button>
         <button
             class="footer-btn split-chevron new-layer-trigger"
@@ -130,7 +131,7 @@
             onclick={() => (menuOpen = !menuOpen)}
             title="New layer type…"
         >
-            <i class="fa-solid fa-chevron-down"></i>
+            <Icon name="fa6-solid:chevron-down" />
         </button>
         {#if menuOpen}
             <NewLayerMenu onpick={pick} onclose={() => (menuOpen = false)} />
@@ -143,10 +144,7 @@
         disabled={!canAddMask}
         title="Add mask"
     >
-        <svg class="mask-glyph" viewBox="0 0 16 10" aria-hidden="true">
-            <rect width="16" height="10" rx="1" fill="currentColor" />
-            <circle cx="8" cy="5" r="3" fill="var(--bg)" />
-        </svg>
+        <Icon name="radix-icons:mask-on" />
     </button>
 
     <button
@@ -155,7 +153,7 @@
         disabled={!canDuplicate}
         title={duplicateTooltip}
     >
-        <i class="fa-solid fa-clone"></i>
+        <Icon name="fa6-solid:clone" />
     </button>
 
     <button
@@ -164,7 +162,7 @@
         disabled={!canDelete || (app.activeVeilIndex === null && !activeEditable)}
         title={deleteTooltip}
     >
-        <i class="fa-solid fa-trash"></i>
+        <Icon name="fa6-solid:trash" />
     </button>
 </div>
 

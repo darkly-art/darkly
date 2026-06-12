@@ -23,7 +23,7 @@ pub struct SchemaSection {
     pub display_name: &'static str,
     /// Optional one-line help shown above the section's prefs.
     pub description: Option<&'static str>,
-    /// Optional FontAwesome class for the tab icon (e.g. `"fa-solid fa-palette"`).
+    /// Optional Iconify icon name for the tab icon (e.g. `"fa6-solid:palette"`).
     pub icon: Option<&'static str>,
     /// Sort key for the tab list. Lower = earlier. Ties broken by `id`.
     pub order: i32,

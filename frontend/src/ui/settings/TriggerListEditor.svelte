@@ -18,6 +18,7 @@
         type TriggerKind,
     } from '../../actions/triggers_combined';
     import ChordCapture from './widgets/ChordCapture.svelte';
+    import Icon from '../../icons/Icon.svelte';
 
     type Props = {
         action: ActionRegistration;
@@ -217,7 +218,7 @@
 
             {#if conflicts[i]}
                 <span class="conflict-note" title={conflicts[i] ?? ''}>
-                    <i class="fa-solid fa-triangle-exclamation"></i>
+                    <Icon name="fa6-solid:triangle-exclamation" />
                 </span>
             {/if}
 
@@ -227,14 +228,14 @@
                 onclick={() => removeTrigger(i)}
                 title="Remove this trigger"
             >
-                <i class="fa-solid fa-xmark"></i>
+                <Icon name="fa6-solid:xmark" />
             </button>
         </div>
     {/each}
 
     <div class="footer">
         <button type="button" class="add" onclick={addTrigger}>
-            <i class="fa-solid fa-plus"></i> Add trigger
+            <Icon name="fa6-solid:plus" /> Add trigger
         </button>
         <button
             type="button"
@@ -244,7 +245,7 @@
             onclick={reset}
             title="Reset to default triggers"
         >
-            <i class="fa-solid fa-rotate-left"></i>
+            <Icon name="fa6-solid:rotate-left" />
         </button>
     </div>
 </div>

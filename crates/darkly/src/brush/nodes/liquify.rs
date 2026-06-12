@@ -337,7 +337,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_range(0.0, 4.0, 0.3)
                     .with_label("Size")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-up-right-and-down-left-from-center")
+                    .with_icon("fa6-solid:up-right-and-down-left-from-center")
                     .exposed()
                     .with_preview_value(0.1)
                     .with_description(
@@ -348,7 +348,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(0.0, 1.0)
                     .with_label("Strength")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-gauge-high")
+                    .with_icon("fa6-solid:gauge-high")
                     .exposed()
                     .with_description("How far pixels are pushed by each brush touch"),
                 PortDef::input("softness", BrushWireType::Scalar)
@@ -356,7 +356,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(0.0, 1.0)
                     .with_label("Softness")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-wave-square")
+                    .with_icon("fa6-solid:wave-square")
                     .exposed()
                     .with_description(
                         "Edge shape. Low values concentrate the warp at the brush center; \

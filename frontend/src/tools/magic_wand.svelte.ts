@@ -23,7 +23,7 @@ export const magicWandSession = new MagicWandSession();
 
 export const magicWandTool: Tool = {
     id: 'magic_wand',
-    faIcon: 'fa-solid fa-wand-magic-sparkles',
+    icon: 'fa6-solid:wand-magic-sparkles',
     group: 'select',
     cluster: 'select',
     hotkeyAction: 'magicWandTool',

@@ -36,7 +36,7 @@ pub fn register() -> SchemaSection {
         id: "animation",
         display_name: "Animation",
         description: Some("Tick rates for animated overlays and veils."),
-        icon: Some("fa-solid fa-stopwatch"),
+        icon: Some("fa6-solid:stopwatch"),
         order: 60,
         prefs: PREFS,
     }

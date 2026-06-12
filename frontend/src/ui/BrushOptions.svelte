@@ -7,6 +7,7 @@
     import LiveBrushPreviewStrip from './brush_picker/LiveBrushPreviewStrip.svelte';
     import Scrub from './Scrub.svelte';
     import ToolBarLayout from './ToolBarLayout.svelte';
+    import Icon from '../icons/Icon.svelte';
     import { tooltipForAction } from '../config/store.svelte';
     import { watchDismiss } from '../lib/dismiss';
 
@@ -121,7 +122,7 @@
         {#if brushGraph.supportsErase}
             <Scrub
                 mode="toggle"
-                icon="fa-solid fa-eraser"
+                icon="fa6-solid:eraser"
                 label="Erase"
                 valueLabel={brushSession.eraseMode ? 'On' : 'Off'}
                 active={brushSession.eraseMode}
@@ -141,7 +142,7 @@
             onclick={toggleBuilder}
             title={brushGraph.isOpen ? 'Collapse brush builder' : 'Expand brush builder'}
         >
-            <i class="fa-solid fa-chevron-up" class:flipped={brushGraph.isOpen}></i>
+            <Icon name="fa6-solid:chevron-up" class={brushGraph.isOpen ? 'flipped' : ''} />
         </button>
     {/snippet}
 </ToolBarLayout>
@@ -229,11 +230,11 @@
         color: var(--text);
     }
 
-    .bottom-bar-toggle i {
+    .bottom-bar-toggle :global(svg) {
         transition: transform 0.2s ease-out;
     }
 
-    .bottom-bar-toggle .flipped {
+    .bottom-bar-toggle :global(.flipped) {
         transform: rotate(180deg);
     }
 </style>

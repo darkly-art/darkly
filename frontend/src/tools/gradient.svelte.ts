@@ -71,25 +71,14 @@ function buildOverlay(): OverlayBuilder | null {
 
 // --- Tool definition ---
 
-// Custom SVG: Font Awesome has nothing that reads as "linear gradient" at
-// toolbar size. Rounded square painted with a currentColor→transparent
-// linear gradient, so the icon inherits the toolbar's muted/active text
-// color and the fade is what carries the meaning.
-const GRADIENT_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="1em" height="1em" aria-hidden="true" focusable="false">
-  <defs>
-    <linearGradient id="darkly-gradient-tool-icon" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="currentColor" stop-opacity="1"/>
-      <stop offset="1" stop-color="currentColor" stop-opacity="0"/>
-    </linearGradient>
-  </defs>
-  <rect x="1.5" y="1.5" width="13" height="13" rx="2.5"
-        fill="url(#darkly-gradient-tool-icon)"
-        stroke="currentColor" stroke-width="1.25"/>
-</svg>`;
-
+// Custom icon: no icon set has anything that reads as "linear gradient" at
+// toolbar size. The bespoke SVG lives at src/icons/svg/gradient.svg and is
+// bundled under the `local:` prefix (see scripts/gen-icon-bundle.mjs) — a
+// rounded square painted with a currentColor→transparent fade, so it inherits
+// the toolbar's muted/active text color.
 export const gradientTool: Tool = {
     id: 'gradient',
-    iconSvg: GRADIENT_ICON_SVG,
+    icon: 'local:gradient',
     group: 'paint',
     cluster: 'fill',
     hotkeyAction: 'gradientTool',

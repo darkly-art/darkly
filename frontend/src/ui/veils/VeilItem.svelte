@@ -1,5 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
+    import Icon from '../../icons/Icon.svelte';
 
     interface VeilParam {
         kind: 'float' | 'int' | 'bool';
@@ -106,7 +107,7 @@
         onpointerleave={() => { draggable = true; }}
         title="Toggle visibility"
     >
-        <i class={veil.visible ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash'}></i>
+        <Icon name={veil.visible ? 'fa6-solid:eye' : 'fa6-solid:eye-slash'} />
     </button>
 
     <span
@@ -114,7 +115,7 @@
         class:thumb-active={isActive}
         title="Veil"
     >
-        <i class="fa-solid fa-eclipse"></i>
+        <Icon name="tabler:circle-half-2" />
     </span>
 
     <span class="veil-name">{app.veilDisplayName(veil.type)}</span>
@@ -124,7 +125,7 @@
         onclick={remove}
         title="Remove veil"
     >
-        <i class="fa-solid fa-trash"></i>
+        <Icon name="fa6-solid:trash" />
     </button>
 </div>
 
