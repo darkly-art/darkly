@@ -152,8 +152,6 @@ impl DarklyEngine {
             None => return,
         };
 
-        let canvas_w = self.doc.width;
-        let canvas_h = self.doc.height;
         let format = wgpu::TextureFormat::Rgba8Unorm;
 
         // Save layer texture to region scratch for undo.
@@ -218,8 +216,10 @@ impl DarklyEngine {
             self.compositor.node_texture(host_id),
             mask_bind_group.as_ref(),
         ) {
-            let target =
-                crate::gpu::paint_target::GpuPaintTarget::from_node(layer_tex, canvas_w, canvas_h);
+            let target = crate::gpu::paint_target::GpuPaintTarget::from_node(
+                layer_tex,
+                self.doc.canvas_rect(),
+            );
             self.gpu.encode("apply-mask-multiply", |encoder| {
                 target.multiply_alpha_by_mask(
                     encoder,

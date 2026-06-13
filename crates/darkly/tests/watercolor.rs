@@ -72,15 +72,18 @@ fn render_dabs_on(
 
     let (device, queue) = shared_device();
     let (layer_texture, layer_view) = create_test_texture(&device, &queue, CANVAS, CANVAS, canvas);
-    let pipelines = BrushPipelines::new(&device, &queue);
+    let pipelines = BrushPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let mut stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
 
     let pre_stroke = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
         &layer_texture,
         &layer_view,
         wgpu::TextureFormat::Rgba8Unorm,
-        CANVAS,
-        CANVAS,
+        darkly::coord::CanvasRect::from_xywh(0, 0, CANVAS, CANVAS),
     );
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("watercolor-compiled-test-pre-stroke"),
@@ -102,6 +105,7 @@ fn render_dabs_on(
                 selection_bind_group: pipelines.default_selection_bind_group(),
                 canvas_width: CANVAS,
                 canvas_height: CANVAS,
+                canvas_origin: [0, 0],
                 blend_mode: 0,
                 view_rotation: 0.0,
                 perf: BrushPerfCounters::default(),
@@ -111,8 +115,7 @@ fn render_dabs_on(
                         &layer_texture,
                         &layer_view,
                         wgpu::TextureFormat::Rgba8Unorm,
-                        CANVAS,
-                        CANVAS,
+                        darkly::coord::CanvasRect::from_xywh(0, 0, CANVAS, CANVAS),
                     ),
                     pre_stroke_texture: pre_stroke_tex,
                     pre_stroke_bind_group: pre_stroke_bg,
@@ -270,15 +273,18 @@ fn begin_stroke_clears_scratch_so_rewind_drops_defunct_pigment() {
     let canvas = light_blue_canvas();
     let (device, queue) = shared_device();
     let (layer_texture, layer_view) = create_test_texture(&device, &queue, CANVAS, CANVAS, &canvas);
-    let pipelines = BrushPipelines::new(&device, &queue);
+    let pipelines = BrushPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let mut stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
 
     let pre_stroke = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
         &layer_texture,
         &layer_view,
         wgpu::TextureFormat::Rgba8Unorm,
-        CANVAS,
-        CANVAS,
+        darkly::coord::CanvasRect::from_xywh(0, 0, CANVAS, CANVAS),
     );
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("watercolor-rewind-pre-stroke"),
@@ -300,6 +306,7 @@ fn begin_stroke_clears_scratch_so_rewind_drops_defunct_pigment() {
                 selection_bind_group: pipelines.default_selection_bind_group(),
                 canvas_width: CANVAS,
                 canvas_height: CANVAS,
+                canvas_origin: [0, 0],
                 blend_mode: 0,
                 view_rotation: 0.0,
                 perf: BrushPerfCounters::default(),
@@ -309,8 +316,7 @@ fn begin_stroke_clears_scratch_so_rewind_drops_defunct_pigment() {
                         &layer_texture,
                         &layer_view,
                         wgpu::TextureFormat::Rgba8Unorm,
-                        CANVAS,
-                        CANVAS,
+                        darkly::coord::CanvasRect::from_xywh(0, 0, CANVAS, CANVAS),
                     ),
                     pre_stroke_texture: pre_stroke_tex,
                     pre_stroke_bind_group: pre_stroke_bg,

@@ -3,6 +3,7 @@ import { app } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
 import { settings } from '../state/settings.svelte';
 import { newDocument } from '../state/newDocument.svelte';
+import { resizeCanvas } from '../state/resizeCanvas.svelte';
 import { exportImage } from '../state/exportImage.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
 import { toast } from '../state/toast.svelte';
@@ -113,9 +114,9 @@ export function openDarklyAsTab(picked: OpenedFile): void {
             // The loaded manifest's dimensions override whatever the tab
             // was seeded with; refresh the JS mirror so coord transforms
             // recenter around the real canvas size.
-            const dims = handle.canvas_dimensions();
-            inst.docW = dims[0];
-            inst.docH = dims[1];
+            // Sync the full canvas window (dims + plane origin) — a loaded
+            // `.darkly` may carry a non-zero `canvas_origin` from a crop.
+            inst.syncCanvasRect();
             app.refreshLayerTree();
             app.refreshVeilList();
             app.requestFrame();
@@ -334,6 +335,34 @@ export function registerActions() {
         icon: 'tabler:flip-horizontal',
         menuPath: ['Select:30'],
         handler: () => app.handle?.invert_selection(),
+    });
+
+    // -- Image (canvas) --
+    actions.register({
+        id: 'resizeCanvas',
+        displayName: 'Resize Canvas',
+        category: 'edit',
+        description: 'Resize the canvas with a 9-point anchor.',
+        icon: 'fa6-solid:up-right-and-down-left-from-center',
+        menuPath: ['Image:10'],
+        handler: () => {
+            if (!app.handle) return;
+            resizeCanvas.open = true;
+        },
+    });
+    actions.register({
+        id: 'cropToSelection',
+        displayName: 'Crop to Selection',
+        category: 'edit',
+        description: 'Crop the canvas to the current selection bounds.',
+        icon: 'fa6-solid:crop-simple',
+        menuPath: ['Image:20'],
+        enabled: () => (app.handle?.has_selection() ?? false) || 'No active selection',
+        handler: () => {
+            app.handle?.crop_to_selection();
+            app.syncCanvasRect();
+            app.requestFrame();
+        },
     });
 
     // -- Clipboard --

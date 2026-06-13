@@ -4,6 +4,7 @@
     import { registryEpoch } from '../../actions/registryEpoch.svelte';
     import { config, formatHotkey } from '../../config/store.svelte';
     import { filterPalette } from './paletteFilter';
+    import { backdropDismiss } from '../../lib/backdropDismiss';
     import Icon from '../../icons/Icon.svelte';
 
     let dialogEl: HTMLDialogElement | undefined = $state();
@@ -82,7 +83,7 @@
     bind:this={dialogEl}
     class="palette"
     onclose={close}
-    onclick={(e) => { if (e.target === dialogEl) close(); }}
+    use:backdropDismiss={close}
 >
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div class="palette-inner" role="presentation" onkeydown={onKeydown}>

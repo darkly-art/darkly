@@ -287,8 +287,16 @@ impl BrushPipelines {
     /// shaders sample from lives on [`Scratch`](crate::brush::scratch::Scratch)
     /// (per-stroke, lazy-grown to dab footprint), so engine-init no
     /// longer needs to know the canvas size.
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        selection_bgl: &wgpu::BindGroupLayout,
+    ) -> Self {
         let min_uniform_align = device.limits().min_uniform_buffer_offset_alignment;
+        // Shared with the paint pipeline + the cached selection bind group;
+        // owned here (cheap Arc clone) so the rest of `new` reads as before.
+        // See [`crate::gpu::selection::selection_mask_bgl`].
+        let selection_bgl = selection_bgl.clone();
 
         // ── Bind group layouts ──────────────────────────────────────
         // Shared layouts are visible in vertex + fragment AND compute so the
@@ -306,28 +314,6 @@ impl BrushPipelines {
                 },
                 count: None,
             }],
-        });
-
-        let selection_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("brush-selection-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
         });
 
         // Canvas copy: texture + sampler (same structure as a dab texture

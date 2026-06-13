@@ -7,7 +7,6 @@
 //! restored sources via [`crate::gpu::compositor::Compositor::bake_subtree_to_layer`].
 
 use super::DarklyEngine;
-use crate::coord::CanvasRect;
 use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::{BakeLayersAction, BakeSourceSlot};
 
@@ -59,7 +58,7 @@ impl DarklyEngine {
         let target_pos_before = pos - 1;
 
         // Allocate the result raster, canvas-sized.
-        let canvas_bounds = CanvasRect::from_xywh(0, 0, self.doc.width, self.doc.height);
+        let canvas_bounds = self.doc.canvas_rect();
         let result_id = self.doc.add_raster_layer(Some(target_id));
         if let Some(LayerNode::Layer(Layer::Raster(r))) = self.doc.find_node_mut(result_id) {
             r.pixels.bounds = canvas_bounds;
@@ -220,7 +219,7 @@ impl DarklyEngine {
         // Allocate the result raster, anchored at the topmost so it sits
         // in the right parent group; we'll reposition exactly after the
         // sources detach.
-        let canvas_bounds = CanvasRect::from_xywh(0, 0, self.doc.width, self.doc.height);
+        let canvas_bounds = self.doc.canvas_rect();
         let result_id = self.doc.add_raster_layer(Some(topmost_id));
         if let Some(LayerNode::Layer(Layer::Raster(r))) = self.doc.find_node_mut(result_id) {
             r.pixels.bounds = canvas_bounds;

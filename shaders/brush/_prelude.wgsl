@@ -38,11 +38,19 @@ struct IntrinsicUniforms {
     layer_offset:    vec2<i32>,
     layer_size:      vec2<u32>,
     canvas_size:     vec2<u32>,
+    // Plane-space offset of the canvas window (selection-mask anchor).
+    canvas_origin:   vec2<i32>,
     cursor_preview_centre:  vec2<f32>,
     cursor_preview_size:    vec2<u32>,
     // Active view rotation in radians (canvas → screen). Subtracted from
     // `theta` in the per-fragment skeleton so brush stamp orientation
     // counteracts the view rotation that the present shader applies on top.
     view_rotation:   f32,
-    _pad:            u32,
+    // Pad the struct to 64 bytes (a multiple of 16) so the node-contributed
+    // uniforms that follow `intrinsic` in the generated `Uniforms` struct keep
+    // their 16-byte alignment. Adding `canvas_origin` above pushed the size to
+    // 56; without this pad the node params would misalign and read garbage.
+    _pad0:           u32,
+    _pad1:           u32,
+    _pad2:           u32,
 };

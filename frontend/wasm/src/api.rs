@@ -105,6 +105,20 @@ enum Command {
     FillBackground(u64),
     FillBackgroundColor(u64, [u8; 4]),
 
+    // Canvas
+    /// Canvas resize/move: the new canvas window as an explicit plane-space
+    /// rect. Expresses any reposition the interactive resize preview can
+    /// produce — including a pure translation (unchanged size, shifted origin),
+    /// which the old anchor-only form could not.
+    ResizeCanvasRect {
+        origin_x: i32,
+        origin_y: i32,
+        w: u32,
+        h: u32,
+    },
+    /// Crop the canvas window to the active selection's plane bounds.
+    CropToSelection,
+
     // Selection
     SelectRect {
         x: f32,
@@ -226,6 +240,20 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
                 engine.set_isolated_node(target);
             }
 
+            Command::ResizeCanvasRect {
+                origin_x,
+                origin_y,
+                w,
+                h,
+            } => {
+                let rect = darkly::coord::CanvasRect::new(
+                    darkly::coord::CanvasPoint::new(origin_x, origin_y),
+                    w,
+                    h,
+                );
+                engine.resize_canvas(rect);
+            }
+            Command::CropToSelection => engine.crop_to_selection(),
             Command::FillBackground(id) => engine.fill_background(LayerId::from_ffi(id)),
             Command::FillBackgroundColor(id, c) => {
                 engine.fill_background_color(LayerId::from_ffi(id), c)
@@ -341,6 +369,46 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
 ///
 /// The device is allocated lazily on the first `createHandle` call, since
 /// `request_adapter` needs a surface to pick an adapter.
+/// Pure screen↔plane matrix constructor for the JS coordinate path. Borrows no
+/// engine state, so it is safe to call inside a pointer event (no RefCell
+/// aliasing with an in-flight `render()` — the reason the JS side historically
+/// re-derived the transform). The frontend feeds its mirrored view inputs and
+/// applies the returned matrices; the construction math lives only here.
+///
+/// Returns 12 floats `[screen→plane (6), plane→screen (6)]`, each row-major
+/// `[m00, m01, m02, m10, m11, m12]` (`out_x = m00·x + m01·y + m02`,
+/// `out_y = m10·x + m11·y + m12`).
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn compute_view_matrices(
+    pan_x: f32,
+    pan_y: f32,
+    zoom: f32,
+    rotation: f32,
+    mirror_h: bool,
+    screen_w: f32,
+    screen_h: f32,
+    canvas_origin_x: f32,
+    canvas_origin_y: f32,
+    canvas_w: f32,
+    canvas_h: f32,
+) -> Vec<f32> {
+    darkly::gpu::view::compute_view_matrices(
+        pan_x,
+        pan_y,
+        zoom,
+        rotation,
+        mirror_h,
+        screen_w,
+        screen_h,
+        canvas_origin_x,
+        canvas_origin_y,
+        canvas_w,
+        canvas_h,
+    )
+    .to_vec()
+}
+
 #[wasm_bindgen]
 pub struct DarklySession {
     instance: wgpu::Instance,
@@ -1423,6 +1491,36 @@ impl DarklyHandle {
         vec![w, h].into_boxed_slice()
     }
 
+    /// The canvas window as `[origin_x, origin_y, width, height]` in plane
+    /// pixels. `origin` is `(0, 0)` for an un-cropped document and moves with
+    /// crop / resize. The JS side caches this so canvas↔screen transforms map
+    /// through the plane (see `coordinates.ts`).
+    pub fn canvas_rect(&self) -> Box<[i32]> {
+        self.flush_if_needed();
+        let r = self.engine.borrow().canvas_rect();
+        vec![r.origin.x, r.origin.y, r.width as i32, r.height as i32].into_boxed_slice()
+    }
+
+    /// Resize/move the canvas window to an explicit plane-space rect:
+    /// `(origin_x, origin_y)` is the new window origin, `(w, h)` its size. The
+    /// interactive resize preview produces the rect directly (content stays put
+    /// in the plane; only the window moves). Queued; applied on the next drain.
+    pub fn resize_canvas_rect(&self, origin_x: i32, origin_y: i32, w: u32, h: u32) {
+        self.push(Command::ResizeCanvasRect {
+            origin_x,
+            origin_y,
+            w,
+            h,
+        });
+    }
+
+    /// Crop the canvas window to the active selection's plane bounds. No-op if
+    /// there is no active selection. (Selection-active state for the
+    /// `cropToSelection` action's enablement is read via `has_selection()`.)
+    pub fn crop_to_selection(&self) {
+        self.push(Command::CropToSelection);
+    }
+
     /// Rename the document. Not undoable — matches every other editor's
     /// title-bar rename affordance. Subsequent saves write the new name
     /// into `manifest.name`.
@@ -1921,12 +2019,6 @@ impl DarklyHandle {
     // =======================================================================
     // Queries — immutable borrow, always safe
     // =======================================================================
-
-    pub fn screen_to_canvas(&self, screen_x: f32, screen_y: f32) -> Vec<f32> {
-        self.flush_if_needed();
-        let (cx, cy) = self.engine.borrow().screen_to_canvas(screen_x, screen_y);
-        vec![cx, cy]
-    }
 
     pub fn last_picked_color(&self) -> Vec<u8> {
         self.flush_if_needed();

@@ -13,13 +13,14 @@ struct Uniforms {
     target_size: vec2f,
     // Document canvas size (used for fragment-stage selection UV).
     canvas_size: vec2f,
+    // Plane-space offset of the canvas window (selection-mask anchor).
+    canvas_origin: vec2f,
     // Circle center in canvas pixels.
     center: vec2f,
     // Circle radius in pixels. 0 = solid fill (coverage always 1.0).
     radius: f32,
     // Soft edge width in pixels (typically 1.0).
     softness: f32,
-    _pad: vec2f,
     // Paint color (RGBA, straight alpha).
     color: vec4f,
 }
@@ -66,8 +67,9 @@ struct VertexOutput {
         );
     }
 
-    // Selection masking: sample selection texture at canvas UV.
-    let sel_uv = in.canvas_pos / uniforms.canvas_size;
+    // Selection masking: map the plane position to the window-anchored
+    // selection mask before sampling (see shaders/lib/canvas.wgsl).
+    let sel_uv = plane_to_selection_uv(in.canvas_pos, uniforms.canvas_origin, uniforms.canvas_size);
     let sel = textureSample(t_selection, t_sampler, sel_uv).r;
     coverage *= sel;
 

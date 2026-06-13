@@ -7,7 +7,7 @@ use crate::gpu::compositor::Compositor;
 use crate::gpu::context::GpuContext;
 use crate::gpu::readback::{self, ReadbackScheduler};
 use crate::gpu::region_store::{EntryPixels, RegionScratch, Snapshot, UndoRegionEntry};
-use crate::gpu::view::ViewTransform;
+use crate::gpu::view::{ViewParams, ViewTransform};
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
@@ -27,25 +27,34 @@ impl PickSource {
     /// fails: missing texture (groups, voids without a node texture),
     /// non-Rgba8 formats (masks), or canvas point outside the layer extent.
     /// Callers fall back to `Merged` in that case.
+    /// `point` is a **plane** pixel; `canvas_origin` is the plane offset of the
+    /// canvas window. The merged composite is window-local (texel `(0,0)` ==
+    /// plane `canvas_origin`), so it samples `point − canvas_origin`; layer
+    /// textures are plane-anchored and translate through `canvas_to_layer`.
     fn resolve<'a>(
         &self,
         compositor: &'a Compositor,
-        px: u32,
-        py: u32,
+        point: CanvasPoint,
+        canvas_origin: CanvasPoint,
     ) -> Option<(&'a wgpu::Texture, LayerRect)> {
         match self {
-            // Composited texture is canvas-aligned: canvas coords == texture
-            // coords, so a 1x1 layer rect at (px, py) names the same pixel.
-            PickSource::Merged => Some((
-                compositor.composited_texture(),
-                LayerRect::from_xywh(px, py, 1, 1),
-            )),
+            PickSource::Merged => {
+                let wx = point.x - canvas_origin.x;
+                let wy = point.y - canvas_origin.y;
+                if wx < 0 || wy < 0 {
+                    return None;
+                }
+                Some((
+                    compositor.composited_texture(),
+                    LayerRect::from_xywh(wx as u32, wy as u32, 1, 1),
+                ))
+            }
             PickSource::Layer(id) => {
                 let layer_tex = compositor.node_texture(*id)?;
                 if layer_tex.format() != wgpu::TextureFormat::Rgba8Unorm {
                     return None;
                 }
-                let p = layer_tex.canvas_to_layer(CanvasPoint::new(px as i32, py as i32))?;
+                let p = layer_tex.canvas_to_layer(point)?;
                 Some((layer_tex.texture(), LayerRect::from_xywh(p.x, p.y, 1, 1)))
             }
         }
@@ -71,7 +80,8 @@ impl DarklyEngine {
         screen_w: f32,
         screen_h: f32,
     ) {
-        let transform = ViewTransform::from_pan_zoom_rotate(
+        let rotation_changed = self.view_params.rotation != rotation;
+        self.view_params = ViewParams {
             pan_x,
             pan_y,
             zoom,
@@ -79,15 +89,8 @@ impl DarklyEngine {
             mirror_h,
             screen_w,
             screen_h,
-            self.doc.width as f32,
-            self.doc.height as f32,
-        );
-        let rotation_changed = self.view_rotation != rotation;
-        self.view_transform = transform;
-        self.view_rotation = rotation;
-        self.compositor
-            .update_view_transform(&self.gpu.queue, &transform);
-        self.compositor.mark_needs_present();
+        };
+        self.rebuild_view_transform();
         // The cursor-preview mask was baked with the old view rotation;
         // re-render at the cached hover pose so the on-canvas silhouette
         // matches what the next stroke would actually paint. No-op when
@@ -100,8 +103,39 @@ impl DarklyEngine {
         }
     }
 
-    pub fn screen_to_canvas(&self, screen_x: f32, screen_y: f32) -> (f32, f32) {
-        self.view_transform.screen_to_canvas(screen_x, screen_y)
+    /// Re-derive the present view matrix from the stored `view_params` and the
+    /// **current** `doc.width/height`, and upload it. The matrix bakes in the
+    /// canvas dimensions, so this must run on every canvas-dimension change
+    /// (resize / crop / undo) as well as on pointer-driven view updates —
+    /// otherwise the present pass samples a resized composite through a
+    /// stale-dim matrix and the image shows stretched/offset. Single chokepoint
+    /// for "view params + canvas dims → cached matrix".
+    pub(crate) fn rebuild_view_transform(&mut self) {
+        let p = self.view_params;
+        let transform = ViewTransform::from_pan_zoom_rotate(
+            p.pan_x,
+            p.pan_y,
+            p.zoom,
+            p.rotation,
+            p.mirror_h,
+            p.screen_w,
+            p.screen_h,
+            self.doc.width as f32,
+            self.doc.height as f32,
+        );
+        self.view_transform = transform;
+        self.compositor
+            .update_view_transform(&self.gpu.queue, &transform);
+        self.compositor.mark_needs_present();
+    }
+
+    /// Map a screen point to **plane** coordinates (window-local +
+    /// `doc.canvas_origin`) — the frame every tool and the overlay operate in.
+    /// Reads the same cached `view_transform` the present pass consumes.
+    pub fn screen_to_plane(&self, screen_x: f32, screen_y: f32) -> (f32, f32) {
+        let o = self.doc.canvas_origin;
+        self.view_transform
+            .screen_to_plane(screen_x, screen_y, o.x as f32, o.y as f32)
     }
 
     /// Push the workspace background color (the area shown outside the
@@ -127,16 +161,20 @@ impl DarklyEngine {
     pub fn pick_color(&mut self, x: f32, y: f32, source: PickSource) -> [u8; 4] {
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
-        let px = x as u32;
-        let py = y as u32;
-
-        if px >= canvas_w || py >= canvas_h {
+        // `x, y` are plane coordinates (the frontend's `screenToCanvas`). Picking
+        // is restricted to the visible canvas window, so bounds-check in
+        // window-local space (`plane − canvas_origin`).
+        let o = self.doc.canvas_origin;
+        let wx = x as i32 - o.x;
+        let wy = y as i32 - o.y;
+        if wx < 0 || wy < 0 || wx as u32 >= canvas_w || wy as u32 >= canvas_h {
             return [0, 0, 0, 0];
         }
+        let point = CanvasPoint::new(x as i32, y as i32);
 
-        let resolved = source.resolve(&self.compositor, px, py).or_else(|| {
+        let resolved = source.resolve(&self.compositor, point, o).or_else(|| {
             // Layer source couldn't be sampled — fall back to merged.
-            PickSource::Merged.resolve(&self.compositor, px, py)
+            PickSource::Merged.resolve(&self.compositor, point, o)
         });
         let Some((texture, rect)) = resolved else {
             return [0, 0, 0, 0];
@@ -639,6 +677,15 @@ impl DarklyEngine {
         // Sync layer/mask state BEFORE restoring GPU regions, so that mask
         // textures are (re)created if needed by the undo action.
         self.sync_compositor_layers();
+
+        // Canvas resize/crop reconcile: a `CanvasResizeAction` swaps the
+        // document's canvas window (origin + dims) but is document-only, so
+        // the compositor's window-sized resources need rebuilding to match.
+        // Detecting divergence here keeps the undo action GPU-free and covers
+        // both undo and redo uniformly.
+        if self.doc.canvas_rect() != self.compositor.canvas_rect() {
+            self.apply_canvas_rect_to_compositor();
+        }
 
         // If this is a GPU region action, execute the texture restore.
         // Node id resolves to the right texture via the unified node-texture

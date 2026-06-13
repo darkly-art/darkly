@@ -37,6 +37,12 @@ pub struct GpuPaintTarget<'a> {
     /// Exposed via [`canvas_size`](Self::canvas_size).
     canvas_width: u32,
     canvas_height: u32,
+    /// Plane-space offset of the canvas window (`Document::canvas_origin`).
+    /// The selection mask is a window-sized texture anchored here, so the
+    /// fragment shader maps a plane position `p` to selection UV via
+    /// `(p - canvas_origin) / canvas_size`. `(0, 0)` for an un-cropped doc.
+    canvas_origin_x: i32,
+    canvas_origin_y: i32,
 }
 
 impl<'a> GpuPaintTarget<'a> {
@@ -44,7 +50,7 @@ impl<'a> GpuPaintTarget<'a> {
     /// drives all downstream pipeline dispatch (R8 mask vs RGBA layer).
     /// Replaces `from_layer` / `from_mask` — callers no longer dispatch on
     /// node kind, only on the texture they hand in.
-    pub fn from_node(tex: &'a LayerTexture, canvas_width: u32, canvas_height: u32) -> Self {
+    pub fn from_node(tex: &'a LayerTexture, canvas: CanvasRect) -> Self {
         let extent = tex.canvas_extent();
         GpuPaintTarget {
             texture: tex.texture(),
@@ -54,8 +60,10 @@ impl<'a> GpuPaintTarget<'a> {
             height: extent.height,
             offset_x: extent.origin.x,
             offset_y: extent.origin.y,
-            canvas_width,
-            canvas_height,
+            canvas_width: canvas.width,
+            canvas_height: canvas.height,
+            canvas_origin_x: canvas.origin.x,
+            canvas_origin_y: canvas.origin.y,
         }
     }
 
@@ -69,17 +77,11 @@ impl<'a> GpuPaintTarget<'a> {
         texture: &'a wgpu::Texture,
         view: &'a wgpu::TextureView,
         format: wgpu::TextureFormat,
-        canvas_width: u32,
-        canvas_height: u32,
+        canvas: CanvasRect,
     ) -> Self {
-        Self::from_extent(
-            texture,
-            view,
-            format,
-            CanvasRect::from_xywh(0, 0, canvas_width, canvas_height),
-            canvas_width,
-            canvas_height,
-        )
+        // A canvas-window-sized texture: its pixel (0, 0) sits at the window's
+        // plane origin, so its extent *is* the canvas window rect.
+        Self::from_extent(texture, view, format, canvas, canvas)
     }
 
     /// Wrap a texture sitting at an explicit canvas extent. Lower-level
@@ -91,8 +93,7 @@ impl<'a> GpuPaintTarget<'a> {
         view: &'a wgpu::TextureView,
         format: wgpu::TextureFormat,
         canvas_extent: CanvasRect,
-        canvas_width: u32,
-        canvas_height: u32,
+        canvas: CanvasRect,
     ) -> Self {
         GpuPaintTarget {
             texture,
@@ -102,8 +103,10 @@ impl<'a> GpuPaintTarget<'a> {
             height: canvas_extent.height,
             offset_x: canvas_extent.x0(),
             offset_y: canvas_extent.y0(),
-            canvas_width,
-            canvas_height,
+            canvas_width: canvas.width,
+            canvas_height: canvas.height,
+            canvas_origin_x: canvas.origin.x,
+            canvas_origin_y: canvas.origin.y,
         }
     }
 
@@ -136,6 +139,13 @@ impl<'a> GpuPaintTarget<'a> {
     /// and grown layers occupy a `canvas_extent` different from `canvas_size`.
     pub fn canvas_size(&self) -> (u32, u32) {
         (self.canvas_width, self.canvas_height)
+    }
+
+    /// Plane-space offset of the canvas window — the anchor of the
+    /// window-sized selection mask. Fed to shaders so a plane position maps to
+    /// selection UV via `(p - canvas_origin) / canvas_size`.
+    pub fn canvas_origin(&self) -> (i32, i32) {
+        (self.canvas_origin_x, self.canvas_origin_y)
     }
 
     /// Borrow this target as a `CanvasFrame` for region-store APIs.
@@ -245,10 +255,10 @@ impl<'a> GpuPaintTarget<'a> {
             target_offset: [self.offset_x as f32, self.offset_y as f32],
             target_size: [self.width as f32, self.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
+            canvas_origin: [self.canvas_origin_x as f32, self.canvas_origin_y as f32],
             center: [0.0, 0.0],
             radius: 0.0, // solid fill — coverage from selection only
             softness: 0.0,
-            _pad: [0.0; 2],
             color: [1.0, 1.0, 1.0, 1.0], // full erase strength
         };
 
@@ -290,10 +300,10 @@ impl<'a> GpuPaintTarget<'a> {
             target_offset: [self.offset_x as f32, self.offset_y as f32],
             target_size: [self.width as f32, self.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
+            canvas_origin: [self.canvas_origin_x as f32, self.canvas_origin_y as f32],
             center: [0.0, 0.0],
             radius: 0.0,
             softness: 0.0,
-            _pad: [0.0; 2],
             color: [0.0, 0.0, 0.0, 1.0],
         };
 
@@ -327,10 +337,10 @@ impl<'a> GpuPaintTarget<'a> {
             target_offset: [self.offset_x as f32, self.offset_y as f32],
             target_size: [self.width as f32, self.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
+            canvas_origin: [self.canvas_origin_x as f32, self.canvas_origin_y as f32],
             center: [0.0, 0.0],
             radius: 0.0,
             softness: 0.0,
-            _pad: [0.0; 2],
             color: [0.0, 0.0, 0.0, 1.0],
         };
 
@@ -366,10 +376,10 @@ impl<'a> GpuPaintTarget<'a> {
             target_offset: [self.offset_x as f32, self.offset_y as f32],
             target_size: [self.width as f32, self.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
+            canvas_origin: [self.canvas_origin_x as f32, self.canvas_origin_y as f32],
             center: [0.0, 0.0],
             radius: 0.0,
             softness: 0.0,
-            _pad: [0.0; 2],
             color: [0.0, 0.0, 0.0, 1.0],
         };
 
@@ -403,10 +413,10 @@ impl<'a> GpuPaintTarget<'a> {
             target_offset: [self.offset_x as f32, self.offset_y as f32],
             target_size: [self.width as f32, self.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
+            canvas_origin: [self.canvas_origin_x as f32, self.canvas_origin_y as f32],
             center: [0.0, 0.0],
             radius: 0.0,
             softness: 0.0,
-            _pad: [0.0; 2],
             color: [0.0, 0.0, 0.0, 1.0],
         };
 
@@ -443,10 +453,10 @@ impl<'a> GpuPaintTarget<'a> {
             target_offset: [self.offset_x as f32, self.offset_y as f32],
             target_size: [self.width as f32, self.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
+            canvas_origin: [self.canvas_origin_x as f32, self.canvas_origin_y as f32],
             center: [0.0, 0.0],
             radius: 0.0,
             softness: 0.0,
-            _pad: [0.0; 2],
             color,
         };
 
@@ -475,9 +485,9 @@ impl<'a> GpuPaintTarget<'a> {
             target_offset: [self.offset_x as f32, self.offset_y as f32],
             target_size: [self.width as f32, self.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
+            canvas_origin: [self.canvas_origin_x as f32, self.canvas_origin_y as f32],
             start: [x0, y0],
             end: [x1, y1],
-            _pad: [0.0; 2],
             color0: color_to_float(color0, 1.0),
             color1: color_to_float(color1, 1.0),
         };
@@ -529,10 +539,10 @@ impl<'a> GpuPaintTarget<'a> {
             target_offset: [self.offset_x as f32, self.offset_y as f32],
             target_size: [self.width as f32, self.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
+            canvas_origin: [self.canvas_origin_x as f32, self.canvas_origin_y as f32],
             center: [0.0, 0.0],
             radius: 0.0, // solid fill — no SDF
             softness: 0.0,
-            _pad: [0.0; 2],
             color: color_to_float(color, 1.0),
         };
 
@@ -571,10 +581,10 @@ impl<'a> GpuPaintTarget<'a> {
             target_offset: [self.offset_x as f32, self.offset_y as f32],
             target_size: [self.width as f32, self.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
+            canvas_origin: [self.canvas_origin_x as f32, self.canvas_origin_y as f32],
             center: [cx, cy],
             radius,
             softness,
-            _pad: [0.0; 2],
             color: color_to_float(color, opacity),
         };
 
@@ -652,18 +662,32 @@ pub struct PaintPipelines {
 }
 
 impl PaintPipelines {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        selection_bgl: &wgpu::BindGroupLayout,
+    ) -> Self {
+        // Shared with the brush pipeline + the cached selection bind group;
+        // owned here (cheap Arc clone) so the rest of `new` reads as before.
+        // See [`crate::gpu::selection::selection_mask_bgl`].
+        let selection_bgl = selection_bgl.clone();
         let paint_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("paint-circle"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/paint_circle.wgsl").into(),
+                crate::gpu::canvas_lib::with_canvas_lib(include_str!(
+                    "../../../../shaders/paint_circle.wgsl"
+                ))
+                .into(),
             ),
         });
 
         let gradient_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gradient"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/gradient.wgsl").into(),
+                crate::gpu::canvas_lib::with_canvas_lib(include_str!(
+                    "../../../../shaders/gradient.wgsl"
+                ))
+                .into(),
             ),
         });
 
@@ -680,28 +704,6 @@ impl PaintPipelines {
                 },
                 count: None,
             }],
-        });
-
-        let selection_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("paint-selection-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
         });
 
         let paint_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1209,10 +1211,10 @@ struct PaintUniforms {
     target_offset: [f32; 2], // Canvas-space offset of target's (0,0) pixel
     target_size: [f32; 2],   // Target texture pixel dimensions (vertex NDC)
     canvas_size: [f32; 2],   // Document canvas size (fragment selection UV)
+    canvas_origin: [f32; 2], // Plane offset of the canvas window (selection UV)
     center: [f32; 2],        // Circle center in canvas pixels
     radius: f32,             // Circle radius (0 = solid fill)
     softness: f32,           // Soft edge width in pixels
-    _pad: [f32; 2],          // Align color to 16 bytes
     color: [f32; 4],         // RGBA paint color (straight alpha)
 }
 
@@ -1225,9 +1227,9 @@ struct GradientUniforms {
     target_offset: [f32; 2], // Canvas-space offset of target's (0,0) pixel
     target_size: [f32; 2],   // Target texture pixel dimensions (vertex NDC)
     canvas_size: [f32; 2],   // Document canvas size (fragment selection UV)
+    canvas_origin: [f32; 2], // Plane offset of the canvas window (selection UV)
     start: [f32; 2],         // Gradient start point in canvas pixels
     end: [f32; 2],           // Gradient end point in canvas pixels
-    _pad: [f32; 2],          // Align colors to 16 bytes
     color0: [f32; 4],        // Start color (RGBA, straight alpha)
     color1: [f32; 4],        // End color (RGBA, straight alpha)
 }

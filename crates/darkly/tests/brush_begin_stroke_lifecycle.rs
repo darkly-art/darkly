@@ -91,7 +91,11 @@ fn run_begin_stroke(graph: &Graph<BrushWireType>, setup: Setup) -> Vec<u8> {
     let (device, queue) = test_device();
     let device = Arc::new(device);
     let queue = Arc::new(queue);
-    let pipelines = BrushPipelines::new(&device, &queue);
+    let pipelines = BrushPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     // StrokeBuffer owns scratch + pre_stroke (texture, view, bind group),
     // which is the exact bundle `StrokeResources` wants. Whichever lifecycle
     // the terminal declares, only one of the two textures is read — the
@@ -142,6 +146,7 @@ fn run_begin_stroke(graph: &Graph<BrushWireType>, setup: Setup) -> Vec<u8> {
         selection_bind_group: pipelines.default_selection_bind_group(),
         canvas_width: W,
         canvas_height: H,
+        canvas_origin: [0, 0],
         blend_mode: 0,
         view_rotation: 0.0,
         perf: BrushPerfCounters::default(),
@@ -151,8 +156,7 @@ fn run_begin_stroke(graph: &Graph<BrushWireType>, setup: Setup) -> Vec<u8> {
                 &paint_target_tex,
                 &paint_target_view,
                 wgpu::TextureFormat::Rgba8Unorm,
-                W,
-                H,
+                darkly::coord::CanvasRect::from_xywh(0, 0, W, H),
             ),
             pre_stroke_texture: pre_stroke_tex,
             pre_stroke_bind_group: pre_stroke_bg,

@@ -275,15 +275,20 @@ fn fill_span(mask: &mut [u8], width: u32, start: i32, end: i32, y: i32) {
 /// the layer offset.
 #[derive(Copy, Clone)]
 pub struct LayerFloodFillExtent {
-    /// Canvas-space offset of the texture's (0, 0) pixel.
+    /// Plane-space offset of the texture's (0, 0) pixel.
     pub offset_x: i32,
     pub offset_y: i32,
     /// Texture pixel dimensions — the size of the readback buffer.
     pub width: u32,
     pub height: u32,
-    /// Document canvas dimensions — the size of the produced mask.
+    /// Document canvas (window) dimensions — the size of the produced mask.
     pub canvas_width: u32,
     pub canvas_height: u32,
+    /// Plane-space origin of the canvas window. The produced mask is
+    /// **window-local** (it uploads into the window-sized selection texture),
+    /// so the projection subtracts this. `(0, 0)` for an un-cropped doc.
+    pub canvas_origin_x: i32,
+    pub canvas_origin_y: i32,
     pub format: wgpu::TextureFormat,
 }
 
@@ -292,6 +297,7 @@ impl LayerFloodFillExtent {
         let canvas_extent = target.canvas_extent();
         let layer_extent = target.layer_extent();
         let (canvas_w, canvas_h) = target.canvas_size();
+        let (cox, coy) = target.canvas_origin();
         Self {
             offset_x: canvas_extent.x0(),
             offset_y: canvas_extent.y0(),
@@ -299,18 +305,21 @@ impl LayerFloodFillExtent {
             height: layer_extent.height,
             canvas_width: canvas_w,
             canvas_height: canvas_h,
+            canvas_origin_x: cox,
+            canvas_origin_y: coy,
             format: target.format(),
         }
     }
 
     /// Run the CPU scanline fill on the texture-extent buffer and project the
-    /// resulting layer-local mask into a canvas-aligned R8 mask sized
-    /// `canvas_width × canvas_height`.
+    /// resulting layer-local mask into a **window-local** R8 mask sized
+    /// `canvas_width × canvas_height` (the frame the selection texture is
+    /// indexed in — see `crate::coord`).
     ///
-    /// `seed_canvas` is the click point in canvas coordinates. The seed is
-    /// translated to texture-local coords before the scanline fill runs;
-    /// pixels outside the layer's canvas footprint stay 0 in the output (the
-    /// layer has no data there).
+    /// `seed_canvas` is the click point in plane coordinates. The seed is
+    /// translated to texture-local coords before the scanline fill runs; the
+    /// result is projected to window-local (`plane − canvas_origin`). Pixels
+    /// outside the layer's canvas-window footprint stay 0 in the output.
     ///
     /// Format dispatch matches the texture's own format — RGBA reads four
     /// bytes per pixel, R8 reads one.
@@ -346,22 +355,27 @@ impl LayerFloodFillExtent {
         let ch = self.canvas_height as usize;
         let mut canvas_mask = vec![0u8; cw * ch];
 
-        let x0 = self.offset_x.max(0);
-        let y0 = self.offset_y.max(0);
-        let x1 = (self.offset_x + self.width as i32).min(self.canvas_width as i32);
-        let y1 = (self.offset_y + self.height as i32).min(self.canvas_height as i32);
+        let (cox, coy) = (self.canvas_origin_x, self.canvas_origin_y);
+        // Plane-space bounds of the layer footprint clipped to the canvas
+        // WINDOW `[canvas_origin, canvas_origin + canvas_size]`; the output is
+        // written at the window-local texel `plane − canvas_origin`.
+        let x0 = self.offset_x.max(cox);
+        let y0 = self.offset_y.max(coy);
+        let x1 = (self.offset_x + self.width as i32).min(cox + self.canvas_width as i32);
+        let y1 = (self.offset_y + self.height as i32).min(coy + self.canvas_height as i32);
         if x0 >= x1 || y0 >= y1 {
             return canvas_mask;
         }
 
         let stride = self.width as usize;
-        for cy in y0..y1 {
-            let ty = (cy - self.offset_y) as usize;
+        for py in y0..y1 {
+            let ty = (py - self.offset_y) as usize; // layer-local row
             let src_row = ty * stride;
-            let dst_row = (cy as usize) * cw;
-            for cx in x0..x1 {
-                let tx = (cx - self.offset_x) as usize;
-                canvas_mask[dst_row + cx as usize] = layer_mask[src_row + tx];
+            let dst_row = (py - coy) as usize * cw; // window-local row
+            for px in x0..x1 {
+                let tx = (px - self.offset_x) as usize; // layer-local col
+                let wx = (px - cox) as usize; // window-local col
+                canvas_mask[dst_row + wx] = layer_mask[src_row + tx];
             }
         }
 
@@ -396,6 +410,37 @@ pub fn request_layer_flood_fill_readback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// REGRESSION: the produced mask is **window-local** — the magic-wand fill
+    /// must land where the window-sized selection texture expects it after a
+    /// crop, i.e. at `plane − canvas_origin`, not at the raw plane coordinate.
+    #[test]
+    fn flood_fill_mask_is_window_local_after_crop() {
+        // A small 2×2 R8 layer, fully opaque, sitting at plane (3, 2).
+        let pixels = vec![255u8; 2 * 2];
+        let ext = LayerFloodFillExtent {
+            offset_x: 3,
+            offset_y: 2,
+            width: 2,
+            height: 2,
+            canvas_width: 6,
+            canvas_height: 6,
+            canvas_origin_x: 2, // cropped window starts at plane (2, 1)
+            canvas_origin_y: 1,
+            format: wgpu::TextureFormat::R8Unorm,
+        };
+
+        // Seed inside the layer (plane (3, 2)); uniform color floods all of it.
+        let mask = ext.flood_fill_to_canvas_mask(&pixels, crate::coord::CanvasPoint::new(3, 2), 0);
+        let at = |x: usize, y: usize| mask[y * 6 + x];
+
+        // Layer plane footprint [3,5)×[2,4) → window-local [1,3)×[1,3).
+        assert_eq!(at(1, 1), 255, "window-local origin of the fill");
+        assert_eq!(at(2, 2), 255, "window-local far corner of the fill");
+        // The pre-fix plane-anchored projection would have written here instead.
+        assert_eq!(at(3, 2), 0, "must NOT land at the raw plane coordinate");
+        assert_eq!(at(0, 0), 0, "outside the fill stays empty");
+    }
 
     #[test]
     fn flood_fill_rgba_basic() {

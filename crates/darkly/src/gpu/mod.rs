@@ -26,6 +26,7 @@ pub mod atlas;
 pub mod blend;
 pub mod blend_mode;
 pub mod blend_modes;
+pub mod canvas_lib;
 pub mod compositor;
 pub mod content_bounds;
 pub mod context;

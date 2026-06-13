@@ -1,6 +1,7 @@
 mod bake_common;
 mod brush_graph;
 mod brush_library;
+mod canvas_resize;
 mod clipboard;
 mod duplicate;
 mod export;
@@ -51,7 +52,7 @@ use crate::gpu::region_store::{EntryPixels, RegionScratch};
 use crate::gpu::selection::SelectionPipelines;
 use crate::gpu::transform::FloatingContent;
 use crate::gpu::veil_preview::VeilPreviewRenderer;
-use crate::gpu::view::ViewTransform;
+use crate::gpu::view::{ViewParams, ViewTransform};
 use crate::layer::LayerId;
 use crate::undo::UndoStack;
 use std::collections::HashMap;
@@ -299,13 +300,13 @@ pub struct DarklyEngine {
     /// kinds — works for any future filter / adjustment modifier too.
     pub(crate) isolated_node: Option<LayerId>,
     pub(crate) view_transform: ViewTransform,
-    /// Active view rotation in radians — the `rotation` arg last passed to
-    /// `set_view_transform`. Cached alongside the GPU-uploaded
-    /// `view_transform` (which is bytemuck-Pod and can't grow Rust-side
-    /// fields without breaking the GPU layout) so the brush stack can
-    /// thread it into `IntrinsicUniforms.view_rotation` for stamp-
-    /// counteracting-view-rotation.
-    pub(crate) view_rotation: f32,
+    /// Decomposed view inputs from which `view_transform` is derived. The
+    /// single source of truth for pan/zoom/rotation/screen — `set_view_transform`
+    /// writes them, and `rebuild_view_transform` re-derives the matrix from
+    /// them (plus the current `doc.width/height`) on any canvas-dimension
+    /// change. `rotation` here is also what the brush stack threads into
+    /// `IntrinsicUniforms.view_rotation` for stamp-counteracting-view-rotation.
+    pub(crate) view_params: ViewParams,
     /// Persistent marching ants overlay (regenerated when selection changes).
     pub(crate) selection_overlay: Vec<OverlayPrimitive>,
     /// Transient tool overlay (set/cleared by the active tool).
@@ -539,8 +540,11 @@ impl DarklyEngine {
         );
         let undo_stack = UndoStack::new(50);
         let region_scratch = RegionScratch::new(&gpu.device, doc_width, doc_height);
-        let paint_pipelines = PaintPipelines::new(&gpu.device, &gpu.queue);
-        let brush_pipelines = BrushPipelines::new(&gpu.device, &gpu.queue);
+        // One selection-mask layout shared by both pipelines (and the cached
+        // selection bind group), so a single bind group serves every consumer.
+        let selection_mask_bgl = crate::gpu::selection::selection_mask_bgl(&gpu.device);
+        let paint_pipelines = PaintPipelines::new(&gpu.device, &gpu.queue, &selection_mask_bgl);
+        let brush_pipelines = BrushPipelines::new(&gpu.device, &gpu.queue, &selection_mask_bgl);
         let selection_pipelines = SelectionPipelines::new(&gpu.device);
         let diff_rect = DiffRectPass::new(&gpu.device);
 
@@ -552,7 +556,7 @@ impl DarklyEngine {
             active_stroke_layer: None,
             isolated_node: None,
             view_transform: ViewTransform::identity(),
-            view_rotation: 0.0,
+            view_params: ViewParams::default(),
             selection_overlay: Vec::new(),
             tool_overlay: Vec::new(),
             clipboard: None,
@@ -629,7 +633,6 @@ impl DarklyEngine {
             &engine.gpu.device,
             selection_mod_id,
             engine.brush_pipelines.selection_bind_group_layout(),
-            &engine.paint_pipelines.selection_bind_group_layout,
         );
 
         engine
@@ -785,6 +788,23 @@ impl DarklyEngine {
             .test_present_to_canvas(&self.gpu.device, &self.gpu.queue, &mut self.doc)
     }
 
+    /// Blocking readback of the present pass through the **production** view
+    /// transform into a `viewport_w × viewport_h` target — what the surface
+    /// would actually show. Unlike [`Self::test_readback_present`] (which forces
+    /// an identity 1:1 transform) this exercises the real screen↔canvas mapping,
+    /// so it can observe resize-induced squash/offset bugs that the
+    /// identity/composite-cache readbacks are blind to.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_readback_viewport(&mut self, viewport_w: u32, viewport_h: u32) -> Vec<u8> {
+        self.compositor.test_present_to_viewport(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut self.doc,
+            viewport_w,
+            viewport_h,
+        )
+    }
+
     /// Test-only animation tick. Headless `render()` returns early without
     /// driving `update_animations`, so tests that need to advance the
     /// veil / overlay / void master clock call this directly. Pass a
@@ -816,6 +836,15 @@ impl DarklyEngine {
             ext.width,
             ext.height,
         )
+    }
+
+    /// Test-only: the current selection marching-ants overlay primitives.
+    /// These are `FLAG_CANVAS_SPACE` (plane-space) dashed lines, so their
+    /// `p0`/`p1` are plane coordinates — used to assert ant placement keeps
+    /// tracking the selection's plane bounds across a crop.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_selection_overlay(&self) -> Vec<crate::gpu::overlay::OverlayPrimitive> {
+        self.selection_overlay.clone()
     }
 
     /// Peek at the cached thumbnail bytes for any node id without queuing a

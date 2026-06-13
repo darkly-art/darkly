@@ -140,8 +140,7 @@ impl BrushStrokePreviewRenderer {
             &target.layer_texture,
             &target.layer_view,
             wgpu::TextureFormat::Rgba8Unorm,
-            width,
-            height,
+            crate::coord::CanvasRect::from_xywh(0, 0, width, height),
         );
         target
             .stroke_buffer
@@ -186,6 +185,7 @@ impl BrushStrokePreviewRenderer {
                     selection_bind_group: sel_bg,
                     canvas_width: width,
                     canvas_height: height,
+                    canvas_origin: [0, 0],
                     blend_mode: 0,
                     // Editor preview always renders at identity view; the
                     // S-curve preview shouldn't shift orientation when the

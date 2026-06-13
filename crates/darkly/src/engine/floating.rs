@@ -205,7 +205,7 @@ impl DarklyEngine {
                     data.map(|d| {
                         crate::mask::pixel_bounds_r8(d, self.doc.width, self.doc.height).map(
                             |[x, y, w, h]| {
-                                crate::coord::CanvasRect::from_xywh(x as i32, y as i32, w, h)
+                                crate::coord::WindowRect::from_xywh(x as i32, y as i32, w, h)
                             },
                         )
                     })
@@ -224,6 +224,9 @@ impl DarklyEngine {
                 None => return false,
             };
 
+            // Bounds are window-local; clamp against the window, then lift the
+            // origin into plane space — `setup_transform` wants a plane-space
+            // source origin, matching the no-selection branch's `layer_to_canvas`.
             let x = bounds.x0().max(0);
             let y = bounds.y0().max(0);
             let w = bounds.width.min(canvas_w.saturating_sub(x as u32));
@@ -233,7 +236,8 @@ impl DarklyEngine {
                 return false;
             }
 
-            self.setup_transform(layer_id, (x, y), w, h);
+            let origin = crate::coord::WindowPoint::new(x, y).to_canvas(self.doc.canvas_origin);
+            self.setup_transform(layer_id, (origin.x, origin.y), w, h);
             true
         } else {
             // No selection — use compositor content bounds.
@@ -331,8 +335,13 @@ impl DarklyEngine {
         // clear at the end of setup zeroes the marching ants.
         let has_selection = self.has_selection();
         let clear_shape = if has_selection {
+            // `source_origin` is plane (it indexes the live layer + the clear
+            // rect); the selection cpu-cache is window-local, so shift back by
+            // `canvas_origin` for the crop read.
+            let o = self.doc.canvas_origin;
+            let sel_origin = (source_origin.0 - o.x, source_origin.1 - o.y);
             let cropped_sel_bg =
-                self.upload_cropped_selection_r8(source_origin, source_width, source_height);
+                self.upload_cropped_selection_r8(sel_origin, source_width, source_height);
 
             if let Some(sel_bg) = &cropped_sel_bg {
                 if let Some(source_tex) = self.compositor.transform_source_texture() {
@@ -340,8 +349,7 @@ impl DarklyEngine {
                         source_tex.0,
                         source_tex.1,
                         format,
-                        source_width,
-                        source_height,
+                        crate::coord::CanvasRect::from_xywh(0, 0, source_width, source_height),
                     );
                     self.gpu.encode("transform-sel-mask", |encoder| {
                         target.multiply_by_mask(
@@ -639,7 +647,7 @@ impl DarklyEngine {
                 let target = self
                     .compositor
                     .node_texture(layer_id)
-                    .map(|t| GpuPaintTarget::from_node(t, self.doc.width, self.doc.height));
+                    .map(|t| GpuPaintTarget::from_node(t, self.doc.canvas_rect()));
                 if let Some(target) = target {
                     match clear_shape {
                         ClearShape::Rect(rect) => {

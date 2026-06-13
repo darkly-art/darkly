@@ -359,6 +359,10 @@ pub struct BrushGpuContext<'a> {
     pub selection_bind_group: &'a wgpu::BindGroup,
     pub canvas_width: u32,
     pub canvas_height: u32,
+    /// Plane-space offset of the canvas window (`Document::canvas_origin`).
+    /// Threaded into `IntrinsicUniforms.canvas_origin` so the stroke shader
+    /// maps a plane position to the window-anchored selection mask.
+    pub canvas_origin: [i32; 2],
     /// Composite blend mode override: 0 = source-over (paint), 1 = destination-out (erase).
     /// Set per-stroke by the engine based on the active tool.
     pub blend_mode: u32,
@@ -399,10 +403,11 @@ impl<'a> BrushGpuContext<'a> {
             layer_offset,
             layer_size,
             canvas_size: [self.canvas_width, self.canvas_height],
+            canvas_origin: self.canvas_origin,
             cursor_preview_centre: [0.0, 0.0],
             cursor_preview_size: [0, 0],
             view_rotation: self.view_rotation,
-            _pad: [0],
+            _pad: [0, 0, 0],
         }
     }
 
@@ -421,10 +426,13 @@ impl<'a> BrushGpuContext<'a> {
             layer_offset: [0, 0],
             layer_size: [target_w, target_h],
             canvas_size: [target_w, target_h],
+            // Preview renders into its own square texture and ignores the
+            // selection (`sel = 1.0`), so the window origin is irrelevant.
+            canvas_origin: [0, 0],
             cursor_preview_centre: centre,
             cursor_preview_size: [target_w, target_h],
             view_rotation: self.view_rotation,
-            _pad: [0],
+            _pad: [0, 0, 0],
         }
     }
 

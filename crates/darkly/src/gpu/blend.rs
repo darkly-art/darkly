@@ -5,6 +5,9 @@ pub struct BlendPipelines {
     pub bind_group_layout: wgpu::BindGroupLayout,
     /// Separate bind group layout for the mask texture (group 1).
     pub mask_bind_group_layout: wgpu::BindGroupLayout,
+    /// Shared canvas-geometry uniform (group 2) — `canvas_size` + `canvas_origin`,
+    /// one buffer for every composite draw (see `composite.wgsl`'s `CanvasUniform`).
+    pub canvas_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl BlendPipelines {
@@ -71,9 +74,30 @@ impl BlendPipelines {
                 }],
             });
 
+        // Group 2: shared canvas geometry (canvas_size + canvas_origin), one
+        // uniform buffer reused across every composite draw.
+        let canvas_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("canvas-geometry-bgl"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("blend-pipeline-layout"),
-            bind_group_layouts: &[Some(&bind_group_layout), Some(&mask_bind_group_layout)],
+            bind_group_layouts: &[
+                Some(&bind_group_layout),
+                Some(&mask_bind_group_layout),
+                Some(&canvas_bind_group_layout),
+            ],
             immediate_size: 0,
         });
 
@@ -83,7 +107,10 @@ impl BlendPipelines {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("composite-shader"),
             source: wgpu::ShaderSource::Wgsl(
-                crate::gpu::blend_mode::build_composite_source().into(),
+                crate::gpu::canvas_lib::with_canvas_lib(
+                    &crate::gpu::blend_mode::build_composite_source(),
+                )
+                .into(),
             ),
         });
 
@@ -120,6 +147,7 @@ impl BlendPipelines {
             pipeline,
             bind_group_layout,
             mask_bind_group_layout,
+            canvas_bind_group_layout,
         }
     }
 
