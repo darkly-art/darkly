@@ -129,6 +129,25 @@ fn resize_canvas_undo_restores_window() {
     assert_eq!(engine.canvas_rect(), CanvasRect::from_xywh(12, 8, 30, 40));
 }
 
+/// RECT-RESIZE regression: the interactive resize preview drives the canvas
+/// window as an explicit plane-space rect (WASM `resize_canvas_rect`), which can
+/// express a **pure translation** — same size, shifted origin. The retired
+/// anchor-only path could not (a zero size-delta forced a zero offset). Moving
+/// the window without resizing must land the origin exactly and undo cleanly.
+#[test]
+fn resize_canvas_pure_translation_moves_window_and_undoes() {
+    let (w, h) = (64u32, 64u32);
+    let mut engine = test_engine(w, h);
+    let _layer = engine.add_raster_layer(None);
+
+    // Same dimensions, non-zero origin: a pure translation of the window.
+    engine.resize_canvas(CanvasRect::from_xywh(10, 6, w, h));
+    assert_eq!(engine.canvas_rect(), CanvasRect::from_xywh(10, 6, w, h));
+
+    engine.undo();
+    assert_eq!(engine.canvas_rect(), CanvasRect::from_xywh(0, 0, w, h));
+}
+
 /// PRESENT-PATH regression: the cached view transform embeds the canvas
 /// dimensions (`canvas_w/h` as the present shader's sampling-normalization +
 /// the canvas center). A resize/crop changes the dims but is otherwise

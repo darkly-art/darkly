@@ -106,14 +106,15 @@ enum Command {
     FillBackgroundColor(u64, [u8; 4]),
 
     // Canvas
-    /// Anchored canvas resize: new dimensions + 9-point anchor (`ax`/`ay` ∈
-    /// {0, 0.5, 1}). The plane-space window rect is resolved engine-side from
-    /// the current canvas, so this carries no origin.
-    ResizeCanvas {
-        new_w: u32,
-        new_h: u32,
-        ax: f32,
-        ay: f32,
+    /// Canvas resize/move: the new canvas window as an explicit plane-space
+    /// rect. Expresses any reposition the interactive resize preview can
+    /// produce — including a pure translation (unchanged size, shifted origin),
+    /// which the old anchor-only form could not.
+    ResizeCanvasRect {
+        origin_x: i32,
+        origin_y: i32,
+        w: u32,
+        h: u32,
     },
     /// Crop the canvas window to the active selection's plane bounds.
     CropToSelection,
@@ -239,13 +240,18 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
                 engine.set_isolated_node(target);
             }
 
-            Command::ResizeCanvas {
-                new_w,
-                new_h,
-                ax,
-                ay,
+            Command::ResizeCanvasRect {
+                origin_x,
+                origin_y,
+                w,
+                h,
             } => {
-                engine.resize_canvas_anchored(new_w, new_h, ax, ay);
+                let rect = darkly::coord::CanvasRect::new(
+                    darkly::coord::CanvasPoint::new(origin_x, origin_y),
+                    w,
+                    h,
+                );
+                engine.resize_canvas(rect);
             }
             Command::CropToSelection => engine.crop_to_selection(),
             Command::FillBackground(id) => engine.fill_background(LayerId::from_ffi(id)),
@@ -1495,15 +1501,16 @@ impl DarklyHandle {
         vec![r.origin.x, r.origin.y, r.width as i32, r.height as i32].into_boxed_slice()
     }
 
-    /// Anchored canvas resize. `(anchor_x, anchor_y)` are the 9-point anchor,
-    /// each in `{0.0, 0.5, 1.0}` (the fraction of the size delta taken off the
-    /// top/left). Queued; applied on the next drain.
-    pub fn resize_canvas(&self, new_w: u32, new_h: u32, anchor_x: f32, anchor_y: f32) {
-        self.push(Command::ResizeCanvas {
-            new_w,
-            new_h,
-            ax: anchor_x,
-            ay: anchor_y,
+    /// Resize/move the canvas window to an explicit plane-space rect:
+    /// `(origin_x, origin_y)` is the new window origin, `(w, h)` its size. The
+    /// interactive resize preview produces the rect directly (content stays put
+    /// in the plane; only the window moves). Queued; applied on the next drain.
+    pub fn resize_canvas_rect(&self, origin_x: i32, origin_y: i32, w: u32, h: u32) {
+        self.push(Command::ResizeCanvasRect {
+            origin_x,
+            origin_y,
+            w,
+            h,
         });
     }
 
