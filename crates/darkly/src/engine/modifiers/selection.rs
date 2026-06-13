@@ -260,11 +260,14 @@ impl DarklyEngine {
             return;
         }
 
-        // Plane → window-local for the window-sized mask (see `select_rect`).
-        let o = self.doc.canvas_origin;
+        // Plane → window-local for the window-sized mask (see `select_rect`),
+        // through the same chokepoint as the other selection shapes.
         let local: Vec<[f32; 2]> = vertices
             .iter()
-            .map(|[vx, vy]| [vx - o.x as f32, vy - o.y as f32])
+            .map(|&[vx, vy]| {
+                let (lx, ly) = self.plane_to_window_local(vx, vy);
+                [lx, ly]
+            })
             .collect();
         let mask =
             crate::mask::rasterize_polygon_r8(self.doc.width, self.doc.height, &local, antialias);
