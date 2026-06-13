@@ -120,8 +120,13 @@ impl DarklyEngine {
         self.compositor.mark_needs_present();
     }
 
-    pub fn screen_to_canvas(&self, screen_x: f32, screen_y: f32) -> (f32, f32) {
-        self.view_transform.screen_to_canvas(screen_x, screen_y)
+    /// Map a screen point to **plane** coordinates (window-local +
+    /// `doc.canvas_origin`) — the frame every tool and the overlay operate in.
+    /// Reads the same cached `view_transform` the present pass consumes.
+    pub fn screen_to_plane(&self, screen_x: f32, screen_y: f32) -> (f32, f32) {
+        let o = self.doc.canvas_origin;
+        self.view_transform
+            .screen_to_plane(screen_x, screen_y, o.x as f32, o.y as f32)
     }
 
     /// Push the workspace background color (the area shown outside the

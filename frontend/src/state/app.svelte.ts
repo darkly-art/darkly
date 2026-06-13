@@ -1,4 +1,5 @@
 import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
+import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry } from '../tools/registry';
 import { pollPick } from '../tools/color_pick_sync';
 import { tickColorPickerCursor } from '../tools/colorpicker_cursor';
@@ -205,6 +206,36 @@ export class DarklyInstance {
      *  in sync at the same join points as `docW`/`docH`. */
     canvasOriginX = $state(0);
     canvasOriginY = $state(0);
+
+    /** Viewport backing-store size in buffer pixels (`canvas.width/height` =
+     *  CSS × DPR). Set by CanvasView on mount and on element resize — the
+     *  reactive mirror that lets {@link viewMatrices} stay fresh on resize
+     *  without reading the DOM element from a `$derived`. */
+    viewportW = $state(1);
+    viewportH = $state(1);
+
+    /** The screen↔plane coordinate matrices, derived from the single Rust
+     *  source of truth (`compute_view_matrices`) — the JS coordinate path
+     *  consumes these instead of re-deriving the transform. 12 floats:
+     *  `[screen→plane (6), plane→screen (6)]`, each row-major
+     *  `[m00, m01, m02, m10, m11, m12]`. Reactive over every view input
+     *  (pan/zoom/rotation/mirror, viewport size, canvas origin, doc dims), so
+     *  it can never go stale; pure (no engine borrow), so reading it inside a
+     *  pointer event cannot alias the RefCell borrow held by `render()`. */
+    viewMatrices: Float32Array = $derived.by(() => {
+        if (!this.handle) {
+            // Identity (screen→plane, plane→screen) until the engine exists.
+            return new Float32Array([1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0]);
+        }
+        const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+        return compute_view_matrices(
+            this.panX * dpr, this.panY * dpr,
+            this.zoom, this.rotation, this.mirrorH,
+            this.viewportW, this.viewportH,
+            this.canvasOriginX, this.canvasOriginY,
+            this.docW, this.docH,
+        );
+    });
 
     // Tool cursor — when non-null, overrides nav cursor on the canvas element.
     toolCursor = $state<string | null>(null);

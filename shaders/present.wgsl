@@ -27,12 +27,12 @@ struct ViewTransform {
 @group(0) @binding(2) var<uniform> view: ViewTransform;
 
 @fragment fn fs_present(in: VertexOutput) -> @location(0) vec4f {
-    // Transform screen pixel -> canvas pixel using the inverse view matrix
+    // Transform screen pixel -> window-local canvas pixel using the inverse view matrix
     let screen_pos = in.position.xy;
     let canvas_x = view.row0.x * screen_pos.x + view.row1.x * screen_pos.y + view.row2.x;
     let canvas_y = view.row0.y * screen_pos.x + view.row1.y * screen_pos.y + view.row2.y;
 
-    // Sample using the padded texture size so texels map 1:1 to canvas pixels.
+    // Sample using the padded texture size so texels map 1:1 to window-local canvas pixels.
     let tex_dims = vec2f(textureDimensions(t_source));
     let uv = vec2f(canvas_x, canvas_y) / tex_dims;
     let clamped_uv = clamp(uv, vec2f(0.0), vec2f(1.0));

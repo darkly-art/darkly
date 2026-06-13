@@ -2984,10 +2984,17 @@ impl Compositor {
 
         // Prepare overlay CPU-side work (upload, bind group) before render passes.
         if self.tool_overlay.has_content() {
+            // The overlay draws plane-space (`FLAG_CANVAS_SPACE`) primitives, so
+            // it needs the plane matrices, not the window-local present matrix.
+            // Derive both from the cached present transform + the window origin.
             let vt = self.cached_view_transform;
+            let (ox, oy) = (self.canvas_origin.x as f32, self.canvas_origin.y as f32);
+            let plane_fwd = vt.plane_to_screen_matrix(ox, oy);
+            let plane_inv = vt.screen_to_plane_matrix(ox, oy);
             let vw = self.veil_chain.viewport_size().0;
             let vh = self.veil_chain.viewport_size().1;
-            self.tool_overlay.prepare(device, queue, &vt, vw, vh);
+            self.tool_overlay
+                .prepare(device, queue, &plane_fwd, &plane_inv, vw, vh);
         }
 
         // Present + veils. Solid overlay primitives are drawn at the end

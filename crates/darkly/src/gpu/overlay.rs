@@ -1,5 +1,3 @@
-use crate::gpu::view::ViewTransform;
-
 // ---------------------------------------------------------------------------
 // Primitive kinds (must match shaders/overlay.wgsl)
 // ---------------------------------------------------------------------------
@@ -579,11 +577,18 @@ impl ToolOverlay {
 
     /// CPU-side work: partition, upload buffers, build bind group.
     /// Must be called once per frame before draw_solid() or encode_snapshot().
+    /// `plane_fwd` / `plane_inv` are the **plane**-space forward (plane→screen)
+    /// and inverse (screen→plane) matrices — derived by the caller from the
+    /// present view transform + `canvas_origin`. The overlay stays frame-agnostic:
+    /// `FLAG_CANVAS_SPACE` primitives are pushed in plane coords, so feeding the
+    /// plane forward (not window-local) is what keeps the cursor preview aligned
+    /// with the paint path across a crop/resize.
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        view_transform: &ViewTransform,
+        plane_fwd: &[[f32; 4]; 3],
+        plane_inv: &[[f32; 4]; 3],
         viewport_w: u32,
         viewport_h: u32,
     ) {
@@ -621,18 +626,16 @@ impl ToolOverlay {
         queue.write_buffer(&self.prim_buf, 0, bytemuck::cast_slice(&self.primitives));
 
         // Upload uniforms.
-        let fwd = forward_from_inverse(view_transform);
-        let inv = &view_transform.matrix;
         let uniforms = OverlayUniforms {
             screen_size: [viewport_w as f32, viewport_h as f32],
             time: self.time,
             preview_coverage_scale: self.preview_coverage_scale,
-            fwd_row0: fwd[0],
-            fwd_row1: fwd[1],
-            fwd_row2: fwd[2],
-            inv_row0: inv[0],
-            inv_row1: inv[1],
-            inv_row2: inv[2],
+            fwd_row0: plane_fwd[0],
+            fwd_row1: plane_fwd[1],
+            fwd_row2: plane_fwd[2],
+            inv_row0: plane_inv[0],
+            inv_row1: plane_inv[1],
+            inv_row2: plane_inv[2],
         };
         queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
@@ -778,43 +781,6 @@ impl ToolOverlay {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: compute forward (canvas → screen) from inverse (screen → canvas)
-// ---------------------------------------------------------------------------
-
-fn forward_from_inverse(vt: &ViewTransform) -> [[f32; 4]; 3] {
-    let m = &vt.matrix;
-    let m00 = m[0][0];
-    let m01 = m[0][1];
-    let m10 = m[1][0];
-    let m11 = m[1][1];
-    let tx = m[2][0];
-    let ty = m[2][1];
-
-    let det = m00 * m11 - m10 * m01;
-    if det.abs() < 1e-12 {
-        return [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 0.0],
-        ];
-    }
-    let inv_det = 1.0 / det;
-
-    let f00 = m11 * inv_det;
-    let f01 = -m10 * inv_det;
-    let f10 = -m01 * inv_det;
-    let f11 = m00 * inv_det;
-    let ftx = -(f00 * tx + f01 * ty);
-    let fty = -(f10 * tx + f11 * ty);
-
-    [
-        [f00, f01, 0.0, 0.0],
-        [f10, f11, 0.0, 0.0],
-        [ftx, fty, 0.0, 0.0],
-    ]
-}
-
-// ---------------------------------------------------------------------------
 // CPU-side SDF for hit testing — delegates to shared sdf module
 // ---------------------------------------------------------------------------
 
@@ -858,6 +824,7 @@ fn cpu_sdf(prim: &OverlayPrimitive, p: [f32; 2]) -> f32 {
 mod tests {
     use super::*;
     use crate::gpu::test_utils::test_device;
+    use crate::gpu::view::ViewTransform;
 
     fn make_overlay() -> ToolOverlay {
         let (device, queue) = test_device();
@@ -887,7 +854,9 @@ mod tests {
         overlay.set_primitives(vec![soft, solid, invert]);
 
         let vt = ViewTransform::identity();
-        overlay.prepare(&device, &queue, &vt, 512, 512);
+        let fwd = vt.plane_to_screen_matrix(0.0, 0.0);
+        let inv = vt.screen_to_plane_matrix(0.0, 0.0);
+        overlay.prepare(&device, &queue, &fwd, &inv, 512, 512);
 
         assert_eq!(overlay.solid_count, 1, "one solid primitive");
         assert_eq!(
@@ -914,7 +883,9 @@ mod tests {
         ]);
 
         let vt = ViewTransform::identity();
-        overlay.prepare(&device, &queue, &vt, 256, 256);
+        let fwd = vt.plane_to_screen_matrix(0.0, 0.0);
+        let inv = vt.screen_to_plane_matrix(0.0, 0.0);
+        overlay.prepare(&device, &queue, &fwd, &inv, 256, 256);
 
         assert_eq!(overlay.solid_count, 2);
         assert_eq!(overlay.snapshot_count, 0);
@@ -1000,7 +971,9 @@ mod tests {
         overlay.set_primitives(vec![prim]);
 
         let vt = ViewTransform::identity();
-        overlay.prepare(&device, &queue, &vt, W, H);
+        let fwd = vt.plane_to_screen_matrix(0.0, 0.0);
+        let inv = vt.screen_to_plane_matrix(0.0, 0.0);
+        overlay.prepare(&device, &queue, &fwd, &inv, W, H);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("soft-contrast-desat-test"),
@@ -1087,7 +1060,9 @@ mod tests {
         overlay.set_primitives(vec![prim]);
 
         let vt = ViewTransform::identity();
-        overlay.prepare(&device, &queue, &vt, W, H);
+        let fwd = vt.plane_to_screen_matrix(0.0, 0.0);
+        let inv = vt.screen_to_plane_matrix(0.0, 0.0);
+        overlay.prepare(&device, &queue, &fwd, &inv, W, H);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("masked-stamp-test"),

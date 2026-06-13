@@ -1,62 +1,41 @@
 /**
- * Bidirectional coordinate transforms between canvas space and screen space.
+ * Bidirectional coordinate transforms between canvas (plane) space and screen
+ * space.
  *
- * Canvas space = document pixels (e.g. 900×1600).
- * Screen space = CSS pixels relative to the canvas element's top-left.
+ * Canvas/plane space = document pixels (window-local + `canvas_origin`).
+ * Screen space = CSS pixels relative to the canvas element's bounding rect.
  *
- * The forward transform (canvas→screen) is the mathematical inverse of the
- * screen→canvas transform in gpu/view.rs. We compute it in JS from the same
- * inputs (panX, panY, zoom, rotation, doc dimensions, element dimensions, DPR).
+ * These are pure matrix-vector products over `app.viewMatrices` — the screen↔
+ * plane affines built by the single Rust source of truth (`compute_view_matrices`)
+ * and cached reactively on `app`. The transform math lives only in Rust; this
+ * file just applies the cached matrices and handles the DOM boundary (DPR +
+ * element offset). Reading the cache is borrow-free, so it is safe inside a
+ * pointer event (no RefCell aliasing with an in-flight `render()`).
+ *
+ * `app.viewMatrices` packs 12 floats: `[screen→plane (6), plane→screen (6)]`,
+ * each row-major `[m00, m01, m02, m10, m11, m12]` with
+ * `out_x = m00·x + m01·y + m02`, `out_y = m10·x + m11·y + m12`.
  */
 
 import { app } from '../state/app.svelte';
 
 /**
- * Convert canvas coordinates to screen CSS coordinates (relative to the
+ * Convert canvas (plane) coordinates to screen CSS coordinates (relative to the
  * canvas element's bounding rect).
- *
- * Forward transform pipeline (from view.rs docs):
- *   1. Translate by -canvas_center
- *   2. Scale by zoom
- *   3. Rotate by R(-rotation) = [cos, sin; -sin, cos]
- *   4. Translate by screen_center + pan (buffer pixels)
- *   5. Convert buffer pixels to CSS pixels (÷ DPR)
  */
 export function canvasToScreen(
     cx: number, cy: number,
-    canvasEl: HTMLCanvasElement,
+    _canvasEl: HTMLCanvasElement,
 ): { x: number; y: number } {
     const dpr = window.devicePixelRatio || 1;
-    const cos_r = Math.cos(app.rotation);
-    const sin_r = Math.sin(app.rotation);
-
-    // Input is plane space; the view transform is window-local (the present
-    // path renders the canvas window). Shift into window-local first.
-    let dx = (cx - app.canvasOriginX) - app.docW / 2;
-    const dy = (cy - app.canvasOriginY) - app.docH / 2;
-
-    // Mirror is a scale(-1, 1) in canvas-centered space, before zoom/rotate.
-    if (app.mirrorH) dx = -dx;
-
-    const buf_x = app.zoom * (cos_r * dx + sin_r * dy)
-                  + canvasEl.width / 2 + app.panX * dpr;
-    const buf_y = app.zoom * (-sin_r * dx + cos_r * dy)
-                  + canvasEl.height / 2 + app.panY * dpr;
-
+    const m = app.viewMatrices; // plane→screen at offset 6, output in buffer px
+    const buf_x = m[6] * cx + m[7] * cy + m[8];
+    const buf_y = m[9] * cx + m[10] * cy + m[11];
     return { x: buf_x / dpr, y: buf_y / dpr };
 }
 
 /**
- * Convert screen CSS coordinates (clientX/clientY) to canvas coordinates.
- *
- * Pure-JS inverse of the forward transform above — avoids calling into WASM,
- * which would alias the RefCell borrow if a pointer event fires while
- * render() holds &mut self (WebGPU can synchronously pump the event queue).
- *
- * Inverse transform (from view.rs ViewTransform::from_pan_zoom_rotate):
- *   1. CSS → buffer pixels (* DPR, - element offset)
- *   2. Apply inverse view matrix: M^-1 * [buf_x, buf_y]
- *      where M^-1 = [cos/z, sin/z; -sin/z, cos/z] with translation
+ * Convert screen CSS coordinates (clientX/clientY) to canvas (plane) coordinates.
  */
 export function screenToCanvas(
     clientX: number, clientY: number,
@@ -67,39 +46,9 @@ export function screenToCanvas(
     const buf_x = (clientX - rect.left) * dpr;
     const buf_y = (clientY - rect.top) * dpr;
 
-    const cos_r = Math.cos(app.rotation);
-    const sin_r = Math.sin(app.rotation);
-    const inv_zoom = 1.0 / app.zoom;
-
-    const canvas_w = app.docW;
-    const canvas_h = app.docH;
-    const cx = canvas_w / 2;
-    const cy = canvas_h / 2;
-
-    // Screen center + pan in buffer pixels (matches Rust's sx, sy)
-    const sx = canvasEl.width / 2 + app.panX * dpr;
-    const sy = canvasEl.height / 2 + app.panY * dpr;
-
-    // Inverse matrix coefficients (same as view.rs)
-    let m00 = cos_r * inv_zoom;
-    const m01 = sin_r * inv_zoom;
-    let m10 = -sin_r * inv_zoom;
-    const m11 = cos_r * inv_zoom;
-    let tx = cx - m00 * sx - m10 * sy;
-    const ty = cy - m01 * sx - m11 * sy;
-
-    // Horizontal mirror: reflect the screen→canvas X output around `cx`.
-    // Matches the matrix branch in `gpu/view.rs::from_pan_zoom_rotate`.
-    if (app.mirrorH) {
-        m00 = -m00;
-        m10 = -m10;
-        tx = canvas_w - tx;
-    }
-
-    // The matrix maps to window-local canvas coords; shift to plane space so
-    // every consumer (paint, selection, fill) works in one frame.
+    const m = app.viewMatrices; // screen→plane at offset 0
     return {
-        x: m00 * buf_x + m10 * buf_y + tx + app.canvasOriginX,
-        y: m01 * buf_x + m11 * buf_y + ty + app.canvasOriginY,
+        x: m[0] * buf_x + m[1] * buf_y + m[2],
+        y: m[3] * buf_x + m[4] * buf_y + m[5],
     };
 }
