@@ -1,31 +1,30 @@
-# Krita overlay. Self-contained: every binding that any of the three editors
-# (Krita / Photoshop / GIMP) has an opinion on is spelled out here explicitly
-# — nothing about Krita is silently inherited from defaults.yaml when any of
-# the three reference editors would have a binding for the action.
+# Krita overlay. Carries every binding where Krita's choice differs from
+# at least one other reference editor, plus Darkly fallbacks for actions
+# where Krita has no opinion but some other editor does. Unanimous
+# bindings (those all three reference editors agree on) live in
+# defaults.yaml; see the rule in defaults.yaml's header.
 name: Krita
 description: Krita-style keybindings
 
 hotkeys:
-  # Edit / clipboard / file.
-  undo: $mod+KeyZ
+  # Edit / clipboard (non-unanimous slice). Krita matches PS on these but
+  # GIMP differs (Redo: <primary>Y, Paste-In-Place: <primary><alt>V — see
+  # gimp/app/actions/edit-actions.c), so each value is pinned per-overlay.
   redo: $mod+Shift+KeyZ
-  copy: $mod+KeyC
-  cut: $mod+KeyX
-  paste: $mod+KeyV
   pasteInPlace: $mod+Shift+KeyV
-  saveDocument: $mod+KeyS
-  saveDocumentAs: $mod+Shift+KeyS
-  open: $mod+KeyO
-  selectAll: $mod+KeyA
-  clearSelectionContents: Delete
-  commitFloating: Enter
-  cancelFloating: Escape
-  # Colors.
-  resetColors: KeyD
-  swapColors: KeyX
-  # Brush size.
-  brushSizeUp: BracketRight
-  brushSizeDown: BracketLeft
+  # Krita has no native Preferences hotkey. Fall through to Darkly's
+  # macOS-convention pick; users can rebind via the settings UI.
+  openSettings: $mod+Comma
+  # Krita's `file_export_file` is explicitly `none` (see
+  # kritamenu.action). GIMP binds Export As to <primary><shift>E
+  # (gimp/app/actions/file-actions.c — `file-export-as`); Darkly inherits
+  # that key here.
+  exportImage: $mod+Shift+KeyE
+  # View > Mirror View. Krita binds M (kritamenu.action `mirror_canvas`,
+  # <shortcut>M</shortcut>). Photoshop and GIMP have no opinion; their
+  # overlays leave mirrorViewH unbound rather than reuse M (Photoshop's
+  # M is rectSelectTool).
+  mirrorViewH: KeyM
   # Tools.
   brushTool: KeyB
   fillTool: KeyF
@@ -36,14 +35,23 @@ hotkeys:
   magicWandTool: KeyW
   transformTool: KeyT
   toggleEraseMode: KeyE
+  # Krita's selection-tool .action files have empty <shortcut>. Fall
+  # through to Photoshop's L / Shift+L convention.
+  lassoSelectTool: KeyL
+  polygonSelectTool: Shift+KeyL
   # Layers.
   isolateLayer: KeyI
   deleteLayer: Shift+Delete
   duplicateLayer: $mod+KeyJ
-  # Krita's "Add Paint Layer" is bound to Insert (host docs line 187).
+  # Krita's "Add Paint Layer" is bound to Insert (kritamenu.action).
   newLayer: Insert
-  # mergeDown lives in defaults.yaml at the same key — all 2/3-consensus
-  # bindings consolidate there per the placement rule. No override needed.
+  # Krita binds "Quick Group" to Ctrl+G (krita.action).
+  newGroup: $mod+KeyG
+  # Krita binds "Merge with Layer Below" to Ctrl+E (krita.action
+  # `merge_layer`, <shortcut>Ctrl+E</shortcut>). The action handler is
+  # selection-aware: with ≥2 selected it bakes the selection via
+  # merge_layers, with 1 it does the classic single-layer merge-down.
+  mergeDown: $mod+KeyE
   # Selection.
   clearSelection: $mod+Shift+KeyA
   invertSelection: $mod+Shift+KeyI
@@ -54,6 +62,10 @@ mouse_clicks:
   sampleColor: canvas@paint:$mod+drag
   # Krita's "Change Primary Setting" — shift+drag scrubs brush size.
   brushSizeAdjust: canvas@paint:shift+drag
+  # Krita uses Alt+click on a layer/mask thumbnail to isolate the node.
+  isolateLayer:
+    - layerThumb:alt+click
+    - maskThumb:alt+click
 
 settings:
   tools.colorPickerSampleSource: merged

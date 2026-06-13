@@ -321,7 +321,7 @@ fn airbrush_endpoint_dabs_not_clipped_against_cache_border() {
     // — black bg, white stroke.
     engine.set_preview_theme([1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]);
 
-    // Airbrush is a built-in: circle tip with a fixed `size_input` constant
+    // Airbrush is a built-in: shape tip with a fixed `size_input` constant
     // (no pressure→size_input wire), so the dab radius doesn't scale with
     // the synthetic stroke's pressure ramp. Same invariant the old
     // "Hard Round" test exercised before that brush was removed.
@@ -414,7 +414,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
 
     // Negative control: scrubbing a port the preview *does* read must
     // still bump the version. After the compiled-WGSL migration
-    // `softness` lives on the upstream `circle` node (the
+    // `softness` lives on the upstream `shape` node (the
     // `paint` terminal has no softness port). It has no
     // `preview_irrelevant_scrub` flag, is read by the preview shader,
     // and is unwired — the perfect canary for "rule too broad". Find
@@ -423,7 +423,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
         .brush_exposed_ports()
         .into_iter()
         .find(|p| p.port_name == "softness")
-        .expect("Ink Pen exposes a `softness` port (on circle after migration)");
+        .expect("Ink Pen exposes a `softness` port (on shape after migration)");
     let v_before_softness = engine.brush_graph_version();
     engine
         .brush_set_exposed_port(softness.node_id, "softness", 0.5)

@@ -37,7 +37,8 @@ use crate::brush::stabilizer::StabilizerConfig;
 use crate::brush::wire::BrushWireType;
 use crate::brush::BrushNodeRegistry;
 use crate::gpu::params::{ParamValue, PortableValue};
-use crate::nodegraph::{Graph, NodeId, PortDir, PortRef};
+use crate::nodegraph::{exposed_port_key, ExposedPortMeta, Graph, NodeId, PortDir, PortRef};
+use indexmap::IndexMap;
 
 /// Portable, YAML-friendly snapshot of a brush. Top-level metadata is
 /// optional — present for full brushes, omitted for graph-only snippets
@@ -61,6 +62,13 @@ pub struct PortableBrush {
     pub nodes: BTreeMap<u64, PortableNode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub connections: Vec<PortableConnection>,
+    /// Ordered brush-bar entries. Keys are `"<yaml_node_id>.<port_name>"`
+    /// (matching the `nodes` map). On import the yaml id is rewritten to
+    /// the freshly-assigned internal `NodeId`. Order is the brush-bar
+    /// display order — `IndexMap` preserves it through every YAML/JSON
+    /// round trip.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub exposed_ports: IndexMap<String, ExposedPortMeta>,
 }
 
 /// A single node entry in the portable form.
@@ -73,8 +81,6 @@ pub struct PortableNode {
     pub params: BTreeMap<String, PortableValue>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub port_defaults: BTreeMap<String, f32>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub exposed: Vec<String>,
 }
 
 /// A wire serialized as `"<from_id>.<from_port> -> <to_id>.<to_port>"`.
@@ -194,10 +200,6 @@ impl PortableBrush {
             // values are; cross-reference the registration to know
             // which to drop.
             let mut port_defaults = BTreeMap::new();
-            // Exposed: complete list of input ports flagged exposed on
-            // the instance. Declarative, no registration lookup needed
-            // on import.
-            let mut exposed = Vec::new();
             for port in &node.ports {
                 if port.dir != PortDir::Input {
                     continue;
@@ -210,11 +212,7 @@ impl PortableBrush {
                 if Some(port.default) != reg_default {
                     port_defaults.insert(port.name.clone(), port.default);
                 }
-                if port.exposed {
-                    exposed.push(port.name.clone());
-                }
             }
-            exposed.sort();
 
             nodes.insert(
                 id.0,
@@ -222,7 +220,6 @@ impl PortableBrush {
                     type_id: node.type_id.clone(),
                     params,
                     port_defaults,
-                    exposed,
                 },
             );
         }
@@ -247,9 +244,15 @@ impl PortableBrush {
             ))
         });
 
+        // Brush-bar entries: graph keys are already `"<NodeId>.<port>"`
+        // and the in-memory `id.0` doubles as the yaml id, so the map
+        // can be copied wholesale.
+        let exposed_ports = graph.exposed_ports.clone();
+
         Ok(Self {
             nodes,
             connections,
+            exposed_ports,
             ..Self::default()
         })
     }
@@ -319,7 +322,7 @@ impl PortableBrush {
             }
 
             // Ports: clone from registration, then apply port_defaults
-            // and exposed overrides.
+            // overrides.
             let mut ports = reg.ports.clone();
             for (name, &value) in &pn.port_defaults {
                 let port = ports
@@ -332,22 +335,6 @@ impl PortableBrush {
                         )
                     })?;
                 port.default = value;
-            }
-            // Exposed list is declarative: every input port's `exposed`
-            // flag is reset, then ports named in the list are set true.
-            for port in ports.iter_mut() {
-                if port.dir == PortDir::Input {
-                    port.exposed = false;
-                }
-            }
-            for name in &pn.exposed {
-                let port = ports
-                    .iter_mut()
-                    .find(|p| p.name == *name && p.dir == PortDir::Input)
-                    .ok_or_else(|| {
-                        format!("unknown input port '{name}' on '{}' (exposed)", pn.type_id)
-                    })?;
-                port.exposed = true;
             }
 
             let new_id = graph.add_node(pn.type_id.clone(), ports, params);
@@ -384,6 +371,27 @@ impl PortableBrush {
                 &b.to.port,
             ))
         });
+
+        // Brush-bar entries: `add_node` auto-populated `exposed_ports`
+        // from each registration's `.exposed()` flag. The portable form
+        // is authoritative, so clear that and re-populate from the saved
+        // map, rewriting yaml ids to the freshly-assigned NodeIds.
+        // Malformed or stale keys are skipped silently — the import
+        // already validated nodes/ports above.
+        graph.exposed_ports.clear();
+        for (yaml_key, meta) in &self.exposed_ports {
+            let Some((yid_str, port_name)) = yaml_key.split_once('.') else {
+                continue;
+            };
+            let Ok(yaml_id) = yid_str.parse::<u64>() else {
+                continue;
+            };
+            let Some(&new_id) = id_map.get(&yaml_id) else {
+                continue;
+            };
+            let new_key = exposed_port_key(new_id, port_name);
+            graph.exposed_ports.insert(new_key, meta.clone());
+        }
         Ok(graph)
     }
 }
@@ -394,12 +402,8 @@ mod tests {
     use crate::brush::registry;
 
     /// Round-trip the default graph and confirm the result compiles to
-    /// the same shape (nodes, connections, params, port defaults,
-    /// exposed flags) as the original. This is the headline guarantee
-    /// of the portable form. The default graph has unique type_ids per
-    /// node, so we match originals to restorations by type_id rather
-    /// than by NodeId — the round trip is not required to preserve
-    /// internal ids, only topology.
+    /// the same shape (nodes, connections, params, port defaults) as the
+    /// original. Brush-bar entries are covered by `port_overrides_survive`.
     #[test]
     fn default_graph_round_trip() {
         let registry = registry();
@@ -436,30 +440,37 @@ mod tests {
                     port.default,
                     r.default
                 );
-                assert_eq!(
-                    port.exposed, r.exposed,
-                    "exposed mismatch on {}.{}",
-                    original.type_id, port.name
-                );
             }
         }
+        // Brush-bar entry count matches across the round trip.
+        assert_eq!(graph.exposed_ports.len(), restored.exposed_ports.len());
     }
 
-    /// Port-default overrides and exposed flags must survive a round
-    /// trip — the round trip is reversible if and only if the per-port
-    /// state encoded in `port_defaults` and `exposed` returns intact.
+    /// Port-default overrides and brush-bar exposure (with custom meta)
+    /// must survive a round trip — the round trip is reversible if and
+    /// only if both per-port defaults and the graph-level
+    /// `exposed_ports` map return intact.
     #[test]
     fn port_overrides_survive() {
         let registry = registry();
         let mut graph = crate::brush::default_graph();
-        let circle = *graph
+        let shape = *graph
             .nodes()
             .iter()
-            .find(|(_, n)| n.type_id == "circle")
+            .find(|(_, n)| n.type_id == "shape")
             .map(|(id, _)| id)
-            .expect("default has a circle node");
-        graph.set_port_default(circle, "softness", 0.37).unwrap();
-        graph.set_port_exposed(circle, "softness", true).unwrap();
+            .expect("default has a shape node");
+        graph.set_port_default(shape, "softness", 0.37).unwrap();
+        graph.expose_port(shape, "softness").unwrap();
+        let shape_key = exposed_port_key(shape, "softness");
+        graph
+            .set_exposed_port_meta(
+                &shape_key,
+                "Softness".into(),
+                "Edge falloff".into(),
+                "fa6-solid:circle-half-stroke".into(),
+            )
+            .unwrap();
 
         let portable = PortableBrush::from_graph_only(&graph, registry).unwrap();
         let yaml = serde_yaml_ng::to_string(&portable).unwrap();
@@ -467,18 +478,23 @@ mod tests {
             .unwrap()
             .into_graph(registry)
             .unwrap();
-        let restored_circle = restored
+        let restored_shape = restored
             .nodes()
             .values()
-            .find(|n| n.type_id == "circle")
-            .expect("restored graph has a circle node");
-        let port = restored_circle
+            .find(|n| n.type_id == "shape")
+            .expect("restored graph has a shape node");
+        let port = restored_shape
             .ports
             .iter()
             .find(|p| p.name == "softness")
             .unwrap();
         assert!((port.default - 0.37).abs() < 1e-6);
-        assert!(port.exposed);
+        assert!(restored.is_port_exposed(restored_shape.id, "softness"));
+        let restored_key = exposed_port_key(restored_shape.id, "softness");
+        let meta = &restored.exposed_ports[&restored_key];
+        assert_eq!(meta.label, "Softness");
+        assert_eq!(meta.description, "Edge falloff");
+        assert_eq!(meta.icon, "fa6-solid:circle-half-stroke");
     }
 
     /// Unknown node `type:` must fail import with a clear error,
@@ -505,7 +521,7 @@ nodes:
         let yaml = "\
 nodes:
   1:
-    type: circle
+    type: shape
     params:
       this_param_does_not_exist: 1
 ";
@@ -522,7 +538,7 @@ nodes:
         let yaml = "\
 nodes:
   1:
-    type: circle
+    type: shape
     params:
       algorithm: [[0.0, 0.0], [1.0, 1.0]]
 ";

@@ -66,10 +66,10 @@ describe('menu action registrations', () => {
 
     it('sorts actions without an order suffix to the end, keeping registration order', () => {
         const regs = [
-            { id: 'b', displayName: 'B', category: 'file', icon: 'fa-circle', menuPath: ['X:20'], handler() {} },
-            { id: 'noOrder1', displayName: 'N1', category: 'file', icon: 'fa-circle', menuPath: ['X'], handler() {} },
-            { id: 'a', displayName: 'A', category: 'file', icon: 'fa-circle', menuPath: ['X:10'], handler() {} },
-            { id: 'noOrder2', displayName: 'N2', category: 'file', icon: 'fa-circle', menuPath: ['X'], handler() {} },
+            { id: 'b', displayName: 'B', category: 'file', icon: 'fa6-solid:circle', menuPath: ['X:20'], handler() {} },
+            { id: 'noOrder1', displayName: 'N1', category: 'file', icon: 'fa6-solid:circle', menuPath: ['X'], handler() {} },
+            { id: 'a', displayName: 'A', category: 'file', icon: 'fa6-solid:circle', menuPath: ['X:10'], handler() {} },
+            { id: 'noOrder2', displayName: 'N2', category: 'file', icon: 'fa6-solid:circle', menuPath: ['X'], handler() {} },
         ] as ActionRegistration[];
         const x = buildTopMenus(regs).find(m => m.title === 'X');
         const ids = x!.entries.map(e => (e as { actionId: string }).actionId);
@@ -83,8 +83,8 @@ describe('menu action registrations', () => {
         expect(parseMenuSegment('A:B')).toEqual({ title: 'A:B' });
     });
 
-    it('gives every registered action a non-empty Font Awesome icon', () => {
-        const missing = actions.all().filter(a => !a.icon || !a.icon.startsWith('fa-'));
+    it('gives every registered action a non-empty Iconify icon name', () => {
+        const missing = actions.all().filter(a => !a.icon || !a.icon.includes(':'));
         expect(missing.map(a => a.id)).toEqual([]);
     });
 

@@ -58,10 +58,10 @@ struct Harness {
 ///   pen_input.position → paint.position
 ///   pen_input.pressure → curve → paint.size_input
 ///   paint_color.color  → stamp.color
-///   circle.mask    → stamp.tip       (per-dab shape feed)
+///   shape.mask    → stamp.tip       (per-dab shape feed)
 ///   stamp.dab          → paint.rgba
 ///
-/// `algorithm` selects the circle's shape function. `amplitude`
+/// `algorithm` selects the shape's silhouette function. `amplitude`
 /// defaults to 0 (= disc) unless the caller overrides.
 fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWireType> {
     let registry = registry();
@@ -82,9 +82,9 @@ fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWir
         registry.get("curve").unwrap().ports.clone(),
         vec![ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]])],
     );
-    let circle = graph.add_node(
-        "circle",
-        registry.get("circle").unwrap().ports.clone(),
+    let shape = graph.add_node(
+        "shape",
+        registry.get("shape").unwrap().ports.clone(),
         vec![ParamValue::Int(algorithm)],
     );
     let stamp = graph.add_node(
@@ -99,9 +99,9 @@ fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWir
     );
 
     graph
-        .set_port_default(circle, "amplitude", amplitude)
+        .set_port_default(shape, "amplitude", amplitude)
         .unwrap();
-    graph.set_port_default(circle, "softness", 0.0).unwrap();
+    graph.set_port_default(shape, "softness", 0.0).unwrap();
     graph.set_port_default(terminal, "size", size).unwrap();
     graph.set_port_default(terminal, "opacity", 1.0).unwrap();
     graph.set_port_default(terminal, "flow", 1.0).unwrap();
@@ -112,7 +112,7 @@ fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWir
     let wires = [
         (pen, "pressure", curve, "input"),
         (curve, "output", terminal, "size_input"),
-        (circle, "mask", stamp, "tip"),
+        (shape, "mask", stamp, "tip"),
         (paint_color, "color", stamp, "color"),
         (stamp, "dab", terminal, "rgba"),
         (pen, "position", terminal, "position"),
@@ -340,9 +340,9 @@ fn two_dabs_same_flush_both_deposit() {
 #[test]
 fn builtin_rough_ink_brush_renders_within_declared_bbox() {
     // Render the actual Rough Ink builtin — exercises `random →
-    // circle` wires that pack per-dab values into the dab record
+    // shape` wires that pack per-dab values into the dab record
     // and reference them from the shape evaluator. Regression test
-    // for the case where circle's shape eval was emitted as a
+    // for the case where the shape evaluator's body was emitted as a
     // top-level WGSL function that captured `d.<field>` from outside
     // its scope (Dawn rejects, naga silently accepted on native).
     //
@@ -385,7 +385,7 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
 
     let runner = compile_graph(&graph).expect("Rough Ink compiles");
     let compiled = runner.compiled_brush().expect("compiled brush attached");
-    // Rough Ink wires `random → circle.amplitude` (natural_range max
+    // Rough Ink wires `random → shape.amplitude` (natural_range max
     // = 0.5) so the brush extent factor composes to 1.5.
     assert!(
         (compiled.brush_extent_factor - 1.5).abs() < 1e-4,

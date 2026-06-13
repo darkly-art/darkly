@@ -12,11 +12,10 @@ export interface ActionRegistration {
     displayName: string;
     category: ActionCategory;
     description?: string;
-    /** Base Font Awesome glyph class for this action (e.g. 'fa-rotate-left'),
-     *  rendered in the menu gutter and command-palette row. Bare glyph only —
-     *  the renderer supplies the `fa-solid` style prefix (matching `status`
-     *  and `MenuEntry.icon`). The dynamic `status()` icon, when active, takes
-     *  precedence over this base icon in the gutter. */
+    /** Base Iconify icon name for this action (e.g. 'fa6-solid:rotate-left'),
+     *  rendered in the menu gutter and command-palette row via `<Icon>`. The
+     *  dynamic `status()` icon, when active, takes precedence over this base
+     *  icon in the gutter. */
     icon: string;
     requires?: string[];
     accepts?: string[];
@@ -37,10 +36,10 @@ export interface ActionRegistration {
      *  string as the row's tooltip (the disabled-reason). Resolve via
      *  `actionEnablement` rather than calling this directly. */
     enabled?: () => boolean | string;
-    /** Leading status indicator for menu/palette rows. Returns a FontAwesome
-     *  icon class to display in the row's gutter (e.g. 'fa-check' for an active
-     *  toggle), or undefined for no status. The action owns its own
-     *  representation — the renderer just displays whatever class it returns.
+    /** Leading status indicator for menu/palette rows. Returns an Iconify
+     *  icon name to display in the row's gutter (e.g. 'fa6-solid:check' for an
+     *  active toggle), or undefined for no status. The action owns its own
+     *  representation — the renderer just displays whatever name it returns.
      *  An action that defines `status` always reserves gutter space, so the
      *  label doesn't shift when the indicator toggles on/off. */
     status?: () => string | undefined;

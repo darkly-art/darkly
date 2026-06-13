@@ -1,5 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
+    import Icon from '../../icons/Icon.svelte';
 
     interface VoidParam {
         kind: 'float' | 'int' | 'bool';
@@ -82,20 +83,20 @@
         title="Randomize seed"
         disabled={!node.params.some((p) => p.name === 'seed')}
     >
-        <i class="fa-solid fa-dice"></i>
+        <Icon name="fa6-solid:dice" />
     </button>
 </div>
 
 {#if cameraError}
     <div class="notice">
-        <i class="fa-solid fa-triangle-exclamation"></i>
+        <Icon name="fa6-solid:triangle-exclamation" />
         <span>{cameraError}</span>
     </div>
 {/if}
 
 {#if showResume}
     <button class="resume-btn" onclick={resumeCamera}>
-        <i class="fa-solid fa-video"></i>
+        <Icon name="fa6-solid:video" />
         <span>Resume camera</span>
     </button>
 {/if}

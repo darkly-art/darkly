@@ -234,7 +234,7 @@
                         <button
                             class="leaf"
                             onclick={() => pick(nt.type_id)}
-                            title={nt.type_id}
+                            title={nt.description || nt.display_name}
                         >
                             <span class="leaf-name">{nt.display_name}</span>
                             <span class="leaf-cat">{CATEGORY_LABELS[nt.category] ?? nt.category}</span>
@@ -263,7 +263,7 @@
                                     <button
                                         class="leaf"
                                         onclick={() => pick(nt.type_id)}
-                                        title={nt.type_id}
+                                        title={nt.description || nt.display_name}
                                     >
                                         <span class="leaf-name">{nt.display_name}</span>
                                     </button>

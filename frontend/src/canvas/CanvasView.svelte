@@ -223,6 +223,24 @@
 
         if (!ctx) return;
         tool?.onPointerDown(ctx, e, pos.x, pos.y);
+
+        // Chromium/Linux touchscreen-pen quirk: when the pen starts a
+        // stroke AND the OS mouse cursor happens to be over the canvas,
+        // Chromium warps the mouse cursor to the pen position and keeps
+        // it following the pen for the whole stroke. CSS cursor:none on
+        // canvas/body/html doesn't suppress it; only a change to which
+        // element the cursor resolves against does. Drop canvas out of
+        // pointer hit-test for one frame at stroke start so Chromium
+        // re-resolves the cursor to the parent (.canvas-container) and
+        // doesn't latch it to the pen. The captured pen pointer continues
+        // to flow to canvas via setPointerCapture.
+        if (e.pointerType === 'pen') {
+            canvas.style.pointerEvents = 'none';
+            requestAnimationFrame(() => {
+                canvas.style.pointerEvents = '';
+            });
+        }
+
         inst.requestFrame();
     }
 

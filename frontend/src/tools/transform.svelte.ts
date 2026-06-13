@@ -388,7 +388,7 @@ function buildOverlay(): OverlayBuilder | null {
 
 export const transformTool: Tool = {
     id: 'transform',
-    faIcon: 'fa-solid fa-up-down-left-right',
+    icon: 'fa6-solid:up-down-left-right',
     group: 'transform',
     hotkeyAction: 'transformTool',
 

@@ -22,6 +22,12 @@ pub struct NodeRegistration<W: WireKind> {
     pub category: &'static str,
     /// Human-readable name (e.g. "Pen Input", "Multiply").
     pub display_name: &'static str,
+    /// Short, single-sentence description of what this node does — shown as
+    /// the add-node menu tooltip. Should read as a noun-phrase or imperative
+    /// fragment in painter vocabulary (never engine-internal terms like
+    /// "scalar" or "fragment shader"); per-port detail goes on the ports
+    /// themselves via `PortDef::with_description`.
+    pub description: &'static str,
     /// Port definitions for this node type.
     pub ports: Vec<PortDef<W>>,
     /// Parameter definitions (for inline UI sliders).

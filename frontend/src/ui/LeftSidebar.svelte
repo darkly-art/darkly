@@ -6,6 +6,7 @@
     import ColorPicker from './ColorPicker.svelte';
     import HamburgerMenu from './HamburgerMenu.svelte';
     import ToolCluster from './ToolCluster.svelte';
+    import Icon from '../icons/Icon.svelte';
     import { menuBar } from '../state/menuBar.svelte';
     import { watchDismiss } from '../lib/dismiss';
 
@@ -101,10 +102,8 @@
                         onclick={() => app.activeToolId = item.tool.id}
                         title={tooltipForAction(app.toolDisplayName(item.tool.id), item.tool.hotkeyAction)}
                     >
-                        {#if item.tool.iconSvg}
-                            {@html item.tool.iconSvg}
-                        {:else}
-                            <i class={item.tool.faIcon}></i>
+                        {#if item.tool.icon}
+                            <Icon name={item.tool.icon} />
                         {/if}
                     </button>
                 {/if}
@@ -129,7 +128,7 @@
             </button>
         </div>
         <button class="tool swap" onclick={() => app.swapColors()} title={tooltipForAction('Swap colors', 'swapColors')}>
-            <i class="fa-solid fa-arrow-right-arrow-left"></i>
+            <Icon name="fa6-solid:arrow-right-arrow-left" />
         </button>
     </div>
 

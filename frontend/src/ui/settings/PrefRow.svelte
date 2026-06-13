@@ -8,6 +8,7 @@
     import EnumDropdown from './widgets/EnumDropdown.svelte';
     import ColorInput from './widgets/ColorInput.svelte';
     import ChordCapture from './widgets/ChordCapture.svelte';
+    import Icon from '../../icons/Icon.svelte';
 
     type Props = { pref: PrefInfo };
     let { pref }: Props = $props();
@@ -79,7 +80,7 @@
             onclick={reset}
             disabled={!hasOverride}
         >
-            <i class="fa-solid fa-rotate-left"></i>
+            <Icon name="fa6-solid:rotate-left" />
         </button>
     </div>
 {/if}

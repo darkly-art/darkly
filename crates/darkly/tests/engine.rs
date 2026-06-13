@@ -3881,7 +3881,7 @@ fn long_stabilized_stroke_no_fallback() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
 
-    // Default brush (circle + stamp + color_output) is enough to exercise
+    // Default brush (shape + stamp + color_output) is enough to exercise
     // the checkpoint ring's coverage invariant — this test is about the
     // stabilizer's full-rerender fallback, not anything scatter-specific.
     let pen_id = find_node_id(&engine, pen_input::TYPE_ID);

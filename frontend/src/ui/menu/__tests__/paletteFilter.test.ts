@@ -7,7 +7,7 @@ function reg(
     displayName: string,
     extra: Partial<ActionRegistration> = {},
 ): ActionRegistration {
-    return { id, displayName, category: 'edit', icon: 'fa-circle', handler: () => {}, ...extra };
+    return { id, displayName, category: 'edit', icon: 'fa6-solid:circle', handler: () => {}, ...extra };
 }
 
 describe('paletteActions', () => {

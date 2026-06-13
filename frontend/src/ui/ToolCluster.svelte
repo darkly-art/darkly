@@ -2,6 +2,7 @@
     import { app } from '../state/app.svelte';
     import { toolRegistry, type Tool, type ToolCluster } from '../tools/registry';
     import { tooltipForAction } from '../config/store.svelte';
+    import Icon from '../icons/Icon.svelte';
 
     interface Props { cluster: ToolCluster; }
     let { cluster }: Props = $props();
@@ -86,10 +87,8 @@
         onmouseenter={onClusterEnter}
         title={clusterTitle}
     >
-        {#if iconSource?.iconSvg}
-            {@html iconSource.iconSvg}
-        {:else if iconSource?.faIcon}
-            <i class={iconSource.faIcon}></i>
+        {#if iconSource?.icon}
+            <Icon name={iconSource.icon} />
         {/if}
     </button>
 
@@ -104,10 +103,8 @@
                 onclick={() => pickTool(tool.id)}
                 title={toolTitle(tool)}
             >
-                {#if tool.iconSvg}
-                    {@html tool.iconSvg}
-                {:else if tool.faIcon}
-                    <i class={tool.faIcon}></i>
+                {#if tool.icon}
+                    <Icon name={tool.icon} />
                 {/if}
             </button>
         {/each}

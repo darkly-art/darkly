@@ -283,6 +283,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "output",
             display_name: "Smudge",
+            description: "Output that drags existing canvas pixels along the stroke, like smearing wet paint with a finger.",
             ports: vec![
                 PortDef::input("position", BrushWireType::Vec2)
                     .with_description("Canvas-pixel pen tip for this dab"),
@@ -300,7 +301,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_range(0.0, 4.0, 0.1)
                     .with_label("Size")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-up-right-and-down-left-from-center")
+                    .with_icon("fa6-solid:up-right-and-down-left-from-center")
                     .exposed()
                     .with_preview_value(0.1)
                     .with_description("Overall brush size"),
@@ -309,7 +310,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(0.0, 1.0)
                     .with_label("Smudge")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-paint-roller")
+                    .with_icon("fa6-solid:paint-roller")
                     .exposed()
                     .with_description(
                         "How strongly each touch drags the canvas along the stroke. \
@@ -321,13 +322,13 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(0.0, 1.0)
                     .with_label("Opacity")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-droplet")
+                    .with_icon("fa6-solid:droplet")
                     .exposed()
                     .with_description(
                         "Overall stroke strength. Lower values reduce how much the smudge affects the canvas.",
                     ),
                 PortDef::input("mask", BrushWireType::Scalar).with_description(
-                    "Per-fragment shape mask (typically wired from circle.mask)",
+                    "Per-fragment shape mask (typically wired from shape.mask)",
                 ),
                 PortDef::output("dab_size", BrushWireType::Vec2)
                     .with_description("Brush mark size in canvas pixels"),
@@ -607,15 +608,14 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
 
     /// Hover-cursor preview. Routes through the shared preview helper.
     /// Smudge has no rotation port — the cursor is symmetric, and
-    /// rotating it wouldn't carry meaningful information for the
-    /// user. Publishes `rotation_rad: 0.0`.
+    /// rotating it wouldn't carry meaningful information for the user.
     fn render_cursor_preview(
         &self,
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
-        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius, 0.0);
+        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius);
         vec![]
     }
 

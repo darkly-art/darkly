@@ -1,5 +1,6 @@
 <script lang="ts">
     import { exposedDragSpeed } from '../state/brush_graph.svelte';
+    import Icon from '../icons/Icon.svelte';
 
     type DragProps = {
         mode: 'drag';
@@ -27,7 +28,7 @@
 
     let dragging = $state(false);
 
-    const DEFAULT_ICON = 'fa-solid fa-sliders';
+    const DEFAULT_ICON = 'fa6-solid:sliders';
     const DEFAULT_FORMAT = (v: number) => v.toFixed(2);
 
     const valueText = $derived(
@@ -67,7 +68,7 @@
 </script>
 
 {#snippet body()}
-    <i class="{props.icon ?? DEFAULT_ICON} scrub-icon"></i>
+    <Icon name={props.icon ?? DEFAULT_ICON} class="scrub-icon" />
     <div class="scrub-text">
         <span class="scrub-label">{props.label}</span>
         <span class="scrub-value">{valueText}</span>
@@ -119,10 +120,10 @@
         background: var(--accent);
     }
 
-    .scrub.dragging .scrub-icon,
+    .scrub.dragging :global(.scrub-icon),
     .scrub.dragging .scrub-label,
     .scrub.dragging .scrub-value,
-    .scrub.on .scrub-icon,
+    .scrub.on :global(.scrub-icon),
     .scrub.on .scrub-label,
     .scrub.on .scrub-value {
         color: #ffffff;
@@ -134,7 +135,7 @@
         cursor: pointer;
     }
 
-    .scrub-icon {
+    .scrub :global(.scrub-icon) {
         font-size: 14px;
         color: var(--text-muted);
     }

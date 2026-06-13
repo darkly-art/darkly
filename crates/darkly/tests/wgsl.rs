@@ -8,7 +8,7 @@
 //!    same `topology_hash` so the per-brush pipeline cache shares
 //!    pipelines.
 //! 2. **The Rough Ink builtin compiles end-to-end** — the framework
-//!    handles a real graph with random + curve + circle + stamp +
+//!    handles a real graph with random + curve + shape + stamp +
 //!    paint and produces non-empty WGSL.
 
 use std::collections::HashMap;
@@ -73,7 +73,7 @@ fn rough_ink_brush_compiles_to_nonempty_wgsl() {
 /// argument rotates the geometry CCW in this frame; subtracting rotates
 /// it CW. The user-facing semantic is "rotation = α (radians) points the
 /// shape's θ=0 reference ray at screen angle α," which makes
-/// `pen.drawing_angle → circle.rotation_input` an identity wire that
+/// `pen.drawing_angle → shape.rotation_input` an identity wire that
 /// orients the shape along the stroke direction. That semantic requires
 /// subtraction. If a future reader is tempted to "clean up" the operator
 /// back to `+`, this test will catch it.
@@ -120,7 +120,7 @@ fn shape_rotation_subtracts_from_theta_for_drawing_angle_compatibility() {
 ///    `drawing_angle`'s wire output. `drawing_angle` is
 ///    `atan2(canvas_dy, canvas_dx)` — a canvas-frame angle. The
 ///    subtraction lifts it to screen-frame so the canonical
-///    `pen.drawing_angle → circle.rotation_input` wire keeps following
+///    `pen.drawing_angle → shape.rotation_input` wire keeps following
 ///    the on-screen stroke direction after the skeleton's
 ///    counteraction.
 ///
@@ -141,9 +141,9 @@ fn stamp_rotation_counteracts_view_rotation() {
         reg.get("paint_color").unwrap().ports.clone(),
         vec![],
     );
-    let circle = graph.add_node(
-        "circle",
-        reg.get("circle").unwrap().ports.clone(),
+    let shape = graph.add_node(
+        "shape",
+        reg.get("shape").unwrap().ports.clone(),
         vec![darkly::gpu::params::ParamValue::Int(0)], // Sine
     );
     let stamp = graph.add_node(
@@ -154,9 +154,9 @@ fn stamp_rotation_counteracts_view_rotation() {
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
     let wires = [
         (pen, "position", term, "position"),
-        (pen, "drawing_angle", circle, "rotation_input"),
+        (pen, "drawing_angle", shape, "rotation_input"),
         (paint_color, "color", stamp, "color"),
-        (circle, "mask", stamp, "tip"),
+        (shape, "mask", stamp, "tip"),
         (stamp, "dab", term, "rgba"),
     ];
     for (fnode, fport, tnode, tport) in wires {
@@ -233,8 +233,8 @@ fn topology_hash_is_stable_for_identical_graphs() {
 #[test]
 fn extent_protocol_composes_along_chain() {
     // Build the same skeleton the test harness builds for Perlin:
-    // pen + circle(perlin) + stamp + paint with a wire on
-    // `amplitude` so it counts as wired. circle's extent must report
+    // pen + shape(perlin) + stamp + paint with a wire on
+    // `amplitude` so it counts as wired. shape's extent must report
     // `1 + amplitude.natural_range.max = 1.5`, and the framework's
     // compose pass must surface it on the CompiledBrush.
     let reg = registry();
@@ -254,9 +254,9 @@ fn extent_protocol_composes_along_chain() {
         reg.get("random").unwrap().ports.clone(),
         vec![darkly::gpu::params::ParamValue::Int(0)],
     );
-    let circle = graph.add_node(
-        "circle",
-        reg.get("circle").unwrap().ports.clone(),
+    let shape = graph.add_node(
+        "shape",
+        reg.get("shape").unwrap().ports.clone(),
         vec![darkly::gpu::params::ParamValue::Int(1)], // Perlin
     );
     let stamp = graph.add_node(
@@ -266,8 +266,8 @@ fn extent_protocol_composes_along_chain() {
     );
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
     let wires = [
-        (rand_amp, "value", circle, "amplitude"),
-        (circle, "mask", stamp, "tip"),
+        (rand_amp, "value", shape, "amplitude"),
+        (shape, "mask", stamp, "tip"),
         (paint_color, "color", stamp, "color"),
         (stamp, "dab", term, "rgba"),
         (pen, "position", term, "position"),

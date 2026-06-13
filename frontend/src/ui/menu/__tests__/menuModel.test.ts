@@ -3,7 +3,7 @@ import { buildTopMenus, buildHamburgerEntries, type MenuEntry } from '../menuMod
 import type { ActionRegistration } from '../../../actions/registry';
 
 function reg(id: string, displayName: string, menuPath?: string[]): ActionRegistration {
-    return { id, displayName, category: 'edit', icon: 'fa-circle', menuPath, handler: () => {} };
+    return { id, displayName, category: 'edit', icon: 'fa6-solid:circle', menuPath, handler: () => {} };
 }
 
 const SAMPLE = [

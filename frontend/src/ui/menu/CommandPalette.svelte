@@ -4,6 +4,7 @@
     import { registryEpoch } from '../../actions/registryEpoch.svelte';
     import { config, formatHotkey } from '../../config/store.svelte';
     import { filterPalette } from './paletteFilter';
+    import Icon from '../../icons/Icon.svelte';
 
     let dialogEl: HTMLDialogElement | undefined = $state();
     let inputEl: HTMLInputElement | undefined = $state();
@@ -107,7 +108,7 @@
                     onclick={() => run(reg)}
                     onmousemove={() => (selected = i)}
                 >
-                    <span class="icon"><i class="fa-solid {rowIcon(reg)}"></i></span>
+                    <span class="icon"><Icon name={rowIcon(reg)} /></span>
                     <span class="name">{reg.displayName}</span>
                     {#if reg.description}<span class="desc">{reg.description}</span>{/if}
                     {#if hotkey(reg.id)}<span class="kbd">{hotkey(reg.id)}</span>{/if}

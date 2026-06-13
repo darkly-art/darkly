@@ -42,6 +42,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "texture",
             display_name: "Image",
+            description: "Uses a picture from the brush bundle as the brush tip shape.",
             ports: vec![PortDef::output("color", BrushWireType::Vec4)
                 .with_description("RGBA value sampled from the named texture at the fragment's canvas-pixel position")],
             params: &[

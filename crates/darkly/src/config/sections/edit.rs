@@ -16,7 +16,7 @@ pub fn register() -> SchemaSection {
         id: "edit",
         display_name: "Editing",
         description: Some("Behavior of edit operations like paste and transforms."),
-        icon: Some("fa-solid fa-pen-to-square"),
+        icon: Some("fa6-solid:pen-to-square"),
         order: 25,
         prefs: PREFS,
     }

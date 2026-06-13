@@ -6,6 +6,7 @@
     import LiveBrushPreviewStrip from '../brush_picker/LiveBrushPreviewStrip.svelte';
     import NodeCanvas from './NodeCanvas.svelte';
     import AddNodeMenu from './AddNodeMenu.svelte';
+    import Icon from '../../icons/Icon.svelte';
 
     // --- Add-node menu state ---
     // Two open paths land here:
@@ -122,8 +123,6 @@
         brushGraph.autoLayout(sizes);
     }
 
-    let fullscreen = $state(false);
-
     /** Brush preview visibility. Persisted via the unified config store
      *  (`ui.brushBuilder.previewVisible` — declared as `Hidden` in the Rust
      *  schema so it's stored but not exposed in the Settings modal). */
@@ -197,15 +196,15 @@
     }
 
     function onKeydown(e: KeyboardEvent) {
-        if (e.key === 'Escape' && fullscreen) {
-            fullscreen = false;
+        if (e.key === 'Escape' && brushGraph.fullscreen) {
+            brushGraph.fullscreen = false;
         }
     }
 </script>
 
 <svelte:window on:keydown={onKeydown} />
 
-<div class="brush-builder" class:fullscreen>
+<div class="brush-builder">
     <div class="canvas-wrapper">
         <NodeCanvas onaddrequest={openMenuAtCursor} />
         <div class="preview-dock">
@@ -230,7 +229,7 @@
                     aria-label="Hide brush preview"
                     title="Hide brush preview"
                 >
-                    <i class="fa-solid fa-eye-slash"></i>
+                    <Icon name="fa6-solid:eye-slash" />
                 </button>
             {:else}
                 <button
@@ -243,10 +242,10 @@
         </div>
         <button
             class="fullscreen-btn"
-            onclick={() => fullscreen = !fullscreen}
-            title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+            onclick={() => brushGraph.fullscreen = !brushGraph.fullscreen}
+            title={brushGraph.fullscreen ? "Exit fullscreen" : "Fullscreen"}
         >
-            <i class={fullscreen ? 'fa-solid fa-compress' : 'fa-solid fa-expand'}></i>
+            <Icon name={brushGraph.fullscreen ? 'fa6-solid:compress' : 'fa6-solid:expand'} />
         </button>
     </div>
 
@@ -447,13 +446,5 @@
     .fullscreen-btn:hover {
         background: var(--accent);
         color: var(--text);
-    }
-    .brush-builder.fullscreen {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100vw;
-        height: 100vh;
-        z-index: 9999;
     }
 </style>

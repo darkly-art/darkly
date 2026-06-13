@@ -55,6 +55,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "input",
             display_name: "Pen Input",
+            description: "Live data from the stylus: pressure, tilt, velocity, and position along the stroke.",
             ports: vec![
             PortDef::output("pressure", BrushWireType::Scalar)
                 .with_natural_range(0.0, 1.0)
@@ -124,7 +125,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_range(0.0, 1.0, 0.0)
                 .with_natural_range(0.0, 1.0)
                 .with_unit(UnitType::Percent)
-                .with_icon("fa-solid fa-wave-square")
+                .with_icon("fa6-solid:wave-square")
                 .with_label("Stabilize")
                 .preview_irrelevant_scrub()
                 .with_description(
@@ -143,7 +144,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_range(0.01, 1.0, 0.10)
                 .with_natural_range(0.01, 1.0)
                 .with_unit(UnitType::Percent)
-                .with_icon("fa-solid fa-grip-lines-vertical")
+                .with_icon("fa6-solid:grip-lines-vertical")
                 .with_label("Spacing")
                 .with_description(
                     "Distance between dabs as a fraction of dab diameter. \
@@ -162,7 +163,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_range(0.0, 64.0, 0.0)
                 .with_natural_range(0.0, 32.0)
                 .with_unit(UnitType::Pixels)
-                .with_icon("fa-solid fa-ruler-horizontal")
+                .with_icon("fa6-solid:ruler-horizontal")
                 .with_label("Spacing min (px)")
                 .with_description(
                     "Absolute-pixel floor for dab spacing. 0 = use the \
@@ -255,7 +256,7 @@ impl BrushNodeEvaluator for PenInputEvaluator {
             });
             // `drawing_angle` is `atan2(canvas_dy, canvas_dx)` — a
             // canvas-frame angle. The skeleton subtracts `view_rotation`
-            // from `theta`, so to keep `pen.drawing_angle → circle.rotation_input`
+            // from `theta`, so to keep `pen.drawing_angle → shape.rotation_input`
             // (the canonical stroke-follow wire) aligned with the on-
             // screen stroke direction, subtract `view_rotation` here too:
             // canvas-frame angle minus V = screen-frame angle. Both

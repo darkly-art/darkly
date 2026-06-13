@@ -4,6 +4,7 @@
     import { config, formatHotkey } from '../../config/store.svelte';
     import ThemeControl from './ThemeControl.svelte';
     import MenuItemsSelf from './MenuItems.svelte';
+    import Icon from '../../icons/Icon.svelte';
 
     let { entries, onrun }: { entries: MenuEntry[]; onrun?: () => void } = $props();
 
@@ -60,7 +61,7 @@
                 onclick={() => (openSubmenu = openSubmenu === entry.title ? null : entry.title)}
             >
                 <span class="label">{entry.title}</span>
-                <i class="chevron fa-solid fa-chevron-right"></i>
+                <Icon name="fa6-solid:chevron-right" class="chevron" />
                 {#if openSubmenu === entry.title}
                     <div class="flyout">
                         <MenuItemsSelf entries={entry.entries} {onrun} />
@@ -81,11 +82,11 @@
                      icon (accented) → the action's own base icon. -->
                 <span class="icon">
                     {#if entry.icon}
-                        <i class="fa-solid {entry.icon}"></i>
+                        <Icon name={entry.icon} />
                     {:else if statusIcon(entry.actionId)}
-                        <i class="fa-solid {statusIcon(entry.actionId)} status"></i>
+                        <Icon name={statusIcon(entry.actionId)} class="status" />
                     {:else if baseIcon(entry.actionId)}
-                        <i class="fa-solid {baseIcon(entry.actionId)}"></i>
+                        <Icon name={baseIcon(entry.actionId)} />
                     {/if}
                 </span>
                 <span class="label">{labelOf(entry.actionId, entry.label)}</span>
@@ -133,11 +134,11 @@
         color: var(--text-muted);
         font-size: 12px;
     }
-    .icon .status { color: var(--accent); font-size: 11px; }
+    .icon :global(.status) { color: var(--accent); font-size: 11px; }
 
     .label { flex: 1; }
 
-    .chevron {
+    .submenu-row :global(.chevron) {
         margin-left: auto;
         font-size: 10px;
         color: var(--text-muted);

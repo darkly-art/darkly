@@ -7,6 +7,7 @@
     import LiveBrushPreviewStrip from './brush_picker/LiveBrushPreviewStrip.svelte';
     import Scrub from './Scrub.svelte';
     import ToolBarLayout from './ToolBarLayout.svelte';
+    import Icon from '../icons/Icon.svelte';
     import { tooltipForAction } from '../config/store.svelte';
     import { watchDismiss } from '../lib/dismiss';
 
@@ -19,6 +20,9 @@
     function toggleBuilder() {
         ensureInit();
         brushGraph.isOpen = !brushGraph.isOpen;
+        // Leaving the builder also leaves fullscreen — otherwise reopening
+        // would silently spring back to a window-filling panel.
+        if (!brushGraph.isOpen) brushGraph.fullscreen = false;
     }
 
     function selectBrush(brush: BrushInfo) {
@@ -30,6 +34,14 @@
     function handleExposedPort(nodeId: number, portName: string, displayValue: number) {
         brushGraph.setExposedPortValueLocal(nodeId, portName, displayValue);
         brushGraph.setExposedPortValue(nodeId, portName, displayValue);
+    }
+
+    /** Flip a Bool exposed port — toggles the port's f32 default between 0 and 1
+     *  via the standard scalar setter, since Bool is encoded as `default >= 0.5`. */
+    function handleExposedBool(nodeId: number, portName: string, current: boolean) {
+        const next = current ? 0 : 1;
+        brushGraph.setPortDefaultLocal(nodeId, portName, next);
+        brushGraph.setExposedPortValue(nodeId, portName, next);
     }
 
     /** Format an exposed scalar value based on its unit type. */
@@ -109,6 +121,17 @@
                     onChange={(v) => handleExposedPort(port.nodeId, port.portName, v)}
                     title={port.description || undefined}
                 />
+            {:else if port.data.kind === 'bool'}
+                {@const d = port.data}
+                <Scrub
+                    mode="toggle"
+                    icon={port.icon || undefined}
+                    label={port.label}
+                    valueLabel={d.value ? 'On' : 'Off'}
+                    active={d.value}
+                    onToggle={() => handleExposedBool(port.nodeId, port.portName, d.value)}
+                    title={port.description || undefined}
+                />
             {/if}
         {/each}
 
@@ -121,7 +144,7 @@
         {#if brushGraph.supportsErase}
             <Scrub
                 mode="toggle"
-                icon="fa-solid fa-eraser"
+                icon="fa6-solid:eraser"
                 label="Erase"
                 valueLabel={brushSession.eraseMode ? 'On' : 'Off'}
                 active={brushSession.eraseMode}
@@ -141,7 +164,7 @@
             onclick={toggleBuilder}
             title={brushGraph.isOpen ? 'Collapse brush builder' : 'Expand brush builder'}
         >
-            <i class="fa-solid fa-chevron-up" class:flipped={brushGraph.isOpen}></i>
+            <Icon name="fa6-solid:chevron-up" class={brushGraph.isOpen ? 'flipped' : ''} />
         </button>
     {/snippet}
 </ToolBarLayout>
@@ -229,11 +252,11 @@
         color: var(--text);
     }
 
-    .bottom-bar-toggle i {
+    .bottom-bar-toggle :global(svg) {
         transition: transform 0.2s ease-out;
     }
 
-    .bottom-bar-toggle .flipped {
+    .bottom-bar-toggle :global(.flipped) {
         transform: rotate(180deg);
     }
 </style>
