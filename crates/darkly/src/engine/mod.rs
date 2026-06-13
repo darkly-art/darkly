@@ -788,6 +788,23 @@ impl DarklyEngine {
             .test_present_to_canvas(&self.gpu.device, &self.gpu.queue, &mut self.doc)
     }
 
+    /// Blocking readback of the present pass through the **production** view
+    /// transform into a `viewport_w × viewport_h` target — what the surface
+    /// would actually show. Unlike [`Self::test_readback_present`] (which forces
+    /// an identity 1:1 transform) this exercises the real screen↔canvas mapping,
+    /// so it can observe resize-induced squash/offset bugs that the
+    /// identity/composite-cache readbacks are blind to.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_readback_viewport(&mut self, viewport_w: u32, viewport_h: u32) -> Vec<u8> {
+        self.compositor.test_present_to_viewport(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut self.doc,
+            viewport_w,
+            viewport_h,
+        )
+    }
+
     /// Test-only animation tick. Headless `render()` returns early without
     /// driving `update_animations`, so tests that need to advance the
     /// veil / overlay / void master clock call this directly. Pass a

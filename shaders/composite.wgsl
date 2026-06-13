@@ -27,16 +27,23 @@ struct Uniforms {
     layer_offset: vec2f,
     // Layer texture dimensions in pixels.
     layer_size: vec2f,
-    // Canvas dimensions in pixels.
-    canvas_size: vec2f,
-    // Plane-space offset of the canvas window — window UV → plane position.
-    canvas_origin: vec2f,
 }
 @group(0) @binding(3) var<uniform> uniforms: Uniforms;
 
 // Mask texture in a separate bind group — avoids rebuilding group 0 on mask change.
 // When no mask is present, a 1x1 white fallback texture is bound (mask_alpha=1.0).
 @group(1) @binding(0) var t_mask: texture_2d<f32>;
+
+// Shared canvas-window geometry (group 2): canvas dimensions + the plane-space
+// offset of the canvas window. Document-owned and single-sourced — one buffer
+// updated whenever the canvas is resized/cropped, bound to every composite draw.
+// Lives outside the per-layer `Uniforms` so it can never go stale per layer
+// (the bug that produced the post-resize anisotropic squash).
+struct CanvasUniform {
+    canvas_size: vec2f,
+    canvas_origin: vec2f,
+}
+@group(2) @binding(0) var<uniform> canvas: CanvasUniform;
 
 // Color Burn — Krita KoCompositeOpFunctions.h:329–361.
 // d=1 is a stable point; s=0 forces full burn. NaN/Inf are masked rather
@@ -137,7 +144,7 @@ fn blend(fg: vec4f, bg: vec4f, mode: u32) -> vec4f {
     // coords. When the layer's bounds match the canvas (the default), this
     // collapses to layer_uv == in.uv. The mask shares the layer's bounds,
     // so the same UV samples both textures.
-    let canvas_pos = window_uv_to_plane(in.uv, uniforms.canvas_origin, uniforms.canvas_size);
+    let canvas_pos = window_uv_to_plane(in.uv, canvas.canvas_origin, canvas.canvas_size);
     let layer_pos = canvas_pos - uniforms.layer_offset;
     let layer_uv = layer_pos / uniforms.layer_size;
     let in_bounds = all(layer_uv >= vec2f(0.0)) && all(layer_uv <= vec2f(1.0));

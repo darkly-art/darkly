@@ -250,12 +250,21 @@ pub(super) struct BlendUniforms {
     pub(super) layer_offset: [f32; 2],
     /// Layer texture dimensions in pixels.
     pub(super) layer_size: [f32; 2],
+}
+
+/// Shared canvas-window geometry (`composite.wgsl` group 2). Single source of
+/// truth for `canvas_size` + `canvas_origin` across every composite draw —
+/// owned by the document, written once per resize in
+/// [`Compositor::set_canvas_rect`]. Pulling these out of the per-layer
+/// [`BlendUniforms`] makes the post-resize stale-geometry squash unrepresentable:
+/// there is exactly one copy, and it cannot be left behind when a layer that was
+/// created before the resize composites afterward.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct CanvasUniform {
     /// Canvas dimensions in pixels.
     pub(super) canvas_size: [f32; 2],
     /// Plane-space offset of the canvas window (`Document::canvas_origin`).
-    /// Lets the fragment shader map window UV → plane position before the
-    /// `- layer_offset` translation, so off-origin (cropped) canvases sample
-    /// plane-anchored layer textures correctly.
     pub(super) canvas_origin: [f32; 2],
 }
 
@@ -328,6 +337,14 @@ pub struct Compositor {
     present_cache_bind_group: wgpu::BindGroup,
     /// View transform uniform buffer for the present shader.
     view_uniform_buf: wgpu::Buffer,
+
+    /// Shared canvas-geometry uniform ([`CanvasUniform`]) — the single copy of
+    /// `canvas_size` + `canvas_origin` bound to every composite draw (group 2).
+    /// Written only by [`Self::set_canvas_rect`].
+    canvas_uniform_buf: wgpu::Buffer,
+    /// Bind group wrapping `canvas_uniform_buf` for the blend pipeline's group 2.
+    /// Stable across frames — only the buffer *contents* change on resize.
+    canvas_bind_group: wgpu::BindGroup,
 
     pub(super) sampler: wgpu::Sampler,
 
@@ -454,6 +471,7 @@ impl Compositor {
         queue: &wgpu::Queue,
         padded_w: u32,
         padded_h: u32,
+        canvas_origin: crate::coord::CanvasPoint,
         group_id: LayerId,
     ) -> GroupState {
         let (a0, v0) =
@@ -465,15 +483,17 @@ impl Compositor {
 
         let canvas = [padded_w as f32, padded_h as f32];
         let normal = crate::gpu::blend_mode::registry().default().gpu_value;
+        // The group's window-sized cache occupies exactly the canvas window in
+        // plane space, so describing it as a "layer" at `layer_offset =
+        // canvas_origin`, `layer_size = canvas_size` makes the shared-canvas
+        // plane round-trip in `composite.wgsl` collapse to an identity sample.
         let uniforms = BlendUniforms {
             opacity: 1.0,
             blend_mode: normal,
             isolated: 0,
             _pad1: 0.0,
-            layer_offset: [0.0, 0.0],
+            layer_offset: [canvas_origin.x as f32, canvas_origin.y as f32],
             layer_size: canvas,
-            canvas_size: canvas,
-            canvas_origin: [0.0, 0.0],
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&format!("group-uniforms-{group_id:?}")),
@@ -762,7 +782,32 @@ impl Compositor {
             });
 
         // Create root GroupState (root is always a non-passthrough group)
-        let root_state = Self::create_group_state(device, queue, padded_w, padded_h, root_id);
+        // A fresh document's canvas window is anchored at the plane origin.
+        let canvas_origin = crate::coord::CanvasPoint::new(0, 0);
+        let root_state =
+            Self::create_group_state(device, queue, padded_w, padded_h, canvas_origin, root_id);
+
+        // Shared canvas-geometry uniform (group 2) — the single copy of
+        // canvas_size + canvas_origin for every composite draw.
+        let canvas_uniform = CanvasUniform {
+            canvas_size: [width as f32, height as f32],
+            canvas_origin: [canvas_origin.x as f32, canvas_origin.y as f32],
+        };
+        let canvas_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("canvas-geometry-uniform"),
+            size: std::mem::size_of::<CanvasUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&canvas_uniform_buf, 0, bytemuck::bytes_of(&canvas_uniform));
+        let canvas_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("canvas-geometry-bg"),
+            layout: &blend_pipelines.canvas_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: canvas_uniform_buf.as_entire_binding(),
+            }],
+        });
 
         // Present bind group reads from root's composite cache
         let present_cache_bind_group = Self::make_present_cache_bind_group(
@@ -799,6 +844,8 @@ impl Compositor {
             _present_bind_group_layout,
             present_cache_bind_group,
             view_uniform_buf,
+            canvas_uniform_buf,
+            canvas_bind_group,
             sampler,
             needs_composite: true,
             needs_present: false,
@@ -881,8 +928,6 @@ impl Compositor {
             _pad1: 0.0,
             layer_offset: [bounds.origin.x as f32, bounds.origin.y as f32],
             layer_size: [bounds.width as f32, bounds.height as f32],
-            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
-            canvas_origin: [self.canvas_origin.x as f32, self.canvas_origin.y as f32],
         };
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1026,6 +1071,7 @@ impl Compositor {
             queue,
             self.padded_width,
             self.padded_height,
+            self.canvas_origin,
             group_id,
         );
         self.group_state.insert(group_id, gs);
@@ -1059,10 +1105,25 @@ impl Compositor {
         self.padded_width = width;
         self.padded_height = height;
 
+        // Update the single shared canvas-geometry uniform. This is the one
+        // write that keeps every composite draw's canvas_size/canvas_origin in
+        // step with the document — the per-layer uniforms no longer carry these
+        // fields, so a layer created before this resize can no longer composite
+        // through stale dimensions (the post-resize anisotropic-squash bug).
+        let canvas_uniform = CanvasUniform {
+            canvas_size: [width as f32, height as f32],
+            canvas_origin: [origin.x as f32, origin.y as f32],
+        };
+        queue.write_buffer(
+            &self.canvas_uniform_buf,
+            0,
+            bytemuck::bytes_of(&canvas_uniform),
+        );
+
         // Recreate every group's accumulators + cache at the new size.
         let group_ids: Vec<LayerId> = self.group_state.keys().copied().collect();
         for gid in group_ids {
-            let gs = Self::create_group_state(device, queue, width, height, gid);
+            let gs = Self::create_group_state(device, queue, width, height, origin, gid);
             self.group_state.insert(gid, gs);
         }
 
@@ -1109,18 +1170,18 @@ impl Compositor {
         isolated: bool,
     ) {
         if let Some(gs) = self.group_state.get(&group_id) {
-            // Groups composite a canvas-sized cache against canvas — the
-            // layer-offset translation collapses to identity.
+            // The group's window-sized cache occupies the canvas window in the
+            // plane, so `layer_offset = canvas_origin` / `layer_size =
+            // canvas_size` makes the shared-canvas plane round-trip collapse to
+            // an identity sample (see `create_group_state`).
             let canvas = [self.canvas_width as f32, self.canvas_height as f32];
             let uniforms = BlendUniforms {
                 opacity,
                 blend_mode: blend_mode_gpu,
                 isolated: isolated as u32,
                 _pad1: 0.0,
-                layer_offset: [0.0, 0.0],
+                layer_offset: [self.canvas_origin.x as f32, self.canvas_origin.y as f32],
                 layer_size: canvas,
-                canvas_size: canvas,
-                canvas_origin: [0.0, 0.0],
             };
             queue.write_buffer(&gs.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         }
@@ -1656,8 +1717,6 @@ impl Compositor {
             _pad1: 0.0,
             layer_offset: [bounds.origin.x as f32, bounds.origin.y as f32],
             layer_size: [bounds.width as f32, bounds.height as f32],
-            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
-            canvas_origin: [self.canvas_origin.x as f32, self.canvas_origin.y as f32],
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&format!("blend-uniforms-{layer_id:?}")),
@@ -2002,8 +2061,6 @@ impl Compositor {
             _pad1: 0.0,
             layer_offset: [canvas_extent.x0() as f32, canvas_extent.y0() as f32],
             layer_size: [canvas_extent.width as f32, canvas_extent.height as f32],
-            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
-            canvas_origin: [self.canvas_origin.x as f32, self.canvas_origin.y as f32],
         };
         let cache = match self.layer_cache.get_mut(&layer_id) {
             Some(c) => c,
@@ -2197,6 +2254,7 @@ impl Compositor {
                 queue,
                 self.padded_width,
                 self.padded_height,
+                self.canvas_origin,
                 bake_parent,
             );
             self.group_state.insert(bake_parent, gs);
@@ -2301,35 +2359,22 @@ impl Compositor {
         true
     }
 
-    /// Run the present pass into a canvas-sized offscreen RGBA8 texture and
-    /// return its bytes. For tests: the production present pass writes to the
-    /// surface (un-readable), but the present shader is exactly where bugs
-    /// like premultiplied-alpha mishandling live, so test coverage of that
-    /// stage requires a parallel sink.
-    ///
-    /// Forces an identity 1:1 view transform so screen pixels map to canvas
-    /// pixels and the OOB branch is inactive across the whole target.
+    /// Run the present pass (`present.wgsl` via the current `view_uniform_buf`)
+    /// into a `target_w × target_h` offscreen RGBA8 texture and return its
+    /// bytes. Assumes the composite cache and view uniform are already current.
     #[cfg(any(test, feature = "testing"))]
-    pub fn test_present_to_canvas(
-        &mut self,
+    fn present_into_target(
+        &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        doc: &mut Document,
+        target_w: u32,
+        target_h: u32,
     ) -> Vec<u8> {
-        self.render_offscreen(device, queue, doc);
-
-        let cw = self.canvas_width;
-        let ch = self.canvas_height;
-        let identity = ViewTransform::from_pan_zoom_rotate(
-            0.0, 0.0, 1.0, 0.0, false, cw as f32, ch as f32, cw as f32, ch as f32,
-        );
-        self.update_view_transform(queue, &identity);
-
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("test-present-target"),
             size: wgpu::Extent3d {
-                width: cw,
-                height: ch,
+                width: target_w,
+                height: target_h,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -2369,9 +2414,57 @@ impl Compositor {
             queue,
             &target,
             wgpu::TextureFormat::Rgba8Unorm,
-            cw,
-            ch,
+            target_w,
+            target_h,
         )
+    }
+
+    /// Run the present pass into a canvas-sized offscreen RGBA8 texture and
+    /// return its bytes. For tests: the production present pass writes to the
+    /// surface (un-readable), but the present shader is exactly where bugs
+    /// like premultiplied-alpha mishandling live, so test coverage of that
+    /// stage requires a parallel sink.
+    ///
+    /// Forces an identity 1:1 view transform so screen pixels map to canvas
+    /// pixels and the OOB branch is inactive across the whole target. Use
+    /// [`Self::test_present_to_viewport`] instead when the screen↔canvas
+    /// mapping itself is under test (resize / squash / offset bugs).
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_present_to_canvas(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        doc: &mut Document,
+    ) -> Vec<u8> {
+        self.render_offscreen(device, queue, doc);
+
+        let cw = self.canvas_width;
+        let ch = self.canvas_height;
+        let identity = ViewTransform::from_pan_zoom_rotate(
+            0.0, 0.0, 1.0, 0.0, false, cw as f32, ch as f32, cw as f32, ch as f32,
+        );
+        self.update_view_transform(queue, &identity);
+
+        self.present_into_target(device, queue, cw, ch)
+    }
+
+    /// Run the present pass through the **production** cached `view_uniform_buf`
+    /// (the matrix `rebuild_view_transform` last uploaded) into a
+    /// `viewport_w × viewport_h` target — i.e. exactly what the surface would
+    /// show, minus the surface. Unlike [`Self::test_present_to_canvas`] this
+    /// does NOT force identity, so it exercises the real screen↔canvas mapping
+    /// where view-transform / resize bugs (anisotropic squash, offset) live.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_present_to_viewport(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        doc: &mut Document,
+        viewport_w: u32,
+        viewport_h: u32,
+    ) -> Vec<u8> {
+        self.render_offscreen(device, queue, doc);
+        self.present_into_target(device, queue, viewport_w, viewport_h)
     }
 
     /// Create a dynamic blend bind group for compositing a layer into a group.
@@ -2686,6 +2779,7 @@ impl Compositor {
         rpass.set_pipeline(self.blend_pipelines.pipeline());
         rpass.set_bind_group(0, bind_group, &[]);
         rpass.set_bind_group(1, mask_bg, &[]);
+        rpass.set_bind_group(2, &self.canvas_bind_group, &[]);
         rpass.draw(0..3, 0..1);
     }
 
@@ -2794,6 +2888,7 @@ impl Compositor {
         rpass.set_pipeline(self.blend_pipelines.pipeline());
         rpass.set_bind_group(0, bind_group, &[]);
         rpass.set_bind_group(1, child_mask_bg, &[]);
+        rpass.set_bind_group(2, &self.canvas_bind_group, &[]);
         rpass.draw(0..3, 0..1);
     }
 

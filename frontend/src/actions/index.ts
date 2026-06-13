@@ -349,7 +349,7 @@ export function registerActions() {
     // -- Image (canvas) --
     actions.register({
         id: 'resizeCanvas',
-        displayName: 'Canvas Size…',
+        displayName: 'Resize Canvas',
         category: 'edit',
         description: 'Resize the canvas with a 9-point anchor.',
         icon: 'fa-up-right-and-down-left-from-center',

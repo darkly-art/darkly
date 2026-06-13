@@ -406,10 +406,12 @@ impl Compositor {
             blend_mode: cache.blend_mode,
             isolated: cache.isolated as u32,
             _pad1: 0.0,
-            layer_offset: [0.0, 0.0],
+            // The preview texture is window-sized and window-anchored, so it
+            // composites as a "layer" occupying the canvas window in the plane:
+            // `layer_offset = canvas_origin`, `layer_size = canvas_size` makes
+            // the shared-canvas plane round-trip collapse to identity.
+            layer_offset: [self.canvas_origin.x as f32, self.canvas_origin.y as f32],
             layer_size: [self.canvas_width as f32, self.canvas_height as f32],
-            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
-            canvas_origin: [0.0, 0.0],
         };
         queue.write_buffer(
             &state.preview_blend_uniform_buf,

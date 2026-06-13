@@ -226,3 +226,136 @@ fn crop_to_selection_matches_selection_bounds() {
 
     assert_eq!(engine.canvas_rect(), CanvasRect::from_xywh(16, 12, 20, 24));
 }
+
+/// Paint a red `+` into `layer`: a horizontal and a vertical arm of equal plane
+/// length `2*arm`, crossing at plane (cx, cy). The presented width vs height of
+/// the red is a brush-size-independent probe of per-axis scale — an isotropic
+/// present yields equal arms, an anisotropic (squashed) present unequal arms.
+fn paint_cross(engine: &mut DarklyEngine, layer_id: LayerId, cx: f32, cy: f32, arm: f32) {
+    for horizontal in [true, false] {
+        engine.begin_stroke(layer_id);
+        let steps = 48;
+        for i in 0..=steps {
+            let t = i as f32 / steps as f32;
+            let (x, y) = if horizontal {
+                (cx - arm + 2.0 * arm * t, cy)
+            } else {
+                (cx, cy - arm + 2.0 * arm * t)
+            };
+            engine.stroke_to(StrokeOp::BrushStroke {
+                x,
+                y,
+                pressure: 1.0,
+                x_tilt: 0.0,
+                y_tilt: 0.0,
+                rotation: 0.0,
+                tangential_pressure: 0.0,
+                time_ms: i as f64 * 16.0,
+                cr: 1.0,
+                cg: 0.0,
+                cb: 0.0,
+                ca: 1.0,
+            });
+        }
+        engine.end_stroke();
+    }
+}
+
+/// Bounding-box `(width, height)` of clearly-red pixels in an RGBA8 buffer.
+fn red_extent(px: &[u8], w: u32, h: u32) -> (u32, u32) {
+    let (mut minx, mut miny, mut maxx, mut maxy) = (u32::MAX, u32::MAX, 0u32, 0u32);
+    let mut found = false;
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            if px[i] > 128 && px[i + 1] < 80 && px[i + 2] < 80 {
+                found = true;
+                minx = minx.min(x);
+                maxx = maxx.max(x);
+                miny = miny.min(y);
+                maxy = maxy.max(y);
+            }
+        }
+    }
+    assert!(found, "no red cross found");
+    (maxx - minx + 1, maxy - miny + 1)
+}
+
+/// Presented horizontal:vertical arm ratio of an equal-armed cross painted at
+/// the center of the (optionally cropped) canvas window, viewed through the
+/// PRODUCTION view transform. For an isotropic screen↔canvas mapping this is
+/// ~1.0 regardless of crop; an anisotropic (squashed) mapping skews it. Soft-
+/// edge sampling noise is constant across crops, so the invariant is "the ratio
+/// does not change when you crop", not "the ratio is exactly 1".
+fn presented_cross_ratio(crop: Option<CanvasRect>) -> f32 {
+    // Large canvas/window vs a small cross so the dab never clips the window
+    // (clipping would itself skew the ratio toward the window aspect and
+    // masquerade as squash).
+    let (w, h) = (200u32, 200u32);
+    let (vw, vh) = (400u32, 400u32);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+    // Production-like view: viewport 400, zoom 1, no pan/rotation/mirror.
+    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, vw as f32, vh as f32);
+    // resize_canvas rebuilds the view transform internally (production path);
+    // the frontend $effect does NOT re-push set_view_transform on crop.
+    let center = match crop {
+        Some(rect) => {
+            engine.resize_canvas(rect);
+            // Paint at the window center so the small cross stays well inside.
+            (
+                rect.origin.x as f32 + rect.width as f32 / 2.0,
+                rect.origin.y as f32 + rect.height as f32 / 2.0,
+            )
+        }
+        None => (100.0, 100.0),
+    };
+    paint_cross(&mut engine, layer_id, center.0, center.1, 8.0);
+    let px = engine.test_readback_viewport(vw, vh);
+    let (cw, ch) = red_extent(&px, vw, vh);
+    cw as f32 / ch as f32
+}
+
+/// REGRESSION (Round 1-3 squash, "even the dabs are squashed sidewise"):
+/// cropping to a non-zero origin with a changed aspect ratio must NOT
+/// anisotropically squash the presented image. Probed via the PRODUCTION view
+/// transform (`test_readback_viewport`) — the identity / composite-cache /
+/// layer readbacks are all blind to this (they showed false-green for two
+/// fix rounds).
+#[test]
+fn crop_does_not_anisotropically_squash_presented_content() {
+    let uncropped = presented_cross_ratio(None);
+    // Non-zero origin (40,30) AND a non-1 aspect ratio (160:100 = 1.6).
+    let cropped = presented_cross_ratio(Some(CanvasRect::from_xywh(40, 30, 160, 100)));
+    let rel = (cropped / uncropped - 1.0).abs();
+    assert!(
+        rel < 0.08,
+        "crop squashed the presented image: arm ratio {cropped:.3} vs uncropped {uncropped:.3} \
+         ({:.0}% change)",
+        rel * 100.0
+    );
+}
+
+/// REGRESSION: the squash must not COMPOUND across successive crops (the user
+/// reports each resize/crop "progressively fucks up the situation even more").
+#[test]
+fn successive_crops_do_not_compound_squash() {
+    let uncropped = presented_cross_ratio(None);
+    let one = presented_cross_ratio(Some(CanvasRect::from_xywh(40, 30, 160, 100)));
+    // A second crop nested inside the first, still containing the window-center
+    // cross with margin.
+    let (vw, vh) = (400u32, 400u32);
+    let mut engine = test_engine(200, 200);
+    let layer_id = engine.add_raster_layer(None);
+    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, vw as f32, vh as f32);
+    engine.resize_canvas(CanvasRect::from_xywh(40, 30, 160, 100));
+    engine.resize_canvas(CanvasRect::from_xywh(60, 50, 110, 70));
+    paint_cross(&mut engine, layer_id, 115.0, 85.0, 8.0);
+    let px = engine.test_readback_viewport(vw, vh);
+    let (cw, ch) = red_extent(&px, vw, vh);
+    let two = cw as f32 / ch as f32;
+    assert!(
+        (one / uncropped - 1.0).abs() < 0.08 && (two / uncropped - 1.0).abs() < 0.08,
+        "squash compounds across crops: uncropped {uncropped:.3}, 1 crop {one:.3}, 2 crops {two:.3}"
+    );
+}
