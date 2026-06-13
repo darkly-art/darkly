@@ -214,17 +214,22 @@ impl Compositor {
             None => return,
         };
 
-        // The preview is canvas-aligned: the transform shader writes the
-        // moved source content using target_offset=(0,0), target_size=canvas,
-        // so any pixel that lands within the canvas survives — including
-        // ones that fell outside the live texture's bounding box.
+        // The preview is a window-local surface anchored at `canvas_origin`:
+        // its texel (0,0) maps to plane `canvas_origin` (that is how the host's
+        // blend composites it — `layer_offset = canvas_origin` in
+        // `write_preview_blend_uniforms_if_active`). So the transform shader's
+        // `target_offset` — "where on the canvas the target's pixels live" —
+        // must be `canvas_origin`, not (0,0); otherwise source content drawn at
+        // plane `C` lands in texel `C` and then composites at plane
+        // `canvas_origin + C`, shifting the whole preview by the crop offset.
+        let origin = self.canvas_origin;
         self.transform_pass.update_uniforms(
             queue,
             matrix,
             source_origin,
             source_width,
             source_height,
-            (0, 0),
+            (origin.x, origin.y),
             self.canvas_width,
             self.canvas_height,
             self.canvas_width,
@@ -247,13 +252,14 @@ impl Compositor {
         );
 
         // 1. Copy live → preview so non-source-rect pixels are preserved.
-        //    Live texture sits at `(live.offset_x, live.offset_y)` in canvas
-        //    space; clip the copy to the on-canvas portion (the preview is
-        //    canvas-sized at origin 0,0). Off-canvas pixels are not in the
-        //    preview — the viewport never renders them anyway, and commit's
+        //    Live texture sits at its plane extent; clip the copy to the
+        //    on-canvas (window) portion. The preview is window-local anchored at
+        //    `canvas_origin`, so intersect against the plane canvas window
+        //    (`canvas_rect()`, at `canvas_origin`) and write to the window-local
+        //    destination texel `visible - canvas_origin`. Off-window pixels are
+        //    not in the preview — the viewport never renders them, and commit's
         //    `grow_node_to_fit` preserves them on the live texture.
-        let canvas_rect =
-            crate::coord::CanvasRect::from_xywh(0, 0, self.canvas_width, self.canvas_height);
+        let canvas_rect = self.canvas_rect();
         let live_canvas_extent = live.canvas_extent();
         if let Some(visible) = live_canvas_extent.intersect(canvas_rect) {
             // Translate the visible canvas slice into the live texture's
@@ -261,8 +267,8 @@ impl Compositor {
             let visible_layer = live
                 .canvas_to_layer_rect(visible)
                 .expect("intersect with live's extent yields a layer-local rect");
-            let dst_x = visible.x0() as u32;
-            let dst_y = visible.y0() as u32;
+            let dst_x = (visible.x0() - origin.x) as u32;
+            let dst_y = (visible.y0() - origin.y) as u32;
             encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: live.texture(),

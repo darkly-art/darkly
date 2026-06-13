@@ -11,6 +11,7 @@ use darkly::document::SelectionMode;
 use darkly::engine::types::StrokeOp;
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
+use darkly::gpu::overlay::{OverlayPrimitive, FLAG_CANVAS_SPACE, KIND_DASHED_LINE};
 use darkly::gpu::test_utils::*;
 use darkly::layer::LayerId;
 
@@ -209,6 +210,146 @@ fn screen_to_plane_includes_canvas_origin() {
         (py - 24.0).abs() < 1e-2,
         "screen center must map to plane y = origin.y + window_center (24), got {py}"
     );
+}
+
+/// Bounding box of all marching-ants (`KIND_DASHED_LINE`, `FLAG_CANVAS_SPACE`)
+/// vertices — returned as a plane-space `(min_x, min_y, max_x, max_y)`.
+fn ants_bbox(prims: &[OverlayPrimitive]) -> (f32, f32, f32, f32) {
+    let (mut minx, mut miny, mut maxx, mut maxy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    let mut found = false;
+    for p in prims {
+        if p.kind != KIND_DASHED_LINE || (p.flags & FLAG_CANVAS_SPACE) == 0 {
+            continue;
+        }
+        for &[x, y] in &[p.p0, p.p1] {
+            found = true;
+            minx = minx.min(x);
+            miny = miny.min(y);
+            maxx = maxx.max(x);
+            maxy = maxy.max(y);
+        }
+    }
+    assert!(found, "no marching-ants primitives present");
+    (minx, miny, maxx, maxy)
+}
+
+/// MARCHING-ANTS regression: the selection outline is pushed as plane-space
+/// (`FLAG_CANVAS_SPACE`) overlay primitives, but the contours are extracted from
+/// the **window-local** selection texture. Without lifting them by `canvas_origin`
+/// the ants render short of the selection by the crop offset. After a non-zero
+/// crop the ant bbox must coincide with the selection's **plane** rect — not its
+/// window-local rect.
+#[test]
+fn marching_ants_track_selection_plane_bounds_after_crop() {
+    let (w, h) = (64u32, 64u32);
+    let mut engine = test_engine(w, h);
+    let _layer = engine.add_raster_layer(None);
+
+    // Crop to a NON-ZERO origin window at plane (8, 4), size 40×40.
+    engine.resize_canvas(CanvasRect::from_xywh(8, 4, 40, 40));
+
+    // Select a plane rect fully inside the window. `select_rect` rasterizes into
+    // the window-local mask and `generate_contours_from_mask` emits the ants
+    // synchronously (Replace path), so the overlay is populated immediately.
+    engine.select_rect(16.0, 12.0, 10.0, 8.0, SelectionMode::Replace, false, 0.0);
+
+    let (minx, miny, maxx, maxy) = ants_bbox(&engine.test_selection_overlay());
+    // Plane rect is [16, 12]..[26, 20]; allow a couple px of contour padding.
+    // The pre-fix bug placed the bbox at the window-local [8, 8]..[18, 16].
+    assert!(
+        (minx - 16.0).abs() <= 2.0 && (miny - 12.0).abs() <= 2.0,
+        "ants min ({minx}, {miny}) must track the selection's PLANE origin (16, 12), \
+         not the window-local (8, 8)"
+    );
+    assert!(
+        (maxx - 26.0).abs() <= 2.0 && (maxy - 20.0).abs() <= 2.0,
+        "ants max ({maxx}, {maxy}) must track the selection's PLANE far edge (26, 20)"
+    );
+}
+
+/// TRANSFORM-SOURCE regression: `begin_transform` from a selection must hand
+/// `setup_transform` a **plane-space** source origin (matching the no-selection
+/// branch's `layer_to_canvas`). Selection bounds are window-local; feeding them
+/// raw offsets the picked-up region by `canvas_origin`.
+#[test]
+fn transform_from_selection_uses_plane_source_origin() {
+    let (w, h) = (64u32, 64u32);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+
+    // Paint so the layer has content under the selection (begin_transform on a
+    // selection does not require content, but keep it realistic).
+    paint_row(&mut engine, layer_id, 16.0, 8.0, 40.0);
+
+    engine.resize_canvas(CanvasRect::from_xywh(8, 4, 40, 40));
+    engine.select_rect(16.0, 12.0, 10.0, 8.0, SelectionMode::Replace, false, 0.0);
+
+    assert!(engine.begin_transform(layer_id), "transform should set up");
+    let (sox, soy, sw, sh, _m) = engine.floating_info().expect("floating active");
+    assert!(
+        (sox - 16.0).abs() <= 1.0 && (soy - 12.0).abs() <= 1.0,
+        "source origin ({sox}, {soy}) must be the selection's PLANE origin (16, 12), \
+         not the window-local (8, 8)"
+    );
+    assert!(
+        (sw - 10.0).abs() <= 1.0 && (sh - 8.0).abs() <= 1.0,
+        "source size ({sw}, {sh}) should match the selection (10, 8)"
+    );
+}
+
+/// TRANSFORM-PREVIEW regression: entering a transform with the identity matrix
+/// is a visual no-op — the live target was only copied out, then re-stamped in
+/// the same place. After a non-zero crop the preview is built on a window-sized
+/// texture; if its copy/target frames disagree with where the host composites it
+/// (`layer_offset = canvas_origin`), the content jumps by the crop offset on
+/// enter. The presented viewport during the (identity) transform must match the
+/// pre-transform present.
+#[test]
+fn transform_preview_matches_pretransform_present_after_crop() {
+    let (w, h) = (96u32, 96u32);
+    let (vw, vh) = (192u32, 192u32);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, vw as f32, vh as f32);
+
+    // Crop to a non-zero origin, then paint a small mark at the window center.
+    engine.resize_canvas(CanvasRect::from_xywh(24, 16, 48, 48));
+    paint_cross(&mut engine, layer_id, 48.0, 40.0, 6.0);
+
+    // Baseline present (no floating).
+    let baseline = engine.test_readback_viewport(vw, vh);
+    let (bx, by) = red_centroid(&baseline, vw, vh);
+
+    // Select the mark and enter an identity transform. The presented preview
+    // must keep the mark at the same screen position.
+    engine.select_rect(40.0, 32.0, 16.0, 16.0, SelectionMode::Replace, false, 0.0);
+    assert!(engine.begin_transform(layer_id), "transform should set up");
+
+    let preview = engine.test_readback_viewport(vw, vh);
+    let (px, py) = red_centroid(&preview, vw, vh);
+
+    assert!(
+        (px - bx).abs() <= 2.0 && (py - by).abs() <= 2.0,
+        "identity-transform preview moved the content: baseline centroid ({bx:.1}, {by:.1}) \
+         vs preview ({px:.1}, {py:.1}) — a `canvas_origin` shift in the floating preview frame"
+    );
+}
+
+/// Centroid (in viewport px) of clearly-red pixels.
+fn red_centroid(px: &[u8], w: u32, h: u32) -> (f32, f32) {
+    let (mut sx, mut sy, mut n) = (0.0f32, 0.0f32, 0u32);
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            if px[i] > 128 && px[i + 1] < 80 && px[i + 2] < 80 {
+                sx += x as f32;
+                sy += y as f32;
+                n += 1;
+            }
+        }
+    }
+    assert!(n > 0, "no red pixels found");
+    (sx / n as f32, sy / n as f32)
 }
 
 /// Crop-to-selection sets the canvas window to the selection's plane bounds.

@@ -1,12 +1,18 @@
 //! Typed coordinate spaces.
 //!
-//! `CanvasPoint` / `CanvasRect` live in document-canvas pixel coordinates and
-//! may be negative (paste-extent layers can sit at negative canvas offsets).
-//! `LayerPoint` / `LayerRect` live in a specific layer texture's local pixel
-//! coordinates and are always non-negative.
+//! `CanvasPoint` / `CanvasRect` live in **plane** coordinates — the absolute
+//! document frame that does not move on crop. They may be negative (paste-extent
+//! layers can sit at negative canvas offsets).
 //!
-//! Conversion between the two requires a `LayerTexture` (or its bounds) — see
-//! `crate::gpu::atlas::LayerTexture`.
+//! `WindowPoint` / `WindowRect` live in **window-local** coordinates — origin at
+//! the canvas-window top-left, i.e. plane `canvas_origin`. The window-sized
+//! selection texture and floating-preview texture live here. Convert to plane
+//! with `to_canvas(canvas_origin)` (the invariant is
+//! `plane = window_local + canvas_origin`).
+//!
+//! `LayerPoint` / `LayerRect` live in a specific layer texture's local pixel
+//! coordinates and are always non-negative. Conversion to plane requires a
+//! `LayerTexture` (or its bounds) — see `crate::gpu::atlas::LayerTexture`.
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CanvasPoint {
@@ -184,6 +190,124 @@ impl CanvasRect {
             ));
         }
         out
+    }
+
+    /// Express this plane rect in window-local coordinates anchored at
+    /// `canvas_origin`. Inverse of [`WindowRect::to_canvas`].
+    pub fn to_window(self, canvas_origin: CanvasPoint) -> WindowRect {
+        WindowRect {
+            origin: WindowPoint {
+                x: self.origin.x - canvas_origin.x,
+                y: self.origin.y - canvas_origin.y,
+            },
+            width: self.width,
+            height: self.height,
+        }
+    }
+}
+
+/// A point in **window-local** space — origin at the canvas-window top-left
+/// (plane `canvas_origin`). The window-sized selection / floating-preview
+/// textures are indexed in this frame. `plane = window_local + canvas_origin`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct WindowPoint {
+    pub x: i32,
+    pub y: i32,
+}
+
+impl WindowPoint {
+    pub const fn new(x: i32, y: i32) -> Self {
+        WindowPoint { x, y }
+    }
+
+    /// Lift this window-local point into plane coordinates.
+    pub fn to_canvas(self, canvas_origin: CanvasPoint) -> CanvasPoint {
+        CanvasPoint::new(self.x + canvas_origin.x, self.y + canvas_origin.y)
+    }
+}
+
+/// A rect in **window-local** space (see [`WindowPoint`]).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct WindowRect {
+    pub origin: WindowPoint,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl WindowRect {
+    pub const fn new(origin: WindowPoint, width: u32, height: u32) -> Self {
+        WindowRect {
+            origin,
+            width,
+            height,
+        }
+    }
+
+    pub const fn from_xywh(x: i32, y: i32, width: u32, height: u32) -> Self {
+        WindowRect {
+            origin: WindowPoint::new(x, y),
+            width,
+            height,
+        }
+    }
+
+    pub fn x0(&self) -> i32 {
+        self.origin.x
+    }
+    pub fn y0(&self) -> i32 {
+        self.origin.y
+    }
+    pub fn x1(&self) -> i32 {
+        self.origin.x + self.width as i32
+    }
+    pub fn y1(&self) -> i32 {
+        self.origin.y + self.height as i32
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.width == 0 || self.height == 0
+    }
+
+    /// Smallest window-local rect containing both. Empty rects are ignored.
+    pub fn union(self, other: WindowRect) -> WindowRect {
+        if self.is_empty() {
+            return other;
+        }
+        if other.is_empty() {
+            return self;
+        }
+        let x0 = self.x0().min(other.x0());
+        let y0 = self.y0().min(other.y0());
+        let x1 = self.x1().max(other.x1());
+        let y1 = self.y1().max(other.y1());
+        WindowRect::from_xywh(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32)
+    }
+
+    pub fn intersect(self, other: WindowRect) -> Option<WindowRect> {
+        let x0 = self.x0().max(other.x0());
+        let y0 = self.y0().max(other.y0());
+        let x1 = self.x1().min(other.x1());
+        let y1 = self.y1().min(other.y1());
+        if x1 > x0 && y1 > y0 {
+            Some(WindowRect::from_xywh(
+                x0,
+                y0,
+                (x1 - x0) as u32,
+                (y1 - y0) as u32,
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Lift this window-local rect into plane coordinates anchored at
+    /// `canvas_origin`. Inverse of [`CanvasRect::to_window`].
+    pub fn to_canvas(self, canvas_origin: CanvasPoint) -> CanvasRect {
+        CanvasRect {
+            origin: self.origin.to_canvas(canvas_origin),
+            width: self.width,
+            height: self.height,
+        }
     }
 }
 
@@ -463,5 +587,43 @@ mod tests {
     fn layer_rect_intersect_overlap() {
         let i = lr(0, 0, 10, 10).intersect(lr(5, 5, 10, 10)).unwrap();
         assert_eq!(i, lr(5, 5, 5, 5));
+    }
+
+    // ------------------------------------------------------------------
+    // WindowRect ↔ CanvasRect — plane = window_local + canvas_origin
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn window_to_canvas_round_trips() {
+        let origin = CanvasPoint::new(40, 15);
+        let w = WindowRect::from_xywh(3, 7, 20, 12);
+        let plane = w.to_canvas(origin);
+        assert_eq!(plane, CanvasRect::from_xywh(43, 22, 20, 12));
+        // round-trip back to window-local recovers the original
+        assert_eq!(plane.to_window(origin), w);
+    }
+
+    #[test]
+    fn window_to_canvas_zero_origin_is_identity() {
+        // Until the first crop `canvas_origin == (0, 0)` and the two frames
+        // coincide — which is exactly why origin bugs hide in fresh docs.
+        let origin = CanvasPoint::new(0, 0);
+        let w = WindowRect::from_xywh(5, 9, 11, 13);
+        assert_eq!(w.to_canvas(origin), CanvasRect::from_xywh(5, 9, 11, 13));
+    }
+
+    #[test]
+    fn window_point_to_canvas_shifts_by_origin() {
+        let origin = CanvasPoint::new(-12, 30);
+        let p = WindowPoint::new(8, 4);
+        assert_eq!(p.to_canvas(origin), CanvasPoint::new(-4, 34));
+    }
+
+    #[test]
+    fn window_rect_intersect_and_union() {
+        let a = WindowRect::from_xywh(0, 0, 10, 10);
+        let b = WindowRect::from_xywh(5, 5, 10, 10);
+        assert_eq!(a.intersect(b), Some(WindowRect::from_xywh(5, 5, 5, 5)));
+        assert_eq!(a.union(b), WindowRect::from_xywh(0, 0, 15, 15));
     }
 }

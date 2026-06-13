@@ -8,7 +8,7 @@
 //! undo, distinct from this document-only path.)
 
 use super::DarklyEngine;
-use crate::coord::{CanvasPoint, CanvasRect};
+use crate::coord::{CanvasPoint, CanvasRect, WindowRect};
 use crate::undo::CanvasResizeAction;
 
 /// Largest canvas dimension we allow, matching wgpu's common
@@ -107,7 +107,7 @@ impl DarklyEngine {
             Some(b) => b,
             None => match self.selection_cpu_cache().and_then(|data| {
                 crate::mask::pixel_bounds_r8(data, self.doc.width, self.doc.height)
-                    .map(|[x, y, w, h]| CanvasRect::from_xywh(x as i32, y as i32, w, h))
+                    .map(|[x, y, w, h]| WindowRect::from_xywh(x as i32, y as i32, w, h))
             }) {
                 Some(b) => b,
                 None => return,
@@ -115,14 +115,7 @@ impl DarklyEngine {
         };
         // Lift window-local bounds into the plane: the crop window is a plane
         // rect anchored at the current window origin.
-        let o = self.doc.canvas_origin;
-        let plane = CanvasRect::from_xywh(
-            o.x + local.x0(),
-            o.y + local.y0(),
-            local.width,
-            local.height,
-        );
-        self.resize_canvas(plane);
+        self.resize_canvas(local.to_canvas(self.doc.canvas_origin));
     }
 
     /// Push the document's canvas rect onto the compositor — recreates the

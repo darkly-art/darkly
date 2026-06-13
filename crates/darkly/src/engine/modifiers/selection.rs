@@ -16,7 +16,7 @@
 
 use super::super::rendering::commit_undo_region;
 use super::super::{DarklyEngine, ReadbackContext};
-use crate::coord::CanvasRect;
+use crate::coord::{CanvasRect, WindowRect};
 use crate::document::SelectionMode;
 use crate::gpu::flood_fill::{self, LayerFloodFillExtent};
 use crate::gpu::overlay::{OverlayPrimitive, FLAG_CANVAS_SPACE, KIND_DASHED_LINE};
@@ -34,12 +34,21 @@ use crate::undo::SelectionAction;
 ///
 /// Two passes (all backings, then all dashes) preserve the original draw order
 /// so white dashes always render on top of any backing at corner overlaps.
+///
+/// Contour points are **window-local** (the selection texture is window-sized).
+/// `win_ox` / `win_oy` place the contour buffer within that window-local frame;
+/// `canvas_origin` then lifts the result into **plane** space, which is what the
+/// overlay's `FLAG_CANVAS_SPACE` (plane) primitives are interpreted in. Omitting
+/// `canvas_origin` is what left the ants short by the crop offset.
 fn emit_marching_ants(
     polylines: &[Vec<[f32; 2]>],
-    ox: f32,
-    oy: f32,
+    win_ox: f32,
+    win_oy: f32,
+    canvas_origin: crate::coord::CanvasPoint,
     out: &mut Vec<OverlayPrimitive>,
 ) {
+    let ox = win_ox + canvas_origin.x as f32;
+    let oy = win_oy + canvas_origin.y as f32;
     for polyline in polylines {
         for w in polyline.windows(2) {
             let a = [w[0][0] + ox, w[0][1] + oy];
@@ -70,6 +79,16 @@ fn emit_marching_ants(
     }
 }
 
+/// Reinterpret window-local selection bounds as a rect in the selection
+/// texture's **undo frame**. That frame is itself window-local-at-origin-0
+/// (`SelectionState::canvas_frame`), so the numbers carry over directly — this
+/// is *not* a `canvas_origin` lift to plane (use `WindowRect::to_canvas` for
+/// that). Kept as one named conversion so the undo path stays in `CanvasRect`
+/// (the shared region API) without leaking the window-local fact.
+fn selection_undo_frame_rect(b: WindowRect) -> CanvasRect {
+    CanvasRect::from_xywh(b.x0(), b.y0(), b.width, b.height)
+}
+
 impl DarklyEngine {
     // ========================================================================
     // Bridge helpers — read/write the selection's split state through one
@@ -95,8 +114,10 @@ impl DarklyEngine {
             .and_then(|s| s.cpu_cache.data.as_deref())
     }
 
-    /// Cached tight bounds of the non-zero selection region, in canvas coords.
-    pub(crate) fn selection_pixel_bounds(&self) -> Option<CanvasRect> {
+    /// Cached tight bounds of the non-zero selection region, in
+    /// **window-local** coords (the selection texture is window-sized; lift to
+    /// plane with `.to_canvas(self.doc.canvas_origin)`).
+    pub(crate) fn selection_pixel_bounds(&self) -> Option<WindowRect> {
         let id = self.doc.selection?;
         self.doc
             .find_modifier(id)
@@ -111,7 +132,7 @@ impl DarklyEngine {
 
     /// Set / clear the selection's tight pixel bounds (called after Replace
     /// or after an async readback recomputes them).
-    pub(crate) fn set_selection_pixel_bounds(&mut self, bounds: Option<CanvasRect>) {
+    pub(crate) fn set_selection_pixel_bounds(&mut self, bounds: Option<WindowRect>) {
         let id = match self.doc.selection {
             Some(id) => id,
             None => return,
@@ -317,6 +338,7 @@ impl DarklyEngine {
         }
         let rect = self
             .selection_pixel_bounds()
+            .map(selection_undo_frame_rect)
             .unwrap_or_else(|| self.selection_full_canvas_rect());
         self.save_selection_for_undo(rect);
         let was_active = self.has_selection();
@@ -437,7 +459,8 @@ impl DarklyEngine {
 
         let ox = mask.x as f32 - pad as f32;
         let oy = mask.y as f32 - pad as f32;
-        emit_marching_ants(&polylines, ox, oy, &mut self.selection_overlay);
+        let origin = self.doc.canvas_origin;
+        emit_marching_ants(&polylines, ox, oy, origin, &mut self.selection_overlay);
 
         self.push_merged_overlay();
     }
@@ -501,7 +524,7 @@ impl DarklyEngine {
         // multiply turns transparent).
         let tight_bounds = crate::mask::pixel_bounds_r8(&mask.data, mask.width, mask.height).map(
             |[bx, by, bw, bh]| {
-                CanvasRect::from_xywh((mask.x + bx) as i32, (mask.y + by) as i32, bw, bh)
+                WindowRect::from_xywh((mask.x + bx) as i32, (mask.y + by) as i32, bw, bh)
             },
         );
         self.set_selection_pixel_bounds(tight_bounds);
@@ -526,7 +549,7 @@ impl DarklyEngine {
         }
 
         let bounds = crate::mask::pixel_bounds_r8(data, self.doc.width, self.doc.height)
-            .map(|[x, y, w, h]| CanvasRect::from_xywh(x as i32, y as i32, w, h));
+            .map(|[x, y, w, h]| WindowRect::from_xywh(x as i32, y as i32, w, h));
         self.set_selection_pixel_bounds(bounds);
         self.set_selection_active(true);
         self.set_selection_cpu_cache(data.to_vec());
@@ -606,7 +629,8 @@ impl DarklyEngine {
             sh.min(ch - sy.min(ch)),
         ];
         let shape_rect = CanvasRect::from_xywh(sx as i32, sy as i32, sw, sh);
-        match self.selection_pixel_bounds() {
+        let old_frame = self.selection_pixel_bounds().map(selection_undo_frame_rect);
+        match old_frame {
             Some(old) if sw > 0 && sh > 0 => old.union(shape_rect),
             Some(old) => old,
             None => CanvasRect::from_xywh(0, 0, cw, ch),
@@ -650,7 +674,7 @@ impl DarklyEngine {
 
         if self.selection_pixel_bounds().is_none() {
             let bounds = crate::mask::pixel_bounds_r8(&pixels, self.doc.width, self.doc.height)
-                .map(|[x, y, w, h]| CanvasRect::from_xywh(x as i32, y as i32, w, h));
+                .map(|[x, y, w, h]| WindowRect::from_xywh(x as i32, y as i32, w, h));
             self.set_selection_pixel_bounds(bounds);
         }
 
@@ -658,7 +682,8 @@ impl DarklyEngine {
 
         let polylines =
             crate::mask::contour_polylines_r8(&pixels, self.doc.width, self.doc.height, 127);
-        emit_marching_ants(&polylines, 0.0, 0.0, &mut self.selection_overlay);
+        let origin = self.doc.canvas_origin;
+        emit_marching_ants(&polylines, 0.0, 0.0, origin, &mut self.selection_overlay);
 
         self.push_merged_overlay();
     }

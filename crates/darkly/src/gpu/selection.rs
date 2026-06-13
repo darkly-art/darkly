@@ -629,7 +629,7 @@ impl SelectionState {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        old_bounds: Option<crate::coord::CanvasRect>,
+        old_bounds: Option<crate::coord::WindowRect>,
         mask: &crate::mask::RasterizedMask,
     ) {
         if let Some(bounds) = old_bounds {
@@ -716,8 +716,9 @@ impl SelectionState {
         self.rebuild_bind_group(device);
     }
 
-    /// Zero out the previously-active region (clear).
-    pub fn clear_region(&mut self, queue: &wgpu::Queue, bounds: Option<crate::coord::CanvasRect>) {
+    /// Zero out the previously-active region (clear). `bounds` are window-local
+    /// (the selection texture is window-sized; see `crate::coord`).
+    pub fn clear_region(&mut self, queue: &wgpu::Queue, bounds: Option<crate::coord::WindowRect>) {
         if let Some(bounds) = bounds {
             let ow = bounds.width;
             let oh = bounds.height;

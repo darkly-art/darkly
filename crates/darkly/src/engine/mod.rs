@@ -838,6 +838,15 @@ impl DarklyEngine {
         )
     }
 
+    /// Test-only: the current selection marching-ants overlay primitives.
+    /// These are `FLAG_CANVAS_SPACE` (plane-space) dashed lines, so their
+    /// `p0`/`p1` are plane coordinates — used to assert ant placement keeps
+    /// tracking the selection's plane bounds across a crop.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_selection_overlay(&self) -> Vec<crate::gpu::overlay::OverlayPrimitive> {
+        self.selection_overlay.clone()
+    }
+
     /// Peek at the cached thumbnail bytes for any node id without queuing a
     /// fresh readback. Test-only — production callers go through
     /// [`node_thumbnail`] which intentionally also queues. The regression

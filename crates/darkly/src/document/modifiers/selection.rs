@@ -15,7 +15,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::coord::CanvasRect;
+use crate::coord::{CanvasRect, WindowRect};
 use crate::document::layer_kind::{IdMap, PixelBlobSpec, SerializedEntity};
 use crate::document::modifier::{Modifier, ModifierKind, ModifierRegistration};
 use crate::format::error::LoadError;
@@ -60,10 +60,11 @@ impl Default for SelectionCpuCache {
 pub struct SelectionModifier {
     pub pixels: PixelBuffer,
     pub cpu_cache: SelectionCpuCache,
-    /// Cached tight bounds of non-zero selection pixels in canvas coords.
+    /// Cached tight bounds of non-zero selection pixels in **window-local**
+    /// coords (the selection texture is window-sized — see `crate::coord`).
     /// Set from rasterization params on `Replace`, cleared after boolean ops
     /// or invert (recomputed from the next readback when needed).
-    pub pixel_bounds: Option<CanvasRect>,
+    pub pixel_bounds: Option<WindowRect>,
 }
 
 impl SelectionModifier {

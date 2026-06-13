@@ -205,7 +205,7 @@ impl DarklyEngine {
                     data.map(|d| {
                         crate::mask::pixel_bounds_r8(d, self.doc.width, self.doc.height).map(
                             |[x, y, w, h]| {
-                                crate::coord::CanvasRect::from_xywh(x as i32, y as i32, w, h)
+                                crate::coord::WindowRect::from_xywh(x as i32, y as i32, w, h)
                             },
                         )
                     })
@@ -224,6 +224,9 @@ impl DarklyEngine {
                 None => return false,
             };
 
+            // Bounds are window-local; clamp against the window, then lift the
+            // origin into plane space — `setup_transform` wants a plane-space
+            // source origin, matching the no-selection branch's `layer_to_canvas`.
             let x = bounds.x0().max(0);
             let y = bounds.y0().max(0);
             let w = bounds.width.min(canvas_w.saturating_sub(x as u32));
@@ -233,7 +236,8 @@ impl DarklyEngine {
                 return false;
             }
 
-            self.setup_transform(layer_id, (x, y), w, h);
+            let origin = crate::coord::WindowPoint::new(x, y).to_canvas(self.doc.canvas_origin);
+            self.setup_transform(layer_id, (origin.x, origin.y), w, h);
             true
         } else {
             // No selection — use compositor content bounds.

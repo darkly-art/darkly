@@ -335,7 +335,7 @@ impl DarklyEngine {
             let bounds = {
                 let data = self.selection_cpu_cache()?;
                 crate::mask::pixel_bounds_r8(data, self.doc.width, self.doc.height).map(
-                    |[x, y, w, h]| crate::coord::CanvasRect::from_xywh(x as i32, y as i32, w, h),
+                    |[x, y, w, h]| crate::coord::WindowRect::from_xywh(x as i32, y as i32, w, h),
                 )
             };
             self.set_selection_pixel_bounds(bounds);
