@@ -8,6 +8,7 @@
     import SettingsModal from './ui/settings/SettingsModal.svelte';
     import ExportImageModal from './ui/ExportImageModal.svelte';
     import NewDocumentModal from './ui/NewDocumentModal.svelte';
+    import ResizeCanvasModal from './ui/ResizeCanvasModal.svelte';
     import ConfirmDiscardModal from './ui/ConfirmDiscardModal.svelte';
     import AboutModal from './ui/AboutModal.svelte';
     import MenuBar from './ui/menu/MenuBar.svelte';
@@ -60,6 +61,7 @@
 <SettingsModal />
 <ExportImageModal />
 <NewDocumentModal />
+<ResizeCanvasModal />
 <ConfirmDiscardModal />
 <AboutModal />
 <CommandPalette />

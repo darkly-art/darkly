@@ -112,6 +112,14 @@ impl ManifestWriter {
 pub struct ManifestCanvas {
     pub width: u32,
     pub height: u32,
+    /// Plane-space offset of the canvas window (`Document::canvas_origin`).
+    /// `(0, 0)` for a document that has never been cropped/resized with a
+    /// moved window. Pre-release: no migration — older files without this
+    /// field default to the origin.
+    #[serde(default)]
+    pub origin_x: i32,
+    #[serde(default)]
+    pub origin_y: i32,
 }
 
 /// Inventory of every modular `type_id` the file uses, keyed by registry.
@@ -252,6 +260,8 @@ mod tests {
             canvas: ManifestCanvas {
                 width: 2048,
                 height: 2048,
+                origin_x: 0,
+                origin_y: 0,
             },
             requires: ManifestRequires {
                 veil: vec!["grain".into()],

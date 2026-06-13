@@ -29,7 +29,7 @@ pub fn register() -> SchemaSection {
         id: "canvas",
         display_name: "Canvas",
         description: Some("Default dimensions and background for new documents."),
-        icon: Some("fa-solid fa-vector-square"),
+        icon: Some("fa6-solid:vector-square"),
         order: 10,
         prefs: PREFS,
     }

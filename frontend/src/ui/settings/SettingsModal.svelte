@@ -7,6 +7,7 @@
     import PrefRow from './PrefRow.svelte';
     import ActionTriggerRow from './ActionTriggerRow.svelte';
     import type { PrefInfo } from '../../config/schema';
+    import Icon from '../../icons/Icon.svelte';
 
     let search = $state('');
     let activeTab = $state<'settings' | 'hotkeys'>('settings');
@@ -80,7 +81,7 @@
                 onclick={resetAll}
                 title="Remove every personal override; the base layout shows through."
             >
-                <i class="fa-solid fa-rotate-left"></i>
+                <Icon name="fa6-solid:rotate-left" />
                 Reset
             </button>
             <button
@@ -90,11 +91,11 @@
                 disabled={exporting}
                 title="Bundle the whole Darkly directory into a downloadable .zip"
             >
-                <i class="fa-solid fa-file-export"></i>
+                <Icon name="fa6-solid:file-export" />
                 {exporting ? 'Exporting…' : 'Export .zip'}
             </button>
             <div class="search-wrap">
-                <i class="fa-solid fa-magnifying-glass"></i>
+                <Icon name="fa6-solid:magnifying-glass" />
                 <input
                     type="search"
                     bind:value={search}

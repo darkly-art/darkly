@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use slotmap::{SecondaryMap, SlotMap};
 
-use crate::coord::CanvasRect;
+use crate::coord::{CanvasPoint, CanvasRect};
 use crate::layer::*;
 
 pub enum SelectionMode {
@@ -79,6 +79,17 @@ pub struct Document {
     pub width: u32,
     pub height: u32,
 
+    /// Offset of the **canvas window** within the fixed canvas/plane space.
+    ///
+    /// There is one coordinate frame — canvas/plane space — in which layer
+    /// extents, undo rects, and selection regions all live (and may be
+    /// negative, e.g. paste). The canvas *window* is the visible/exported
+    /// rectangle `(canvas_origin, width, height)` within that plane.
+    /// Default `(0, 0)`; canvas resize / crop move the window by changing
+    /// this and `width`/`height` while content stays put in the plane.
+    /// Serialized beside `width`/`height`; undoable via `CanvasResizeAction`.
+    pub canvas_origin: CanvasPoint,
+
     /// Sticky "has unsaved changes" bit. Set at the [`UndoStack::push`]
     /// chokepoint — any new undoable mutation flips it true. Cleared
     /// only by a successful save (`poll_save_result`) or a load
@@ -141,6 +152,7 @@ impl Document {
             name: "Untitled".to_string(),
             width,
             height,
+            canvas_origin: CanvasPoint::new(0, 0),
             dirty: false,
             entities,
             parent: SecondaryMap::new(),
@@ -165,6 +177,14 @@ impl Document {
     /// Id of the implicit root group. Replaces the old `ROOT_ID` constant.
     pub fn root_id(&self) -> LayerId {
         self.root
+    }
+
+    /// The canvas window as a plane-space rect: `(canvas_origin, width,
+    /// height)`. Single source of truth for "the canvas region" used as
+    /// layer / selection / undo bounds. Equals `(0, 0, width, height)` for
+    /// a fresh document and moves with crop / resize.
+    pub fn canvas_rect(&self) -> CanvasRect {
+        CanvasRect::new(self.canvas_origin, self.width, self.height)
     }
 
     // ---------------------------------------------------------------
@@ -549,7 +569,7 @@ impl Document {
     /// Add a new raster layer, positioning it relative to `anchor` per
     /// [`Document::resolve_anchor_target`].
     pub fn add_raster_layer(&mut self, anchor: Option<LayerId>) -> LayerId {
-        let bounds = CanvasRect::from_xywh(0, 0, self.width, self.height);
+        let bounds = self.canvas_rect();
         let name = self.next_name("Layer");
         let id = self.entities.insert_with_key(|key| {
             Entity::Node(LayerNode::Layer(Layer::Raster(RasterLayer::new(
@@ -661,7 +681,7 @@ impl Document {
         if let Some(id) = self.selection {
             return id;
         }
-        let bounds = CanvasRect::from_xywh(0, 0, self.width, self.height);
+        let bounds = self.canvas_rect();
         let id = self.entities.insert_with_key(|key| {
             let mut m = Modifier {
                 id: key,
@@ -922,9 +942,7 @@ impl Document {
             LayerNode::Layer(Layer::Raster(r)) => Some(r.pixels.bounds),
             // Voids and groups have no pixel buffer — masks on them default
             // to the full canvas, matching how group masks already behave.
-            LayerNode::Layer(Layer::Void(_)) | LayerNode::Group(_) => {
-                Some(CanvasRect::from_xywh(0, 0, self.width, self.height))
-            }
+            LayerNode::Layer(Layer::Void(_)) | LayerNode::Group(_) => Some(self.canvas_rect()),
         }
     }
 }

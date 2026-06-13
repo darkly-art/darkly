@@ -52,6 +52,8 @@
             if (canvas.width !== w || canvas.height !== h) {
                 canvas.width = w;
                 canvas.height = h;
+                inst.viewportW = w;
+                inst.viewportH = h;
                 inst.handle?.resize(w, h);
                 // Re-sync the Rust view transform with the new screen dimensions
                 // so the compositor and JS coordinate conversion agree.
@@ -73,6 +75,8 @@
         const rect = canvas.getBoundingClientRect();
         canvas.width = Math.round(rect.width * dpr);
         canvas.height = Math.round(rect.height * dpr);
+        inst.viewportW = canvas.width;
+        inst.viewportH = canvas.height;
 
         try {
             // Whether we should seed a default background layer. Fresh

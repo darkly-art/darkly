@@ -80,7 +80,11 @@ fn render_big_round() -> Out {
     let (device, queue) = test_device();
     let device = Arc::new(device);
     let queue = Arc::new(queue);
-    let pipelines = BrushPipelines::new(&device, &queue);
+    let pipelines = BrushPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let (target_tex, target_view) = preview_target(&device);
 
     let mut runner: BrushGraphRunner = compile_graph(&graph).expect("brush compiles");
@@ -96,6 +100,7 @@ fn render_big_round() -> Out {
         selection_bind_group: pipelines.default_selection_bind_group(),
         canvas_width: PREVIEW_SIDE,
         canvas_height: PREVIEW_SIDE,
+        canvas_origin: [0, 0],
         blend_mode: 0,
         view_rotation: 0.0,
         perf: BrushPerfCounters::default(),

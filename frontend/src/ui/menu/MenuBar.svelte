@@ -7,6 +7,7 @@
     import { commandPalette } from '../../state/commandPalette.svelte';
     import { config, formatHotkey } from '../../config/store.svelte';
     import { watchDismiss } from '../../lib/dismiss';
+    import Icon from '../../icons/Icon.svelte';
 
     const settingsHotkey = $derived(formatHotkey(config.get('hotkeys.openSettings') as string | undefined));
     const paletteHotkey = $derived(formatHotkey(config.get('hotkeys.commandPalette') as string | undefined));
@@ -52,14 +53,14 @@
         title={settingsHotkey ? `Settings (${settingsHotkey})` : 'Settings'}
         onclick={() => actions.dispatch('openSettings', {})}
     >
-        <i class="fa-solid fa-gear"></i>
+        <Icon name="fa6-solid:gear" />
     </button>
     <button
         class="icon-btn"
         title={paletteHotkey ? `Find (${paletteHotkey})` : 'Find'}
         onclick={() => (commandPalette.open = true)}
     >
-        <i class="fa-solid fa-magnifying-glass"></i>
+        <Icon name="fa6-solid:magnifying-glass" />
     </button>
 
     {#each topMenus as menu (menu.title)}
@@ -82,7 +83,7 @@
     <div class="spacer"></div>
 
     <button class="icon-btn" title="Unpin menu" onclick={() => menuBar.toggle()}>
-        <i class="fa-solid fa-thumbtack"></i>
+        <Icon name="fa6-solid:thumbtack" />
     </button>
 </div>
 

@@ -47,6 +47,26 @@ hotkeys:
   # Brush parameter hotkeys — `[` / `]` is the universal sizing convention.
   brushSizeUp: BracketRight
   brushSizeDown: BracketLeft
+  # Photoshop binds Edit > Preferences to $mod+K; Krita/GIMP have no
+  # default. Darkly picks the macOS preferences convention.
+  openSettings: $mod+Comma
+  # Photoshop & GIMP both have export (Photoshop: $mod+Alt+W for "Export
+  # As"; GIMP: $mod+Shift+E for "Export As…"). Krita's `file_export_file`
+  # is explicitly `none`. Darkly picks GIMP's binding.
+  exportImage: $mod+Shift+KeyE
+  # Photoshop binds Lasso to L and Polygonal Lasso to Shift+L; Krita's
+  # selection-tool .action files have empty <shortcut>; GIMP's analog is
+  # "Free Select" (KeyF) with no polygonal counterpart. Darkly inherits
+  # Photoshop's choice; per-editor overlays can override.
+  lassoSelectTool: KeyL
+  polygonSelectTool: Shift+KeyL
+  # Krita binds View > Mirror View to M; Photoshop/GIMP have no default.
+  mirrorViewH: KeyM
+  # Canvas resize. Photoshop binds Image Size to $mod+Alt+I and Canvas Size
+  # to $mod+Alt+C; GIMP/Krita have no default for canvas size. Darkly takes
+  # Photoshop's Canvas Size binding. `cropToSelection` stays menu-only (no
+  # reference editor binds it).
+  resizeCanvas: $mod+Alt+KeyC
   # Darkly-original (brush builder) — no reference-editor prior art.
   addBrushNode: Shift+KeyA
   # Darkly-original (command palette). No Krita/PS/GIMP prior art, so it

@@ -73,6 +73,15 @@ shared/styles/          @darkly/styles — tokens + themes (UI + website)
 website/                Astro + Starlight site (splash, docs, /demo/)
 ```
 
+### Coordinate Systems
+
+**If you're touching anything with x/y coordinates, read
+[`docs/coordinate-systems.md`](docs/coordinate-systems.md) first.** Darkly moves
+a pixel through several frames (screen → plane → window-local → layer-local), and
+a value carried into the wrong frame is the single most recurring class of bug
+here — invisible until the canvas is cropped. The doc covers the frames, their
+authority, how to convert between them, and the pitfalls that have bitten us.
+
 ### Hotkey & Config Presets
 
 Darkly's settings use a three-layer resolution order: `user → overlay (krita/ps/gimp) → defaults`. Placement rule is documented in [`crates/darkly/presets/defaults.yaml`](crates/darkly/presets/defaults.yaml)'s header; host-editor reference hotkeys live in [`docs/*-default-hotkeys.md`](docs/).
@@ -112,7 +121,7 @@ State belongs to the thing it describes — not to a parent that manages it on i
 
 The **document** is the authoritative model. The **compositor** is a derived realization. State falls into three categories:
 
-- **Document** (`crates/darkly/src/document.rs`, `src/layer.rs`): persistent, undoable, serializable. Tree structure, layer properties, mask presence, layer extents, selection regions, canvas size. Must be possible to reason about without a GPU.
+- **Document** (`crates/darkly/src/document.rs`, `src/layer.rs`): persistent, undoable, serializable. Tree structure, layer properties, mask presence, layer extents, selection regions, canvas size + `canvas_origin` (see [Coordinate Systems](#coordinate-systems) — the canvas window is a plane rect anchored at `canvas_origin`). Must be possible to reason about without a GPU.
 - **Session** (fields on `DarklyEngine` and tool/UI structs): transient editor state. Active tool, mask-editing target, viewport transform. Does not survive reload.
 - **Compositor** (`src/gpu/compositor.rs` and friends): GPU textures, bind groups, pipelines, render caches. Always derivable from document + dirty regions; rebuildable on demand.
 

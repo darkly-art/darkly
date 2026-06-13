@@ -1,5 +1,6 @@
 <script lang="ts">
     import type { Snippet } from 'svelte';
+    import { backdropDismiss } from '../lib/backdropDismiss';
 
     type Props = {
         open: boolean;
@@ -30,12 +31,6 @@
         open = false;
     }
 
-    function onBackdropClick(e: MouseEvent) {
-        // The dialog element itself covers the backdrop; its child content
-        // sits inside. A click whose target is the dialog itself == backdrop.
-        if (e.target === dialogEl) open = false;
-    }
-
     function onKeydown(e: KeyboardEvent) {
         // Stop every keydown inside the modal from bubbling to the
         // window-level hotkey handlers (pan-tool space, brush-builder
@@ -50,7 +45,7 @@
 <dialog
     bind:this={dialogEl}
     onclose={onClose}
-    onclick={onBackdropClick}
+    use:backdropDismiss={onClose}
     onkeydown={onKeydown}
     class="modal size-{size}"
     class:bare

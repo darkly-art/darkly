@@ -783,6 +783,10 @@ fn assemble_shader(
     graph_texture_names: &[String],
 ) -> String {
     let mut out = String::new();
+    // Shared canvas-window helpers (plane_to_selection_uv) — WGSL has no
+    // `#include`, so prepend the lib ahead of the assembled brush shader.
+    out.push_str(crate::gpu::canvas_lib::CANVAS_LIB);
+    out.push('\n');
     out.push_str(include_str!("../../../../../shaders/brush/_shape.wgsl"));
     out.push('\n');
     out.push_str(include_str!("../../../../../shaders/brush/_noise.wgsl"));
@@ -903,11 +907,16 @@ fn assemble_shader(
     out.push_str("        f32(u.intrinsic.canvas_size.x),\n");
     out.push_str("        f32(u.intrinsic.canvas_size.y),\n");
     out.push_str("    );\n");
+    out.push_str("    let canvas_origin = vec2<f32>(\n");
+    out.push_str("        f32(u.intrinsic.canvas_origin.x),\n");
+    out.push_str("        f32(u.intrinsic.canvas_origin.y),\n");
+    out.push_str("    );\n");
     match mode {
-        // Stroke: target ≡ canvas, so `target_pos / canvas_size` is the
-        // canvas-space normalized UV the selection texture expects.
+        // Stroke: `target_pos` is a plane position; the window-anchored
+        // selection mask maps via `(target_pos - canvas_origin) / canvas_size`
+        // (see shaders/lib/canvas.wgsl).
         ShaderMode::Stroke => out.push_str(
-            "    let sel = textureSampleLevel(sel_tex, sel_smp, target_pos / canvas_size, 0.0).r;\n",
+            "    let sel = textureSampleLevel(sel_tex, sel_smp, plane_to_selection_uv(target_pos, canvas_origin, canvas_size), 0.0).r;\n",
         ),
         ShaderMode::CursorPreview => out.push_str("    let sel: f32 = 1.0;\n"),
     }

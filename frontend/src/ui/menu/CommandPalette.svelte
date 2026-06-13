@@ -4,6 +4,8 @@
     import { registryEpoch } from '../../actions/registryEpoch.svelte';
     import { config, formatHotkey } from '../../config/store.svelte';
     import { filterPalette } from './paletteFilter';
+    import { backdropDismiss } from '../../lib/backdropDismiss';
+    import Icon from '../../icons/Icon.svelte';
 
     let dialogEl: HTMLDialogElement | undefined = $state();
     let inputEl: HTMLInputElement | undefined = $state();
@@ -81,7 +83,7 @@
     bind:this={dialogEl}
     class="palette"
     onclose={close}
-    onclick={(e) => { if (e.target === dialogEl) close(); }}
+    use:backdropDismiss={close}
 >
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div class="palette-inner" role="presentation" onkeydown={onKeydown}>
@@ -107,7 +109,7 @@
                     onclick={() => run(reg)}
                     onmousemove={() => (selected = i)}
                 >
-                    <span class="icon"><i class="fa-solid {rowIcon(reg)}"></i></span>
+                    <span class="icon"><Icon name={rowIcon(reg)} /></span>
                     <span class="name">{reg.displayName}</span>
                     {#if reg.description}<span class="desc">{reg.description}</span>{/if}
                     {#if hotkey(reg.id)}<span class="kbd">{hotkey(reg.id)}</span>{/if}

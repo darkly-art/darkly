@@ -6,6 +6,7 @@
     import LiveBrushPreviewStrip from '../brush_picker/LiveBrushPreviewStrip.svelte';
     import NodeCanvas from './NodeCanvas.svelte';
     import AddNodeMenu from './AddNodeMenu.svelte';
+    import Icon from '../../icons/Icon.svelte';
 
     // --- Add-node menu state ---
     // Two open paths land here:
@@ -228,7 +229,7 @@
                     aria-label="Hide brush preview"
                     title="Hide brush preview"
                 >
-                    <i class="fa-solid fa-eye-slash"></i>
+                    <Icon name="fa6-solid:eye-slash" />
                 </button>
             {:else}
                 <button
@@ -244,7 +245,7 @@
             onclick={() => brushGraph.fullscreen = !brushGraph.fullscreen}
             title={brushGraph.fullscreen ? "Exit fullscreen" : "Fullscreen"}
         >
-            <i class={brushGraph.fullscreen ? 'fa-solid fa-compress' : 'fa-solid fa-expand'}></i>
+            <Icon name={brushGraph.fullscreen ? 'fa6-solid:compress' : 'fa6-solid:expand'} />
         </button>
     </div>
 

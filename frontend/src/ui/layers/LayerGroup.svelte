@@ -7,6 +7,7 @@
     import { toast } from '../../state/toast.svelte';
     import LayerItem from './LayerItem.svelte';
     import LayerGroup from './LayerGroup.svelte';
+    import Icon from '../../icons/Icon.svelte';
 
     interface Modifier {
         id: number; kind: string; name: string; visible: boolean; locked: boolean;
@@ -316,14 +317,14 @@
             onpointerdown={(e: PointerEvent) => { e.stopPropagation(); }}
             title={tooltipForAction('Toggle visibility', 'toggleVisibility')}
         >
-            <i class={group.visible ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash'}></i>
+            <Icon name={group.visible ? 'fa6-solid:eye' : 'fa6-solid:eye-slash'} />
         </button>
 
         <button class="collapse-btn" onclick={toggleCollapsed} title="Toggle collapsed">
-            <i class={group.collapsed ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'}></i>
+            <Icon name={group.collapsed ? 'fa6-solid:chevron-right' : 'fa6-solid:chevron-down'} />
         </button>
 
-        <i class="folder-icon fa-solid {group.collapsed ? 'fa-folder' : 'fa-folder-open'}"></i>
+        <Icon name={group.collapsed ? 'fa6-solid:folder' : 'fa6-solid:folder-open'} class="folder-icon" />
 
         {#if editing}
             <input
@@ -363,7 +364,7 @@
             onpointerdown={(e: PointerEvent) => { e.stopPropagation(); }}
             title={tooltipForAction(group.locked ? 'Unlock group' : 'Lock group', 'toggleLock')}
         >
-            <i class={group.locked ? 'fa-solid fa-lock' : 'fa-solid fa-lock-open'}></i>
+            <Icon name={group.locked ? 'fa6-solid:lock' : 'fa6-solid:lock-open'} />
         </button>
     </div>
 
@@ -522,7 +523,7 @@
     .lock-btn:hover { color: var(--text); }
     .lock-btn.locked { color: var(--text); }
 
-    .folder-icon {
+    .group-header :global(.folder-icon) {
         color: var(--text-muted);
         font-size: 12px;
         width: 14px;

@@ -291,7 +291,7 @@ impl DarklyEngine {
         let has_selection = selection.is_some();
         let sel_bg = if has_selection {
             selection
-                .map(|s| s.brush_bind_group())
+                .map(|s| s.selection_bind_group())
                 .unwrap_or(&self.brush_pipelines.default_selection_bind_group)
         } else {
             &self.brush_pipelines.default_selection_bind_group
@@ -311,8 +311,9 @@ impl DarklyEngine {
             selection_bind_group: sel_bg,
             canvas_width: 0,
             canvas_height: 0,
+            canvas_origin: [0, 0],
             blend_mode: 0,
-            view_rotation: self.view_rotation,
+            view_rotation: self.view_params.rotation,
             perf: BrushPerfCounters::default(),
             // The preview pipeline doesn't touch the stroke scratch / paint
             // target — the terminal's `render_preview` writes to the

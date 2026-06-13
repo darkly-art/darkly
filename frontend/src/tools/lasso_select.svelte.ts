@@ -36,7 +36,7 @@ function clearPreviewOverlay() {
 
 export const lassoSelectTool: Tool = {
     id: 'lasso_select',
-    faIcon: 'fa-solid fa-lasso',
+    icon: 'tabler:lasso',
     group: 'select',
     cluster: 'select',
     hotkeyAction: 'lassoSelectTool',

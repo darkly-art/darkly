@@ -19,7 +19,7 @@ pub fn register() -> SchemaSection {
         id: "rendering",
         display_name: "Rendering",
         description: Some("Viewport-level rendering knobs."),
-        icon: Some("fa-solid fa-gauge-high"),
+        icon: Some("fa6-solid:gauge-high"),
         order: 70,
         prefs: PREFS,
     }

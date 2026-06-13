@@ -1,5 +1,6 @@
 <script lang="ts">
     import { watchDismiss } from '../../lib/dismiss';
+    import Icon from '../../icons/Icon.svelte';
 
     let { onpick, onclose }: {
         onpick: (kind: 'layer' | 'group' | 'veil' | 'void') => void;
@@ -20,20 +21,19 @@
 
 <div class="new-layer-menu" data-keep-open="new-layer" role="menu">
     <button class="item" role="menuitem" onclick={() => onpick('layer')}>
-        <i class="fa-solid fa-image"></i>
+        <Icon name="fa6-solid:image" />
         <span>Normal Layer</span>
     </button>
     <button class="item" role="menuitem" onclick={() => onpick('group')}>
-        <i class="fa-solid fa-folder"></i>
+        <Icon name="fa6-solid:folder" />
         <span>Layer Group</span>
     </button>
     <button class="item" role="menuitem" onclick={() => onpick('veil')}>
-        <!-- <i class="fa-solid fa-fire-flame-curved"></i> -->
-         <i class="fa-solid fa-eclipse"></i>
+        <Icon name="tabler:circle-half-2" />
         <span>Veil</span>
     </button>
     <button class="item" role="menuitem" onclick={() => onpick('void')}>
-        <i class="fa-solid fa-galaxy"></i>
+        <Icon name="tabler:galaxy" />
         <span>Void</span>
     </button>
 </div>
@@ -72,14 +72,14 @@
         background: var(--bg-hover);
     }
 
-    .item i {
+    .item :global(svg) {
         width: 14px;
         text-align: center;
         color: var(--text-muted);
         font-size: 12px;
     }
 
-    .item:hover i {
+    .item:hover :global(svg) {
         color: var(--accent);
     }
 </style>

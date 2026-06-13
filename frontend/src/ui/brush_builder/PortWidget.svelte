@@ -3,6 +3,7 @@
     import { brushGraph, WIRE_COLORS, type PortDef } from '../../state/brush_graph.svelte';
     import { app } from '../../state/app.svelte';
     import type { NodeCanvasContext } from './NodeCanvas.svelte';
+    import Icon from '../../icons/Icon.svelte';
 
     interface Props {
         nodeId: number;
@@ -305,7 +306,7 @@
             title={isExposed ? 'Hide from brush bar' : 'Expose in brush bar'}
             onclick={toggleExposed}
         >
-            <i class="fa-solid fa-eye"></i>
+            <Icon name="fa6-solid:eye" />
         </button>
     {/if}
 </div>

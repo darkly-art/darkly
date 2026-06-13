@@ -28,10 +28,10 @@ struct OverlayUniforms {
     // visibility; clamped at 1.0 in the shader so the boost can't push
     // alpha beyond the legal range. Default 1.0 (no boost).
     preview_coverage_scale: f32,
-    fwd_row0: vec4f,  // canvas → screen transform
+    fwd_row0: vec4f,  // plane → screen transform
     fwd_row1: vec4f,
     fwd_row2: vec4f,
-    inv_row0: vec4f,  // screen → canvas transform
+    inv_row0: vec4f,  // screen → plane transform
     inv_row1: vec4f,
     inv_row2: vec4f,
 }
@@ -79,14 +79,14 @@ const FLAG_SOFT_CONTRAST: u32  = 4u;
 // Coordinate transforms
 // ---------------------------------------------------------------------------
 
-fn canvas_to_screen(p: vec2f) -> vec2f {
+fn plane_to_screen(p: vec2f) -> vec2f {
     return vec2f(
         u.fwd_row0.x * p.x + u.fwd_row0.y * p.y + u.fwd_row2.x,
         u.fwd_row1.x * p.x + u.fwd_row1.y * p.y + u.fwd_row2.y,
     );
 }
 
-fn screen_to_canvas(p: vec2f) -> vec2f {
+fn screen_to_plane(p: vec2f) -> vec2f {
     return vec2f(
         u.inv_row0.x * p.x + u.inv_row1.x * p.y + u.inv_row2.x,
         u.inv_row0.y * p.x + u.inv_row1.y * p.y + u.inv_row2.y,
@@ -95,7 +95,7 @@ fn screen_to_canvas(p: vec2f) -> vec2f {
 
 fn maybe_transform(p: vec2f, flags: u32) -> vec2f {
     if (flags & FLAG_CANVAS_SPACE) != 0u {
-        return canvas_to_screen(p);
+        return plane_to_screen(p);
     }
     return p;
 }
@@ -151,10 +151,10 @@ struct VertexOutput {
             if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
                 let center = prim.p0;
                 let radii = prim.p1;
-                let c0 = canvas_to_screen(center + vec2f(-radii.x, -radii.y));
-                let c1 = canvas_to_screen(center + vec2f( radii.x, -radii.y));
-                let c2 = canvas_to_screen(center + vec2f(-radii.x,  radii.y));
-                let c3 = canvas_to_screen(center + vec2f( radii.x,  radii.y));
+                let c0 = plane_to_screen(center + vec2f(-radii.x, -radii.y));
+                let c1 = plane_to_screen(center + vec2f( radii.x, -radii.y));
+                let c2 = plane_to_screen(center + vec2f(-radii.x,  radii.y));
+                let c3 = plane_to_screen(center + vec2f( radii.x,  radii.y));
                 lo = min(min(c0, c1), min(c2, c3)) - vec2f(margin);
                 hi = max(max(c0, c1), max(c2, c3)) + vec2f(margin);
             } else {
@@ -170,10 +170,10 @@ struct VertexOutput {
             let ey = vec2f(-s,  c) * prim.p1.y;
             if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
                 let corners = array<vec2f, 4>(
-                    canvas_to_screen(prim.p0 - ex - ey),
-                    canvas_to_screen(prim.p0 + ex - ey),
-                    canvas_to_screen(prim.p0 - ex + ey),
-                    canvas_to_screen(prim.p0 + ex + ey),
+                    plane_to_screen(prim.p0 - ex - ey),
+                    plane_to_screen(prim.p0 + ex - ey),
+                    plane_to_screen(prim.p0 - ex + ey),
+                    plane_to_screen(prim.p0 + ex + ey),
                 );
                 lo = min(min(corners[0], corners[1]), min(corners[2], corners[3])) - vec2f(margin);
                 hi = max(max(corners[0], corners[1]), max(corners[2], corners[3])) + vec2f(margin);
@@ -189,10 +189,10 @@ struct VertexOutput {
         case KIND_RECT, KIND_FILLED_RECT: {
             if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
                 // Canvas-space rect: transform all 4 corners for correct AABB.
-                let c0 = canvas_to_screen(prim.p0);
-                let c1 = canvas_to_screen(vec2f(prim.p1.x, prim.p0.y));
-                let c2 = canvas_to_screen(vec2f(prim.p0.x, prim.p1.y));
-                let c3 = canvas_to_screen(prim.p1);
+                let c0 = plane_to_screen(prim.p0);
+                let c1 = plane_to_screen(vec2f(prim.p1.x, prim.p0.y));
+                let c2 = plane_to_screen(vec2f(prim.p0.x, prim.p1.y));
+                let c3 = plane_to_screen(prim.p1);
                 lo = min(min(c0, c1), min(c2, c3)) - vec2f(margin);
                 hi = max(max(c0, c1), max(c2, c3)) + vec2f(margin);
             } else {
@@ -294,7 +294,7 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
         case KIND_RECT: {
             if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
                 // Evaluate SDF in canvas space for correct rotation.
-                let cp = screen_to_canvas(screen_pos);
+                let cp = screen_to_plane(screen_pos);
                 let canvas_d = sdf_rect(cp, prim.p0, prim.p1, prim.corner_radius);
                 let zoom = length(vec2f(u.fwd_row0.x, u.fwd_row1.x));
                 dist = abs(canvas_d) * zoom - half_t;
@@ -324,7 +324,7 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
         }
         case KIND_FILLED_RECT: {
             if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
-                let cp = screen_to_canvas(screen_pos);
+                let cp = screen_to_plane(screen_pos);
                 let canvas_d = sdf_rect(cp, prim.p0, prim.p1, prim.corner_radius);
                 let zoom = length(vec2f(u.fwd_row0.x, u.fwd_row1.x));
                 dist = canvas_d * zoom;
@@ -338,7 +338,7 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
         case KIND_ELLIPSE: {
             // p0 = center, p1 = [rx, ry] — stroked ellipse outline
             if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
-                let cp = screen_to_canvas(screen_pos);
+                let cp = screen_to_plane(screen_pos);
                 let canvas_d = sdf_ellipse(cp, prim.p0, prim.p1);
                 let zoom = length(vec2f(u.fwd_row0.x, u.fwd_row1.x));
                 dist = abs(canvas_d) * zoom - half_t;
@@ -349,7 +349,7 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
         case KIND_FILLED_ELLIPSE: {
             // p0 = center, p1 = [rx, ry] — filled ellipse (signed interior)
             if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
-                let cp = screen_to_canvas(screen_pos);
+                let cp = screen_to_plane(screen_pos);
                 let canvas_d = sdf_ellipse(cp, prim.p0, prim.p1);
                 let zoom = length(vec2f(u.fwd_row0.x, u.fwd_row1.x));
                 dist = canvas_d * zoom;
@@ -363,7 +363,7 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
             // falloff (soft brush, hard round, textured tip) is the shape.
             var local: vec2f;
             if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
-                local = screen_to_canvas(screen_pos) - prim.p0;
+                local = screen_to_plane(screen_pos) - prim.p0;
             } else {
                 local = screen_pos - prim.p0;
             }

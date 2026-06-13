@@ -52,7 +52,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_natural_range(0.0, 1.0)
                 .with_label("Softness")
                 .with_unit(UnitType::Percent)
-                .with_icon("fa-solid fa-feather")
+                .with_icon("fa6-solid:feather")
                 .with_description("Edge softness (0% = hard, 100% = feathered)"),
             // amplitude is meaningful for Sine and Perlin (modulates the
             // bumpy boundary); the Superformula's amplitude is implicit in

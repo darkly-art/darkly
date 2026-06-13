@@ -89,7 +89,11 @@ fn gpu_gradient_with_selection() {
     let fmt = wgpu::TextureFormat::Rgba8Unorm;
 
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
 
     // Create selection mask: left half = 255, right half = 0.
     let mut sel_data = vec![0u8; (w * h) as usize];
@@ -114,7 +118,12 @@ fn gpu_gradient_with_selection() {
     });
     let sel_bg = pipelines.create_selection_bind_group(&device, &sel_view, &sampler);
 
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(
+        &tex,
+        &view,
+        fmt,
+        darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
+    );
     let mut enc = encoder(&device);
     target.linear_gradient(
         &mut enc,
@@ -155,7 +164,11 @@ fn gpu_clear_selection_contents() {
     // Fill with red.
     let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
     let (tex, view) = create_test_texture(&device, &queue, w, h, &red);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
 
     // Create selection mask: left half = 255.
     let mut sel_data = vec![0u8; (w * h) as usize];
@@ -180,7 +193,12 @@ fn gpu_clear_selection_contents() {
     });
     let sel_bg = pipelines.create_selection_bind_group(&device, &sel_view, &sampler);
 
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(
+        &tex,
+        &view,
+        fmt,
+        darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
+    );
 
     // Erase within selection.
     let mut enc = encoder(&device);
@@ -212,7 +230,11 @@ fn gpu_clear_selection_undo() {
 
     let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
     let (tex, view) = create_test_texture(&device, &queue, w, h, &red);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
     let mut store = darkly::gpu::region_store::RegionScratch::new(&device, w, h);
 
     // Selection: full canvas.
@@ -239,7 +261,12 @@ fn gpu_clear_selection_undo() {
     submit(&queue, enc);
 
     // Erase within selection.
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(
+        &tex,
+        &view,
+        fmt,
+        darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
+    );
     let mut enc = encoder(&device);
     target.erase_with_selection(&mut enc, &pipelines, &queue, &sel_bg);
     submit(&queue, enc);
@@ -281,7 +308,11 @@ fn gpu_flood_fill_respects_selection() {
 
     // Transparent canvas.
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
-    let pipelines = PaintPipelines::new(&device, &queue);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
 
     // CPU flood fill from (16, 32) on the transparent canvas — should fill everything.
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -310,7 +341,12 @@ fn gpu_flood_fill_respects_selection() {
     let mask_bg =
         pipelines.upload_r8_bind_group(&device, &queue, w, h, &combined, "test-fill-sel-mask");
 
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
+    let target = GpuPaintTarget::from_canvas_texture(
+        &tex,
+        &view,
+        fmt,
+        darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
+    );
     let mut enc = encoder(&device);
     target.fill_rect_with_selection(
         &mut enc,

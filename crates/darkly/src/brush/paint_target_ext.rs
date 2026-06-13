@@ -111,6 +111,7 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
         let layer_off_x = canvas_ext.x0() as f32;
         let layer_off_y = canvas_ext.y0() as f32;
         let (cw, ch) = self.canvas_size();
+        let (cox, coy) = self.canvas_origin();
 
         let uniforms = CompositeUniforms {
             origin: [layer_off_x, layer_off_y],
@@ -118,6 +119,7 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
             target_offset: [layer_off_x, layer_off_y],
             target_size: [layer_w, layer_h],
             canvas_size: [cw as f32, ch as f32],
+            canvas_origin: [cox as f32, coy as f32],
             uv_min: [0.0, 0.0],
             uv_max: [1.0, 1.0],
             blend_mode,

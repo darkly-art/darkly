@@ -43,7 +43,7 @@ function clearPreviewOverlay() {
 
 export const ellipseSelectTool: Tool = {
     id: 'ellipse_select',
-    faIcon: 'fa-solid fa-circle-dashed',
+    icon: 'tabler:circle-dashed',
     group: 'select',
     cluster: 'select',
     hotkeyAction: 'ellipseSelectTool',

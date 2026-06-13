@@ -5,6 +5,7 @@
     import { actions } from '../../actions/registry';
     import { tooltipForAction } from '../../config/store.svelte';
     import { toast } from '../../state/toast.svelte';
+    import Icon from '../../icons/Icon.svelte';
 
     interface Modifier {
         id: number; kind: string; name: string; visible: boolean; locked: boolean;
@@ -342,7 +343,7 @@
         onpointerleave={() => { draggable = true; }}
         title={tooltipForAction('Toggle visibility', 'toggleVisibility')}
     >
-        <i class={layer.visible ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash'}></i>
+        <Icon name={layer.visible ? 'fa6-solid:eye' : 'fa6-solid:eye-slash'} />
     </button>
 
     {#if layer.type === 'raster' && layerThumb}
@@ -364,7 +365,7 @@
             class:thumb-active={isActive && !isEditingMask}
             title="Void layer"
         >
-            <i class="fa-solid fa-galaxy"></i>
+            <Icon name="tabler:galaxy" />
         </span>
     {/if}
 
@@ -408,7 +409,7 @@
         onpointerleave={() => { draggable = true; }}
         title={tooltipForAction(layer.locked ? 'Unlock layer' : 'Lock layer', 'toggleLock')}
     >
-        <i class={layer.locked ? 'fa-solid fa-lock' : 'fa-solid fa-lock-open'}></i>
+        <Icon name={layer.locked ? 'fa6-solid:lock' : 'fa6-solid:lock-open'} />
     </button>
 </div>
 

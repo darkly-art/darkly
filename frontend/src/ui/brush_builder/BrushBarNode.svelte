@@ -3,6 +3,7 @@
     import { flip } from 'svelte/animate';
     import { cubicOut } from 'svelte/easing';
     import { brushGraph, type ExposedPortInfo } from '../../state/brush_graph.svelte';
+    import Icon from '../../icons/Icon.svelte';
     import BrushBarEntryModal from './BrushBarEntryModal.svelte';
     import type { NodeCanvasContext } from './NodeCanvas.svelte';
 
@@ -148,13 +149,13 @@
     onlostpointercapture={endMove}
 >
     <header class="header">
-        <i class="fa-solid fa-sliders header-icon"></i>
+        <Icon name="fa6-solid:sliders" class="header-icon" />
         <span class="title">Brush Bar</span>
     </header>
     <div class="body">
         {#if brushGraph.exposedPorts.length === 0}
             <p class="empty">
-                Click the <i class="fa-solid fa-eye"></i> icon on any port to add it here.
+                Click the <Icon name="fa6-solid:eye" /> icon on any port to add it here.
             </p>
         {:else}
             <ul class="rows" ondragend={onRowDragEnd}>
@@ -170,10 +171,10 @@
                         ondrop={onRowDrop}
                     >
                         <span class="row-grip" aria-hidden="true">
-                            <i class="fa-solid fa-grip-vertical"></i>
+                            <Icon name="fa6-solid:grip-vertical" />
                         </span>
                         {#if port.icon}
-                            <span class="row-icon"><i class={port.icon}></i></span>
+                            <span class="row-icon"><Icon name={port.icon} /></span>
                         {/if}
                         <span class="row-label">{port.label}</span>
                         <button
@@ -182,7 +183,7 @@
                             onclick={(e) => { e.stopPropagation(); openEditor(port); }}
                             ondragstart={(e) => e.preventDefault()}
                         >
-                            <i class="fa-solid fa-pen"></i>
+                            <Icon name="fa6-solid:pen" />
                         </button>
                     </li>
                 {/each}
@@ -219,7 +220,7 @@
         font-size: 12px;
         font-weight: 600;
     }
-    .header-icon {
+    .header :global(.header-icon) {
         color: var(--accent);
     }
     .body {

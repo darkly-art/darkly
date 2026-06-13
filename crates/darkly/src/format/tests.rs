@@ -742,6 +742,8 @@ fn synth_minimal_manifest() -> Manifest {
         canvas: ManifestCanvas {
             width: 4,
             height: 4,
+            origin_x: 0,
+            origin_y: 0,
         },
         requires: ManifestRequires {
             layer_kind: vec!["group".to_string()],

@@ -1,5 +1,7 @@
 <script lang="ts">
     import Modal from '../Modal.svelte';
+    import Icon from '../../icons/Icon.svelte';
+    import { BUNDLED_ICON_NAMES } from '../../icons/bundle.generated';
     import { brushGraph, type ExposedPortInfo } from '../../state/brush_graph.svelte';
 
     type Props = {
@@ -11,14 +13,10 @@
 
     let labelInput = $state('');
     let descriptionInput = $state('');
+    // An Iconify name from the offline bundle (or '' for no icon). The picker
+    // below only offers bundled names, so whatever is stored always resolves
+    // offline via <Icon>.
     let iconInput = $state('');
-    let iconError = $state('');
-
-    /** Same alphabet as Graph::set_exposed_port_meta — letters, digits,
-     *  hyphens, spaces. Bind into a Svelte `class={...}` attribute only
-     *  (never `{@html ...}`), so even if a string slipped through the
-     *  filter the engine would have rejected it. */
-    const ICON_SAFE = /^[a-zA-Z0-9\- ]*$/;
 
     /** Re-seed the inputs whenever the modal opens for a fresh entry —
      *  the engine emits the current effective values (registration
@@ -29,23 +27,11 @@
             labelInput = entry.label;
             descriptionInput = entry.description;
             iconInput = entry.icon;
-            iconError = '';
         }
     });
 
-    function validateIcon(): boolean {
-        if (!ICON_SAFE.test(iconInput)) {
-            iconError =
-                "Icon must only contain letters, digits, hyphens, and spaces (e.g. 'fa-solid fa-circle').";
-            return false;
-        }
-        iconError = '';
-        return true;
-    }
-
     function onSave() {
         if (!entry) return;
-        if (!validateIcon()) return;
         brushGraph.setExposedPortMeta(
             entry.key,
             labelInput,
@@ -81,28 +67,29 @@
                     placeholder="Shown as a tooltip to the brush user."
                 ></textarea>
             </label>
-            <label class="field">
+            <div class="field">
                 <span class="field-label">Icon</span>
-                <div class="icon-field-row">
-                    <span class="icon-preview" class:placeholder={!iconInput || !!iconError}>
-                        {#if iconInput && !iconError}
-                            <i class={iconInput}></i>
-                        {:else}
-                            <i class="fa-regular fa-square"></i>
-                        {/if}
-                    </span>
-                    <input
-                        type="text"
-                        class="text-input"
-                        bind:value={iconInput}
-                        placeholder="fa-solid fa-circle"
-                        oninput={validateIcon}
-                    />
+                <div class="icon-picker">
+                    <button
+                        type="button"
+                        class="icon-cell none"
+                        class:selected={!iconInput}
+                        onclick={() => (iconInput = '')}
+                        title="No icon"
+                    >None</button>
+                    {#each BUNDLED_ICON_NAMES as name (name)}
+                        <button
+                            type="button"
+                            class="icon-cell"
+                            class:selected={iconInput === name}
+                            onclick={() => (iconInput = name)}
+                            title={name}
+                        >
+                            <Icon {name} />
+                        </button>
+                    {/each}
                 </div>
-                {#if iconError}
-                    <span class="icon-error">{iconError}</span>
-                {/if}
-            </label>
+            </div>
             <footer class="actions">
                 <button type="button" class="btn" onclick={onCancel}>Cancel</button>
                 <button type="submit" class="btn primary">Save</button>
@@ -149,31 +136,39 @@
         min-height: 78px;
         line-height: 1.4;
     }
-    .icon-error {
-        font-size: 11px;
-        color: var(--error, #d44);
-    }
-    .icon-field-row {
-        display: flex;
-        align-items: stretch;
-        gap: 8px;
-    }
-    .icon-field-row .text-input {
-        flex: 1;
-    }
-    .icon-preview {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 36px;
-        font-size: 16px;
-        color: var(--text);
+    .icon-picker {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(34px, 1fr));
+        gap: 4px;
+        max-height: 180px;
+        overflow-y: auto;
+        padding: 6px;
         background: var(--bg);
         border: 1px solid var(--bg-hover);
         border-radius: 4px;
-        flex-shrink: 0;
     }
-    .icon-preview.placeholder {
+    .icon-cell {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 34px;
+        font-size: 15px;
+        color: var(--text);
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        cursor: pointer;
+        font-family: inherit;
+    }
+    .icon-cell:hover {
+        background: var(--bg-hover);
+    }
+    .icon-cell.selected {
+        border-color: var(--accent);
+        color: var(--accent);
+    }
+    .icon-cell.none {
+        font-size: 10px;
         color: var(--text-muted);
     }
     .actions {

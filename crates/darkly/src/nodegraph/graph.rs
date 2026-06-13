@@ -117,7 +117,7 @@ pub struct PortDef<W: WireKind> {
     /// Display unit for numeric ports (controls UI conversion and suffix).
     #[serde(default)]
     pub unit_type: UnitType,
-    /// Font Awesome icon class (e.g. `"fa-solid fa-circle"`), or empty.
+    /// Iconify icon name (e.g. `"fa6-solid:circle"`), or empty.
     #[serde(default)]
     pub icon: String,
     /// User-facing display label.  Falls back to `name` if empty.
@@ -411,22 +411,22 @@ pub enum GraphError {
     ExposedPortNotFound {
         key: String,
     },
-    /// Icon string contained a character outside the FontAwesome-class
-    /// shape (`[a-zA-Z0-9- ]`). Rejected so the value stays safe to
-    /// bind directly into an HTML `class=` attribute.
+    /// Icon string contained a character outside the Iconify-name
+    /// shape (`[a-zA-Z0-9-: ]`). Rejected so the value stays a safe,
+    /// inert token (it is passed to `<Icon name={...}>`, never `{@html}`).
     InvalidIcon {
         icon: String,
     },
 }
 
-/// Accept only the byte shape FontAwesome class strings use:
-/// lowercase/uppercase letters, digits, hyphens, and spaces. Keeping
-/// the value within this alphabet means it can be bound into a Svelte
-/// `class={...}` attribute without further escaping (Svelte already
-/// HTML-escapes attribute values, but staying inside the alphabet
-/// removes any debate about edge cases).
+/// Accept only the byte shape Iconify names use (`prefix:name`):
+/// letters, digits, hyphens, and the `:` separator (spaces tolerated for
+/// legacy values). Keeping the value within this alphabet means the stored
+/// string is an inert token — the frontend hands it to `<Icon name={...}>`,
+/// which resolves it against the offline bundle and renders nothing for an
+/// unknown name, so a hostile value can never become markup.
 fn is_safe_icon_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'-' || b == b' '
+    b.is_ascii_alphanumeric() || b == b'-' || b == b':' || b == b' '
 }
 
 impl std::fmt::Display for GraphError {
@@ -1171,7 +1171,7 @@ mod tests {
         let port = PortDef::input("opacity", TestWireKind::Scalar)
             .with_range(0.0, 1.0, 1.0)
             .with_unit(UnitType::Percent)
-            .with_icon("fa-solid fa-sun")
+            .with_icon("fa6-solid:sun")
             .with_label("Opacity")
             .exposed()
             .with_description("Per-dab opacity");
@@ -1179,7 +1179,7 @@ mod tests {
         let json = serde_json::to_string(&port).unwrap();
         let back: PortDef<TestWireKind> = serde_json::from_str(&json).unwrap();
         assert_eq!(back.unit_type, UnitType::Percent);
-        assert_eq!(back.icon, "fa-solid fa-sun");
+        assert_eq!(back.icon, "fa6-solid:sun");
         assert_eq!(back.label, "Opacity");
         assert!(back.exposed);
         assert_eq!(back.description, "Per-dab opacity");
@@ -1276,14 +1276,9 @@ mod tests {
         let key = exposed_port_key(id, "val");
 
         // Safe icon class — accepted.
-        g.set_exposed_port_meta(
-            &key,
-            "Label".into(),
-            "Desc".into(),
-            "fa-solid fa-sun".into(),
-        )
-        .unwrap();
-        assert_eq!(g.exposed_ports[&key].icon, "fa-solid fa-sun");
+        g.set_exposed_port_meta(&key, "Label".into(), "Desc".into(), "fa6-solid:sun".into())
+            .unwrap();
+        assert_eq!(g.exposed_ports[&key].icon, "fa6-solid:sun");
 
         // Unsafe icon (contains `<`) — rejected; previous value retained.
         let err = g
@@ -1295,7 +1290,7 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(err, GraphError::InvalidIcon { .. }));
-        assert_eq!(g.exposed_ports[&key].icon, "fa-solid fa-sun");
+        assert_eq!(g.exposed_ports[&key].icon, "fa6-solid:sun");
         assert_eq!(g.exposed_ports[&key].label, "Label");
     }
 

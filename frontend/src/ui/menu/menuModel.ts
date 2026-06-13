@@ -25,7 +25,7 @@ export interface TopMenu {
 /** Fixed ordering for the known top-level menus. Any group not in this list
  *  (forward-compat for a new `menuPath[0]`) is appended after, in first-seen
  *  order. */
-const MENU_ORDER = ['File', 'Edit', 'Select', 'Layer', 'Colors', 'View', 'Help'];
+const MENU_ORDER = ['File', 'Edit', 'Select', 'Image', 'Layer', 'Colors', 'View', 'Help'];
 
 function groupByTop(regs: ActionRegistration[]): Map<string, ActionRegistration[]> {
     const m = new Map<string, ActionRegistration[]>();
@@ -102,11 +102,11 @@ export function buildHamburgerEntries(regs: ActionRegistration[]): MenuEntry[] {
         (t): MenuEntry => ({ kind: 'submenu', title: t.title, entries: t.entries }),
     );
     return [
-        { kind: 'action', actionId: 'commandPalette', label: 'Find', icon: 'fa-magnifying-glass' },
+        { kind: 'action', actionId: 'commandPalette', label: 'Find', icon: 'fa6-solid:magnifying-glass' },
         { kind: 'separator' },
         ...submenus,
         { kind: 'separator' },
-        { kind: 'action', actionId: 'openSettings', icon: 'fa-gear' },
+        { kind: 'action', actionId: 'openSettings', icon: 'fa6-solid:gear' },
         { kind: 'action', actionId: 'openCheatsheet' },
         { kind: 'action', actionId: 'aboutDarkly' },
     ];

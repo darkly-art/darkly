@@ -14,11 +14,12 @@ struct Uniforms {
     target_size: vec2f,
     // Document canvas size (used for fragment-stage selection UV).
     canvas_size: vec2f,
+    // Plane-space offset of the canvas window (selection-mask anchor).
+    canvas_origin: vec2f,
     // Gradient start point in canvas pixels.
     start: vec2f,
     // Gradient end point in canvas pixels.
     end: vec2f,
-    _pad: vec2f,
     // Start color (RGBA, straight alpha).
     color0: vec4f,
     // End color (RGBA, straight alpha).
@@ -62,8 +63,9 @@ struct VertexOutput {
 
     let color = mix(uniforms.color0, uniforms.color1, t);
 
-    // Selection masking.
-    let sel_uv = in.canvas_pos / uniforms.canvas_size;
+    // Selection masking: map the plane position to the window-anchored
+    // selection mask before sampling (see shaders/lib/canvas.wgsl).
+    let sel_uv = plane_to_selection_uv(in.canvas_pos, uniforms.canvas_origin, uniforms.canvas_size);
     let sel = textureSample(t_selection, t_sampler, sel_uv).r;
 
     return vec4f(color.rgb, color.a * sel);

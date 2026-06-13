@@ -32,6 +32,19 @@ describe('menu action registrations', () => {
         expect(actions.get('clearSelection')?.displayName).toBe('Deselect');
     });
 
+    it('puts canvas resize + crop under the Image menu', () => {
+        expect(actions.get('resizeCanvas')?.menuPath).toEqual(['Image:10']);
+        expect(actions.get('cropToSelection')?.menuPath).toEqual(['Image:20']);
+    });
+
+    it('disables cropToSelection with a reason when no selection is active', () => {
+        // No WASM handle in this environment → no active selection.
+        const crop = actions.get('cropToSelection')!;
+        expect(crop.enabled?.()).not.toBe(true);
+        expect(actionEnablement(crop)).toMatchObject({ enabled: false });
+        expect(actionEnablement(crop).reason).toBe('No active selection');
+    });
+
     it("save actions' enabled() follows canSave (disabled-with-reason here)", () => {
         // The test environment has no File System Access API, so canSave is
         // false; enabled() returns the disabled-reason string (not `true`).
@@ -53,10 +66,10 @@ describe('menu action registrations', () => {
 
     it('sorts actions without an order suffix to the end, keeping registration order', () => {
         const regs = [
-            { id: 'b', displayName: 'B', category: 'file', icon: 'fa-circle', menuPath: ['X:20'], handler() {} },
-            { id: 'noOrder1', displayName: 'N1', category: 'file', icon: 'fa-circle', menuPath: ['X'], handler() {} },
-            { id: 'a', displayName: 'A', category: 'file', icon: 'fa-circle', menuPath: ['X:10'], handler() {} },
-            { id: 'noOrder2', displayName: 'N2', category: 'file', icon: 'fa-circle', menuPath: ['X'], handler() {} },
+            { id: 'b', displayName: 'B', category: 'file', icon: 'fa6-solid:circle', menuPath: ['X:20'], handler() {} },
+            { id: 'noOrder1', displayName: 'N1', category: 'file', icon: 'fa6-solid:circle', menuPath: ['X'], handler() {} },
+            { id: 'a', displayName: 'A', category: 'file', icon: 'fa6-solid:circle', menuPath: ['X:10'], handler() {} },
+            { id: 'noOrder2', displayName: 'N2', category: 'file', icon: 'fa6-solid:circle', menuPath: ['X'], handler() {} },
         ] as ActionRegistration[];
         const x = buildTopMenus(regs).find(m => m.title === 'X');
         const ids = x!.entries.map(e => (e as { actionId: string }).actionId);
@@ -70,8 +83,8 @@ describe('menu action registrations', () => {
         expect(parseMenuSegment('A:B')).toEqual({ title: 'A:B' });
     });
 
-    it('gives every registered action a non-empty Font Awesome icon', () => {
-        const missing = actions.all().filter(a => !a.icon || !a.icon.startsWith('fa-'));
+    it('gives every registered action a non-empty Iconify icon name', () => {
+        const missing = actions.all().filter(a => !a.icon || !a.icon.includes(':'));
         expect(missing.map(a => a.id)).toEqual([]);
     });
 

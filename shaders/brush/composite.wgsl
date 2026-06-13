@@ -15,6 +15,7 @@ struct CompositeUniforms {
     target_offset: vec2f, // canvas-space offset of render target's (0,0) pixel
     target_size: vec2f,   // render target pixel dimensions (vertex NDC)
     canvas_size: vec2f,   // document canvas dimensions (fragment selection UV)
+    canvas_origin: vec2f, // plane offset of the canvas window (selection-mask anchor)
     uv_min: vec2f,       // min UV in dab texture (nonzero when clipped at top/left)
     uv_max: vec2f,       // max UV in dab texture
     blend_mode: u32,     // 0 = source-over, 1 = erase (destination-out)
@@ -70,7 +71,7 @@ struct VertexOutput {
     // Selection masking: modulate dab by selection coverage. Applied per-dab
     // only — the stroke→layer commit passes `apply_selection = 0` because
     // selection has already been baked into the scratch by prior dabs.
-    let sel_uv = in.canvas_pos / u.canvas_size;
+    let sel_uv = plane_to_selection_uv(in.canvas_pos, u.canvas_origin, u.canvas_size);
     let sel_raw = textureSample(t_selection, s_selection, sel_uv).r;
     let sel = select(1.0, sel_raw, u.apply_selection == 1u);
 

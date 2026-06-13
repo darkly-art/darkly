@@ -1,6 +1,7 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
     import VeilItem from './VeilItem.svelte';
+    import Icon from '../../icons/Icon.svelte';
 
     let { onupdate }: { onupdate: () => void } = $props();
 
@@ -34,7 +35,7 @@
             onpointerdown={(e: PointerEvent) => { e.stopPropagation(); }}
             title="Toggle all veils"
         >
-            <i class={anyVisible ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash'}></i>
+            <Icon name={anyVisible ? 'fa6-solid:eye' : 'fa6-solid:eye-slash'} />
         </button>
 
         <button
@@ -42,10 +43,10 @@
             onclick={(e) => { e.stopPropagation(); toggleCollapsed(); }}
             title={collapsed ? 'Expand' : 'Collapse'}
         >
-            <i class={collapsed ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'}></i>
+            <Icon name={collapsed ? 'fa6-solid:chevron-right' : 'fa6-solid:chevron-down'} />
         </button>
 
-        <i class="folder-icon fa-solid {collapsed ? 'fa-folder' : 'fa-folder-open'}"></i>
+        <Icon name={collapsed ? 'fa6-solid:folder' : 'fa6-solid:folder-open'} class="folder-icon" />
 
         <span class="folder-name">Veils</span>
         <span class="count">{app.veilList.length}</span>
@@ -118,7 +119,7 @@
         color: var(--text);
     }
 
-    .folder-icon {
+    .folder-header :global(.folder-icon) {
         color: var(--accent);
         font-size: 12px;
         width: 14px;

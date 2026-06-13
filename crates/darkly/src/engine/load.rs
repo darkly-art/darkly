@@ -202,6 +202,8 @@ fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Res
 fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), LoadError> {
     let mut doc = Document::new(manifest.canvas.width, manifest.canvas.height);
     doc.name = manifest.name.clone();
+    doc.canvas_origin =
+        crate::coord::CanvasPoint::new(manifest.canvas.origin_x, manifest.canvas.origin_y);
 
     let mut id_map: IdMap = HashMap::with_capacity(manifest.nodes.len() + manifest.modifiers.len());
 
@@ -635,7 +637,6 @@ fn ensure_selection_state(engine: &mut DarklyEngine) {
         &engine.gpu.device,
         id,
         engine.brush_pipelines.selection_bind_group_layout(),
-        &engine.paint_pipelines.selection_bind_group_layout,
     );
 }
 
@@ -688,6 +689,8 @@ mod tests {
             canvas: crate::format::manifest::ManifestCanvas {
                 width: 8,
                 height: 8,
+                origin_x: 0,
+                origin_y: 0,
             },
             requires: ManifestRequires {
                 layer_kind: vec!["group".to_string(), "raster".to_string()],

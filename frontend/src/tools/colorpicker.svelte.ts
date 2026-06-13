@@ -8,7 +8,7 @@ import ColorPickerOptions from '../ui/ColorPickerOptions.svelte';
 
 export const colorPickerTool: Tool = {
     id: 'colorpicker',
-    faIcon: 'fa-solid fa-eye-dropper',
+    icon: 'fa6-solid:eye-dropper',
     group: 'paint',
     hotkeyAction: 'colorPickerTool',
     optionsComponent: ColorPickerOptions,
