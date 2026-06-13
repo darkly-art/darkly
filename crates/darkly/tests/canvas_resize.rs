@@ -352,6 +352,66 @@ fn red_centroid(px: &[u8], w: u32, h: u32) -> (f32, f32) {
     (sx / n as f32, sy / n as f32)
 }
 
+/// COPY regression: copying a selection in a cropped document must extract the
+/// pixels under the selection's **plane** location and stamp the clipboard with
+/// a **plane** offset (so paste-in-place lands it back correctly). The copy
+/// `region` is window-local; the pre-fix code fed it raw to the layer read (so it
+/// grabbed pixels offset by `-canvas_origin`) and to the clipboard offset (so
+/// paste landed offset by `-canvas_origin`).
+#[test]
+fn copy_selection_after_crop_extracts_plane_pixels_and_offset() {
+    let (w, h) = (64u32, 64u32);
+    let mut engine = test_engine(w, h);
+
+    // Full-canvas layer with a solid red 8×8 square at PLANE (30, 28).
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    for y in 28..36 {
+        for x in 30..38 {
+            let i = ((y * w + x) * 4) as usize;
+            rgba[i] = 255; // R
+            rgba[i + 3] = 255; // A
+        }
+    }
+    let layer_id = engine.paste_image(w, h, &rgba, 0, 0, None);
+
+    // Crop to a NON-ZERO origin window at plane (16, 12); the square is inside.
+    engine.resize_canvas(CanvasRect::from_xywh(16, 12, 40, 40));
+
+    // Select the square in plane coords, then copy.
+    engine.select_rect(30.0, 28.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
+    engine.copy(layer_id);
+
+    // Drive the async copy readback to completion.
+    let mut export = None;
+    for _ in 0..8 {
+        engine.test_flush_readbacks();
+        engine.render(0.0);
+        if let Some(e) = engine.poll_copy_result() {
+            export = Some(e);
+            break;
+        }
+    }
+    let export = export.expect("copy readback should complete");
+
+    // Clipboard offset is the PLANE position of the selection (30, 28) — not the
+    // window-local (14, 16) the pre-fix code produced.
+    assert_eq!(
+        (export.offset_x, export.offset_y),
+        (30, 28),
+        "clipboard offset must be the selection's plane position"
+    );
+    // And the extracted pixels are the red square — proving the layer read came
+    // from the right plane location, not from the empty (14, 16) region.
+    let any_red = export
+        .rgba
+        .chunks_exact(4)
+        .any(|p| p[0] > 200 && p[1] < 60 && p[2] < 60 && p[3] > 200);
+    assert!(
+        any_red,
+        "copied pixels must be the red square; an offset layer read would grab empty space"
+    );
+}
+
 /// Crop-to-selection sets the canvas window to the selection's plane bounds.
 #[test]
 fn crop_to_selection_matches_selection_bounds() {
