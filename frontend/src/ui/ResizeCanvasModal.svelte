@@ -1,5 +1,6 @@
 <script lang="ts">
     import Modal from './Modal.svelte';
+    import Icon from '../icons/Icon.svelte';
     import { resizeCanvas } from '../state/resizeCanvas.svelte';
     import { app } from '../state/app.svelte';
 
@@ -143,7 +144,7 @@
                 title={linkAspect ? 'Unlock aspect ratio' : 'Lock aspect ratio'}
                 onclick={() => (linkAspect = !linkAspect)}
             >
-                <i class={linkAspect ? 'fa-solid fa-link' : 'fa-solid fa-link-slash'}></i>
+                <Icon name={linkAspect ? 'fa6-solid:link' : 'fa6-solid:link-slash'} />
             </button>
         </div>
 

@@ -343,7 +343,7 @@ export function registerActions() {
         displayName: 'Resize Canvas',
         category: 'edit',
         description: 'Resize the canvas with a 9-point anchor.',
-        icon: 'fa-up-right-and-down-left-from-center',
+        icon: 'fa6-solid:up-right-and-down-left-from-center',
         menuPath: ['Image:10'],
         handler: () => {
             if (!app.handle) return;
@@ -355,7 +355,7 @@ export function registerActions() {
         displayName: 'Crop to Selection',
         category: 'edit',
         description: 'Crop the canvas to the current selection bounds.',
-        icon: 'fa-crop-simple',
+        icon: 'fa6-solid:crop-simple',
         menuPath: ['Image:20'],
         enabled: () => (app.handle?.has_selection() ?? false) || 'No active selection',
         handler: () => {
