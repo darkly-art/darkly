@@ -27,25 +27,34 @@ impl PickSource {
     /// fails: missing texture (groups, voids without a node texture),
     /// non-Rgba8 formats (masks), or canvas point outside the layer extent.
     /// Callers fall back to `Merged` in that case.
+    /// `point` is a **plane** pixel; `canvas_origin` is the plane offset of the
+    /// canvas window. The merged composite is window-local (texel `(0,0)` ==
+    /// plane `canvas_origin`), so it samples `point − canvas_origin`; layer
+    /// textures are plane-anchored and translate through `canvas_to_layer`.
     fn resolve<'a>(
         &self,
         compositor: &'a Compositor,
-        px: u32,
-        py: u32,
+        point: CanvasPoint,
+        canvas_origin: CanvasPoint,
     ) -> Option<(&'a wgpu::Texture, LayerRect)> {
         match self {
-            // Composited texture is canvas-aligned: canvas coords == texture
-            // coords, so a 1x1 layer rect at (px, py) names the same pixel.
-            PickSource::Merged => Some((
-                compositor.composited_texture(),
-                LayerRect::from_xywh(px, py, 1, 1),
-            )),
+            PickSource::Merged => {
+                let wx = point.x - canvas_origin.x;
+                let wy = point.y - canvas_origin.y;
+                if wx < 0 || wy < 0 {
+                    return None;
+                }
+                Some((
+                    compositor.composited_texture(),
+                    LayerRect::from_xywh(wx as u32, wy as u32, 1, 1),
+                ))
+            }
             PickSource::Layer(id) => {
                 let layer_tex = compositor.node_texture(*id)?;
                 if layer_tex.format() != wgpu::TextureFormat::Rgba8Unorm {
                     return None;
                 }
-                let p = layer_tex.canvas_to_layer(CanvasPoint::new(px as i32, py as i32))?;
+                let p = layer_tex.canvas_to_layer(point)?;
                 Some((layer_tex.texture(), LayerRect::from_xywh(p.x, p.y, 1, 1)))
             }
         }
@@ -152,16 +161,20 @@ impl DarklyEngine {
     pub fn pick_color(&mut self, x: f32, y: f32, source: PickSource) -> [u8; 4] {
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
-        let px = x as u32;
-        let py = y as u32;
-
-        if px >= canvas_w || py >= canvas_h {
+        // `x, y` are plane coordinates (the frontend's `screenToCanvas`). Picking
+        // is restricted to the visible canvas window, so bounds-check in
+        // window-local space (`plane − canvas_origin`).
+        let o = self.doc.canvas_origin;
+        let wx = x as i32 - o.x;
+        let wy = y as i32 - o.y;
+        if wx < 0 || wy < 0 || wx as u32 >= canvas_w || wy as u32 >= canvas_h {
             return [0, 0, 0, 0];
         }
+        let point = CanvasPoint::new(x as i32, y as i32);
 
-        let resolved = source.resolve(&self.compositor, px, py).or_else(|| {
+        let resolved = source.resolve(&self.compositor, point, o).or_else(|| {
             // Layer source couldn't be sampled — fall back to merged.
-            PickSource::Merged.resolve(&self.compositor, px, py)
+            PickSource::Merged.resolve(&self.compositor, point, o)
         });
         let Some((texture, rect)) = resolved else {
             return [0, 0, 0, 0];

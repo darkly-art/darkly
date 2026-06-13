@@ -136,6 +136,19 @@ impl DarklyEngine {
         // matrix encoding the old dims — re-derive it from the unchanged view
         // params + the new dims so the next present isn't stretched/offset.
         self.rebuild_view_transform();
+
+        // `set_canvas_rect` re-realized the selection mask at the moved window
+        // (preserving its plane pixels), but the doc-side window-local caches
+        // are now stale: `pixel_bounds` / `cpu_cache` were measured against the
+        // OLD window, and the marching ants were emitted for it. Drop them and
+        // kick a readback to repopulate against the new window — which also
+        // regenerates the ants. Async, so a transform/copy issued before it
+        // lands defers through the existing pending-op mechanism.
+        if self.has_selection() {
+            self.set_selection_pixel_bounds(None);
+            self.invalidate_selection_cpu_cache();
+            self.kick_selection_readback();
+        }
     }
 }
 

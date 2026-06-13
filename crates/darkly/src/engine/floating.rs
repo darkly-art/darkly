@@ -335,8 +335,13 @@ impl DarklyEngine {
         // clear at the end of setup zeroes the marching ants.
         let has_selection = self.has_selection();
         let clear_shape = if has_selection {
+            // `source_origin` is plane (it indexes the live layer + the clear
+            // rect); the selection cpu-cache is window-local, so shift back by
+            // `canvas_origin` for the crop read.
+            let o = self.doc.canvas_origin;
+            let sel_origin = (source_origin.0 - o.x, source_origin.1 - o.y);
             let cropped_sel_bg =
-                self.upload_cropped_selection_r8(source_origin, source_width, source_height);
+                self.upload_cropped_selection_r8(sel_origin, source_width, source_height);
 
             if let Some(sel_bg) = &cropped_sel_bg {
                 if let Some(source_tex) = self.compositor.transform_source_texture() {

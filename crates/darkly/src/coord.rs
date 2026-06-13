@@ -13,41 +13,64 @@
 //! `LayerPoint` / `LayerRect` live in a specific layer texture's local pixel
 //! coordinates and are always non-negative. Conversion to plane requires a
 //! `LayerTexture` (or its bounds) — see `crate::gpu::atlas::LayerTexture`.
+//!
+//! `Point<S>` / `Rect<S>` are generic over a zero-size coordinate-space tag
+//! `S` ([`Plane`] / [`Window`]). The space-agnostic rect/point algebra is
+//! written once here; `CanvasPoint`/`CanvasRect`/`WindowPoint`/`WindowRect` are
+//! type aliases. `Rect<Plane>` and `Rect<Window>` are distinct, incompatible
+//! types — mixing frames is a compile error — and the only space-specific code
+//! is the `to_canvas` / `to_window` conversions on the concrete instantiations.
 
+use std::marker::PhantomData;
+
+/// Coordinate-space tag for the **plane** frame — the absolute document frame
+/// that does not move on crop. May be negative.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Plane;
+
+/// Coordinate-space tag for the **window-local** frame — origin at the
+/// canvas-window top-left (plane `canvas_origin`). The window-sized selection
+/// and floating-preview textures are indexed in this frame.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Window;
+
+/// A point in coordinate space `S`. See the module docs and [`Plane`] /
+/// [`Window`] for the frames. The `serde(bound)` drops the auto-added
+/// `S: Serialize/Deserialize` bound, and `serde(skip)` on the tag keeps the
+/// emitted JSON identical to a bare `{ x, y }`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct CanvasPoint {
+#[serde(bound(serialize = "", deserialize = ""))]
+pub struct Point<S> {
     pub x: i32,
     pub y: i32,
+    #[serde(skip)]
+    _space: PhantomData<S>,
 }
 
-impl CanvasPoint {
+impl<S> Point<S> {
     pub const fn new(x: i32, y: i32) -> Self {
-        CanvasPoint { x, y }
+        Point {
+            x,
+            y,
+            _space: PhantomData,
+        }
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct LayerPoint {
-    pub x: u32,
-    pub y: u32,
-}
-
-impl LayerPoint {
-    pub const fn new(x: u32, y: u32) -> Self {
-        LayerPoint { x, y }
-    }
-}
-
+/// An axis-aligned rect in coordinate space `S`. Carries the full space-agnostic
+/// rect algebra; the plane/window conversions live on the concrete `Rect<Plane>`
+/// / `Rect<Window>` instantiations below.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct CanvasRect {
-    pub origin: CanvasPoint,
+#[serde(bound(serialize = "", deserialize = ""))]
+pub struct Rect<S> {
+    pub origin: Point<S>,
     pub width: u32,
     pub height: u32,
 }
 
-impl CanvasRect {
-    pub const fn new(origin: CanvasPoint, width: u32, height: u32) -> Self {
-        CanvasRect {
+impl<S: Copy> Rect<S> {
+    pub const fn new(origin: Point<S>, width: u32, height: u32) -> Self {
+        Rect {
             origin,
             width,
             height,
@@ -55,8 +78,8 @@ impl CanvasRect {
     }
 
     pub const fn from_xywh(x: i32, y: i32, width: u32, height: u32) -> Self {
-        CanvasRect {
-            origin: CanvasPoint::new(x, y),
+        Rect {
+            origin: Point::new(x, y),
             width,
             height,
         }
@@ -83,7 +106,7 @@ impl CanvasRect {
     /// Origin floors toward more-negative; far edge ceils toward more-positive.
     /// Uses `div_euclid` so the floor is correct for negative coords —
     /// `(-1).div_euclid(256) = -1`, not 0 (which is what `/` gives in Rust).
-    pub fn round_outward(self, chunk: u32) -> CanvasRect {
+    pub fn round_outward(self, chunk: u32) -> Rect<S> {
         if self.is_empty() {
             return self;
         }
@@ -93,10 +116,10 @@ impl CanvasRect {
         // Ceiling outward via euclidean division on the inclusive far edge.
         let x1 = (self.x1() - 1).div_euclid(chunk) * chunk + chunk;
         let y1 = (self.y1() - 1).div_euclid(chunk) * chunk + chunk;
-        CanvasRect::from_xywh(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32)
+        Rect::from_xywh(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32)
     }
 
-    pub fn contains(&self, other: CanvasRect) -> bool {
+    pub fn contains(&self, other: Rect<S>) -> bool {
         if other.is_empty() {
             return true;
         }
@@ -111,7 +134,7 @@ impl CanvasRect {
 
     /// Smallest rect containing both. Empty rects are ignored (an empty `self`
     /// returns `other` and vice versa).
-    pub fn union(self, other: CanvasRect) -> CanvasRect {
+    pub fn union(self, other: Rect<S>) -> Rect<S> {
         if self.is_empty() {
             return other;
         }
@@ -122,21 +145,16 @@ impl CanvasRect {
         let y0 = self.y0().min(other.y0());
         let x1 = self.x1().max(other.x1());
         let y1 = self.y1().max(other.y1());
-        CanvasRect::from_xywh(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32)
+        Rect::from_xywh(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32)
     }
 
-    pub fn intersect(self, other: CanvasRect) -> Option<CanvasRect> {
+    pub fn intersect(self, other: Rect<S>) -> Option<Rect<S>> {
         let x0 = self.x0().max(other.x0());
         let y0 = self.y0().max(other.y0());
         let x1 = self.x1().min(other.x1());
         let y1 = self.y1().min(other.y1());
         if x1 > x0 && y1 > y0 {
-            Some(CanvasRect::from_xywh(
-                x0,
-                y0,
-                (x1 - x0) as u32,
-                (y1 - y0) as u32,
-            ))
+            Some(Rect::from_xywh(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
         } else {
             None
         }
@@ -144,7 +162,7 @@ impl CanvasRect {
 
     /// Axis-aligned rectangular subtraction: returns 0 to 4 rects whose union
     /// equals `self \ other`.
-    pub fn subtract(self, other: Option<CanvasRect>) -> Vec<CanvasRect> {
+    pub fn subtract(self, other: Option<Rect<S>>) -> Vec<Rect<S>> {
         if self.is_empty() {
             return Vec::new();
         }
@@ -155,7 +173,7 @@ impl CanvasRect {
         let mut out = Vec::with_capacity(4);
         // top strip
         if other.y0() > self.y0() {
-            out.push(CanvasRect::from_xywh(
+            out.push(Rect::from_xywh(
                 self.x0(),
                 self.y0(),
                 self.width,
@@ -164,7 +182,7 @@ impl CanvasRect {
         }
         // bottom strip
         if other.y1() < self.y1() {
-            out.push(CanvasRect::from_xywh(
+            out.push(Rect::from_xywh(
                 self.x0(),
                 other.y1(),
                 self.width,
@@ -173,7 +191,7 @@ impl CanvasRect {
         }
         // left strip (clipped to other's vertical extent)
         if other.x0() > self.x0() {
-            out.push(CanvasRect::from_xywh(
+            out.push(Rect::from_xywh(
                 self.x0(),
                 other.y0(),
                 (other.x0() - self.x0()) as u32,
@@ -182,7 +200,7 @@ impl CanvasRect {
         }
         // right strip
         if other.x1() < self.x1() {
-            out.push(CanvasRect::from_xywh(
+            out.push(Rect::from_xywh(
                 other.x1(),
                 other.y0(),
                 (self.x1() - other.x1()) as u32,
@@ -191,123 +209,65 @@ impl CanvasRect {
         }
         out
     }
-
-    /// Express this plane rect in window-local coordinates anchored at
-    /// `canvas_origin`. Inverse of [`WindowRect::to_canvas`].
-    pub fn to_window(self, canvas_origin: CanvasPoint) -> WindowRect {
-        WindowRect {
-            origin: WindowPoint {
-                x: self.origin.x - canvas_origin.x,
-                y: self.origin.y - canvas_origin.y,
-            },
-            width: self.width,
-            height: self.height,
-        }
-    }
-}
-
-/// A point in **window-local** space — origin at the canvas-window top-left
-/// (plane `canvas_origin`). The window-sized selection / floating-preview
-/// textures are indexed in this frame. `plane = window_local + canvas_origin`.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct WindowPoint {
-    pub x: i32,
-    pub y: i32,
 }
 
 impl WindowPoint {
-    pub const fn new(x: i32, y: i32) -> Self {
-        WindowPoint { x, y }
-    }
-
     /// Lift this window-local point into plane coordinates.
     pub fn to_canvas(self, canvas_origin: CanvasPoint) -> CanvasPoint {
         CanvasPoint::new(self.x + canvas_origin.x, self.y + canvas_origin.y)
     }
 }
 
-/// A rect in **window-local** space (see [`WindowPoint`]).
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct WindowRect {
-    pub origin: WindowPoint,
-    pub width: u32,
-    pub height: u32,
+impl CanvasPoint {
+    /// Express this plane point in window-local coordinates anchored at
+    /// `canvas_origin`. Inverse of [`WindowPoint::to_canvas`].
+    pub fn to_window(self, canvas_origin: CanvasPoint) -> WindowPoint {
+        WindowPoint::new(self.x - canvas_origin.x, self.y - canvas_origin.y)
+    }
 }
 
 impl WindowRect {
-    pub const fn new(origin: WindowPoint, width: u32, height: u32) -> Self {
-        WindowRect {
-            origin,
-            width,
-            height,
-        }
-    }
-
-    pub const fn from_xywh(x: i32, y: i32, width: u32, height: u32) -> Self {
-        WindowRect {
-            origin: WindowPoint::new(x, y),
-            width,
-            height,
-        }
-    }
-
-    pub fn x0(&self) -> i32 {
-        self.origin.x
-    }
-    pub fn y0(&self) -> i32 {
-        self.origin.y
-    }
-    pub fn x1(&self) -> i32 {
-        self.origin.x + self.width as i32
-    }
-    pub fn y1(&self) -> i32 {
-        self.origin.y + self.height as i32
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.width == 0 || self.height == 0
-    }
-
-    /// Smallest window-local rect containing both. Empty rects are ignored.
-    pub fn union(self, other: WindowRect) -> WindowRect {
-        if self.is_empty() {
-            return other;
-        }
-        if other.is_empty() {
-            return self;
-        }
-        let x0 = self.x0().min(other.x0());
-        let y0 = self.y0().min(other.y0());
-        let x1 = self.x1().max(other.x1());
-        let y1 = self.y1().max(other.y1());
-        WindowRect::from_xywh(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32)
-    }
-
-    pub fn intersect(self, other: WindowRect) -> Option<WindowRect> {
-        let x0 = self.x0().max(other.x0());
-        let y0 = self.y0().max(other.y0());
-        let x1 = self.x1().min(other.x1());
-        let y1 = self.y1().min(other.y1());
-        if x1 > x0 && y1 > y0 {
-            Some(WindowRect::from_xywh(
-                x0,
-                y0,
-                (x1 - x0) as u32,
-                (y1 - y0) as u32,
-            ))
-        } else {
-            None
-        }
-    }
-
     /// Lift this window-local rect into plane coordinates anchored at
     /// `canvas_origin`. Inverse of [`CanvasRect::to_window`].
     pub fn to_canvas(self, canvas_origin: CanvasPoint) -> CanvasRect {
-        CanvasRect {
-            origin: self.origin.to_canvas(canvas_origin),
-            width: self.width,
-            height: self.height,
-        }
+        CanvasRect::new(
+            self.origin.to_canvas(canvas_origin),
+            self.width,
+            self.height,
+        )
+    }
+}
+
+impl CanvasRect {
+    /// Express this plane rect in window-local coordinates anchored at
+    /// `canvas_origin`. Inverse of [`WindowRect::to_canvas`].
+    pub fn to_window(self, canvas_origin: CanvasPoint) -> WindowRect {
+        WindowRect::new(
+            self.origin.to_window(canvas_origin),
+            self.width,
+            self.height,
+        )
+    }
+}
+
+/// A point in the **plane** frame (see [`Plane`]).
+pub type CanvasPoint = Point<Plane>;
+/// A rect in the **plane** frame (see [`Plane`]).
+pub type CanvasRect = Rect<Plane>;
+/// A point in the **window-local** frame (see [`Window`]).
+pub type WindowPoint = Point<Window>;
+/// A rect in the **window-local** frame (see [`Window`]).
+pub type WindowRect = Rect<Window>;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct LayerPoint {
+    pub x: u32,
+    pub y: u32,
+}
+
+impl LayerPoint {
+    pub const fn new(x: u32, y: u32) -> Self {
+        LayerPoint { x, y }
     }
 }
 
@@ -625,5 +585,26 @@ mod tests {
         let b = WindowRect::from_xywh(5, 5, 10, 10);
         assert_eq!(a.intersect(b), Some(WindowRect::from_xywh(5, 5, 5, 5)));
         assert_eq!(a.union(b), WindowRect::from_xywh(0, 0, 15, 15));
+    }
+
+    #[test]
+    fn canvas_point_to_window_is_inverse_of_to_canvas() {
+        let origin = CanvasPoint::new(40, -15);
+        let p = CanvasPoint::new(43, -8);
+        let w = p.to_window(origin);
+        assert_eq!(w, WindowPoint::new(3, 7));
+        assert_eq!(w.to_canvas(origin), p);
+    }
+
+    #[test]
+    fn window_rect_shares_generic_algebra() {
+        // contains/round_outward are now available on the window-local frame
+        // too (they came for free from the generic `Rect<S>`).
+        let outer = WindowRect::from_xywh(0, 0, 100, 100);
+        assert!(outer.contains(WindowRect::from_xywh(10, 10, 5, 5)));
+        assert_eq!(
+            WindowRect::from_xywh(0, 0, 257, 1).round_outward(256),
+            WindowRect::from_xywh(0, 0, 512, 256)
+        );
     }
 }
