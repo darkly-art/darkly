@@ -125,9 +125,8 @@ For a feature to count, it must be:
 - [x] Merge down
 - [x] Duplicate layer / group
 - [x] Crop to selection
-- [ ] Interactive crop tool
-- [x] Canvas resize (dimensions + 9-point anchor)
-- [ ] Canvas resize with content scaling
+- [x] Canvas resize
+- [x] Image rescale
 - [x] Select All / Deselect / Invert as menu+hotkey actions
 - [x] Invert selection (boolean op exists)
 - [x] Command palette (Ctrl+Shift+P)

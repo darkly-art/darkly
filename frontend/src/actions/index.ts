@@ -4,6 +4,7 @@ import { config } from '../config/store.svelte';
 import { settings } from '../state/settings.svelte';
 import { newDocument } from '../state/newDocument.svelte';
 import { resizeCanvas } from '../state/resizeCanvas.svelte';
+import { imageRescale } from '../state/imageRescale.svelte';
 import { exportImage } from '../state/exportImage.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
 import { toast } from '../state/toast.svelte';
@@ -263,7 +264,7 @@ export function registerActions() {
         description: 'Undo the last action.',
         icon: 'fa6-solid:rotate-left',
         menuPath: ['Edit:10'],
-        handler: () => { app.handle?.undo(); app.refreshLayerTree(); },
+        handler: () => { app.handle?.undo(); app.syncCanvasRect(); app.refreshLayerTree(); },
     });
     actions.register({
         id: 'redo',
@@ -272,7 +273,7 @@ export function registerActions() {
         description: 'Redo the last undone action.',
         icon: 'fa6-solid:rotate-right',
         menuPath: ['Edit:20'],
-        handler: () => { app.handle?.redo(); app.refreshLayerTree(); },
+        handler: () => { app.handle?.redo(); app.syncCanvasRect(); app.refreshLayerTree(); },
     });
 
     // -- Colors --
@@ -348,6 +349,18 @@ export function registerActions() {
         handler: () => {
             if (!app.handle) return;
             resizeCanvas.open = true;
+        },
+    });
+    actions.register({
+        id: 'rescaleImage',
+        displayName: 'Image Size…',
+        category: 'edit',
+        description: 'Resample all layers to new document dimensions.',
+        icon: 'fa6-solid:expand',
+        menuPath: ['Image:11'],
+        handler: () => {
+            if (!app.handle) return;
+            imageRescale.open = true;
         },
     });
     actions.register({

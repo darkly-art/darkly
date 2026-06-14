@@ -687,31 +687,106 @@ impl DarklyEngine {
             self.apply_canvas_rect_to_compositor();
         }
 
-        // If this is a GPU region action, execute the texture restore.
-        // Node id resolves to the right texture via the unified node-texture
-        // pool — caller no longer dispatches by format.
-        if let Some(entry) = action.gpu_region_entry_mut() {
+        // Execute every GPU region restore this action owns. Most actions own
+        // one; image rescale owns one per pixel-bearing node (and the snapshot
+        // restores across a texture extent change — see below). Node id
+        // resolves to the right texture via the unified node-texture pool.
+        let label = match direction {
+            UndoDirection::Undo => "undo-restore",
+            UndoDirection::Redo => "redo-restore",
+        };
+        for entry in action.gpu_region_entries_mut() {
             let node_id = entry.layer_id;
-            let frame = self
-                .compositor
-                .node_texture(node_id)
-                .map(|t| t.canvas_frame());
-            if let Some(frame) = frame {
-                let label = match direction {
-                    UndoDirection::Undo => "undo-restore",
-                    UndoDirection::Redo => "redo-restore",
-                };
-                restore_gpu_region(
-                    &self.gpu,
-                    &self.region_scratch,
-                    &mut self.readbacks,
-                    entry,
-                    &frame,
-                    label,
-                );
-                // Restored pixels — refresh the panel thumbnail.
-                self.compositor.mark_node_pixels_dirty(node_id);
+            let cur_extent = match self.compositor.node_texture(node_id) {
+                Some(t) => t.canvas_extent(),
+                None => continue,
+            };
+            // A content-scaling rescale swaps the node's document `PixelBuffer.
+            // bounds` in undo/redo; when the GPU texture no longer matches, the
+            // texture must be realloc'd to the doc bounds before the snapshot is
+            // uploaded (the per-node analogue of the canvas-rect reconcile).
+            // Normal actions keep doc bounds == texture extent (growth is
+            // document-led), so `target_extent` is `None` and this is the plain
+            // path. `entry.canvas_rect` is a sub-rect for paint, so it can't be
+            // used to detect the extent change — the doc bounds are the signal.
+            let target_extent = self
+                .doc
+                .node_pixel_bounds(node_id)
+                .filter(|b| *b != cur_extent);
+
+            match target_extent {
+                None => {
+                    // Constant-extent restore (paint, transform, mask, and any
+                    // rescale node whose size didn't change): capture the
+                    // entry's rect and upload, in one encoder.
+                    let frame = self
+                        .compositor
+                        .node_texture(node_id)
+                        .expect("checked above")
+                        .canvas_frame();
+                    restore_gpu_region(
+                        &self.gpu,
+                        &self.region_scratch,
+                        &mut self.readbacks,
+                        entry,
+                        &frame,
+                        label,
+                    );
+                }
+                Some(target_extent) => {
+                    // Extent-changing restore (image rescale): capture the
+                    // *whole* current texture (the opposite-direction content)
+                    // for the forward entry, realloc the node texture to the doc
+                    // bounds (cleared), then upload the saved pixels into it. The
+                    // capture must be submitted before the realloc drops the old
+                    // texture.
+                    let (forward, request) = {
+                        let cur_frame = self
+                            .compositor
+                            .node_texture(node_id)
+                            .expect("checked above")
+                            .canvas_frame();
+                        self.gpu.encode_ret(label, |enc| {
+                            self.region_scratch.capture_region(
+                                enc,
+                                &self.gpu.device,
+                                entry.layer_id,
+                                entry.format,
+                                &cur_frame,
+                                cur_extent,
+                            )
+                        })
+                    };
+                    self.readbacks.submit(
+                        request,
+                        ReadbackContext::UndoRegionReady {
+                            cell: forward.pixels.clone(),
+                        },
+                    );
+                    self.gpu.encode("undo-rescale-realloc", |enc| {
+                        self.compositor.realloc_node_texture(
+                            &self.gpu.device,
+                            &self.gpu.queue,
+                            enc,
+                            node_id,
+                            target_extent,
+                            false,
+                        );
+                    });
+                    let new_frame = self
+                        .compositor
+                        .node_texture(node_id)
+                        .expect("realloc'd above")
+                        .canvas_frame();
+                    self.gpu.encode(label, |enc| {
+                        self.region_scratch
+                            .upload_region(enc, &self.gpu.device, entry, &new_frame);
+                    });
+                    *entry = forward;
+                }
             }
+            // Restored pixels — refresh the panel thumbnail.
+            self.compositor.mark_node_pixels_dirty(node_id);
         }
 
         // If this is a selection GPU action, restore the selection texture
@@ -886,11 +961,10 @@ fn restore_gpu_region(
     frame: &CanvasFrame<'_>,
     label: &str,
 ) {
-    let request = gpu.encode_ret(label, |encoder| {
-        let (swapped, request) = region_scratch.restore_region(encoder, &gpu.device, entry, frame);
-        *entry = swapped;
-        request
+    let (forward, request) = gpu.encode_ret(label, |encoder| {
+        region_scratch.restore_region(encoder, &gpu.device, entry, frame)
     });
+    *entry = forward;
     scheduler.submit(
         request,
         ReadbackContext::UndoRegionReady {

@@ -39,6 +39,7 @@ pub mod paint_target;
 pub mod params;
 pub mod readback;
 pub mod region_store;
+pub mod rescale;
 pub mod selection;
 pub mod straight_composite;
 #[cfg(any(test, feature = "testing"))]
