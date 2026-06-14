@@ -351,6 +351,10 @@ mod tests {
         // Agnostic defaults present without picking an editor.
         assert_eq!(get_i64("animation.veil_divisor"), 2);
         assert_eq!(get_i64("canvas.width"), 1920);
+        // Autosave section (schema in sections/autosave.rs, defaults in yaml).
+        assert!(get_bool("autosave.enabled"));
+        assert_eq!(get_i64("autosave.intervalSeconds"), 120);
+        assert!(kind_is_int("autosave.intervalSeconds"));
         assert_eq!(get_str("hotkeys.nav.trigger"), "Space");
         assert!(get_bool("input.fingerPainting"));
         // Darkly-original hotkey defined in defaults.yaml (no reference-editor

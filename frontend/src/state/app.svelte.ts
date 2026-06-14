@@ -3,7 +3,6 @@ import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry } from '../tools/registry';
 import { pollPick } from '../tools/color_pick_sync';
 import { tickColorPickerCursor } from '../tools/colorpicker_cursor';
-import type { SaveBundle } from '../storage/saveDocument';
 import { CameraSource } from '../lib/cameraSource';
 
 export interface Color {
@@ -29,6 +28,15 @@ export class DarklyInstance {
         typeof crypto !== 'undefined' && 'randomUUID' in crypto
             ? crypto.randomUUID()
             : `instance-${Math.random().toString(36).slice(2)}`;
+
+    /** Stable key for this tab's crash-recovery snapshot. Distinct from
+     *  `id` so it reads clearly at the recovery-store boundary; repeated
+     *  autosaves overwrite one snapshot file per tab. A tab restored from
+     *  a snapshot gets a fresh `recoveryId` (it's a new live tab). */
+    readonly recoveryId: string =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+            ? crypto.randomUUID()
+            : `recovery-${Math.random().toString(36).slice(2)}`;
 
     handle = $state<DarklyHandle | null>(null);
 
@@ -710,18 +718,12 @@ export class DarklyInstance {
         this.requestFrame();
     }
 
-    // --- Async save result callback ---
-
-    private _saveCallback: ((bundle: SaveBundle) => void) | null = null;
-
-    /** Register a one-shot callback for when the async `.darkly` save
-     *  readback completes (manifest JSON + composite RGBA + per-blob
-     *  bytes arrive together). The caller PNG-encodes the composite +
-     *  thumbnail and assembles the zip; see `storage/saveDocument.ts`. */
-    onSaveResult(cb: (bundle: SaveBundle) => void) {
-        this._saveCallback = cb;
-        this.requestFrame();
-    }
+    // Note: `.darkly` save readbacks are NOT polled from the render loop.
+    // `storage/saveDocument.ts::produceDarklyBytes` self-drives via its own
+    // rAF, calling `handle.poll_save_result()` (which drains the readback
+    // scheduler itself). This lets a backgrounded tab finish an autosave
+    // snapshot without its render loop running — see the Rust
+    // `DarklyEngine::poll_save_result` "no-render drain".
 
     // --- Demand-driven rendering ---
 
@@ -744,6 +746,18 @@ export class DarklyInstance {
     endInteraction() {
         this._interactionCount = Math.max(0, this._interactionCount - 1);
         if (this._interactionCount === 0) this.requestFrame();
+    }
+
+    /** True while a canvas pointer stroke/drag is in flight (any tool).
+     *  Set by CanvasView's pointer dispatch. Generic, not brush-specific —
+     *  it gates autosave so a snapshot never captures a half-committed
+     *  stroke or runs its offscreen composite mid-stroke. */
+    pointerActive = $state(false);
+
+    /** Safe to take an autosave snapshot right now? False while the user
+     *  is mid-stroke on the canvas or mid-drag in the brush builder. */
+    get idleForSnapshot(): boolean {
+        return !this.pointerActive && this._interactionCount === 0;
     }
 
     /** Schedule a render frame if one isn't already pending. */
@@ -810,16 +824,6 @@ export class DarklyInstance {
                 }
             }
 
-            // Check for completed async `.darkly` save readbacks.
-            if (this._saveCallback) {
-                const bundle = this.handle.poll_save_result();
-                if (bundle) {
-                    const cb = this._saveCallback;
-                    this._saveCallback = null;
-                    cb(bundle);
-                }
-            }
-
             // Continue animation loop only when no UI interaction is
             // monopolizing the main thread.  One-shot renders (tool
             // actions, resize, etc.) always go through — only the
@@ -827,8 +831,7 @@ export class DarklyInstance {
             const shouldContinue =
                 needsMore ||
                 this._copyCallback ||
-                this._exportCallback ||
-                this._saveCallback;
+                this._exportCallback;
             if (shouldContinue && this._interactionCount === 0) {
                 this.requestFrame();
             }

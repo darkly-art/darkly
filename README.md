@@ -132,7 +132,7 @@ For a feature to count, it must be:
 - [x] Invert selection (boolean op exists)
 - [x] Command palette (Ctrl+Shift+P)
 - [x] Application menu (File/Edit/Select/… , pinnable to top bar)
-- [ ] Autosave + crash recovery
+- [x] Autosave + crash recovery
 - [ ] Brightness / Contrast
 - [ ] Hue / Saturation / Lightness
 - [ ] Levels

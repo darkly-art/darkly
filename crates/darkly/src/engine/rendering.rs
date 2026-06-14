@@ -311,11 +311,22 @@ impl DarklyEngine {
             }
         }
 
+        self.drain_readbacks() || any_completed
+    }
+
+    /// Poll the GPU readback scheduler once (non-blocking `device.poll`)
+    /// and dispatch every completed readback to its handler. Returns true
+    /// if any landed.
+    ///
+    /// Factored out of [`Self::poll_pending`] so the save flow can drain
+    /// its own readbacks from [`Self::poll_save_result`] — letting a
+    /// backgrounded tab finish a recovery snapshot without running a full
+    /// `render()`/present (only the focused tab renders).
+    pub(crate) fn drain_readbacks(&mut self) -> bool {
         let completed = self.readbacks.poll(&self.gpu.device);
         if completed.is_empty() {
-            return any_completed;
+            return false;
         }
-
         for (ctx, pixels) in completed {
             self.handle_completed_readback(ctx, pixels);
         }

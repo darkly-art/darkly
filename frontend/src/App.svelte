@@ -10,6 +10,7 @@
     import NewDocumentModal from './ui/NewDocumentModal.svelte';
     import ResizeCanvasModal from './ui/ResizeCanvasModal.svelte';
     import ConfirmDiscardModal from './ui/ConfirmDiscardModal.svelte';
+    import RecoveryModal from './ui/RecoveryModal.svelte';
     import AboutModal from './ui/AboutModal.svelte';
     import MenuBar from './ui/menu/MenuBar.svelte';
     import CommandPalette from './ui/menu/CommandPalette.svelte';
@@ -63,6 +64,7 @@
 <NewDocumentModal />
 <ResizeCanvasModal />
 <ConfirmDiscardModal />
+<RecoveryModal />
 <AboutModal />
 <CommandPalette />
 

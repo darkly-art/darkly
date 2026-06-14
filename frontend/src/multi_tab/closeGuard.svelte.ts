@@ -11,6 +11,14 @@
 
 import { shell } from './shell.svelte';
 import { saveDocument } from '../storage/saveDocument';
+import { removeSnapshot } from '../storage/recovery';
+import { sessionId } from '../state/recoverySession';
+
+/** Drop a tab's recovery snapshot — it's being closed deliberately, so its
+ *  unsaved work is no longer something to recover from a crash. */
+function clearSnapshot(recoveryId: string): void {
+    void removeSnapshot(sessionId, recoveryId).catch(() => {});
+}
 
 class CloseGuardState {
     /** True while the modal is mounted. */
@@ -36,6 +44,7 @@ class CloseGuardState {
         const inst = shell.instances.find(i => i.id === id);
         if (!inst) return;
         if (!inst.handle?.is_dirty()) {
+            clearSnapshot(inst.recoveryId);
             shell.close(id);
             return;
         }
@@ -53,6 +62,8 @@ class CloseGuardState {
         const id = this.tabId;
         this.open = false;
         this.tabId = '';
+        const inst = shell.instances.find(i => i.id === id);
+        if (inst) clearSnapshot(inst.recoveryId);
         shell.close(id);
     }
 

@@ -448,7 +448,9 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
 /// Pump the engine until a save completes. Caps iterations so a stuck
 /// readback fails the test rather than hanging.
 fn drive_save_to_completion(engine: &mut DarklyEngine) -> SaveBundle {
-    engine.start_save_document().expect("start save");
+    engine
+        .start_save_document(crate::engine::SavePurpose::File)
+        .expect("start save");
     for _ in 0..32 {
         engine.test_flush_readbacks();
         engine.render(0.0);
