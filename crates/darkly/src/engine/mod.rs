@@ -13,6 +13,7 @@ mod load;
 mod merge;
 mod modifiers;
 mod painting;
+pub mod protocol;
 pub mod rendering;
 pub mod save;
 pub mod types;
