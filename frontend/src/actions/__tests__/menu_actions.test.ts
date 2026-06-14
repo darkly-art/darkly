@@ -18,13 +18,13 @@ describe('menu action registrations', () => {
         // The command palette is surfaced as "Find", not as a submenu row.
         expect(actions.get('commandPalette')?.menuPath).toBeUndefined();
         expect(actions.get('openCheatsheet')?.menuPath).toEqual(['Help:10']);
-        expect(actions.get('aboutDarkly')?.menuPath).toEqual(['Help:20']);
+        expect(actions.get('aboutDarkly')?.menuPath).toEqual(['Help:50']);
     });
 
-    it('puts docs, website, and github links under Help, after about', () => {
-        expect(actions.get('openDocs')?.menuPath).toEqual(['Help:30']);
-        expect(actions.get('openWebsite')?.menuPath).toEqual(['Help:40']);
-        expect(actions.get('openGithub')?.menuPath).toEqual(['Help:50']);
+    it('puts docs, website, and github links under Help, before about', () => {
+        expect(actions.get('openDocs')?.menuPath).toEqual(['Help:20']);
+        expect(actions.get('openWebsite')?.menuPath).toEqual(['Help:30']);
+        expect(actions.get('openGithub')?.menuPath).toEqual(['Help:40']);
 
         const help = buildTopMenus(actions.all()).find(m => m.title === 'Help');
         const ids = help!.entries
@@ -32,10 +32,10 @@ describe('menu action registrations', () => {
             .map(e => (e as { actionId: string }).actionId);
         expect(ids).toEqual([
             'openCheatsheet',
-            'aboutDarkly',
             'openDocs',
             'openWebsite',
             'openGithub',
+            'aboutDarkly',
         ]);
     });
 
