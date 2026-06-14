@@ -59,7 +59,7 @@ use std::sync::Arc;
 
 use darkly::brush::paint_info::PaintInformation;
 use darkly::document::{MoveTarget, SelectionMode};
-use darkly::engine::{DarklyEngine, PickSource, StrokeOp};
+use darkly::engine::{DarklyEngine, PickSource, SavePurpose, StrokeOp};
 use darkly::gpu::context::{GpuContext, GpuDevice};
 use darkly::gpu::overlay::OverlayPrimitive;
 use darkly::gpu::params::{ParamDef, ParamValue};
@@ -1536,6 +1536,14 @@ impl DarklyHandle {
         self.engine.borrow().is_dirty()
     }
 
+    /// Force the document into the unsaved state. Used after restoring a
+    /// crash-recovery snapshot — the restored document has no backing
+    /// file, so it must read as dirty so closing the tab still prompts.
+    pub fn mark_dirty(&self) {
+        self.flush_if_needed();
+        self.engine.borrow_mut().mark_dirty();
+    }
+
     // --- Native save / open (.darkly container) ---
 
     /// Kick off a `.darkly` save. Builds the manifest synchronously,
@@ -1544,13 +1552,23 @@ impl DarklyHandle {
     /// pixel readback completes.
     ///
     /// Returns a string error when a save is already in flight on this
-    /// engine — the UI disables the Save action for the tab while a
-    /// save is active so this is an exceptional path.
-    pub fn start_save_document(&self) -> Result<(), JsError> {
+    /// engine (e.g. a manual Ctrl+S already holds the slot when an
+    /// autosave tick fires) — callers skip and retry.
+    ///
+    /// `snapshot = true` marks this an autosave recovery snapshot: the
+    /// eventual `poll_save_result` drain leaves the document's dirty flag
+    /// set (nothing reached the user's file). `false` is a real save and
+    /// clears dirty on completion.
+    pub fn start_save_document(&self, snapshot: bool) -> Result<(), JsError> {
         self.flush_if_needed();
+        let purpose = if snapshot {
+            SavePurpose::Snapshot
+        } else {
+            SavePurpose::File
+        };
         self.engine
             .borrow_mut()
-            .start_save_document()
+            .start_save_document(purpose)
             .map_err(|e| JsError::new(&e.to_string()))
     }
 

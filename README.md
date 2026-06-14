@@ -29,10 +29,6 @@ Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructi
 
 [![darkly](https://github.com/user-attachments/assets/647404d5-c2fe-4f9f-a1f9-7b532c3a3cd0)](https://demo.darkly.art)
 
-## Upcoming Kickstarter
-
-We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most. Help us make Darkly feature-complete, so we can rescue our friends and colleagues from the grip of corporate software!
-
 ## Features
 
 ### Node-Based Brush Engine
@@ -132,7 +128,7 @@ For a feature to count, it must be:
 - [x] Invert selection (boolean op exists)
 - [x] Command palette (Ctrl+Shift+P)
 - [x] Application menu (File/Edit/Select/… , pinnable to top bar)
-- [ ] Autosave + crash recovery
+- [x] Autosave + crash recovery
 - [ ] Brightness / Contrast
 - [ ] Hue / Saturation / Lightness
 - [ ] Levels

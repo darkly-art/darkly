@@ -49,6 +49,25 @@ impl std::fmt::Display for SaveError {
 
 impl std::error::Error for SaveError {}
 
+/// Why a save was kicked off — determines whether draining its result
+/// clears the document's [`crate::document::Document::dirty`] flag.
+///
+/// Autosave reuses the exact same readback pipeline as a real save, so
+/// without this distinction every autosave tick would mark the document
+/// clean even though nothing reached the user's file — silently
+/// suppressing the close-confirmation guard and the `beforeunload`
+/// warning that protect genuinely-unsaved work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SavePurpose {
+    /// A real save to the user's `.darkly` file. Draining clears `dirty`
+    /// — the document on disk now matches the snapshot we sealed.
+    File,
+    /// An autosave recovery snapshot written to OPFS. Draining must NOT
+    /// clear `dirty`: nothing reached the user's file, so unsaved-work
+    /// tracking must still see the document as dirty.
+    Snapshot,
+}
+
 /// Which kind of texture a pending [`ReadbackContext::SaveDocument`]
 /// readback is sourced from. Drives how the completed pixels are
 /// stitched into the [`SaveJob`]: per-blob bytes for pixel-bearing
@@ -87,6 +106,9 @@ pub struct SaveJob {
     /// Composite readback result. `None` until the `Composite` arm
     /// fires.
     composite: Option<(u32, u32, Vec<u8>)>,
+    /// Why this save was started — gates whether the drain clears
+    /// `doc.dirty` (see [`SavePurpose`]).
+    purpose: SavePurpose,
 }
 
 impl SaveJob {
@@ -102,7 +124,11 @@ impl DarklyEngine {
     /// every source texture, and queues all readbacks. Returns
     /// immediately; the result lands on [`Self::poll_save_result`] once
     /// every readback completes (typically within a few frames).
-    pub fn start_save_document(&mut self) -> Result<(), SaveError> {
+    ///
+    /// `purpose` decides whether the eventual drain clears `doc.dirty`:
+    /// [`SavePurpose::File`] does (the file matches disk), while an
+    /// autosave [`SavePurpose::Snapshot`] leaves it untouched.
+    pub fn start_save_document(&mut self, purpose: SavePurpose) -> Result<(), SaveError> {
         if self.active_save_job.is_some() {
             return Err(SaveError::InProgress);
         }
@@ -157,6 +183,7 @@ impl DarklyEngine {
             pinned_textures,
             pending_blobs,
             composite: None,
+            purpose,
         });
 
         Ok(())
@@ -166,13 +193,24 @@ impl DarklyEngine {
     /// still in flight; returns `Some(SaveBundle)` once every pixel
     /// blob and the composite have landed.
     ///
-    /// A successful drain also clears the [`Document::dirty`] flag — the
-    /// bundle handoff is the moment the document's contents are no
-    /// longer "unsaved." Edits queued between `start_save_document` and
-    /// this drain are intentionally lost from the dirty flag's POV: the
-    /// snapshot built at submit time is what's leaving the engine, so
-    /// the document on disk matches the snapshot we just sealed.
+    /// A [`SavePurpose::File`] drain also clears the [`Document::dirty`]
+    /// flag — the bundle handoff is the moment the document's contents
+    /// are no longer "unsaved." Edits queued between `start_save_document`
+    /// and this drain are intentionally lost from the dirty flag's POV:
+    /// the snapshot built at submit time is what's leaving the engine, so
+    /// the document on disk matches the snapshot we just sealed. A
+    /// [`SavePurpose::Snapshot`] (autosave) drain leaves `dirty` alone.
+    ///
+    /// Drives the readback scheduler itself before checking completion,
+    /// so a backgrounded tab — whose `render()` loop isn't running — can
+    /// still finish its snapshot when pumped via this method alone.
     pub fn poll_save_result(&mut self) -> Option<SaveBundle> {
+        // Advance any in-flight GPU readbacks (non-blocking) so a save can
+        // complete without a full render/present. Harmless no-op when the
+        // frame loop already drained this frame.
+        if self.active_save_job.is_some() {
+            self.drain_readbacks();
+        }
         let job = self.active_save_job.as_ref()?;
         if !job.is_complete() {
             return None;
@@ -190,7 +228,11 @@ impl DarklyEngine {
             .collect();
         // Stable ordering for tests + bit-stable output.
         blobs.sort_by(|a, b| a.path.cmp(&b.path));
-        self.doc.dirty = false;
+        // Only a real file save means "disk matches" — an autosave snapshot
+        // wrote to OPFS, not the user's file, so it must leave `dirty` set.
+        if job.purpose == SavePurpose::File {
+            self.doc.dirty = false;
+        }
         Some(SaveBundle {
             manifest_json,
             composite_width,
@@ -429,9 +471,11 @@ mod tests {
     fn save_in_progress_returns_err() {
         let mut engine = headless_engine(32, 32);
         let _layer = engine.add_raster_layer(None);
-        engine.start_save_document().expect("first save kicks off");
+        engine
+            .start_save_document(SavePurpose::File)
+            .expect("first save kicks off");
         let err = engine
-            .start_save_document()
+            .start_save_document(SavePurpose::File)
             .expect_err("second save must refuse");
         assert!(matches!(err, SaveError::InProgress));
     }
@@ -497,7 +541,9 @@ mod tests {
         let _layer = engine.add_raster_layer(None);
         assert!(engine.is_dirty(), "add_raster_layer must flip dirty");
 
-        engine.start_save_document().expect("save kicks off");
+        engine
+            .start_save_document(SavePurpose::File)
+            .expect("save kicks off");
         // Drive readbacks to completion.
         let mut bundle = None;
         for _ in 0..16 {
@@ -515,6 +561,65 @@ mod tests {
         );
     }
 
+    /// Regression: an autosave [`SavePurpose::Snapshot`] writes to OPFS,
+    /// not the user's file, so draining it must leave `dirty` set.
+    /// Otherwise the close-confirmation guard + `beforeunload` warning
+    /// would silently treat genuinely-unsaved work as saved.
+    #[test]
+    fn snapshot_save_does_not_clear_dirty() {
+        let mut engine = headless_engine(32, 32);
+        let _layer = engine.add_raster_layer(None);
+        assert!(engine.is_dirty(), "add_raster_layer must flip dirty");
+
+        engine
+            .start_save_document(SavePurpose::Snapshot)
+            .expect("snapshot save kicks off");
+        let mut bundle = None;
+        for _ in 0..16 {
+            engine.test_flush_readbacks();
+            engine.render(0.0);
+            if let Some(b) = engine.poll_save_result() {
+                bundle = Some(b);
+                break;
+            }
+        }
+        bundle.expect("snapshot should complete within 16 frames");
+        assert!(
+            engine.is_dirty(),
+            "autosave snapshot must NOT clear dirty — nothing reached the user's file"
+        );
+    }
+
+    /// A snapshot save must be drivable to completion via
+    /// `poll_save_result` alone — no `render()`/present — because a
+    /// backgrounded tab's render loop isn't running. `poll_save_result`
+    /// drains the readback scheduler itself.
+    #[test]
+    fn snapshot_completes_without_render() {
+        let mut engine = headless_engine(32, 32);
+        let _layer = engine.add_raster_layer(None);
+
+        engine
+            .start_save_document(SavePurpose::Snapshot)
+            .expect("snapshot save kicks off");
+        let mut bundle = None;
+        for _ in 0..32 {
+            // Native stand-in for the browser event loop: fire the GPU map
+            // callbacks but DON'T poll/dispatch the scheduler here — leave
+            // that to poll_save_result. NO engine.render() — the whole point.
+            engine.test_wait_gpu();
+            if let Some(b) = engine.poll_save_result() {
+                bundle = Some(b);
+                break;
+            }
+        }
+        let bundle = bundle.expect("snapshot must complete via poll alone, without render()");
+        assert!(
+            bundle.composite_width == 32 && bundle.composite_height == 32,
+            "composite dimensions should match the canvas"
+        );
+    }
+
     /// The save snapshot must survive concurrent edits — the manifest
     /// is built at submit time, GPU textures are refcount-pinned, and
     /// readbacks see GPU command-buffer state at submit time. Adding a
@@ -524,7 +629,9 @@ mod tests {
     fn save_concurrent_edit_does_not_corrupt() {
         let mut engine = headless_engine(32, 32);
         let _baseline = engine.add_raster_layer(None);
-        engine.start_save_document().expect("save kicks off");
+        engine
+            .start_save_document(SavePurpose::File)
+            .expect("save kicks off");
 
         // Mutate the document mid-save.
         let _added_mid_save = engine.add_raster_layer(None);

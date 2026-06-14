@@ -5,6 +5,12 @@ on:
   push:
     branches: [master]
 
+# Cancel an in-progress run when a newer commit is pushed to the same ref
+# (PR or branch), so we don't burn CI minutes on superseded commits.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"

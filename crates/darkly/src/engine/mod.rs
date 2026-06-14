@@ -21,7 +21,7 @@ mod veils;
 pub use export::ExportImageResult;
 pub use load::LoadDocument;
 pub use rendering::{PickSource, DEFAULT_THUMB_SIZE};
-pub use save::{SaveError, SaveJob, SaveReadbackKind};
+pub use save::{SaveError, SaveJob, SavePurpose, SaveReadbackKind};
 pub use types::{
     BlendModeTypeInfo, ClipboardExport, LayerInfo, LayerKindTypeInfo, ModifierInfo,
     ModifierTypeInfo, ParamInfo, StrokeOp, ToolTypeInfo, VeilInfo, VeilTypeInfo,
@@ -945,6 +945,19 @@ impl DarklyEngine {
         for (ctx, pixels) in completed {
             self.handle_completed_readback(ctx, pixels);
         }
+    }
+
+    /// Block on the GPU device only — fire map callbacks — WITHOUT
+    /// polling or dispatching the readback scheduler. On native this
+    /// stands in for the browser event loop that resolves buffer
+    /// mappings on web. For tests that must verify another code path
+    /// (e.g. `poll_save_result`) does the scheduler drain itself.
+    #[cfg(test)]
+    pub fn test_wait_gpu(&mut self) {
+        let _ = self.gpu.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
     }
 }
 
