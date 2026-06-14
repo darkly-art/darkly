@@ -7,6 +7,7 @@ mod duplicate;
 mod export;
 mod flatten;
 mod floating;
+mod image_rescale;
 mod layers;
 mod load;
 mod merge;
@@ -717,6 +718,37 @@ impl DarklyEngine {
             .find_modifier(id)
             .and_then(|m| m.pixels())
             .map(|p| p.bounds)
+    }
+
+    /// Test-only: whether the undo / redo stacks have anything to apply.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_can_undo(&self) -> bool {
+        self.undo_stack.can_undo()
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_can_redo(&self) -> bool {
+        self.undo_stack.can_redo()
+    }
+
+    /// Test-only: a pixel-bearing node's document-side `PixelBuffer.bounds`
+    /// (raster layer or mask modifier). Used to assert extents scale on rescale.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_node_pixel_bounds(&self, id: LayerId) -> Option<crate::coord::CanvasRect> {
+        self.doc.node_pixel_bounds(id)
+    }
+
+    /// Test-only: the mask modifier id attached to `host_id`, if any (the first
+    /// non-selection pixel-bearing modifier on the host).
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_mask_id(&self, host_id: LayerId) -> Option<LayerId> {
+        let node = self.doc.find_node(host_id)?;
+        node.modifiers().iter().copied().find(|&mid| {
+            self.doc
+                .find_modifier(mid)
+                .map(|m| m.as_selection().is_none() && m.pixels().is_some())
+                .unwrap_or(false)
+        })
     }
 
     /// Number of GPU textures the compositor currently holds across the

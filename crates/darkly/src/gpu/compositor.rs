@@ -44,6 +44,22 @@ pub const MAX_LAYER_DIM: u32 = 16384;
 /// reallocations regardless of dab count.
 pub const LAYER_GROWTH_CHUNK: u32 = 256;
 
+/// Scale a node's canvas extent about `origin` by `(sx, sy)` — the per-node
+/// extent math shared by image rescale's GPU pass and the engine's validation
+/// (so both predict the same new size). Width/height clamp to a 1px minimum.
+pub(crate) fn scaled_extent_about(
+    e: crate::coord::CanvasRect,
+    origin: crate::coord::CanvasPoint,
+    sx: f32,
+    sy: f32,
+) -> crate::coord::CanvasRect {
+    let nx0 = origin.x + ((e.origin.x - origin.x) as f32 * sx).round() as i32;
+    let ny0 = origin.y + ((e.origin.y - origin.y) as f32 * sy).round() as i32;
+    let nw = ((e.width as f32 * sx).round() as i32).max(1) as u32;
+    let nh = ((e.height as f32 * sy).round() as i32).max(1) as u32;
+    crate::coord::CanvasRect::from_xywh(nx0, ny0, nw, nh)
+}
+
 /// Read-only handle to an entity's GPU pixel storage. Returned by
 /// [`Compositor::pixel_data_for`] so callers that need to schedule a
 /// readback (today: the save pipeline) can find the texture for any
@@ -385,6 +401,9 @@ pub struct Compositor {
 
     // --- Floating Content Transform ---
     pub(super) transform_pass: crate::gpu::transform::TransformPass,
+
+    // --- Image rescale resampling ---
+    rescale_pass: crate::gpu::rescale::RescalePass,
 
     // --- Isolation (session state) ---
     /// When `Some(id)`, the render walk descends only into nodes on the
@@ -826,6 +845,7 @@ impl Compositor {
         let tool_overlay = ToolOverlay::new(device, queue, surface_format);
 
         let transform_pass = crate::gpu::transform::TransformPass::new(device);
+        let rescale_pass = crate::gpu::rescale::RescalePass::new(device);
         let content_bounds = ContentBoundsPass::new(device);
 
         Compositor {
@@ -858,6 +878,7 @@ impl Compositor {
             veil_chain,
             void_registry: VoidRegistry::new(),
             transform_pass,
+            rescale_pass,
             isolated_node: None,
             selection_state: None,
             content_bounds,
@@ -956,18 +977,11 @@ impl Compositor {
         self.mark_node_pixels_dirty(layer_id);
     }
 
-    /// Resize a layer's GPU texture to the given canvas-space extent.
-    ///
-    /// **Pure realization.** This method is a faithful reflection of the
-    /// requested extent — it does not compute unions or chunk-align. The
-    /// caller (engine-level `grow_layer`) is responsible for choosing
     /// Resize a node's GPU texture (raster layer or mask modifier) to a new
-    /// canvas extent. Format-agnostic — the existing texture's format drives
-    /// reallocation. If the node is unknown or already at `new_extent`, this
-    /// is a no-op. Otherwise the texture is reallocated and old contents are
-    /// `copy_texture_to_texture`'d into the new texture at the offset that
-    /// preserves their canvas-space anchor; new pixels start zeroed for RGBA
-    /// (transparent) and white-filled for R8 (full reveal).
+    /// canvas extent, copying old contents into the new texture at the offset
+    /// that preserves their canvas-space anchor. Thin wrapper over
+    /// [`realloc_node_texture`](Self::realloc_node_texture) with `copy_old =
+    /// true`.
     ///
     /// **Lockstep growth across host + modifiers is the engine's job** — it
     /// owns the document and walks `host.modifiers` to call this helper for
@@ -979,6 +993,32 @@ impl Compositor {
         encoder: &mut wgpu::CommandEncoder,
         node_id: LayerId,
         new_extent: CanvasRect,
+    ) {
+        self.realloc_node_texture(device, queue, encoder, node_id, new_extent, true);
+    }
+
+    /// Reallocate a node's GPU texture (raster layer or mask modifier) to a new
+    /// canvas extent.
+    ///
+    /// **Pure realization.** A faithful reflection of the requested extent — it
+    /// does not compute unions or chunk-align; the caller chooses `new_extent`.
+    /// Format-agnostic: the existing texture's format drives reallocation. If
+    /// the node is unknown or already at `new_extent`, this is a no-op.
+    ///
+    /// When `copy_old` is `true`, the old contents are
+    /// `copy_texture_to_texture`'d into the new texture at the canvas-anchored
+    /// offset; uncovered pixels start zeroed for RGBA (transparent) and
+    /// white-filled for R8 (full reveal). When `copy_old` is `false`, the new
+    /// texture is left at its allocation default (cleared) — used by undo
+    /// restores that immediately upload the authoritative pixels themselves.
+    pub fn realloc_node_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        node_id: LayerId,
+        new_extent: CanvasRect,
+        copy_old: bool,
     ) {
         let (current, format) = match self.node_textures.get(&node_id) {
             Some(t) => (t.canvas_extent(), t.format()),
@@ -993,40 +1033,79 @@ impl Compositor {
                 LayerTexture::new_mask_with_extent(device, queue, new_extent)
             }
             wgpu::TextureFormat::Rgba8Unorm => LayerTexture::with_bounds(device, new_extent),
-            other => panic!("resize_node_texture: unsupported format {other:?}"),
+            other => panic!("realloc_node_texture: unsupported format {other:?}"),
         };
 
-        let old_tex = self
-            .node_textures
-            .get(&node_id)
-            .expect("node_textures entry checked above");
-        let copy_dst_x = (current.origin.x - new_extent.origin.x) as u32;
-        let copy_dst_y = (current.origin.y - new_extent.origin.y) as u32;
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: old_tex.texture(),
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: new_tex.texture(),
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: copy_dst_x,
-                    y: copy_dst_y,
-                    z: 0,
+        if copy_old {
+            let old_tex = self
+                .node_textures
+                .get(&node_id)
+                .expect("node_textures entry checked above");
+            let copy_dst_x = (current.origin.x - new_extent.origin.x) as u32;
+            let copy_dst_y = (current.origin.y - new_extent.origin.y) as u32;
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: old_tex.texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
                 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: current.width,
-                height: current.height,
-                depth_or_array_layers: 1,
-            },
-        );
+                wgpu::TexelCopyTextureInfo {
+                    texture: new_tex.texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: copy_dst_x,
+                        y: copy_dst_y,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: current.width,
+                    height: current.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
 
+        self.swap_node_texture(device, queue, node_id, new_tex);
+
+        // Resize rewrites the texture; thumbnail must reflect the new
+        // extent + transferred pixels.
+        self.mark_node_pixels_dirty(node_id);
+        self.mark_dirty();
+    }
+
+    /// Replace a node's texture handle and rebuild the cached state that
+    /// referenced the old view. Shared by every path that swaps a node texture
+    /// out from under the compositor (resize/realloc, rescale).
+    fn swap_node_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        node_id: LayerId,
+        new_tex: LayerTexture,
+    ) {
         self.node_textures.insert(node_id, new_tex);
+
+        // A content layer's blend uniform bakes in the texture's canvas extent
+        // (`layer_offset` / `layer_size`). The extent may have just changed, so
+        // refresh it from the cached blend props — otherwise the composite
+        // samples the new texture through stale geometry (the post-resize
+        // squash `BlendUniforms` is designed to make unrepresentable). Masks
+        // have no layer_cache entry and are unaffected.
+        if let Some(cache) = self.layer_cache.get(&node_id) {
+            let ext = self.node_textures[&node_id].canvas_extent();
+            let uniforms = BlendUniforms {
+                opacity: cache.opacity,
+                blend_mode: cache.blend_mode,
+                isolated: cache.isolated as u32,
+                _pad1: 0.0,
+                layer_offset: [ext.x0() as f32, ext.y0() as f32],
+                layer_size: [ext.width as f32, ext.height as f32],
+            };
+            queue.write_buffer(&cache.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        }
 
         // Any cached blend bind groups using this node (as parent or child)
         // reference the now-replaced texture view; drop them so the next
@@ -1048,10 +1127,43 @@ impl Compositor {
             });
             self.mask_bind_groups.insert(node_id, mask_bg);
         }
+    }
 
-        // Resize rewrites the texture; thumbnail must reflect the new
-        // extent + transferred pixels.
-        self.mark_node_pixels_dirty(node_id);
+    /// Resample each node's texture from its current extent into a new extent
+    /// scaled about the canvas origin by `(sx, sy)` — the GPU half of image
+    /// rescale. Replaces each node texture (rebuilding cached bind groups via
+    /// [`swap_node_texture`](Self::swap_node_texture)) and marks pixels dirty.
+    ///
+    /// The engine owns the document side (extent bounds, undo snapshots) and
+    /// reads the resulting extents back from `node_texture(id).canvas_extent()`.
+    pub fn rescale_nodes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        node_ids: &[LayerId],
+        sx: f32,
+        sy: f32,
+    ) {
+        let origin = self.canvas_origin;
+        for &id in node_ids {
+            let (old_extent, format) = match self.node_textures.get(&id) {
+                Some(t) => (t.canvas_extent(), t.format()),
+                None => continue,
+            };
+            let new_extent = scaled_extent_about(old_extent, origin, sx, sy);
+            let new_tex = {
+                let src = self
+                    .node_textures
+                    .get(&id)
+                    .expect("node_textures entry checked above");
+                self.rescale_pass.resample_node(
+                    device, queue, encoder, src, new_extent, origin, sx, sy, format,
+                )
+            };
+            self.swap_node_texture(device, queue, id, new_tex);
+            self.mark_node_pixels_dirty(id);
+        }
         self.mark_dirty();
     }
 

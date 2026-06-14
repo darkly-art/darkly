@@ -118,6 +118,12 @@ enum Command {
     },
     /// Crop the canvas window to the active selection's plane bounds.
     CropToSelection,
+    /// Image rescale ("Image Size"): resample all layer + mask content to new
+    /// document dimensions. Unlike `ResizeCanvasRect`, content is scaled.
+    RescaleImage {
+        w: u32,
+        h: u32,
+    },
 
     // Selection
     SelectRect {
@@ -254,6 +260,7 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
                 engine.resize_canvas(rect);
             }
             Command::CropToSelection => engine.crop_to_selection(),
+            Command::RescaleImage { w, h } => engine.rescale_image(w, h),
             Command::FillBackground(id) => engine.fill_background(LayerId::from_ffi(id)),
             Command::FillBackgroundColor(id, c) => {
                 engine.fill_background_color(LayerId::from_ffi(id), c)
@@ -502,6 +509,7 @@ impl DarklySession {
                 doc_height,
             )),
             commands: RefCell::new(Vec::new()),
+            last_frame_count: std::cell::Cell::new(0.0),
         }
     }
 }
@@ -522,6 +530,15 @@ pub struct DarklyHandle {
     /// Unified command queue — all fire-and-forget mutations are queued here.
     /// Drained by [`render`] or [`flush_if_needed`].
     commands: RefCell<Vec<Command>>,
+    /// Borrow-free mirror of the engine's master frame counter. Refreshed
+    /// whenever [`frame_count`](Self::frame_count) successfully borrows the
+    /// engine; read back when it can't. The rAF loop calls `frame_count`
+    /// *before* `render`, and WebGPU event pumping can run that rAF callback
+    /// *inside* an outer `render`'s `borrow_mut` (see the re-entrancy note at
+    /// the top of this module) — so this read, like `render`, must tolerate a
+    /// busy engine instead of panicking. A one-frame-stale counter is harmless
+    /// (it only phase-locks throttle divisors).
+    last_frame_count: std::cell::Cell<f64>,
 }
 
 impl DarklyHandle {
@@ -666,6 +683,7 @@ impl DarklyHandle {
         DarklyHandle {
             engine: RefCell::new(DarklyEngine::new(gpu, doc_width, doc_height)),
             commands: RefCell::new(Vec::new()),
+            last_frame_count: std::cell::Cell::new(0.0),
         }
     }
 
@@ -1521,6 +1539,13 @@ impl DarklyHandle {
         self.push(Command::CropToSelection);
     }
 
+    /// Image rescale ("Image Size"): resample all layer + mask content to new
+    /// document dimensions `(w, h)`. The canvas origin stays; content is scaled
+    /// (lossy, undoable). Queued; applied on the next drain.
+    pub fn rescale_image(&self, w: u32, h: u32) {
+        self.push(Command::RescaleImage { w, h });
+    }
+
     /// Rename the document. Not undoable — matches every other editor's
     /// title-bar rename affordance. Subsequent saves write the new name
     /// into `manifest.name`.
@@ -2022,7 +2047,17 @@ impl DarklyHandle {
     /// `u64` directly — values up to 2^53 round-trip exactly, more than
     /// enough for ~3 million years at 60Hz.
     pub fn frame_count(&self) -> f64 {
-        self.engine.borrow().frame_count() as f64
+        // The rAF loop reads this *before* `render`, and WebGPU event pumping
+        // can run that rAF inside an outer `render`'s `borrow_mut` (module
+        // re-entrancy note) — so a plain `borrow()` here would panic exactly
+        // like a re-entrant `render` would without its `try_borrow_mut`. Fall
+        // back to the last-seen value when the engine is busy; refresh the
+        // mirror whenever we can. Stale-by-one-frame only nudges throttle
+        // divisor phase, never correctness.
+        if let Ok(engine) = self.engine.try_borrow() {
+            self.last_frame_count.set(engine.frame_count() as f64);
+        }
+        self.last_frame_count.get()
     }
 
     /// Engine-side thumbnail dimension used by the auto-queue path. The

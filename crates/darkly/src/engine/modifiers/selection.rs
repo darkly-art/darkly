@@ -336,8 +336,22 @@ impl DarklyEngine {
     }
 
     pub fn clear_selection(&mut self) {
+        if let Some((was_active, entry)) = self.clear_selection_collecting_undo() {
+            self.push_undo(Box::new(SelectionAction::new(was_active, entry)));
+        }
+    }
+
+    /// Clear the active selection and return its undo data `(was_active,
+    /// entry)` **without** pushing an undo step — the caller records it. The
+    /// public [`clear_selection`](Self::clear_selection) wraps it in a
+    /// `SelectionAction`; image rescale folds the pair into its single undo
+    /// step (so a rescale-with-active-selection undoes in one operation).
+    /// Returns `None` when there is no active selection.
+    pub(crate) fn clear_selection_collecting_undo(
+        &mut self,
+    ) -> Option<(bool, crate::gpu::region_store::UndoRegionEntry)> {
         if !self.has_selection() {
-            return;
+            return None;
         }
         let rect = self
             .selection_pixel_bounds()
@@ -354,9 +368,10 @@ impl DarklyEngine {
         self.set_selection_active(false);
         self.invalidate_selection_cpu_cache();
 
-        self.commit_selection_undo(was_active, rect);
+        let entry = self.commit_selection_undo_entry(rect)?;
         self.selection_overlay.clear();
         self.push_merged_overlay();
+        Some((was_active, entry))
     }
 
     pub fn select_all(&mut self) {
@@ -578,22 +593,32 @@ impl DarklyEngine {
     }
 
     pub(crate) fn commit_selection_undo(&mut self, was_active: bool, rect: CanvasRect) {
+        if let Some(entry) = self.commit_selection_undo_entry(rect) {
+            self.push_undo(Box::new(SelectionAction::new(was_active, entry)));
+        }
+    }
+
+    /// Build the selection's GPU undo entry from the pending snapshot (paired
+    /// with a prior [`save_selection_for_undo`](Self::save_selection_for_undo))
+    /// without pushing an action. Returns `None` if the snapshot or selection
+    /// modifier is missing.
+    fn commit_selection_undo_entry(
+        &mut self,
+        rect: CanvasRect,
+    ) -> Option<crate::gpu::region_store::UndoRegionEntry> {
         let Some(snap) = self.pending_selection_snapshot.take() else {
             debug_assert!(false, "commit_selection_undo without a paired save");
-            return;
+            return None;
         };
         let modifier_id = match self.selection_modifier_id() {
             Some(id) => id,
             None => {
                 debug_assert!(false, "commit_selection_undo without a selection modifier");
-                return;
+                return None;
             }
         };
-        let frame = match self.compositor.selection_state() {
-            Some(s) => s.canvas_frame(),
-            None => return,
-        };
-        let entry = commit_undo_region(
+        let frame = self.compositor.selection_state()?.canvas_frame();
+        Some(commit_undo_region(
             &self.gpu,
             &self.region_scratch,
             &mut self.readbacks,
@@ -602,8 +627,7 @@ impl DarklyEngine {
             &frame,
             &snap,
             rect,
-        );
-        self.push_undo(Box::new(SelectionAction::new(was_active, entry)));
+        ))
     }
 
     /// Full-canvas undo rect — used when post-op extent isn't known up-front.
