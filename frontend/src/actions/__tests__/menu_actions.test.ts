@@ -21,6 +21,24 @@ describe('menu action registrations', () => {
         expect(actions.get('aboutDarkly')?.menuPath).toEqual(['Help:20']);
     });
 
+    it('puts docs, website, and github links under Help, after about', () => {
+        expect(actions.get('openDocs')?.menuPath).toEqual(['Help:30']);
+        expect(actions.get('openWebsite')?.menuPath).toEqual(['Help:40']);
+        expect(actions.get('openGithub')?.menuPath).toEqual(['Help:50']);
+
+        const help = buildTopMenus(actions.all()).find(m => m.title === 'Help');
+        const ids = help!.entries
+            .filter(e => e.kind === 'action')
+            .map(e => (e as { actionId: string }).actionId);
+        expect(ids).toEqual([
+            'openCheatsheet',
+            'aboutDarkly',
+            'openDocs',
+            'openWebsite',
+            'openGithub',
+        ]);
+    });
+
     it('puts the selection commands under Select', () => {
         for (const id of ['selectAll', 'clearSelection', 'invertSelection', 'clearSelectionContents']) {
             const seg = actions.get(id)?.menuPath?.[0];
