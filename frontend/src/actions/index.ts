@@ -361,7 +361,7 @@ export function registerActions() {
         id: 'rescaleImage',
         displayName: 'Scale Image to New Size',
         category: 'edit',
-        description: 'Resample all layers to new document dimensions.',
+        description: 'Resize all layers to new document dimensions.',
         icon: 'fa6-solid:expand',
         menuPath: ['Image:11'],
         handler: () => {
