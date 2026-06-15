@@ -1,8 +1,8 @@
-import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
+import type { Engine } from '../engine/protocol';
 import type { Component } from 'svelte';
 
 export interface ToolContext {
-    handle: DarklyHandle;
+    engine: Engine;
     canvasEl: HTMLCanvasElement;
     screenToCanvas: (screenX: number, screenY: number) => { x: number; y: number };
 }

@@ -80,7 +80,7 @@
     }
 
     async function handleCopy() {
-        const yaml = brushGraph.exportYaml();
+        const yaml = await brushGraph.exportYaml();
         if (!yaml) {
             toast.show('error', 'Nothing to copy');
             return;
@@ -105,7 +105,7 @@
             toast.show('warning', 'Clipboard is empty');
             return;
         }
-        const err = brushGraph.importYaml(text);
+        const err = await brushGraph.importYaml(text);
         if (err) {
             toast.show('error', err);
         } else {

@@ -53,11 +53,15 @@ fn transport_enqueue_under_held_borrow_does_not_panic() {
     let transport = Transport::new();
 
     let _render_guard = cell.borrow_mut(); // render in flight
-    // Re-entrant enqueue (as if fired inside submit()'s event pump):
+                                           // Re-entrant enqueue (as if fired inside submit()'s event pump):
     transport.enqueue(1, "add_raster", json!({ "anchor": -1 }), Vec::new());
     transport.enqueue(2, "layer_tree", json!(null), Vec::new());
 
-    assert_eq!(transport.pending(), 2, "requests queued, nothing dispatched yet");
+    assert_eq!(
+        transport.pending(),
+        2,
+        "requests queued, nothing dispatched yet"
+    );
 }
 
 /// Invariant #2: try_drain yields `Busy` (reschedule) instead of panicking when
@@ -85,5 +89,9 @@ fn transport_try_drain_under_held_borrow_reschedules() {
         }
         DrainOutcome::Busy => panic!("engine is free; drain should succeed"),
     }
-    assert_eq!(transport.pending(), 0, "FIFO emptied after a successful drain");
+    assert_eq!(
+        transport.pending(),
+        0,
+        "FIFO emptied after a successful drain"
+    );
 }

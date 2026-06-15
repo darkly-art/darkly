@@ -27,8 +27,8 @@
 
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
-        if (app.handle) {
-            app.handle.set_veil_visible(veil.index, !veil.visible);
+        if (app.engine) {
+            app.engine.post('set_veil_visible', { index: veil.index, visible: !veil.visible });
             onupdate();
         }
     }
@@ -67,7 +67,7 @@
         e.stopPropagation();
         dropPos = 'none';
         const draggedIdx = e.dataTransfer?.getData('application/x-veil');
-        if (draggedIdx == null || !app.handle) return;
+        if (draggedIdx == null || !app.engine) return;
         const from = Number(draggedIdx);
         if (from === veil.index) return;
 

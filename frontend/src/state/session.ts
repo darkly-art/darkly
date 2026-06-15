@@ -1,4 +1,5 @@
-import init, { DarklySession, DarklyHandle } from '../../wasm/pkg/darkly_wasm';
+import init, { DarklySession } from '../../wasm/pkg/darkly_wasm';
+import { Engine } from '../engine/protocol';
 
 /**
  * Process-level WASM bootstrap + shared `DarklySession`.
@@ -33,7 +34,8 @@ export async function createHandle(
     canvas: HTMLCanvasElement,
     docWidth: number,
     docHeight: number,
-): Promise<DarklyHandle> {
+): Promise<Engine> {
     const session = await getSession();
-    return session.createHandle(canvas, docWidth, docHeight);
+    const handle = await session.createHandle(canvas, docWidth, docHeight);
+    return new Engine(handle);
 }

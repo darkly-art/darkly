@@ -225,7 +225,7 @@
                 if (!isEditing) shell.focus(inst.id);
             }}
             ondblclick={() => startRename(inst.id)}
-            onauxclick={(e) => { if (e.button === 1) { e.preventDefault(); closeGuard.guardedClose(inst.id); } }}
+            onauxclick={(e) => { if (e.button === 1) { e.preventDefault(); void closeGuard.guardedClose(inst.id); } }}
         >
             {#if isEditing}
                 <input
@@ -244,7 +244,7 @@
                     class="close"
                     tabindex="-1"
                     aria-label="Close tab"
-                    onclick={(e) => { e.stopPropagation(); closeGuard.guardedClose(inst.id); }}
+                    onclick={(e) => { e.stopPropagation(); void closeGuard.guardedClose(inst.id); }}
                 >×</button>
             {/if}
         </div>

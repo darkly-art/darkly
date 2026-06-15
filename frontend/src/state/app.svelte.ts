@@ -1,4 +1,4 @@
-import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
+import type { Engine, EngineState } from '../engine/protocol';
 import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry } from '../tools/registry';
 import { pollPick } from '../tools/color_pick_sync';
@@ -8,6 +8,39 @@ import { CameraSource } from '../lib/cameraSource';
 
 export interface Color {
     r: number; g: number; b: number; a: number;
+}
+
+/** Packed `poll_save_result` payload: every byte blob concatenated into one
+ *  `bytes` buffer, with the lengths needed to slice them back out. */
+interface PackedSaveResult {
+    manifestLen: number;
+    compositeWidth: number;
+    compositeHeight: number;
+    compositeLen: number;
+    blobs: Array<{ path: string; len: number }>;
+    bytes: Uint8Array;
+}
+
+/** Reconstruct the {@link SaveBundle} `saveDocument.ts` expects from the packed
+ *  protocol result (manifest ++ composite ++ blob0 ++ blob1 ++ … in `bytes`). */
+function unpackSaveBundle(p: PackedSaveResult): SaveBundle {
+    let off = 0;
+    const manifestJson = p.bytes.subarray(off, off + p.manifestLen);
+    off += p.manifestLen;
+    const compositeRgba = p.bytes.subarray(off, off + p.compositeLen);
+    off += p.compositeLen;
+    const blobs = p.blobs.map((b) => {
+        const bytes = p.bytes.subarray(off, off + b.len);
+        off += b.len;
+        return { path: b.path, bytes };
+    });
+    return {
+        manifestJson,
+        compositeWidth: p.compositeWidth,
+        compositeHeight: p.compositeHeight,
+        compositeRgba,
+        blobs,
+    };
 }
 
 /**
@@ -30,7 +63,7 @@ export class DarklyInstance {
             ? crypto.randomUUID()
             : `instance-${Math.random().toString(36).slice(2)}`;
 
-    handle = $state<DarklyHandle | null>(null);
+    engine = $state<Engine | null>(null);
 
     /** Initial document name to apply once the WASM handle finishes
      *  bootstrapping. The shell uses this to thread "Untitled N"
@@ -58,7 +91,17 @@ export class DarklyInstance {
     /** One-shot hook fired by `createInstance` once `handle` is set.
      *  Used by the Open Document flow to load a `.darkly` payload
      *  into a freshly-opened tab. Cleared after firing. */
-    onHandleReady: ((handle: DarklyHandle) => void) | null = null;
+    onHandleReady: ((engine: Engine) => void) | null = null;
+
+    /** Synchronously-readable mirror of engine state, refreshed from
+     *  `engine.render`'s returned snapshot each frame (no per-frame query — it's
+     *  a downhill projection of render's one borrow). The single home for every
+     *  value the UI caches: frame/thumbnail counters and document bools. UI
+     *  consumers that can't `await` — `$derived`, menu `enabled()` gates,
+     *  `beforeunload` — read this instead of querying the engine. `$state` so
+     *  they re-derive when it changes. Grows as the UI needs more (see Rust
+     *  `EngineState`). Null until the first frame renders. */
+    engineState = $state<EngineState | null>(null);
 
     // Colors
     foreground = $state<Color>({ r: 0, g: 0, b: 0, a: 255 });
@@ -108,26 +151,28 @@ export class DarklyInstance {
      *  one pass. Called once during editor init, before action registration
      *  and before `this.handle` is set, so the maps are ready by the time any
      *  UI mounts. */
-    loadRegistries(handle: { tool_types(): string; veil_types(): string;
-        void_types(): string;
-        blend_mode_types(): string; modifier_types(): string;
-        layer_kind_types(): string }) {
-        const buildMap = (json: string): Record<string, string> => {
-            try {
-                const arr = JSON.parse(json) as Array<{ type: string; displayName: string }>;
-                const m: Record<string, string> = {};
-                for (const e of arr) m[e.type] = e.displayName;
-                return m;
-            } catch {
-                return {};
-            }
+    async loadRegistries(engine: Engine) {
+        const buildMap = (
+            arr: Array<{ type: string; displayName: string }>,
+        ): Record<string, string> => {
+            const m: Record<string, string> = {};
+            for (const e of arr ?? []) m[e.type] = e.displayName;
+            return m;
         };
-        this.toolDisplayNames = buildMap(handle.tool_types());
-        this.veilDisplayNames = buildMap(handle.veil_types());
-        this.voidDisplayNames = buildMap(handle.void_types());
-        this.blendModeDisplayNames = buildMap(handle.blend_mode_types());
-        this.modifierDisplayNames = buildMap(handle.modifier_types());
-        this.layerKindDisplayNames = buildMap(handle.layer_kind_types());
+        const [tools, veils, voids, blends, modifiers, layerKinds] = await Promise.all([
+            engine.send('tool_types'),
+            engine.send('veil_types'),
+            engine.send('void_types'),
+            engine.send('blend_mode_types'),
+            engine.send('modifier_types'),
+            engine.send('layer_kind_types'),
+        ]);
+        this.toolDisplayNames = buildMap(tools);
+        this.veilDisplayNames = buildMap(veils);
+        this.voidDisplayNames = buildMap(voids);
+        this.blendModeDisplayNames = buildMap(blends);
+        this.modifierDisplayNames = buildMap(modifiers);
+        this.layerKindDisplayNames = buildMap(layerKinds);
     }
 
     /** Add a veil with a partial overrides record. Param names match the
@@ -135,18 +180,20 @@ export class DarklyInstance {
      *  Missing params fall back to registered defaults via the WASM
      *  bridge. Pass `visible: false` to hide the veil after add (the
      *  common starter-veil case). */
-    addVeil(type: string, options: Record<string, unknown> = {}): void {
-        if (!this.handle) return;
+    async addVeil(type: string, options: Record<string, unknown> = {}): Promise<void> {
+        const engine = this.engine;
+        if (!engine) return;
         const { visible, ...params } = options;
-        this.handle.add_veil(type, params);
+        engine.post('add_veil', { veil_type: type, params });
         if (visible === false) {
-            // `veil_list()` returns highest-index first, so the just-added
-            // veil sits at index 0 of the array.
-            const list = JSON.parse(this.handle.veil_list()) as Array<{ index: number }>;
+            // `veil_list` returns highest-index first, so the just-added veil
+            // sits at index 0 of the array. The list send is enqueued after the
+            // add above, so FIFO ordering guarantees it sees the new veil.
+            const list = (await engine.send('veil_list')) as Array<{ index: number }>;
             const added = list[0];
-            if (added) this.handle.set_veil_visible(added.index, false);
+            if (added) engine.post('set_veil_visible', { index: added.index, visible: false });
         }
-        this.refreshVeilList();
+        await this.refreshVeilList();
         this.requestFrame();
     }
 
@@ -172,12 +219,6 @@ export class DarklyInstance {
 
     // Layer tree (read from WASM, refreshed after mutations/undo/redo).
     layerTree = $state<any[]>([]);
-
-    // Mirrors the engine's `thumbnail_version` counter. Bumped from
-    // `requestFrame` after each render so any `$derived` that reads
-    // a thumbnail (via getNodeThumbnail) re-runs when an async readback
-    // lands and the wasm cache is updated.
-    thumbnailEpoch = $state(0);
 
     // Veil list (read from WASM, refreshed after mutations).
     veilList = $state<any[]>([]);
@@ -223,7 +264,7 @@ export class DarklyInstance {
      *  it can never go stale; pure (no engine borrow), so reading it inside a
      *  pointer event cannot alias the RefCell borrow held by `render()`. */
     viewMatrices: Float32Array = $derived.by(() => {
-        if (!this.handle) {
+        if (!this.engine) {
             // Identity (screen→plane, plane→screen) until the engine exists.
             return new Float32Array([1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0]);
         }
@@ -255,7 +296,7 @@ export class DarklyInstance {
         // nothing if the new layer is hidden by isolation). Selecting the
         // same isolated node is a no-op.
         if (this.isolatedNodeId !== null && id !== this.isolatedNodeId) {
-            this.handle?.set_isolated_node(0);
+            this.engine?.post('set_isolated_node', { id: 0 });
             this.isolatedNodeId = null;
             this.requestFrame();
         }
@@ -318,7 +359,7 @@ export class DarklyInstance {
             return;
         }
         if (this.isolatedNodeId !== null) {
-            this.handle?.set_isolated_node(0);
+            this.engine?.post('set_isolated_node', { id: 0 });
             this.isolatedNodeId = null;
             this.requestFrame();
         }
@@ -463,9 +504,9 @@ export class DarklyInstance {
      *  once the layer is in the tree, the user has opted in (added to
      *  `cameraSessionStarted`), and the void isn't frozen. Idempotent. */
     startCameraVoid(layerId: number) {
-        if (!this.handle) return;
+        if (!this.engine) return;
         if (this.cameraSources.has(layerId)) return;
-        const src = new CameraSource(layerId, this.handle);
+        const src = new CameraSource(layerId, this.engine);
         // Reassign the Map so Svelte sees a new identity (Map mutations
         // don't trigger reactivity on their own in current Svelte 5).
         this.cameraSources = new Map(this.cameraSources).set(layerId, src);
@@ -597,8 +638,8 @@ export class DarklyInstance {
 
     /** Remove a veil and keep `activeVeilIndex` consistent with the new list. */
     removeVeil(index: number) {
-        if (!this.handle) return;
-        this.handle.remove_veil(index);
+        if (!this.engine) return;
+        this.engine.post('remove_veil', { index });
         if (this.activeVeilIndex === index) {
             this.activeVeilIndex = null;
         } else if (this.activeVeilIndex !== null && this.activeVeilIndex > index) {
@@ -610,8 +651,8 @@ export class DarklyInstance {
 
     /** Reorder a veil and adjust `activeVeilIndex` so the selection follows the move. */
     moveVeil(from: number, to: number) {
-        if (!this.handle || from === to) return;
-        this.handle.move_veil(from, to);
+        if (!this.engine || from === to) return;
+        this.engine.post('move_veil', { from, to });
         const a = this.activeVeilIndex;
         if (a !== null) {
             if (a === from) {
@@ -642,50 +683,46 @@ export class DarklyInstance {
      *  that moves or resizes the canvas window (load, resize, crop) so the
      *  coordinate transforms in `coordinates.ts` recenter around the real
      *  window. Returns the `[ox, oy, w, h]` rect for callers that need it. */
-    syncCanvasRect(): [number, number, number, number] | null {
-        if (!this.handle) return null;
-        const r = this.handle.canvas_rect();
-        this.canvasOriginX = r[0];
-        this.canvasOriginY = r[1];
-        this.docW = r[2];
-        this.docH = r[3];
-        return [r[0], r[1], r[2], r[3]];
+    async syncCanvasRect(): Promise<[number, number, number, number] | null> {
+        if (!this.engine) return null;
+        const r = (await this.engine.send('canvas_rect')) as {
+            origin_x: number;
+            origin_y: number;
+            width: number;
+            height: number;
+        };
+        this.canvasOriginX = r.origin_x;
+        this.canvasOriginY = r.origin_y;
+        this.docW = r.width;
+        this.docH = r.height;
+        return [r.origin_x, r.origin_y, r.width, r.height];
     }
 
-    refreshLayerTree() {
-        if (this.handle) {
-            let next: any[] = [];
-            try {
-                const parsed = JSON.parse(this.handle.layer_tree());
-                next = Array.isArray(parsed) ? parsed : [];
-            } catch { next = []; }
-            // Camera voids own a MediaStream + <video>; reconcile the live
-            // set against the new tree so freshly-added voids spin up,
-            // deleted / frozen / undone voids tear down (turning off the OS
-            // camera indicator). Done BEFORE assignment so this method only
-            // *writes* `layerTree` (never reads it), keeping it out of any
-            // enclosing effect's dependency set — otherwise the write loops
-            // back through the effect.
-            this.reconcileCameraSources(next);
-            this.pruneSelectionAgainstTree(next);
-            this.layerTree = next;
-            // Schedule a render frame: callers invoke this after layer
-            // mutations (undo/redo, add/remove, drag/drop, etc.), and
-            // the engine may have async work pending — dirty-pixel
-            // readbacks, content-bounds compute, animation. Without a
-            // frame, drain_dirty_thumbnail_readbacks never runs and the
-            // layer panel ends up showing pre-mutation thumbnails.
-            this.requestFrame();
-        }
+    async refreshLayerTree(): Promise<void> {
+        if (!this.engine) return;
+        const parsed = await this.engine.send('layer_tree');
+        const next: any[] = Array.isArray(parsed) ? parsed : [];
+        // Camera voids own a MediaStream + <video>; reconcile the live set
+        // against the new tree so freshly-added voids spin up, deleted /
+        // frozen / undone voids tear down (turning off the OS camera
+        // indicator). Done BEFORE assignment so this method only *writes*
+        // `layerTree` (never reads it), keeping it out of any enclosing
+        // effect's dependency set — otherwise the write loops back through it.
+        this.reconcileCameraSources(next);
+        this.pruneSelectionAgainstTree(next);
+        this.layerTree = next;
+        // Schedule a render frame: callers invoke this after layer mutations
+        // (undo/redo, add/remove, drag/drop, etc.), and the engine may have
+        // async work pending — dirty-pixel readbacks, content-bounds compute,
+        // animation. Without a frame, drain_dirty_thumbnail_readbacks never
+        // runs and the layer panel ends up showing pre-mutation thumbnails.
+        this.requestFrame();
     }
 
-    refreshVeilList() {
-        if (this.handle) {
-            try {
-                const list = JSON.parse(this.handle.veil_list());
-                this.veilList = Array.isArray(list) ? list : [];
-            } catch { this.veilList = []; }
-        }
+    async refreshVeilList(): Promise<void> {
+        if (!this.engine) return;
+        const list = await this.engine.send('veil_list');
+        this.veilList = Array.isArray(list) ? list : [];
     }
 
     // --- Async copy result callback ---
@@ -752,31 +789,40 @@ export class DarklyInstance {
         this._framePending = true;
         requestAnimationFrame((ts) => {
             this._framePending = false;
-            if (!this.handle) return;
+            const engine = this.engine;
+            if (!engine) return;
             // Push the latest webcam / screenshare frames into their void
-            // input textures BEFORE render — handle.render reads from those
-            // textures during composite, so a later upload would lag by a
-            // frame.
+            // input textures BEFORE render — render reads from those textures
+            // during composite, so a later upload would lag by a frame.
             //
             // The frame count we pass to `tick` is the value the compositor's
-            // master counter *will* hold once `handle.render` increments it
-            // (which it does inside `update_animations`). Anticipating the
-            // increment keeps JS-side divisor gates phase-locked with the
-            // Rust-side veil / overlay / void divisors that check the
-            // post-increment value — so a camera `divisor=N` fires on the
-            // same rAF as a veil `divisor=N`, not one off.
-            const nextFrameCount = this.handle.frame_count() + 1;
+            // master counter *will* hold once render increments it (inside
+            // `update_animations`): one past the count the *previous* render
+            // returned. Anticipating the increment keeps JS-side divisor gates
+            // phase-locked with the Rust-side veil / overlay / void divisors
+            // that check the post-increment value — so a camera `divisor=N`
+            // fires on the same rAF as a veil `divisor=N`, not one off. (We
+            // can't read `frame_count` directly anymore — it would be a third
+            // competing engine borrow; render returns it on the state mirror.)
+            const nextFrameCount = (this.engineState?.frameCount ?? 0) + 1;
             for (const src of this.cameraSources.values()) {
                 src.tick(nextFrameCount);
             }
-            const needsMore = this.handle.render(ts / 1000.0);
 
-            // Sync thumbnail-readback completions into a Svelte-reactive
-            // epoch so `$derived` consumers re-run. `!==` (not `>`) so a
-            // handle swap that resets the wasm counter to 0 still triggers
-            // a re-derivation against the new engine.
-            const v = this.handle.thumbnail_version();
-            if (v !== this.thumbnailEpoch) this.thumbnailEpoch = v;
+            // The ONE engine borrow per frame: drains the request FIFO (which
+            // resolves any pending `send`/`post` promises) then composites. A
+            // re-entrant render reached via the event pump returns `busy` — the
+            // outer render handles everything, so we bail without rescheduling.
+            const frame = engine.render(ts / 1000.0);
+            if (frame.busy) return;
+
+            // Refresh the synchronously-readable engine-state mirror from
+            // render's returned snapshot — no per-frame query; it's a downhill
+            // projection of the borrow render already held this frame. This one
+            // assignment updates everything the UI caches: frame/thumbnail
+            // counters (thumbnail `$derived`s re-run when `thumbnailVersion`
+            // changes) and document bools.
+            if (frame.state) this.engineState = frame.state;
 
             // Per-frame tool hook — async state sync (e.g. GPU readback completion).
             toolRegistry.get(this.activeToolId)?.onFrame?.();
@@ -792,32 +838,38 @@ export class DarklyInstance {
 
             // Check for completed async copy/cut readback.
             if (this._copyCallback) {
-                const result = this.handle.poll_copy_result();
-                if (result) {
-                    const cb = this._copyCallback;
-                    this._copyCallback = null;
-                    cb(result);
-                }
+                engine.send('poll_copy_result').then((result) => {
+                    if (result && this._copyCallback) {
+                        const cb = this._copyCallback;
+                        this._copyCallback = null;
+                        cb(result);
+                    }
+                });
             }
 
             // Check for completed async export readback.
             if (this._exportCallback) {
-                const result = this.handle.poll_export_result();
-                if (result) {
-                    const cb = this._exportCallback;
-                    this._exportCallback = null;
-                    cb(result);
-                }
+                engine
+                    .send<{ width: number; height: number; bytes: Uint8Array }>('poll_export_result')
+                    .then((result) => {
+                        if (result && this._exportCallback) {
+                            const cb = this._exportCallback;
+                            this._exportCallback = null;
+                            cb({ width: result.width, height: result.height, rgba: result.bytes });
+                        }
+                    });
             }
 
-            // Check for completed async `.darkly` save readbacks.
+            // Check for completed async `.darkly` save readbacks. The bundle's
+            // byte blobs arrive concatenated in `bytes`; slice them back out
+            // into the per-blob shape `saveDocument.ts` expects.
             if (this._saveCallback) {
-                const bundle = this.handle.poll_save_result();
-                if (bundle) {
+                engine.send<PackedSaveResult>('poll_save_result').then((packed) => {
+                    if (!packed || !this._saveCallback) return;
                     const cb = this._saveCallback;
                     this._saveCallback = null;
-                    cb(bundle);
-                }
+                    cb(unpackSaveBundle(packed));
+                });
             }
 
             // Continue animation loop only when no UI interaction is
@@ -825,7 +877,7 @@ export class DarklyInstance {
             // actions, resize, etc.) always go through — only the
             // self-scheduling continuous loop is suppressed.
             const shouldContinue =
-                needsMore ||
+                frame.needsMore ||
                 this._copyCallback ||
                 this._exportCallback ||
                 this._saveCallback;

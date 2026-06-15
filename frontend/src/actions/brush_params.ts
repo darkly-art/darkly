@@ -55,7 +55,7 @@ function adjustBrushParam(role: Role, dir: 1 | -1): void {
             ? data.value * Math.pow(spec.step, dir)
             : data.value + spec.step * dir;
     commit(port.nodeId, port.portName, clamp(next, data.min, data.max));
-    if (app.handle) refreshHoverOverlay(app.handle);
+    if (app.engine) refreshHoverOverlay(app.engine);
 }
 
 /** Set an absolute value (used by drag scrubs). */
@@ -123,9 +123,9 @@ export function registerBrushParamActions() {
             // position; pose comes from the live event, matching the
             // normal hover preview (pressure forced to 1 by `cursorPose`
             // so both paths show the same brush extent).
-            if (app.handle) {
-                pushHoverOverlay(
-                    app.handle,
+            if (app.engine) {
+                void pushHoverOverlay(
+                    app.engine,
                     cursorPose(e),
                     sizeDrag.anchorX,
                     sizeDrag.anchorY,

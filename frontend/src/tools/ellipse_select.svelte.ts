@@ -19,7 +19,7 @@ let dragEnd: [number, number] | null = null;
 // `kis_tool_select_elliptical.cc`). The ellipse boundary itself is curved,
 // so antialiasing stays on at commit time — only the bbox is snapped.
 function pushPreviewOverlay() {
-    if (!app.handle || !dragStart || !dragEnd) return;
+    if (!app.engine || !dragStart || !dragEnd) return;
     const [x0, y0] = dragStart;
     const [x1, y1] = dragEnd;
     const sx0 = Math.round(x0);
@@ -30,15 +30,17 @@ function pushPreviewOverlay() {
     const cy = (sy0 + sy1) / 2;
     const rx = Math.abs(sx1 - sx0) / 2;
     const ry = Math.abs(sy1 - sy0) / 2;
-    app.handle.set_overlay([
-        prim(KIND_ELLIPSE, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR, [cx, cy], [rx, ry], { dashLen: 6, thickness: 1 }),
-    ]);
+    app.engine.post('set_overlay', {
+        primitives: [
+            prim(KIND_ELLIPSE, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR, [cx, cy], [rx, ry], { dashLen: 6, thickness: 1 }),
+        ],
+    });
 }
 
 function clearPreviewOverlay() {
     dragStart = null;
     dragEnd = null;
-    app.handle?.clear_overlay();
+    app.engine?.post('clear_overlay');
 }
 
 export const ellipseSelectTool: Tool = {
@@ -64,8 +66,8 @@ export const ellipseSelectTool: Tool = {
         pushPreviewOverlay();
     },
 
-    onPointerUp(_ctx, e) {
-        if (!dragStart || !dragEnd || !app.handle) {
+    onPointerUp(ctx, e) {
+        if (!dragStart || !dragEnd) {
             clearPreviewOverlay();
             return;
         }
@@ -84,10 +86,10 @@ export const ellipseSelectTool: Tool = {
         // Only commit if the snapped bbox has meaningful size.
         if (w > 0 && h > 0) {
             const mode = selectionMode(e);
-            app.handle.select_ellipse(x, y, w, h, mode, true, 0);
+            ctx.engine.post('select_ellipse', { x, y, w, h, mode, antialias: true, feather: 0 });
         } else if (selectionMode(e) === 'replace') {
             // Click without drag = deselect (only in replace mode)
-            app.handle.clear_selection();
+            ctx.engine.post('clear_selection');
         }
 
         clearPreviewOverlay();
@@ -95,7 +97,7 @@ export const ellipseSelectTool: Tool = {
 
     onKeyDown(e) {
         if (e.key === 'Escape') {
-            app.handle?.clear_selection();
+            app.engine?.post('clear_selection');
             return true;
         }
         return false;

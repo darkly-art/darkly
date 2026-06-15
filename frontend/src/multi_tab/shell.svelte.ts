@@ -18,11 +18,13 @@ class MultiTabShell {
     /** Stable id of the focused instance, or `null` when no tabs are open. */
     activeId = $state<string | null>(null);
 
-    /** Monotonic counter, bumped whenever any tab's name changes. Reads
-     *  in [`nameOf`] depend on it so Svelte re-derives even though the
-     *  underlying value lives on the engine (a plain WASM call, opaque
-     *  to Svelte's reactivity). */
-    private nameVersion = $state(0);
+    /** Display name per instance id. The shell is the authoritative mirror
+     *  of the engine's document name: `setName` is the single write path
+     *  (user rename, Save As, and the post-load sync in `actions/index.ts`
+     *  all route through it), and `pendingName` seeds it before init. Reads
+     *  go through this reactive map so the tab strip re-renders on rename —
+     *  the engine's `document_name` is async and can't back a `$derived`. */
+    private names = $state<Record<string, string>>({});
 
     private nextSerial = 1;
 
@@ -31,32 +33,33 @@ class MultiTabShell {
         return this.instances.find(i => i.id === this.activeId) ?? null;
     }
 
-    /** Tab title for `id`. Reads through the engine's `document_name()`
-     *  when the handle is ready; falls back to the pending name (set by
-     *  `open(name?)` and applied to the engine post-handle-init) or
-     *  `"Untitled"` for instances whose handles haven't bootstrapped. */
+    /** Tab title for `id`. Reads the shell-side mirror (populated by
+     *  `setName`), falling back to the pending name (set by `open(name?)`
+     *  and applied to the engine post-init) or `"Untitled"` for instances
+     *  whose handles haven't bootstrapped. Synchronous — the engine's
+     *  `document_name` is async and can't be read inside a `$derived`. */
     nameOf(id: string): string {
-        // Subscribe to the version counter so Svelte re-runs on rename.
-        void this.nameVersion;
+        const cached = this.names[id];
+        if (cached !== undefined) return cached;
         const inst = this.instances.find(i => i.id === id);
         if (!inst) return 'Untitled';
-        if (inst.handle) return inst.handle.document_name();
         return inst.pendingName ?? 'Untitled';
     }
 
     /** Rename a tab. Persists into the engine via `set_document_name`
-     *  (queued — visible on the next render). If the instance's handle
-     *  hasn't booted yet, the name is stashed on `pendingName` for the
-     *  init path to apply. */
+     *  (queued — visible on the next render) and updates the shell-side
+     *  mirror that `nameOf` reads. If the instance's handle hasn't booted
+     *  yet, the name is stashed on `pendingName` for the init path to
+     *  apply. */
     setName(id: string, name: string): void {
         const inst = this.instances.find(i => i.id === id);
         if (!inst) return;
-        if (inst.handle) {
-            inst.handle.set_document_name(name);
+        if (inst.engine) {
+            inst.engine.post('set_document_name', { name });
         } else {
             inst.pendingName = name;
         }
-        this.nameVersion++;
+        this.names = { ...this.names, [id]: name };
     }
 
     /** Add a fresh, empty `DarklyInstance` to the strip and focus it. The
@@ -75,7 +78,6 @@ class MultiTabShell {
         inst.pendingName = name ?? `Untitled ${this.nextSerial++}`;
         if (dims) inst.pendingDims = dims;
         this.instances.push(inst);
-        this.nameVersion++;
         this.focus(inst.id);
         return inst;
     }
@@ -117,8 +119,11 @@ class MultiTabShell {
         // Free the WASM handle: drops the Rust DarklyEngine, returning all
         // its GPU textures to the shared device. No effect on sibling
         // instances since the device is `Arc`-shared.
-        removed.handle?.free();
-        this.nameVersion++;
+        removed.engine?.free();
+        if (id in this.names) {
+            const { [id]: _removed, ...rest } = this.names;
+            this.names = rest;
+        }
 
         if (this.activeId === id) {
             const next = this.instances[idx] ?? this.instances[idx - 1] ?? null;

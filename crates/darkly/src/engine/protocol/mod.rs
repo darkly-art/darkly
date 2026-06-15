@@ -34,33 +34,38 @@ pub use transport::{DrainOutcome, QueuedRequest, RequestOutcome, Transport};
 pub use crate::gpu::params::param_values_from_json as params_from_json;
 
 /// A handler's successful result: a JSON value plus an optional binary
-/// side-channel. `bytes` is empty for non-binary requests; it is repacked
-/// out-of-band by the transport (zero-copy `Uint8Array` in the browser).
+/// side-channel. `bytes` is `None` for non-binary requests and `Some` (possibly
+/// empty) for binary ones — the `Some`/`None` distinction matters: a binary
+/// request whose payload isn't ready yet (e.g. a preview readback in flight)
+/// returns `Some(empty)`, which must still surface a `bytes` field to the caller
+/// rather than collapsing to "no value". Repacked out-of-band by the transport
+/// (zero-copy `Uint8Array` in the browser).
 #[derive(Debug)]
 pub struct Response {
     pub value: Value,
-    pub bytes: Vec<u8>,
+    pub bytes: Option<Vec<u8>>,
 }
 
 impl Response {
     /// JSON-only response (the common case).
     pub fn json(value: Value) -> Self {
-        Response {
-            value,
-            bytes: Vec::new(),
-        }
+        Response { value, bytes: None }
     }
 
-    /// JSON envelope + binary side-channel payload.
+    /// JSON envelope + binary side-channel payload (always surfaces a `bytes`
+    /// field downstream, even when `bytes` is empty).
     pub fn binary(value: Value, bytes: Vec<u8>) -> Self {
-        Response { value, bytes }
+        Response {
+            value,
+            bytes: Some(bytes),
+        }
     }
 
     /// A void mutation that returns nothing.
     pub fn empty() -> Self {
         Response {
             value: Value::Null,
-            bytes: Vec::new(),
+            bytes: None,
         }
     }
 }
@@ -102,6 +107,46 @@ impl ProtocolError {
 /// Map a serde decode error onto a [`ProtocolError::BadPayload`].
 pub fn bad_payload(e: impl std::fmt::Display) -> ProtocolError {
     ProtocolError::BadPayload(e.to_string())
+}
+
+/// Decode a request payload into a handler's `Req` struct, mapping serde
+/// failures onto [`ProtocolError::BadPayload`].
+pub fn decode<T: serde::de::DeserializeOwned>(payload: Value) -> Result<T, ProtocolError> {
+    serde_json::from_value(payload).map_err(bad_payload)
+}
+
+/// Decode a `{ id: u64 }` payload to a [`LayerId`] — the single most common
+/// handler shape.
+pub fn layer_id(payload: Value) -> Result<crate::layer::LayerId, ProtocolError> {
+    #[derive(serde::Deserialize)]
+    struct Id {
+        id: u64,
+    }
+    let r: Id = decode(payload)?;
+    Ok(crate::layer::LayerId::from_ffi(r.id))
+}
+
+/// Encode a node-graph mutation result. The engine returns the serialized graph
+/// JSON on success; handlers resolve with `{ graph }` (parsed) or `{ error }` —
+/// the brush-builder consumes both without throwing (matches the old
+/// `graph_result` JsValue shape).
+pub fn graph_result(r: Result<String, String>) -> Result<Response, ProtocolError> {
+    match r {
+        Ok(json) => {
+            let graph: Value = serde_json::from_str(&json).map_err(bad_payload)?;
+            Ok(Response::json(serde_json::json!({ "graph": graph })))
+        }
+        Err(e) => Ok(Response::json(serde_json::json!({ "error": e }))),
+    }
+}
+
+/// Encode a `Result<(), String>` as either `null` (success) or `{ error }` —
+/// the old `JsValue::NULL | from_str(e)` convention for brush compile/validate.
+pub fn ok_or_error(r: Result<(), String>) -> Response {
+    match r {
+        Ok(()) => Response::json(Value::Null),
+        Err(e) => Response::json(serde_json::json!({ "error": e })),
+    }
 }
 
 /// The per-file unit a handler module returns from `register()`.

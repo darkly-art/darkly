@@ -42,7 +42,7 @@ const MANIFEST_PATH = 'manifest.json';
  * `forceAs` skips the cached handle and always prompts (Ctrl+Shift+S).
  */
 export async function saveDocument({ forceAs = false }: { forceAs?: boolean } = {}): Promise<void> {
-    if (!app.handle) return;
+    if (!app.engine) return;
     if (!canSave) {
         toast.show(
             'error',
@@ -76,35 +76,36 @@ export async function saveDocument({ forceAs = false }: { forceAs?: boolean } = 
  *  handle when one exists and `forceAs` is false; otherwise prompts via
  *  the picker and seeds `doc.name` from the chosen filename. */
 async function acquireHandle(forceAs: boolean): Promise<FileSystemFileHandle | null> {
-    if (!app.handle) return null;
+    const engine = app.engine;
+    if (!engine) return null;
     if (!forceAs && app.fileHandle) return app.fileHandle;
 
     const suggested =
-        sanitizeFilename(app.handle.document_name()) || 'darkly-document';
+        sanitizeFilename((await engine.send('document_name')).name) || 'darkly-document';
     const handle = await pickSaveFile(`${suggested}.darkly`);
     if (!handle) return null;
 
     // Reflect the chosen filename in the doc's display name so the tab
     // strip and a subsequent Ctrl+S both pick it up.
     const baseName = handle.name.replace(/\.darkly$/i, '');
-    if (baseName) app.handle.set_document_name(baseName);
+    if (baseName) engine.post('set_document_name', { name: baseName });
     return handle;
 }
 
 /** Kick `start_save_document` and await the `poll_save_result` callback. */
 function runSaveBundle(): Promise<SaveBundle> {
     return new Promise((resolve, reject) => {
-        if (!app.handle) {
+        const engine = app.engine;
+        if (!engine) {
             reject(new Error('no engine handle'));
             return;
         }
-        try {
-            app.handle.start_save_document();
-        } catch (e) {
-            reject(e instanceof Error ? e : new Error(String(e)));
-            return;
-        }
         app.onSaveResult((bundle: SaveBundle) => resolve(bundle));
+        // `start_save_document` rejects on error; surface that as the save
+        // failure rather than waiting forever for a callback that won't fire.
+        engine
+            .send('start_save_document')
+            .catch((e) => reject(e instanceof Error ? e : new Error(String(e))));
     });
 }
 

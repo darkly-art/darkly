@@ -13,7 +13,7 @@
     import { dispatchDrag } from '../actions/triggers';
     import { bindingSite } from '../actions/binding_site';
     import { handleDroppedFile } from '../actions';
-    import { THUMB_SIZE } from '../ui/layers/thumbnails';
+    import { THUMB_SIZE } from '../ui/layers/thumbnails.svelte';
     import { isColorPickerModifierActive } from '../tools/colorpicker_cursor';
 
     /** Optional pre-built instance. When provided, CanvasView skips the
@@ -54,16 +54,16 @@
                 canvas.height = h;
                 inst.viewportW = w;
                 inst.viewportH = h;
-                inst.handle?.resize(w, h);
+                inst.engine?.post('resize', { width: w, height: h });
                 // Re-sync the Rust view transform with the new screen dimensions
                 // so the compositor and JS coordinate conversion agree.
                 const dpr2 = dpr;
-                inst.handle?.set_view_transform(
-                    inst.panX * dpr2, inst.panY * dpr2,
-                    inst.zoom, inst.rotation,
-                    inst.mirrorH,
-                    w, h,
-                );
+                inst.engine?.post('set_view_transform', {
+                    pan_x: inst.panX * dpr2, pan_y: inst.panY * dpr2,
+                    zoom: inst.zoom, rotation: inst.rotation,
+                    mirror_h: inst.mirrorH,
+                    screen_w: w, screen_h: h,
+                });
                 inst.requestFrame();
             }
         });
@@ -92,13 +92,11 @@
             // `open_document` would immediately replace, and keeps the
             // canvas free of an unwanted "Layer 1" under an opened PNG.
             const seedBackground =
-                (!providedInstance || !providedInstance.handle)
+                (!providedInstance || !providedInstance.engine)
                 && !providedInstance?.onHandleReady;
 
-            let handle;
-            if (providedInstance && providedInstance.handle) {
-                // Multi-tab, hot path: shell pre-built handle + canvas.
-                handle = providedInstance.handle;
+            if (providedInstance && providedInstance.engine) {
+                // Multi-tab, hot path: shell pre-built engine + canvas.
                 providedInstance.canvasEl = canvas;
             } else if (providedInstance) {
                 // Multi-tab, first-mount path: shell put a fresh instance in
@@ -118,19 +116,19 @@
                 if (seedBackground) {
                     seedFreshDocument(providedInstance, docW, docH);
                 }
-                handle = providedInstance.handle!;
             } else {
                 // Single-instance path: existing initEditor creates an
-                // instance, makes it active, and returns its handle.
-                handle = await initEditor(canvas);
+                // instance, makes it active, and sets its engine.
+                await initEditor(canvas);
             }
-            handle.resize(canvas.width, canvas.height);
+            const engine = inst.engine!;
+            engine.post('resize', { width: canvas.width, height: canvas.height });
 
             // Drift guard: the engine auto-queues thumbnail readbacks
             // at `DEFAULT_THUMB_SIZE`; the panel renders <img> at the
             // TS-side `THUMB_SIZE`. If they fall out of sync, cached
             // bytes won't fit the displayed dimensions. Fail loudly.
-            const engineThumb = handle.engine_default_thumb_size();
+            const engineThumb = engine.engineDefaultThumbSize();
             if (engineThumb !== THUMB_SIZE) {
                 console.error(
                     `Thumbnail size drift: engine=${engineThumb} ts=${THUMB_SIZE}`,
@@ -164,9 +162,9 @@
 
 
     function getToolContext(): ToolContext | null {
-        if (!inst.handle) return null;
+        if (!inst.engine) return null;
         return {
-            handle: inst.handle,
+            engine: inst.engine,
             canvasEl: canvas,
             screenToCanvas(sx: number, sy: number) {
                 return screenToCanvas(sx, sy, canvas);
@@ -175,7 +173,7 @@
     }
 
     function getCanvasCoords(e: PointerEvent): { x: number; y: number } {
-        if (inst.handle) {
+        if (inst.engine) {
             return screenToCanvas(e.clientX, e.clientY, canvas);
         }
         // Fallback when no view transform
@@ -389,14 +387,14 @@
     // Pan is stored in CSS pixels; the shader operates in buffer pixels.
     // Scale pan by DPR to convert to buffer space.
     $effect(() => {
-        if (inst.handle && canvas) {
+        if (inst.engine && canvas) {
             const dpr = window.devicePixelRatio || 1;
-            inst.handle.set_view_transform(
-                inst.panX * dpr, inst.panY * dpr,
-                inst.zoom, inst.rotation,
-                inst.mirrorH,
-                canvas.width, canvas.height,
-            );
+            inst.engine.post('set_view_transform', {
+                pan_x: inst.panX * dpr, pan_y: inst.panY * dpr,
+                zoom: inst.zoom, rotation: inst.rotation,
+                mirror_h: inst.mirrorH,
+                screen_w: canvas.width, screen_h: canvas.height,
+            });
             inst.requestFrame();
         }
     });

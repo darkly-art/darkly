@@ -52,7 +52,7 @@ fn add_raster_dispatch_adds_a_layer_and_returns_id() {
         .expect("add_raster dispatch");
     let id = resp.value.get("id").and_then(|v| v.as_u64());
     assert!(id.is_some(), "add_raster returns an id");
-    assert!(resp.bytes.is_empty(), "non-binary response carries no bytes");
+    assert!(resp.bytes.is_none(), "non-binary response carries no bytes");
     assert_eq!(engine.layer_tree().len(), before + 1, "a layer was added");
 }
 
@@ -92,11 +92,54 @@ fn bad_payload_is_a_protocol_error() {
     assert!(matches!(err, ProtocolError::BadPayload(_)));
 }
 
+/// The TS `RequestKind` union is generated from the registry. This test
+/// regenerates the expected file content and asserts it matches what's checked
+/// in, so a new handler can't ship without the frontend's kind union learning
+/// about it. Regenerate with `DARKLY_REGEN_TS=1`.
+#[test]
+fn request_kind_ts_union_is_in_sync() {
+    let reg = RequestRegistry::new();
+    let kinds = reg.all_kinds();
+
+    let mut ts = String::new();
+    ts.push_str("// @generated from RequestRegistry::all_kinds() — do not edit by hand.\n");
+    ts.push_str(
+        "// Regenerate: DARKLY_REGEN_TS=1 cargo test -p darkly --test protocol --features testing\n\n",
+    );
+    ts.push_str("export type RequestKind =\n");
+    for (i, k) in kinds.iter().enumerate() {
+        let sep = if i == 0 { '=' } else { '|' };
+        let _ = sep; // formatting handled below
+        ts.push_str(&format!("    | '{k}'\n"));
+    }
+    ts.push_str("    ;\n\n");
+    ts.push_str("export const REQUEST_KINDS: readonly RequestKind[] = [\n");
+    for k in &kinds {
+        ts.push_str(&format!("    '{k}',\n"));
+    }
+    ts.push_str("] as const;\n");
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../frontend/src/engine/protocol_gen.ts");
+
+    if std::env::var("DARKLY_REGEN_TS").is_ok() {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &ts).unwrap();
+        return;
+    }
+
+    let actual = std::fs::read_to_string(&path).unwrap_or_default();
+    assert_eq!(
+        actual, ts,
+        "protocol_gen.ts is stale — run DARKLY_REGEN_TS=1 cargo test -p darkly --test protocol --features testing"
+    );
+}
+
 #[test]
 fn binary_side_channel_round_trips() {
     // Structural: Response::binary carries bytes verbatim out-of-band.
     let payload = vec![1u8, 2, 3, 4, 255];
     let resp = Response::binary(json!({ "len": payload.len() }), payload.clone());
-    assert_eq!(resp.bytes, payload);
+    assert_eq!(resp.bytes, Some(payload));
     assert_eq!(resp.value.get("len").and_then(|v| v.as_u64()), Some(5));
 }

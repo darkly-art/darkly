@@ -4,7 +4,7 @@
  * (Save / Discard / Cancel) back through the shell.
  *
  * The guard always focuses the target tab before showing the modal —
- * `saveDocument()` operates on `app.handle`, so the engine the user is
+ * `saveDocument()` operates on `app.engine`, so the engine the user is
  * being prompted about must be the active one. Side effect: the modal
  * doubles as a visual cue for which tab is in question.
  */
@@ -23,7 +23,7 @@ class CloseGuardState {
     tabName = $state('');
 
     /** Open the modal for `id`, focusing the tab first so the save flow
-     *  (which operates on `app.handle`) sees the correct engine. */
+     *  (which operates on `app.engine`) sees the correct engine. */
     private openFor(id: string) {
         shell.focus(id);
         this.tabId = id;
@@ -32,10 +32,11 @@ class CloseGuardState {
     }
 
     /** Public entry point — close `id`, prompting on dirty work. */
-    guardedClose(id: string) {
+    async guardedClose(id: string) {
         const inst = shell.instances.find(i => i.id === id);
         if (!inst) return;
-        if (!inst.handle?.is_dirty()) {
+        const dirty = inst.engine ? (await inst.engine.send<{ value: boolean }>('is_dirty')).value : false;
+        if (!dirty) {
             shell.close(id);
             return;
         }
@@ -66,7 +67,7 @@ class CloseGuardState {
         this.tabId = '';
         await saveDocument({ forceAs: false });
         const inst = shell.instances.find(i => i.id === id);
-        if (inst?.handle && !inst.handle.is_dirty()) {
+        if (inst?.engine && !(await inst.engine.send<{ value: boolean }>('is_dirty')).value) {
             shell.close(id);
         }
     }
@@ -77,7 +78,12 @@ export const closeGuard = new CloseGuardState();
 /** True when any open tab has unsaved changes — backs the
  *  `window.beforeunload` handler so the browser prompts on accidental
  *  reload / navigation. Walks every instance because the user may have
- *  multiple dirty tabs open at once. */
+ *  multiple dirty tabs open at once.
+ *
+ *  Reads each instance's `engineState` mirror (refreshed each frame from
+ *  `render`'s returned snapshot) rather than querying the engine: a
+ *  `beforeunload` handler must answer the browser synchronously and so
+ *  cannot `await`. */
 export function anyTabDirty(): boolean {
-    return shell.instances.some(i => i.handle?.is_dirty() === true);
+    return shell.instances.some(i => i.engineState?.dirty === true);
 }

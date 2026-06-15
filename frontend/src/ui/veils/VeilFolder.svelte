@@ -15,10 +15,10 @@
 
     function toggleAllVisibility(e: MouseEvent) {
         e.stopPropagation();
-        if (!app.handle) return;
+        if (!app.engine) return;
         const target = !anyVisible;
         for (const v of app.veilList) {
-            app.handle.set_veil_visible(v.index, target);
+            app.engine.post('set_veil_visible', { index: v.index, visible: target });
         }
         onupdate();
     }

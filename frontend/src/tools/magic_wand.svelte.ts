@@ -29,24 +29,24 @@ export const magicWandTool: Tool = {
     hotkeyAction: 'magicWandTool',
     optionsComponent: MagicWandOptions,
 
-    onPointerDown(_ctx, e, cx, cy) {
-        if (!app.handle || app.activeLayerId == null) return;
+    onPointerDown(ctx, e, cx, cy) {
+        if (app.activeLayerId == null) return;
 
         const mode = selectionMode(e);
-        app.handle.select_magic_wand(
-            BigInt(app.activeLayerId),
-            Math.round(cx),
-            Math.round(cy),
-            magicWandSession.tolerance,
+        ctx.engine.post('select_magic_wand', {
+            layer_id: app.activeLayerId,
+            seed_x: Math.round(cx),
+            seed_y: Math.round(cy),
+            tolerance: magicWandSession.tolerance,
             mode,
-        );
+        });
     },
     onPointerMove() {},
     onPointerUp() {},
 
     onKeyDown(e) {
         if (e.key === 'Escape') {
-            app.handle?.clear_selection();
+            app.engine?.post('clear_selection');
             return true;
         }
         return false;

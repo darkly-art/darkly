@@ -14,7 +14,7 @@
     let brushPickerOpen = $state(false);
 
     function ensureInit() {
-        if (!brushGraph.graph && app.handle) brushGraph.init();
+        if (!brushGraph.graph && app.engine) brushGraph.init();
     }
 
     function toggleBuilder() {
@@ -60,7 +60,7 @@
 
     function toggleEraseMode() {
         brushSession.eraseMode = !brushSession.eraseMode;
-        app.handle?.set_brush_blend_mode(brushSession.eraseMode ? 1 : 0);
+        app.engine?.post('set_brush_blend_mode', { mode: brushSession.eraseMode ? 1 : 0 });
     }
 
     // Brushes whose terminal doesn't honor `gpu.blend_mode` (smudge,
@@ -72,7 +72,7 @@
     $effect(() => {
         if (!brushGraph.supportsErase && brushSession.eraseMode) {
             brushSession.eraseMode = false;
-            app.handle?.set_brush_blend_mode(0);
+            app.engine?.post('set_brush_blend_mode', { mode: 0 });
         }
     });
 </script>
