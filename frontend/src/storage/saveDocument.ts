@@ -23,7 +23,8 @@ import { sessionId } from '../state/recoverySession';
  *  clears it. */
 export type SavePurpose = 'file' | 'snapshot';
 
-/** Wire shape returned by `DarklyHandle.poll_save_result()`. Mirrors
+/** Wire shape reconstructed from the `poll_save_result` request (the engine
+ *  packs it; `app.svelte.ts::unpackSaveBundle` slices it back out). Mirrors
  *  `crates/darkly/src/format/manifest.rs::SaveBundle`. */
 export interface SaveBundle {
     manifestJson: Uint8Array;

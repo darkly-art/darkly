@@ -1,9 +1,10 @@
 /**
  * Autosave scheduler. On a configurable interval it snapshots the active
  * tab (when dirty and idle) to OPFS for crash recovery, and it snapshots a
- * tab when you switch away from it so every open document is covered —
- * without ever needing a backgrounded tab to render (the snapshot bytes
- * come from `produceDarklyBytes`, which self-drives the readback).
+ * tab when you switch away from it so every open document is covered. The
+ * snapshot bytes come from `produceDarklyBytes`, which keeps the tab's
+ * render loop alive (via `onSaveResult`) until the readback lands — so even
+ * a backgrounded tab completes without the user looking at it.
  *
  * Snapshots reuse the exact `.darkly` save pipeline and are marked
  * `'snapshot'` so they leave the document's dirty flag set (nothing
@@ -60,14 +61,14 @@ class AutosaveScheduler {
         this.reconfigure();
 
         // Snapshot a tab when focus leaves it (it's still alive and its
-        // snapshot self-drives to completion). Watching `shell.active`
-        // reactively keeps the shell ignorant of autosave.
+        // snapshot drives to completion on its own render loop). Watching
+        // `shell.active` reactively keeps the shell ignorant of autosave.
         this.stopWatch = $effect.root(() => {
             let prev: DarklyInstance | null = null;
             $effect(() => {
                 const cur = shell.active;
                 // Only snapshot a tab we switched AWAY from while it's still
-                // open — a *closed* tab's handle is freed (and closeGuard
+                // open — a *closed* tab's engine is freed (and closeGuard
                 // already cleared its snapshot).
                 if (prev && prev !== cur && shell.instances.includes(prev)) {
                     void this.snapshot(prev, SWITCH_DEBOUNCE_MS);

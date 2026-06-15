@@ -52,9 +52,9 @@ export async function ensureProcessInit(): Promise<void> {
 /** Options for {@link createInstance}. */
 export interface CreateInstanceOptions {
     /** Seed a fresh document with a single white background layer (the
-     *  default for "new tab" flows). Done **before** the handle is
-     *  published to `instance.handle`, so any `$effect` that watches
-     *  `app.handle` sees a fully-bootstrapped engine — no
+     *  default for "new tab" flows). Done **before** the engine is
+     *  published to `instance.engine`, so any `$effect` that watches
+     *  `app.engine` sees a fully-bootstrapped engine — no
      *  refresh-after-mutation race for consumers like `LayerPanel`. */
     seedBackground?: boolean;
 }
@@ -67,10 +67,10 @@ export interface CreateInstanceOptions {
  *  shows up in the tab strip before its async handle is ready);
  *  otherwise a new one is constructed.
  *
- *  **Publish order matters**: `instance.handle = handle` is the *last*
+ *  **Publish order matters**: `instance.engine = engine` is the *last*
  *  thing that happens before `onHandleReady` fires. Every bootstrap
  *  mutation — registry load, name application, optional bg seed —
- *  completes first, so reactive consumers that subscribe on handle
+ *  completes first, so reactive consumers that subscribe on the engine
  *  becoming non-null read a fully-initialised engine.
  *
  *  Does NOT touch `setActiveInstance` — the caller decides focus. */
@@ -106,8 +106,8 @@ export async function createInstance(
     }
 
     // Seed the default background layer for fresh docs. Done before
-    // publishing the handle so any reactive consumer that fires on
-    // `app.handle` becoming truthy reads a doc that already has its
+    // publishing the engine so any reactive consumer that fires on
+    // `app.engine` becoming truthy reads a doc that already has its
     // bg layer — eliminates the "refresh after mutation" race the
     // LayerPanel would otherwise hit.
     if (options.seedBackground) {
