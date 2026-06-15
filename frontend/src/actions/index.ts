@@ -23,6 +23,7 @@ import { shell } from '../multi_tab/shell.svelte';
 import { about } from '../state/about.svelte';
 import { commandPalette } from '../state/commandPalette.svelte';
 import { openCheatsheet } from '../ui/cheatsheet';
+import { links, openExternal } from '../links';
 
 // Tooltip explaining why Save / Save As are disabled when the browser lacks
 // the File System Access API (Firefox). Returned from each save action's
@@ -991,12 +992,42 @@ export function registerActions() {
     });
 
     actions.register({
+        id: 'openDocs',
+        displayName: 'Documentation',
+        category: 'view',
+        description: 'Open the Darkly documentation in a new tab.',
+        icon: 'fa6-solid:book',
+        menuPath: ['Help:20'],
+        handler: () => openExternal(links.docs),
+    });
+
+    actions.register({
+        id: 'openWebsite',
+        displayName: 'Website',
+        category: 'view',
+        description: 'Open the Darkly website in a new tab.',
+        icon: 'fa6-solid:globe',
+        menuPath: ['Help:30'],
+        handler: () => openExternal(links.website),
+    });
+
+    actions.register({
+        id: 'openGithub',
+        displayName: 'GitHub Repository',
+        category: 'view',
+        description: 'Open the Darkly source repository on GitHub.',
+        icon: 'fa6-brands:github',
+        menuPath: ['Help:40'],
+        handler: () => openExternal(links.github),
+    });
+
+    actions.register({
         id: 'aboutDarkly',
         displayName: 'About Darkly',
         category: 'view',
         description: 'Show version and credits.',
         icon: 'fa6-solid:circle-info',
-        menuPath: ['Help:20'],
+        menuPath: ['Help:50'],
         handler: () => { about.open = true; },
     });
 

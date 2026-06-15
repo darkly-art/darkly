@@ -221,6 +221,10 @@
 
         if (!ctx) return;
         tool?.onPointerDown(ctx, e, pos.x, pos.y);
+        // Mark a tool interaction in flight so autosave doesn't snapshot
+        // mid-stroke. Released in onPointerUp / onPointerCancel (pointer
+        // capture guarantees one of them fires on this element).
+        inst.pointerActive = true;
 
         // Chromium/Linux touchscreen-pen quirk: when the pen starts a
         // stroke AND the OS mouse cursor happens to be over the canvas,
@@ -288,6 +292,7 @@
             return;
         }
 
+        inst.pointerActive = false;
         const ctx = getToolContext();
         if (!ctx) return;
         const tool = toolRegistry.get(inst.activeToolId);
@@ -297,6 +302,7 @@
 
     function onPointerCancel(e: PointerEvent) {
         e.preventDefault();
+        inst.pointerActive = false;
 
         // Pen/touch can fire pointercancel instead of pointerup (pen lifted
         // out of range, system gesture, browser intervention).  Clean up

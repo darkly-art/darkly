@@ -4,9 +4,11 @@
 //! the single [`Response`] `bytes` side-channel; the JSON value carries the
 //! lengths so the JS edge can slice them back out in order.
 
+use serde::Deserialize;
 use serde_json::json;
 
-use crate::engine::protocol::{ProtocolError, RequestRegistration, Response};
+use crate::engine::protocol::{bad_payload, ProtocolError, RequestRegistration, Response};
+use crate::engine::SavePurpose;
 
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
@@ -29,9 +31,25 @@ pub fn registrations() -> Vec<RequestRegistration> {
         },
         RequestRegistration {
             kind: "start_save_document",
-            handle: |engine, _payload, _b| match engine.start_save_document() {
-                Ok(()) => Ok(Response::empty()),
-                Err(e) => Err(ProtocolError::engine(e.to_string())),
+            handle: |engine, payload, _b| {
+                // A `snapshot` save (autosave to OPFS) must not clear the
+                // document's dirty flag; a file save does. Default to a file
+                // save when the flag is absent.
+                #[derive(Deserialize)]
+                struct Req {
+                    #[serde(default)]
+                    snapshot: bool,
+                }
+                let r: Req = serde_json::from_value(payload).map_err(bad_payload)?;
+                let purpose = if r.snapshot {
+                    SavePurpose::Snapshot
+                } else {
+                    SavePurpose::File
+                };
+                match engine.start_save_document(purpose) {
+                    Ok(()) => Ok(Response::empty()),
+                    Err(e) => Err(ProtocolError::engine(e.to_string())),
+                }
             },
         },
         RequestRegistration {

@@ -11,6 +11,7 @@
     import ResizeCanvasModal from './ui/ResizeCanvasModal.svelte';
     import ImageRescaleModal from './ui/ImageRescaleModal.svelte';
     import ConfirmDiscardModal from './ui/ConfirmDiscardModal.svelte';
+    import RecoveryModal from './ui/RecoveryModal.svelte';
     import AboutModal from './ui/AboutModal.svelte';
     import MenuBar from './ui/menu/MenuBar.svelte';
     import CommandPalette from './ui/menu/CommandPalette.svelte';
@@ -65,6 +66,7 @@
 <ResizeCanvasModal />
 <ImageRescaleModal />
 <ConfirmDiscardModal />
+<RecoveryModal />
 <AboutModal />
 <CommandPalette />
 

@@ -9,6 +9,8 @@ import { DarklyInstance, setActiveInstance, getActiveInstance } from './state/ap
 import { createHandle } from './state/session';
 import type { Engine } from './engine/protocol';
 import { setupColorPickerModifierTracking } from './tools/colorpicker_cursor';
+import { autosave } from './state/autosave.svelte';
+import { recovery } from './state/recovery.svelte';
 
 let processInitialized = false;
 
@@ -36,6 +38,13 @@ export async function ensureProcessInit(): Promise<void> {
     // as soon as the user holds the modifier with a paint tool active
     // (not just on pointerdown). Idempotent.
     setupColorPickerModifierTracking();
+
+    // Autosave + crash recovery. `recovery.init()` registers this browser
+    // session (heartbeat + clean-exit handler) and, if a prior session
+    // crashed with unsaved work, prompts to restore it. `autosave.start()`
+    // arms the snapshot interval + tab-switch hook.
+    autosave.start();
+    void recovery.init();
 
     processInitialized = true;
 }

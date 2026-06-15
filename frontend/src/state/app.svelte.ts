@@ -1,9 +1,9 @@
 import type { Engine, EngineState } from '../engine/protocol';
+import type { SaveBundle } from '../storage/saveDocument';
 import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry } from '../tools/registry';
 import { pollPick } from '../tools/color_pick_sync';
 import { tickColorPickerCursor } from '../tools/colorpicker_cursor';
-import type { SaveBundle } from '../storage/saveDocument';
 import { CameraSource } from '../lib/cameraSource';
 
 export interface Color {
@@ -64,6 +64,15 @@ export class DarklyInstance {
             : `instance-${Math.random().toString(36).slice(2)}`;
 
     engine = $state<Engine | null>(null);
+
+    /** Stable key for this tab's crash-recovery snapshot. Distinct from
+     *  `id` so it reads clearly at the recovery-store boundary; repeated
+     *  autosaves overwrite one snapshot file per tab. A tab restored from
+     *  a snapshot gets a fresh `recoveryId` (it's a new live tab). */
+    readonly recoveryId: string =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+            ? crypto.randomUUID()
+            : `recovery-${Math.random().toString(36).slice(2)}`;
 
     /** Initial document name to apply once the WASM handle finishes
      *  bootstrapping. The shell uses this to thread "Untitled N"
@@ -781,6 +790,18 @@ export class DarklyInstance {
     endInteraction() {
         this._interactionCount = Math.max(0, this._interactionCount - 1);
         if (this._interactionCount === 0) this.requestFrame();
+    }
+
+    /** True while a canvas pointer stroke/drag is in flight (any tool).
+     *  Set by CanvasView's pointer dispatch. Generic, not brush-specific —
+     *  it gates autosave so a snapshot never captures a half-committed
+     *  stroke or runs its offscreen composite mid-stroke. */
+    pointerActive = $state(false);
+
+    /** Safe to take an autosave snapshot right now? False while the user
+     *  is mid-stroke on the canvas or mid-drag in the brush builder. */
+    get idleForSnapshot(): boolean {
+        return !this.pointerActive && this._interactionCount === 0;
     }
 
     /** Schedule a render frame if one isn't already pending. */

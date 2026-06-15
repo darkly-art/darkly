@@ -82,6 +82,7 @@ export type RequestKind =
     | 'last_picked_color'
     | 'layer_kind_types'
     | 'layer_tree'
+    | 'mark_dirty'
     | 'mask_to_selection'
     | 'merge_down'
     | 'merge_layers'
@@ -230,6 +231,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'last_picked_color',
     'layer_kind_types',
     'layer_tree',
+    'mark_dirty',
     'mask_to_selection',
     'merge_down',
     'merge_layers',

@@ -34,5 +34,12 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 })))
             },
         },
+        RequestRegistration {
+            kind: "mark_dirty",
+            handle: |engine, _payload, _b| {
+                engine.mark_dirty();
+                Ok(Response::empty())
+            },
+        },
     ]
 }

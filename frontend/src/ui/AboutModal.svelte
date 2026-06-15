@@ -3,13 +3,11 @@
     import Icon from '../icons/Icon.svelte';
     import { about } from '../state/about.svelte';
     import { darklyVersion } from '../version';
+    import { links } from '../links';
 
     // Relative to Vite's base ('./') so it resolves both at a web root and from
     // file:// in the packaged desktop bundle.
     const bannerSrc = `${import.meta.env.BASE_URL}darkly-banner.png`;
-
-    const WEBSITE = 'https://darkly.art';
-    const GITHUB = 'https://github.com/darkly-art/darkly';
 
     let copied = $state(false);
     let copyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -43,12 +41,12 @@
         </div>
 
         <div class="links">
-            <a class="link" href={WEBSITE} target="_blank" rel="noopener noreferrer">
+            <a class="link" href={links.website} target="_blank" rel="noopener noreferrer">
                 <Icon name="fa6-solid:globe" />
                 <span>Website</span>
                 <Icon name="fa6-solid:arrow-up-right-from-square" class="external" />
             </a>
-            <a class="link" href={GITHUB} target="_blank" rel="noopener noreferrer">
+            <a class="link" href={links.github} target="_blank" rel="noopener noreferrer">
                 <Icon name="fa6-brands:github" />
                 <span>GitHub</span>
                 <Icon name="fa6-solid:arrow-up-right-from-square" class="external" />

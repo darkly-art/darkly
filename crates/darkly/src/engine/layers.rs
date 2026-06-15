@@ -691,6 +691,14 @@ impl DarklyEngine {
         }
     }
 
+    /// Force the document into the unsaved state. Used after restoring a
+    /// crash-recovery snapshot: the restored document is unsaved work
+    /// with no backing file handle, so it must read as dirty (otherwise
+    /// closing the tab would silently discard the recovered work).
+    pub fn mark_dirty(&mut self) {
+        self.doc.dirty = true;
+    }
+
     /// Rename the document. Not undoable — renaming is a metadata change
     /// users expect to be free-standing, matching every other editor's
     /// "title bar rename" affordance. The save flow picks the new name
