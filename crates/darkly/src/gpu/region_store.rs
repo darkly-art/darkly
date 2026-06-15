@@ -471,16 +471,14 @@ impl RegionScratch {
         (entry, request)
     }
 
-    /// Restore saved pixels back to the layer texture, producing a forward
-    /// entry (the pre-restore state) plus its async-readback request for
-    /// redo.
-    ///
-    /// Both branches encode their commands into the supplied encoder, so the
-    /// forward capture sequences strictly before the restore. The
-    /// `Ready` branch allocates a one-shot upload buffer (mapped at
-    /// creation) so the restore stays in the encoder's command stream —
-    /// `queue.write_texture` would re-order to the start of the next submit
-    /// and stomp the forward capture.
+    /// Restore `entry`'s saved pixels into `target`, producing the forward
+    /// entry (the pre-restore state) + its async-readback request for the
+    /// inverse op. The constant-extent combinator of
+    /// [`capture_region`](Self::capture_region) +
+    /// [`upload_region`](Self::upload_region): capture the entry's rect, then
+    /// upload, in one encoder (capture sequences before the overwrite). Use the
+    /// two halves directly when the target texture is realloc'd between them
+    /// (image rescale's extent change).
     pub fn restore_region(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -488,9 +486,134 @@ impl RegionScratch {
         entry: &UndoRegionEntry,
         target: &CanvasFrame<'_>,
     ) -> (UndoRegionEntry, ReadbackRequest) {
+        let (forward, request) = self.capture_region(
+            encoder,
+            device,
+            entry.layer_id,
+            entry.format,
+            target,
+            entry.canvas_rect,
+        );
+        self.upload_region(encoder, device, entry, target);
+        (forward, request)
+    }
+
+    /// Capture `capture_rect` of `target`'s **current** pixels into a fresh
+    /// undo entry (the forward / opposite-direction state) plus its async
+    /// readback request.
+    ///
+    /// This is the first half of an undo restore: snapshot what's there now so
+    /// the inverse operation can put it back. Pairs with
+    /// [`upload_region`](Self::upload_region); a caller that needs to realloc
+    /// the target texture (image rescale changes a node's extent) can do so
+    /// *between* the two calls — capture reads the old extent, upload writes
+    /// the new. For constant-extent restores pass `capture_rect ==
+    /// entry.canvas_rect`; the pair then behaves like the old `restore_region`.
+    ///
+    /// The capture commands must be encoded (and, across an extent change,
+    /// submitted) before the upload overwrites / the realloc replaces the
+    /// target — same encoder preserves order for the constant-extent case.
+    pub fn capture_region(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        layer_id: LayerId,
+        format: wgpu::TextureFormat,
+        target: &CanvasFrame<'_>,
+        capture_rect: CanvasRect,
+    ) -> (UndoRegionEntry, ReadbackRequest) {
+        let layer_rect = target
+            .canvas_to_layer_rect(capture_rect)
+            .expect("capture_region rect must overlap the target's canvas extent");
+        let bpp = format.block_copy_size(None).unwrap_or(1);
+        let unpadded_row_bytes = layer_rect.width * bpp;
+        let padded_row_bytes = padded_row(layer_rect.width, bpp);
+        let byte_size = padded_row_bytes as u64 * layer_rect.height as u64;
+        let origin = wgpu::Origin3d {
+            x: layer_rect.x0(),
+            y: layer_rect.y0(),
+            z: 0,
+        };
+        let extent = wgpu::Extent3d {
+            width: layer_rect.width,
+            height: layer_rect.height,
+            depth_or_array_layers: 1,
+        };
+        let texel_layout = wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(padded_row_bytes),
+            rows_per_image: Some(layer_rect.height),
+        };
+
+        let (readback, staging) = allocate_pending_buffers(device, byte_size);
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: target.texture,
+                mip_level: 0,
+                origin,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: texel_layout,
+            },
+            extent,
+        );
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: target.texture,
+                mip_level: 0,
+                origin,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: texel_layout,
+            },
+            extent,
+        );
+
+        let pixels = Rc::new(RefCell::new(EntryPixels::Pending {
+            readback: readback.clone(),
+            staging,
+        }));
+        let request = ReadbackRequest::from_buffer(
+            readback,
+            layer_rect.height,
+            padded_row_bytes,
+            unpadded_row_bytes,
+        );
+        let forward = UndoRegionEntry {
+            layer_id,
+            canvas_rect: capture_rect,
+            format,
+            padded_row_bytes,
+            unpadded_row_bytes,
+            byte_size,
+            pixels,
+        };
+        (forward, request)
+    }
+
+    /// Upload `entry`'s saved pixels back into `target` at `entry.canvas_rect`
+    /// — the second half of an undo restore. The `Ready` branch allocates a
+    /// one-shot mapped-at-creation upload buffer so the copy stays in the
+    /// encoder's command stream (`queue.write_texture` would re-order to the
+    /// start of the next submit and stomp a same-encoder forward capture).
+    ///
+    /// `target` must already be sized so `entry.canvas_rect` maps fully into
+    /// it (the caller realloc's the node texture for an extent-changing
+    /// restore before calling this).
+    pub fn upload_region(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        entry: &UndoRegionEntry,
+        target: &CanvasFrame<'_>,
+    ) {
         let layer_rect = target
             .canvas_to_layer_rect(entry.canvas_rect)
-            .expect("restore_region entry must overlap the target's canvas extent");
+            .expect("upload_region entry must overlap the target's canvas extent");
         let origin = wgpu::Origin3d {
             x: layer_rect.x0(),
             y: layer_rect.y0(),
@@ -511,40 +634,6 @@ impl RegionScratch {
             rows_per_image: Some(height),
         };
 
-        // 1. Allocate the forward entry's pair of staging buffers + capture
-        //    the pre-restore target into BOTH. The commands must precede the
-        //    restore-into-target command below so the forward entry contains
-        //    the redo pixels rather than the undone pixels.
-        let (forward_readback, forward_staging) = allocate_pending_buffers(device, byte_size);
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: target.texture,
-                mip_level: 0,
-                origin,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &forward_readback,
-                layout: texel_layout,
-            },
-            extent,
-        );
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: target.texture,
-                mip_level: 0,
-                origin,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &forward_staging,
-                layout: texel_layout,
-            },
-            extent,
-        );
-
-        // 2. Restore old pixels into target — same encoder, so this runs
-        //    after the forward capture.
         let pixels_borrow = entry.pixels.borrow();
         match &*pixels_borrow {
             EntryPixels::Pending { staging, .. } => {
@@ -610,29 +699,6 @@ impl RegionScratch {
                 );
             }
         }
-        drop(pixels_borrow);
-
-        let forward_pixels = Rc::new(RefCell::new(EntryPixels::Pending {
-            readback: forward_readback.clone(),
-            staging: forward_staging,
-        }));
-        let request = ReadbackRequest::from_buffer(
-            forward_readback,
-            height,
-            padded_row_bytes,
-            unpadded_row_bytes,
-        );
-
-        let forward = UndoRegionEntry {
-            layer_id: entry.layer_id,
-            canvas_rect: entry.canvas_rect,
-            format: entry.format,
-            padded_row_bytes,
-            unpadded_row_bytes,
-            byte_size,
-            pixels: forward_pixels,
-        };
-        (forward, request)
     }
 
     /// Restore a region directly from the scratch texture to the target,

@@ -1,6 +1,7 @@
 mod canvas_resize;
 mod compound;
 mod gpu_region;
+mod image_rescale;
 mod layer;
 mod modifier;
 pub mod property;
@@ -10,6 +11,7 @@ mod tombstones;
 pub use canvas_resize::CanvasResizeAction;
 pub use compound::CompoundAction;
 pub use gpu_region::GpuRegionAction;
+pub use image_rescale::ImageRescaleAction;
 pub use layer::{
     BakeLayersAction, BakeSourceSlot, DuplicateAction, LayerAddAction, LayerMoveAction,
     LayerRemoveAction,
@@ -45,9 +47,20 @@ pub trait UndoAction {
 
     /// If this is a GPU region action, return a mutable reference to its entry.
     /// The engine uses this to execute GPU texture restores during undo/redo,
-    /// then swaps the entry with the forward/backward entry returned by `restore_region`.
+    /// then swaps the entry with the forward entry produced by the restore.
     fn gpu_region_entry_mut(&mut self) -> Option<&mut UndoRegionEntry> {
         None
+    }
+
+    /// Every GPU region entry this action owns. The engine restores each one
+    /// during undo/redo. Defaults to the single [`gpu_region_entry_mut`] entry;
+    /// actions that bundle per-node snapshots (image rescale) or aggregate
+    /// children (compound) override this to return all of them. The single-
+    /// entry default preserves the existing one-region-per-step behaviour.
+    ///
+    /// [`gpu_region_entry_mut`]: Self::gpu_region_entry_mut
+    fn gpu_region_entries_mut(&mut self) -> Vec<&mut UndoRegionEntry> {
+        self.gpu_region_entry_mut().into_iter().collect()
     }
 
     /// If this is a selection GPU action, return a mutable reference to its region entry.
