@@ -136,8 +136,8 @@ For a feature to count, it must be:
 - [ ] Desaturate
 - [ ] Clipping mask
 - [ ] Adjustment layers
-- [ ] Feather + antialias
-- [ ] Grow / Shrink / Border / Smooth as discrete commands
+- [x] Feather + antialias
+- [x] Grow / Shrink / Border / Smooth as discrete commands
 - [ ] Flip canvas H / V
 - [ ] Rotate canvas 90° CW / CCW / 180°
 - [ ] Flip layer / selection H / V

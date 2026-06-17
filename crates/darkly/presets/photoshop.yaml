@@ -46,6 +46,8 @@ hotkeys:
   # Selection.
   clearSelection: $mod+KeyD
   invertSelection: $mod+Shift+KeyI
+  # Photoshop binds Select > Modify > Feather to Shift+F6.
+  featherSelection: Shift+F6
 
 mouse_clicks:
   # Photoshop's eyedropper modifier is Alt+drag (not Ctrl+drag).

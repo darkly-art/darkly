@@ -5,6 +5,7 @@ import { settings } from '../state/settings.svelte';
 import { newDocument } from '../state/newDocument.svelte';
 import { resizeCanvas } from '../state/resizeCanvas.svelte';
 import { imageRescale } from '../state/imageRescale.svelte';
+import { selectionModify } from '../state/selectionModify.svelte';
 import { exportImage } from '../state/exportImage.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
 import { toast } from '../state/toast.svelte';
@@ -342,6 +343,66 @@ export function registerActions() {
         icon: 'tabler:flip-horizontal',
         menuPath: ['Select:30'],
         handler: () => app.engine?.post('invert_selection'),
+    });
+    actions.register({
+        id: 'growSelection',
+        displayName: 'Grow Selection',
+        category: 'selection',
+        description: 'Expand the selection edge outward by a number of pixels.',
+        icon: 'fa6-solid:up-right-and-down-left-from-center',
+        menuPath: ['Select:50'],
+        enabled: () => app.engineState?.hasSelection || 'No active selection',
+        handler: () => selectionModify.show('grow'),
+    });
+    actions.register({
+        id: 'shrinkSelection',
+        displayName: 'Shrink Selection',
+        category: 'selection',
+        description: 'Contract the selection edge inward by a number of pixels.',
+        icon: 'fa6-solid:down-left-and-up-right-to-center',
+        menuPath: ['Select:60'],
+        enabled: () => app.engineState?.hasSelection || 'No active selection',
+        handler: () => selectionModify.show('shrink'),
+    });
+    actions.register({
+        id: 'borderSelection',
+        displayName: 'Border Selection',
+        category: 'selection',
+        description: 'Replace the selection with a band straddling its edge.',
+        icon: 'fa6-solid:border-all',
+        menuPath: ['Select:70'],
+        enabled: () => app.engineState?.hasSelection || 'No active selection',
+        handler: () => selectionModify.show('border'),
+    });
+    actions.register({
+        id: 'smoothSelection',
+        displayName: 'Smooth Selection',
+        category: 'selection',
+        description: 'Round off jagged edges and remove small specks.',
+        icon: 'fa6-solid:wand-magic-sparkles',
+        menuPath: ['Select:80'],
+        enabled: () => app.engineState?.hasSelection || 'No active selection',
+        handler: () => app.engine?.post('smooth_selection', { radius: 2 }),
+    });
+    actions.register({
+        id: 'featherSelection',
+        displayName: 'Feather Selection',
+        category: 'selection',
+        description: 'Soften the selection edge with a Gaussian blur.',
+        icon: 'fa6-solid:feather',
+        menuPath: ['Select:90'],
+        enabled: () => app.engineState?.hasSelection || 'No active selection',
+        handler: () => selectionModify.show('feather'),
+    });
+    actions.register({
+        id: 'antialiasSelection',
+        displayName: 'Antialias Selection',
+        category: 'selection',
+        description: 'Soften the staircase of a hard-edged selection.',
+        icon: 'fa6-solid:wand-magic',
+        menuPath: ['Select:100'],
+        enabled: () => app.engineState?.hasSelection || 'No active selection',
+        handler: () => app.engine?.post('antialias_selection'),
     });
 
     // -- Image (canvas) --

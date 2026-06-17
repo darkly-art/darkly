@@ -21,7 +21,7 @@ use crate::document::SelectionMode;
 use crate::gpu::flood_fill::{self, LayerFloodFillExtent};
 use crate::gpu::overlay::{OverlayPrimitive, FLAG_CANVAS_SPACE, KIND_DASHED_LINE};
 use crate::gpu::readback;
-use crate::gpu::selection::CombineMode;
+use crate::gpu::selection::{CombineMode, MorphOp};
 use crate::layer::LayerId;
 use crate::mask::RasterizedMask;
 use crate::undo::SelectionAction;
@@ -408,6 +408,138 @@ impl DarklyEngine {
                     .invert(encoder, &self.gpu.device, &self.gpu.queue, state);
             });
         }
+        self.set_selection_pixel_bounds(None);
+        self.invalidate_selection_cpu_cache();
+        self.commit_selection_undo(was_active, rect);
+        self.kick_selection_readback();
+    }
+
+    /// Grow (dilate) the active selection by `radius` pixels. No-op without an
+    /// active selection or for `radius == 0`.
+    pub fn grow_selection(&mut self, radius: u32) {
+        self.morph_selection(MorphOp::Dilate, radius);
+    }
+
+    /// Shrink (erode) the active selection by `radius` pixels.
+    pub fn shrink_selection(&mut self, radius: u32) {
+        self.morph_selection(MorphOp::Erode, radius);
+    }
+
+    /// Replace the active selection with a band of width `radius` straddling
+    /// its edge (`dilate − erode`).
+    pub fn border_selection(&mut self, radius: u32) {
+        if radius == 0 || !self.has_selection() {
+            return;
+        }
+        let rect = self.selection_full_canvas_rect();
+        self.save_selection_for_undo(rect);
+        let was_active = self.has_selection();
+        if let Some(state) = self.compositor.selection_state_mut() {
+            self.selection_pipelines.border(&self.gpu, state, radius);
+        }
+        self.finish_selection_edit(was_active, rect);
+    }
+
+    /// Smooth the active selection: a morphological open then close (`erode N →
+    /// dilate 2N → erode N`), removing specks and pinholes and rounding jagged
+    /// edges.
+    pub fn smooth_selection(&mut self, radius: u32) {
+        if radius == 0 || !self.has_selection() {
+            return;
+        }
+        let rect = self.selection_full_canvas_rect();
+        self.save_selection_for_undo(rect);
+        let was_active = self.has_selection();
+        self.run_morph_steps(MorphOp::Erode, radius);
+        self.run_morph_steps(MorphOp::Dilate, 2 * radius);
+        self.run_morph_steps(MorphOp::Erode, radius);
+        self.finish_selection_edit(was_active, rect);
+    }
+
+    /// Feather (Gaussian-blur) the active selection edge by `radius` pixels.
+    pub fn feather_selection(&mut self, radius: f32) {
+        if radius <= 0.0 || !self.has_selection() {
+            return;
+        }
+        self.blur_selection(radius);
+    }
+
+    /// Antialias the active selection — a fixed small-radius Gaussian blur that
+    /// softens the staircase of a hard-edged selection.
+    pub fn antialias_selection(&mut self) {
+        if !self.has_selection() {
+            return;
+        }
+        self.blur_selection(1.0);
+    }
+
+    /// Grow or shrink the active selection by `radius` single-pixel morphology
+    /// steps, wrapped in one undo step. Shared by [`grow_selection`] /
+    /// [`shrink_selection`].
+    fn morph_selection(&mut self, op: MorphOp, radius: u32) {
+        if radius == 0 || !self.has_selection() {
+            return;
+        }
+        let rect = self.selection_full_canvas_rect();
+        self.save_selection_for_undo(rect);
+        let was_active = self.has_selection();
+        self.run_morph_steps(op, radius);
+        self.finish_selection_edit(was_active, rect);
+    }
+
+    /// Run `count` single-pixel morphology steps over the selection mask,
+    /// alternating 4-/8-connectivity for a rounder structuring element. Each
+    /// step is its own submit (the per-step uniform varies). No undo handling —
+    /// the caller brackets the whole edit.
+    fn run_morph_steps(&mut self, op: MorphOp, count: u32) {
+        for i in 0..count {
+            let eight = i % 2 == 1;
+            if let Some(state) = self.compositor.selection_state_mut() {
+                self.gpu.encode("sel-morph", |encoder| {
+                    self.selection_pipelines.morph_step(
+                        encoder,
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        state,
+                        op,
+                        eight,
+                    );
+                });
+            }
+        }
+    }
+
+    /// Separable Gaussian blur (H then V) of the selection mask, wrapped in one
+    /// undo step. σ = radius / 2, kernel extent ±ceil(radius) — matching
+    /// [`crate::mask::gaussian_kernel`]. Shared by feather / antialias.
+    fn blur_selection(&mut self, radius: f32) {
+        let rect = self.selection_full_canvas_rect();
+        self.save_selection_for_undo(rect);
+        let was_active = self.has_selection();
+        let sigma = radius * 0.5;
+        let krad = radius.ceil() as i32;
+        for horizontal in [true, false] {
+            if let Some(state) = self.compositor.selection_state_mut() {
+                self.gpu.encode("sel-blur", |encoder| {
+                    self.selection_pipelines.blur_pass(
+                        encoder,
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        state,
+                        horizontal,
+                        krad,
+                        sigma,
+                    );
+                });
+            }
+        }
+        self.finish_selection_edit(was_active, rect);
+    }
+
+    /// Post-edit bookkeeping shared by the GPU selection-modify ops: drop the
+    /// cached pixel bounds and CPU mirror (an async readback repopulates them),
+    /// commit the undo step, and kick the readback for marching ants.
+    fn finish_selection_edit(&mut self, was_active: bool, rect: CanvasRect) {
         self.set_selection_pixel_bounds(None);
         self.invalidate_selection_cpu_cache();
         self.commit_selection_undo(was_active, rect);
