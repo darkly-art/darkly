@@ -331,4 +331,53 @@ mod tests {
             CanvasRect::from_xywh(-90, 70, 30, 40),
         );
     }
+
+    /// Locks the §2 brush-dab migration: `extent.clamp_f32(dab)` followed by
+    /// `canvas_to_layer_rect(bbox)` must produce exactly what the brush nodes'
+    /// hand-rolled float-clamp → floor/ceil → local-translate produced, for a
+    /// dab crossing the edges of an *offset* (paste-extent) layer. The old
+    /// formula is replicated inline as the permanent golden reference.
+    #[test]
+    fn clamp_f32_matches_hand_rolled_dab_clamp_off_extent() {
+        let l = make_layer(-100, 50, 200, 300);
+        let extent = l.canvas_extent();
+
+        // Dab footprint (canvas space) crossing the right and top edges.
+        let (dab_x0, dab_y0, dab_x1, dab_y1) = (60.0_f32, 30.0_f32, 120.0_f32, 90.0_f32);
+
+        // --- New path (the primitive) ---
+        let canvas_bbox = extent.clamp_f32(dab_x0, dab_y0, dab_x1, dab_y1).unwrap();
+        let local = l.canvas_to_layer_rect(canvas_bbox).unwrap();
+
+        // --- Old hand-rolled reference (paint/watercolor/smudge/liquify) ---
+        let layer_x0 = extent.x0() as f32;
+        let layer_y0 = extent.y0() as f32;
+        let layer_x1 = layer_x0 + extent.width as f32;
+        let layer_y1 = layer_y0 + extent.height as f32;
+        let cx0 = dab_x0.max(layer_x0);
+        let cy0 = dab_y0.max(layer_y0);
+        let cx1 = dab_x1.min(layer_x1);
+        let cy1 = dab_y1.min(layer_y1);
+        let bbox_x = cx0.floor() as i32;
+        let bbox_y = cy0.floor() as i32;
+        let bbox_w = (cx1.ceil() as i32 - bbox_x) as u32;
+        let bbox_h = (cy1.ceil() as i32 - bbox_y) as u32;
+        let local_x0 = (bbox_x - extent.x0()).max(0) as u32;
+        let local_y0 = (bbox_y - extent.y0()).max(0) as u32;
+        let local_x1 = (local_x0 + bbox_w).min(extent.width);
+        let local_y1 = (local_y0 + bbox_h).min(extent.height);
+
+        assert_eq!(
+            canvas_bbox,
+            CanvasRect::from_xywh(bbox_x, bbox_y, bbox_w, bbox_h)
+        );
+        assert_eq!(
+            local,
+            LayerRect::from_xywh(local_x0, local_y0, local_x1 - local_x0, local_y1 - local_y0),
+        );
+        // Explicit golden values so a future refactor of the reference can't
+        // silently drift both sides together.
+        assert_eq!(canvas_bbox, CanvasRect::from_xywh(60, 50, 40, 40));
+        assert_eq!(local, LayerRect::from_xywh(160, 0, 40, 40));
+    }
 }

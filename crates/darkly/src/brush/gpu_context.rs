@@ -558,37 +558,35 @@ impl<'a> BrushGpuContext<'a> {
             return None;
         }
 
-        // Read region (the scratch snapshot the brush samples from).
-        let read_x0 = (position[0] - read_half_w).max(layer_x0);
-        let read_y0 = (position[1] - read_half_h).max(layer_y0);
-        let read_x1 = (position[0] + read_half_w).min(layer_x1);
-        let read_y1 = (position[1] + read_half_h).min(layer_y1);
+        // Read region (the scratch snapshot the brush samples from). The shared
+        // primitive floors the near edge and ceils the far edge before clamping
+        // to the extent, so every fragment in the quad has a valid scratch read
+        // mirror texel and `i32` origins stay representable (paste-extent /
+        // leftward-grown layers).
+        let copy = pt_canvas.clamp_f32(
+            position[0] - read_half_w,
+            position[1] - read_half_h,
+            position[0] + read_half_w,
+            position[1] + read_half_h,
+        )?;
+        let copy_canvas_x = copy.x0();
+        let copy_canvas_y = copy.y0();
+        let copy_w = copy.width;
+        let copy_h = copy.height;
 
-        // Floor-then-ceil so every fragment in the quad has a valid
-        // scratch read mirror texel to read. `i32` keeps negative origins
-        // (paste-extent layers, leftward-grown layers) representable.
-        let copy_canvas_x = read_x0.floor() as i32;
-        let copy_canvas_y = read_y0.floor() as i32;
-        let copy_w = (read_x1.ceil() as i32 - copy_canvas_x) as u32;
-        let copy_h = (read_y1.ceil() as i32 - copy_canvas_y) as u32;
-        if copy_w == 0 || copy_h == 0 {
-            return None;
-        }
-
-        // Save-point bbox tracks the write region — that's the only
-        // damage to scratch. Canvas coords are stable across mid-stroke
-        // layer growth (Storage Frame Rule).
-        let write_bbox_x = write_x0.floor() as i32;
-        let write_bbox_y = write_y0.floor() as i32;
-        let write_bbox_w = (write_x1.ceil() as i32 - write_bbox_x) as u32;
-        let write_bbox_h = (write_y1.ceil() as i32 - write_bbox_y) as u32;
-        self.dab_batch
-            .push_write_bbox(crate::coord::CanvasRect::from_xywh(
-                write_bbox_x,
-                write_bbox_y,
-                write_bbox_w,
-                write_bbox_h,
-            ));
+        // Save-point bbox tracks the write region — that's the only damage to
+        // scratch. Canvas coords are stable across mid-stroke layer growth
+        // (Storage Frame Rule). `quad_w/h > 0` above guarantees the snapped
+        // footprint is non-empty, so the clamp can't be `None` here.
+        let write_bbox = pt_canvas
+            .clamp_f32(
+                unclipped_write_x0,
+                unclipped_write_y0,
+                position[0] + write_half_w,
+                position[1] + write_half_h,
+            )
+            .expect("write region has positive area (quad_w/h > 0), so its snapped bbox overlaps the extent");
+        self.dab_batch.push_write_bbox(write_bbox);
 
         // The read mirror is filled from the stroke scratch, which is
         // layer-sized and indexed in layer-local pixels — translate

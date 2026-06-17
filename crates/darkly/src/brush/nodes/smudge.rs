@@ -402,39 +402,34 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
         // For smudge this is `1.0` when the upstream is a plain disc.
         let bbox_radius = radius * compiled.brush_extent_factor + compiled.brush_extent_extra_px;
         let canvas_ext = paint_target.canvas_extent();
+        // Near-edge of the layer extent — reused below for the read-region copy
+        // origin (a one-sided clamp, distinct from the dab footprint clamp).
         let layer_x0 = canvas_ext.x0() as f32;
         let layer_y0 = canvas_ext.y0() as f32;
-        let layer_x1 = layer_x0 + canvas_ext.width as f32;
-        let layer_y1 = layer_y0 + canvas_ext.height as f32;
-        let cx0 = (position[0] - bbox_radius).max(layer_x0);
-        let cy0 = (position[1] - bbox_radius).max(layer_y0);
-        let cx1 = (position[0] + bbox_radius).min(layer_x1);
-        let cy1 = (position[1] + bbox_radius).min(layer_y1);
-        if cx1 <= cx0 || cy1 <= cy0 {
-            return vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))];
-        }
-        let bbox_x = cx0.floor() as i32;
-        let bbox_y = cy0.floor() as i32;
-        let bbox_w = (cx1.ceil() as i32 - bbox_x) as u32;
-        let bbox_h = (cy1.ceil() as i32 - bbox_y) as u32;
-        let layer_w = canvas_ext.width;
-        let layer_h = canvas_ext.height;
-        let local_x0 = (bbox_x - canvas_ext.x0()).max(0) as u32;
-        let local_y0 = (bbox_y - canvas_ext.y0()).max(0) as u32;
-        let local_x1 = (local_x0 + bbox_w).min(layer_w);
-        let local_y1 = (local_y0 + bbox_h).min(layer_h);
-        gpu.dab_batch
-            .push_write_bbox(crate::coord::CanvasRect::from_xywh(
-                bbox_x, bbox_y, bbox_w, bbox_h,
-            ));
+        // Clamp the dab footprint to the layer extent via the shared primitive;
+        // a dab entirely off-extent yields `None` and is skipped.
+        let canvas_bbox = match canvas_ext.clamp_f32(
+            position[0] - bbox_radius,
+            position[1] - bbox_radius,
+            position[0] + bbox_radius,
+            position[1] + bbox_radius,
+        ) {
+            Some(r) => r,
+            None => return vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))],
+        };
+        let local = paint_target
+            .canvas_frame()
+            .canvas_to_layer_rect(canvas_bbox)
+            .expect("canvas_bbox came from canvas_ext.clamp_f32, so it overlaps the extent");
+        gpu.dab_batch.push_write_bbox(canvas_bbox);
         gpu.dab_batch.bbox = Some(match gpu.dab_batch.bbox {
             Some([x0, y0, x1, y1]) => [
-                x0.min(local_x0),
-                y0.min(local_y0),
-                x1.max(local_x1),
-                y1.max(local_y1),
+                x0.min(local.x0()),
+                y0.min(local.y0()),
+                x1.max(local.x1()),
+                y1.max(local.y1()),
             ],
-            None => [local_x0, local_y0, local_x1, local_y1],
+            None => [local.x0(), local.y0(), local.x1(), local.y1()],
         });
 
         // Asymmetric read region — expanded by `|motion|` per axis so
