@@ -676,8 +676,8 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
 
         let bbox_radius = radius * compiled.brush_extent_factor + compiled.brush_extent_extra_px;
         let canvas_ext = paint_target.canvas_extent();
-        // Clamp the dab footprint to the layer extent via the shared primitive;
-        // a dab entirely off-extent yields `None` and is skipped.
+        // Clamp the dab footprint to the layer extent; a dab entirely
+        // off-extent has no pixels to draw and is skipped.
         let canvas_bbox = match canvas_ext.clamp_f32(
             position[0] - bbox_radius,
             position[1] - bbox_radius,

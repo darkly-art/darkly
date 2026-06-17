@@ -337,9 +337,9 @@ pub fn rasterize_sdf_r8(
         0
     };
 
-    // Clamp the (margin-expanded) shape box to the window via the shared
-    // underflow-safe primitive: a shape entirely off-window — or a reversed-drag
-    // negative bw/bh — yields `None` and an empty mask, never a panic.
+    // Tight output region: the margin-expanded shape box clamped to the window.
+    // A shape entirely off-window — or a reversed-drag negative bw/bh — has no
+    // overlap, so `intersect` yields `None` and the mask is empty.
     let window = WindowRect::from_xywh(0, 0, canvas_width, canvas_height);
     let region = match WindowRect::from_corners(
         bx - margin,
@@ -422,9 +422,9 @@ pub fn rasterize_polygon_r8(
         max_y = max_y.max(v[1]);
     }
 
-    // Clamp the margin-expanded float bbox to the window via the shared
-    // underflow-safe primitive — a polygon entirely off-window yields `None`
-    // and an empty mask (no hand-rolled clamp, no late zero-guard).
+    // Tight output region: the margin-expanded vertex bbox clamped to the
+    // window. A polygon entirely off-window has no overlap, so `clamp_f32`
+    // yields `None` and the mask is empty.
     let margin = if antialias { 1.0 } else { 0.0 };
     let window = WindowRect::from_xywh(0, 0, canvas_width, canvas_height);
     let region = match window.clamp_f32(
@@ -495,8 +495,13 @@ pub fn rasterize_polygon_r8(
                 let xr = pair[1];
 
                 // Integer pixel range fully inside the span.
-                let px_start = (xl.ceil() as i32).max(x0 as i32) as u32;
-                let px_end = (xr.floor() as i32 + 1).min(x1 as i32) as u32;
+                // Clamp BOTH endpoints into `[x0, x1]` before the `as u32` cast.
+                // A span entirely off the left edge has a negative `xr`; without
+                // the lower clamp `(xr.floor() + 1) as u32` wraps to ~4 billion and
+                // the inner loop walks off `accum`. A fully-off span now yields a
+                // reversed (empty) range instead.
+                let px_start = (xl.ceil() as i32).clamp(x0 as i32, x1 as i32) as u32;
+                let px_end = (xr.floor() as i32 + 1).clamp(x0 as i32, x1 as i32) as u32;
 
                 for px in px_start..px_end {
                     accum[local_y * rw as usize + (px - x0) as usize] += 1;
@@ -1557,6 +1562,17 @@ mod tests {
         let mask = crate::mask::rasterize_polygon_r8(100, 100, &verts, true);
         assert_eq!(mask.width, 0);
         assert_eq!(mask.height, 0);
+    }
+
+    #[test]
+    fn rasterize_polygon_r8_negative_span_does_not_panic() {
+        // A thin triangle leaning off the left edge: on lower scanlines the fill
+        // span is entirely negative (xr < 0). `(xr.floor() as i32 + 1) as u32` used
+        // to wrap to ~4 billion and run the scanline loop off the end of `accum`.
+        let verts = [[0.0_f32, 0.0], [10.0, 0.0], [-100.0, 100.0]];
+        let mask = crate::mask::rasterize_polygon_r8(100, 100, &verts, true);
+        assert!(mask.x + mask.width <= 100);
+        assert!(mask.y + mask.height <= 100);
     }
 
     // --- feather ---

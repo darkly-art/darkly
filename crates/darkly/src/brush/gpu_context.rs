@@ -558,11 +558,11 @@ impl<'a> BrushGpuContext<'a> {
             return None;
         }
 
-        // Read region (the scratch snapshot the brush samples from). The shared
-        // primitive floors the near edge and ceils the far edge before clamping
-        // to the extent, so every fragment in the quad has a valid scratch read
-        // mirror texel and `i32` origins stay representable (paste-extent /
-        // leftward-grown layers).
+        // Read region (the scratch snapshot the brush samples from). Floor the
+        // near edge and ceil the far edge before clamping to the extent, so
+        // every fragment in the quad has a valid scratch read mirror texel and
+        // `i32` origins stay representable (paste-extent / leftward-grown
+        // layers).
         let copy = pt_canvas.clamp_f32(
             position[0] - read_half_w,
             position[1] - read_half_h,

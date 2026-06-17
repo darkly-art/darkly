@@ -453,8 +453,8 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         // origin (a one-sided clamp, distinct from the dab footprint clamp).
         let layer_x0 = canvas_ext.x0() as f32;
         let layer_y0 = canvas_ext.y0() as f32;
-        // Clamp the dab footprint to the layer extent via the shared primitive;
-        // a dab entirely off-extent yields `None` and is skipped.
+        // Clamp the dab footprint to the layer extent; a dab entirely
+        // off-extent has no pixels to draw and is skipped.
         let canvas_bbox = match canvas_ext.clamp_f32(
             position[0] - bbox_radius,
             position[1] - bbox_radius,
