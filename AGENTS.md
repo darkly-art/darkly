@@ -2,7 +2,7 @@
 
 Darkly is a web-based, gpu-native paint program written in Rust, Svelte and Typescript, leveraging WebAssembly and WebGPU.
 
-This document exists to keep Darkly ***minimal, elegant, and proper***.
+This document exists to keep Darkly **minimal, elegant, and proper**. The best code is the code never written; nearly all the principles below are in support of this core principle.
 
 ## Architecture
 
@@ -88,6 +88,16 @@ authority, how to convert between them, and the pitfalls that have bitten us.
 
 Darkly's settings use a three-layer resolution order: `user → overlay (krita/ps/gimp) → defaults`. Placement rule is documented in [`crates/darkly/presets/defaults.yaml`](crates/darkly/presets/defaults.yaml)'s header; host-editor reference hotkeys live in [`docs/*-default-hotkeys.md`](docs/).
 
+## DRY Principle
+
+Don't Repeat Yourself — and interpret this broadly. If two pieces of code aren't identical but follow a similar enough pattern that they could be generalized, they should be. This applies across modules, layers (Rust, WASM bridge, JS), and systems.
+
+**Search before writing.** To ensure what you're about to write doesn't have siblings somewhere else in the codebase, grep for similar functionality. By doing this, you may discover overlap that can be extracted into a shared component (DRYify opportunity), or even better, that what you need is already written, and can simply be imported.
+
+**Place functionality where it generalizes.** Before writing logic, ask: "where does this belong so that it works for all cases, not just this one?" If a behavior applies to any tool, it belongs in the tool system's generic hooks — not inside one specific tool. If a behavior applies to any async operation, it belongs in the async completion pipeline — not special-cased at one call site. Putting the right logic in the right architectural layer eliminates the need to repeat it, and prevents future features from having to rediscover where to plug in. A good signal you've placed something wrong: it only works for one workflow, or a second caller would have to copy-paste the same pattern.
+
+**Stop-sign phrases.** If you find yourself writing "mirrors X", "bit-exact copy of X", "keep in sync with X", or "identical to X" in a comment, you are duplicating code. Pause and consider why you're doing it. If it's not easily factorable into a shared feature, stop executing and raise the issue to the user.
+
 ## Modularity Principle
 
 **Default to modular.** When you design anything with more than one variant — or that will plausibly grow one — the first question is "what's the unit, and how does the rest of the code stay ignorant of which one it's looking at?" That mindset applies at every scale: from a small enum where one method per variant beats a `match` at the call site, up to full subsystems with traits, registries, and per-variant files. The cost of designing modularly up front is almost always small; the cost of retrofitting after centralized branching has spread across the codebase is large. Hand-written dispatch should feel like an exception that needs justifying, not the default shape.
@@ -106,14 +116,6 @@ Mechanics: `build.rs` scans module directories and generates each `mod.rs` (neve
 The "default to modular" stance leads directly to the type-owned dispatch rule below: once a system is modular, the consumer must not re-introduce centralized branching by asking variants what they are.
 
 **Type-owned dispatch:** Anything a type knows about itself — behavior, properties, capabilities, identity — lives on the type, behind a uniform interface. Consumers call methods; they never introspect, classify, or branch on which variant they got. The diagnostic question: *would adding a new variant, or changing what an existing one knows about itself, force me to edit this code?* If yes, the knowledge is misplaced. The violation has one recurring shape — `matches!(type_id, ...)`, `if kind == X`, `fn is_foo(type_id) -> bool`, or any consumer-side helper that routes by type — code outside a type's own module asking questions the type should be answering itself. Replace it with a trait method, defaulted to the common case and overridden per variant, so new variants are purely additive.
-
-## DRY Principle
-
-Don't Repeat Yourself — and interpret this broadly. If two pieces of code aren't identical but follow a similar enough pattern that they could be generalized, they should be. This applies across modules, layers (Rust, WASM bridge, JS), and systems.
-
-**Place functionality where it generalizes.** Before writing logic, ask: "where does this belong so that it works for all cases, not just this one?" If a behavior applies to any tool, it belongs in the tool system's generic hooks — not inside one specific tool. If a behavior applies to any async operation, it belongs in the async completion pipeline — not special-cased at one call site. Putting the right logic in the right architectural layer eliminates the need to repeat it, and prevents future features from having to rediscover where to plug in. A good signal you've placed something wrong: it only works for one workflow, or a second caller would have to copy-paste the same pattern.
-
-**Stop-sign phrases.** If you find yourself writing "mirrors X", "bit-exact copy of X", "keep in sync with X", or "identical to X" in a comment, you are duplicating code. Pause and consider why you're doing it. If it's not easily factorable into a shared feature, stop executing and raise the issue to the user.
 
 ## Ownership Principle
 
