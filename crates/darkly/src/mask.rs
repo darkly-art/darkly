@@ -591,10 +591,17 @@ fn contour_raw_segments_r8(
         None => return Vec::new(),
     };
 
-    let px_min = (bx as i32 - 1).max(0);
-    let py_min = (by as i32 - 1).max(0);
-    let px_max = ((bx + bw) as i32).min(width as i32 - 1);
-    let py_max = ((by + bh) as i32).min(height as i32 - 1);
+    // Range over the cells straddling the bounds, including the virtual
+    // "outside = 0" row/column at index -1 and at the buffer's far edge. A mask
+    // that fills to the canvas border (e.g. an inverted selection) has its
+    // boundary transition only against those out-of-range samples, so clamping
+    // the loop to [0, width-1] would drop the entire border contour. The
+    // `sample` closure returns 0 for out-of-range coords, so iterating past the
+    // edge is safe.
+    let px_min = bx as i32 - 1;
+    let py_min = by as i32 - 1;
+    let px_max = (bx + bw) as i32;
+    let py_max = (by + bh) as i32;
 
     let sample = |x: i32, y: i32| -> f32 {
         if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
@@ -1723,6 +1730,57 @@ mod tests {
                 assert!(len_sq > 0.0, "degenerate segment in polyline at index {i}");
             }
         }
+    }
+
+    #[test]
+    fn polylines_full_canvas_traces_border() {
+        // Regression: a mask filled to the canvas edge (e.g. the result of
+        // inverting a selection) must produce a contour along the canvas border.
+        // The marching-squares pass has to evaluate the cells straddling the
+        // virtual "outside = 0" row/column at index -1 and width-1; clamping the
+        // loop to [0, width-1] dropped them and left the border ants missing.
+        let w = 12u32;
+        let h = 12u32;
+        let buf = vec![255u8; (w * h) as usize];
+        let polylines = crate::mask::contour_polylines_r8(&buf, w, h, 127);
+        assert_eq!(
+            polylines.len(),
+            1,
+            "a fully-filled mask should trace one border loop, got {}",
+            polylines.len()
+        );
+        let mut arc = 0.0_f32;
+        for win in polylines[0].windows(2) {
+            let dx = win[1][0] - win[0][0];
+            let dy = win[1][1] - win[0][1];
+            arc += (dx * dx + dy * dy).sqrt();
+        }
+        let expected = 2.0 * (w as f32 + h as f32);
+        assert!(
+            (arc - expected).abs() < 4.0,
+            "border perimeter ≈ {expected}, got {arc}"
+        );
+    }
+
+    #[test]
+    fn polylines_inverted_rect_has_border_and_hole() {
+        // The exact marching-ants invert case: a full-canvas mask with a
+        // rectangular hole punched out (selection inverted). Expect two loops —
+        // the canvas border and the inner hole — not just the hole.
+        let stride = 20u32;
+        let mut buf = vec![255u8; (stride * stride) as usize];
+        for y in 6..12 {
+            for x in 6..12 {
+                buf[(y * stride + x) as usize] = 0;
+            }
+        }
+        let polylines = crate::mask::contour_polylines_r8(&buf, stride, stride, 127);
+        assert_eq!(
+            polylines.len(),
+            2,
+            "inverted-rect mask should yield a border loop and a hole loop, got {}",
+            polylines.len()
+        );
     }
 
     #[test]
