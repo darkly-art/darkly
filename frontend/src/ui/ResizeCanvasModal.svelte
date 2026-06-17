@@ -56,13 +56,10 @@
     let prevOpen = false;
     $effect(() => {
         if (resizeCanvas.open && !prevOpen) {
-            const r = app.handle?.canvas_rect();
-            if (r) {
-                originX0 = r[0];
-                originY0 = r[1];
-                oldW = r[2];
-                oldH = r[3];
-            }
+            originX0 = app.canvasOriginX;
+            originY0 = app.canvasOriginY;
+            oldW = app.docW;
+            oldH = app.docH;
             width = oldW;
             height = oldH;
             anchorX = 0.5;
@@ -82,8 +79,8 @@
     // poll). The result is the current canvas window at oldW×oldH, so it maps
     // 1:1 onto the content rect.
     function requestComposite() {
-        if (!app.handle) return;
-        app.handle.start_export();
+        if (!app.engine) return;
+        app.engine.post('start_export');
         app.onExportResult((result) => {
             if (!resizeCanvas.open) return; // modal closed before it landed
             const cv = document.createElement('canvas');
@@ -240,7 +237,12 @@
     function apply() {
         const w = clampDim(rect.w);
         const h = clampDim(rect.h);
-        app.handle?.resize_canvas_rect(originX0 + rect.x, originY0 + rect.y, w, h);
+        app.engine?.post('resize_canvas_rect', {
+            origin_x: originX0 + rect.x,
+            origin_y: originY0 + rect.y,
+            w,
+            h,
+        });
         // The new origin/dims are known synchronously in this JS turn, so the
         // coordinate transforms recenter before any pointer event reads them.
         app.syncCanvasRect();

@@ -13,6 +13,7 @@ mod load;
 mod merge;
 mod modifiers;
 mod painting;
+pub mod protocol;
 pub mod rendering;
 pub mod save;
 pub mod types;
@@ -24,7 +25,7 @@ pub use load::LoadDocument;
 pub use rendering::{PickSource, DEFAULT_THUMB_SIZE};
 pub use save::{SaveError, SaveJob, SavePurpose, SaveReadbackKind};
 pub use types::{
-    BlendModeTypeInfo, ClipboardExport, LayerInfo, LayerKindTypeInfo, ModifierInfo,
+    BlendModeTypeInfo, ClipboardExport, EngineState, LayerInfo, LayerKindTypeInfo, ModifierInfo,
     ModifierTypeInfo, ParamInfo, StrokeOp, ToolTypeInfo, VeilInfo, VeilTypeInfo,
 };
 

@@ -205,17 +205,22 @@ function resolveHandle(canvasX: number, canvasY: number): {
 
 /** Read floating content info from Rust and populate JS state.
  *  Called ONLY from event handlers (not from overlay push). */
-function syncFromRust(): boolean {
-    if (!app.handle) return false;
-    const raw = app.handle.floating_info();
+async function syncFromRust(): Promise<boolean> {
+    if (!app.engine) return false;
+    const raw = await app.engine.send<
+        { ox: number; oy: number; w: number; h: number; matrix: number[] } | null
+    >('floating_info');
     if (!raw) {
         active = false;
         return false;
     }
-    origin = [raw[0], raw[1]];
-    srcW = raw[2];
-    srcH = raw[3];
-    matrix = [raw[4], raw[5], raw[6], raw[7], raw[8], raw[9]];
+    origin = [raw.ox, raw.oy];
+    srcW = raw.w;
+    srcH = raw.h;
+    matrix = [
+        raw.matrix[0], raw.matrix[1], raw.matrix[2],
+        raw.matrix[3], raw.matrix[4], raw.matrix[5],
+    ];
     active = true;
     return true;
 }
@@ -224,12 +229,12 @@ function clearState() {
     active = false;
     drag = null;
     bboxPolygon = null;
-    app.handle?.clear_overlay();
+    app.engine?.post('clear_overlay');
     app.toolCursor = null;
 }
 
 function pushMatrix() {
-    app.handle?.update_floating_matrix(new Float32Array(matrix));
+    app.engine?.post('update_floating_matrix', { matrix });
     app.requestFrame();
 }
 
@@ -339,8 +344,8 @@ function mid(a: [number, number], b: [number, number]): [number, number] {
 }
 
 function buildOverlay(): OverlayBuilder | null {
-    if (!active || !app.handle || !canvasEl) {
-        app.handle?.clear_overlay();
+    if (!active || !app.engine || !canvasEl) {
+        app.engine?.post('clear_overlay');
         bboxPolygon = null;
         return null;
     }
@@ -378,7 +383,7 @@ function buildOverlay(): OverlayBuilder | null {
     o.handle(bm, { id: Handle.Bottom, cursor: 'ns-resize', radius: 4 });
     o.handle(lm, { id: Handle.Left,   cursor: 'ew-resize', radius: 4 });
 
-    o.push(app.handle);
+    o.push(app.engine);
     return o;
 }
 
@@ -392,19 +397,19 @@ export const transformTool: Tool = {
     group: 'transform',
     hotkeyAction: 'transformTool',
 
-    onActivate(ctx) {
+    async onActivate(ctx) {
         canvasEl = ctx.canvasEl;
-        if (!app.activeLayerId || !ctx.handle) return;
-        if (!ctx.handle.has_floating()) {
-            ctx.handle.begin_transform(app.activeLayerId);
+        if (!app.activeLayerId) return;
+        if (!(await ctx.engine.send<{ value: boolean }>('has_floating')).value) {
+            await ctx.engine.send('begin_transform', { id: app.activeLayerId });
         }
-        syncFromRust();
+        await syncFromRust();
         app.requestFrame();
     },
 
-    onDeactivate(ctx) {
-        if (ctx.handle?.has_floating()) {
-            ctx.handle.commit_floating();
+    async onDeactivate(ctx) {
+        if ((await ctx.engine.send<{ value: boolean }>('has_floating')).value) {
+            ctx.engine.post('commit_floating');
             app.requestFrame();
         }
         clearState();
@@ -420,13 +425,13 @@ export const transformTool: Tool = {
         return active;
     },
 
-    onPointerDown(ctx, _e, cx, cy) {
+    async onPointerDown(ctx, _e, cx, cy) {
         if (!active) {
-            if (app.handle && app.activeLayerId != null) {
-                if (!app.handle.has_floating()) {
-                    app.handle.begin_transform(app.activeLayerId);
+            if (app.activeLayerId != null) {
+                if (!(await ctx.engine.send<{ value: boolean }>('has_floating')).value) {
+                    await ctx.engine.send('begin_transform', { id: app.activeLayerId });
                 }
-                syncFromRust();
+                await syncFromRust();
             }
             if (!active) return;
         }
@@ -447,13 +452,13 @@ export const transformTool: Tool = {
 
     onKeyDown(e) {
         if (e.key === 'Enter') {
-            app.handle?.commit_floating();
+            app.engine?.post('commit_floating');
             clearState();
             app.requestFrame();
             return true;
         }
         if (e.key === 'Escape') {
-            app.handle?.cancel_floating();
+            app.engine?.post('cancel_floating');
             clearState();
             app.requestFrame();
             return true;
@@ -461,15 +466,17 @@ export const transformTool: Tool = {
         return false;
     },
 
-    onFrame() {
-        const hasFloating = app.handle?.has_floating() ?? false;
+    async onFrame() {
+        const hasFloating = app.engine
+            ? (await app.engine.send<{ value: boolean }>('has_floating')).value
+            : false;
         // Resync when engine and tool disagree — the engine can clear
         // floating without notifying us (undo, auto_commit_floating from
         // an unrelated edit, etc.), and async content-bounds readbacks
         // can deliver floating mid-frame.
         if (active !== hasFloating) {
             if (hasFloating) {
-                syncFromRust();
+                await syncFromRust();
             } else {
                 clearState();
             }
@@ -479,16 +486,16 @@ export const transformTool: Tool = {
         }
     },
 
-    dismissOverlay() {
-        if (app.handle?.has_floating()) {
+    async dismissOverlay() {
+        if (app.engine && (await app.engine.send<{ value: boolean }>('has_floating')).value) {
             // Activating the floating's own target layer (e.g. paste-as-
             // floating creates a new layer and selects it) is part of the
             // floating workflow, not a user-switched-away signal.
-            const target = app.handle.floating_target_layer();
+            const target = (await app.engine.send<{ id: number }>('floating_target_layer')).id;
             if (target >= 0 && target === app.activeLayerId) {
                 return;
             }
-            app.handle.commit_floating();
+            app.engine.post('commit_floating');
             app.requestFrame();
         }
         clearState();

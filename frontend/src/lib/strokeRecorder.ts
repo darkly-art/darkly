@@ -97,7 +97,7 @@ class StrokeRecorder {
  *  that `actions/index.ts` keeps in sync with the engine. Avoids re-entering
  *  the WASM RefCell mid-stroke. */
 export function currentCanvasDimensions(): [number, number] | null {
-    if (!app.handle) return null;
+    if (!app.engine) return null;
     return [app.docW, app.docH];
 }
 

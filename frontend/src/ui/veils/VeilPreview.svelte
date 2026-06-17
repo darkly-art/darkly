@@ -28,15 +28,15 @@
         lastDrawn = frameIdx;
     }
 
-    function tick(now: number) {
+    async function tick(now: number) {
         rafHandle = 0;
         if (!data) {
             // Still generating — kick the engine's render loop so its
             // `poll_pending` drains the in-flight readbacks, then check.
-            if (framesRemaining <= 0 || !app.handle) return;
+            if (framesRemaining <= 0 || !app.engine) return;
             framesRemaining--;
             app.requestFrame();
-            const pd = pollPreview(app.handle, veilType);
+            const pd = await pollPreview(app.engine, veilType);
             if (pd) {
                 data = pd;
                 prevTime = now;
@@ -76,7 +76,7 @@
         prevTime = 0;
         data = null;
         framesRemaining = POLL_FRAMES;
-        app.handle?.start_veil_preview(veilType);
+        app.engine?.post('start_veil_preview', { veil_type: veilType });
         schedule();
     });
 

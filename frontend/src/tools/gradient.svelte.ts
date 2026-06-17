@@ -25,19 +25,20 @@ let overlay: OverlayBuilder | null = null;
 
 function applyGradient() {
     const layerId = app.activeLayerId;
-    if (!layerId || !app.handle) return;
+    if (!layerId || !app.engine) return;
 
     const c = app.foreground;
     const bg = app.background;
 
-    app.handle.begin_stroke(layerId);
-    app.handle.stroke_to('linear_gradient', {
+    app.engine.post('begin_stroke', { id: layerId });
+    app.engine.post('stroke_to', {
+        op: 'linear_gradient',
         x0: startX, y0: startY,
         x1: endX, y1: endY,
         r0: c.r, g0: c.g, b0: c.b, a0: c.a,
         r1: bg.r, g1: bg.g, b1: bg.b, a1: bg.a,
     });
-    app.handle.end_stroke();
+    app.engine.post('end_stroke');
 }
 
 function clearPlacement() {
@@ -46,7 +47,7 @@ function clearPlacement() {
     pending = null;
     draggingHandle = null;
     overlay = null;
-    app.handle?.clear_overlay();
+    app.engine?.post('clear_overlay');
     app.toolCursor = null;
 }
 
@@ -59,13 +60,13 @@ function beginDrawing(cx: number, cy: number) {
 }
 
 function buildOverlay(): OverlayBuilder | null {
-    if ((!isDrawing && !hasPlacement) || !canvasEl || !app.handle) return null;
+    if ((!isDrawing && !hasPlacement) || !canvasEl || !app.engine) return null;
 
     const o = new OverlayBuilder(canvasEl);
     o.line([startX, startY], [endX, endY]);
     o.handle([startX, startY], { id: 'start', cursor: 'grab', fill: '#4af', stroke: '#fff' });
     o.handle([endX, endY],     { id: 'end',   cursor: 'grab', fill: '#fa4', stroke: '#fff' });
-    o.push(app.handle);
+    o.push(app.engine);
     return o;
 }
 

@@ -2,11 +2,11 @@
 
 Darkly is a web-based, gpu-native paint program written in Rust, Svelte and Typescript, leveraging WebAssembly and WebGPU.
 
-This document exists to keep Darkly ***minimal, elegant, and proper***.
+This document exists to keep Darkly **minimal, elegant, and proper**. The best code is the code never written; nearly all the principles below are in support of this core principle.
 
 ## Architecture
 
-Darkly's Rust core (`crates/darkly/`) is platform-agnostic — document, brush engine, GPU compositor, undo, and `DarklyEngine` itself, all with zero platform dependencies. A WASM bridge (`frontend/wasm/`) wraps the engine for the browser: commands and query results cross the boundary as JSON (or `serde_wasm_bindgen` values for typed payloads).
+Darkly's Rust core (`crates/darkly/`) is platform-agnostic — document, brush engine, GPU compositor, undo, and `DarklyEngine` itself, all with zero platform dependencies. A WASM bridge (`frontend/wasm/`) wraps the engine for the browser. The frontend's `Engine` transport (`frontend/src/engine/`) issues typed requests by kind (`send`/`post`) over a single id→promise FIFO; the wasm `DarklyHandle` enqueues them — borrowing nothing — and resolves them on a scheduled drain or at frame time. Payloads cross the boundary as `serde_wasm_bindgen` values (with raw `bytes` alongside for binary responses). A process-level `DarklySession` owns one wgpu device and hands out one `DarklyHandle` per canvas (`createHandle`); the multi-tab editor runs N handles on the one shared device.
 
 State splits three ways:
 
@@ -22,15 +22,17 @@ Data flows downhill: document → compositor, session → compositor. Never upwa
 flowchart LR
     User[Pointer / keyboard]
     Svelte[Svelte UI<br/>frontend/src/]
-    Bridge[DarklyHandle<br/>frontend/wasm/<br/>command queue + queries]
-    Engine[DarklyEngine<br/>crates/darkly/]
+    Transport[Engine transport<br/>frontend/src/engine/<br/>id→promise request/response]
+    Handle[DarklyHandle<br/>frontend/wasm/<br/>enqueue → drain / render]
+    Core[DarklyEngine<br/>crates/darkly/]
     WGPU[wgpu]
     Canvas[WebGPU canvas]
 
     User --> Svelte
-    Svelte <-->|JSON commands + query results| Bridge
-    Bridge --> Engine
-    Engine --> WGPU
+    Svelte <-->|send / post requests by kind| Transport
+    Transport <-->|enqueue + drain / render| Handle
+    Handle --> Core
+    Core --> WGPU
     WGPU --> Canvas
 ```
 
@@ -86,6 +88,16 @@ authority, how to convert between them, and the pitfalls that have bitten us.
 
 Darkly's settings use a three-layer resolution order: `user → overlay (krita/ps/gimp) → defaults`. Placement rule is documented in [`crates/darkly/presets/defaults.yaml`](crates/darkly/presets/defaults.yaml)'s header; host-editor reference hotkeys live in [`docs/*-default-hotkeys.md`](docs/).
 
+## DRY Principle
+
+Don't Repeat Yourself — and interpret this broadly. If two pieces of code aren't identical but follow a similar enough pattern that they could be generalized, they should be. This applies across modules, layers (Rust, WASM bridge, JS), and systems.
+
+**Search before writing.** To ensure what you're about to write doesn't have siblings somewhere else in the codebase, grep for similar functionality. By doing this, you may discover overlap that can be extracted into a shared component (DRYify opportunity), or even better, that what you need is already written, and can simply be imported.
+
+**Place functionality where it generalizes.** Before writing logic, ask: "where does this belong so that it works for all cases, not just this one?" If a behavior applies to any tool, it belongs in the tool system's generic hooks — not inside one specific tool. If a behavior applies to any async operation, it belongs in the async completion pipeline — not special-cased at one call site. Putting the right logic in the right architectural layer eliminates the need to repeat it, and prevents future features from having to rediscover where to plug in. A good signal you've placed something wrong: it only works for one workflow, or a second caller would have to copy-paste the same pattern.
+
+**Stop-sign phrases.** If you find yourself writing "mirrors X", "bit-exact copy of X", "keep in sync with X", or "identical to X" in a comment, you are duplicating code. Pause and consider why you're doing it. If it's not easily factorable into a shared feature, stop executing and raise the issue to the user.
+
 ## Modularity Principle
 
 **Default to modular.** When you design anything with more than one variant — or that will plausibly grow one — the first question is "what's the unit, and how does the rest of the code stay ignorant of which one it's looking at?" That mindset applies at every scale: from a small enum where one method per variant beats a `match` at the call site, up to full subsystems with traits, registries, and per-variant files. The cost of designing modularly up front is almost always small; the cost of retrofitting after centralized branching has spread across the codebase is large. Hand-written dispatch should feel like an exception that needs justifying, not the default shape.
@@ -104,14 +116,6 @@ Mechanics: `build.rs` scans module directories and generates each `mod.rs` (neve
 The "default to modular" stance leads directly to the type-owned dispatch rule below: once a system is modular, the consumer must not re-introduce centralized branching by asking variants what they are.
 
 **Type-owned dispatch:** Anything a type knows about itself — behavior, properties, capabilities, identity — lives on the type, behind a uniform interface. Consumers call methods; they never introspect, classify, or branch on which variant they got. The diagnostic question: *would adding a new variant, or changing what an existing one knows about itself, force me to edit this code?* If yes, the knowledge is misplaced. The violation has one recurring shape — `matches!(type_id, ...)`, `if kind == X`, `fn is_foo(type_id) -> bool`, or any consumer-side helper that routes by type — code outside a type's own module asking questions the type should be answering itself. Replace it with a trait method, defaulted to the common case and overridden per variant, so new variants are purely additive.
-
-## DRY Principle
-
-Don't Repeat Yourself — and interpret this broadly. If two pieces of code aren't identical but follow a similar enough pattern that they could be generalized, they should be. This applies across modules, layers (Rust, WASM bridge, JS), and systems.
-
-**Place functionality where it generalizes.** Before writing logic, ask: "where does this belong so that it works for all cases, not just this one?" If a behavior applies to any tool, it belongs in the tool system's generic hooks — not inside one specific tool. If a behavior applies to any async operation, it belongs in the async completion pipeline — not special-cased at one call site. Putting the right logic in the right architectural layer eliminates the need to repeat it, and prevents future features from having to rediscover where to plug in. A good signal you've placed something wrong: it only works for one workflow, or a second caller would have to copy-paste the same pattern.
-
-**Stop-sign phrases.** If you find yourself writing "mirrors X", "bit-exact copy of X", "keep in sync with X", or "identical to X" in a comment, you are duplicating code. Pause and consider why you're doing it. If it's not easily factorable into a shared feature, stop executing and raise the issue to the user.
 
 ## Ownership Principle
 
@@ -166,6 +170,8 @@ The correct pattern is async readback: `request_readback()` → `readbacks.submi
 Every system must be implemented properly. No hacks, no hardcoding, no shortcuts in Rust or the WASM bridge. If we implement one of something, we build a proper system for it. It's okay to take a step back from the current task to do things right.
 
 **Every bug is a signal that something nearby is awkward or overcomplicated.** Before patching, ask: "is this an elegant solution?" If the answer is no, the bug is telling you the code wants to be restructured — propose a refactor instead of layering a fix on top. The cleanest fix is often the one that makes the bug impossible to express, not the one that handles it.
+
+**Comments describe the code, not the plan that produced it.** Write comments about what the code does and why it's there as it stands — never about the process that got it there. Do not reference ephemeral planning artifacts: step or phase numbers, plan-list items, "TODO from the plan", "as decided in step 3", or before/after framing ("new", "now", "previously", "used to") that only makes sense relative to a change in flight. A comment that would be meaningless to someone reading the file fresh — with no knowledge of the task that introduced it — is in the wrong register; rewrite it to stand on its own, or delete it.
 
 **Keep the README "Features & Roadmap" checklist in sync with the codebase.** When you ship, remove, or rename a user-visible feature (one with a button and, where appropriate, a hotkey in the frontend) in the same change update the checklist in `README.md` — flip `[ ]` to `[x]`, or add a new line. A Rust helper without a frontend surface does not count as shipped.
 

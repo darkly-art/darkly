@@ -57,7 +57,7 @@ function cursorOnFirstVertex(): boolean {
 }
 
 function pushPreviewOverlay() {
-    if (!app.handle || points.length === 0) return;
+    if (!app.engine || points.length === 0) return;
     const prims = [];
     for (let i = 1; i < points.length; i++) {
         prims.push(prim(KIND_LINE, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR,
@@ -73,7 +73,7 @@ function pushPreviewOverlay() {
         prims.push(prim(KIND_CIRCLE, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR,
                         points[0], [r, 0], { thickness: 1 }));
     }
-    app.handle.set_overlay(prims);
+    app.engine.post('set_overlay', { primitives: prims });
 }
 
 function isDoubleClick(cx: number, cy: number, now: number): boolean {
@@ -90,15 +90,20 @@ function clearState() {
     cursor = null;
     lastClickTime = 0;
     lastClickPos = null;
-    app.handle?.clear_overlay();
+    app.engine?.post('clear_overlay');
 }
 
 function commit(e: MouseEvent | PointerEvent | KeyboardEvent) {
-    if (!app.handle || points.length < 3) {
+    if (!app.engine || points.length < 3) {
         clearState();
         return;
     }
-    app.handle.select_lasso(points, selectionMode(e as PointerEvent), true, 0);
+    app.engine.post('select_lasso', {
+        verts: points,
+        mode: selectionMode(e as PointerEvent),
+        antialias: true,
+        feather: 0,
+    });
     clearState();
 }
 
@@ -175,7 +180,7 @@ export const polygonSelectTool: Tool = {
             if (points.length > 0) {
                 clearState();
             } else {
-                app.handle?.clear_selection();
+                app.engine?.post('clear_selection');
             }
             return true;
         }

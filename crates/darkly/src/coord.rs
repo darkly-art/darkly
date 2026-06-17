@@ -160,6 +160,36 @@ impl<S: Copy> Rect<S> {
         }
     }
 
+    /// Build a rect from two corners. A reversed or off-extent axis yields
+    /// extent 0 (an empty rect), never an underflow — this is the single home
+    /// for the "clamp a bounding box and difference the edges" arithmetic that
+    /// callers must not re-roll by hand. Inputs must be finite (callers casting
+    /// from `f32` must clamp `NaN`/∞ first); `saturating_sub` keeps even extreme
+    /// `i32` corners safe in debug.
+    pub fn from_corners(x0: i32, y0: i32, x1: i32, y1: i32) -> Rect<S> {
+        Rect::from_xywh(
+            x0,
+            y0,
+            x1.saturating_sub(x0).max(0) as u32,
+            y1.saturating_sub(y0).max(0) as u32,
+        )
+    }
+
+    /// Snap a float AABB outward to integer pixels (floor the near edge, ceil
+    /// the far edge) and intersect with `self` (the valid extent). Returns the
+    /// tight integer sub-rect, or `None` if they don't overlap. The single home
+    /// for the float-footprint "clamp to extent" boilerplate. Inputs must be
+    /// finite.
+    pub fn clamp_f32(self, x0: f32, y0: f32, x1: f32, y1: f32) -> Option<Rect<S>> {
+        Rect::from_corners(
+            x0.floor() as i32,
+            y0.floor() as i32,
+            x1.ceil() as i32,
+            y1.ceil() as i32,
+        )
+        .intersect(self)
+    }
+
     /// Axis-aligned rectangular subtraction: returns 0 to 4 rects whose union
     /// equals `self \ other`.
     pub fn subtract(self, other: Option<Rect<S>>) -> Vec<Rect<S>> {
@@ -384,6 +414,50 @@ mod tests {
     fn intersect_contained() {
         let i = r(0, 0, 100, 100).intersect(r(20, 30, 5, 5)).unwrap();
         assert_eq!(i, r(20, 30, 5, 5));
+    }
+
+    #[test]
+    fn from_corners_normal() {
+        assert_eq!(CanvasRect::from_corners(5, 10, 15, 30), r(5, 10, 10, 20));
+    }
+
+    #[test]
+    fn from_corners_reversed_is_empty() {
+        // Reversed corners on either axis collapse to extent 0, not underflow.
+        let rect = CanvasRect::from_corners(15, 30, 5, 10);
+        assert!(rect.is_empty());
+        assert_eq!(rect, r(15, 30, 0, 0));
+    }
+
+    #[test]
+    fn from_corners_extreme_i32_no_overflow() {
+        // A far-off-extent corner (e.g. from a saturating f32 cast) must not
+        // panic; the reversed axis simply yields 0.
+        let rect = CanvasRect::from_corners(i32::MAX, 0, i32::MIN, 10);
+        assert!(rect.is_empty());
+    }
+
+    #[test]
+    fn clamp_f32_disjoint_is_none() {
+        let extent = r(0, 0, 100, 100);
+        assert_eq!(extent.clamp_f32(500.0, 500.0, 550.0, 550.0), None);
+        assert_eq!(extent.clamp_f32(-50.0, -50.0, -10.0, -10.0), None);
+    }
+
+    #[test]
+    fn clamp_f32_partial_clamps_to_extent() {
+        let extent = r(0, 0, 100, 100);
+        // Straddles the bottom-right corner; rounds outward then clips to extent.
+        let i = extent.clamp_f32(80.5, 80.5, 130.0, 130.0).unwrap();
+        assert_eq!(i, r(80, 80, 20, 20));
+    }
+
+    #[test]
+    fn clamp_f32_inside_rounds_outward() {
+        let extent = r(0, 0, 100, 100);
+        // Fully inside: floor near edge, ceil far edge.
+        let i = extent.clamp_f32(10.2, 10.8, 20.1, 20.9).unwrap();
+        assert_eq!(i, r(10, 10, 11, 11));
     }
 
     #[test]

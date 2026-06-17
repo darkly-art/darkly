@@ -25,7 +25,7 @@ import {
     FLAG_CANVAS_SPACE, prim,
     type GpuPrim,
 } from '../tools/selection_helpers';
-import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
+import type { Engine } from '../engine/protocol';
 import { app } from '../state/app.svelte';
 
 // ---------------------------------------------------------------------------
@@ -140,7 +140,7 @@ export class OverlayBuilder {
     }
 
     /** Convert to GPU primitives and push to the overlay system. */
-    push(wasmHandle: DarklyHandle): void {
+    push(engine: Engine): void {
         const dpr = window.devicePixelRatio || 1;
         const prims: GpuPrim[] = [];
 
@@ -169,7 +169,7 @@ export class OverlayBuilder {
             }));
         }
 
-        wasmHandle.set_overlay(prims);
+        engine.post('set_overlay', { primitives: prims });
         // Overlay updates may originate outside a pointer event (e.g. async
         // GPU readback completion in a tool's onFrame hook). The frame loop
         // has already decided whether to continue based on render()'s return
@@ -178,8 +178,8 @@ export class OverlayBuilder {
     }
 
     /** Clear the GPU overlay. */
-    clear(wasmHandle: DarklyHandle): void {
-        wasmHandle.clear_overlay();
+    clear(engine: Engine): void {
+        engine.post('clear_overlay');
         app.requestFrame();
     }
 

@@ -44,11 +44,8 @@
     let prevOpen = false;
     $effect(() => {
         if (imageRescale.open && !prevOpen) {
-            const r = app.handle?.canvas_rect();
-            if (r) {
-                oldW = r[2];
-                oldH = r[3];
-            }
+            oldW = app.docW;
+            oldH = app.docH;
             pxW = oldW;
             pxH = oldH;
             unit = 'px';
@@ -86,7 +83,7 @@
     function apply() {
         const w = clampDim(pxW);
         const h = clampDim(pxH);
-        app.handle?.rescale_image(w, h);
+        app.engine?.post('rescale_image', { w, h });
         // New dims are known synchronously this JS turn — recenter the
         // coordinate transforms before any pointer event reads them.
         app.syncCanvasRect();

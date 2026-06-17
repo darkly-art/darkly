@@ -39,16 +39,17 @@ class RecoveryState {
         if (!bytes) return;
 
         const inst = shell.open(entry.name);
-        inst.onHandleReady = (handle) => {
+        inst.onHandleReady = async (engine) => {
             try {
-                handle.open_document(bytes);
-                shell.setName(inst.id, handle.document_name());
+                await engine.send('open_document', {}, bytes);
+                const { name } = await engine.send('document_name');
+                shell.setName(inst.id, name);
                 // Recovered work has no backing file — keep it dirty so
                 // closing the tab still prompts and autosave re-snapshots it.
-                handle.mark_dirty();
-                inst.syncCanvasRect();
-                app.refreshLayerTree();
-                app.refreshVeilList();
+                engine.post('mark_dirty');
+                await inst.syncCanvasRect();
+                await app.refreshLayerTree();
+                await app.refreshVeilList();
                 app.requestFrame();
             } catch (e) {
                 loadError.show(parseLoadErrorMessage(e));

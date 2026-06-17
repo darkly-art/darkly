@@ -24,11 +24,11 @@
  * a notice in `VoidProperties.svelte`.
  */
 
-import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
+import type { Engine } from '../engine/protocol';
 
 export class CameraSource {
     readonly layerId: number;
-    private readonly handle: DarklyHandle;
+    private readonly engine: Engine;
     private video: HTMLVideoElement | null = null;
     private stream: MediaStream | null = null;
     private starting = false;
@@ -73,9 +73,9 @@ export class CameraSource {
      *  etc.). Reactive Svelte readers in VoidProperties pull this directly. */
     error: string | null = null;
 
-    constructor(layerId: number, handle: DarklyHandle) {
+    constructor(layerId: number, engine: Engine) {
         this.layerId = layerId;
-        this.handle = handle;
+        this.engine = engine;
     }
 
     /** Begin the MediaStream. Resolves once the first frame is available or
@@ -180,7 +180,7 @@ export class CameraSource {
             this.canvas.height = vh;
         }
         this.ctx.drawImage(this.video, 0, 0, vw, vh);
-        this.handle.upload_void_external_image(this.layerId, this.canvas);
+        this.engine.uploadVoidExternalImage(this.layerId, this.canvas);
     }
 
     /** Update the upload throttle. Called by the layer-tree reconciler when

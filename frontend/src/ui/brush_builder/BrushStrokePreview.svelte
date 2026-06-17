@@ -33,9 +33,10 @@
     let framesRemaining = 0;
     let rafHandle = 0;
 
-    function refresh() {
-        if (!app.handle) return;
-        const bytes = app.handle.brush_stroke_preview();
+    async function refresh() {
+        const engine = app.engine;
+        if (!engine) return;
+        const { bytes } = await engine.send('brush_stroke_preview');
         if (!bytes || bytes.length === 0) return;
         if (bytes.length === lastLen && dataUrl) return;
         const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });
@@ -46,7 +47,7 @@
     }
 
     const compressor = new SignalCompressor(REFRESH_MS, () => {
-        refresh();
+        void refresh();
         // After issuing a render request, poll for the async readback to
         // land. The first refresh() returns the prior cache (or empty);
         // subsequent frames see the new pixels once the scheduler
@@ -70,7 +71,7 @@
         // render loop — discrete requests still run, so this keeps
         // readbacks advancing without competing for the main thread.
         app.requestFrame();
-        refresh();
+        void refresh();
         scheduleFrame();
     }
 
@@ -84,7 +85,7 @@
         void brushGraph.graph;
         void brushGraph.activeBrush;
         void theme.current;
-        void app.handle;
+        void app.engine;
         untrack(() => compressor.request());
     });
 

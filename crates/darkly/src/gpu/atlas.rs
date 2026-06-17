@@ -331,4 +331,22 @@ mod tests {
             CanvasRect::from_xywh(-90, 70, 30, 40),
         );
     }
+
+    /// A dab footprint that crosses the edges of an offset (paste-extent) layer
+    /// clamps to the layer's canvas extent, then translates into texture-local
+    /// pixels. The layer spans canvas x[-100,100] y[50,350]; the dab x[60,120]
+    /// y[30,90] pokes past the right and top edges.
+    #[test]
+    fn clamp_f32_then_layer_rect_off_extent_dab() {
+        let l = make_layer(-100, 50, 200, 300);
+        let extent = l.canvas_extent();
+
+        let canvas_bbox = extent.clamp_f32(60.0, 30.0, 120.0, 90.0).unwrap();
+        // Clipped to the extent's right (100) and top (50) edges.
+        assert_eq!(canvas_bbox, CanvasRect::from_xywh(60, 50, 40, 40));
+
+        // Translated into the texture's local frame (subtract the -100/50 offset).
+        let local = l.canvas_to_layer_rect(canvas_bbox).unwrap();
+        assert_eq!(local, LayerRect::from_xywh(160, 0, 40, 40));
+    }
 }

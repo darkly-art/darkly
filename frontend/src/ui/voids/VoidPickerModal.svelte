@@ -14,22 +14,29 @@
     let voidTypes = $state<any[]>([]);
 
     $effect(() => {
-        if (app.handle) {
+        const engine = app.engine;
+        if (!engine) return;
+        (async () => {
             try {
-                voidTypes = JSON.parse(app.handle.void_types());
+                const list = await engine.send('void_types');
+                voidTypes = Array.isArray(list) ? list : [];
             } catch {
                 voidTypes = [];
             }
-        }
+        })();
     });
 
-    function pick(vt: any) {
-        if (!app.handle) return;
+    async function pick(vt: any) {
+        if (!app.engine) return;
         const defaults: Record<string, any> = {};
         for (const p of vt.params) {
             defaults[p.name] = p.default;
         }
-        const id = app.handle.add_void_layer(vt.type, defaults, app.activeLayerId ?? -1);
+        const id = (await app.engine.send('add_void', {
+            void_type: vt.type,
+            params: defaults,
+            anchor: app.activeLayerId ?? -1,
+        })).id;
         if (id >= 0) {
             app.selectLayer(id);
             // Adding a camera void via the picker is an explicit user

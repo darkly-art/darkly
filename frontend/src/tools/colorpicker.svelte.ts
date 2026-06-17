@@ -30,12 +30,12 @@ export const colorPickerTool: Tool = {
 
     onPointerDown(ctx, _e, cx, cy) {
         setColorPickerPressed(true);
-        startPick(ctx.handle, cx, cy);
+        startPick(ctx.engine, cx, cy);
     },
 
     onPointerMove(ctx, e, cx, cy) {
         if (e.buttons & 1) {
-            startPick(ctx.handle, cx, cy);
+            startPick(ctx.engine, cx, cy);
         }
     },
 

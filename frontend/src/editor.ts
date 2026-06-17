@@ -1,4 +1,4 @@
-import init, { DarklyHandle } from '../wasm/pkg/darkly_wasm';
+import init from '../wasm/pkg/darkly_wasm';
 import { config } from './config/store.svelte';
 import { registerHotkeys } from './config/hotkeys.svelte';
 import { registerActions } from './actions';
@@ -7,6 +7,7 @@ import { theme } from './state/theme.svelte';
 import { pixelFilter } from './state/pixelFilter.svelte';
 import { DarklyInstance, setActiveInstance, getActiveInstance } from './state/app.svelte';
 import { createHandle } from './state/session';
+import type { Engine } from './engine/protocol';
 import { setupColorPickerModifierTracking } from './tools/colorpicker_cursor';
 import { autosave } from './state/autosave.svelte';
 import { recovery } from './state/recovery.svelte';
@@ -51,9 +52,9 @@ export async function ensureProcessInit(): Promise<void> {
 /** Options for {@link createInstance}. */
 export interface CreateInstanceOptions {
     /** Seed a fresh document with a single white background layer (the
-     *  default for "new tab" flows). Done **before** the handle is
-     *  published to `instance.handle`, so any `$effect` that watches
-     *  `app.handle` sees a fully-bootstrapped engine — no
+     *  default for "new tab" flows). Done **before** the engine is
+     *  published to `instance.engine`, so any `$effect` that watches
+     *  `app.engine` sees a fully-bootstrapped engine — no
      *  refresh-after-mutation race for consumers like `LayerPanel`. */
     seedBackground?: boolean;
 }
@@ -66,10 +67,10 @@ export interface CreateInstanceOptions {
  *  shows up in the tab strip before its async handle is ready);
  *  otherwise a new one is constructed.
  *
- *  **Publish order matters**: `instance.handle = handle` is the *last*
+ *  **Publish order matters**: `instance.engine = engine` is the *last*
  *  thing that happens before `onHandleReady` fires. Every bootstrap
  *  mutation — registry load, name application, optional bg seed —
- *  completes first, so reactive consumers that subscribe on handle
+ *  completes first, so reactive consumers that subscribe on the engine
  *  becoming non-null read a fully-initialised engine.
  *
  *  Does NOT touch `setActiveInstance` — the caller decides focus. */
@@ -82,12 +83,12 @@ export async function createInstance(
 ): Promise<DarklyInstance> {
     await ensureProcessInit();
 
-    const handle = await createHandle(canvas, docWidth, docHeight);
+    const engine = await createHandle(canvas, docWidth, docHeight);
 
     // Display-name maps describe the WASM core's process-global registries —
     // identical for every instance, but loading them per-instance keeps the
     // instance self-contained (no shell-level "registry source" coupling).
-    instance.loadRegistries(handle);
+    await instance.loadRegistries(engine);
 
     // Action/hotkey registration is process-wide but reads the active
     // instance via the `app` proxy. Calling it here is idempotent.
@@ -100,25 +101,25 @@ export async function createInstance(
     // plain "Untitled" — without this the first tab-strip read would
     // race the rename.
     if (instance.pendingName !== null) {
-        handle.set_document_name(instance.pendingName);
+        engine.post('set_document_name', { name: instance.pendingName });
         instance.pendingName = null;
     }
 
     // Seed the default background layer for fresh docs. Done before
-    // publishing the handle so any reactive consumer that fires on
-    // `app.handle` becoming truthy reads a doc that already has its
+    // publishing the engine so any reactive consumer that fires on
+    // `app.engine` becoming truthy reads a doc that already has its
     // bg layer — eliminates the "refresh after mutation" race the
     // LayerPanel would otherwise hit.
     if (options.seedBackground) {
-        const bg = handle.add_raster_layer(-1);
-        handle.fill_background(bg);
+        const { id: bg } = await engine.send('add_raster', { anchor: -1 });
+        engine.post('fill_background', { id: bg });
         instance.selectLayer(bg);
     }
 
     instance.canvasEl = canvas;
     instance.docW = docWidth;
     instance.docH = docHeight;
-    instance.handle = handle;
+    instance.engine = engine;
 
     // Fire the one-shot `onHandleReady` hook (used by the Open
     // Document flow to load a `.darkly` payload into a freshly-opened
@@ -126,7 +127,7 @@ export async function createInstance(
     if (instance.onHandleReady) {
         const cb = instance.onHandleReady;
         instance.onHandleReady = null;
-        cb(handle);
+        cb(engine);
     }
     return instance;
 }
@@ -138,13 +139,13 @@ export async function createInstance(
  *  keeps "what's in a fresh tab" at the application layer — the engine
  *  itself stays opinion-free. */
 export function seedFreshDocument(instance: DarklyInstance, docW: number, docH: number): void {
-    if (!instance.handle) return;
+    if (!instance.engine) return;
     // The veil chain needs a non-zero viewport before `add_veil` will
     // allocate textures; without this `ensure_textures` no-ops and the
     // next call would unwrap on `views`. CanvasView issues its own
     // resize to the surface dims right after, so the only cost is one
     // GPU realloc that's immediately replaced.
-    instance.handle.resize(docW, docH);
+    instance.engine.post('resize', { width: docW, height: docH });
     instance.addVeil('rainy_glass', { direction: 135, visible: false });
     instance.addVeil('grain',       { speed: 0.05,    visible: false });
     instance.addVeil('lens_blur',   { radius: 0.25,   visible: false });
@@ -154,12 +155,12 @@ export function seedFreshDocument(instance: DarklyInstance, docW: number, docH: 
 /** Single-instance boot path used by the standalone (non-multi-tab) host.
  *  Creates one `DarklyInstance`, makes it the active one, returns its
  *  handle. CanvasView calls this on mount. */
-export async function initEditor(canvas: HTMLCanvasElement): Promise<DarklyHandle> {
+export async function initEditor(canvas: HTMLCanvasElement): Promise<Engine> {
     // If a prior boot already created an instance (e.g. via HMR or a host
     // that pre-registers one), reuse it instead of orphaning the engine.
     const existing = getActiveInstance();
-    if (existing?.handle) {
-        return existing.handle;
+    if (existing?.engine) {
+        return existing.engine;
     }
 
     const docWidth = config.get('canvas.width') as number;
@@ -171,7 +172,7 @@ export async function initEditor(canvas: HTMLCanvasElement): Promise<DarklyHandl
     setActiveInstance(instance);
     theme.pushToWasm();
     pixelFilter.syncFromConfig();
-    return instance.handle!;
+    return instance.engine!;
 }
 
 // HMR'ing this module would create a second WASM engine with a fresh undo

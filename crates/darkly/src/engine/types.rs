@@ -2,6 +2,37 @@
 
 use crate::gpu::params::{ParamDef, ParamValue};
 
+/// Cached, synchronously-consumable snapshot of engine state that the frontend
+/// mirrors. Returned by `render` each frame (a downhill projection of the one
+/// borrow render already holds — no extra query, no per-frame poll) so
+/// synchronous UI consumers (`$derived`, menu `enabled()`, `beforeunload`) read
+/// a local mirror instead of awaiting the engine.
+///
+/// This is a single struct *by design*: every field here exists for the same
+/// reason — frontend mirroring — so they ride together rather than as a
+/// proliferating handful of return scalars. Mixes document state (`dirty`,
+/// `has_selection`) with compositor/session signals (`frame_count`,
+/// `thumbnail_version`); the unifying purpose is "values the UI caches," not a
+/// document/compositor distinction — hence the name. Grow it as the UI needs
+/// more; adding a field requires no new per-value plumbing on either side.
+///
+/// `frame_count` is `f64` (not `u64`) so it crosses the wasm boundary as a JS
+/// `number`, not a `BigInt` — values up to 2^53 round-trip exactly.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineState {
+    /// Compositor master tick (post-increment for this frame). Drives JS-side
+    /// divisor phase-locking (camera upload throttle).
+    pub frame_count: f64,
+    /// Bumped each time a thumbnail readback lands; the layer panel mirrors it
+    /// into a reactive epoch so thumbnail `$derived`s re-run.
+    pub thumbnail_version: u32,
+    /// Document has unsaved changes (`is_dirty`). Backs the close-tab guard.
+    pub dirty: bool,
+    /// Document has an active selection. Backs selection-gated menu items.
+    pub has_selection: bool,
+}
+
 /// Per-instance view of a tree node. `type` (variant tag) and `blendMode` are
 /// stable registry `type_id`s — display labels are looked up by the UI through
 /// the matching `*_types()` table, never carried alongside as a redundant copy.
