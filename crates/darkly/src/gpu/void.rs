@@ -149,6 +149,21 @@ pub trait Void: std::fmt::Debug {
     /// would otherwise wipe the displayed image.
     fn update_params(&mut self, queue: &wgpu::Queue, cache: &EffectCache, params: &[ParamValue]);
 
+    /// Apply a user transform (pan / scale / rotate) in place — the void
+    /// *consuming* the generic transform helper's output. Like
+    /// [`Self::update_params`], this rewrites the uniform buffer in place and
+    /// must NOT rebuild via `from_params` (that drops the aux webcam texture).
+    /// Default is a genuine no-op: voids that don't set
+    /// [`VoidRegistration::supports_live_transform`] are never handed a
+    /// transform by the engine, so they ignore this entirely.
+    fn set_transform(
+        &mut self,
+        _queue: &wgpu::Queue,
+        _cache: &EffectCache,
+        _transform: &crate::transform::Transform,
+    ) {
+    }
+
     /// Whether this void consumes per-frame external image input (webcam,
     /// screenshare, …). When true, the bridge plumbs frames through
     /// [`Self::upload_external_image`] each render. The default is false —
@@ -216,6 +231,11 @@ pub struct VoidRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
     pub params: &'static [ParamDef],
+    /// Whether this void exposes a live, user-editable transform (driven by the
+    /// generic gizmo, stored on [`crate::layer::VoidLayer::transform`]). Voids
+    /// that opt in implement [`Void::set_transform`]; the rest leave it false
+    /// and the engine never hands them a transform.
+    pub supports_live_transform: bool,
     pub create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
     pub from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Void>,
 }
@@ -233,6 +253,7 @@ struct RegistryEntry {
     display_name: &'static str,
     create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
     params: &'static [ParamDef],
+    supports_live_transform: bool,
     from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Void>,
     cached_pipeline: Option<Arc<EffectPipeline>>,
 }
@@ -253,6 +274,7 @@ impl VoidRegistry {
                     display_name: reg.display_name,
                     create_pipeline: reg.create_pipeline,
                     params: reg.params,
+                    supports_live_transform: reg.supports_live_transform,
                     from_params: reg.from_params,
                     cached_pipeline: None,
                 },
@@ -275,6 +297,16 @@ impl VoidRegistry {
 
     pub fn param_defs(&self, type_id: &str) -> &'static [ParamDef] {
         self.entries.get(type_id).map(|e| e.params).unwrap_or(&[])
+    }
+
+    /// Whether the named void kind exposes a live, user-editable transform.
+    /// Consumed by [`crate::layer::Layer::transform_capability`]. Unknown
+    /// types return false.
+    pub fn supports_live_transform(&self, type_id: &str) -> bool {
+        self.entries
+            .get(type_id)
+            .map(|e| e.supports_live_transform)
+            .unwrap_or(false)
     }
 
     pub fn has(&self, type_id: &str) -> bool {

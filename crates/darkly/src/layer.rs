@@ -148,6 +148,12 @@ pub struct VoidLayer {
     /// Parameter values matching the void type's
     /// [`crate::gpu::void::ParamDef`] schema, in order.
     pub params: Vec<ParamValue>,
+    /// User transform (pan / scale / rotate) applied to the void's output,
+    /// edited by the generic transform gizmo. Persistent / undoable /
+    /// serializable document state. Voids that don't opt into live transform
+    /// (see [`crate::gpu::void::VoidRegistration::supports_live_transform`])
+    /// simply leave this at identity. Default `Basic(IDENTITY)`.
+    pub transform: crate::transform::Transform,
     pub modifiers: Vec<LayerId>,
     /// Optional persistent frame snapshot. Most voids leave this `None`
     /// (their output is purely procedural — replays from params). The
@@ -168,6 +174,7 @@ impl VoidLayer {
             blend: BlendProps::new(),
             void_type,
             params,
+            transform: crate::transform::Transform::identity(),
             modifiers: Vec::new(),
             frame: None,
         }
@@ -325,12 +332,48 @@ impl LayerNode {
     }
 }
 
+/// How a layer answers "can the user transform me, and how?" — consumed by the
+/// Transform tool to pick which binding drives the generic gizmo. This is the
+/// layer describing *itself* (type-owned dispatch); the transform subsystem
+/// never branches on layer kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransformCapability {
+    /// Live, non-destructive, persistent transform property (e.g. a camera
+    /// void). The gizmo edits the stored [`crate::transform::Transform`].
+    Live,
+    /// Destructive extract-and-commit (raster layers — today's floating).
+    Destructive,
+    /// Not user-transformable (groups, non-transformable voids).
+    None,
+}
+
 pub enum Layer {
     Raster(RasterLayer),
     Void(VoidLayer),
 }
 
 impl Layer {
+    /// Whether and how the user can transform this layer. The void's opinion is
+    /// static, looked up from the registry by `void_type` — passed in because
+    /// [`VoidRegistry`] is owned by the compositor, not a global.
+    ///
+    /// [`VoidRegistry`]: crate::gpu::void::VoidRegistry
+    pub fn transform_capability(
+        &self,
+        reg: &crate::gpu::void::VoidRegistry,
+    ) -> TransformCapability {
+        match self {
+            Layer::Raster(_) => TransformCapability::Destructive,
+            Layer::Void(v) => {
+                if reg.supports_live_transform(&v.void_type) {
+                    TransformCapability::Live
+                } else {
+                    TransformCapability::None
+                }
+            }
+        }
+    }
+
     pub fn id(&self) -> LayerId {
         match self {
             Layer::Raster(r) => r.id,
@@ -402,5 +445,17 @@ impl Layer {
 
     pub fn locked(&self) -> bool {
         self.common().locked
+    }
+
+    /// Regenerable procedural state — `(params, transform)` — for void layers,
+    /// `None` for raster. Used by `sync_compositor_layers` to push the doc's
+    /// authoritative void state downhill to the compositor after any doc
+    /// mutation (undo / redo / load), so the running void instance never drifts
+    /// from the document.
+    pub fn void_state(&self) -> Option<(&[ParamValue], &crate::transform::Transform)> {
+        match self {
+            Layer::Void(v) => Some((&v.params, &v.transform)),
+            Layer::Raster(_) => None,
+        }
     }
 }

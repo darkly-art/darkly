@@ -99,6 +99,7 @@ pub fn register() -> VoidRegistration {
         type_id: TYPE_ID,
         display_name: "Noise",
         params: PARAMS,
+        supports_live_transform: false,
         create_pipeline,
         from_params: |params, shared| Box::new(Noise::from_params(params, shared)),
     }

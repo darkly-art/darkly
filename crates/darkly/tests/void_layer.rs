@@ -417,3 +417,136 @@ fn void_params_via_tree(
         })
         .collect()
 }
+
+// ---------------------------------------------------------------------------
+// Generic transform on a void (camera) — the void consuming the gizmo helper.
+// ---------------------------------------------------------------------------
+
+fn camera_defaults(engine: &DarklyEngine) -> Vec<ParamValue> {
+    engine
+        .void_param_defs("camera")
+        .iter()
+        .map(darkly::gpu::params::ParamDef::default_value)
+        .collect()
+}
+
+/// The camera void opts into a live transform; noise and groups don't. The
+/// tool reads this string to choose which binding drives the gizmo.
+#[test]
+fn transform_capability_reports_live_for_camera() {
+    let mut engine = test_engine(64, 64);
+    let cam = engine
+        .add_void_layer("camera", camera_defaults(&engine), None)
+        .expect("camera void should be addable");
+    let noise = engine
+        .add_void_layer("noise", noise_defaults(&engine), None)
+        .expect("noise void should be addable");
+
+    assert_eq!(engine.layer_transform_capability(cam), "live");
+    assert_eq!(engine.layer_transform_capability(noise), "none");
+}
+
+/// THE coordinate-frame guard (docs/coordinate-systems.md #1): after a crop,
+/// the gizmo bbox the void reports must be anchored at `canvas_origin`, NOT
+/// (0,0) — otherwise the handles draw in the wrong plane location. The shader
+/// itself works in window-local (origin cancels), so this reporting boundary
+/// is where the origin has to be correct.
+#[test]
+fn void_transform_info_reports_canvas_origin_after_crop() {
+    use darkly::coord::CanvasRect;
+    let mut engine = test_engine(128, 128);
+    let cam = engine
+        .add_void_layer("camera", camera_defaults(&engine), None)
+        .expect("camera void should be addable");
+
+    // Crop to a window whose origin is non-zero in plane space.
+    engine.resize_canvas(CanvasRect::from_xywh(10, 20, 40, 50));
+    assert_eq!(engine.canvas_rect().origin.x, 10);
+    assert_eq!(engine.canvas_rect().origin.y, 20);
+
+    let (ox, oy, w, h, _t) = engine
+        .void_transform_info(cam)
+        .expect("camera reports transform info");
+    assert_eq!(
+        (ox, oy),
+        (10, 20),
+        "gizmo origin must be canvas_origin, not (0,0)"
+    );
+    assert_eq!((w, h), (40, 50), "gizmo extent must be the canvas size");
+}
+
+/// Live transform round-trips through the doc and renders without panicking
+/// (exercises the full set_transform → uniform → camera.wgsl path; the camera
+/// has no frame on native so the output is transparent, but the pipeline runs).
+#[test]
+fn update_void_transform_stores_and_renders() {
+    use darkly::transform::Transform;
+    let mut engine = test_engine(64, 64);
+    let cam = engine
+        .add_void_layer("camera", camera_defaults(&engine), None)
+        .expect("camera void should be addable");
+
+    let t = Transform::from_affine([2.0, 0.0, 5.0, 0.0, 2.0, 9.0]);
+    engine.update_void_transform(cam, t);
+    let _ = engine.test_readback_canvas(); // must not panic
+
+    let (.., stored) = engine.void_transform_info(cam).expect("info");
+    assert_eq!(stored, t, "the stored transform reflects the update");
+}
+
+/// Undo restores the layer's PRE-EDIT transform, not identity. A non-coalescing
+/// boundary (a param edit, different `Property` kind) sits between two transform
+/// edits so the second is its own undo step whose `old_value` must be the first
+/// transform — proving `update_void_transform` reads the current transform as
+/// the old value rather than seeding identity.
+#[test]
+fn void_transform_undo_restores_pre_edit_value() {
+    use darkly::transform::Transform;
+    let mut engine = test_engine(64, 64);
+    let cam = engine
+        .add_void_layer("camera", camera_defaults(&engine), None)
+        .expect("camera void should be addable");
+
+    let a = Transform::from_affine([1.0, 0.0, 3.0, 0.0, 1.0, 0.0]);
+    engine.update_void_transform(cam, a);
+
+    // Different Property kind → breaks transform coalescing, so the next
+    // transform edit starts a fresh undo step.
+    engine.update_void_params(cam, camera_defaults(&engine));
+
+    let b = Transform::from_affine([1.0, 0.0, 7.0, 0.0, 1.0, 0.0]);
+    engine.update_void_transform(cam, b);
+
+    engine.undo();
+    let (.., after_undo) = engine.void_transform_info(cam).expect("info");
+    assert_eq!(
+        after_undo, a,
+        "undo must restore the pre-edit transform, not identity"
+    );
+}
+
+/// A whole gizmo drag — many `update_void_transform` calls in a row — collapses
+/// into a single undo step (coalescing on the `Transform` discriminant).
+#[test]
+fn void_transform_drag_coalesces_to_one_undo_step() {
+    use darkly::transform::Transform;
+    let mut engine = test_engine(64, 64);
+    let cam = engine
+        .add_void_layer("camera", camera_defaults(&engine), None)
+        .expect("camera void should be addable");
+
+    for i in 1..=8 {
+        engine.update_void_transform(
+            cam,
+            Transform::from_affine([1.0, 0.0, i as f32, 0.0, 1.0, 0.0]),
+        );
+    }
+    // One undo undoes the entire drag back to identity.
+    engine.undo();
+    let (.., after) = engine.void_transform_info(cam).expect("info");
+    assert_eq!(
+        after,
+        Transform::identity(),
+        "the drag must be a single undo step"
+    );
+}

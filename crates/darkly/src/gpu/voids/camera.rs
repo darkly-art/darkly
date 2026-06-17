@@ -26,38 +26,16 @@ use std::sync::Arc;
 
 pub const TYPE_ID: &str = "camera";
 
+// Scale / rotation / pan are NOT params — they're the generic
+// [`crate::transform::Transform`] on the void layer, edited by the on-canvas
+// gizmo (the Transform tool) and applied via [`Void::set_transform`]. Only the
+// discrete toggles (mirror, freeze) and the upload throttle remain as params.
+//
+// UX seam (intentional): mirror stays a toggle here rather than folding into the
+// gizmo affine as a negative scale, because flipping is a discrete choice that's
+// awkward to express by dragging a handle. So the camera has two transform
+// sources — the gizmo affine and these mirror flags — composed in the shader.
 const PARAMS: &[ParamDef] = &[
-    // Zoom about the layer center. 1.0 = "cover" fit (default). <1 zooms
-    // out (lets letterbox / surrounding-pan show as transparent); >1 zooms in.
-    ParamDef::Float {
-        name: "scale",
-        min: 0.1,
-        max: 4.0,
-        default: 1.0,
-    },
-    // CCW rotation in degrees. UI presents degrees because 0–360 is more
-    // intuitive than -π–π on a slider; the shader converts to radians.
-    ParamDef::Float {
-        name: "rotation",
-        min: 0.0,
-        max: 360.0,
-        default: 0.0,
-    },
-    // Pan in fractions of canvas width / height. ±1 shifts the source by a
-    // full canvas dimension, which combined with scale<1 lets users surface
-    // the cropped-out regions of the cover-fit frame.
-    ParamDef::Float {
-        name: "pan_x",
-        min: -1.0,
-        max: 1.0,
-        default: 0.0,
-    },
-    ParamDef::Float {
-        name: "pan_y",
-        min: -1.0,
-        max: 1.0,
-        default: 0.0,
-    },
     // Horizontal mirror (selfie mode). Defaults to ON because that's what
     // every video-call app shows the user — the webcam comes in pointed
     // at them, and they expect their reflection, not a backwards view.
@@ -101,6 +79,7 @@ pub fn register() -> VoidRegistration {
         type_id: TYPE_ID,
         display_name: "Camera",
         params: PARAMS,
+        supports_live_transform: true,
         create_pipeline,
         from_params: |params, shared| Box::new(Camera::from_params(params, shared)),
     }
@@ -109,10 +88,13 @@ pub fn register() -> VoidRegistration {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraUniforms {
-    scale: f32,
-    rotation_rad: f32,
-    pan_x: f32,
-    pan_y: f32,
+    /// Inverse of the user transform's affine, row 0: `[a, b, tx, _pad]`.
+    /// The shader maps a window-local fragment through this inverse to find
+    /// the pre-transform position, then cover-fit + mirror to a source UV.
+    /// Mirrors the `inv_row0/inv_row1` layout of [`crate::gpu::transform::TransformBlendUniforms`].
+    inv_row0: [f32; 4],
+    /// Inverse affine row 1: `[c, d, ty, _pad]`.
+    inv_row1: [f32; 4],
     webcam_w: f32,
     webcam_h: f32,
     canvas_w: f32,
@@ -128,10 +110,14 @@ struct CameraUniforms {
 
 #[derive(Debug)]
 pub struct Camera {
-    scale: f32,
-    rotation_deg: f32,
-    pan_x: f32,
-    pan_y: f32,
+    /// User transform (pan / scale / rotate) edited by the gizmo. The shader
+    /// samples through its inverse. NOTE: `canvas_origin` deliberately does not
+    /// enter here — the gizmo edits this affine in the void's local frame,
+    /// which coincides with window-local (the frame `FragCoord.xy` is in), so
+    /// `canvas_origin` cancels in the shader. It matters only at the reporting
+    /// boundary (`void_transform_info` reports the bbox origin = canvas_origin
+    /// so the gizmo draws in the right plane location).
+    transform: crate::transform::Transform,
     mirror_h: bool,
     mirror_v: bool,
     freeze: bool,
@@ -160,10 +146,7 @@ impl Clone for Camera {
         // fresh `EffectCache` from `ensure_void_layer` with the 1×1
         // placeholder aux texture, so start dirty.
         Camera {
-            scale: self.scale,
-            rotation_deg: self.rotation_deg,
-            pan_x: self.pan_x,
-            pan_y: self.pan_y,
+            transform: self.transform,
             mirror_h: self.mirror_h,
             mirror_v: self.mirror_v,
             freeze: self.freeze,
@@ -180,43 +163,29 @@ impl Clone for Camera {
 
 impl Camera {
     fn from_params(params: &[ParamValue], shared: Arc<EffectPipeline>) -> Self {
-        let scale = match params.first() {
-            Some(ParamValue::Float(v)) => *v,
-            _ => 1.0,
-        };
-        let rotation_deg = match params.get(1) {
-            Some(ParamValue::Float(v)) => *v,
-            _ => 0.0,
-        };
-        let pan_x = match params.get(2) {
-            Some(ParamValue::Float(v)) => *v,
-            _ => 0.0,
-        };
-        let pan_y = match params.get(3) {
-            Some(ParamValue::Float(v)) => *v,
-            _ => 0.0,
-        };
-        let mirror_h = match params.get(4) {
+        // Param order (scale/rotation/pan removed — now the gizmo transform):
+        //   0: mirror_h, 1: mirror_v, 2: freeze, 3: frame_divisor.
+        let mirror_h = match params.first() {
             Some(ParamValue::Bool(v)) => *v,
             _ => true,
         };
-        let mirror_v = match params.get(5) {
+        let mirror_v = match params.get(1) {
             Some(ParamValue::Bool(v)) => *v,
             _ => false,
         };
-        let freeze = match params.get(6) {
+        let freeze = match params.get(2) {
             Some(ParamValue::Bool(v)) => *v,
             _ => false,
         };
-        let frame_divisor = match params.get(7) {
+        let frame_divisor = match params.get(3) {
             Some(ParamValue::Int(v)) => (*v).max(1) as u32,
             _ => 4,
         };
         Camera {
-            scale,
-            rotation_deg,
-            pan_x,
-            pan_y,
+            // Transform is not a param — it lives on the layer and is applied
+            // via `set_transform`. New instances start at identity; the
+            // compositor pushes the layer's stored transform after creation.
+            transform: crate::transform::Transform::identity(),
             mirror_h,
             mirror_v,
             freeze,
@@ -231,11 +200,13 @@ impl Camera {
     }
 
     fn uniforms(&self) -> CameraUniforms {
+        // Sample through the inverse of the user transform. A singular matrix
+        // (degenerate scale) falls back to identity rather than NaN-ing the UV.
+        let fwd = self.transform.to_affine();
+        let inv = crate::transform::affine_inverse(&fwd).unwrap_or(crate::transform::IDENTITY);
         CameraUniforms {
-            scale: self.scale,
-            rotation_rad: self.rotation_deg.to_radians(),
-            pan_x: self.pan_x,
-            pan_y: self.pan_y,
+            inv_row0: [inv[0], inv[1], inv[2], 0.0],
+            inv_row1: [inv[3], inv[4], inv[5], 0.0],
             webcam_w: self.webcam_w as f32,
             webcam_h: self.webcam_h as f32,
             canvas_w: self.canvas_w.get() as f32,
@@ -245,6 +216,30 @@ impl Camera {
             _pad0: 0.0,
             _pad1: 0.0,
         }
+    }
+
+    /// CPU mirror of `camera.wgsl`'s fragment mapping: a window-local fragment
+    /// `(fx, fy)` → source UV. Kept in lockstep with the shader so the 4-way
+    /// composition (inverse-affine → cover-fit → mirror) can be unit-tested
+    /// without a live webcam. **If you edit the WGSL `fs_main` math, edit this
+    /// too** (and vice-versa); the tests pin them together.
+    #[cfg(test)]
+    fn src_uv(u: &CameraUniforms, frag: (f32, f32)) -> (f32, f32) {
+        // Inverse affine on the window-local fragment → pre-transform local.
+        let lx = u.inv_row0[0] * frag.0 + u.inv_row0[1] * frag.1 + u.inv_row0[2];
+        let ly = u.inv_row1[0] * frag.0 + u.inv_row1[1] * frag.1 + u.inv_row1[2];
+        let src_w = u.webcam_w.max(1.0);
+        let src_h = u.webcam_h.max(1.0);
+        // Cover-fit about the canvas center.
+        let dx = lx - u.canvas_w * 0.5;
+        let dy = ly - u.canvas_h * 0.5;
+        let cover = (u.canvas_w / src_w).max(u.canvas_h / src_h);
+        let mut ox = dx / cover;
+        let mut oy = dy / cover;
+        // Mirror in the source's natural frame (after the inverse transform).
+        ox *= 1.0 - 2.0 * u.mirror_h;
+        oy *= 1.0 - 2.0 * u.mirror_v;
+        (ox / src_w + 0.5, oy / src_h + 0.5)
     }
 
     /// Replace the aux frame texture with a fresh `(w, h)` allocation and
@@ -356,10 +351,6 @@ impl Void for Camera {
 
     fn param_values(&self) -> Vec<ParamValue> {
         vec![
-            ParamValue::Float(self.scale),
-            ParamValue::Float(self.rotation_deg),
-            ParamValue::Float(self.pan_x),
-            ParamValue::Float(self.pan_y),
             ParamValue::Bool(self.mirror_h),
             ParamValue::Bool(self.mirror_v),
             ParamValue::Bool(self.freeze),
@@ -393,39 +384,39 @@ impl Void for Camera {
         // frame lives, and toggling `freeze` (or any other param) must
         // not wipe it. The bind group continues to reference the same
         // texture view, so the next encode samples whatever was last
-        // uploaded.
-        self.scale = match params.first() {
-            Some(ParamValue::Float(v)) => *v,
-            _ => self.scale,
-        };
-        self.rotation_deg = match params.get(1) {
-            Some(ParamValue::Float(v)) => *v,
-            _ => self.rotation_deg,
-        };
-        self.pan_x = match params.get(2) {
-            Some(ParamValue::Float(v)) => *v,
-            _ => self.pan_x,
-        };
-        self.pan_y = match params.get(3) {
-            Some(ParamValue::Float(v)) => *v,
-            _ => self.pan_y,
-        };
-        self.mirror_h = match params.get(4) {
+        // uploaded. Param order: mirror_h, mirror_v, freeze, frame_divisor.
+        self.mirror_h = match params.first() {
             Some(ParamValue::Bool(v)) => *v,
             _ => self.mirror_h,
         };
-        self.mirror_v = match params.get(5) {
+        self.mirror_v = match params.get(1) {
             Some(ParamValue::Bool(v)) => *v,
             _ => self.mirror_v,
         };
-        self.freeze = match params.get(6) {
+        self.freeze = match params.get(2) {
             Some(ParamValue::Bool(v)) => *v,
             _ => self.freeze,
         };
-        self.frame_divisor = match params.get(7) {
+        self.frame_divisor = match params.get(3) {
             Some(ParamValue::Int(v)) => (*v).max(1) as u32,
             _ => self.frame_divisor,
         };
+        if let Some(buf) = cache.uniform_bufs.first() {
+            queue.write_buffer(buf, 0, bytemuck::bytes_of(&self.uniforms()));
+        }
+        self.dirty.mark();
+    }
+
+    fn set_transform(
+        &mut self,
+        queue: &wgpu::Queue,
+        cache: &EffectCache,
+        transform: &crate::transform::Transform,
+    ) {
+        // In-place, exactly like `update_params`: store the transform and
+        // rewrite the uniform. Never rebuild — that would drop the aux webcam
+        // texture (the `from_params` rebuild bug documented on `update_params`).
+        self.transform = *transform;
         if let Some(buf) = cache.uniform_bufs.first() {
             queue.write_buffer(buf, 0, bytemuck::bytes_of(&self.uniforms()));
         }
@@ -724,21 +715,16 @@ mod tests {
     #[test]
     fn param_round_trip() {
         // Default params round-trip through from_params → param_values.
-        // Order matches PARAMS: scale, rotation, pan_x, pan_y,
-        // mirror_h, mirror_v, freeze, frame_divisor. mirror_h defaults to
-        // ON (selfie mode); everything else off / zero / identity except
-        // frame_divisor which defaults to 4 (~15fps at 60Hz rAF).
+        // Order matches PARAMS (scale/rotation/pan are now the gizmo
+        // transform, not params): mirror_h, mirror_v, freeze, frame_divisor.
+        // mirror_h defaults to ON (selfie mode); the rest off / 4.
         let cam = Camera::from_params(&default_params(), fake_pipeline());
         let out = cam.param_values();
-        assert_eq!(out.len(), 8);
-        assert_eq!(out[0], ParamValue::Float(1.0));
-        assert_eq!(out[1], ParamValue::Float(0.0));
-        assert_eq!(out[2], ParamValue::Float(0.0));
-        assert_eq!(out[3], ParamValue::Float(0.0));
-        assert_eq!(out[4], ParamValue::Bool(true), "mirror_h defaults on");
-        assert_eq!(out[5], ParamValue::Bool(false), "mirror_v defaults off");
-        assert_eq!(out[6], ParamValue::Bool(false), "freeze defaults off");
-        assert_eq!(out[7], ParamValue::Int(4), "frame_divisor defaults to 4");
+        assert_eq!(out.len(), 4);
+        assert_eq!(out[0], ParamValue::Bool(true), "mirror_h defaults on");
+        assert_eq!(out[1], ParamValue::Bool(false), "mirror_v defaults off");
+        assert_eq!(out[2], ParamValue::Bool(false), "freeze defaults off");
+        assert_eq!(out[3], ParamValue::Int(4), "frame_divisor defaults to 4");
     }
 
     #[test]
@@ -766,15 +752,15 @@ mod tests {
         };
 
         let mut new_params = default_params();
-        new_params[7] = ParamValue::Int(8);
+        new_params[3] = ParamValue::Int(8);
         cam.update_params(&queue, &cache, &new_params);
         assert_eq!(cam.frame_divisor, 8);
-        assert_eq!(cam.param_values()[7], ParamValue::Int(8));
+        assert_eq!(cam.param_values()[3], ParamValue::Int(8));
 
         // Out-of-range values are clamped to >= 1 — divisor 0 would mean
         // "upload every 0th frame" which is undefined; the JS gate uses
         // `counter % divisor` so a zero divisor would panic on modulo.
-        new_params[7] = ParamValue::Int(0);
+        new_params[3] = ParamValue::Int(0);
         cam.update_params(&queue, &cache, &new_params);
         assert_eq!(cam.frame_divisor, 1, "divisor clamps up to 1");
     }
@@ -784,10 +770,9 @@ mod tests {
         // wants_external_input is the gate the compositor uses to drop
         // uploads from the JS side; once `freeze` flips on, that gate
         // should close so subsequent webcam frames are ignored. freeze
-        // is the 7th param (index 6) — mirror_h and mirror_v come
-        // between the transforms and freeze.
+        // is now the 3rd param (index 2): mirror_h, mirror_v, freeze, divisor.
         let mut params = default_params();
-        params[6] = ParamValue::Bool(true);
+        params[2] = ParamValue::Bool(true);
         let cam = Camera::from_params(&params, fake_pipeline());
         assert!(!cam.wants_external_input());
         assert!(!cam.needs_animation());
@@ -828,10 +813,10 @@ mod tests {
             aux_pipelines: Vec::new(),
         };
 
-        // Toggle freeze on via update_params. freeze is the 7th param
-        // (index 6) — mirror_h/v sit between the transforms and freeze.
+        // Toggle freeze on via update_params. freeze is index 2 now:
+        // mirror_h, mirror_v, freeze, frame_divisor.
         let mut new_params = default_params();
-        new_params[6] = ParamValue::Bool(true);
+        new_params[2] = ParamValue::Bool(true);
         cam.update_params(&queue, &cache, &new_params);
 
         // Webcam dimensions survive — the saved frame texture would too.
@@ -842,14 +827,102 @@ mod tests {
         assert!(!cam.wants_external_input());
     }
 
+    /// Regression (sibling of `update_params_preserves_webcam_dimensions`):
+    /// `set_transform` is the gizmo's live-update path and must also mutate in
+    /// place — never rebuild from `from_params`, which would drop the aux
+    /// webcam texture and blank the layer mid-drag.
+    #[test]
+    fn set_transform_preserves_webcam_dimensions() {
+        let (device, queue) = crate::gpu::test_utils::test_device();
+        let pipeline = Arc::new(create_pipeline(&device, wgpu::TextureFormat::Rgba8Unorm));
+        let mut cam = Camera::from_params(&default_params(), pipeline);
+        cam.webcam_w = 1280;
+        cam.webcam_h = 720;
+
+        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("test-uniforms"),
+            size: std::mem::size_of::<CameraUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let cache = EffectCache {
+            uniform_bufs: vec![uniform_buf],
+            bind_groups: Vec::new(),
+            aux_textures: Vec::new(),
+            aux_views: Vec::new(),
+            aux_pipelines: Vec::new(),
+        };
+
+        let t = crate::transform::Transform::from_affine([2.0, 0.0, 5.0, 0.0, 2.0, 9.0]);
+        cam.set_transform(&queue, &cache, &t);
+
+        assert_eq!(cam.webcam_w, 1280);
+        assert_eq!(cam.webcam_h, 720);
+        assert_eq!(cam.transform, t, "transform stored");
+    }
+
     #[test]
     fn uniforms_layout_matches_wgsl() {
-        // The WGSL `Params` struct in camera.wgsl has 12 f32s — 48 bytes
-        // (multiple of 16 as uniform-buffer layout requires). If we ever
-        // add/reorder a field, this catches the drift.
-        assert_eq!(std::mem::size_of::<CameraUniforms>(), 48);
+        // The WGSL `Params` struct in camera.wgsl is now 16 f32s — 64 bytes
+        // (inv_row0[4] + inv_row1[4] + webcam/canvas/mirror/pad). 64 is a clean
+        // multiple of 16 so no extra std140 padding. Catches layout drift.
+        assert_eq!(std::mem::size_of::<CameraUniforms>(), 64);
         assert_eq!(std::mem::size_of::<CameraUniforms>() % 16, 0);
         assert_eq!(std::mem::align_of::<CameraUniforms>(), 4);
+    }
+
+    /// CPU-side proof of the shader composition (inverse-affine → cover-fit →
+    /// mirror), pinned to `Camera::src_uv` which mirrors `camera.wgsl::fs_main`.
+    /// Square 100×100 webcam on a 100×100 canvas keeps cover-fit = 1, so the
+    /// math is easy to reason about by hand.
+    #[test]
+    fn src_uv_composition() {
+        let cam = {
+            let mut c = Camera::from_params(&default_params(), fake_pipeline());
+            c.mirror_h = false; // isolate the affine; mirror tested separately
+            c.webcam_w = 100;
+            c.webcam_h = 100;
+            c.canvas_w.set(100);
+            c.canvas_h.set(100);
+            c
+        };
+
+        // Identity transform: canvas center maps to source center (0.5, 0.5).
+        let u = cam.uniforms();
+        let (ux, uy) = Camera::src_uv(&u, (50.0, 50.0));
+        approx(ux, 0.5);
+        approx(uy, 0.5);
+
+        // Body-translate the content +20px in x (gizmo drag). The output pixel
+        // at canvas x=70 now shows what was at the center → uv.x back to 0.5.
+        let mut shifted = cam;
+        shifted.transform =
+            crate::transform::Transform::from_affine([1.0, 0.0, 20.0, 0.0, 1.0, 0.0]);
+        let u2 = shifted.uniforms();
+        let (sx, sy) = Camera::src_uv(&u2, (70.0, 50.0));
+        approx(sx, 0.5);
+        approx(sy, 0.5);
+    }
+
+    #[test]
+    fn src_uv_mirror_flips_x() {
+        let mut cam = Camera::from_params(&default_params(), fake_pipeline());
+        cam.webcam_w = 100;
+        cam.webcam_h = 100;
+        cam.canvas_w.set(100);
+        cam.canvas_h.set(100);
+
+        // Identity transform, mirror_h on: a point left of center samples the
+        // right side of the source. Canvas x=25 (left of center) → uv.x = 0.75.
+        cam.mirror_h = true;
+        cam.mirror_v = false;
+        let u = cam.uniforms();
+        let (ux, _) = Camera::src_uv(&u, (25.0, 50.0));
+        approx(ux, 0.75);
+    }
+
+    fn approx(a: f32, b: f32) {
+        assert!((a - b).abs() < 1e-4, "expected {b}, got {a}");
     }
 
     #[test]

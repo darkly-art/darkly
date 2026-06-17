@@ -14,66 +14,15 @@ use crate::layer::LayerId;
 // ---------------------------------------------------------------------------
 // Affine matrix helpers  ([a, b, tx, c, d, ty])
 // ---------------------------------------------------------------------------
-
-/// 2D affine matrix stored as [a, b, tx, c, d, ty].
-/// Transforms point (x,y) → (a*x + b*y + tx, c*x + d*y + ty).
-pub type Affine2D = [f32; 6];
-
-/// Identity affine: no transformation.
-pub const IDENTITY: Affine2D = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-
-/// Compute the inverse of a 2D affine matrix.
-/// Returns None if the matrix is singular (det ≈ 0).
-pub fn affine_inverse(m: &Affine2D) -> Option<Affine2D> {
-    let [a, b, tx, c, d, ty] = *m;
-    let det = a * d - b * c;
-    if det.abs() < 1e-12 {
-        return None;
-    }
-    let inv_det = 1.0 / det;
-    Some([
-        d * inv_det,
-        -b * inv_det,
-        (b * ty - d * tx) * inv_det,
-        -c * inv_det,
-        a * inv_det,
-        (c * tx - a * ty) * inv_det,
-    ])
-}
-
-/// Transform a point by an affine matrix.
-pub fn affine_transform(m: &Affine2D, x: f32, y: f32) -> (f32, f32) {
-    let [a, b, tx, c, d, ty] = *m;
-    (a * x + b * y + tx, c * x + d * y + ty)
-}
-
-/// Multiply two affine matrices: result = a ∘ b (apply b first, then a).
-pub fn affine_multiply(a: &Affine2D, b: &Affine2D) -> Affine2D {
-    [
-        a[0] * b[0] + a[1] * b[3],
-        a[0] * b[1] + a[1] * b[4],
-        a[0] * b[2] + a[1] * b[5] + a[2],
-        a[3] * b[0] + a[4] * b[3],
-        a[3] * b[1] + a[4] * b[4],
-        a[3] * b[2] + a[4] * b[5] + a[5],
-    ]
-}
-
-/// Build a translation affine.
-pub fn affine_translate(tx: f32, ty: f32) -> Affine2D {
-    [1.0, 0.0, tx, 0.0, 1.0, ty]
-}
-
-/// Build a scale affine.
-pub fn affine_scale(sx: f32, sy: f32) -> Affine2D {
-    [sx, 0.0, 0.0, 0.0, sy, 0.0]
-}
-
-/// Build a rotation affine (angle in radians, CCW).
-pub fn affine_rotate(angle: f32) -> Affine2D {
-    let (s, c) = angle.sin_cos();
-    [c, -s, 0.0, s, c, 0.0]
-}
+//
+// The affine math + the `Transform` record now live in the dependency-free
+// `crate::transform` module (the consumer-agnostic helper). Re-exported here so
+// the GPU pipeline keeps referring to `gpu::transform::Affine2D` etc. — one
+// home for the math, no duplication.
+pub use crate::transform::{
+    affine_inverse, affine_multiply, affine_rotate, affine_scale, affine_transform,
+    affine_translate, Affine2D, IDENTITY,
+};
 
 // ---------------------------------------------------------------------------
 // FloatingContent — CPU-side data owned by the engine

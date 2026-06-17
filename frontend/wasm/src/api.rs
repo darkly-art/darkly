@@ -550,6 +550,18 @@ fn parse_selection_mode(mode: &str) -> SelectionMode {
 }
 
 /// Convert a JS params object to a `Vec<ParamValue>` using `ParamDef` metadata.
+/// Decode a `(mode_tag, payload)` pair from the gizmo into a typed
+/// [`darkly::transform::Transform`]. Basic mode (tag 0) expects 6 affine
+/// components. Returns `None` for unknown modes or short payloads.
+fn decode_transform(mode_tag: u32, payload: &[f32]) -> Option<darkly::transform::Transform> {
+    match mode_tag {
+        0 if payload.len() >= 6 => Some(darkly::transform::Transform::from_affine([
+            payload[0], payload[1], payload[2], payload[3], payload[4], payload[5],
+        ])),
+        _ => None,
+    }
+}
+
 fn js_to_param_values(js: &JsValue, defs: &[ParamDef]) -> Vec<ParamValue> {
     defs.iter()
         .map(|def| match def {
@@ -1200,6 +1212,61 @@ impl DarklyHandle {
         let defs = e.void_param_defs(&type_id);
         let pv = js_to_param_values(&params, defs);
         e.update_void_params(id, pv);
+    }
+
+    /// Set a void layer's user transform — the void consuming the generic
+    /// gizmo's output. `mode_tag` selects the transform mode (0 = basic
+    /// affine); `payload` is the mode's numbers (6 affine components for
+    /// basic). No-op if the payload is malformed or the layer isn't a void.
+    pub fn update_void_transform(&self, layer_id: f64, mode_tag: u32, payload: &[f32]) {
+        self.flush_if_needed();
+        let Some(transform) = decode_transform(mode_tag, payload) else {
+            return;
+        };
+        let id = LayerId::from_ffi(layer_id as u64);
+        self.engine
+            .borrow_mut()
+            .update_void_transform(id, transform);
+    }
+
+    /// Read a void layer's current transform + its gizmo bbox. Returns
+    /// `[origin_x, origin_y, w, h, mode_tag, a, b, tx, c, d, ty]` in PLANE
+    /// space (origin = canvas_origin). `None` if the layer isn't a void.
+    pub fn void_transform_info(&self, layer_id: f64) -> Option<Box<[f32]>> {
+        self.flush_if_needed();
+        let id = LayerId::from_ffi(layer_id as u64);
+        self.engine
+            .borrow()
+            .void_transform_info(id)
+            .map(|(ox, oy, w, h, t)| {
+                let m = t.to_affine();
+                vec![
+                    ox as f32,
+                    oy as f32,
+                    w as f32,
+                    h as f32,
+                    t.mode_tag() as f32,
+                    m[0],
+                    m[1],
+                    m[2],
+                    m[3],
+                    m[4],
+                    m[5],
+                ]
+                .into_boxed_slice()
+            })
+    }
+
+    /// How the user may transform a layer: `"live"`, `"destructive"`, or
+    /// `"none"`. The Transform tool reads this to pick which binding drives the
+    /// gizmo, without the frontend needing to know layer kinds.
+    pub fn layer_transform_capability(&self, layer_id: f64) -> String {
+        self.flush_if_needed();
+        let id = LayerId::from_ffi(layer_id as u64);
+        self.engine
+            .borrow()
+            .layer_transform_capability(id)
+            .to_string()
     }
 
     pub fn remove_layer(&self, layer_id: f64) -> Result<(), JsError> {

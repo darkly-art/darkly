@@ -1,23 +1,23 @@
-// Camera void — sample an external image (webcam frame) with user transforms.
+// Camera void — sample an external image (webcam frame) with a user transform.
 //
 // Bind group 0:
-//   0: Params uniform (scale, rotation_rad, pan, webcam/canvas dims)
+//   0: Params uniform (inverse user-transform affine, webcam/canvas dims, mirror)
 //   1: Source texture (the webcam frame, uploaded by upload_external_image)
 //   2: Sampler (linear clamp-to-edge)
 //
-// Coordinate flow per fragment, all in *pixel* space so rotation preserves
-// shape independent of canvas aspect:
-//   FragCoord.xy → dest_centered (pixels, origin at canvas center)
-//                → inverse-rotate (image rotates, not the UV grid)
-//                → divide by total_scale = cover_scale * user_scale
-//                → subtract pan (canvas-fraction units → source pixels)
+// MUST stay in lockstep with the CPU mirror `Camera::src_uv` in camera.rs —
+// the tests pin them together. Coordinate flow per fragment (all window-local
+// pixels; the gizmo edits the affine in the void's local frame, which IS
+// window-local, so `canvas_origin` cancels and never appears here):
+//   FragCoord.xy → inverse user affine → pre-transform local pixel
+//                → cover-fit about canvas center → source-pixel offset
+//                → mirror in the source's natural frame
 //                → normalize by webcam size → src_uv ∈ [0, 1]
 //   src_uv outside [0, 1] → transparent.
 //
-// `cover_scale = max(canvas_w/src_w, canvas_h/src_h)` is the factor that
-// makes the webcam exactly cover the canvas at scale=1. Doing the user's
-// scale on top of cover_scale gives the natural "1.0 = cover-fit, >1 zooms
-// in, <1 reveals letterbox" feel.
+// `cover = max(canvas_w/src_w, canvas_h/src_h)` makes the webcam exactly cover
+// the canvas at the identity transform; the user affine scales/rotates/pans on
+// top of that.
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
@@ -31,10 +31,9 @@ struct VertexOutput {
 }
 
 struct Params {
-    scale: f32,
-    rotation_rad: f32,
-    pan_x: f32,
-    pan_y: f32,
+    // Inverse of the user transform's affine, row-major rows [a, b, tx, _].
+    inv_row0: vec4f,
+    inv_row1: vec4f,
     webcam_w: f32,
     webcam_h: f32,
     canvas_w: f32,
@@ -52,43 +51,27 @@ struct Params {
 @group(0) @binding(2) var src_sampler: sampler;
 
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    let canvas = vec2f(params.canvas_w, params.canvas_h);
     let src_size = vec2f(max(params.webcam_w, 1.0), max(params.webcam_h, 1.0));
+    let canvas = vec2f(params.canvas_w, params.canvas_h);
 
-    // Centered destination pixel (pixels, origin at canvas center).
-    let dest_centered = in.position.xy - canvas * 0.5;
-
-    // Inverse rotation in pixel space — preserves shape regardless of
-    // canvas aspect, unlike rotating in normalized [0,1] UV which skews.
-    let c = cos(-params.rotation_rad);
-    let s = sin(-params.rotation_rad);
-    let dest_rot = vec2f(
-        c * dest_centered.x - s * dest_centered.y,
-        s * dest_centered.x + c * dest_centered.y,
+    // Inverse user affine on the window-local fragment → pre-transform local.
+    let frag = in.position.xy;
+    let local = vec2f(
+        params.inv_row0.x * frag.x + params.inv_row0.y * frag.y + params.inv_row0.z,
+        params.inv_row1.x * frag.x + params.inv_row1.y * frag.y + params.inv_row1.z,
     );
 
-    // Cover fit factor + user zoom. At user_scale = 1 the source's short
-    // axis exactly fills the canvas's matching axis; the long axis crops.
-    let cover_scale = max(canvas.x / src_size.x, canvas.y / src_size.y);
-    let total_scale = cover_scale * max(params.scale, 1e-6);
+    // Cover fit about the canvas center.
+    let centered = local - canvas * 0.5;
+    let cover = max(canvas.x / src_size.x, canvas.y / src_size.y);
+    var src_offset = centered / cover;
 
-    // Inverse scale → source-pixel offset from source center.
-    var src_offset = dest_rot / total_scale;
-
-    // Mirror happens *after* rotation but before pan, so flipping
-    // horizontally always flips along the source's natural x axis
-    // (not along the rotated dest x axis). This matches how every
-    // selfie camera in the world behaves: rotate the head, the
-    // mirroring stays bound to the camera's frame, not your head.
+    // Mirror in the source's natural frame (after the inverse transform), so
+    // flipping always flips along the camera's own axis, not the rotated one.
     let mirror = vec2f(1.0 - 2.0 * params.mirror_h, 1.0 - 2.0 * params.mirror_v);
     src_offset = src_offset * mirror;
 
-    // Pan in canvas-fraction units (1.0 = full canvas dim). Converted to
-    // source pixels via the same total_scale so a pan of 1 shifts the
-    // image by exactly one canvas-worth, independent of zoom or aspect.
-    let pan_src = vec2f(params.pan_x, params.pan_y) * canvas / total_scale;
-
-    let src_uv = (src_offset - pan_src) / src_size + vec2f(0.5);
+    let src_uv = src_offset / src_size + vec2f(0.5);
 
     // textureSample must be called from uniform control flow — sample
     // unconditionally and mask out-of-frame after the fact.

@@ -1759,6 +1759,24 @@ impl Compositor {
         self.mark_dirty();
     }
 
+    /// Apply a void's user transform in place. Sibling of
+    /// [`Self::update_void_layer_params`]: delegates to [`Void::set_transform`],
+    /// which rewrites the uniform without rebuilding (preserving any aux
+    /// textures, e.g. the camera's live frame). No-op for non-procedural or
+    /// non-transform-aware voids.
+    pub fn update_void_layer_transform(
+        &mut self,
+        queue: &wgpu::Queue,
+        layer_id: LayerId,
+        transform: &crate::transform::Transform,
+    ) {
+        let Some(proc) = self.procedural_content_mut(layer_id) else {
+            return;
+        };
+        proc.void.set_transform(queue, &proc.cache, transform);
+        self.mark_dirty();
+    }
+
     /// Push a fresh external image frame (webcam, screenshare, …) into a
     /// void's input texture. Delegates to the void's
     /// [`Void::upload_external_image`], which handles texture allocation,

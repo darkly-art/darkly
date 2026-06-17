@@ -786,6 +786,19 @@ impl DarklyEngine {
                 blend.blend_mode.gpu_value,
                 isolated_host(layer.id()),
             );
+            // Push the doc's authoritative void state downhill. `ensure_layer`
+            // only *creates* missing void caches (it's idempotent), so without
+            // this an undo/redo of a void param or transform — or applying a
+            // freshly-loaded layer's stored transform — would leave the running
+            // void instance stale. Both calls no-op for raster layers and for
+            // voids that don't consume them.
+            if let Some((params, transform)) = layer.void_state() {
+                let id = layer.id();
+                self.compositor
+                    .update_void_layer_params(&self.gpu.queue, id, params);
+                self.compositor
+                    .update_void_layer_transform(&self.gpu.queue, id, transform);
+            }
         }
 
         // --- Mask modifiers: ensure the R8 GPU texture for any host with a mask ---
