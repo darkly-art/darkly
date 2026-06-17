@@ -6,7 +6,7 @@ This document exists to keep Darkly ***minimal, elegant, and proper***.
 
 ## Architecture
 
-Darkly's Rust core (`crates/darkly/`) is platform-agnostic — document, brush engine, GPU compositor, undo, and `DarklyEngine` itself, all with zero platform dependencies. A WASM bridge (`frontend/wasm/`) wraps the engine for the browser: commands and query results cross the boundary as JSON (or `serde_wasm_bindgen` values for typed payloads).
+Darkly's Rust core (`crates/darkly/`) is platform-agnostic — document, brush engine, GPU compositor, undo, and `DarklyEngine` itself, all with zero platform dependencies. A WASM bridge (`frontend/wasm/`) wraps the engine for the browser. The frontend's `Engine` transport (`frontend/src/engine/`) issues typed requests by kind (`send`/`post`) over a single id→promise FIFO; the wasm `DarklyHandle` enqueues them — borrowing nothing — and resolves them on a scheduled drain or at frame time. Payloads cross the boundary as `serde_wasm_bindgen` values (with raw `bytes` alongside for binary responses). A process-level `DarklySession` owns one wgpu device and hands out one `DarklyHandle` per canvas (`createHandle`); the multi-tab editor runs N handles on the one shared device.
 
 State splits three ways:
 
@@ -22,15 +22,17 @@ Data flows downhill: document → compositor, session → compositor. Never upwa
 flowchart LR
     User[Pointer / keyboard]
     Svelte[Svelte UI<br/>frontend/src/]
-    Bridge[DarklyHandle<br/>frontend/wasm/<br/>command queue + queries]
-    Engine[DarklyEngine<br/>crates/darkly/]
+    Transport[Engine transport<br/>frontend/src/engine/<br/>id→promise request/response]
+    Handle[DarklyHandle<br/>frontend/wasm/<br/>enqueue → drain / render]
+    Core[DarklyEngine<br/>crates/darkly/]
     WGPU[wgpu]
     Canvas[WebGPU canvas]
 
     User --> Svelte
-    Svelte <-->|JSON commands + query results| Bridge
-    Bridge --> Engine
-    Engine --> WGPU
+    Svelte <-->|send / post requests by kind| Transport
+    Transport <-->|enqueue + drain / render| Handle
+    Handle --> Core
+    Core --> WGPU
     WGPU --> Canvas
 ```
 
@@ -166,6 +168,8 @@ The correct pattern is async readback: `request_readback()` → `readbacks.submi
 Every system must be implemented properly. No hacks, no hardcoding, no shortcuts in Rust or the WASM bridge. If we implement one of something, we build a proper system for it. It's okay to take a step back from the current task to do things right.
 
 **Every bug is a signal that something nearby is awkward or overcomplicated.** Before patching, ask: "is this an elegant solution?" If the answer is no, the bug is telling you the code wants to be restructured — propose a refactor instead of layering a fix on top. The cleanest fix is often the one that makes the bug impossible to express, not the one that handles it.
+
+**Comments describe the code, not the plan that produced it.** Write comments about what the code does and why it's there as it stands — never about the process that got it there. Do not reference ephemeral planning artifacts: step or phase numbers, plan-list items, "TODO from the plan", "as decided in step 3", or before/after framing ("new", "now", "previously", "used to") that only makes sense relative to a change in flight. A comment that would be meaningless to someone reading the file fresh — with no knowledge of the task that introduced it — is in the wrong register; rewrite it to stand on its own, or delete it.
 
 **Keep the README "Features & Roadmap" checklist in sync with the codebase.** When you ship, remove, or rename a user-visible feature (one with a button and, where appropriate, a hotkey in the frontend) in the same change update the checklist in `README.md` — flip `[ ]` to `[x]`, or add a new line. A Rust helper without a frontend surface does not count as shipped.
 
