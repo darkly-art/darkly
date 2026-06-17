@@ -80,6 +80,51 @@ pub fn registrations() -> Vec<RequestRegistration> {
             },
         },
         RequestRegistration {
+            kind: "flip_canvas",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "lowercase")]
+                enum Axis {
+                    H,
+                    V,
+                }
+                #[derive(Deserialize)]
+                struct Req {
+                    axis: Axis,
+                }
+                let r: Req = decode(payload)?;
+                engine.transform_canvas(match r.axis {
+                    Axis::H => crate::gpu::ortho_transform::OrthoXform::FlipH,
+                    Axis::V => crate::gpu::ortho_transform::OrthoXform::FlipV,
+                });
+                Ok(Response::empty())
+            },
+        },
+        RequestRegistration {
+            kind: "rotate_canvas",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "lowercase")]
+                enum Dir {
+                    Cw,
+                    Ccw,
+                    #[serde(rename = "180")]
+                    Half,
+                }
+                #[derive(Deserialize)]
+                struct Req {
+                    dir: Dir,
+                }
+                let r: Req = decode(payload)?;
+                engine.transform_canvas(match r.dir {
+                    Dir::Cw => crate::gpu::ortho_transform::OrthoXform::Rot90Cw,
+                    Dir::Ccw => crate::gpu::ortho_transform::OrthoXform::Rot90Ccw,
+                    Dir::Half => crate::gpu::ortho_transform::OrthoXform::Rot180,
+                });
+                Ok(Response::empty())
+            },
+        },
+        RequestRegistration {
             kind: "canvas_dimensions",
             handle: |engine, _payload, _b| {
                 let (width, height) = engine.canvas_dimensions();

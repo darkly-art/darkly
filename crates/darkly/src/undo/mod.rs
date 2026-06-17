@@ -1,17 +1,17 @@
+mod canvas_geometry;
 mod canvas_resize;
 mod compound;
 mod gpu_region;
-mod image_rescale;
 mod layer;
 mod modifier;
 pub mod property;
 mod selection;
 mod tombstones;
 
+pub use canvas_geometry::CanvasGeometryAction;
 pub use canvas_resize::CanvasResizeAction;
 pub use compound::CompoundAction;
 pub use gpu_region::GpuRegionAction;
-pub use image_rescale::ImageRescaleAction;
 pub use layer::{
     BakeLayersAction, BakeSourceSlot, DuplicateAction, LayerAddAction, LayerMoveAction,
     LayerRemoveAction,

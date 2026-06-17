@@ -1,62 +1,74 @@
-//! Undo action for image rescale (Photoshop "Image Size").
+//! Undo action for canvas-geometry edits that resample or permute every
+//! pixel-bearing node: **image rescale** (Photoshop "Image Size") and **canvas
+//! flip / rotate**.
 //!
-//! Image rescale is lossy: it resamples every pixel-bearing node to new
-//! dimensions. This action carries the document-side swap (canvas width/height
-//! plus each node's `PixelBuffer.bounds`) and the per-node GPU pixel snapshots
-//! that the engine's `apply_undo` restores — across the node texture extent
-//! change (see `engine/rendering.rs`). It also folds in the selection clear so
-//! a rescale-with-active-selection undoes in a single step.
+//! Both swap the canvas dimensions (and, for rotate-90, the `canvas_origin`)
+//! plus every node's `PixelBuffer.bounds`, and carry per-node GPU pixel
+//! snapshots that the engine's `apply_undo` restores across the node texture
+//! extent change (see `engine/rendering.rs`). They differ only in *how* the
+//! GPU pixels were produced (bilinear resample vs. exact permutation) — which
+//! is the compositor's concern, not the undo stack's — so one action serves
+//! both. A folded selection entry lets an op with an active selection undo in
+//! a single step.
 //!
-//! Why a dedicated action rather than reusing [`CanvasResizeAction`]: this one
-//! must additionally swap per-node `PixelBuffer.bounds` (canvas resize moves
-//! only the window, never layer extents) and keep `canvas_origin` fixed while
-//! changing width/height.
+//! Why dedicated rather than reusing [`CanvasResizeAction`]: this one must
+//! additionally swap per-node `PixelBuffer.bounds` (a canvas-window move never
+//! touches layer extents) and the canvas dimensions independently of origin.
 //!
 //! [`CanvasResizeAction`]: super::CanvasResizeAction
 
 use super::UndoAction;
-use crate::coord::CanvasRect;
+use crate::coord::{CanvasPoint, CanvasRect};
 use crate::document::Document;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::region_store::UndoRegionEntry;
 use crate::layer::LayerId;
 use std::collections::{HashMap, HashSet};
 
-/// The selection clear folded into a rescale, so undo restores the selection
-/// in the same step. Mirrors [`super::SelectionAction`]'s two fields.
+/// The selection clear/transform folded into a geometry edit, so undo restores
+/// the selection in the same step. Mirrors [`super::SelectionAction`]'s fields.
 struct SelectionPart {
     was_active: bool,
     entry: UndoRegionEntry,
 }
 
-pub struct ImageRescaleAction {
+pub struct CanvasGeometryAction {
     old_w: u32,
     old_h: u32,
     new_w: u32,
     new_h: u32,
+    /// Canvas window origin in plane space. Equal old/new for rescale and flips
+    /// (which keep the window put); recentred by rotate-90 (GIMP offset rule).
+    old_origin: CanvasPoint,
+    new_origin: CanvasPoint,
     /// Per pixel-bearing node: `(id, old_extent, new_extent)`. The bounds swap
-    /// is what drives `apply_undo`'s per-node texture-extent reconcile so the
-    /// region restores land at the correct layer-local coords either way.
+    /// drives `apply_undo`'s per-node texture-extent reconcile so the region
+    /// restores land at the correct layer-local coords either way.
     bounds: Vec<(LayerId, CanvasRect, CanvasRect)>,
     /// Old-direction pixel snapshots, one per node (same order as `bounds`).
     regions: Vec<UndoRegionEntry>,
-    /// Present only if a selection was active and cleared by the rescale.
+    /// Present only if a selection was active and cleared/transformed by the op.
     selection: Option<SelectionPart>,
 }
 
-impl ImageRescaleAction {
+impl CanvasGeometryAction {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         old_dims: (u32, u32),
         new_dims: (u32, u32),
+        old_origin: CanvasPoint,
+        new_origin: CanvasPoint,
         bounds: Vec<(LayerId, CanvasRect, CanvasRect)>,
         regions: Vec<UndoRegionEntry>,
         selection: Option<(bool, UndoRegionEntry)>,
     ) -> Self {
-        ImageRescaleAction {
+        CanvasGeometryAction {
             old_w: old_dims.0,
             old_h: old_dims.1,
             new_w: new_dims.0,
             new_h: new_dims.1,
+            old_origin,
+            new_origin,
             bounds,
             regions,
             selection: selection.map(|(was_active, entry)| SelectionPart { was_active, entry }),
@@ -64,10 +76,11 @@ impl ImageRescaleAction {
     }
 }
 
-impl UndoAction for ImageRescaleAction {
+impl UndoAction for CanvasGeometryAction {
     fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
         doc.width = self.old_w;
         doc.height = self.old_h;
+        doc.canvas_origin = self.old_origin;
         for (id, old_extent, _) in &self.bounds {
             doc.set_node_pixel_bounds(*id, *old_extent);
         }
@@ -79,6 +92,7 @@ impl UndoAction for ImageRescaleAction {
     fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
         doc.width = self.new_w;
         doc.height = self.new_h;
+        doc.canvas_origin = self.new_origin;
         for (id, _, new_extent) in &self.bounds {
             doc.set_node_pixel_bounds(*id, *new_extent);
         }

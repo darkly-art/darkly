@@ -602,7 +602,7 @@ impl DarklyEngine {
     /// with a prior [`save_selection_for_undo`](Self::save_selection_for_undo))
     /// without pushing an action. Returns `None` if the snapshot or selection
     /// modifier is missing.
-    fn commit_selection_undo_entry(
+    pub(crate) fn commit_selection_undo_entry(
         &mut self,
         rect: CanvasRect,
     ) -> Option<crate::gpu::region_store::UndoRegionEntry> {

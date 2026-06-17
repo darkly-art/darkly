@@ -212,6 +212,31 @@ pub fn registrations() -> Vec<RequestRegistration> {
             },
         },
         RequestRegistration {
+            kind: "flip_node",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "lowercase")]
+                enum Axis {
+                    H,
+                    V,
+                }
+                #[derive(Deserialize)]
+                struct Req {
+                    node_id: u64,
+                    axis: Axis,
+                }
+                let r: Req = decode(payload)?;
+                let ok = engine.flip_node(
+                    LayerId::from_ffi(r.node_id),
+                    match r.axis {
+                        Axis::H => crate::gpu::ortho_transform::OrthoXform::FlipH,
+                        Axis::V => crate::gpu::ortho_transform::OrthoXform::FlipV,
+                    },
+                );
+                Ok(Response::json(json!({ "ok": ok })))
+            },
+        },
+        RequestRegistration {
             kind: "merge_down",
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]

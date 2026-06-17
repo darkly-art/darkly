@@ -14,7 +14,33 @@
 //! bind group always references the current one and is rebuilt after a swap.
 
 use crate::document::SelectionMode;
+use crate::gpu::ortho_transform::{OrthoTransformPass, OrthoXform};
 use crate::layer::LayerId;
+
+/// Allocate the ping-pong pair of R8 selection textures at `(w, h)`. Shared by
+/// every path that (re)allocates the selection mask so the descriptor stays in
+/// one place.
+fn alloc_sel_textures(device: &wgpu::Device, w: u32, h: u32) -> [wgpu::Texture; 2] {
+    std::array::from_fn(|i| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(if i == 0 { "sel-tex-0" } else { "sel-tex-1" }),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        })
+    })
+}
 
 /// Reusable GPU pipelines for selection boolean operations.
 /// Created once in `DarklyEngine::new()`.
@@ -442,25 +468,7 @@ impl SelectionState {
         height: u32,
         bgl: &wgpu::BindGroupLayout,
     ) -> Self {
-        let textures = std::array::from_fn(|i| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(if i == 0 { "sel-tex-0" } else { "sel-tex-1" }),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC
-                    | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            })
-        });
+        let textures = alloc_sel_textures(device, width, height);
         let views = [
             textures[0].create_view(&wgpu::TextureViewDescriptor::default()),
             textures[1].create_view(&wgpu::TextureViewDescriptor::default()),
@@ -533,25 +541,7 @@ impl SelectionState {
         let new_w = new_rect.width;
         let new_h = new_rect.height;
 
-        let new_textures: [wgpu::Texture; 2] = std::array::from_fn(|i| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(if i == 0 { "sel-tex-0" } else { "sel-tex-1" }),
-                size: wgpu::Extent3d {
-                    width: new_w,
-                    height: new_h,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC
-                    | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            })
-        });
+        let new_textures = alloc_sel_textures(device, new_w, new_h);
         let new_views = [
             new_textures[0].create_view(&wgpu::TextureViewDescriptor::default()),
             new_textures[1].create_view(&wgpu::TextureViewDescriptor::default()),
@@ -620,6 +610,61 @@ impl SelectionState {
         self.width = new_w;
         self.height = new_h;
 
+        self.rebuild_bind_group(device);
+    }
+
+    /// Orthogonally transform the selection mask about its own centre (which
+    /// coincides with the canvas centre — the mask is window-sized). Flips and
+    /// 180° rotate ping-pong in place; 90° rotations swap the mask dimensions
+    /// to match the rotated canvas. Exact, like every ortho transform.
+    pub fn apply_ortho(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        pass: &OrthoTransformPass,
+        xform: OrthoXform,
+    ) {
+        let (old_w, old_h) = (self.width, self.height);
+        let r8 = wgpu::TextureFormat::R8Unorm;
+        if xform.swaps_dims() {
+            let (new_w, new_h) = (old_h, old_w);
+            let new_textures = alloc_sel_textures(device, new_w, new_h);
+            let new_views = [
+                new_textures[0].create_view(&wgpu::TextureViewDescriptor::default()),
+                new_textures[1].create_view(&wgpu::TextureViewDescriptor::default()),
+            ];
+            pass.render_remap(
+                device,
+                queue,
+                encoder,
+                &self.views[self.current],
+                &new_views[0],
+                old_w,
+                old_h,
+                xform,
+                r8,
+            );
+            self.textures = new_textures;
+            self.views = new_views;
+            self.current = 0;
+            self.width = new_w;
+            self.height = new_h;
+        } else {
+            let dst = 1 - self.current;
+            pass.render_remap(
+                device,
+                queue,
+                encoder,
+                &self.views[self.current],
+                &self.views[dst],
+                old_w,
+                old_h,
+                xform,
+                r8,
+            );
+            self.current = dst;
+        }
         self.rebuild_bind_group(device);
     }
 

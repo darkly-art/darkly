@@ -398,6 +398,9 @@ impl DarklyEngine {
                             self.begin_transform(pt.node_id);
                         }
                     }
+                    if let Some(pf) = self.pending_flip.take() {
+                        self.flip_node(pf.node_id, pf.xform);
+                    }
                 }
             }
             ReadbackContext::Thumbnail {

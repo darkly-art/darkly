@@ -386,6 +386,71 @@ export function registerActions() {
             app.requestFrame();
         },
     });
+    actions.register({
+        id: 'flipCanvasH',
+        displayName: 'Flip Canvas Horizontally',
+        category: 'edit',
+        description: 'Mirror the whole canvas left-to-right.',
+        icon: 'fa6-solid:arrows-left-right',
+        menuPath: ['Image:30'],
+        handler: async () => {
+            app.engine?.post('flip_canvas', { axis: 'h' });
+            await app.syncCanvasRect();
+            app.requestFrame();
+        },
+    });
+    actions.register({
+        id: 'flipCanvasV',
+        displayName: 'Flip Canvas Vertically',
+        category: 'edit',
+        description: 'Mirror the whole canvas top-to-bottom.',
+        icon: 'fa6-solid:arrows-up-down',
+        menuPath: ['Image:31'],
+        handler: async () => {
+            app.engine?.post('flip_canvas', { axis: 'v' });
+            await app.syncCanvasRect();
+            app.requestFrame();
+        },
+    });
+    actions.register({
+        id: 'rotateCanvasCW',
+        displayName: 'Rotate Canvas 90° CW',
+        category: 'edit',
+        description: 'Rotate the whole canvas a quarter turn clockwise.',
+        icon: 'fa6-solid:rotate-right',
+        menuPath: ['Image:40'],
+        handler: async () => {
+            app.engine?.post('rotate_canvas', { dir: 'cw' });
+            await app.syncCanvasRect();
+            app.requestFrame();
+        },
+    });
+    actions.register({
+        id: 'rotateCanvasCCW',
+        displayName: 'Rotate Canvas 90° CCW',
+        category: 'edit',
+        description: 'Rotate the whole canvas a quarter turn counter-clockwise.',
+        icon: 'fa6-solid:rotate-left',
+        menuPath: ['Image:41'],
+        handler: async () => {
+            app.engine?.post('rotate_canvas', { dir: 'ccw' });
+            await app.syncCanvasRect();
+            app.requestFrame();
+        },
+    });
+    actions.register({
+        id: 'rotateCanvas180',
+        displayName: 'Rotate Canvas 180°',
+        category: 'edit',
+        description: 'Rotate the whole canvas a half turn.',
+        icon: 'fa6-solid:rotate',
+        menuPath: ['Image:42'],
+        handler: async () => {
+            app.engine?.post('rotate_canvas', { dir: '180' });
+            await app.syncCanvasRect();
+            app.requestFrame();
+        },
+    });
 
     // -- Clipboard --
     actions.register({
@@ -861,6 +926,36 @@ export function registerActions() {
         },
     });
 
+    actions.register({
+        id: 'flipLayerH',
+        displayName: 'Flip Layer Horizontally',
+        category: 'layers',
+        description: 'Mirror the active layer (or selection) left-to-right.',
+        icon: 'fa6-solid:arrows-left-right',
+        menuPath: ['Layer:80'],
+        enabled: () => app.activeLayerId !== null || 'No active layer',
+        handler: async () => {
+            const engine = app.engine;
+            if (!engine || app.activeLayerId === null) return;
+            await engine.send('flip_node', { node_id: app.activeLayerId, axis: 'h' });
+            app.requestFrame();
+        },
+    });
+    actions.register({
+        id: 'flipLayerV',
+        displayName: 'Flip Layer Vertically',
+        category: 'layers',
+        description: 'Mirror the active layer (or selection) top-to-bottom.',
+        icon: 'fa6-solid:arrows-up-down',
+        menuPath: ['Layer:81'],
+        enabled: () => app.activeLayerId !== null || 'No active layer',
+        handler: async () => {
+            const engine = app.engine;
+            if (!engine || app.activeLayerId === null) return;
+            await engine.send('flip_node', { node_id: app.activeLayerId, axis: 'v' });
+            app.requestFrame();
+        },
+    });
     actions.register({
         id: 'mergeDown',
         displayName: 'Merge Down',

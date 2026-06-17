@@ -55,6 +55,34 @@ describe('menu action registrations', () => {
         expect(actions.get('cropToSelection')?.menuPath).toEqual(['Image:20']);
     });
 
+    it('puts canvas flip + rotate under the Image menu, in order after crop', () => {
+        expect(actions.get('flipCanvasH')?.menuPath).toEqual(['Image:30']);
+        expect(actions.get('flipCanvasV')?.menuPath).toEqual(['Image:31']);
+        expect(actions.get('rotateCanvasCW')?.menuPath).toEqual(['Image:40']);
+        expect(actions.get('rotateCanvasCCW')?.menuPath).toEqual(['Image:41']);
+        expect(actions.get('rotateCanvas180')?.menuPath).toEqual(['Image:42']);
+
+        const image = buildTopMenus(actions.all()).find(m => m.title === 'Image');
+        const ids = image!.entries
+            .filter(e => e.kind === 'action')
+            .map(e => (e as { actionId: string }).actionId);
+        expect(ids).toEqual([
+            'resizeCanvas',
+            'rescaleImage',
+            'cropToSelection',
+            'flipCanvasH',
+            'flipCanvasV',
+            'rotateCanvasCW',
+            'rotateCanvasCCW',
+            'rotateCanvas180',
+        ]);
+    });
+
+    it('puts layer flips under the Layer menu', () => {
+        expect(actions.get('flipLayerH')?.menuPath).toEqual(['Layer:80']);
+        expect(actions.get('flipLayerV')?.menuPath).toEqual(['Layer:81']);
+    });
+
     it('disables cropToSelection with a reason when no selection is active', () => {
         // No WASM handle in this environment → no active selection.
         const crop = actions.get('cropToSelection')!;

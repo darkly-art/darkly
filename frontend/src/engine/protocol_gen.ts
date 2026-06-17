@@ -70,6 +70,8 @@ export type RequestKind =
     | 'fill_background_color'
     | 'flatten_image'
     | 'flatten_node'
+    | 'flip_canvas'
+    | 'flip_node'
     | 'floating_info'
     | 'floating_target_layer'
     | 'get_brush_cursor_preview_info'
@@ -113,6 +115,7 @@ export type RequestKind =
     | 'rescale_image'
     | 'resize'
     | 'resize_canvas_rect'
+    | 'rotate_canvas'
     | 'select_all'
     | 'select_ellipse'
     | 'select_lasso'
@@ -219,6 +222,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'fill_background_color',
     'flatten_image',
     'flatten_node',
+    'flip_canvas',
+    'flip_node',
     'floating_info',
     'floating_target_layer',
     'get_brush_cursor_preview_info',
@@ -262,6 +267,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'rescale_image',
     'resize',
     'resize_canvas_rect',
+    'rotate_canvas',
     'select_all',
     'select_ellipse',
     'select_lasso',
