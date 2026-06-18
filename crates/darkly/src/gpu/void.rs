@@ -164,6 +164,19 @@ pub trait Void: std::fmt::Debug {
     ) {
     }
 
+    /// The void's natural content rectangle at the identity transform, in
+    /// WINDOW-LOCAL coords (relative to the canvas-window top-left), as
+    /// `(origin_x, origin_y, w, h)`. The transform gizmo draws its bbox around
+    /// this rect (the engine lifts it to plane space by adding `canvas_origin`).
+    ///
+    /// Default is canvas-filling `(0, 0, canvas_w, canvas_h)` — correct for
+    /// procedural voids like noise whose field fills the canvas. The camera
+    /// overrides it with the cover-fit webcam rect, which extends *beyond* the
+    /// canvas on the cropped axis, so the gizmo wraps the real image bounds.
+    fn content_extent(&self, canvas_w: u32, canvas_h: u32) -> (f32, f32, f32, f32) {
+        (0.0, 0.0, canvas_w as f32, canvas_h as f32)
+    }
+
     /// Whether this void consumes per-frame external image input (webcam,
     /// screenshare, …). When true, the bridge plumbs frames through
     /// [`Self::upload_external_image`] each render. The default is false —

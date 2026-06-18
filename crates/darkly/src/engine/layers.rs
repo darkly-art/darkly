@@ -254,24 +254,34 @@ impl DarklyEngine {
         ));
     }
 
-    /// Read a void layer's current transform + its canvas-aligned gizmo extent.
-    /// Returns `(origin_x, origin_y, w, h, transform)` in PLANE space — the
-    /// origin is `canvas_origin` (NOT `(0,0)`) so the gizmo draws its bbox over
-    /// the canvas window even after a crop. `None` if `layer_id` isn't a void.
+    /// Read a void layer's current transform + the gizmo bbox to draw around
+    /// its active pixels. Returns `(origin_x, origin_y, w, h, transform)` in
+    /// PLANE space. The bbox is the void's [`crate::gpu::void::Void::content_extent`]
+    /// (canvas-filling for most voids, the cover-fit rect for the camera —
+    /// which extends beyond the canvas), lifted from window-local to plane by
+    /// adding `canvas_origin` so it sits correctly even after a crop. Falls
+    /// back to the canvas rect if the void instance isn't realized yet.
+    /// `None` if `layer_id` isn't a void.
     pub fn void_transform_info(
         &self,
         layer_id: LayerId,
-    ) -> Option<(i32, i32, u32, u32, crate::transform::Transform)> {
+    ) -> Option<(f32, f32, f32, f32, crate::transform::Transform)> {
         let transform = match self.doc.find_node(layer_id) {
             Some(LayerNode::Layer(Layer::Void(v))) => v.transform,
             _ => return None,
         };
         let rect = self.doc.canvas_rect();
+        let (ox, oy, w, h) = self.compositor.void_content_extent(layer_id).unwrap_or((
+            0.0,
+            0.0,
+            rect.width as f32,
+            rect.height as f32,
+        ));
         Some((
-            rect.origin.x,
-            rect.origin.y,
-            rect.width,
-            rect.height,
+            rect.origin.x as f32 + ox,
+            rect.origin.y as f32 + oy,
+            w,
+            h,
             transform,
         ))
     }

@@ -5,12 +5,13 @@
 //! hands the video element to this void via [`Void::upload_external_image`],
 //! and we copy the current frame into an aux texture using
 //! [`wgpu::Queue::copy_external_image_to_texture`]. The shader then samples
-//! that aux texture, applies the user's scale / rotation / pan transforms,
+//! that aux texture, applies the user's transform (the generic gizmo affine),
 //! and writes to the layer's destination texture.
 //!
-//! Aspect handling is "cover": at scale=1, pan=(0,0) the webcam fills the
-//! layer and the short axis is cropped. Out-of-frame samples (e.g. after a
-//! large pan) return transparent.
+//! Aspect handling is "cover": at the identity transform the webcam fills the
+//! layer and the short axis is cropped — the active-pixel rect overhangs the
+//! canvas on the long axis (see `content_rect`). Out-of-frame samples return
+//! transparent. The gizmo wraps that overhanging content rect, not the canvas.
 //!
 //! Native: the upload path is unreachable because [`crate::gpu::void::ExternalImageSource`]
 //! has no variants on non-wasm targets. The void can still be registered and
@@ -89,16 +90,19 @@ pub fn register() -> VoidRegistration {
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraUniforms {
     /// Inverse of the user transform's affine, row 0: `[a, b, tx, _pad]`.
-    /// The shader maps a window-local fragment through this inverse to find
-    /// the pre-transform position, then cover-fit + mirror to a source UV.
-    /// Mirrors the `inv_row0/inv_row1` layout of [`crate::gpu::transform::TransformBlendUniforms`].
+    /// The shader maps a window-local fragment (relative to the content rect)
+    /// through this inverse to find the pre-transform position, then normalizes
+    /// to a source UV. Mirrors the `inv_row0/inv_row1` layout of
+    /// [`crate::gpu::transform::TransformBlendUniforms`].
     inv_row0: [f32; 4],
     /// Inverse affine row 1: `[c, d, ty, _pad]`.
     inv_row1: [f32; 4],
-    webcam_w: f32,
-    webcam_h: f32,
-    canvas_w: f32,
-    canvas_h: f32,
+    /// Window-local origin of the cover-fit content rect (see
+    /// [`Void::content_extent`]). Negative on the overhanging axis. Cover-fit
+    /// is baked into this rect, so the shader needs no separate canvas dims.
+    content_origin: [f32; 2],
+    /// Window-local size of the cover-fit content rect.
+    content_size: [f32; 2],
     /// 0.0 or 1.0 — used in the shader as a sign-flip on the source-x
     /// offset. f32 (not bool/u32) so the shader can do
     /// `1.0 - 2.0 * mirror_h` without casts.
@@ -204,18 +208,42 @@ impl Camera {
         // (degenerate scale) falls back to identity rather than NaN-ing the UV.
         let fwd = self.transform.to_affine();
         let inv = crate::transform::affine_inverse(&fwd).unwrap_or(crate::transform::IDENTITY);
+        let (ox, oy, cw, ch) = self.content_rect(self.canvas_w.get(), self.canvas_h.get());
         CameraUniforms {
             inv_row0: [inv[0], inv[1], inv[2], 0.0],
             inv_row1: [inv[3], inv[4], inv[5], 0.0],
-            webcam_w: self.webcam_w as f32,
-            webcam_h: self.webcam_h as f32,
-            canvas_w: self.canvas_w.get() as f32,
-            canvas_h: self.canvas_h.get() as f32,
+            content_origin: [ox, oy],
+            content_size: [cw, ch],
             mirror_h: if self.mirror_h { 1.0 } else { 0.0 },
             mirror_v: if self.mirror_v { 1.0 } else { 0.0 },
             _pad0: 0.0,
             _pad1: 0.0,
         }
+    }
+
+    /// Cover-fit content rect in window-local coords — the webcam's active
+    /// pixels. `(origin_x, origin_y, w, h)`; the origin is negative on the
+    /// overhanging (cropped) axis. Until the first frame (webcam is the 1×1
+    /// placeholder) there's no meaningful aspect, so fall back to canvas-fill.
+    /// Backs both the uniform and [`Void::content_extent`] (the gizmo bbox), so
+    /// the on-canvas handles wrap exactly the pixels the shader samples.
+    fn content_rect(&self, canvas_w: u32, canvas_h: u32) -> (f32, f32, f32, f32) {
+        let cw = canvas_w as f32;
+        let ch = canvas_h as f32;
+        if self.webcam_w <= 1 || self.webcam_h <= 1 {
+            return (0.0, 0.0, cw, ch);
+        }
+        let sw = self.webcam_w as f32;
+        let sh = self.webcam_h as f32;
+        let cover = (cw / sw).max(ch / sh);
+        let content_w = sw * cover;
+        let content_h = sh * cover;
+        (
+            (cw - content_w) * 0.5,
+            (ch - content_h) * 0.5,
+            content_w,
+            content_h,
+        )
     }
 
     /// CPU mirror of `camera.wgsl`'s fragment mapping: a window-local fragment
@@ -225,21 +253,16 @@ impl Camera {
     /// too** (and vice-versa); the tests pin them together.
     #[cfg(test)]
     fn src_uv(u: &CameraUniforms, frag: (f32, f32)) -> (f32, f32) {
-        // Inverse affine on the window-local fragment → pre-transform local.
-        let lx = u.inv_row0[0] * frag.0 + u.inv_row0[1] * frag.1 + u.inv_row0[2];
-        let ly = u.inv_row1[0] * frag.0 + u.inv_row1[1] * frag.1 + u.inv_row1[2];
-        let src_w = u.webcam_w.max(1.0);
-        let src_h = u.webcam_h.max(1.0);
-        // Cover-fit about the canvas center.
-        let dx = lx - u.canvas_w * 0.5;
-        let dy = ly - u.canvas_h * 0.5;
-        let cover = (u.canvas_w / src_w).max(u.canvas_h / src_h);
-        let mut ox = dx / cover;
-        let mut oy = dy / cover;
-        // Mirror in the source's natural frame (after the inverse transform).
-        ox *= 1.0 - 2.0 * u.mirror_h;
-        oy *= 1.0 - 2.0 * u.mirror_v;
-        (ox / src_w + 0.5, oy / src_h + 0.5)
+        // Window-local fragment → content-local → inverse affine → normalize.
+        let cl = (frag.0 - u.content_origin[0], frag.1 - u.content_origin[1]);
+        let lx = u.inv_row0[0] * cl.0 + u.inv_row0[1] * cl.1 + u.inv_row0[2];
+        let ly = u.inv_row1[0] * cl.0 + u.inv_row1[1] * cl.1 + u.inv_row1[2];
+        let mut ux = lx / u.content_size[0];
+        let mut uy = ly / u.content_size[1];
+        // Mirror the webcam image about its center (in UV space).
+        ux = 0.5 + (ux - 0.5) * (1.0 - 2.0 * u.mirror_h);
+        uy = 0.5 + (uy - 0.5) * (1.0 - 2.0 * u.mirror_v);
+        (ux, uy)
     }
 
     /// Replace the aux frame texture with a fresh `(w, h)` allocation and
@@ -421,6 +444,14 @@ impl Void for Camera {
             queue.write_buffer(buf, 0, bytemuck::bytes_of(&self.uniforms()));
         }
         self.dirty.mark();
+    }
+
+    fn content_extent(&self, canvas_w: u32, canvas_h: u32) -> (f32, f32, f32, f32) {
+        // Use the compositor's LIVE canvas dims (passed in) rather than the
+        // cached Cell, so the gizmo bbox is correct immediately after a crop —
+        // `set_canvas_rect` updates the compositor's dims but not the void's
+        // cached copy.
+        self.content_rect(canvas_w, canvas_h)
     }
 
     fn wants_external_input(&self) -> bool {
@@ -923,6 +954,36 @@ mod tests {
 
     fn approx(a: f32, b: f32) {
         assert!((a - b).abs() < 1e-4, "expected {b}, got {a}");
+    }
+
+    /// The gizmo bbox = cover-fit content rect, which OVERHANGS the canvas on
+    /// the cropped axis (the user's complaint: it should reflect the real
+    /// webcam bounds, not the canvas). A 200×100 webcam on a 100×100 canvas
+    /// covers by scaling ×1, so the content is 200 wide — extending 50px past
+    /// each side — and 100 tall (fits).
+    #[test]
+    fn content_extent_overhangs_canvas() {
+        let mut cam = Camera::from_params(&default_params(), fake_pipeline());
+        cam.canvas_w.set(100);
+        cam.canvas_h.set(100);
+        cam.webcam_w = 200;
+        cam.webcam_h = 100;
+        let (ox, oy, w, h) = cam.content_extent(100, 100);
+        approx(w, 200.0);
+        approx(h, 100.0);
+        approx(ox, -50.0); // overhangs left/right
+        approx(oy, 0.0); // fits vertically
+    }
+
+    /// Until the first frame arrives (1×1 placeholder), there's no aspect to
+    /// cover-fit, so the content rect falls back to canvas-fill.
+    #[test]
+    fn content_extent_falls_back_to_canvas_without_frame() {
+        let cam = Camera::from_params(&default_params(), fake_pipeline());
+        cam.canvas_w.set(80);
+        cam.canvas_h.set(60);
+        let (ox, oy, w, h) = cam.content_extent(80, 60);
+        assert_eq!((ox, oy, w, h), (0.0, 0.0, 80.0, 60.0));
     }
 
     #[test]

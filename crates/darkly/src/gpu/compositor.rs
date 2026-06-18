@@ -1777,6 +1777,17 @@ impl Compositor {
         self.mark_dirty();
     }
 
+    /// The void's active-pixel bbox in WINDOW-LOCAL coords, via
+    /// [`Void::content_extent`]. Canvas-filling for most voids; the cover-fit
+    /// rect for the camera. `None` if `layer_id` isn't a realized void.
+    pub fn void_content_extent(&self, layer_id: LayerId) -> Option<(f32, f32, f32, f32)> {
+        let proc = self.procedural_content(layer_id)?;
+        Some(
+            proc.void
+                .content_extent(self.canvas_width, self.canvas_height),
+        )
+    }
+
     /// Push a fresh external image frame (webcam, screenshare, …) into a
     /// void's input texture. Delegates to the void's
     /// [`Void::upload_external_image`], which handles texture allocation,

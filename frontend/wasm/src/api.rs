@@ -1241,10 +1241,10 @@ impl DarklyHandle {
             .map(|(ox, oy, w, h, t)| {
                 let m = t.to_affine();
                 vec![
-                    ox as f32,
-                    oy as f32,
-                    w as f32,
-                    h as f32,
+                    ox,
+                    oy,
+                    w,
+                    h,
                     t.mode_tag() as f32,
                     m[0],
                     m[1],

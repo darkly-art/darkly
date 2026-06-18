@@ -442,8 +442,12 @@ fn transform_capability_reports_live_for_camera() {
         .add_void_layer("noise", noise_defaults(&engine), None)
         .expect("noise void should be addable");
 
+    // Both camera and noise expose a live transform (every void has a content
+    // bbox the gizmo can manipulate). Groups remain non-transformable.
     assert_eq!(engine.layer_transform_capability(cam), "live");
-    assert_eq!(engine.layer_transform_capability(noise), "none");
+    assert_eq!(engine.layer_transform_capability(noise), "live");
+    let group = engine.add_group(None);
+    assert_eq!(engine.layer_transform_capability(group), "none");
 }
 
 /// THE coordinate-frame guard (docs/coordinate-systems.md #1): after a crop,
@@ -464,15 +468,17 @@ fn void_transform_info_reports_canvas_origin_after_crop() {
     assert_eq!(engine.canvas_rect().origin.x, 10);
     assert_eq!(engine.canvas_rect().origin.y, 20);
 
+    // With no webcam frame yet, the camera's content rect falls back to
+    // canvas-fill, so the bbox is exactly the (cropped) canvas window.
     let (ox, oy, w, h, _t) = engine
         .void_transform_info(cam)
         .expect("camera reports transform info");
     assert_eq!(
         (ox, oy),
-        (10, 20),
+        (10.0, 20.0),
         "gizmo origin must be canvas_origin, not (0,0)"
     );
-    assert_eq!((w, h), (40, 50), "gizmo extent must be the canvas size");
+    assert_eq!((w, h), (40.0, 50.0), "gizmo extent must be the canvas size");
 }
 
 /// Live transform round-trips through the doc and renders without panicking
@@ -548,5 +554,32 @@ fn void_transform_drag_coalesces_to_one_undo_step() {
         after,
         Transform::identity(),
         "the drag must be a single undo step"
+    );
+}
+
+/// The transform gizmo works on a noise void too (generic, not camera-only):
+/// applying a transform must reach the noise shader and pan/scale the field,
+/// producing a visibly different render. Regression for the inverse-affine
+/// uniform plumbing in `Noise::set_transform` / `noise.wgsl`.
+#[test]
+fn noise_void_transform_changes_output() {
+    use darkly::transform::Transform;
+    let mut engine = test_engine(64, 64);
+    let mut params = noise_defaults(&engine);
+    set_float_param(&mut params, "size", 40.0); // visible structure
+    let id = engine
+        .add_void_layer("noise", params, None)
+        .expect("noise void should be addable");
+
+    let frame_a = engine.test_readback_canvas();
+
+    // Scale the field ×2 about the origin — a clearly different cross-section.
+    engine.update_void_transform(id, Transform::from_affine([2.0, 0.0, 0.0, 0.0, 2.0, 0.0]));
+    let frame_b = engine.test_readback_canvas();
+
+    assert_eq!(frame_a.len(), frame_b.len(), "readbacks must match size");
+    assert_ne!(
+        frame_a, frame_b,
+        "transforming a noise void must scale/pan the field in the output",
     );
 }
