@@ -805,7 +805,7 @@ export function registerActions() {
         category: 'layers',
         description: 'Show or hide the active layer.',
         icon: 'fa6-solid:eye',
-        menuPath: ['Layer:50'],
+        menuPath: ['Layer:70'],
         accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
@@ -823,7 +823,7 @@ export function registerActions() {
         category: 'layers',
         description: 'Lock or unlock the active layer.',
         icon: 'fa6-solid:lock',
-        menuPath: ['Layer:60'],
+        menuPath: ['Layer:80'],
         accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
@@ -841,7 +841,7 @@ export function registerActions() {
         category: 'layers',
         description: 'Solo a layer so only it shows in the canvas. Press again to bring everything else back.',
         icon: 'fa6-solid:circle-dot',
-        menuPath: ['Layer:70'],
+        menuPath: ['Layer:90'],
         accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
@@ -856,7 +856,7 @@ export function registerActions() {
         category: 'layers',
         description: 'Delete the selected layers (or remove the active veil).',
         icon: 'fa6-solid:trash',
-        menuPath: ['Layer:40'],
+        menuPath: ['Layer:60'],
         handler: async () => {
             const engine = app.engine;
             if (!engine) return;
@@ -928,11 +928,11 @@ export function registerActions() {
 
     actions.register({
         id: 'flipLayerH',
-        displayName: 'Flip Layer Horizontally',
+        displayName: 'Flip Horizontally',
         category: 'layers',
         description: 'Mirror the active layer (or selection) left-to-right.',
         icon: 'fa6-solid:arrows-left-right',
-        menuPath: ['Layer:80'],
+        menuPath: ['Layer:40'],
         enabled: () => app.activeLayerId !== null || 'No active layer',
         handler: async () => {
             const engine = app.engine;
@@ -943,11 +943,11 @@ export function registerActions() {
     });
     actions.register({
         id: 'flipLayerV',
-        displayName: 'Flip Layer Vertically',
+        displayName: 'Flip Vertically',
         category: 'layers',
         description: 'Mirror the active layer (or selection) top-to-bottom.',
         icon: 'fa6-solid:arrows-up-down',
-        menuPath: ['Layer:81'],
+        menuPath: ['Layer:50'],
         enabled: () => app.activeLayerId !== null || 'No active layer',
         handler: async () => {
             const engine = app.engine;
@@ -962,7 +962,7 @@ export function registerActions() {
         category: 'layers',
         description: 'Merge the active layer into the one below it, or combine multiple selected layers into a single layer.',
         icon: 'fa6-solid:arrows-down-to-line',
-        menuPath: ['Layer:90'],
+        menuPath: ['Layer:110'],
         handler: async () => {
             const engine = app.engine;
             if (!engine) return;
@@ -997,7 +997,7 @@ export function registerActions() {
         description:
             'Bake modifiers into the layer (apply mask), or flatten a group into a single raster that inherits the group’s blend props.',
         icon: 'fa6-solid:layer-group',
-        menuPath: ['Layer:100'],
+        menuPath: ['Layer:120'],
         accepts: ['layerId'],
         handler: async (ctx) => {
             const engine = app.engine;
@@ -1020,7 +1020,7 @@ export function registerActions() {
         category: 'layers',
         description: 'Add a mask modifier to the active layer or group and activate it for painting.',
         icon: 'radix-icons:mask-on',
-        menuPath: ['Layer:80'],
+        menuPath: ['Layer:100'],
         accepts: ['layerId'],
         handler: async (ctx) => {
             const engine = app.engine;

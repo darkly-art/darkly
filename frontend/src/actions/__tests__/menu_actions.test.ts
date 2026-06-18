@@ -78,9 +78,30 @@ describe('menu action registrations', () => {
         ]);
     });
 
-    it('puts layer flips under the Layer menu', () => {
-        expect(actions.get('flipLayerH')?.menuPath).toEqual(['Layer:80']);
-        expect(actions.get('flipLayerV')?.menuPath).toEqual(['Layer:81']);
+    it('puts layer flips under the Layer menu, grouped after Duplicate (no order collision)', () => {
+        expect(actions.get('flipLayerH')?.menuPath).toEqual(['Layer:40']);
+        expect(actions.get('flipLayerV')?.menuPath).toEqual(['Layer:50']);
+
+        // Assert the whole Layer-menu order so a future duplicate suffix (the
+        // bug that put Add Mask between the two flips) can't slip back in.
+        const layer = buildTopMenus(actions.all()).find(m => m.title === 'Layer');
+        const ids = layer!.entries
+            .filter(e => e.kind === 'action')
+            .map(e => (e as { actionId: string }).actionId);
+        expect(ids).toEqual([
+            'newLayer',
+            'newGroup',
+            'duplicateLayer',
+            'flipLayerH',
+            'flipLayerV',
+            'deleteLayer',
+            'toggleVisibility',
+            'toggleLock',
+            'isolateLayer',
+            'addMask',
+            'mergeDown',
+            'flatten',
+        ]);
     });
 
     it('disables cropToSelection with a reason when no selection is active', () => {
