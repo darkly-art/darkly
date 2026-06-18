@@ -77,7 +77,13 @@
         display: flex;
         flex-direction: column;
         width: 100vw;
+        /* `dvh` tracks the *dynamic* viewport so the shell shrinks to the area
+         * left by iOS Safari's browser chrome. With plain `vh` (the large
+         * viewport) the bottom tool-options bar sits behind the toolbar and is
+         * clipped by `overflow: hidden`. `vh` first as the fallback for engines
+         * without `dvh`. */
         height: 100vh;
+        height: 100dvh;
         overflow: hidden;
     }
 

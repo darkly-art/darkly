@@ -126,7 +126,14 @@
     }
 
     .body {
-        flex: 1;
+        /* flex-basis must stay `auto` (not the `flex: 1` shorthand's `0%`):
+         * sm/md dialogs have no explicit height, so the dialog box is
+         * fit-content (indefinite). A `flex: 1 1 0%` child has no free space to
+         * grow into there and collapses to zero height in Safari, squashing the
+         * whole modal to its borders. `auto` bases the child on its content;
+         * grow/shrink still let it fill and scroll inside size-lg's fixed
+         * height. */
+        flex: 1 1 auto;
         min-height: 0;
         overflow: auto;
         padding: 18px;
