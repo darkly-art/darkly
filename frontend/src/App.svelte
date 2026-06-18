@@ -9,7 +9,10 @@
     import ExportImageModal from './ui/ExportImageModal.svelte';
     import NewDocumentModal from './ui/NewDocumentModal.svelte';
     import ResizeCanvasModal from './ui/ResizeCanvasModal.svelte';
+    import ImageRescaleModal from './ui/ImageRescaleModal.svelte';
+    import SelectionModifyModal from './ui/SelectionModifyModal.svelte';
     import ConfirmDiscardModal from './ui/ConfirmDiscardModal.svelte';
+    import RecoveryModal from './ui/RecoveryModal.svelte';
     import AboutModal from './ui/AboutModal.svelte';
     import MenuBar from './ui/menu/MenuBar.svelte';
     import CommandPalette from './ui/menu/CommandPalette.svelte';
@@ -62,7 +65,10 @@
 <ExportImageModal />
 <NewDocumentModal />
 <ResizeCanvasModal />
+<ImageRescaleModal />
+<SelectionModifyModal />
 <ConfirmDiscardModal />
+<RecoveryModal />
 <AboutModal />
 <CommandPalette />
 

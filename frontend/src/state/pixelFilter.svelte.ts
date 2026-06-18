@@ -13,12 +13,12 @@ import { config } from '../config/store.svelte';
 let lastMode: string | null = null;
 
 function pushToWasm() {
-    if (!app.handle) return;
+    if (!app.engine) return;
     const raw = config.get('display.pixelFilter');
     const mode = typeof raw === 'string' ? raw : 'auto';
     if (mode === lastMode) return;
     lastMode = mode;
-    app.handle.set_pixel_filter(mode);
+    app.engine.post('set_pixel_filter', { mode });
     app.requestFrame();
 }
 

@@ -30,9 +30,10 @@
     let framesRemaining = 0;
     let rafHandle = 0;
 
-    function refresh() {
-        if (!app.handle) return;
-        const bytes = app.handle.brush_active_dab_preview();
+    async function refresh() {
+        const engine = app.engine;
+        if (!engine) return;
+        const { bytes } = await engine.send('brush_active_dab_preview');
         if (!bytes || bytes.length === 0) return;
         if (bytes.length === lastLen && dabUrl) return;
         const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });
@@ -43,7 +44,7 @@
     }
 
     const compressor = new SignalCompressor(REFRESH_MS, () => {
-        refresh();
+        void refresh();
         framesRemaining = POLL_FRAMES_PER_REQUEST;
         scheduleFrame();
     });
@@ -60,7 +61,7 @@
         // Same trick as BrushStrokePreview — kick the engine's render loop so
         // `poll_pending` advances the in-flight readback.
         app.requestFrame();
-        refresh();
+        void refresh();
         scheduleFrame();
     }
 
@@ -71,7 +72,7 @@
         void brushGraph.graph;
         void brushGraph.activeBrush;
         void theme.current;
-        void app.handle;
+        void app.engine;
         untrack(() => compressor.request());
     });
 

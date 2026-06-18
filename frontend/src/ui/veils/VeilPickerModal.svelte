@@ -15,26 +15,27 @@
     let veilTypes = $state<any[]>([]);
 
     $effect(() => {
-        if (app.handle) {
+        const engine = app.engine;
+        if (!engine) return;
+        (async () => {
             try {
-                veilTypes = JSON.parse(app.handle.veil_types());
+                const list = await engine.send('veil_types');
+                veilTypes = Array.isArray(list) ? list : [];
             } catch {
                 veilTypes = [];
             }
-        }
+        })();
     });
 
-    function pick(vt: any) {
-        if (!app.handle) return;
+    async function pick(vt: any) {
+        if (!app.engine) return;
         const defaults: Record<string, any> = {};
         for (const p of vt.params) {
             defaults[p.name] = p.default;
         }
-        app.handle.add_veil(vt.type, defaults);
-        app.refreshVeilList();
+        await app.addVeil(vt.type, defaults);
         // Select the newly added veil (added at end of list).
         app.selectVeil(app.veilList.length - 1);
-        app.requestFrame();
         open = false;
     }
 </script>

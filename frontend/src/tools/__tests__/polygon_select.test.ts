@@ -7,14 +7,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // `vi.mock` is hoisted above any top-level `const` — `vi.hoisted` is the
 // supported escape hatch to declare spies that the mock factory and the
 // tests can both reference.
-const { handle, fakeApp } = vi.hoisted(() => {
-    const handle = {
-        select_lasso: vi.fn(),
-        clear_selection: vi.fn(),
-        set_overlay: vi.fn(),
-        clear_overlay: vi.fn(),
+const { engine, fakeApp } = vi.hoisted(() => {
+    const engine = {
+        post: vi.fn(),
+        send: vi.fn().mockResolvedValue({}),
     };
-    return { handle, fakeApp: { handle, zoom: 1.0 } };
+    return { engine, fakeApp: { engine, zoom: 1.0 } };
 });
 vi.mock('../../state/app.svelte', () => ({ app: fakeApp }));
 
@@ -37,16 +35,21 @@ function keyEvent(key: string, mods: { shiftKey?: boolean; altKey?: boolean } = 
 // Minimal ToolContext stub — the polygon tool never reads any of these.
 const ctx = {} as any;
 
+/** All `engine.post` calls whose first arg (the request kind) is `kind`. */
+function postCalls(kind: string) {
+    return engine.post.mock.calls.filter(([k]) => k === kind);
+}
+
 function reset() {
-    Object.values(handle).forEach(fn => fn.mockClear());
+    engine.post.mockClear();
+    engine.send.mockClear();
     // Escape clears any in-progress polygon without committing — guarantees
     // each test starts with an empty module-level vertex buffer.
     polygonSelectTool.onKeyDown?.(keyEvent('Escape'));
     // Then run an explicit Escape again to clear the now-empty buffer state
     // (the first Escape may have committed to clear_selection if the buffer
     // was already empty), and zero out the spies one more time.
-    handle.clear_selection.mockClear();
-    handle.clear_overlay.mockClear();
+    engine.post.mockClear();
     clock = 0;
 }
 
@@ -55,15 +58,15 @@ describe('polygonSelectTool', () => {
 
     it('single click adds a vertex and draws a preview overlay', () => {
         polygonSelectTool.onPointerDown(ctx, pointerDown(10, 20), 10, 20);
-        expect(handle.select_lasso).not.toHaveBeenCalled();
-        expect(handle.set_overlay).toHaveBeenCalled();
+        expect(postCalls('select_lasso')).toHaveLength(0);
+        expect(postCalls('set_overlay').length).toBeGreaterThan(0);
     });
 
     it('does not commit before three vertices are placed', () => {
         polygonSelectTool.onPointerDown(ctx, pointerDown(0, 0), 0, 0);
         polygonSelectTool.onPointerDown(ctx, pointerDown(10, 0), 10, 0);
         polygonSelectTool.onKeyDown?.(keyEvent('Enter'));
-        expect(handle.select_lasso).not.toHaveBeenCalled();
+        expect(postCalls('select_lasso')).toHaveLength(0);
     });
 
     it('Enter closes the polygon and commits all placed vertices', () => {
@@ -71,10 +74,11 @@ describe('polygonSelectTool', () => {
         polygonSelectTool.onPointerDown(ctx, pointerDown(10, 0), 10, 0);
         polygonSelectTool.onPointerDown(ctx, pointerDown(10, 10), 10, 10);
         polygonSelectTool.onKeyDown?.(keyEvent('Enter'));
-        expect(handle.select_lasso).toHaveBeenCalledTimes(1);
-        const [verts, mode] = handle.select_lasso.mock.calls[0];
-        expect(verts).toEqual([[0, 0], [10, 0], [10, 10]]);
-        expect(mode).toBe('replace');
+        const calls = postCalls('select_lasso');
+        expect(calls).toHaveLength(1);
+        const payload = calls[0][1];
+        expect(payload.verts).toEqual([[0, 0], [10, 0], [10, 10]]);
+        expect(payload.mode).toBe('replace');
     });
 
     it('double-click closes without adding a duplicate vertex', () => {
@@ -83,8 +87,9 @@ describe('polygonSelectTool', () => {
         polygonSelectTool.onPointerDown(ctx, pointerDown(10, 10), 10, 10);
         // Second click of a double-click — small dt, same position.
         polygonSelectTool.onPointerDown(ctx, pointerDown(10, 10, 50), 10, 10);
-        expect(handle.select_lasso).toHaveBeenCalledTimes(1);
-        expect(handle.select_lasso.mock.calls[0][0]).toEqual([[0, 0], [10, 0], [10, 10]]);
+        const calls = postCalls('select_lasso');
+        expect(calls).toHaveLength(1);
+        expect(calls[0][1].verts).toEqual([[0, 0], [10, 0], [10, 10]]);
     });
 
     it('clicking inside the first-vertex snap zone closes', () => {
@@ -95,9 +100,10 @@ describe('polygonSelectTool', () => {
         // Move into snap zone first so the snap indicator becomes active.
         polygonSelectTool.onPointerMove(ctx, pointerDown(3, 4), 3, 4);
         polygonSelectTool.onPointerDown(ctx, pointerDown(3, 4), 3, 4);
-        expect(handle.select_lasso).toHaveBeenCalledTimes(1);
+        const calls = postCalls('select_lasso');
+        expect(calls).toHaveLength(1);
         // Snap-click should NOT add the snap point as a new vertex.
-        expect(handle.select_lasso.mock.calls[0][0]).toEqual([[0, 0], [100, 0], [100, 100]]);
+        expect(calls[0][1].verts).toEqual([[0, 0], [100, 0], [100, 100]]);
     });
 
     it('Backspace removes the last placed vertex', () => {
@@ -106,23 +112,23 @@ describe('polygonSelectTool', () => {
         polygonSelectTool.onPointerDown(ctx, pointerDown(10, 10), 10, 10);
         polygonSelectTool.onKeyDown?.(keyEvent('Backspace'));
         polygonSelectTool.onKeyDown?.(keyEvent('Enter'));
-        expect(handle.select_lasso).not.toHaveBeenCalled();  // only 2 verts left
+        expect(postCalls('select_lasso')).toHaveLength(0);  // only 2 verts left
     });
 
     it('Escape mid-draw cancels without committing or clearing the selection', () => {
         polygonSelectTool.onPointerDown(ctx, pointerDown(0, 0), 0, 0);
         polygonSelectTool.onPointerDown(ctx, pointerDown(10, 0), 10, 0);
-        handle.clear_selection.mockClear();
+        engine.post.mockClear();
         polygonSelectTool.onKeyDown?.(keyEvent('Escape'));
-        expect(handle.select_lasso).not.toHaveBeenCalled();
+        expect(postCalls('select_lasso')).toHaveLength(0);
         // No in-progress polygon was committed AND the existing doc selection
         // was not touched — Escape only cancels the WIP polygon here.
-        expect(handle.clear_selection).not.toHaveBeenCalled();
+        expect(postCalls('clear_selection')).toHaveLength(0);
     });
 
     it('Escape with no in-progress polygon clears the selection', () => {
         polygonSelectTool.onKeyDown?.(keyEvent('Escape'));
-        expect(handle.clear_selection).toHaveBeenCalledTimes(1);
+        expect(postCalls('clear_selection')).toHaveLength(1);
     });
 
     it('Shift held when closing yields add-to-selection mode', () => {
@@ -130,6 +136,6 @@ describe('polygonSelectTool', () => {
         polygonSelectTool.onPointerDown(ctx, pointerDown(10, 0), 10, 0);
         polygonSelectTool.onPointerDown(ctx, pointerDown(10, 10), 10, 10);
         polygonSelectTool.onKeyDown?.(keyEvent('Enter', { shiftKey: true }));
-        expect(handle.select_lasso.mock.calls[0][1]).toBe('add');
+        expect(postCalls('select_lasso')[0][1].mode).toBe('add');
     });
 });

@@ -19,7 +19,7 @@ let dragEnd: [number, number] | null = null;
 // `KisToolSelectRectangular::finishRect`). The preview overlay snaps too so
 // what the user sees during the drag matches what they get on release.
 function pushPreviewOverlay() {
-    if (!app.handle || !dragStart || !dragEnd) return;
+    if (!app.engine || !dragStart || !dragEnd) return;
     const [x0, y0] = dragStart;
     const [x1, y1] = dragEnd;
     const sx0 = Math.round(x0);
@@ -28,15 +28,17 @@ function pushPreviewOverlay() {
     const sy1 = Math.round(y1);
     const tl: [number, number] = [Math.min(sx0, sx1), Math.min(sy0, sy1)];
     const br: [number, number] = [Math.max(sx0, sx1), Math.max(sy0, sy1)];
-    app.handle.set_overlay([
-        prim(KIND_RECT, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR, tl, br, { dashLen: 6, thickness: 1 }),
-    ]);
+    app.engine.post('set_overlay', {
+        primitives: [
+            prim(KIND_RECT, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR, tl, br, { dashLen: 6, thickness: 1 }),
+        ],
+    });
 }
 
 function clearPreviewOverlay() {
     dragStart = null;
     dragEnd = null;
-    app.handle?.clear_overlay();
+    app.engine?.post('clear_overlay');
 }
 
 export const rectSelectTool: Tool = {
@@ -62,8 +64,8 @@ export const rectSelectTool: Tool = {
         pushPreviewOverlay();
     },
 
-    onPointerUp(_ctx, e) {
-        if (!dragStart || !dragEnd || !app.handle) {
+    onPointerUp(ctx, e) {
+        if (!dragStart || !dragEnd) {
             clearPreviewOverlay();
             return;
         }
@@ -84,10 +86,10 @@ export const rectSelectTool: Tool = {
         // is a crisp 1-bit mask.
         if (w > 0 && h > 0) {
             const mode = selectionMode(e);
-            app.handle.select_rect(x, y, w, h, mode, false, 0);
+            ctx.engine.post('select_rect', { x, y, w, h, mode, antialias: false, feather: 0 });
         } else if (selectionMode(e) === 'replace') {
             // Click without drag = deselect (only in replace mode)
-            app.handle.clear_selection();
+            ctx.engine.post('clear_selection');
         }
 
         clearPreviewOverlay();
@@ -95,7 +97,7 @@ export const rectSelectTool: Tool = {
 
     onKeyDown(e) {
         if (e.key === 'Escape') {
-            app.handle?.clear_selection();
+            app.engine?.post('clear_selection');
             return true;
         }
         return false;

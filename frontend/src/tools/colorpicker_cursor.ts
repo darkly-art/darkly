@@ -308,7 +308,7 @@ function tryEngage(): void {
     // tool's placement gizmo, etc.) so the canvas shows only the picker
     // cursor while the modifier is held. `clear_overlay` is a generic
     // engine API — the picker doesn't know which tool drew the overlay.
-    app.handle?.clear_overlay();
+    app.engine?.post('clear_overlay');
     refreshCursor();
     app.requestFrame();
 }
@@ -342,10 +342,10 @@ function disengage(): void {
         // not implementing `restoreHover`.
         const tool = toolRegistry.get(app.activeToolId);
         const canvasEl = app.canvasEl;
-        if (tool?.restoreHover && app.handle && canvasEl && lastCanvas) {
+        if (tool?.restoreHover && app.engine && canvasEl && lastCanvas) {
             tool.restoreHover(
                 {
-                    handle: app.handle,
+                    engine: app.engine,
                     canvasEl,
                     screenToCanvas: (sx, sy) => screenToCanvas(sx, sy, canvasEl),
                 },

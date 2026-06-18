@@ -2,14 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock app/config/coordinates *before* importing the module under test so
 // the action's `import { app }` / `startPick` chain resolves to our fakes.
-const { handle, fakeApp, fakeConfig } = vi.hoisted(() => {
-    const handle = {
-        pick_color: vi.fn(),
-        has_pending_color_pick: vi.fn().mockReturnValue(false),
-        last_picked_color: vi.fn().mockReturnValue(new Uint8Array([0, 0, 0, 0])),
+const { engine, fakeApp, fakeConfig } = vi.hoisted(() => {
+    const engine = {
+        post: vi.fn(),
+        send: vi.fn().mockResolvedValue({ value: false }),
     };
     const fakeApp = {
-        handle,
+        engine,
         activeLayerId: null as number | null,
         canvasEl: {} as HTMLCanvasElement, // present-but-empty stub
         foreground: { r: 0, g: 0, b: 0, a: 255 },
@@ -18,7 +17,7 @@ const { handle, fakeApp, fakeConfig } = vi.hoisted(() => {
         _mode: 'merged',
         get: vi.fn((_key: string) => fakeConfig._mode),
     };
-    return { handle, fakeApp, fakeConfig };
+    return { engine, fakeApp, fakeConfig };
 });
 vi.mock('../../state/app.svelte', () => ({ app: fakeApp }));
 vi.mock('../../config/store.svelte', () => ({ config: fakeConfig }));
@@ -32,9 +31,8 @@ import { registerSampleColorAction } from '../sample_color';
 import { buildChordIndex, resolveChord } from '../hotkey_resolve';
 
 beforeEach(() => {
-    handle.pick_color.mockClear();
-    handle.has_pending_color_pick.mockClear();
-    handle.last_picked_color.mockClear();
+    engine.post.mockClear();
+    engine.send.mockClear();
 });
 
 describe('sampleColor action registration', () => {
@@ -51,7 +49,7 @@ describe('sampleColor action registration', () => {
         const action = actions.get('sampleColor')!;
         action.handler({ x: 123, y: 456 });
         // `merged` mode + null activeLayerId → layer_id sentinel -1.
-        expect(handle.pick_color).toHaveBeenCalledWith(123, 456, -1);
+        expect(engine.post).toHaveBeenCalledWith('pick_color', { x: 123, y: 456, layer_id: -1 });
     });
 
     it('onMove queues a pick at the screenToCanvas-converted coordinates', () => {
@@ -60,7 +58,7 @@ describe('sampleColor action registration', () => {
         const fakeEvent = { clientX: 999, clientY: 888 } as unknown as PointerEvent;
         action.onMove!({ x: 0, y: 0 }, fakeEvent, 0, 0);
         // screenToCanvas stub returns { x: 50, y: 60 }.
-        expect(handle.pick_color).toHaveBeenCalledWith(50, 60, -1);
+        expect(engine.post).toHaveBeenCalledWith('pick_color', { x: 50, y: 60, layer_id: -1 });
     });
 });
 

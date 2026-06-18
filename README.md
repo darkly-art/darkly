@@ -29,10 +29,6 @@ Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructi
 
 [![darkly](https://github.com/user-attachments/assets/647404d5-c2fe-4f9f-a1f9-7b532c3a3cd0)](https://demo.darkly.art)
 
-## Upcoming Kickstarter
-
-We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most. Help us make Darkly feature-complete, so we can rescue our friends and colleagues from the grip of corporate software!
-
 ## Features
 
 ### Node-Based Brush Engine
@@ -125,14 +121,13 @@ For a feature to count, it must be:
 - [x] Merge down
 - [x] Duplicate layer / group
 - [x] Crop to selection
-- [ ] Interactive crop tool
-- [x] Canvas resize (dimensions + 9-point anchor)
-- [ ] Canvas resize with content scaling
+- [x] Canvas resize
+- [x] Image rescale
 - [x] Select All / Deselect / Invert as menu+hotkey actions
 - [x] Invert selection (boolean op exists)
 - [x] Command palette (Ctrl+Shift+P)
 - [x] Application menu (File/Edit/Select/… , pinnable to top bar)
-- [ ] Autosave + crash recovery
+- [x] Autosave + crash recovery
 - [ ] Brightness / Contrast
 - [ ] Hue / Saturation / Lightness
 - [ ] Levels
@@ -141,8 +136,8 @@ For a feature to count, it must be:
 - [ ] Desaturate
 - [ ] Clipping mask
 - [ ] Adjustment layers
-- [ ] Feather + antialias
-- [ ] Grow / Shrink / Border / Smooth as discrete commands
+- [x] Feather + antialias
+- [x] Grow / Shrink / Border / Smooth as discrete commands
 - [ ] Flip canvas H / V
 - [ ] Rotate canvas 90° CW / CCW / 180°
 - [ ] Flip layer / selection H / V

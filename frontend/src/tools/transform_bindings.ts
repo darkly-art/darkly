@@ -1,7 +1,10 @@
 /**
  * Consumer bindings for the transform gizmo. Each wires the generic gizmo to a
- * specific consumer's WASM surface — this is where knowledge of *what's being
- * transformed* lives (deliberately NOT in the gizmo).
+ * specific consumer's protocol surface — this is where knowledge of *what's
+ * being transformed* lives (deliberately NOT in the gizmo).
+ *
+ * Reads go through the async `engine.send` request/response transport; live
+ * updates and commit/cancel are fire-and-forget `engine.post`.
  *
  * - `floatingTransformBinding` — destructive raster extract/commit (paste &
  *   move). The floating session must already be begun (`begin_transform`)
@@ -15,25 +18,27 @@ import type { TransformBinding } from './transform_gizmo';
 /** Binding over the floating (paste / raster-extract) session. */
 export function floatingTransformBinding(): TransformBinding {
     return {
-        read() {
-            const raw = app.handle?.floating_info();
+        async read() {
+            const raw = await app.engine?.send<
+                { ox: number; oy: number; w: number; h: number; matrix: number[] } | null
+            >('floating_info');
             if (!raw) return null;
             return {
-                origin: [raw[0], raw[1]],
-                w: raw[2],
-                h: raw[3],
+                origin: [raw.ox, raw.oy] as [number, number],
+                w: raw.w,
+                h: raw.h,
                 mode: 0, // floating is always basic affine
-                affine: [raw[4], raw[5], raw[6], raw[7], raw[8], raw[9]],
+                affine: raw.matrix as Affine2D,
             };
         },
         update(affine: Affine2D) {
-            app.handle?.update_floating_matrix(new Float32Array(affine));
+            app.engine?.post('update_floating_matrix', { matrix: affine });
         },
         commit() {
-            app.handle?.commit_floating();
+            app.engine?.post('commit_floating');
         },
         cancel() {
-            app.handle?.cancel_floating();
+            app.engine?.post('cancel_floating');
         },
     };
 }
@@ -45,28 +50,38 @@ export function voidTransformBinding(layerId: number): TransformBinding {
     // live on the document and coalesced into the undo stack.
     let original: Affine2D | null = null;
     return {
-        read() {
-            const raw = app.handle?.void_transform_info(layerId);
+        async read() {
+            const raw = await app.engine?.send<
+                { ox: number; oy: number; w: number; h: number; mode: number; matrix: number[] } | null
+            >('void_transform_info', { layer_id: layerId });
             if (!raw) return null;
-            const affine: Affine2D = [raw[5], raw[6], raw[7], raw[8], raw[9], raw[10]];
+            const affine = raw.matrix as Affine2D;
             if (original === null) original = [...affine];
             return {
-                origin: [raw[0], raw[1]],
-                w: raw[2],
-                h: raw[3],
-                mode: raw[4],
+                origin: [raw.ox, raw.oy] as [number, number],
+                w: raw.w,
+                h: raw.h,
+                mode: raw.mode,
                 affine,
             };
         },
         update(affine: Affine2D, modeTag: number) {
-            app.handle?.update_void_transform(layerId, modeTag, new Float32Array(affine));
+            app.engine?.post('update_void_transform', {
+                layer_id: layerId,
+                mode_tag: modeTag,
+                payload: Array.from(affine),
+            });
         },
         commit() {
             // Live + undoable already; nothing to finalize.
         },
         cancel() {
             if (original) {
-                app.handle?.update_void_transform(layerId, 0, new Float32Array(original));
+                app.engine?.post('update_void_transform', {
+                    layer_id: layerId,
+                    mode_tag: 0,
+                    payload: Array.from(original),
+                });
             }
         },
     };

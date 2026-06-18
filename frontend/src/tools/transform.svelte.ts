@@ -19,18 +19,20 @@ import { floatingTransformBinding, voidTransformBinding } from './transform_bind
 let gizmo: TransformGizmo | null = null;
 
 /** Resolve the selected layer's capability and attach the matching binding. */
-function activate(): void {
-    if (!gizmo || !app.handle || app.activeLayerId == null) return;
-    const cap = app.handle.layer_transform_capability(app.activeLayerId);
+async function activate(): Promise<void> {
+    if (!gizmo || !app.engine || app.activeLayerId == null) return;
+    const { value: cap } = await app.engine.send<{ value: string }>('layer_transform_capability', {
+        layer_id: app.activeLayerId,
+    });
     if (cap === 'live') {
-        gizmo.attach(voidTransformBinding(app.activeLayerId));
+        await gizmo.attach(voidTransformBinding(app.activeLayerId));
     } else if (cap === 'destructive') {
         // Floating extract may resolve asynchronously (content-bounds readback);
         // if it isn't ready this frame, `onFrame` picks it up once it is.
-        if (!app.handle.has_floating()) {
-            app.handle.begin_transform(app.activeLayerId);
+        if (!(await app.engine.send<{ value: boolean }>('has_floating')).value) {
+            await app.engine.send('begin_transform', { id: app.activeLayerId });
         }
-        gizmo.attach(floatingTransformBinding());
+        await gizmo.attach(floatingTransformBinding());
     }
     // 'none' → leave the gizmo inactive (inert no-op).
     app.requestFrame();
@@ -44,7 +46,7 @@ export const transformTool: Tool = {
 
     onActivate(ctx: ToolContext) {
         gizmo = new TransformGizmo(ctx.canvasEl);
-        activate();
+        void activate();
     },
 
     onDeactivate() {
@@ -60,10 +62,10 @@ export const transformTool: Tool = {
         return gizmo?.active ?? false;
     },
 
-    onPointerDown(_ctx, _e, cx, cy) {
+    async onPointerDown(_ctx, _e, cx, cy) {
         if (!gizmo) return;
         // First click (or a click after Enter/Escape) re-engages the gizmo.
-        if (!gizmo.active) activate();
+        if (!gizmo.active) await activate();
         if (gizmo.active) gizmo.pointerDown(cx, cy);
     },
 
@@ -88,26 +90,28 @@ export const transformTool: Tool = {
         return false;
     },
 
-    onFrame() {
+    async onFrame() {
         if (!gizmo) return;
         // Pick up an async floating extract once its content-bounds readback
         // lands (begin_transform may defer a frame). Never auto-attaches voids
         // — those attach explicitly via activate(), so Enter/Escape can end
         // the session without it immediately reappearing.
-        if (!gizmo.active && app.handle?.has_floating()) {
-            gizmo.attach(floatingTransformBinding());
+        if (!gizmo.active && app.engine) {
+            if ((await app.engine.send<{ value: boolean }>('has_floating')).value) {
+                await gizmo.attach(floatingTransformBinding());
+            }
         }
-        gizmo.frame();
+        await gizmo.frame();
     },
 
-    dismissOverlay() {
+    async dismissOverlay() {
         if (!gizmo) return;
-        if (app.handle?.has_floating()) {
+        if (app.engine && (await app.engine.send<{ value: boolean }>('has_floating')).value) {
             // Activating the floating's own target layer (e.g. paste-as-floating
             // creates a new layer and selects it) is part of the floating
             // workflow, not a user-switched-away signal.
-            const target = app.handle.floating_target_layer();
-            if (target >= 0 && target === app.activeLayerId) {
+            const { id } = await app.engine.send<{ id: number }>('floating_target_layer');
+            if (id >= 0 && id === app.activeLayerId) {
                 return;
             }
         }

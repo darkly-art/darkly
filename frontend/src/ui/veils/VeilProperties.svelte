@@ -15,12 +15,12 @@
     } = $props();
 
     function pushParams() {
-        if (!app.handle) return;
+        if (!app.engine) return;
         const params: Record<string, number | boolean> = {};
         for (const p of veil.params) {
             params[p.name] = p.value ?? p.default;
         }
-        app.handle.update_veil(veil.index, params);
+        app.engine.post('update_veil', { index: veil.index, params });
         app.refreshVeilList();
         app.requestFrame();
     }

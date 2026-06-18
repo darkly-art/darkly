@@ -7,10 +7,10 @@ const { downloadFile } = vi.hoisted(() => ({ downloadFile: vi.fn() }));
 
 vi.mock('../downloadFile', () => ({ downloadFile }));
 // strokeRecorder imports `app` from `state/app.svelte` for the dimensions
-// helper. The recorder methods themselves never touch `app` — `app.handle`
+// helper. The recorder methods themselves never touch `app` — `app.engine`
 // is consulted only by `currentCanvasDimensions`, which the tests don't
 // exercise. Stub it so the import resolves without pulling in Svelte runes.
-vi.mock('../../state/app.svelte', () => ({ app: { handle: null, docW: 0, docH: 0 } }));
+vi.mock('../../state/app.svelte', () => ({ app: { engine: null, docW: 0, docH: 0 } }));
 
 import { strokeRecorder, type RecordedEventParams } from '../strokeRecorder';
 

@@ -16,12 +16,12 @@
     } = $props();
 
     function pushParams() {
-        if (!app.handle) return;
+        if (!app.engine) return;
         const params: Record<string, number | boolean> = {};
         for (const p of node.params) {
             params[p.name] = p.value ?? p.default;
         }
-        app.handle.update_void_params(node.id, params);
+        app.engine.post('update_void_params', { layer_id: node.id, params });
         app.refreshLayerTree();
         app.requestFrame();
     }

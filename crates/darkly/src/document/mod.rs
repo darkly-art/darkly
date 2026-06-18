@@ -209,6 +209,31 @@ impl Document {
         self.entities.get_mut(id).and_then(Entity::as_modifier_mut)
     }
 
+    /// Canvas-space pixel bounds of any pixel-bearing node — a raster layer or
+    /// a mask/selection modifier. `None` for nodes that have no pixels (groups,
+    /// void layers) or unknown ids. Lets callers treat "things with pixels"
+    /// uniformly without branching on layer vs modifier or on layer kind.
+    pub fn node_pixel_bounds(&self, id: LayerId) -> Option<CanvasRect> {
+        if let Some(b) = self.find_node(id).and_then(|n| n.pixels()) {
+            return Some(b.bounds);
+        }
+        self.find_modifier(id)
+            .and_then(|m| m.pixels())
+            .map(|b| b.bounds)
+    }
+
+    /// Set the canvas-space pixel bounds of a raster layer or modifier. No-op
+    /// for nodes without pixels or unknown ids. Pairs with
+    /// [`node_pixel_bounds`](Self::node_pixel_bounds); used by image rescale to
+    /// keep the document's extents in step with the resampled GPU textures.
+    pub fn set_node_pixel_bounds(&mut self, id: LayerId, bounds: CanvasRect) {
+        if let Some(b) = self.find_node_mut(id).and_then(|n| n.pixels_mut()) {
+            b.bounds = bounds;
+        } else if let Some(b) = self.find_modifier_mut(id).and_then(|m| m.pixels_mut()) {
+            b.bounds = bounds;
+        }
+    }
+
     /// Find the host node a modifier is attached to (the layer or group that
     /// owns it on its `modifiers` list).
     pub fn find_modifier_host(&self, modifier_id: LayerId) -> Option<&LayerNode> {

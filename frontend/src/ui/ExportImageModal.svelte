@@ -44,9 +44,9 @@
     }
 
     function confirm() {
-        if (!app.handle || exporting) return;
+        if (!app.engine || exporting) return;
         exporting = true;
-        const handle = app.handle;
+        const engine = app.engine;
         app.onExportResult(async (result) => {
             try {
                 if (result?.rgba) {
@@ -60,7 +60,7 @@
                 exportImage.open = false;
             }
         });
-        handle.start_export();
+        engine.post('start_export');
     }
 </script>
 

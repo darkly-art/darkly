@@ -7,11 +7,13 @@ mod duplicate;
 mod export;
 mod flatten;
 mod floating;
+mod image_rescale;
 mod layers;
 mod load;
 mod merge;
 mod modifiers;
 mod painting;
+pub mod protocol;
 pub mod rendering;
 pub mod save;
 pub mod types;
@@ -21,9 +23,9 @@ mod veils;
 pub use export::ExportImageResult;
 pub use load::LoadDocument;
 pub use rendering::{PickSource, DEFAULT_THUMB_SIZE};
-pub use save::{SaveError, SaveJob, SaveReadbackKind};
+pub use save::{SaveError, SaveJob, SavePurpose, SaveReadbackKind};
 pub use types::{
-    BlendModeTypeInfo, ClipboardExport, LayerInfo, LayerKindTypeInfo, ModifierInfo,
+    BlendModeTypeInfo, ClipboardExport, EngineState, LayerInfo, LayerKindTypeInfo, ModifierInfo,
     ModifierTypeInfo, ParamInfo, StrokeOp, ToolTypeInfo, VeilInfo, VeilTypeInfo,
 };
 
@@ -686,6 +688,24 @@ impl DarklyEngine {
         self.selection_cpu_cache()
     }
 
+    /// Blocking readback of the document selection's R8 mask texture (window-
+    /// sized, one byte per pixel — 255 selected, 0 unselected). Test-only;
+    /// lets selection-modify tests inspect mask values directly rather than
+    /// inferring them through paint. Returns `None` before the selection state
+    /// is allocated.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_readback_selection(&self) -> Option<Vec<u8>> {
+        let state = self.compositor.selection_state()?;
+        Some(crate::gpu::test_utils::readback_texture(
+            &self.gpu.device,
+            &self.gpu.queue,
+            state.texture(),
+            wgpu::TextureFormat::R8Unorm,
+            state.width,
+            state.height,
+        ))
+    }
+
     /// Test-only public accessor for the selection modifier's id.
     pub fn selection_modifier_id_test(&self) -> Option<LayerId> {
         self.doc.selection_id()
@@ -717,6 +737,37 @@ impl DarklyEngine {
             .find_modifier(id)
             .and_then(|m| m.pixels())
             .map(|p| p.bounds)
+    }
+
+    /// Test-only: whether the undo / redo stacks have anything to apply.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_can_undo(&self) -> bool {
+        self.undo_stack.can_undo()
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_can_redo(&self) -> bool {
+        self.undo_stack.can_redo()
+    }
+
+    /// Test-only: a pixel-bearing node's document-side `PixelBuffer.bounds`
+    /// (raster layer or mask modifier). Used to assert extents scale on rescale.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_node_pixel_bounds(&self, id: LayerId) -> Option<crate::coord::CanvasRect> {
+        self.doc.node_pixel_bounds(id)
+    }
+
+    /// Test-only: the mask modifier id attached to `host_id`, if any (the first
+    /// non-selection pixel-bearing modifier on the host).
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_mask_id(&self, host_id: LayerId) -> Option<LayerId> {
+        let node = self.doc.find_node(host_id)?;
+        node.modifiers().iter().copied().find(|&mid| {
+            self.doc
+                .find_modifier(mid)
+                .map(|m| m.as_selection().is_none() && m.pixels().is_some())
+                .unwrap_or(false)
+        })
     }
 
     /// Number of GPU textures the compositor currently holds across the
@@ -945,6 +996,19 @@ impl DarklyEngine {
         for (ctx, pixels) in completed {
             self.handle_completed_readback(ctx, pixels);
         }
+    }
+
+    /// Block on the GPU device only — fire map callbacks — WITHOUT
+    /// polling or dispatching the readback scheduler. On native this
+    /// stands in for the browser event loop that resolves buffer
+    /// mappings on web. For tests that must verify another code path
+    /// (e.g. `poll_save_result`) does the scheduler drain itself.
+    #[cfg(test)]
+    pub fn test_wait_gpu(&mut self) {
+        let _ = self.gpu.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
     }
 }
 

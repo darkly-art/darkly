@@ -7,6 +7,10 @@
  * document — it imports only the overlay renderer, the affine util, and the
  * mode registry. A consumer owns a transform and supplies a binding; the gizmo
  * just drives it.
+ *
+ * Reads cross the async request/response transport, so `read()` is a Promise:
+ * the gizmo caches the geometry, interaction uses the cache synchronously, and
+ * live updates are fire-and-forget through the binding.
  */
 import { app } from '../state/app.svelte';
 import { OverlayBuilder } from '../canvas/gpu_overlay';
@@ -26,13 +30,13 @@ import {
  */
 export interface TransformBinding {
     /** Current bbox + transform, or `null` if the target is no longer valid. */
-    read(): {
+    read(): Promise<{
         origin: [number, number];
         w: number;
         h: number;
         mode: number;
         affine: Affine2D;
-    } | null;
+    } | null>;
     /** Live preview: push an updated affine for the given mode. */
     update(affine: Affine2D, modeTag: number): void;
     /** Finalize. */
@@ -60,9 +64,9 @@ export class TransformGizmo {
 
     /** Wire a consumer's binding and seed geometry from it. Returns whether the
      *  gizmo became active (the binding had a valid target). */
-    attach(binding: TransformBinding): boolean {
+    async attach(binding: TransformBinding): Promise<boolean> {
         this.binding = binding;
-        if (!this.adopt()) {
+        if (!(await this.adopt())) {
             this.clear();
             return false;
         }
@@ -72,8 +76,8 @@ export class TransformGizmo {
 
     /** Pull the current bbox + transform from the binding into local geometry.
      *  Returns false (and leaves geometry stale) if the target is gone. */
-    private adopt(): boolean {
-        const info = this.binding?.read();
+    private async adopt(): Promise<boolean> {
+        const info = await this.binding?.read();
         if (!info) return false;
         this.geo = {
             matrix: [...info.affine],
@@ -88,11 +92,13 @@ export class TransformGizmo {
     /** Per-frame reconcile: drop if the target vanished (e.g. floating
      *  committed by an unrelated edit / undo), otherwise resync geometry when
      *  idle (so an external change like undo is reflected) and redraw. */
-    frame(): void {
+    async frame(): Promise<void> {
         if (!this.binding) return;
-        if (!this.drag && !this.adopt()) {
-            this.clear();
-            return;
+        if (!this.drag) {
+            if (!(await this.adopt())) {
+                this.clear();
+                return;
+            }
         }
         this.rebuildOverlay();
     }
@@ -111,6 +117,7 @@ export class TransformGizmo {
             const m = this.mode.updateDrag(this.geo, this.drag, cx, cy, shift);
             this.geo.matrix = m;
             this.binding.update(m, this.mode.tag);
+            this.rebuildOverlay();
             app.requestFrame();
         } else {
             app.toolCursor = this.mode.resolveHandle(this.geo, this.overlay, this.bbox, cx, cy).cursor;
@@ -136,10 +143,10 @@ export class TransformGizmo {
     }
 
     private rebuildOverlay(): void {
-        if (!app.handle) return;
+        if (!app.engine) return;
         const o = new OverlayBuilder(this.canvasEl);
         this.bbox = this.mode.buildOverlay(this.geo, o);
-        o.push(app.handle);
+        o.push(app.engine);
         this.overlay = o;
     }
 
@@ -148,7 +155,7 @@ export class TransformGizmo {
         this.drag = null;
         this.bbox = null;
         this.overlay = null;
-        app.handle?.clear_overlay();
+        app.engine?.post('clear_overlay');
         app.toolCursor = null;
     }
 }

@@ -19,16 +19,16 @@ export function registerSampleColorAction(): void {
         icon: 'fa6-solid:eye-dropper',
         type: 'hold',
         handler: (ctx) => {
-            if (!app.handle) return;
+            if (!app.engine) return;
             const cx = typeof ctx.x === 'number' ? ctx.x : 0;
             const cy = typeof ctx.y === 'number' ? ctx.y : 0;
             setColorPickerPressed(true);
-            startPick(app.handle, cx, cy);
+            startPick(app.engine, cx, cy);
         },
         onMove: (_ctx, e) => {
-            if (!app.handle || !app.canvasEl) return;
+            if (!app.engine || !app.canvasEl) return;
             const { x, y } = screenToCanvas(e.clientX, e.clientY, app.canvasEl);
-            startPick(app.handle, x, y);
+            startPick(app.engine, x, y);
         },
         // `deactivate` only flips the cursor back to the idle indicator —
         // the picked color itself sticks (no need to undo any foreground

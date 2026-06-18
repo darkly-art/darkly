@@ -42,10 +42,11 @@
         return { url: next, len: bytes.length };
     }
 
-    function refresh() {
-        if (!app.handle) return;
+    async function refresh() {
+        const engine = app.engine;
+        if (!engine) return;
         const stroke = loadPng(
-            app.handle.brush_thumbnail(brushName),
+            (await engine.send('brush_thumbnail', { name: brushName })).bytes,
             strokeUrl,
             lastStrokeLen,
         );
@@ -54,7 +55,7 @@
             lastStrokeLen = stroke.len;
         }
         const dab = loadPng(
-            app.handle.brush_dab_thumbnail(brushName),
+            (await engine.send('brush_dab_thumbnail', { name: brushName })).bytes,
             dabUrl,
             lastDabLen,
         );
@@ -65,7 +66,7 @@
     }
 
     const compressor = new SignalCompressor(REFRESH_MS, () => {
-        refresh();
+        void refresh();
         framesRemaining = POLL_FRAMES_PER_REQUEST;
         scheduleFrame();
     });
@@ -80,14 +81,14 @@
         if (framesRemaining <= 0) return;
         framesRemaining--;
         app.requestFrame();
-        refresh();
+        void refresh();
         scheduleFrame();
     }
 
     // Reactive trigger: WASM handle becoming available, theme swaps,
     // and the brush name changing all require fresh thumbnails.
     $effect(() => {
-        void app.handle;
+        void app.engine;
         void theme.current;
         void brushName;
         untrack(() => compressor.request());

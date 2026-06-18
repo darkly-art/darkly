@@ -4,6 +4,7 @@
 
 pub mod animation;
 pub mod app;
+pub mod autosave;
 pub mod canvas;
 pub mod colors;
 pub mod display;
@@ -21,6 +22,7 @@ pub fn registrations() -> Vec<SchemaSection> {
     vec![
         animation::register(),
         app::register(),
+        autosave::register(),
         canvas::register(),
         colors::register(),
         display::register(),

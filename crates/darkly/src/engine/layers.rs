@@ -757,6 +757,27 @@ impl DarklyEngine {
         self.doc.dirty
     }
 
+    /// Snapshot the engine state the frontend mirrors. Cheap CPU reads; `render`
+    /// returns this each frame so synchronous UI consumers read a local mirror
+    /// instead of awaiting per-value queries. See [`crate::engine::EngineState`].
+    /// Call *after* `render` so `frame_count` is the post-increment value.
+    pub fn engine_state(&self) -> crate::engine::EngineState {
+        crate::engine::EngineState {
+            frame_count: self.frame_count() as f64,
+            thumbnail_version: self.thumbnail_version(),
+            dirty: self.is_dirty(),
+            has_selection: self.has_selection(),
+        }
+    }
+
+    /// Force the document into the unsaved state. Used after restoring a
+    /// crash-recovery snapshot: the restored document is unsaved work
+    /// with no backing file handle, so it must read as dirty (otherwise
+    /// closing the tab would silently discard the recovered work).
+    pub fn mark_dirty(&mut self) {
+        self.doc.dirty = true;
+    }
+
     /// Rename the document. Not undoable — renaming is a metadata change
     /// users expect to be free-standing, matching every other editor's
     /// "title bar rename" affordance. The save flow picks the new name

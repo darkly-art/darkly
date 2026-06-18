@@ -58,9 +58,9 @@ class LoadErrorState {
 
 export const loadError = new LoadErrorState();
 
-/** Best-effort parse of the JSON payload that
- *  `DarklyHandle.open_document(bytes)` throws on refusal. Falls back
- *  to a generic message when the throwable isn't structured. */
+/** Best-effort parse of the JSON payload that the `open_document`
+ *  request rejects with on refusal. Falls back to a generic message
+ *  when the throwable isn't structured. */
 export function parseLoadErrorMessage(e: unknown): LoadErrorPayload {
     const raw = e instanceof Error ? e.message : String(e);
     try {
