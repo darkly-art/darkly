@@ -133,6 +133,73 @@ pub fn registrations() -> Vec<RequestRegistration> {
             },
         },
         RequestRegistration {
+            kind: "grow_selection",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                struct Req {
+                    radius: u32,
+                }
+                let r: Req = decode(payload)?;
+                engine.grow_selection(r.radius);
+                Ok(Response::empty())
+            },
+        },
+        RequestRegistration {
+            kind: "shrink_selection",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                struct Req {
+                    radius: u32,
+                }
+                let r: Req = decode(payload)?;
+                engine.shrink_selection(r.radius);
+                Ok(Response::empty())
+            },
+        },
+        RequestRegistration {
+            kind: "border_selection",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                struct Req {
+                    radius: u32,
+                }
+                let r: Req = decode(payload)?;
+                engine.border_selection(r.radius);
+                Ok(Response::empty())
+            },
+        },
+        RequestRegistration {
+            kind: "smooth_selection",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                struct Req {
+                    radius: u32,
+                }
+                let r: Req = decode(payload)?;
+                engine.smooth_selection(r.radius);
+                Ok(Response::empty())
+            },
+        },
+        RequestRegistration {
+            kind: "feather_selection",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                struct Req {
+                    radius: f32,
+                }
+                let r: Req = decode(payload)?;
+                engine.feather_selection(r.radius);
+                Ok(Response::empty())
+            },
+        },
+        RequestRegistration {
+            kind: "antialias_selection",
+            handle: |engine, _payload, _b| {
+                engine.antialias_selection();
+                Ok(Response::empty())
+            },
+        },
+        RequestRegistration {
             kind: "has_selection",
             handle: |engine, _payload, _b| {
                 Ok(Response::json(

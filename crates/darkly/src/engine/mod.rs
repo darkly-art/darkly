@@ -700,6 +700,24 @@ impl DarklyEngine {
         self.selection_cpu_cache()
     }
 
+    /// Blocking readback of the document selection's R8 mask texture (window-
+    /// sized, one byte per pixel — 255 selected, 0 unselected). Test-only;
+    /// lets selection-modify tests inspect mask values directly rather than
+    /// inferring them through paint. Returns `None` before the selection state
+    /// is allocated.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_readback_selection(&self) -> Option<Vec<u8>> {
+        let state = self.compositor.selection_state()?;
+        Some(crate::gpu::test_utils::readback_texture(
+            &self.gpu.device,
+            &self.gpu.queue,
+            state.texture(),
+            wgpu::TextureFormat::R8Unorm,
+            state.width,
+            state.height,
+        ))
+    }
+
     /// Test-only public accessor for the selection modifier's id.
     pub fn selection_modifier_id_test(&self) -> Option<LayerId> {
         self.doc.selection_id()

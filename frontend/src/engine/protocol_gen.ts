@@ -7,10 +7,12 @@ export type RequestKind =
     | 'add_raster'
     | 'add_veil'
     | 'add_void'
+    | 'antialias_selection'
     | 'apply_mask'
     | 'begin_stroke'
     | 'begin_transform'
     | 'blend_mode_types'
+    | 'border_selection'
     | 'brush_active_dab_preview'
     | 'brush_active_supports_erase'
     | 'brush_dab_thumbnail'
@@ -66,6 +68,7 @@ export type RequestKind =
     | 'duplicate_node'
     | 'duplicate_nodes'
     | 'end_stroke'
+    | 'feather_selection'
     | 'fill_background'
     | 'fill_background_color'
     | 'flatten_image'
@@ -76,6 +79,7 @@ export type RequestKind =
     | 'floating_target_layer'
     | 'get_brush_cursor_preview_info'
     | 'group_layers'
+    | 'grow_selection'
     | 'has_floating'
     | 'has_pending_color_pick'
     | 'has_selection'
@@ -139,6 +143,8 @@ export type RequestKind =
     | 'set_veil_visible'
     | 'set_view_transform'
     | 'set_viewport_bg'
+    | 'shrink_selection'
+    | 'smooth_selection'
     | 'start_export'
     | 'start_save_document'
     | 'start_veil_preview'
@@ -159,10 +165,12 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'add_raster',
     'add_veil',
     'add_void',
+    'antialias_selection',
     'apply_mask',
     'begin_stroke',
     'begin_transform',
     'blend_mode_types',
+    'border_selection',
     'brush_active_dab_preview',
     'brush_active_supports_erase',
     'brush_dab_thumbnail',
@@ -218,6 +226,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'duplicate_node',
     'duplicate_nodes',
     'end_stroke',
+    'feather_selection',
     'fill_background',
     'fill_background_color',
     'flatten_image',
@@ -228,6 +237,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'floating_target_layer',
     'get_brush_cursor_preview_info',
     'group_layers',
+    'grow_selection',
     'has_floating',
     'has_pending_color_pick',
     'has_selection',
@@ -291,6 +301,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_veil_visible',
     'set_view_transform',
     'set_viewport_bg',
+    'shrink_selection',
+    'smooth_selection',
     'start_export',
     'start_save_document',
     'start_veil_preview',

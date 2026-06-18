@@ -56,9 +56,29 @@ pub struct SelectionPipelines {
     /// uploaded shape data. Re-allocated only when the selection's
     /// dimensions change (canvas resize, document load).
     shape_scratch: Option<ShapeScratch>,
+
+    /// Shared layout for the single-input passes (texture + sampler +
+    /// uniform): morphology and blur both sample one R8 source, so one layout
+    /// and one pipeline-layout serve both pipelines.
+    single_bgl: wgpu::BindGroupLayout,
+    morph_pipeline: wgpu::RenderPipeline,
+    morph_buf: wgpu::Buffer,
+    blur_pipeline: wgpu::RenderPipeline,
+    blur_buf: wgpu::Buffer,
+    /// Reusable R8 scratch textures, sized to the selection, for composite ops
+    /// (border) that hold intermediate masks across passes. Realloc'd when the
+    /// selection's dimensions change, mirroring `shape_scratch`.
+    scratch_pool: Vec<ScratchTex>,
 }
 
 struct ShapeScratch {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    width: u32,
+    height: u32,
+}
+
+struct ScratchTex {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     width: u32,
@@ -70,6 +90,31 @@ struct ShapeScratch {
 struct CombineParams {
     mode: u32,
     _pad: [u32; 3],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct MorphParams {
+    op: u32,
+    neighborhood: u32,
+    texel: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct BlurParams {
+    dir: [f32; 2],
+    radius: i32,
+    sigma: f32,
+}
+
+/// Single-pixel morphology step kind. `Dilate` (max) grows the mask, `Erode`
+/// (min) shrinks it. Values match `selection_morph.wgsl`'s `op` uniform.
+#[repr(u32)]
+#[derive(Copy, Clone)]
+pub enum MorphOp {
+    Dilate = 0,
+    Erode = 1,
 }
 
 impl SelectionPipelines {
@@ -174,13 +219,128 @@ impl SelectionPipelines {
             ..Default::default()
         });
 
+        // Morphology + blur both sample one R8 source through this shared
+        // layout (texture + sampler + per-pass uniform).
+        let single_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("sel-single-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let single_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sel-single-layout"),
+            bind_group_layouts: &[Some(&single_bgl)],
+            immediate_size: 0,
+        });
+
+        let morph_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("selection-morph"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../../shaders/selection_morph.wgsl").into(),
+            ),
+        });
+        let morph_pipeline =
+            Self::build_single_input_pipeline(device, &single_layout, &morph_shader, "sel-morph");
+
+        let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("selection-blur"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../../shaders/selection_blur.wgsl").into(),
+            ),
+        });
+        let blur_pipeline =
+            Self::build_single_input_pipeline(device, &single_layout, &blur_shader, "sel-blur");
+
+        let morph_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("sel-morph-params"),
+            size: std::mem::size_of::<MorphParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let blur_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("sel-blur-params"),
+            size: std::mem::size_of::<BlurParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         SelectionPipelines {
             combine_pipeline,
             combine_bgl,
             mode_buf,
             sampler,
             shape_scratch: None,
+            single_bgl,
+            morph_pipeline,
+            morph_buf,
+            blur_pipeline,
+            blur_buf,
+            scratch_pool: Vec::new(),
         }
+    }
+
+    /// Build a fullscreen-triangle pipeline that samples one R8 source and
+    /// writes an R8 target — the common shape of the morphology and blur
+    /// passes (only the fragment shader differs).
+    fn build_single_input_pipeline(
+        device: &wgpu::Device,
+        layout: &wgpu::PipelineLayout,
+        shader: &wgpu::ShaderModule,
+        label: &str,
+    ) -> wgpu::RenderPipeline {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::R8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::RED,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
     }
 
     /// Ensure `shape_scratch` is exactly `(w, h)` and return its view. The
@@ -254,7 +414,23 @@ impl SelectionPipelines {
             },
         );
         let shape_view = &scratch.view;
+        self.dispatch_combine(encoder, device, queue, state, shape_view, mode);
+    }
 
+    /// Run the combine shader with `state`'s current mask as `existing` and an
+    /// arbitrary R8 view as `shape`, writing the result to the other ping-pong
+    /// texture and swapping. Shared by [`combine`](Self::combine) (shape =
+    /// uploaded scratch) and [`border`](Self::border) (shape = an intermediate
+    /// scratch). `shape_view` must not alias `state`'s textures.
+    fn dispatch_combine(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        state: &mut SelectionState,
+        shape_view: &wgpu::TextureView,
+        mode: CombineMode,
+    ) {
         queue.write_buffer(
             &self.mode_buf,
             0,
@@ -310,6 +486,270 @@ impl SelectionPipelines {
 
         state.current = dst;
         state.rebuild_bind_group(device);
+    }
+
+    /// One single-pixel morphology step: reads `state`'s current mask, writes
+    /// the dilated/eroded result to the other ping-pong texture, swaps. The
+    /// engine loops this N times (alternating `eight` for a rounder element).
+    pub fn morph_step(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        state: &mut SelectionState,
+        op: MorphOp,
+        eight: bool,
+    ) {
+        queue.write_buffer(
+            &self.morph_buf,
+            0,
+            bytemuck::bytes_of(&MorphParams {
+                op: op as u32,
+                neighborhood: if eight { 1 } else { 0 },
+                texel: [1.0 / state.width as f32, 1.0 / state.height as f32],
+            }),
+        );
+        self.single_input_pass(
+            encoder,
+            device,
+            state,
+            &self.morph_pipeline,
+            &self.morph_buf,
+        );
+    }
+
+    /// One separable Gaussian blur pass (horizontal or vertical) over `state`'s
+    /// current mask. The engine runs an H pass then a V pass for feather /
+    /// antialias. `radius` is the half-kernel extent; `sigma` the gaussian σ.
+    pub fn blur_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        state: &mut SelectionState,
+        horizontal: bool,
+        radius: i32,
+        sigma: f32,
+    ) {
+        let dir = if horizontal {
+            [1.0 / state.width as f32, 0.0]
+        } else {
+            [0.0, 1.0 / state.height as f32]
+        };
+        queue.write_buffer(
+            &self.blur_buf,
+            0,
+            bytemuck::bytes_of(&BlurParams { dir, radius, sigma }),
+        );
+        self.single_input_pass(encoder, device, state, &self.blur_pipeline, &self.blur_buf);
+    }
+
+    /// Render a single-input pass (`pipeline` sampling `state`'s current mask
+    /// with `params`) into the other ping-pong texture, then swap. Shared core
+    /// of [`morph_step`](Self::morph_step) and [`blur_pass`](Self::blur_pass).
+    fn single_input_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        state: &mut SelectionState,
+        pipeline: &wgpu::RenderPipeline,
+        params: &wgpu::Buffer,
+    ) {
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("sel-single-bg"),
+            layout: &self.single_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&state.views[state.current]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params.as_entire_binding(),
+                },
+            ],
+        });
+
+        let dst = 1 - state.current;
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("sel-single-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &state.views[dst],
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        state.current = dst;
+        state.rebuild_bind_group(device);
+    }
+
+    /// Replace the selection with a band of width `radius` straddling its
+    /// edge: `dilate(radius) − erode(radius)`. Submits its own command buffers
+    /// (one per morphology step plus the snapshot copies), so it takes the
+    /// `GpuContext` rather than a borrowed encoder. No-op for `radius == 0`.
+    pub fn border(
+        &mut self,
+        gpu: &crate::gpu::context::GpuContext,
+        state: &mut SelectionState,
+        radius: u32,
+    ) {
+        if radius == 0 {
+            return;
+        }
+        let (w, h) = (state.width, state.height);
+        // scratch[0] holds the original mask; scratch[1] the eroded interior.
+        self.ensure_scratch(&gpu.device, 2, w, h);
+
+        gpu.encode("sel-border-save", |e| {
+            Self::copy_tex(
+                e,
+                &state.textures[state.current],
+                &self.scratch_pool[0].texture,
+                w,
+                h,
+            )
+        });
+        for i in 0..radius {
+            gpu.encode("sel-border-erode", |e| {
+                self.morph_step(
+                    e,
+                    &gpu.device,
+                    &gpu.queue,
+                    state,
+                    MorphOp::Erode,
+                    i % 2 == 1,
+                )
+            });
+        }
+        gpu.encode("sel-border-inner", |e| {
+            Self::copy_tex(
+                e,
+                &state.textures[state.current],
+                &self.scratch_pool[1].texture,
+                w,
+                h,
+            )
+        });
+        gpu.encode("sel-border-restore", |e| {
+            Self::copy_tex(
+                e,
+                &self.scratch_pool[0].texture,
+                &state.textures[state.current],
+                w,
+                h,
+            )
+        });
+        for i in 0..radius {
+            gpu.encode("sel-border-dilate", |e| {
+                self.morph_step(
+                    e,
+                    &gpu.device,
+                    &gpu.queue,
+                    state,
+                    MorphOp::Dilate,
+                    i % 2 == 1,
+                )
+            });
+        }
+        gpu.encode("sel-border-sub", |e| {
+            let inner = &self.scratch_pool[1].view;
+            self.dispatch_combine(
+                e,
+                &gpu.device,
+                &gpu.queue,
+                state,
+                inner,
+                CombineMode::Subtract,
+            )
+        });
+    }
+
+    /// Ensure `scratch_pool` holds `n` R8 textures of exactly `(w, h)`,
+    /// reallocating when the count or selection dimensions change.
+    fn ensure_scratch(&mut self, device: &wgpu::Device, n: usize, w: u32, h: u32) {
+        let ok = self.scratch_pool.len() == n
+            && self
+                .scratch_pool
+                .iter()
+                .all(|s| s.width == w && s.height == h);
+        if ok {
+            return;
+        }
+        self.scratch_pool = (0..n)
+            .map(|i| {
+                let texture = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(if i == 0 {
+                        "sel-scratch-0"
+                    } else {
+                        "sel-scratch-1"
+                    }),
+                    size: wgpu::Extent3d {
+                        width: w,
+                        height: h,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::R8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_SRC
+                        | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                ScratchTex {
+                    texture,
+                    view,
+                    width: w,
+                    height: h,
+                }
+            })
+            .collect();
+    }
+
+    fn copy_tex(
+        encoder: &mut wgpu::CommandEncoder,
+        src: &wgpu::Texture,
+        dst: &wgpu::Texture,
+        w: u32,
+        h: u32,
+    ) {
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: src,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: dst,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     /// Run the combine shader in "invert" mode.
