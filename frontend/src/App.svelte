@@ -72,6 +72,7 @@
 <RecoveryModal />
 <AboutModal />
 <CommandPalette />
+<PointerHud />
 
 <style>
     .app-root {
