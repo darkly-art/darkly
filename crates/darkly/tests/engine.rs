@@ -3397,6 +3397,72 @@ fn transform_masked_sub_canvas_layer_previews_without_crash() {
     engine.render(0.0);
 }
 
+/// Copying a selected region while editing a mask must populate the clipboard.
+/// The active paint target when editing a mask is the *mask modifier id* (no
+/// host redirect), so the copy entry points must accept a modifier id — not
+/// bail because `doc.layer(id)` returns `None` for a non-layer entity. Pre-fix
+/// `copy`/`cut`/`copy_layer_rich` all guarded on `doc.layer(id)?`, so copying a
+/// mask region silently did nothing (no readback, no clipboard, no error).
+#[test]
+fn copy_selected_mask_region_populates_clipboard() {
+    let mut engine = test_engine(64, 64);
+    let host = engine.add_raster_layer(None);
+    fill_layer(&mut engine, host, 0, 200, 0);
+    engine.add_mask(host);
+    // White mask everywhere, black dab at (20,20).
+    paint_mask_dab(&mut engine, host, 20.0, 20.0, 0.0);
+    engine.test_flush_readbacks();
+
+    let mask_id = engine.host_mask_id(host).expect("host has a mask");
+
+    // Select a region around the dab and copy the MASK (active node = mask id),
+    // exactly as the frontend `copy` action does via `copy_layer_rich`.
+    engine.select_rect(10.0, 10.0, 24.0, 24.0, SelectionMode::Replace, false, 0.0);
+    engine.test_flush_readbacks();
+    engine.copy_layer_rich(mask_id);
+    engine.test_flush_readbacks();
+
+    let result = engine
+        .poll_copy_result()
+        .expect("copying a selected mask region must produce a clipboard result");
+    assert!(
+        result.width > 0 && result.height > 0 && !result.rgba.is_empty(),
+        "mask copy must carry the selected region's pixels; got {}x{} ({} bytes)",
+        result.width,
+        result.height,
+        result.rgba.len()
+    );
+}
+
+/// Pasting while a mask is the active edit target must place the new layer as
+/// the host's SIBLING, not nest it under the (raster) host. The active id is
+/// the mask *modifier* id, and `parent_of(mask) == host`, so a naive
+/// `MoveTarget::After(mask_id)` linked the pasted layer as a child of the
+/// raster host — an invalid tree that left the paste off the published layer
+/// tree (raster layers publish no children) and invisible on canvas.
+#[test]
+fn paste_while_editing_mask_places_layer_at_top_level() {
+    use darkly::engine::types::LayerInfo;
+
+    let mut engine = test_engine(64, 64);
+    let host = engine.add_raster_layer(None);
+    engine.add_mask(host);
+    let mask_id = engine.host_mask_id(host).expect("host has a mask");
+
+    let rgba = vec![255u8; 8 * 8 * 4];
+    let pasted = engine.paste_image(8, 8, &rgba, 4, 4, Some(mask_id));
+
+    let in_tree = engine
+        .layer_tree()
+        .iter()
+        .any(|n| matches!(n, LayerInfo::Raster { id, .. } if *id == pasted.to_ffi() as f64));
+    assert!(
+        in_tree,
+        "pasted layer must be a top-level sibling of the host, not nested under \
+         the raster host (invalid tree → invisible paste)"
+    );
+}
+
 /// The document model must expose the selection as a typed [`Modifier`] —
 /// not as a parallel `Option<AlphaMask>` slot. `Document.selection` is a
 /// Modifier with `kind = Selection(...)`, addressable through the same

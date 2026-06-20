@@ -7,7 +7,6 @@ use crate::clipboard::{
     Clipboard, ClipboardRect, ImageClip, LayerClipboard, MaskClipboard,
     LAYER_CLIPBOARD_SCHEMA_VERSION,
 };
-use crate::document::MoveTarget;
 use crate::gpu::blend_mode;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::readback;
@@ -19,7 +18,13 @@ impl DarklyEngine {
     /// clipboard. Kicks off an async GPU readback — the result is available via
     /// `poll_copy_result()` on the next frame. Returns `None` immediately.
     pub fn copy(&mut self, layer_id: LayerId) -> Option<ClipboardExport> {
-        self.doc.layer(layer_id)?;
+        // The copy target is any pixel-bearing node: a raster/void layer, or a
+        // modifier (the active paint target when editing a mask is the mask
+        // modifier id directly). `start_copy_readback` gates on the node's
+        // texture, so a non-pixel target simply no-ops there.
+        if self.doc.layer(layer_id).is_none() && !self.doc.is_modifier(layer_id) {
+            return None;
+        }
 
         if self.has_selection() && self.selection_cpu_cache().is_none() {
             // Selection cache not ready — defer until SelectionReadback completes.
@@ -484,7 +489,11 @@ impl DarklyEngine {
     /// Cut = copy + clear. The clear happens on GPU during start_copy_readback.
     /// Returns `None` immediately; result available via `poll_copy_result()`.
     pub fn cut(&mut self, layer_id: LayerId) -> Option<ClipboardExport> {
-        self.doc.layer(layer_id)?;
+        // Accept a modifier id (mask edit target) as well as a layer — see
+        // `copy`. The actual texture gate lives in `start_copy_readback`.
+        if self.doc.layer(layer_id).is_none() && !self.doc.is_modifier(layer_id) {
+            return None;
+        }
         if !self.doc.is_node_editable(layer_id) {
             return None;
         }
@@ -534,10 +543,12 @@ impl DarklyEngine {
         self.compositor
             .upload_node_pixels(&self.gpu.queue, id, rgba);
 
-        // Position above active layer if specified.
-        if let Some(active_id) = active_layer_id {
-            self.doc.move_layer(id, MoveTarget::After(active_id));
-        }
+        // Position relative to the active node. `resolve_anchor_target` maps a
+        // modifier anchor (the active id while editing a mask) to its host, so
+        // the pasted layer lands as the host's sibling rather than nested under
+        // it — the same anchor resolution the document's `add_*` helpers use.
+        let target = self.doc.resolve_anchor_target(active_layer_id);
+        self.doc.move_layer(id, target);
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
@@ -573,36 +584,43 @@ impl DarklyEngine {
         // Snapshot metadata up-front. Layers can mutate while the readback
         // is in flight; pinning at copy time matches user intent and keeps
         // the snapshot independent of whatever happens before completion.
-        let meta = {
-            // Rich copy is a pixel-readback path — only meaningful for raster
-            // layers. Voids regenerate from params, so there's nothing to read
-            // back; cross-tab clipboard for voids would need its own JSON path
-            // (out of scope for this change).
-            let Layer::Raster(layer) = self.doc.layer(layer_id)? else {
-                return None;
-            };
-            let mask = layer.modifiers.iter().find_map(|mid| {
-                let m = self.doc.find_modifier(*mid)?;
-                if !m.is_mask() {
-                    return None;
-                }
-                let bounds = m.pixels().map(|p| p.bounds).unwrap_or(layer.pixels.bounds);
-                Some(RichCopyMask {
-                    name: m.common.name.clone(),
-                    visible: m.common.visible,
-                    bounds,
+        //
+        // Rich metadata (blend mode, opacity, …) only exists for raster
+        // layers. The active paint target when editing a mask is the mask
+        // *modifier* id, which has no layer metadata — fall through to a plain
+        // pixel copy (`pending_rich_metadata` left `None` → `complete_copy`
+        // builds an image clip). Voids regenerate from params, so there's
+        // nothing to read back; cross-tab clipboard for voids would need its
+        // own JSON path (out of scope for this change).
+        let meta = match self.doc.layer(layer_id) {
+            Some(Layer::Raster(layer)) => {
+                let mask = layer.modifiers.iter().find_map(|mid| {
+                    let m = self.doc.find_modifier(*mid)?;
+                    if !m.is_mask() {
+                        return None;
+                    }
+                    let bounds = m.pixels().map(|p| p.bounds).unwrap_or(layer.pixels.bounds);
+                    Some(RichCopyMask {
+                        name: m.common.name.clone(),
+                        visible: m.common.visible,
+                        bounds,
+                    })
+                });
+                Some(RichCopyMetadata {
+                    name: layer.common.name.clone(),
+                    visible: layer.common.visible,
+                    locked: layer.common.locked,
+                    opacity: layer.blend.opacity,
+                    blend_mode: layer.blend.blend_mode.type_id.to_string(),
+                    mask,
                 })
-            });
-            RichCopyMetadata {
-                name: layer.common.name.clone(),
-                visible: layer.common.visible,
-                locked: layer.common.locked,
-                opacity: layer.blend.opacity,
-                blend_mode: layer.blend.blend_mode.type_id.to_string(),
-                mask,
             }
+            // Mask modifier: copy pixels only, no rich metadata.
+            _ if self.doc.is_modifier(layer_id) => None,
+            // Groups / voids / unknown ids have no pixel-readback path here.
+            _ => return None,
         };
-        self.pending_rich_metadata = Some(meta);
+        self.pending_rich_metadata = meta;
 
         // Reuse the standard copy path for the pixel readback. When
         // `complete_copy` runs and finds `pending_rich_metadata` populated,

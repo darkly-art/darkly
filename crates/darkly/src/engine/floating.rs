@@ -2,7 +2,6 @@
 
 use super::rendering::commit_undo_region;
 use super::{DarklyEngine, PendingTransform};
-use crate::document::MoveTarget;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::transform::{Affine2D, ClearShape, FloatingContent, FloatingMode, IDENTITY};
 use crate::layer::{Layer, LayerId};
@@ -135,9 +134,12 @@ impl DarklyEngine {
             layer_bounds,
         );
 
-        if let Some(active_id) = active_layer_id {
-            self.doc.move_layer(new_id, MoveTarget::After(active_id));
-        }
+        // Position relative to the active node. `resolve_anchor_target` maps a
+        // modifier anchor (the active id while editing a mask) to its host, so
+        // the pasted layer lands as the host's sibling rather than nested under
+        // it — the same anchor resolution the document's `add_*` helpers use.
+        let target = self.doc.resolve_anchor_target(active_layer_id);
+        self.doc.move_layer(new_id, target);
 
         // Upload RGBA to floating source texture; the compositor renders it
         // as a preview overlay until commit.
