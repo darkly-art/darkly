@@ -62,7 +62,7 @@ impl DarklyEngine {
         // default to a sub-canvas host's bounds, smaller than the selection).
         if self.has_selection() {
             if let Some(src_id) = self.selection_modifier_id() {
-                self.grow_modifier_to_fit(mod_id, self.selection_seed_bounds());
+                self.grow_modifier(mod_id, self.selection_seed_bounds());
                 self.clone_modifier_pixels(src_id, mod_id);
             }
         }
@@ -117,6 +117,7 @@ impl DarklyEngine {
         }
         self.compositor.dispose_node_texture(mask_id);
         self.compositor.dispose_passthrough_mask_state(host_id);
+        self.compositor.dispose_projection_state(host_id);
         self.compositor.mark_dirty();
 
         let mut actions: Vec<Box<dyn UndoAction>> = Vec::new();
@@ -293,6 +294,7 @@ impl DarklyEngine {
         let detached = self.doc.detach_modifier_for_undo(mask_id).is_some();
         self.compositor.dispose_node_texture(mask_id);
         self.compositor.dispose_passthrough_mask_state(host_id);
+        self.compositor.dispose_projection_state(host_id);
         if detached {
             self.push_undo(Box::new(ModifierRemoveAction::new(mask_id, host_id)));
         }
@@ -321,7 +323,7 @@ impl DarklyEngine {
             None => return,
         };
         if let Some(src_id) = self.selection_modifier_id() {
-            self.grow_modifier_to_fit(mask_id, self.selection_seed_bounds());
+            self.grow_modifier(mask_id, self.selection_seed_bounds());
             self.clone_modifier_pixels(src_id, mask_id);
         }
         self.compositor.mark_node_pixels_dirty(mask_id);
@@ -369,52 +371,6 @@ impl DarklyEngine {
             Some(w) => w.to_canvas(self.doc.canvas_origin),
             None => self.doc.canvas_rect(),
         }
-    }
-
-    /// Grow a mask modifier's own bounds (doc `PixelBuffer.bounds` + GPU
-    /// texture) to cover `needed`, honoring `MAX_LAYER_DIM`. Document-led, same
-    /// shape as [`Self::grow_layer`] but for a modifier id growing *itself* — no
-    /// host coupling. Returns the new extent when grown, `None` otherwise.
-    ///
-    /// Stage A's inline grow path used by the selection-seeding callers so the
-    /// subsequent clone is lossless. (Stage B's `grow_modifier` adds a real undo
-    /// op and supersedes this.)
-    fn grow_modifier_to_fit(
-        &mut self,
-        mod_id: LayerId,
-        needed: crate::coord::CanvasRect,
-    ) -> Option<crate::coord::CanvasRect> {
-        use crate::gpu::compositor::{LAYER_GROWTH_CHUNK, MAX_LAYER_DIM};
-
-        let current = self
-            .doc
-            .find_modifier(mod_id)
-            .and_then(|m| m.pixels())
-            .map(|b| b.bounds)?;
-        if current.contains(needed) {
-            return None;
-        }
-        let new_extent = current.union(needed).round_outward(LAYER_GROWTH_CHUNK);
-        if new_extent.width > MAX_LAYER_DIM || new_extent.height > MAX_LAYER_DIM {
-            return None;
-        }
-
-        // Doc first — the modifier's `PixelBuffer` is the source of truth.
-        self.doc
-            .find_modifier_mut(mod_id)
-            .and_then(|m| m.pixels_mut())?
-            .bounds = new_extent;
-
-        self.gpu.encode("mask-grow", |encoder| {
-            self.compositor.resize_node_texture(
-                &self.gpu.device,
-                &self.gpu.queue,
-                encoder,
-                mod_id,
-                new_extent,
-            );
-        });
-        Some(new_extent)
     }
 
     /// GPU-to-GPU copy of one modifier's R8 pixel buffer into another's.

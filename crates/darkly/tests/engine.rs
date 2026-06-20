@@ -2685,19 +2685,18 @@ fn floating_preview_respects_layer_mask() {
 //
 // These tests defend the structural invariants of the modifier-node model:
 // the document model has no `has_mask` / `mask_enabled` / `show_mask`
-// booleans, masks are real nodes with their own `PixelBuffer`, lockstep
-// growth is a document-side operation, and the type system forbids ever
-// putting a `Modifier` into the regular tree.
+// booleans, masks are real nodes with their own `PixelBuffer`, a mask owns
+// and grows its bounds independently of its host (the mask-apply pass samples
+// it in its own space — no lockstep coupling), and the type system forbids
+// ever putting a `Modifier` into the regular tree.
 // ============================================================================
 
-/// Painting past the host's bounds grows the host texture and — because the
-/// mask is unlocked — grows the mask in lockstep so `host.bounds == mask.bounds`
-/// after the stroke. Defends the per-buffer-bounds invariant from §3 of the
-/// plan: the blend shader samples each `PixelBuffer` by its own bounds, and
-/// lockstep growth keeps the mask UV-coincident with the host without a
-/// special "shared UV" case.
+/// A mask owns its bounds independently of its host: growing the host (paint
+/// past the host's own edge) leaves the mask's bounds untouched. The de-fused
+/// mask-apply pass samples the mask in its own space, so there is no lockstep
+/// coupling — the host grows alone.
 #[test]
-fn mask_grows_in_lockstep_with_host_when_unlocked() {
+fn growing_host_leaves_mask_bounds_unchanged() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
     let layer_id = engine.add_raster_layer(None);
@@ -2712,12 +2711,14 @@ fn mask_grows_in_lockstep_with_host_when_unlocked() {
     let mask_before = engine
         .node_pixel_bounds(mask_id)
         .expect("mask modifier has bounds");
+    // Fresh mask defaults to the full canvas — coincident with a fresh
+    // canvas-sized host, but by independent default, not by coupling.
     assert_eq!(
-        host_before, mask_before,
-        "fresh mask must inherit the host's bounds"
+        mask_before, host_before,
+        "fresh mask defaults to the canvas (== a fresh canvas-sized host)"
     );
 
-    // Paint past the right edge to force a chunk-aligned growth of the host.
+    // Paint the HOST past its right edge → the host grows on its own.
     paint_at(
         &mut engine,
         layer_id,
@@ -2740,83 +2741,87 @@ fn mask_grows_in_lockstep_with_host_when_unlocked() {
         host_after.width,
     );
     assert_eq!(
-        host_after, mask_after,
-        "unlocked mask must follow the host's growth in lockstep — the doc \
-         operation in `grow_layer_to_extent` walks `host.modifiers` and \
-         resizes each non-locked one. host={host_after:?} mask={mask_after:?}"
-    );
-
-    // The newly-grown mask region must be unmasked (255) — the GPU resize
-    // clears new pixels to white per `resize_node_texture`, so the host's
-    // newly-grown extent samples through cleanly.
-    let mask_pixels = engine.test_readback_mask(layer_id);
-    let mask_w = mask_after.width;
-    let mask_h = mask_after.height;
-    assert_eq!(
-        mask_pixels.len(),
-        (mask_w * mask_h) as usize,
-        "mask byte count must match its grown bounds"
-    );
-    // Sample a pixel in the newly-grown column (just past the original right
-    // edge of the canvas, well clear of the brush dab footprint near
-    // (cw + 50, ch / 2)). Convert canvas coord → mask-local via origin.
-    let probe_canvas_x = cw as i32 + 1;
-    let probe_canvas_y = 4i32;
-    let local_x = (probe_canvas_x - mask_after.origin.x) as u32;
-    let local_y = (probe_canvas_y - mask_after.origin.y) as u32;
-    let probe = mask_pixels[(local_y * mask_w + local_x) as usize];
-    assert_eq!(
-        probe, 255,
-        "newly-grown mask region must default to fully-revealed (255); got {probe}"
+        mask_after, mask_before,
+        "the mask must NOT follow the host's growth — it owns its own bounds. \
+         host={host_after:?} mask before/after={mask_after:?}"
     );
 }
 
-/// A locked mask must NOT follow the host's growth. After the host grows,
-/// the mask's `PixelBuffer.bounds` is unchanged — the blend shader samples
-/// each buffer by its own bounds, so a diverged mask renders at its frozen
-/// position without any special-case shader code (§4 of the plan).
+/// Painting a mask past its own bounds grows the MASK independently — the host
+/// is untouched. Undoing the stroke restores the mask's pixels (growth is
+/// document-led, so the stroke's region undo covers it the same way raster
+/// grow does — and the newly-grown region restores to white, not black).
 #[test]
-fn locked_mask_does_not_follow_host_growth() {
-    let (cw, ch) = (256u32, 256u32);
+fn painting_mask_past_bounds_grows_mask_independently() {
+    use darkly::coord::CanvasRect;
+
+    let (cw, ch) = (128u32, 128u32);
     let mut engine = test_engine(cw, ch);
+    // Crop first (non-zero canvas_origin) so the frame math is exercised.
+    let (ox, oy) = (15i32, 9i32);
+    engine.resize_canvas(CanvasRect::from_xywh(ox, oy, cw, ch));
+
     let layer_id = engine.add_raster_layer(None);
     engine.add_mask(layer_id);
     let mask_id = engine.host_mask_id(layer_id).expect("mask exists");
 
-    let mask_bounds_before = engine.node_pixel_bounds(mask_id).expect("mask has bounds");
+    let host_before = engine.layer_bounds(layer_id).expect("host bounds");
+    let mask_before = engine.node_pixel_bounds(mask_id).expect("mask bounds");
 
-    // Lock the mask before growing the host.
-    engine.set_node_locked(mask_id, true);
+    // One stroke on the MASK: a first dab inside the bounds (so the pre-stroke
+    // undo snapshot is captured at the OLD extent), then a dab past the right
+    // edge (so the mask grows mid-stroke). This is the corruption-prone path —
+    // the grown region must enter the snapshot as white (255), not zero.
+    let black = |x: f32, y: f32| StrokeOp::BrushStroke {
+        x,
+        y,
+        pressure: 1.0,
+        x_tilt: 0.0,
+        y_tilt: 0.0,
+        rotation: 0.0,
+        tangential_pressure: 0.0,
+        time_ms: 0.0,
+        cr: 0.0,
+        cg: 0.0,
+        cb: 0.0,
+        ca: 1.0,
+    };
+    engine.begin_stroke(mask_id);
+    engine.stroke_to(black((ox + 30) as f32, (oy + 30) as f32));
+    engine.stroke_to(black(
+        (ox + cw as i32) as f32 + 40.0,
+        (oy + ch as i32 / 2) as f32,
+    ));
+    engine.end_stroke();
+    engine.render(0.0);
 
-    // Force a host growth.
-    paint_at(
-        &mut engine,
-        layer_id,
-        cw as f32 + 50.0,
-        ch as f32 / 2.0,
-        1.0,
-        0.0,
-        0.0,
-    );
-
-    let host_after = engine.layer_bounds(layer_id).expect("layer still exists");
-    let mask_after = engine.node_pixel_bounds(mask_id).expect("mask still here");
-
+    let host_after = engine.layer_bounds(layer_id).expect("host still exists");
+    let mask_after = engine
+        .node_pixel_bounds(mask_id)
+        .expect("mask still exists");
     assert!(
-        host_after.width > cw,
-        "test setup precondition: host should have grown past canvas"
+        mask_after.width > mask_before.width,
+        "mask must grow itself when painted past its bounds; before {} after {}",
+        mask_before.width,
+        mask_after.width,
     );
     assert_eq!(
-        mask_after, mask_bounds_before,
-        "locked mask must keep its original bounds; host={host_after:?} \
-         mask before/after={mask_after:?}"
+        host_after, host_before,
+        "host must NOT grow when only the mask is painted; host={host_after:?}"
     );
-    // The mask's GPU texture must still match its (unchanged) bounds.
+
+    // Undo the mask stroke — every readable mask pixel returns to white (the
+    // pre-stroke all-white state). A black pixel here would be the B4
+    // corruption: the grown region's pre-stroke default restored as 0.
+    engine.undo();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
     let mask_pixels = engine.test_readback_mask(layer_id);
-    assert_eq!(
-        mask_pixels.len(),
-        (mask_after.width * mask_after.height) as usize,
-        "locked mask GPU texture must match the unchanged bounds"
+    let darkest = mask_pixels.iter().copied().min().unwrap_or(255);
+    assert!(
+        darkest > 250,
+        "undo must restore the all-white mask (incl. the grown region); \
+         darkest pixel was {darkest}"
     );
 }
 
@@ -3184,7 +3189,9 @@ fn selection_to_sub_canvas_mask_covers_whole_selection() {
     engine.render(0.0);
 
     // Grow-to-union: the mask now covers the whole selection (the canvas).
-    let bounds = engine.node_pixel_bounds(mask_id).expect("mask still attached");
+    let bounds = engine
+        .node_pixel_bounds(mask_id)
+        .expect("mask still attached");
     assert!(
         bounds.contains(canvas),
         "mask must have grown to cover the whole selection; mask={bounds:?} canvas={canvas:?}"
@@ -3233,6 +3240,63 @@ fn mask_to_selection_from_sub_canvas_mask_does_not_crash() {
     assert!(
         engine.has_selection(),
         "mask_to_selection must activate the selection without crashing"
+    );
+}
+
+/// A masked leaf composites through the de-fused projection + `apply_mask`
+/// path: the host content drops into its own window-sized projection, the mask
+/// modulates that projection's alpha (sampled in the mask's own space), and the
+/// result blends down — never sampling the host's texture/geometry. Output must
+/// match the fused result: painted-black mask region hides the host; the rest
+/// reveals it. Cropped first (non-zero `canvas_origin`) so the window→plane→
+/// mask-local frame math is exercised.
+#[test]
+fn masked_leaf_composites_through_projection_cropped() {
+    use darkly::coord::CanvasRect;
+
+    let (cw, ch) = (64u32, 64u32);
+    let mut engine = test_engine(cw, ch);
+    let (ox, oy) = (20i32, 16i32);
+    engine.resize_canvas(CanvasRect::from_xywh(ox, oy, cw, ch));
+
+    let layer_id = engine.add_raster_layer(None);
+    // Flood the host opaque green (seed inside the cropped host bounds).
+    engine.begin_stroke(layer_id);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: (ox + 1) as f32,
+        y: (oy + 1) as f32,
+        r: 0,
+        g: 255,
+        b: 0,
+        a: 255,
+        tolerance: 255,
+    });
+    engine.end_stroke();
+    engine.render(0.0);
+
+    engine.add_mask(layer_id);
+    // Black dab on the mask near the window's top-left → hides the host there.
+    paint_mask_dab(
+        &mut engine,
+        layer_id,
+        (ox + 12) as f32,
+        (oy + 12) as f32,
+        0.0,
+    );
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let canvas = engine.test_readback_canvas();
+    // Window-local sampling: the dab center is hidden, a far corner reveals.
+    let hidden = rgba_at(&canvas, cw, 12, 12);
+    let shown = rgba_at(&canvas, cw, cw - 3, ch - 3);
+    assert!(
+        hidden[3] < 40,
+        "mask-painted region must hide the host (low alpha); got {hidden:?}"
+    );
+    assert!(
+        shown[1] > 200 && shown[3] > 200,
+        "unmasked region must show opaque green through the projection; got {shown:?}"
     );
 }
 

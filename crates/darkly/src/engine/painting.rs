@@ -459,7 +459,9 @@ impl DarklyEngine {
             (HALF as u32) * 2,
         );
 
-        let new_extent = match self.grow_layer(layer_id, needed) {
+        // Grow the stroke target itself — raster grows the raster, a mask
+        // stroke grows the mask (no host coupling).
+        let new_extent = match self.grow_node_to_fit(layer_id, needed) {
             Some(e) => e,
             None => return,
         };
@@ -526,26 +528,82 @@ impl DarklyEngine {
         }
     }
 
-    /// Grow whichever raster layer owns `node_id` to cover `needed`.
+    /// Grow whichever pixel-bearing node `node_id` names to cover `needed`,
+    /// each growing **itself** — no host coupling.
     ///
-    /// - If `node_id` is a raster layer, grows it directly.
-    /// - If `node_id` is a modifier (e.g. a mask), grows its host raster —
-    ///   which lockstep-grows the modifier alongside it.
+    /// - A raster layer grows its own bounds + texture ([`Self::grow_layer`]).
+    /// - A modifier (e.g. a mask) grows its own bounds + texture
+    ///   ([`Self::grow_modifier`]); the host is untouched.
     ///
-    /// Lets callers that hold a generic node id (transform commit, paste
-    /// commit) request growth without first disambiguating between raster
-    /// and modifier ids.
+    /// Lets callers that hold a generic node id (stroke target, transform
+    /// commit, paste commit) request growth without first disambiguating
+    /// between raster and modifier ids.
     pub(crate) fn grow_node_to_fit(
         &mut self,
         node_id: crate::layer::LayerId,
         needed: crate::coord::CanvasRect,
     ) -> Option<crate::coord::CanvasRect> {
-        let target_id = if self.doc.is_modifier(node_id) {
-            self.doc.parent_of(node_id)?
+        if self.doc.is_modifier(node_id) {
+            self.grow_modifier(node_id, needed)
         } else {
-            node_id
-        };
-        self.grow_layer(target_id, needed)
+            self.grow_layer(node_id, needed)
+        }
+    }
+
+    /// Grow a modifier's own pixel buffer (doc `PixelBuffer.bounds` + GPU
+    /// texture) to cover `needed`, honoring `MAX_LAYER_DIM`. Document-led, the
+    /// modifier analogue of [`Self::grow_layer`] — the modifier grows itself,
+    /// fully decoupled from its host. Returns `Some(new_extent)` when grown.
+    ///
+    /// Growth is document-led (doc bounds and GPU texture move together), so
+    /// the stroke's region undo restores painted pixels with the same
+    /// constant-extent path raster grow uses — no separate bounds-undo op.
+    pub(crate) fn grow_modifier(
+        &mut self,
+        mod_id: LayerId,
+        needed: crate::coord::CanvasRect,
+    ) -> Option<crate::coord::CanvasRect> {
+        use crate::gpu::compositor::{LAYER_GROWTH_CHUNK, MAX_LAYER_DIM};
+
+        let current = self
+            .doc
+            .find_modifier(mod_id)
+            .and_then(|m| m.pixels())
+            .map(|b| b.bounds)?;
+        if current.contains(needed) {
+            return None;
+        }
+        let new_extent = current.union(needed).round_outward(LAYER_GROWTH_CHUNK);
+        if new_extent.width > MAX_LAYER_DIM || new_extent.height > MAX_LAYER_DIM {
+            if !self.layer_growth_capped {
+                self.layer_growth_capped = true;
+                log::warn!(
+                    "Modifier {:?} growth refused: requested {}×{} exceeds MAX_LAYER_DIM ({})",
+                    mod_id,
+                    new_extent.width,
+                    new_extent.height,
+                    MAX_LAYER_DIM,
+                );
+            }
+            return None;
+        }
+
+        // Doc first — the modifier's `PixelBuffer` is the source of truth.
+        self.doc
+            .find_modifier_mut(mod_id)
+            .and_then(|m| m.pixels_mut())?
+            .bounds = new_extent;
+
+        self.gpu.encode("modifier-grow", |encoder| {
+            self.compositor.resize_node_texture(
+                &self.gpu.device,
+                &self.gpu.queue,
+                encoder,
+                mod_id,
+                new_extent,
+            );
+        });
+        Some(new_extent)
     }
 
     /// Grow a raster layer's bounds to cover `needed` (canvas-space).
@@ -598,25 +656,10 @@ impl DarklyEngine {
         // Encoder discipline: the resize must run in its own encoder,
         // submitted before any subsequent dab dispatch can start a new
         // encoder against the new texture. `gpu.encode` already does
-        // one-encoder-per-call.
-        // Lockstep growth: collect mask-modifier ids of this host that
-        // share the host's UV space (i.e. non-locked) and grow them in the
-        // same encoder. Locked modifiers stay at their old extent — the
-        // shader samples each `PixelBuffer` via its own bounds, so a
-        // diverged modifier just renders at its frozen position.
-        let lockstep_ids: Vec<LayerId> = self
-            .doc
-            .modifiers_of(layer_id)
-            .iter()
-            .copied()
-            .filter(|mid| {
-                self.doc
-                    .find_modifier(*mid)
-                    .map(|m| !m.common.locked && m.pixels().is_some())
-                    .unwrap_or(false)
-            })
-            .collect();
-
+        // one-encoder-per-call. A mask is no longer grown in lockstep — it
+        // owns its bounds and grows itself (`grow_modifier`); the mask-apply
+        // pass samples it in its own space, so a divergent mask renders
+        // correctly without any shared-UV coupling.
         self.gpu.encode("layer-grow", |encoder| {
             self.compositor.resize_node_texture(
                 &self.gpu.device,
@@ -625,27 +668,7 @@ impl DarklyEngine {
                 layer_id,
                 new_extent,
             );
-            for mod_id in &lockstep_ids {
-                self.compositor.resize_node_texture(
-                    &self.gpu.device,
-                    &self.gpu.queue,
-                    encoder,
-                    *mod_id,
-                    new_extent,
-                );
-            }
         });
-
-        // Sync each lockstep modifier's document `PixelBuffer.bounds` to
-        // match its newly-grown GPU texture. The compositor is the realization;
-        // the document is the source of truth — both must agree post-resize.
-        for mod_id in &lockstep_ids {
-            if let Some(modifier) = self.doc.find_modifier_mut(*mod_id) {
-                if let Some(buf) = modifier.pixels_mut() {
-                    buf.bounds = new_extent;
-                }
-            }
-        }
 
         // Refresh the blend-uniform buffer so the composite pass sees the
         // new offset/size on the next render.

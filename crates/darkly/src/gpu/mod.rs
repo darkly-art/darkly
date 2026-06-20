@@ -22,6 +22,7 @@ pub fn clear_view_transparent(
     });
 }
 
+pub mod apply_mask;
 pub mod atlas;
 pub mod blend;
 pub mod blend_mode;

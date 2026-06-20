@@ -247,6 +247,24 @@ impl RegionScratch {
                 let encoder = encoder_opt
                     .as_deref_mut()
                     .expect("do_copy implies encoder present");
+                // Clear the whole new texture to the format's pre-stroke default
+                // first (white for an R8 mask, transparent otherwise); the copy
+                // below then overwrites the preserved region, leaving the newly-
+                // grown area at its correct default rather than zero (black).
+                let new_view = new_tex.create_view(&wgpu::TextureViewDescriptor::default());
+                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("scratch-grow-clear"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &new_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(Self::scratch_default_clear(format)),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
                 encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: field,
@@ -814,9 +832,23 @@ impl RegionScratch {
             format,
             usage: wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::TEXTURE_BINDING,
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                // RENDER_ATTACHMENT so a grow can clear the newly-added region
+                // to the format's default before the old content is copied in.
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         })
+    }
+
+    /// The pre-stroke value a freshly-grown region of a scratch texture holds,
+    /// mirroring the live texture's default fill: R8 masks default to white
+    /// (255 = reveal), everything else to transparent/zero. Getting this wrong
+    /// for an R8 mask corrupts undo — the grown region would restore to black.
+    fn scratch_default_clear(format: wgpu::TextureFormat) -> wgpu::Color {
+        match format {
+            wgpu::TextureFormat::R8Unorm => wgpu::Color::WHITE,
+            _ => wgpu::Color::TRANSPARENT,
+        }
     }
 }
 
