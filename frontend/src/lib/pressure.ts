@@ -1,19 +1,36 @@
-/** Effective pen pressure for a PointerEvent, normalised so pressure-driven
- *  brush dynamics (size, flow) never collapse on devices without a force
- *  sensor.
+/** Whether a device of a given `pointerType` has proven, this session, that it
+ *  carries a real force sensor.
  *
- *  Only a stylus carries a real force sensor. Mouse reports the W3C spec
- *  default of 0.5 (a "split the difference" value for generic gesture
- *  surfaces). Finger-touch — and a stylus on engines that don't surface
- *  force through PointerEvents (notably iOS Safari) — reports 0. A raw 0
- *  there means "no sensor", not "no pressure": brushes that wire pressure
- *  into size or flow (e.g. the Round and Smudge presets) would shrink every
- *  dab to the sub-pixel radius floor and vanish. So treat any non-stylus
- *  input, or a zero reading, as full pressure — matching Krita, Photoshop,
- *  GIMP, and MyPaint, which all override mouse to full pressure for the same
- *  reason. A real stylus with a positive reading keeps its true value so
- *  pressure dynamics still work.
+ *  The web platform exposes no capability flag — only the pressure value, which
+ *  is ambiguous. For sensorless hardware the Pointer Events spec emits 0.5
+ *  while a button is held and 0 otherwise, and 1.0 is an unremarkable full
+ *  press. So a reading that is none of {0, 0.5, 1.0} is the first proof the
+ *  device actually measures force. Until that proof arrives the input reads as
+ *  full pressure (so brushes that wire pressure into size/flow don't collapse
+ *  every dab to the sub-pixel radius floor); once it arrives, the device's
+ *  values — including genuine zeros — are trusted verbatim for the rest of the
+ *  session. Keyed by `pointerType` because one session can mix devices (e.g. a
+ *  pressure pen and a sensorless touchscreen), and proving one must not make
+ *  the other start trusting its zeros.
  */
+const pressureCapable: Record<string, boolean> = {};
+
+/** Pressure values the spec emits for sensorless hardware (plus a plain full
+ *  press), so seeing one proves nothing about whether a sensor exists. */
+const PLACEHOLDER_PRESSURES = new Set([0, 0.5, 1.0]);
+
+/** Effective pressure for a PointerEvent. Returns the device's real reading
+ *  once it has proven it carries a force sensor; full pressure until then.
+ *  Pinning sensorless input to full matches Krita, Photoshop, GIMP, MyPaint. */
 export function effectivePressure(e: PointerEvent): number {
-    return e.pointerType === 'pen' && e.pressure > 0 ? e.pressure : 1.0;
+    if (!pressureCapable[e.pointerType] && !PLACEHOLDER_PRESSURES.has(e.pressure)) {
+        pressureCapable[e.pointerType] = true;
+    }
+    return pressureCapable[e.pointerType] ? e.pressure : 1.0;
+}
+
+/** Clear the learned per-`pointerType` capability. Test-only — a real session
+ *  never needs to un-learn a sensor. */
+export function resetPressureCapability(): void {
+    for (const key of Object.keys(pressureCapable)) delete pressureCapable[key];
 }

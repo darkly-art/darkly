@@ -58,14 +58,13 @@ export interface PenPose {
     tangentialPressure: number;
 }
 
-/** Pose for the on-canvas cursor preview. Tracks the live PointerEvent
- *  pressure (with mouse overridden to full per [`effectivePressure`])
- *  so the cursor circle reflects what a dab at this pose would
- *  actually look like — pressure-driven dynamics included. The resize
+/** Pose for the on-canvas cursor preview. Pressure is pinned to full so the
+ *  circle shows the brush's reach — a hovering pen reports 0, and the preview
+ *  isn't a live dab. Tilt and twist still track the live event. The resize
  *  scrub uses the same pose, keeping cursor and stroke in lockstep. */
 export function cursorPose(e: PointerEvent): PenPose {
     return {
-        pressure: effectivePressure(e),
+        pressure: 1.0,
         tiltX: (e.tiltX ?? 0) / 90,
         tiltY: (e.tiltY ?? 0) / 90,
         twist: (e.twist ?? 0) / 360,
@@ -92,8 +91,8 @@ let hoverGen = 0;
 
 /** Refresh the on-canvas brush cursor preview at `(cx, cy)` using the
  *  given pose. Exported so non-brush callers (e.g. the shift+drag size
- *  scrub, which uses `FULL_PRESS_POSE` so the circle shows the brush's
- *  max extent) can keep the preview in sync after mutating the graph. */
+ *  scrub, which uses `cursorPose` so the circle shows the brush's full
+ *  extent) can keep the preview in sync after mutating the graph. */
 export async function pushHoverOverlay(engine: Engine, pose: PenPose, cx: number, cy: number) {
     const gen = hoverGen;
     const info = (await engine.send('refresh_brush_cursor_preview', {
