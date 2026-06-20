@@ -14,6 +14,7 @@
     import ConfirmDiscardModal from './ui/ConfirmDiscardModal.svelte';
     import RecoveryModal from './ui/RecoveryModal.svelte';
     import AboutModal from './ui/AboutModal.svelte';
+    import PointerHud from './ui/PointerHud.svelte';
     import MenuBar from './ui/menu/MenuBar.svelte';
     import CommandPalette from './ui/menu/CommandPalette.svelte';
     import { menuBar } from './state/menuBar.svelte';
