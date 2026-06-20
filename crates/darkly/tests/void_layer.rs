@@ -583,3 +583,38 @@ fn noise_void_transform_changes_output() {
         "transforming a noise void must scale/pan the field in the output",
     );
 }
+
+/// Regression: the camera void's persistent frame (its last received webcam
+/// frame) must survive save → load. The save flow reads the void's aux
+/// texture back with `copy_texture_to_buffer`, which requires the texture to
+/// carry `COPY_SRC`; the frame texture was created without it, so the readback
+/// was a wgpu validation error and the frame silently never reached the
+/// `.darkly` — the layer reopened black. This plants a known frame through
+/// `restore_void_pixels` (the load entry point) and reads it back exactly the
+/// way `queue_pixel_readback` does at save time.
+#[test]
+fn camera_void_frame_round_trips_through_save_readback() {
+    let mut engine = test_engine(64, 64);
+    let cam = engine
+        .add_void_layer("camera", camera_defaults(&engine), None)
+        .expect("camera void should be addable");
+
+    // A known 4×4 RGBA pattern stands in for a captured webcam frame.
+    let (w, h) = (4u32, 4u32);
+    let known: Vec<u8> = (0..(w * h))
+        .flat_map(|i| {
+            let v = (i * 16) as u8;
+            [v, 255 - v, 128, 255]
+        })
+        .collect();
+
+    engine.test_plant_void_frame(cam, w, h, &known);
+
+    let read_back = engine
+        .test_readback_void_frame(cam)
+        .expect("camera void with a planted frame must surface pixel data for save");
+    assert_eq!(
+        read_back, known,
+        "the camera void's persistent frame must read back byte-for-byte through the save path",
+    );
+}

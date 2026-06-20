@@ -322,10 +322,13 @@ fn make_frame_texture(device: &wgpu::Device, w: u32, h: u32) -> (wgpu::Texture, 
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
         // RENDER_ATTACHMENT is required by `copy_external_image_to_texture`
-        // per the WebGPU spec; TEXTURE_BINDING for shader sampling;
-        // COPY_DST for the texel copy fallback path.
+        // per the WebGPU spec; TEXTURE_BINDING for shader sampling; COPY_DST
+        // for live frame uploads and the load-time restore; COPY_SRC so the
+        // save flow can read this persistent frame back (the readback's
+        // `copy_texture_to_buffer` is a validation error without it).
         usage: wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
