@@ -94,6 +94,67 @@ pub fn registrations() -> Vec<RequestRegistration> {
             },
         },
         RequestRegistration {
+            kind: "update_void_transform",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                struct Req {
+                    layer_id: u64,
+                    #[serde(default)]
+                    mode_tag: u32,
+                    payload: Vec<f32>,
+                }
+                let r: Req = decode(payload)?;
+                let id = LayerId::from_ffi(r.layer_id);
+                // Basic mode (tag 0) carries the 6 affine components. Unknown
+                // modes / short payloads are ignored (no-op).
+                if r.mode_tag == 0 && r.payload.len() >= 6 {
+                    let t = crate::transform::Transform::from_affine([
+                        r.payload[0],
+                        r.payload[1],
+                        r.payload[2],
+                        r.payload[3],
+                        r.payload[4],
+                        r.payload[5],
+                    ]);
+                    engine.update_void_transform(id, t);
+                }
+                Ok(Response::empty())
+            },
+        },
+        RequestRegistration {
+            kind: "void_transform_info",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                struct Req {
+                    layer_id: u64,
+                }
+                let r: Req = decode(payload)?;
+                let id = LayerId::from_ffi(r.layer_id);
+                let value = match engine.void_transform_info(id) {
+                    Some((ox, oy, w, h, t)) => json!({
+                        "ox": ox, "oy": oy, "w": w, "h": h,
+                        "mode": t.mode_tag(), "matrix": t.to_affine(),
+                    }),
+                    None => serde_json::Value::Null,
+                };
+                Ok(Response::json(value))
+            },
+        },
+        RequestRegistration {
+            kind: "layer_transform_capability",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                struct Req {
+                    layer_id: u64,
+                }
+                let r: Req = decode(payload)?;
+                let id = LayerId::from_ffi(r.layer_id);
+                Ok(Response::json(
+                    json!({ "value": engine.layer_transform_capability(id) }),
+                ))
+            },
+        },
+        RequestRegistration {
             kind: "remove_layer",
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]

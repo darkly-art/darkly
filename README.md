@@ -117,7 +117,7 @@ For a feature to count, it must be:
 - [x] Clipboard copy / cut / paste (PNG via browser clipboard)
 
 ### Important — expected for serious work
-- [x] Affine transform tool (translate / scale / rotate via floating content)
+- [x] Generic transform tool (translate / scale / rotate gizmo — floating content + transformable voids)
 - [x] Merge down
 - [x] Duplicate layer / group
 - [x] Crop to selection
@@ -159,7 +159,7 @@ For a feature to count, it must be:
 - [x] Veils (stackable viewport post-process effects: frozen, grain, lens blur, monochrome, painting, pixelate, rainy glass, VHS, watercolor)
 - [x] Veil picker with live animated previews
 - [x] Void layers (domain‑warped FBM noise)
-- [x] Camera void (live webcam with scale / rotation / pan)
+- [x] Camera void (live webcam, positioned with the on-canvas transform gizmo)
 - [x] Group blend mode / opacity (isolated + passthrough compositing)
 - [ ] Brush save/load + editable nodes/wires (e.g. YAML)
 - [ ] Recent files

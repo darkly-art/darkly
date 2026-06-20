@@ -1467,21 +1467,15 @@ impl Compositor {
     /// `pixel_data_for` hides that asymmetry so callers (save readback,
     /// future readers) don't need to know.
     pub fn pixel_data_for(&self, node_id: LayerId) -> Option<PixelDataRef<'_>> {
-        if let Some(t) = self.node_textures.get(&node_id) {
-            let ext = t.layer_extent();
-            return Some(PixelDataRef {
-                texture: t.texture(),
-                format: t.format(),
-                width: ext.width,
-                height: ext.height,
-            });
-        }
-        // Persistent void textures (camera void's last frame, etc.) live
-        // on the void's own EffectCache rather than in `node_textures` —
-        // they're not canvas-sized and don't participate in the standard
-        // raster blend at that resolution. Surface them here so the save
-        // flow's `queue_pixel_readback` sees a uniform lookup, no kind
-        // discrimination at the call site.
+        // A void's *persistent* frame (camera void's last webcam frame, at its
+        // native resolution) lives on the void's EffectCache, not in
+        // `node_textures`. A void also has a canvas-sized `node_textures`
+        // entry — its composited output for the blend — so this branch must
+        // come FIRST: that texture is the wrong thing to save (wrong content,
+        // wrong resolution), and only a void that declares a persistent frame
+        // reaches here at all (procedural voids return `None` and fall
+        // through). Without this ordering the save reads back the composited
+        // output and the camera frame is lost on reload.
         if let Some(proc) = self.procedural_content(node_id) {
             if let Some((w, h)) = proc.void.persistent_frame_size() {
                 if let Some(tex) = proc.cache.aux_textures.first() {
@@ -1493,6 +1487,15 @@ impl Compositor {
                     });
                 }
             }
+        }
+        if let Some(t) = self.node_textures.get(&node_id) {
+            let ext = t.layer_extent();
+            return Some(PixelDataRef {
+                texture: t.texture(),
+                format: t.format(),
+                width: ext.width,
+                height: ext.height,
+            });
         }
         if let Some(sel) = self.selection_state.as_ref() {
             if sel.modifier_id == node_id {
@@ -1869,6 +1872,35 @@ impl Compositor {
         };
         proc.void.update_params(queue, &proc.cache, params);
         self.mark_dirty();
+    }
+
+    /// Apply a void's user transform in place. Sibling of
+    /// [`Self::update_void_layer_params`]: delegates to [`Void::set_transform`],
+    /// which rewrites the uniform without rebuilding (preserving any aux
+    /// textures, e.g. the camera's live frame). No-op for non-procedural or
+    /// non-transform-aware voids.
+    pub fn update_void_layer_transform(
+        &mut self,
+        queue: &wgpu::Queue,
+        layer_id: LayerId,
+        transform: &crate::transform::Transform,
+    ) {
+        let Some(proc) = self.procedural_content_mut(layer_id) else {
+            return;
+        };
+        proc.void.set_transform(queue, &proc.cache, transform);
+        self.mark_dirty();
+    }
+
+    /// The void's active-pixel bbox in WINDOW-LOCAL coords, via
+    /// [`Void::content_extent`]. Canvas-filling for most voids; the cover-fit
+    /// rect for the camera. `None` if `layer_id` isn't a realized void.
+    pub fn void_content_extent(&self, layer_id: LayerId) -> Option<(f32, f32, f32, f32)> {
+        let proc = self.procedural_content(layer_id)?;
+        Some(
+            proc.void
+                .content_extent(self.canvas_width, self.canvas_height),
+        )
     }
 
     /// Push a fresh external image frame (webcam, screenshare, …) into a

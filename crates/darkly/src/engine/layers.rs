@@ -223,6 +223,85 @@ impl DarklyEngine {
         ));
     }
 
+    /// Set a void layer's user transform (the void *consuming* the generic
+    /// transform gizmo's output). Mirrors [`Self::update_void_params`]:
+    /// reads the layer's CURRENT transform as the undo `old_value` before
+    /// writing, so a whole gizmo drag coalesces into one undo step that
+    /// restores the true pre-drag state — never identity.
+    pub fn update_void_transform(
+        &mut self,
+        layer_id: LayerId,
+        new_transform: crate::transform::Transform,
+    ) {
+        if !self.doc.is_node_editable(layer_id) {
+            return;
+        }
+        let old_transform = match self.doc.find_node(layer_id) {
+            Some(LayerNode::Layer(Layer::Void(v))) => v.transform,
+            _ => return,
+        };
+        if let Some(LayerNode::Layer(Layer::Void(v))) = self.doc.find_node_mut(layer_id) {
+            v.transform = new_transform;
+        }
+        self.compositor
+            .update_void_layer_transform(&self.gpu.queue, layer_id, &new_transform);
+        self.compositor.mark_dirty();
+
+        self.coalesce_property_undo(PropertyAction::new(
+            layer_id,
+            Property::Transform(old_transform),
+            Property::Transform(new_transform),
+        ));
+    }
+
+    /// Read a void layer's current transform + the gizmo bbox to draw around
+    /// its active pixels. Returns `(origin_x, origin_y, w, h, transform)` in
+    /// PLANE space. The bbox is the void's [`crate::gpu::void::Void::content_extent`]
+    /// (canvas-filling for most voids, the cover-fit rect for the camera —
+    /// which extends beyond the canvas), lifted from window-local to plane by
+    /// adding `canvas_origin` so it sits correctly even after a crop. Falls
+    /// back to the canvas rect if the void instance isn't realized yet.
+    /// `None` if `layer_id` isn't a void.
+    pub fn void_transform_info(
+        &self,
+        layer_id: LayerId,
+    ) -> Option<(f32, f32, f32, f32, crate::transform::Transform)> {
+        let transform = match self.doc.find_node(layer_id) {
+            Some(LayerNode::Layer(Layer::Void(v))) => v.transform,
+            _ => return None,
+        };
+        let rect = self.doc.canvas_rect();
+        let (ox, oy, w, h) = self.compositor.void_content_extent(layer_id).unwrap_or((
+            0.0,
+            0.0,
+            rect.width as f32,
+            rect.height as f32,
+        ));
+        Some((
+            rect.origin.x as f32 + ox,
+            rect.origin.y as f32 + oy,
+            w,
+            h,
+            transform,
+        ))
+    }
+
+    /// How the user may transform a layer — `live` / `destructive` / `none`.
+    /// Resolves the void's static capability through the compositor-owned
+    /// registry. Returned as a stable string for the WASM boundary.
+    pub fn layer_transform_capability(&self, layer_id: LayerId) -> &'static str {
+        use crate::layer::TransformCapability;
+        let cap = match self.doc.find_node(layer_id) {
+            Some(LayerNode::Layer(l)) => l.transform_capability(self.compositor.void_registry()),
+            _ => TransformCapability::None,
+        };
+        match cap {
+            TransformCapability::Live => "live",
+            TransformCapability::Destructive => "destructive",
+            TransformCapability::None => "none",
+        }
+    }
+
     /// Hand a fresh external image frame to a void's input texture.
     /// Wraps [`crate::gpu::compositor::Compositor::upload_void_external_image`];
     /// no-ops if `layer_id` isn't a void or the void doesn't consume external

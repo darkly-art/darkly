@@ -85,6 +85,7 @@ export type RequestKind =
     | 'is_dirty'
     | 'last_picked_color'
     | 'layer_kind_types'
+    | 'layer_transform_capability'
     | 'layer_tree'
     | 'mark_dirty'
     | 'mask_to_selection'
@@ -151,8 +152,10 @@ export type RequestKind =
     | 'update_floating_matrix'
     | 'update_veil'
     | 'update_void_params'
+    | 'update_void_transform'
     | 'veil_list'
     | 'veil_types'
+    | 'void_transform_info'
     | 'void_types'
     ;
 
@@ -240,6 +243,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'is_dirty',
     'last_picked_color',
     'layer_kind_types',
+    'layer_transform_capability',
     'layer_tree',
     'mark_dirty',
     'mask_to_selection',
@@ -306,7 +310,9 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'update_floating_matrix',
     'update_veil',
     'update_void_params',
+    'update_void_transform',
     'veil_list',
     'veil_types',
+    'void_transform_info',
     'void_types',
 ] as const;

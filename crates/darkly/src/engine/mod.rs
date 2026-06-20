@@ -806,6 +806,47 @@ impl DarklyEngine {
         )
     }
 
+    /// Plant a persistent void frame (camera void's last webcam frame) into
+    /// the void's aux texture — the same entry point the load path uses via
+    /// `restore_void_pixels`. For test assertions only: on native there is no
+    /// webcam, so this is the only way to give a camera void a frame to read
+    /// back.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_plant_void_frame(
+        &mut self,
+        layer_id: LayerId,
+        width: u32,
+        height: u32,
+        bytes: &[u8],
+    ) {
+        self.compositor.restore_void_pixels(
+            &self.gpu.device,
+            &self.gpu.queue,
+            layer_id,
+            width,
+            height,
+            bytes,
+        );
+    }
+
+    /// Blocking readback of a void layer's persistent frame through the exact
+    /// `pixel_data_for` path the save flow uses (`queue_pixel_readback`). For
+    /// test assertions only. Returns `None` when the void declares no
+    /// persistent frame. This is the readback the camera void's aux texture
+    /// must support — it requires `COPY_SRC` on that texture.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_readback_void_frame(&self, layer_id: LayerId) -> Option<Vec<u8>> {
+        let data = self.compositor.pixel_data_for(layer_id)?;
+        Some(crate::gpu::test_utils::readback_texture(
+            &self.gpu.device,
+            &self.gpu.queue,
+            data.texture,
+            data.format,
+            data.width,
+            data.height,
+        ))
+    }
+
     /// Blocking readback of the root composited canvas. For test assertions
     /// only. Returns canvas-sized RGBA8 pixels (padding excluded). Forces an
     /// offscreen composite first because headless `render()` skips the

@@ -45,6 +45,10 @@ struct VoidBody {
     /// declares them. Variant identity (`Int` vs `Float`) round-trips via
     /// the regression-tested `#[serde(untagged)]` ordering in `ParamValue`.
     params: Vec<ParamValue>,
+    /// User transform (gizmo-edited pan / scale / rotate). `#[serde(default)]`
+    /// so procedural voids and pre-transform saves load as identity.
+    #[serde(default)]
+    transform: crate::transform::Transform,
     #[serde(default)]
     modifiers: Vec<u64>,
     /// Optional persistent frame for voids that consume external input
@@ -80,6 +84,7 @@ fn serialize(node: &LayerNode) -> SerializedEntity {
         blend_mode: v.blend.blend_mode.type_id.to_string(),
         void_type: v.void_type.clone(),
         params: v.params.clone(),
+        transform: v.transform,
         modifiers: v.modifiers.iter().map(|m| m.to_ffi()).collect(),
         pixels: v.frame.clone(),
     };
@@ -124,6 +129,7 @@ fn deserialize(body: &serde_json::Value, id: LayerId) -> Result<LayerNode, LoadE
         },
         void_type: body.void_type,
         params: body.params,
+        transform: body.transform,
         modifiers: body.modifiers.into_iter().map(LayerId::from_ffi).collect(),
         frame: body.pixels,
     })))
@@ -256,6 +262,56 @@ mod tests {
             _ => panic!("deserialize must yield a Void layer"),
         };
         assert_eq!(v_after.frame, Some(frame));
+    }
+
+    /// A non-identity void transform (gizmo-edited camera) must survive the
+    /// wire format. Regression for the live-transform feature: without the
+    /// `transform` field on `VoidBody` the gizmo edit would silently reset to
+    /// identity on reload.
+    #[test]
+    fn void_transform_round_trips() {
+        let mut doc = Document::new(64, 64);
+        let id = doc.add_void_layer("camera".to_string(), "Camera", Vec::new(), None);
+        let t = crate::transform::Transform::from_affine([2.0, 0.5, 10.0, -0.25, 1.5, -20.0]);
+        if let Some(LayerNode::Layer(Layer::Void(v))) = doc.find_node_mut(id) {
+            v.transform = t;
+        }
+
+        let reg = register();
+        let serialized = (reg.serialize)(doc.find_node(id).expect("void exists"));
+        let restored = (reg.deserialize)(&serialized.body, id).expect("deserialize must succeed");
+        let v_after = match &restored {
+            LayerNode::Layer(Layer::Void(v)) => v,
+            _ => panic!("deserialize must yield a Void layer"),
+        };
+        assert_eq!(
+            v_after.transform, t,
+            "non-identity transform must round-trip"
+        );
+    }
+
+    /// Old saves (and procedural voids) with no `transform` field load as
+    /// identity rather than failing — `#[serde(default)]`.
+    #[test]
+    fn void_missing_transform_defaults_to_identity() {
+        let reg = register();
+        let body = serde_json::json!({
+            "name": "n",
+            "visible": true,
+            "locked": false,
+            "opacity": 1.0,
+            "blend_mode": blend_mode::registry().default().type_id,
+            "void_type": "noise",
+            "params": [],
+            "modifiers": []
+        });
+        let id = Document::new(8, 8).root_id();
+        let restored = (reg.deserialize)(&body, id).expect("deserialize must succeed");
+        let v = match &restored {
+            LayerNode::Layer(Layer::Void(v)) => v,
+            _ => panic!("expected void"),
+        };
+        assert_eq!(v.transform, crate::transform::Transform::identity());
     }
 
     /// A void without a frame (the normal noise void, or a freshly-added

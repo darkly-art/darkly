@@ -34,6 +34,11 @@ struct Params {
     // produces the same feature size in the final output at any aux scale.
     canvas_scale: f32,
     _pad0: f32,
+    // Inverse of the user transform's affine (rows [a, b, tx, _]). Applied to
+    // the canvas-space coordinate so the field pans / scales / rotates with the
+    // gizmo. Identity when untransformed.
+    inv_row0: vec4f,
+    inv_row1: vec4f,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -48,8 +53,15 @@ const Z_SCALE: f32 = 0.15;
 
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // FragCoord is in render-target pixels; scale to canvas space so the
-    // FBM domain is independent of aux-texture resolution.
-    let xy = in.position.xy * params.canvas_scale * params.frequency;
+    // FBM domain is independent of aux-texture resolution. The noise content
+    // rect is the canvas (content_origin = 0), so canvas px == content-local.
+    let canvas_px = in.position.xy * params.canvas_scale;
+    // Apply the inverse user transform so the field tracks the gizmo.
+    let tp = vec2f(
+        params.inv_row0.x * canvas_px.x + params.inv_row0.y * canvas_px.y + params.inv_row0.z,
+        params.inv_row1.x * canvas_px.x + params.inv_row1.y * canvas_px.y + params.inv_row1.z,
+    );
+    let xy = tp * params.frequency;
     let p = vec3f(xy, params.time * Z_SCALE);
 
     let v = fbm_warp3(p, params.seed, params.octaves, LACUNARITY, GAIN, params.warp);
