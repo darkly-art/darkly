@@ -18,6 +18,7 @@ mod painting;
 pub mod protocol;
 pub mod rendering;
 pub mod save;
+mod selection_support;
 pub mod types;
 mod undo_dispatch;
 mod veils;

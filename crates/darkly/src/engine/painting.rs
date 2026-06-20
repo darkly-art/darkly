@@ -9,8 +9,10 @@ use crate::brush::paint_info::PaintInformation;
 use crate::brush::spacing::SpacingConfig;
 use crate::brush::stroke_buffer::StrokeBuffer;
 use crate::brush::stroke_engine::StrokeEngine;
+use crate::coord::CanvasRect;
 use crate::gpu::flood_fill;
-use crate::gpu::paint_target::GpuPaintTarget;
+use crate::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
+use crate::gpu::region_store::UndoRegionEntry;
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
@@ -79,6 +81,89 @@ impl DarklyEngine {
     }
 
     // --- Painting ---
+
+    /// Snapshot `rect` of `node_id`'s texture, run an in-place GPU mutation
+    /// (encoded into the SAME command buffer, after the save), commit it as a
+    /// `GpuRegionAction`, and mark the node dirty. The canonical "edit a region
+    /// with undo" unit. `mutate` receives the node's paint target, the paint
+    /// pipelines, and the queue, so it never re-borrows `self`. The texture
+    /// format is resolved from the node. Returns `false` if the node has no
+    /// texture.
+    pub(crate) fn region_undo_inplace(
+        &mut self,
+        node_id: LayerId,
+        rect: CanvasRect,
+        label_save: &str,
+        label_commit: &'static str,
+        mutate: impl FnOnce(
+            &mut wgpu::CommandEncoder,
+            GpuPaintTarget<'_>,
+            &PaintPipelines,
+            &wgpu::Queue,
+        ),
+    ) -> bool {
+        let Some(tex) = self.compositor.node_texture(node_id) else {
+            return false;
+        };
+        let frame = tex.canvas_frame();
+        let format = tex.format();
+        let target = GpuPaintTarget::from_node(tex, self.doc.canvas_rect());
+
+        // Save then mutate in one command buffer — wgpu executes recorded
+        // commands in order, so the snapshot captures pre-mutation pixels.
+        let snap = self.gpu.encode_ret(label_save, |encoder| {
+            let snap =
+                self.region_scratch
+                    .save_region(&self.gpu.device, encoder, &frame, format, rect);
+            mutate(encoder, target, &self.paint_pipelines, &self.gpu.queue);
+            snap
+        });
+
+        // `frame`'s last use; after this the shared `compositor` borrow is free
+        // for the `&mut` calls below (NLL).
+        let entry = commit_undo_region(
+            &self.gpu,
+            &self.region_scratch,
+            &mut self.readbacks,
+            label_commit,
+            node_id,
+            &frame,
+            &snap,
+            rect,
+        );
+        self.push_undo(Box::new(GpuRegionAction::new(entry)));
+        self.compositor.mark_node_pixels_dirty(node_id);
+        true
+    }
+
+    /// Snapshot+commit a node region into an `UndoRegionEntry` without pushing
+    /// or marking dirty — for callers that batch many entries into one compound
+    /// action (canvas transform, image rescale) and run the GPU permute
+    /// separately. Returns `None` if the node has no texture.
+    pub(crate) fn snapshot_region_entry(
+        &mut self,
+        node_id: LayerId,
+        rect: CanvasRect,
+        format: wgpu::TextureFormat,
+        label_save: &str,
+        label_commit: &'static str,
+    ) -> Option<UndoRegionEntry> {
+        let frame = self.compositor.node_texture(node_id)?.canvas_frame();
+        let snap = self.gpu.encode_ret(label_save, |encoder| {
+            self.region_scratch
+                .save_region(&self.gpu.device, encoder, &frame, format, rect)
+        });
+        Some(commit_undo_region(
+            &self.gpu,
+            &self.region_scratch,
+            &mut self.readbacks,
+            label_commit,
+            node_id,
+            &frame,
+            &snap,
+            rect,
+        ))
+    }
 
     /// Fill the layer with the default background image, centered and clipped
     /// to the canvas. The image is baked into the binary at build time.
@@ -179,44 +264,15 @@ impl DarklyEngine {
             return;
         }
         let rect = self.doc.canvas_rect();
-        let format = wgpu::TextureFormat::Rgba8Unorm;
-
-        let layer_tex = match self.compositor.node_texture(layer_id) {
-            Some(t) => t,
-            None => return,
-        };
-        let layer_frame = layer_tex.canvas_frame();
-
-        let snap = self.gpu.encode_ret("fill-background-color", |encoder| {
-            let snap = self.region_scratch.save_region(
-                &self.gpu.device,
-                encoder,
-                &layer_frame,
-                format,
-                rect,
-            );
-            if let Some(target) = self
-                .compositor
-                .node_texture(layer_id)
-                .map(|t| GpuPaintTarget::from_node(t, self.doc.canvas_rect()))
-            {
-                target.fill_rect(encoder, &self.paint_pipelines, &self.gpu.queue, rect, color);
-            }
-            snap
-        });
-        let entry = commit_undo_region(
-            &self.gpu,
-            &self.region_scratch,
-            &mut self.readbacks,
-            "fill-background-color-commit",
+        self.region_undo_inplace(
             layer_id,
-            &layer_frame,
-            &snap,
             rect,
+            "fill-background-color",
+            "fill-background-color-commit",
+            |encoder, target, pipelines, queue| {
+                target.fill_rect(encoder, pipelines, queue, rect, color);
+            },
         );
-        self.push_undo(Box::new(GpuRegionAction::new(entry)));
-
-        self.compositor.mark_node_pixels_dirty(layer_id);
     }
 
     // --- Stroke lifecycle ---
@@ -1289,105 +1345,36 @@ impl DarklyEngine {
         if !self.has_selection() {
             return;
         }
-
-        let format = match self.paint_target(layer_id) {
-            Some(t) => t.format(),
+        let rect = self.doc.canvas_rect();
+        // Own the cached selection bind group so it doesn't borrow `self`
+        // across the `&mut self` helper call below.
+        let sel_bg = match self.compositor.selection_state() {
+            Some(s) => s.selection_bind_group().clone(),
             None => return,
         };
-        let rect = self.doc.canvas_rect();
-
-        // Inline dispatch helper for use INSIDE the gpu.encode closures.
-        // `paint_target()` is a method call which the closure-capture
-        // analyser can't split-borrow through, so closures need direct
-        // field access (`self.compositor.X`) to compile alongside
-        // `self.region_scratch` / `self.undo_stack` access.
-        macro_rules! pt_for {
-            () => {
-                GpuPaintTarget::from_node(
-                    self.compositor.node_texture(layer_id).unwrap(),
-                    self.doc.canvas_rect(),
-                )
-            };
-        }
-
-        // Save region for undo.
-        let snap = self.gpu.encode_ret("clear-sel-save", |encoder| {
-            let frame = pt_for!().canvas_frame();
-            self.region_scratch
-                .save_region(&self.gpu.device, encoder, &frame, format, rect)
-        });
-
-        // Erase within selection using the cached GPU selection bind group.
-        let sel_bg = self
-            .compositor
-            .selection_state()
-            .map(|s| s.selection_bind_group())
-            .expect("has_selection true → selection_state allocated");
-        self.gpu.encode("clear-sel-erase", |encoder| {
-            pt_for!().erase_with_selection(encoder, &self.paint_pipelines, &self.gpu.queue, sel_bg);
-        });
-
-        // Commit for undo.
-        let frame = pt_for!().canvas_frame();
-        let entry = commit_undo_region(
-            &self.gpu,
-            &self.region_scratch,
-            &mut self.readbacks,
-            "clear-sel-commit",
+        self.region_undo_inplace(
             layer_id,
-            &frame,
-            &snap,
             rect,
+            "clear-sel-save",
+            "clear-sel-commit",
+            |encoder, target, pipelines, queue| {
+                target.erase_with_selection(encoder, pipelines, queue, &sel_bg);
+            },
         );
-        self.push_undo(Box::new(GpuRegionAction::new(entry)));
-        self.compositor.mark_node_pixels_dirty(layer_id);
     }
 
     /// Clear entire layer to transparent via GPU.
     pub(crate) fn gpu_clear_layer(&mut self, layer_id: LayerId) {
-        let format = match self.paint_target(layer_id) {
-            Some(t) => t.format(),
-            None => return,
-        };
         let rect = self.doc.canvas_rect();
-
-        // Inline dispatch helper — see `gpu_clear_selection` for why a macro
-        // is needed instead of calling `self.paint_target(...)` directly.
-        macro_rules! pt_for {
-            () => {
-                GpuPaintTarget::from_node(
-                    self.compositor.node_texture(layer_id).unwrap(),
-                    self.doc.canvas_rect(),
-                )
-            };
-        }
-
-        // Save region for undo.
-        let snap = self.gpu.encode_ret("clear-layer-save", |encoder| {
-            let frame = pt_for!().canvas_frame();
-            self.region_scratch
-                .save_region(&self.gpu.device, encoder, &frame, format, rect)
-        });
-
-        // Clear the full canvas.
-        self.gpu.encode("clear-layer", |encoder| {
-            pt_for!().clear_rect(encoder, &self.paint_pipelines, &self.gpu.queue, rect);
-        });
-
-        // Commit for undo.
-        let frame = pt_for!().canvas_frame();
-        let entry = commit_undo_region(
-            &self.gpu,
-            &self.region_scratch,
-            &mut self.readbacks,
-            "clear-layer-commit",
+        self.region_undo_inplace(
             layer_id,
-            &frame,
-            &snap,
             rect,
+            "clear-layer-save",
+            "clear-layer-commit",
+            |encoder, target, pipelines, queue| {
+                target.clear_rect(encoder, pipelines, queue, rect);
+            },
         );
-        self.push_undo(Box::new(GpuRegionAction::new(entry)));
-        self.compositor.mark_node_pixels_dirty(layer_id);
     }
 
     /// Resolve the active paint target for a layer.
@@ -1463,20 +1450,14 @@ impl DarklyEngine {
         height: u32,
     ) -> Option<wgpu::Texture> {
         let pixels = self.cropped_selection_pixels(origin, width, height)?;
-        let texture = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("selection-cropped-tex"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+        let (texture, _view) = crate::gpu::create_texture_with_view(
+            &self.gpu.device,
+            width,
+            height,
+            wgpu::TextureFormat::R8Unorm,
+            "selection-cropped-tex",
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
         self.gpu.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,

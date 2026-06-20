@@ -58,11 +58,6 @@ impl DarklyEngine {
     pub(crate) fn start_copy_readback(&mut self, layer_id: LayerId, is_cut: bool) {
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
-        // The copy `region` is window-local (it indexes the window-sized
-        // selection texture and is clamped to the window). Layer reads and the
-        // clipboard paste-offset operate in plane space, so they lift the region
-        // by `canvas_origin` (identity for an un-cropped doc).
-        let canvas_origin = self.doc.canvas_origin;
 
         // Determine format from the unified node-texture pool — both raster
         // (RGBA8) and mask modifier (R8) targets resolve through the same
@@ -81,16 +76,36 @@ impl DarklyEngine {
                 return;
             }
         };
-        let [rx, ry, rw, rh] = region;
+        let [_, _, rw, rh] = region;
         if rw == 0 || rh == 0 {
             return;
         }
 
-        let has_selection = self.has_selection();
+        if self.has_selection() {
+            self.copy_with_selection(layer_id, region, is_cut, format);
+        } else {
+            self.copy_without_selection(layer_id, region, is_cut, format);
+        }
+    }
 
-        // Resolve the node's CanvasFrame once for both the cut undo save
-        // below and the matching commit further down. Format dispatch lives
-        // behind the unified node-texture pool.
+    /// Copy/cut path when a selection is active: mask the layer region by the
+    /// selection entirely on GPU, then async-read the pre-masked staging
+    /// texture. On cut, the same selection texture erases the layer in place,
+    /// guaranteeing `extracted + remaining == original`.
+    fn copy_with_selection(
+        &mut self,
+        layer_id: LayerId,
+        region: [u32; 4],
+        is_cut: bool,
+        format: wgpu::TextureFormat,
+    ) {
+        let [rx, ry, rw, rh] = region;
+        // The copy `region` is window-local; layer reads operate in plane space,
+        // so they lift it by `canvas_origin` (identity for an un-cropped doc).
+        let canvas_origin = self.doc.canvas_origin;
+
+        // Resolve the node's CanvasFrame once for both the cut undo save below
+        // and the matching commit further down.
         let target_frame = self
             .compositor
             .node_texture(layer_id)
@@ -99,269 +114,195 @@ impl DarklyEngine {
             .map(|f| f.canvas_extent)
             .unwrap_or_else(|| self.doc.canvas_rect());
 
-        if has_selection {
-            // --- GPU extraction path ---
-            // Save undo state for cut before any modification.
-            let cut_snapshot = if is_cut {
-                target_frame.map(|frame| {
-                    self.gpu.encode_ret("cut-save", |encoder| {
-                        self.region_scratch.save_region(
-                            &self.gpu.device,
-                            encoder,
-                            &frame,
-                            format,
-                            undo_rect,
-                        )
-                    })
+        // Save undo state for cut before any modification.
+        let cut_snapshot = if is_cut {
+            target_frame.map(|frame| {
+                self.gpu.encode_ret("cut-save", |encoder| {
+                    self.region_scratch.save_region(
+                        &self.gpu.device,
+                        encoder,
+                        &frame,
+                        format,
+                        undo_rect,
+                    )
                 })
-            } else {
-                None
-            };
+            })
+        } else {
+            None
+        };
 
-            // Create staging texture for the masked copy.
-            let staging_tex = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("copy-staging"),
-                size: wgpu::Extent3d {
-                    width: rw,
-                    height: rh,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
+        let (staging_tex, staging_view) = crate::gpu::create_texture_with_view(
+            &self.gpu.device,
+            rw,
+            rh,
+            format,
+            "copy-staging",
+            wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+        );
+
+        // Crop the live selection to the copy region (nearest — pixel-exact).
+        let region_window = crate::coord::WindowRect::from_xywh(rx as i32, ry as i32, rw, rh);
+        let sel_crop_bg = self
+            .selection_region_bind_group(region_window, wgpu::FilterMode::Nearest)
+            .expect("has_selection true → selection_state allocated");
+
+        // Get texture references before entering the encode closure.
+        let layer_node = self.compositor.node_texture(layer_id).unwrap();
+        let layer_tex = layer_node.texture();
+        // The selection region in PLANE space, and the portion of it the layer
+        // texture actually holds, translated to layer-local texels. The layer is
+        // plane-anchored at its own extent (which need not be the canvas
+        // window), so the copy source must come through `canvas_to_layer_rect`,
+        // not the raw window-local `(rx, ry)`.
+        let region_plane = region_window.to_canvas(canvas_origin);
+        let layer_copy = layer_node
+            .canvas_extent()
+            .intersect(region_plane)
+            .and_then(|ov| layer_node.canvas_to_layer_rect(ov).map(|lr| (ov, lr)));
+
+        let sel_paint_bg = self
+            .compositor
+            .selection_state()
+            .expect("has_selection true → selection_state allocated")
+            .selection_bind_group();
+
+        self.gpu.encode("copy-gpu-extract", |encoder| {
+            // 1. Copy the layer's covered portion of the selected region into
+            //    the staging texture. Clear first so any part of the region the
+            //    layer does NOT cover stays transparent (else the masked
+            //    multiply below would scale uninitialized texels).
+            crate::gpu::clear_view_transparent(encoder, &staging_view, "copy-staging-clear");
+            if let Some((ov, lr)) = layer_copy {
+                // Staging is indexed by the selection region, so the destination
+                // is the overlap's offset within it.
+                crate::gpu::blit_region(
+                    encoder,
+                    layer_tex,
+                    (lr.x0(), lr.y0()),
+                    &staging_tex,
+                    (
+                        (ov.x0() - region_plane.x0()) as u32,
+                        (ov.y0() - region_plane.y0()) as u32,
+                    ),
+                    ov.width,
+                    ov.height,
+                );
+            }
+
+            // 2. Multiply staging alpha by cropped selection: staging.a *= sel.
+            //    RGB stays unchanged — straight-alpha convention (see
+            //    docs/lessons-learned/compositing-lessons-learned.md §1).
+            let staging_target = GpuPaintTarget::from_canvas_texture(
+                &staging_tex,
+                &staging_view,
                 format,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC
-                    | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            let staging_view = staging_tex.create_view(&wgpu::TextureViewDescriptor::default());
-
-            // Create a cropped selection R8 texture for the copy region.
-            let sel_crop_tex = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("copy-sel-crop"),
-                size: wgpu::Extent3d {
-                    width: rw,
-                    height: rh,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            let sel_crop_view = sel_crop_tex.create_view(&wgpu::TextureViewDescriptor::default());
-            let sel_sampler = self.gpu.device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("copy-sel-sampler"),
-                mag_filter: wgpu::FilterMode::Nearest,
-                min_filter: wgpu::FilterMode::Nearest,
-                ..Default::default()
-            });
-            let sel_crop_bg = self.paint_pipelines.create_selection_bind_group(
-                &self.gpu.device,
-                &sel_crop_view,
-                &sel_sampler,
+                crate::coord::CanvasRect::from_xywh(0, 0, rw, rh),
+            );
+            staging_target.multiply_alpha_by_mask(
+                encoder,
+                &self.paint_pipelines,
+                &self.gpu.queue,
+                &sel_crop_bg,
             );
 
-            // Get texture references before entering the encode closure.
-            let layer_node = self.compositor.node_texture(layer_id).unwrap();
-            let layer_tex = layer_node.texture();
-            // The selection region in PLANE space, and the portion of it the
-            // layer texture actually holds, translated to layer-local texels.
-            // The layer is plane-anchored at its own extent (which need not be
-            // the canvas window), so the copy source must come through
-            // `canvas_to_layer_rect`, not the raw window-local `(rx, ry)`.
-            let region_plane = crate::coord::WindowRect::from_xywh(rx as i32, ry as i32, rw, rh)
-                .to_canvas(canvas_origin);
-            let layer_copy = layer_node
-                .canvas_extent()
-                .intersect(region_plane)
-                .and_then(|ov| layer_node.canvas_to_layer_rect(ov).map(|lr| (ov, lr)));
-
-            let selection_state = self
-                .compositor
-                .selection_state()
-                .expect("has_selection true → selection_state allocated");
-            let sel_tex = selection_state.texture();
-            let sel_paint_bg = selection_state.selection_bind_group();
-
-            // Selection crop: the region is window-local and the selection
-            // texture is window-sized, so it reads at `(rx, ry)` directly,
-            // clamped to the window.
-            let sel_copy_w = rw.min(canvas_w.saturating_sub(rx));
-            let sel_copy_h = rh.min(canvas_h.saturating_sub(ry));
-
-            self.gpu.encode("copy-gpu-extract", |encoder| {
-                // 1. Copy the layer's covered portion of the selected region
-                //    into the staging texture. Clear first so any part of the
-                //    region the layer does NOT cover stays transparent (else
-                //    the masked multiply below would scale uninitialized texels).
-                crate::gpu::clear_view_transparent(encoder, &staging_view, "copy-staging-clear");
-                if let Some((ov, lr)) = layer_copy {
-                    encoder.copy_texture_to_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: layer_tex,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d {
-                                x: lr.x0(),
-                                y: lr.y0(),
-                                z: 0,
-                            },
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &staging_tex,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d {
-                                // Staging is indexed by the selection region, so
-                                // the destination is the overlap's offset within it.
-                                x: (ov.x0() - region_plane.x0()) as u32,
-                                y: (ov.y0() - region_plane.y0()) as u32,
-                                z: 0,
-                            },
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::Extent3d {
-                            width: ov.width,
-                            height: ov.height,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                }
-
-                // 2. Copy selection region → cropped selection texture.
-                if sel_copy_w > 0 && sel_copy_h > 0 {
-                    encoder.copy_texture_to_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: sel_tex,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d { x: rx, y: ry, z: 0 },
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &sel_crop_tex,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::Extent3d {
-                            width: sel_copy_w,
-                            height: sel_copy_h,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                }
-
-                // 3. Multiply staging alpha by cropped selection: staging.a *= sel.
-                //    RGB stays unchanged — straight-alpha convention (see
-                //    docs/lessons-learned/compositing-lessons-learned.md §1).
-                let staging_target = GpuPaintTarget::from_canvas_texture(
-                    &staging_tex,
-                    &staging_view,
-                    format,
-                    crate::coord::CanvasRect::from_xywh(0, 0, rw, rh),
-                );
-                staging_target.multiply_alpha_by_mask(
+            // 3. If cut: reduce layer alpha by selection on selected pixels.
+            //    layer.a *= (1 - sel), layer.rgb unchanged (straight alpha).
+            if is_cut {
+                let layer_target = self
+                    .compositor
+                    .node_texture(layer_id)
+                    .map(|t| GpuPaintTarget::from_node(t, self.doc.canvas_rect()))
+                    .expect("node texture missing for cut target");
+                layer_target.multiply_alpha_by_inverse_mask(
                     encoder,
                     &self.paint_pipelines,
                     &self.gpu.queue,
-                    &sel_crop_bg,
+                    sel_paint_bg,
                 );
-
-                // 4. If cut: reduce layer alpha by selection on selected pixels.
-                //    layer.a *= (1 - sel), layer.rgb unchanged (straight alpha).
-                if is_cut {
-                    let layer_target = self
-                        .compositor
-                        .node_texture(layer_id)
-                        .map(|t| GpuPaintTarget::from_node(t, self.doc.canvas_rect()))
-                        .expect("node texture missing for cut target");
-                    layer_target.multiply_alpha_by_inverse_mask(
-                        encoder,
-                        &self.paint_pipelines,
-                        &self.gpu.queue,
-                        sel_paint_bg,
-                    );
-                }
-
-                // 5. Kick async readback of the masked staging texture.
-                let request = readback::request_readback(
-                    &self.gpu.device,
-                    encoder,
-                    &staging_tex,
-                    format,
-                    crate::coord::LayerRect::from_xywh(0, 0, rw, rh),
-                );
-                self.readbacks.submit(
-                    request,
-                    ReadbackContext::Copy {
-                        node_id: layer_id,
-                        region,
-                        is_cut,
-                    },
-                );
-            });
-
-            // Commit undo for cut.
-            if let (Some(snap), Some(frame)) = (cut_snapshot, target_frame) {
-                let entry = commit_undo_region(
-                    &self.gpu,
-                    &self.region_scratch,
-                    &mut self.readbacks,
-                    "cut-commit",
-                    layer_id,
-                    &frame,
-                    &snap,
-                    undo_rect,
-                );
-                self.push_undo(Box::new(GpuRegionAction::new(entry)));
-                self.compositor.mark_node_pixels_dirty(layer_id);
             }
-        } else {
-            // --- No selection: direct readback ---
-            // `region` is the canvas window in window-local coords; lift it to
-            // plane (`+ canvas_origin`), then translate to the layer texture's
-            // own texel frame (it may sit at a non-zero plane offset). Layers
-            // disjoint from the requested region yield nothing.
-            let (texture, layer_rect) = {
-                let layer_tex = self
-                    .compositor
-                    .node_texture(layer_id)
-                    .expect("node texture missing for copy");
-                let region_plane =
-                    crate::coord::WindowRect::from_xywh(rx as i32, ry as i32, rw, rh)
-                        .to_canvas(canvas_origin);
-                match layer_tex.canvas_to_layer_rect(region_plane) {
-                    Some(lr) => (layer_tex.texture(), lr),
-                    None => return,
-                }
-            };
 
-            self.gpu.encode("copy-readback", |encoder| {
-                let request = readback::request_readback(
-                    &self.gpu.device,
-                    encoder,
-                    texture,
-                    format,
-                    layer_rect,
-                );
-                self.readbacks.submit(
-                    request,
-                    ReadbackContext::Copy {
-                        node_id: layer_id,
-                        region,
-                        is_cut,
-                    },
-                );
-            });
+            // 4. Kick async readback of the masked staging texture.
+            let request = readback::request_readback(
+                &self.gpu.device,
+                encoder,
+                &staging_tex,
+                format,
+                crate::coord::LayerRect::from_xywh(0, 0, rw, rh),
+            );
+            self.readbacks.submit(
+                request,
+                ReadbackContext::Copy {
+                    node_id: layer_id,
+                    region,
+                    is_cut,
+                },
+            );
+        });
 
-            if is_cut {
-                // gpu_clear_layer handles its own undo save/commit.
-                self.gpu_clear_layer(layer_id);
+        // Commit undo for cut.
+        if let (Some(snap), Some(frame)) = (cut_snapshot, target_frame) {
+            let entry = commit_undo_region(
+                &self.gpu,
+                &self.region_scratch,
+                &mut self.readbacks,
+                "cut-commit",
+                layer_id,
+                &frame,
+                &snap,
+                undo_rect,
+            );
+            self.push_undo(Box::new(GpuRegionAction::new(entry)));
+            self.compositor.mark_node_pixels_dirty(layer_id);
+        }
+    }
+
+    /// Copy/cut path with no selection: read the layer's covered portion of the
+    /// requested region straight back, no masking. On cut, clear the whole
+    /// layer (which handles its own undo).
+    fn copy_without_selection(
+        &mut self,
+        layer_id: LayerId,
+        region: [u32; 4],
+        is_cut: bool,
+        format: wgpu::TextureFormat,
+    ) {
+        let [rx, ry, rw, rh] = region;
+        // `region` is the canvas window in window-local coords; lift it to plane
+        // (`+ canvas_origin`), then translate to the layer texture's own texel
+        // frame (it may sit at a non-zero plane offset). Layers disjoint from the
+        // requested region yield nothing.
+        let (texture, layer_rect) = {
+            let layer_tex = self
+                .compositor
+                .node_texture(layer_id)
+                .expect("node texture missing for copy");
+            let region_plane = crate::coord::WindowRect::from_xywh(rx as i32, ry as i32, rw, rh)
+                .to_canvas(self.doc.canvas_origin);
+            match layer_tex.canvas_to_layer_rect(region_plane) {
+                Some(lr) => (layer_tex.texture(), lr),
+                None => return,
             }
+        };
+
+        self.gpu.encode("copy-readback", |encoder| {
+            let request =
+                readback::request_readback(&self.gpu.device, encoder, texture, format, layer_rect);
+            self.readbacks.submit(
+                request,
+                ReadbackContext::Copy {
+                    node_id: layer_id,
+                    region,
+                    is_cut,
+                },
+            );
+        });
+
+        if is_cut {
+            // gpu_clear_layer handles its own undo save/commit.
+            self.gpu_clear_layer(layer_id);
         }
     }
 
