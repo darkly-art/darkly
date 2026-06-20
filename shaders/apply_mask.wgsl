@@ -54,16 +54,17 @@ struct CanvasUniform {
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let proj = textureSample(t_proj, t_sampler, in.uv);
 
-    // window UV → plane → mask-local UV, via the mask's own geometry.
-    let plane = window_uv_to_plane(in.uv, canvas.canvas_origin, canvas.canvas_size);
-    let mask_uv = plane_to_selection_uv(plane, mu.mask_offset, mu.mask_size);
-    let in_bounds = all(mask_uv >= vec2f(0.0)) && all(mask_uv <= vec2f(1.0));
-    let has_footprint = mu.mask_size.x > 0.0 && mu.mask_size.y > 0.0;
-
-    // textureSample needs uniform control flow — sample unconditionally, then
-    // pick 1.0 (reveal) outside the footprint.
-    let raw = textureSample(t_mask, t_sampler, mask_uv).r;
-    let mask_alpha = select(1.0, raw, has_footprint && in_bounds);
+    // Mask sampled in its own space (window_uv → plane → mask-local), shared
+    // with the passthrough-group lerp via `sample_mask_window`.
+    let mask_alpha = sample_mask_window(
+        t_mask,
+        t_sampler,
+        in.uv,
+        canvas.canvas_origin,
+        canvas.canvas_size,
+        mu.mask_offset,
+        mu.mask_size,
+    );
 
     if (mu.isolated != 0u) {
         return vec4f(mask_alpha, mask_alpha, mask_alpha, 1.0);

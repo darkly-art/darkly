@@ -337,6 +337,23 @@ pub(super) struct CanvasUniform {
     pub(super) canvas_origin: [f32; 2],
 }
 
+/// Uniforms for the passthrough-group mask lerp (`mask_lerp.wgsl`). Carries the
+/// canvas-window + mask geometry inline so the lerp samples the group mask in
+/// its own plane space (matching `apply_mask`) without the pipeline needing the
+/// shared canvas bind group.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct LerpUniforms {
+    canvas_origin: [f32; 2],
+    canvas_size: [f32; 2],
+    mask_offset: [f32; 2],
+    mask_size: [f32; 2],
+    isolated: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
 /// GPU state for a passthrough group that has a mask (Photoshop-style).
 /// Stores a snapshot texture for the parent accumulator and a uniform buffer
 /// for the lerp pass.
@@ -741,7 +758,10 @@ impl Compositor {
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("mask-lerp-shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("../../../../shaders/mask_lerp.wgsl").into(),
+                    crate::gpu::canvas_lib::with_canvas_lib(include_str!(
+                        "../../../../shaders/mask_lerp.wgsl"
+                    ))
+                    .into(),
                 ),
             });
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1528,11 +1548,9 @@ impl Compositor {
             };
             queue.write_buffer(&gs.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         }
-        // Also update passthrough mask state uniform (isolated only).
-        if let Some(pms) = self.passthrough_mask_state.get(&group_id) {
-            let val = isolated as u32;
-            queue.write_buffer(&pms.uniform_buf, 0, bytemuck::bytes_of(&val));
-        }
+        // The passthrough-mask lerp uniform (mask geometry + isolated) is
+        // refreshed per-frame in `sync_projection_states`, where the mask's
+        // current extent is available.
     }
 
     /// Set the session-level isolation target. The render walk filters off-
@@ -1891,7 +1909,7 @@ impl Compositor {
         );
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&format!("pt-lerp-uniforms-{host_id:?}")),
-            size: 4,
+            size: std::mem::size_of::<LerpUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -3069,18 +3087,26 @@ impl Compositor {
     }
 
     /// The mask id a leaf host should route through the de-fused projection
-    /// path, or `None` to keep the fast (fused) path. A host qualifies when it
-    /// carries a *visible* mask modifier and neither the host nor its mask is
-    /// the active transform-preview target (preview still rides the fused
-    /// `preview_mask_bind_group` path until B3 migrates it).
+    /// path, or `None` to keep the fast (fused) path. A host qualifies whenever
+    /// it carries a *visible* mask modifier — including while a transform
+    /// preview is active on the host or its mask, in which case the projection
+    /// swaps in the preview content/mask (see
+    /// [`Self::compose_layer_through_projection`]).
     fn host_active_mask_for_projection(&self, doc: &Document, host_id: LayerId) -> Option<LayerId> {
-        let mask = doc.mask_modifier(host_id).filter(|m| m.common.visible)?;
-        if let Some(s) = self.transform_pass.active.as_ref() {
-            if s.target_layer == host_id || s.target_layer == mask.id {
-                return None;
-            }
+        doc.mask_modifier(host_id)
+            .filter(|m| m.common.visible)
+            .map(|m| m.id)
+    }
+
+    /// During an active transform, the roles a masked host's preview can play:
+    /// `(layer_transforming, mask_transforming)`. At most one is true — the
+    /// layer or the mask is being dragged, not both. Drives whether the
+    /// projection samples the preview layer / preview mask vs. the live ones.
+    fn projection_transform_roles(&self, host_id: LayerId, mask_id: LayerId) -> (bool, bool) {
+        match self.transform_pass.active.as_ref() {
+            Some(s) => (s.target_layer == host_id, s.target_layer == mask_id),
+            None => (false, false),
         }
-        Some(mask.id)
     }
 
     /// Allocate a [`ProjectionState`] for `host_id` at the given dimensions,
@@ -3192,18 +3218,31 @@ impl Compositor {
                 (c.opacity, c.blend_mode)
             };
             let isolated = self.isolated_node == Some(mask_id);
+            let (layer_transforming, mask_transforming) =
+                self.projection_transform_roles(host_id, mask_id);
+            let canvas_origin = [self.canvas_origin.x as f32, self.canvas_origin.y as f32];
 
             self.ensure_projection_state(device, host_id, padded_w, padded_h);
 
-            // Compose-content uniform: straight host content (opacity 1, Normal)
-            // sampled in the host texture's own frame.
+            // Compose-content uniform: straight host content (opacity 1, Normal).
+            // When the *layer* is transform-previewing, the content comes from
+            // the canvas-aligned preview texture, so it samples at the canvas
+            // window; otherwise it samples the live layer in its own frame.
+            let (content_offset, content_size) = if layer_transforming {
+                (canvas_origin, canvas_size)
+            } else {
+                (
+                    [layer_ext.x0() as f32, layer_ext.y0() as f32],
+                    [layer_ext.width as f32, layer_ext.height as f32],
+                )
+            };
             let content = BlendUniforms {
                 opacity: 1.0,
                 blend_mode: normal,
                 isolated: 0,
                 _pad1: 0.0,
-                layer_offset: [layer_ext.x0() as f32, layer_ext.y0() as f32],
-                layer_size: [layer_ext.width as f32, layer_ext.height as f32],
+                layer_offset: content_offset,
+                layer_size: content_size,
             };
             // Down-composite uniform: the host's opacity + blend mode, canvas-
             // window geometry (the projection fills exactly the canvas window).
@@ -3212,12 +3251,23 @@ impl Compositor {
                 blend_mode,
                 isolated: 0,
                 _pad1: 0.0,
-                layer_offset: [self.canvas_origin.x as f32, self.canvas_origin.y as f32],
+                layer_offset: canvas_origin,
                 layer_size: canvas_size,
             };
+            // Mask uniform: when the *mask* is transform-previewing, the preview
+            // mask is a canvas-aligned R8 texture, so it samples at the canvas
+            // window; otherwise the live mask samples in its own frame.
+            let (mask_offset, mask_size) = if mask_transforming {
+                (canvas_origin, canvas_size)
+            } else {
+                (
+                    [mask_ext.x0() as f32, mask_ext.y0() as f32],
+                    [mask_ext.width as f32, mask_ext.height as f32],
+                )
+            };
             let mu = crate::gpu::apply_mask::MaskUniform {
-                mask_offset: [mask_ext.x0() as f32, mask_ext.y0() as f32],
-                mask_size: [mask_ext.width as f32, mask_ext.height as f32],
+                mask_offset,
+                mask_size,
                 isolated: isolated as u32,
                 _pad0: 0,
                 _pad1: 0,
@@ -3227,6 +3277,69 @@ impl Compositor {
             queue.write_buffer(&ps.content_uniform_buf, 0, bytemuck::bytes_of(&content));
             queue.write_buffer(&ps.down_uniform_buf, 0, bytemuck::bytes_of(&down));
             queue.write_buffer(&ps.mask_uniform_buf, 0, bytemuck::bytes_of(&mu));
+        }
+
+        // (Re-)ensure a passthrough-mask snapshot exists for every passthrough
+        // group with a visible mask. The snapshot is parent-accumulator-sized,
+        // so `set_canvas_rect` drops it on a crop/resize; without this re-ensure
+        // the group mask would silently disable after a crop (compose falls back
+        // to plain passthrough).
+        let masked_passthrough: Vec<LayerId> = doc
+            .all_groups()
+            .iter()
+            .filter(|g| g.passthrough)
+            .map(|g| g.id)
+            .filter(|gid| {
+                doc.mask_modifier(*gid)
+                    .map(|m| m.common.visible)
+                    .unwrap_or(false)
+            })
+            .collect();
+        for gid in &masked_passthrough {
+            self.ensure_passthrough_mask_state(device, *gid);
+        }
+
+        // Refresh the passthrough-group mask lerp uniforms (canvas + mask
+        // geometry + isolated) so a group mask that grew independently of the
+        // canvas window samples in its own space — same `sample_mask_window`
+        // path as the leaf projection.
+        let canvas_origin = [self.canvas_origin.x as f32, self.canvas_origin.y as f32];
+        let group_ids: Vec<LayerId> = self.passthrough_mask_state.keys().copied().collect();
+        for group_id in group_ids {
+            let mask_id = match doc.mask_modifier(group_id).filter(|m| m.common.visible) {
+                Some(m) => m.id,
+                None => continue,
+            };
+            // A mask being transform-previewed is canvas-aligned; otherwise it
+            // samples in its live extent.
+            let mask_transforming = self
+                .transform_pass
+                .active
+                .as_ref()
+                .is_some_and(|s| s.target_layer == mask_id);
+            let (mask_offset, mask_size) = if mask_transforming {
+                (canvas_origin, canvas_size)
+            } else {
+                match self.node_textures.get(&mask_id).map(|t| t.canvas_extent()) {
+                    Some(e) => (
+                        [e.x0() as f32, e.y0() as f32],
+                        [e.width as f32, e.height as f32],
+                    ),
+                    None => continue,
+                }
+            };
+            let lu = LerpUniforms {
+                canvas_origin,
+                canvas_size,
+                mask_offset,
+                mask_size,
+                isolated: (self.isolated_node == Some(mask_id)) as u32,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+            };
+            let pms = &self.passthrough_mask_state[&group_id];
+            queue.write_buffer(&pms.uniform_buf, 0, bytemuck::bytes_of(&lu));
         }
     }
 
@@ -3259,14 +3372,36 @@ impl Compositor {
             Some(p) => p,
             None => return,
         };
-        let layer_view = match self.node_textures.get(&host_id) {
-            Some(t) => t.view(),
-            None => return,
+
+        // Transform-preview swap: sample the (canvas-aligned) preview layer when
+        // the layer is being dragged, and the preview mask when the mask is.
+        // Geometry for these is set to match in `sync_projection_states`.
+        let (layer_transforming, mask_transforming) =
+            self.projection_transform_roles(host_id, mask_id);
+        let preview = self.transform_pass.active.as_ref();
+
+        let layer_view = if layer_transforming {
+            match preview {
+                Some(s) => &s.preview_view,
+                None => return,
+            }
+        } else {
+            match self.node_textures.get(&host_id) {
+                Some(t) => t.view(),
+                None => return,
+            }
         };
-        let mask_bg = self
+        let live_mask_bg = self
             .mask_bind_groups
             .get(&mask_id)
             .unwrap_or(&self.default_mask_bind_group);
+        let mask_bg = if mask_transforming {
+            preview
+                .and_then(|s| s.preview_mask_bind_group.as_ref())
+                .unwrap_or(live_mask_bg)
+        } else {
+            live_mask_bg
+        };
 
         // Build the (non-hot) bind groups fresh — masked leaves are rare.
         // Pass 1 reads the cleared accum[1] as a transparent background.

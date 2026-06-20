@@ -31,8 +31,19 @@ struct VertexOutput {
 @group(0) @binding(1) var t_after: texture_2d<f32>;
 @group(0) @binding(2) var t_sampler: sampler;
 
+// Canvas-window + mask geometry carried inline (not via a separate canvas bind
+// group) so the lerp pipeline keeps its two-bind-group layout. The mask is
+// sampled in its OWN plane space (via `sample_mask_window`) so a group mask
+// that grows independently of the canvas window samples correctly.
 struct LerpUniforms {
+    canvas_origin: vec2f,
+    canvas_size: vec2f,
+    mask_offset: vec2f,
+    mask_size: vec2f,
     isolated: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 @group(0) @binding(3) var<uniform> uniforms: LerpUniforms;
 
@@ -40,7 +51,15 @@ struct LerpUniforms {
 @group(1) @binding(0) var t_mask: texture_2d<f32>;
 
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    let mask_alpha = textureSample(t_mask, t_sampler, in.uv).r;
+    let mask_alpha = sample_mask_window(
+        t_mask,
+        t_sampler,
+        in.uv,
+        uniforms.canvas_origin,
+        uniforms.canvas_size,
+        uniforms.mask_offset,
+        uniforms.mask_size,
+    );
 
     // Show mask as grayscale (same as composite.wgsl behavior).
     if (uniforms.isolated != 0u) {

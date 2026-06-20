@@ -2680,6 +2680,62 @@ fn floating_preview_respects_layer_mask() {
     );
 }
 
+/// A passthrough-group mask that is *sub-canvas* (smaller than the canvas
+/// window after a crop/enlarge) must lerp using the mask sampled in its OWN
+/// plane space — the same `sample_mask_window` path as the leaf projection.
+/// Pre-B6 the lerp sampled the mask at the raw window UV, so an independent-
+/// bounds group mask mislocated its hidden region once the window grew.
+#[test]
+fn passthrough_sub_canvas_group_mask_samples_own_space() {
+    use darkly::coord::CanvasRect;
+    use darkly::document::MoveTarget;
+
+    // 64×64 group + child filled red; group mask painted black at one spot.
+    let mut engine = test_engine(64, 64);
+    let group_id = engine.add_group(None);
+    engine.set_group_passthrough(group_id, true);
+    let child_id = engine.add_raster_layer(None);
+    engine.move_layer(child_id, MoveTarget::IntoGroupTop(group_id));
+    engine.begin_stroke(child_id);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r: 255,
+        g: 0,
+        b: 0,
+        a: 255,
+        tolerance: 255,
+    });
+    engine.end_stroke();
+    engine.render(0.0);
+
+    engine.add_mask(group_id);
+    // A black brush dab on the mask at plane (40, 40) — a localized hidden spot.
+    paint_mask_dab(&mut engine, group_id, 40.0, 40.0, 0.0);
+    engine.test_flush_readbacks();
+
+    // Enlarge + offset the canvas window → the 64×64 group mask is sub-canvas.
+    engine.resize_canvas(CanvasRect::from_xywh(20, 16, 128, 96));
+    engine.render(0.0);
+
+    let canvas = engine.test_readback_canvas();
+    // Plane (40,40) → window-local (20,24): the dab hides the child there.
+    let hidden = alpha_at(&canvas, 128, 20, 24);
+    // Plane (62,18) → window-local (42,2): inside child + mask, away from the
+    // dab → the child's red shows (mask white).
+    let shown = alpha_at(&canvas, 128, 42, 2);
+    assert!(
+        hidden < 128,
+        "sub-canvas group mask must hide the child at the dab's own-space \
+         location; got alpha={hidden}"
+    );
+    assert!(
+        shown > 200,
+        "away from the dab the child must show through the sub-canvas group \
+         mask; got alpha={shown}"
+    );
+}
+
 // ============================================================================
 // Mask → Modifier-Node regression tests
 //
@@ -3298,6 +3354,47 @@ fn masked_leaf_composites_through_projection_cropped() {
         shown[1] > 200 && shown[3] > 200,
         "unmasked region must show opaque green through the projection; got {shown:?}"
     );
+}
+
+/// Transforming a masked *sub-canvas* layer (cropped canvas) must render its
+/// preview through the projection + `apply_mask` path with no WebGPU
+/// validation error — the originating crash scenario. The live mask keeps its
+/// own (sub-canvas) bounds while the layer content previews transformed.
+#[test]
+fn transform_masked_sub_canvas_layer_previews_without_crash() {
+    use darkly::coord::CanvasRect;
+    use darkly::gpu::transform::affine_translate;
+
+    // 64×64 host + mask, painted, then enlarge + offset the canvas → both are
+    // sub-canvas.
+    let mut engine = test_engine(64, 64);
+    let host = engine.add_raster_layer(None);
+    fill_layer(&mut engine, host, 0, 200, 0); // opaque green
+    engine.add_mask(host);
+    paint_mask_dab(&mut engine, host, 20.0, 20.0, 0.0); // black dab on the mask
+    engine.test_flush_readbacks();
+    engine.resize_canvas(CanvasRect::from_xywh(20, 16, 128, 96));
+    engine.render(0.0);
+
+    // Select a rect inside the window so the transform region resolves
+    // synchronously (no async content-bounds round-trip), then transform the
+    // LAYER and render the preview — must not hit a copy-range / validation
+    // crash, and must produce visible output.
+    engine.select_rect(25.0, 20.0, 40.0, 40.0, SelectionMode::Replace, false, 0.0);
+    engine.test_flush_readbacks();
+    assert!(engine.begin_transform(host), "begin_transform must start");
+    engine.update_floating_matrix(affine_translate(15.0, 10.0));
+    engine.render(0.0);
+
+    let preview = engine.test_readback_canvas();
+    assert!(
+        preview.iter().any(|&b| b > 0),
+        "masked-layer transform preview must render something through the projection"
+    );
+
+    // Commit + render cleanly too.
+    engine.commit_floating();
+    engine.render(0.0);
 }
 
 /// The document model must expose the selection as a typed [`Modifier`] —
