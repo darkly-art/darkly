@@ -60,6 +60,59 @@ pub(crate) fn scaled_extent_about(
     crate::coord::CanvasRect::from_xywh(nx0, ny0, nw, nh)
 }
 
+/// Map a node's canvas extent `e` through an orthogonal transform applied to
+/// the `frame` rect (the canvas window for canvas ops). Pure integer pixel
+/// algebra — the exact counterpart of [`scaled_extent_about`], shared by the
+/// ortho GPU pass and the engine's document-side bookkeeping so both agree on
+/// where every node lands. Rotations swap the frame's width/height and recentre
+/// it (GIMP's `offset = (old_dim − new_dim)/2`); flips leave the frame put.
+pub(crate) fn ortho_extent_about(
+    e: crate::coord::CanvasRect,
+    frame: crate::coord::CanvasRect,
+    xform: crate::gpu::ortho_transform::OrthoXform,
+) -> crate::coord::CanvasRect {
+    let i0 = e.origin.x - frame.origin.x;
+    let j0 = e.origin.y - frame.origin.y;
+    let (ni0, nj0, nw, nh) = xform.map_local(i0, j0, e.width, e.height, frame.width, frame.height);
+    let (ox, oy) = if xform.swaps_dims() {
+        (
+            frame.origin.x + (frame.width as i32 - frame.height as i32) / 2,
+            frame.origin.y + (frame.height as i32 - frame.width as i32) / 2,
+        )
+    } else {
+        (frame.origin.x, frame.origin.y)
+    };
+    crate::coord::CanvasRect::from_xywh(ox + ni0, oy + nj0, nw, nh)
+}
+
+/// Transient `w`×`h` texture used as the source/destination of an in-place
+/// region mirror ([`Compositor::flip_node_region`]). Needs copy + sampling +
+/// render-target usage; dropped when the encoder's work completes.
+fn create_ortho_scratch(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("ortho-scratch"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    })
+}
+
 /// Read-only handle to an entity's GPU pixel storage. Returned by
 /// [`Compositor::pixel_data_for`] so callers that need to schedule a
 /// readback (today: the save pipeline) can find the texture for any
@@ -404,6 +457,9 @@ pub struct Compositor {
 
     // --- Image rescale resampling ---
     rescale_pass: crate::gpu::rescale::RescalePass,
+
+    // --- Orthogonal (flip / 90° rotate) transforms ---
+    ortho_pass: crate::gpu::ortho_transform::OrthoTransformPass,
 
     // --- Isolation (session state) ---
     /// When `Some(id)`, the render walk descends only into nodes on the
@@ -846,6 +902,7 @@ impl Compositor {
 
         let transform_pass = crate::gpu::transform::TransformPass::new(device);
         let rescale_pass = crate::gpu::rescale::RescalePass::new(device);
+        let ortho_pass = crate::gpu::ortho_transform::OrthoTransformPass::new(device);
         let content_bounds = ContentBoundsPass::new(device);
 
         Compositor {
@@ -879,6 +936,7 @@ impl Compositor {
             void_registry: VoidRegistry::new(),
             transform_pass,
             rescale_pass,
+            ortho_pass,
             isolated_node: None,
             selection_state: None,
             content_bounds,
@@ -1164,6 +1222,131 @@ impl Compositor {
             self.swap_node_texture(device, queue, id, new_tex);
             self.mark_node_pixels_dirty(id);
         }
+        self.mark_dirty();
+    }
+
+    /// Orthogonally transform each node's texture about `frame` (the canvas
+    /// window for canvas flip/rotate) — the exact, no-resample counterpart of
+    /// [`rescale_nodes`](Self::rescale_nodes). Each node moves to
+    /// [`ortho_extent_about`]'s computed extent (rotations also swap w/h);
+    /// the texture is replaced via [`swap_node_texture`](Self::swap_node_texture).
+    /// The engine owns the document side (extent bounds, undo snapshots) and
+    /// reads results back from `node_texture(id).canvas_extent()`.
+    pub fn ortho_transform_nodes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        node_ids: &[LayerId],
+        frame: CanvasRect,
+        xform: crate::gpu::ortho_transform::OrthoXform,
+    ) {
+        for &id in node_ids {
+            let (old_extent, format) = match self.node_textures.get(&id) {
+                Some(t) => (t.canvas_extent(), t.format()),
+                None => continue,
+            };
+            let new_extent = ortho_extent_about(old_extent, frame, xform);
+            let new_tex = {
+                let src = self
+                    .node_textures
+                    .get(&id)
+                    .expect("node_textures entry checked above");
+                self.ortho_pass
+                    .remap_node(device, queue, encoder, src, new_extent, xform, format)
+            };
+            self.swap_node_texture(device, queue, id, new_tex);
+            self.mark_node_pixels_dirty(id);
+        }
+        self.mark_dirty();
+    }
+
+    /// Mirror (`FlipH`/`FlipV`) a node's `region` in place about that region's
+    /// centre — the layer/selection flip primitive. Where `mask_view` (a
+    /// region-sized R8) is selected the texel takes the mirror, elsewhere it
+    /// passes through, so non-rectangular selections clip exactly; `None`
+    /// mirrors the whole region. No extent change — `region` must already be
+    /// clipped to the node extent by the caller (the document bbox center is
+    /// the caller's to choose). Pixels are copied out, permuted, copied back.
+    pub fn flip_node_region(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        node_id: LayerId,
+        region: CanvasRect,
+        xform: crate::gpu::ortho_transform::OrthoXform,
+        mask_view: Option<&wgpu::TextureView>,
+    ) {
+        let (extent, format) = match self.node_textures.get(&node_id) {
+            Some(t) => (t.canvas_extent(), t.format()),
+            None => return,
+        };
+        let region = match extent.intersect(region) {
+            Some(r) if r.width > 0 && r.height > 0 => r,
+            _ => return,
+        };
+        let (w, h) = (region.width, region.height);
+        let lx = (region.origin.x - extent.origin.x) as u32;
+        let ly = (region.origin.y - extent.origin.y) as u32;
+
+        let src_scratch = create_ortho_scratch(device, w, h, format);
+        let out_scratch = create_ortho_scratch(device, w, h, format);
+        let node_tex = self.node_textures[&node_id].texture();
+
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: node_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: lx, y: ly, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &src_scratch,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let src_view = src_scratch.create_view(&wgpu::TextureViewDescriptor::default());
+        let out_view = out_scratch.create_view(&wgpu::TextureViewDescriptor::default());
+        match mask_view {
+            Some(mv) => self.ortho_pass.render_mirror_masked(
+                device, queue, encoder, &src_view, mv, &out_view, w, h, xform, format,
+            ),
+            None => self.ortho_pass.render_remap(
+                device, queue, encoder, &src_view, &out_view, w, h, xform, format,
+            ),
+        }
+
+        let node_tex = self.node_textures[&node_id].texture();
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &out_scratch,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: node_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: lx, y: ly, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        self.mark_node_pixels_dirty(node_id);
         self.mark_dirty();
     }
 
@@ -1714,6 +1897,22 @@ impl Compositor {
     /// op + invert pipelines that mutate the ping-pong textures.
     pub fn selection_state_mut(&mut self) -> Option<&mut crate::gpu::selection::SelectionState> {
         self.selection_state.as_mut()
+    }
+
+    /// Orthogonally transform the active selection mask alongside a canvas
+    /// flip/rotate (no-op if there is no selection state). Drives the shared
+    /// ortho pass over the selection's ping-pong textures.
+    pub fn ortho_transform_selection(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        xform: crate::gpu::ortho_transform::OrthoXform,
+    ) {
+        let pass = &self.ortho_pass;
+        if let Some(sel) = self.selection_state.as_mut() {
+            sel.apply_ortho(device, queue, encoder, pass, xform);
+        }
     }
 
     /// Borrow a layer's procedural-content sidecar, if any. Returns `None`
@@ -3256,5 +3455,56 @@ impl Compositor {
 
         self.finish_present();
         perf::time_end("render-total");
+    }
+}
+
+#[cfg(test)]
+mod ortho_extent_tests {
+    use super::ortho_extent_about;
+    use crate::coord::CanvasRect;
+    use crate::gpu::ortho_transform::OrthoXform;
+
+    // Odd, non-square canvas window so off-by-one in the index map or pivot
+    // would surface. `frame` is the canvas; `e` a node extent inside it.
+    fn frame() -> CanvasRect {
+        CanvasRect::from_xywh(0, 0, 7, 5)
+    }
+
+    #[test]
+    fn flip_h_moves_node_to_the_mirror_column() {
+        // Node cols [1,4) (w=3) in a 7-wide frame → cols [3,6).
+        let e = CanvasRect::from_xywh(1, 0, 3, 5);
+        assert_eq!(
+            ortho_extent_about(e, frame(), OrthoXform::FlipH),
+            CanvasRect::from_xywh(3, 0, 3, 5)
+        );
+    }
+
+    #[test]
+    fn flip_v_moves_node_to_the_mirror_row() {
+        let e = CanvasRect::from_xywh(0, 1, 7, 2);
+        assert_eq!(
+            ortho_extent_about(e, frame(), OrthoXform::FlipV),
+            CanvasRect::from_xywh(0, 2, 7, 2)
+        );
+    }
+
+    #[test]
+    fn rot90_swaps_dims_and_recentres_the_frame() {
+        // The whole canvas extent maps to the recentred, dimension-swapped frame
+        // (GIMP offset rule: new_origin = old + (W-H)/2, (H-W)/2).
+        let canvas = frame();
+        let cw = ortho_extent_about(canvas, canvas, OrthoXform::Rot90Cw);
+        assert_eq!(cw, CanvasRect::from_xywh((7 - 5) / 2, (5 - 7) / 2, 5, 7));
+    }
+
+    #[test]
+    fn rot90_round_trips_to_identity() {
+        let canvas = frame();
+        let e = CanvasRect::from_xywh(1, 0, 3, 5);
+        let cw = ortho_extent_about(e, canvas, OrthoXform::Rot90Cw);
+        let rotated_frame = ortho_extent_about(canvas, canvas, OrthoXform::Rot90Cw);
+        let back = ortho_extent_about(cw, rotated_frame, OrthoXform::Rot90Ccw);
+        assert_eq!(back, e, "CW then CCW restores the node extent");
     }
 }

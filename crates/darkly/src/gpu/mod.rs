@@ -34,6 +34,7 @@ pub mod diff_rect;
 pub mod effect;
 pub mod floating_preview;
 pub mod flood_fill;
+pub mod ortho_transform;
 pub mod overlay;
 pub mod paint_target;
 pub mod params;

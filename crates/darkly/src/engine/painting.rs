@@ -1387,10 +1387,30 @@ impl DarklyEngine {
         width: u32,
         height: u32,
     ) -> Option<wgpu::BindGroup> {
+        let pixels = self.cropped_selection_pixels(origin, width, height)?;
+        Some(self.paint_pipelines.upload_r8_bind_group(
+            &self.gpu.device,
+            &self.gpu.queue,
+            width,
+            height,
+            &pixels,
+            "selection-cropped",
+        ))
+    }
+
+    /// Crop the live selection's CPU cache to a `width`×`height` window-local
+    /// region at `origin`, returning straight R8 coverage (0 outside the
+    /// canvas). `None` if there's no selection or the cache hasn't landed.
+    /// Shared by the paint-mask bind-group path and the layer-flip mask.
+    pub(crate) fn cropped_selection_pixels(
+        &self,
+        origin: (i32, i32),
+        width: u32,
+        height: u32,
+    ) -> Option<Vec<u8>> {
         if !self.has_selection() {
             return None;
         }
-
         let full = self.selection_cpu_cache()?;
         let (ox, oy) = origin;
         let cw = self.doc.width;
@@ -1407,14 +1427,52 @@ impl DarklyEngine {
                 }
             }
         }
+        Some(pixels)
+    }
 
-        Some(self.paint_pipelines.upload_r8_bind_group(
-            &self.gpu.device,
-            &self.gpu.queue,
-            width,
-            height,
+    /// Crop the live selection into a fresh `width`×`height` R8 texture (for
+    /// passes that `textureLoad` the mask directly, e.g. the layer-flip mirror).
+    /// `origin` is window-local; `None` if the cache isn't ready.
+    pub(crate) fn upload_cropped_selection_texture(
+        &self,
+        origin: (i32, i32),
+        width: u32,
+        height: u32,
+    ) -> Option<wgpu::Texture> {
+        let pixels = self.cropped_selection_pixels(origin, width, height)?;
+        let texture = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("selection-cropped-tex"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             &pixels,
-            "selection-cropped",
-        ))
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        Some(texture)
     }
 }

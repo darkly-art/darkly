@@ -16,7 +16,7 @@ use crate::coord::CanvasRect;
 use crate::gpu::compositor::scaled_extent_about;
 use crate::gpu::region_store::UndoRegionEntry;
 use crate::layer::LayerId;
-use crate::undo::ImageRescaleAction;
+use crate::undo::CanvasGeometryAction;
 
 impl DarklyEngine {
     /// Resample all layer + mask pixels to `(new_width, new_height)`, scaling
@@ -122,9 +122,11 @@ impl DarklyEngine {
         // 5. Update canvas dimensions (origin fixed) + push the undo step.
         self.doc.width = new_width;
         self.doc.height = new_height;
-        self.push_undo(Box::new(ImageRescaleAction::new(
+        self.push_undo(Box::new(CanvasGeometryAction::new(
             (old_w, old_h),
             (new_width, new_height),
+            origin,
+            origin,
             bounds,
             regions,
             selection,

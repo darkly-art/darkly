@@ -138,9 +138,9 @@ For a feature to count, it must be:
 - [ ] Adjustment layers
 - [x] Feather + antialias
 - [x] Grow / Shrink / Border / Smooth as discrete commands
-- [ ] Flip canvas H / V
-- [ ] Rotate canvas 90° CW / CCW / 180°
-- [ ] Flip layer / selection H / V
+- [x] Flip canvas H / V
+- [x] Rotate canvas 90° CW / CCW / 180°
+- [x] Flip layer / selection H / V
 - [ ] Text tool / text layers
 - [ ] Recent colors
 - [ ] Saved swatches / palettes

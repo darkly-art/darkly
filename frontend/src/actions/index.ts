@@ -447,6 +447,71 @@ export function registerActions() {
             app.requestFrame();
         },
     });
+    actions.register({
+        id: 'flipCanvasH',
+        displayName: 'Flip Canvas Horizontally',
+        category: 'edit',
+        description: 'Mirror the whole canvas left-to-right.',
+        icon: 'fa6-solid:arrows-left-right',
+        menuPath: ['Image:30'],
+        handler: async () => {
+            app.engine?.post('flip_canvas', { axis: 'h' });
+            await app.syncCanvasRect();
+            app.requestFrame();
+        },
+    });
+    actions.register({
+        id: 'flipCanvasV',
+        displayName: 'Flip Canvas Vertically',
+        category: 'edit',
+        description: 'Mirror the whole canvas top-to-bottom.',
+        icon: 'fa6-solid:arrows-up-down',
+        menuPath: ['Image:31'],
+        handler: async () => {
+            app.engine?.post('flip_canvas', { axis: 'v' });
+            await app.syncCanvasRect();
+            app.requestFrame();
+        },
+    });
+    actions.register({
+        id: 'rotateCanvasCW',
+        displayName: 'Rotate Canvas 90° CW',
+        category: 'edit',
+        description: 'Rotate the whole canvas a quarter turn clockwise.',
+        icon: 'fa6-solid:rotate-right',
+        menuPath: ['Image:40'],
+        handler: async () => {
+            app.engine?.post('rotate_canvas', { dir: 'cw' });
+            await app.syncCanvasRect();
+            app.requestFrame();
+        },
+    });
+    actions.register({
+        id: 'rotateCanvasCCW',
+        displayName: 'Rotate Canvas 90° CCW',
+        category: 'edit',
+        description: 'Rotate the whole canvas a quarter turn counter-clockwise.',
+        icon: 'fa6-solid:rotate-left',
+        menuPath: ['Image:41'],
+        handler: async () => {
+            app.engine?.post('rotate_canvas', { dir: 'ccw' });
+            await app.syncCanvasRect();
+            app.requestFrame();
+        },
+    });
+    actions.register({
+        id: 'rotateCanvas180',
+        displayName: 'Rotate Canvas 180°',
+        category: 'edit',
+        description: 'Rotate the whole canvas a half turn.',
+        icon: 'fa6-solid:rotate',
+        menuPath: ['Image:42'],
+        handler: async () => {
+            app.engine?.post('rotate_canvas', { dir: '180' });
+            await app.syncCanvasRect();
+            app.requestFrame();
+        },
+    });
 
     // -- Clipboard --
     actions.register({
@@ -801,7 +866,7 @@ export function registerActions() {
         category: 'layers',
         description: 'Show or hide the active layer.',
         icon: 'fa6-solid:eye',
-        menuPath: ['Layer:50'],
+        menuPath: ['Layer:70'],
         accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
@@ -819,7 +884,7 @@ export function registerActions() {
         category: 'layers',
         description: 'Lock or unlock the active layer.',
         icon: 'fa6-solid:lock',
-        menuPath: ['Layer:60'],
+        menuPath: ['Layer:80'],
         accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
@@ -837,7 +902,7 @@ export function registerActions() {
         category: 'layers',
         description: 'Solo a layer so only it shows in the canvas. Press again to bring everything else back.',
         icon: 'fa6-solid:circle-dot',
-        menuPath: ['Layer:70'],
+        menuPath: ['Layer:90'],
         accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
@@ -852,7 +917,7 @@ export function registerActions() {
         category: 'layers',
         description: 'Delete the selected layers (or remove the active veil).',
         icon: 'fa6-solid:trash',
-        menuPath: ['Layer:40'],
+        menuPath: ['Layer:60'],
         handler: async () => {
             const engine = app.engine;
             if (!engine) return;
@@ -923,12 +988,42 @@ export function registerActions() {
     });
 
     actions.register({
+        id: 'flipLayerH',
+        displayName: 'Flip Horizontally',
+        category: 'layers',
+        description: 'Mirror the active layer (or selection) left-to-right.',
+        icon: 'fa6-solid:arrows-left-right',
+        menuPath: ['Layer:40'],
+        enabled: () => app.activeLayerId !== null || 'No active layer',
+        handler: async () => {
+            const engine = app.engine;
+            if (!engine || app.activeLayerId === null) return;
+            await engine.send('flip_node', { node_id: app.activeLayerId, axis: 'h' });
+            app.requestFrame();
+        },
+    });
+    actions.register({
+        id: 'flipLayerV',
+        displayName: 'Flip Vertically',
+        category: 'layers',
+        description: 'Mirror the active layer (or selection) top-to-bottom.',
+        icon: 'fa6-solid:arrows-up-down',
+        menuPath: ['Layer:50'],
+        enabled: () => app.activeLayerId !== null || 'No active layer',
+        handler: async () => {
+            const engine = app.engine;
+            if (!engine || app.activeLayerId === null) return;
+            await engine.send('flip_node', { node_id: app.activeLayerId, axis: 'v' });
+            app.requestFrame();
+        },
+    });
+    actions.register({
         id: 'mergeDown',
         displayName: 'Merge Down',
         category: 'layers',
         description: 'Merge the active layer into the one below it, or combine multiple selected layers into a single layer.',
         icon: 'fa6-solid:arrows-down-to-line',
-        menuPath: ['Layer:90'],
+        menuPath: ['Layer:110'],
         handler: async () => {
             const engine = app.engine;
             if (!engine) return;
@@ -963,7 +1058,7 @@ export function registerActions() {
         description:
             'Bake modifiers into the layer (apply mask), or flatten a group into a single raster that inherits the group’s blend props.',
         icon: 'fa6-solid:layer-group',
-        menuPath: ['Layer:100'],
+        menuPath: ['Layer:120'],
         accepts: ['layerId'],
         handler: async (ctx) => {
             const engine = app.engine;
@@ -986,7 +1081,7 @@ export function registerActions() {
         category: 'layers',
         description: 'Add a mask modifier to the active layer or group and activate it for painting.',
         icon: 'radix-icons:mask-on',
-        menuPath: ['Layer:80'],
+        menuPath: ['Layer:100'],
         accepts: ['layerId'],
         handler: async (ctx) => {
             const engine = app.engine;

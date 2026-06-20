@@ -2,12 +2,14 @@ mod bake_common;
 mod brush_graph;
 mod brush_library;
 mod canvas_resize;
+mod canvas_transform;
 mod clipboard;
 mod duplicate;
 mod export;
 mod flatten;
 mod floating;
 mod image_rescale;
+mod layer_flip;
 mod layers;
 mod load;
 mod merge;
@@ -68,6 +70,13 @@ use std::collections::HashMap;
 /// derived from the node's [`PixelBuffer`].
 pub(crate) struct PendingTransform {
     pub node_id: LayerId,
+}
+
+/// Deferred layer/selection flip — waiting for the selection CPU cache (the
+/// flip pivot is the selection bbox centre, read from that cache).
+pub(crate) struct PendingFlip {
+    pub node_id: LayerId,
+    pub xform: crate::gpu::ortho_transform::OrthoXform,
 }
 
 /// Deferred copy/cut — waiting for selection CPU cache to be populated.
@@ -446,6 +455,8 @@ pub struct DarklyEngine {
     // --- Deferred operations ---
     /// Pending transform waiting for content bounds computation.
     pub(crate) pending_transform: Option<PendingTransform>,
+    /// Pending layer/selection flip waiting for the selection CPU cache.
+    pub(crate) pending_flip: Option<PendingFlip>,
     /// Pending copy/cut waiting for selection CPU cache.
     pub(crate) pending_copy: Option<PendingCopy>,
 
@@ -599,6 +610,7 @@ impl DarklyEngine {
             pending_undo_commit: None,
             selection_pipelines,
             pending_transform: None,
+            pending_flip: None,
             pending_copy: None,
             readbacks: ReadbackScheduler::new(),
             pending_copy_result: None,
