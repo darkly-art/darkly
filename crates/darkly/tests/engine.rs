@@ -3156,6 +3156,86 @@ fn selection_to_mask_round_trip_preserves_pixels() {
     );
 }
 
+/// Regression: seeding a *sub-canvas* mask from a canvas-sized selection must
+/// not crash with a `copy range touches outside "mask-texture"` WebGPU
+/// validation error, and the grow-to-union must make the mask cover the
+/// **whole** selection (not just the pre-existing overlap). Cropped first
+/// (non-zero `canvas_origin`) so the plane↔texture frame math is exercised.
+#[test]
+fn selection_to_sub_canvas_mask_covers_whole_selection() {
+    use darkly::coord::CanvasRect;
+
+    // 64×64 layer + mask, then enlarge & offset the canvas window so the mask
+    // (still 64×64 @ origin 0,0 — host bounds) is strictly smaller than and
+    // offset from the canvas window.
+    let mut engine = test_engine(64, 64);
+    let layer_id = engine.add_raster_layer(None);
+    engine.add_mask(layer_id);
+    let mask_id = engine.host_mask_id(layer_id).expect("mask just added");
+
+    let canvas = CanvasRect::from_xywh(20, 16, 128, 96);
+    engine.resize_canvas(canvas);
+
+    // Canvas-sized selection (window 128×96) seeded into the smaller mask.
+    // Pre-fix this copy overflows the 64×64 mask texture → validation crash.
+    engine.select_all();
+    engine.render(0.0);
+    engine.selection_to_mask(layer_id);
+    engine.render(0.0);
+
+    // Grow-to-union: the mask now covers the whole selection (the canvas).
+    let bounds = engine.node_pixel_bounds(mask_id).expect("mask still attached");
+    assert!(
+        bounds.contains(canvas),
+        "mask must have grown to cover the whole selection; mask={bounds:?} canvas={canvas:?}"
+    );
+
+    // A selected plane pixel that lay OUTSIDE the original 64×64 mask must now
+    // read as revealed (255) — proof the grow-to-union represented it, not just
+    // the old intersection. Plane (130, 100) is inside the canvas window but
+    // well past the original mask's right/bottom edge.
+    let mask_pixels = engine.test_readback_mask(layer_id);
+    let mw = bounds.width;
+    let lx = (130 - bounds.origin.x) as u32;
+    let ly = (100 - bounds.origin.y) as u32;
+    let v = mask_byte_at(&mask_pixels, mw, lx, ly);
+    assert!(
+        v > 200,
+        "selected pixel outside the original mask bounds must be revealed after \
+         grow-to-union; got {v}"
+    );
+}
+
+/// Regression: reading a *sub-canvas* mask back into the selection
+/// (`mask_to_selection`) must not crash with a `copy range touches outside`
+/// validation error either — the old copy read a canvas-sized rect out of the
+/// smaller mask texture. Cropped first.
+#[test]
+fn mask_to_selection_from_sub_canvas_mask_does_not_crash() {
+    use darkly::coord::CanvasRect;
+
+    let mut engine = test_engine(64, 64);
+    let layer_id = engine.add_raster_layer(None);
+    engine.add_mask(layer_id);
+    let mask_id = engine.host_mask_id(layer_id).expect("mask just added");
+
+    // Paint a dab on the mask so it carries real content.
+    paint_mask_dab(&mut engine, layer_id, 20.0, 20.0, 0.0);
+
+    // Enlarge & offset the canvas so the mask is sub-canvas.
+    engine.resize_canvas(CanvasRect::from_xywh(20, 16, 128, 96));
+
+    // Pre-fix: copying canvas_w×canvas_h out of the 64×64 mask overflows it.
+    engine.mask_to_selection(mask_id);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    assert!(
+        engine.has_selection(),
+        "mask_to_selection must activate the selection without crashing"
+    );
+}
+
 /// The document model must expose the selection as a typed [`Modifier`] —
 /// not as a parallel `Option<AlphaMask>` slot. `Document.selection` is a
 /// Modifier with `kind = Selection(...)`, addressable through the same

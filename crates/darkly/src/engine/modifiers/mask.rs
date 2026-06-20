@@ -56,10 +56,13 @@ impl DarklyEngine {
         self.compositor
             .ensure_passthrough_mask_state(&self.gpu.device, host_id);
 
-        // If a selection is active, seed the mask pixels from the selection
-        // texture (R8 → R8 full-canvas copy).
+        // If a selection is active, seed the mask pixels from the selection.
+        // Grow the mask to the union of its bounds and the selection's plane
+        // bounds first, so the whole selection is represented (the mask may
+        // default to a sub-canvas host's bounds, smaller than the selection).
         if self.has_selection() {
             if let Some(src_id) = self.selection_modifier_id() {
+                self.grow_modifier_to_fit(mod_id, self.selection_seed_bounds());
                 self.clone_modifier_pixels(src_id, mod_id);
             }
         }
@@ -318,6 +321,7 @@ impl DarklyEngine {
             None => return,
         };
         if let Some(src_id) = self.selection_modifier_id() {
+            self.grow_modifier_to_fit(mask_id, self.selection_seed_bounds());
             self.clone_modifier_pixels(src_id, mask_id);
         }
         self.compositor.mark_node_pixels_dirty(mask_id);
@@ -357,60 +361,175 @@ impl DarklyEngine {
         self.doc.mask_modifier_id(host_id)
     }
 
+    /// Plane-space bounds to seed a mask from: the selection's tight pixel
+    /// bounds (lifted from window-local), or the full canvas if no tight bounds
+    /// are tracked (a whole-canvas selection).
+    fn selection_seed_bounds(&self) -> crate::coord::CanvasRect {
+        match self.selection_pixel_bounds() {
+            Some(w) => w.to_canvas(self.doc.canvas_origin),
+            None => self.doc.canvas_rect(),
+        }
+    }
+
+    /// Grow a mask modifier's own bounds (doc `PixelBuffer.bounds` + GPU
+    /// texture) to cover `needed`, honoring `MAX_LAYER_DIM`. Document-led, same
+    /// shape as [`Self::grow_layer`] but for a modifier id growing *itself* — no
+    /// host coupling. Returns the new extent when grown, `None` otherwise.
+    ///
+    /// Stage A's inline grow path used by the selection-seeding callers so the
+    /// subsequent clone is lossless. (Stage B's `grow_modifier` adds a real undo
+    /// op and supersedes this.)
+    fn grow_modifier_to_fit(
+        &mut self,
+        mod_id: LayerId,
+        needed: crate::coord::CanvasRect,
+    ) -> Option<crate::coord::CanvasRect> {
+        use crate::gpu::compositor::{LAYER_GROWTH_CHUNK, MAX_LAYER_DIM};
+
+        let current = self
+            .doc
+            .find_modifier(mod_id)
+            .and_then(|m| m.pixels())
+            .map(|b| b.bounds)?;
+        if current.contains(needed) {
+            return None;
+        }
+        let new_extent = current.union(needed).round_outward(LAYER_GROWTH_CHUNK);
+        if new_extent.width > MAX_LAYER_DIM || new_extent.height > MAX_LAYER_DIM {
+            return None;
+        }
+
+        // Doc first — the modifier's `PixelBuffer` is the source of truth.
+        self.doc
+            .find_modifier_mut(mod_id)
+            .and_then(|m| m.pixels_mut())?
+            .bounds = new_extent;
+
+        self.gpu.encode("mask-grow", |encoder| {
+            self.compositor.resize_node_texture(
+                &self.gpu.device,
+                &self.gpu.queue,
+                encoder,
+                mod_id,
+                new_extent,
+            );
+        });
+        Some(new_extent)
+    }
+
     /// GPU-to-GPU copy of one modifier's R8 pixel buffer into another's.
-    /// Resolves source and destination via [`Self::modifier_texture`], so it
+    /// Resolves source and destination via [`Self::modifier_frame`], so it
     /// works uniformly for any pair of pixel-bearing modifier ids — selection
     /// or mask, in either direction. This is the §4a unification: the kind-
     /// specific bridge ops (`selection_to_mask`, `mask_to_selection`) now
     /// delegate to one function instead of duplicating the encode dance.
+    ///
+    /// **Clear-then-copy, bounds-aware.** The two textures may have different
+    /// plane extents (a sub-canvas mask vs. the canvas-sized selection). `dst`
+    /// is cleared to 0, then the plane-space *overlap* of the two extents is
+    /// copied into `dst`'s local origin — so `dst` faithfully equals `src` over
+    /// the overlap and reads 0 outside it, lossless across `dst`'s whole extent.
+    /// Disjoint extents degrade to a pure clear, never a `copy range touches
+    /// outside` validation crash. Callers that need the whole source represented
+    /// grow `dst` to the union first (see `selection_to_mask` / `add_mask`).
     ///
     /// Marks `dst_id` thumbnail-dirty before returning per the write-site
     /// invariant — callers don't need to. For the selection modifier (which
     /// doesn't surface in the layer panel), the mark is a no-op: the drain
     /// only readbacks ids present in `compositor.node_textures`.
     pub(crate) fn clone_modifier_pixels(&mut self, src_id: LayerId, dst_id: LayerId) {
-        let canvas_w = self.doc.width;
-        let canvas_h = self.doc.height;
-        let src_tex = match self.modifier_texture(src_id) {
-            Some(t) => t,
+        let (src_frame, _) = match self.modifier_frame(src_id) {
+            Some(v) => v,
             None => return,
         };
-        let dst_tex = match self.modifier_texture(dst_id) {
-            Some(t) => t,
+        let (dst_frame, dst_view) = match self.modifier_frame(dst_id) {
+            Some(v) => v,
             None => return,
         };
+        let overlap = src_frame.canvas_extent.intersect(dst_frame.canvas_extent);
         self.gpu.encode("clone-modifier-pixels", |encoder| {
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: src_tex,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: dst_tex,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: canvas_w,
-                    height: canvas_h,
-                    depth_or_array_layers: 1,
-                },
-            );
+            // Clear the destination to 0 over its whole extent first.
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("clone-modifier-clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: dst_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            });
+
+            // Copy the plane overlap, mapped into each texture's local frame.
+            if let Some(overlap) = overlap {
+                if let (Some(src_local), Some(dst_local)) = (
+                    src_frame.canvas_to_layer_rect(overlap),
+                    dst_frame.canvas_to_layer_rect(overlap),
+                ) {
+                    encoder.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: src_frame.texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d {
+                                x: src_local.x0(),
+                                y: src_local.y0(),
+                                z: 0,
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: dst_frame.texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d {
+                                x: dst_local.x0(),
+                                y: dst_local.y0(),
+                                z: 0,
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d {
+                            width: src_local.width.min(dst_local.width),
+                            height: src_local.height.min(dst_local.height),
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+            }
         });
         self.compositor.mark_node_pixels_dirty(dst_id);
     }
 
-    /// Resolve the GPU texture for any pixel-bearing modifier id. The
-    /// selection lives in `compositor.selection_state`; per-host modifiers
-    /// (mask, future filter/transform) live in the shared node-texture pool.
-    pub(crate) fn modifier_texture(&self, id: LayerId) -> Option<&wgpu::Texture> {
+    /// Resolve a pixel-bearing modifier id to a plane-space [`CanvasFrame`] plus
+    /// its render view. The selection lives in `compositor.selection_state` and
+    /// is window-local, so its extent is lifted to plane space via
+    /// `canvas_origin`; per-host modifiers (mask, future filter/transform) live
+    /// in the shared node-texture pool and are already plane-anchored.
+    pub(crate) fn modifier_frame(
+        &self,
+        id: LayerId,
+    ) -> Option<(crate::gpu::atlas::CanvasFrame<'_>, &wgpu::TextureView)> {
         if Some(id) == self.selection_modifier_id() {
-            self.compositor.selection_state().map(|s| s.texture())
+            let s = self.compositor.selection_state()?;
+            let extent = crate::coord::CanvasRect::from_xywh(
+                self.doc.canvas_origin.x,
+                self.doc.canvas_origin.y,
+                s.width,
+                s.height,
+            );
+            Some((
+                crate::gpu::atlas::CanvasFrame {
+                    texture: s.texture(),
+                    canvas_extent: extent,
+                },
+                &s.views[s.current],
+            ))
         } else {
-            self.compositor.node_texture(id).map(|t| t.texture())
+            let t = self.compositor.node_texture(id)?;
+            Some((t.canvas_frame(), t.view()))
         }
     }
 }
