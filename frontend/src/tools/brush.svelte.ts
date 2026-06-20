@@ -3,6 +3,7 @@ import type { Engine } from '../engine/protocol';
 import { app } from '../state/app.svelte';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { srgbToLinear } from '../lib/color';
+import { effectivePressure } from '../lib/pressure';
 import { strokeRecorder, currentCanvasDimensions } from '../lib/strokeRecorder';
 import {
     KIND_MASKED_STAMP,
@@ -55,17 +56,6 @@ export interface PenPose {
     tiltY: number;
     twist: number;
     tangentialPressure: number;
-}
-
-/** Effective pressure for a PointerEvent. Stylus / touch report real
- *  per-event pressure; mouse-with-button-down reports the W3C spec
- *  default of 0.5 (a "split the difference" value designed for generic
- *  gesture surfaces). For paint tools that means a Flow=100% mouse
- *  click only deposits ~50% alpha, which is surprising — Krita,
- *  Photoshop, GIMP, and MyPaint all override mouse to full pressure
- *  for the same reason. Match that convention here. */
-export function effectivePressure(e: PointerEvent): number {
-    return e.pointerType === 'mouse' ? 1.0 : e.pressure;
 }
 
 /** Pose for the on-canvas cursor preview. Tracks the live PointerEvent
