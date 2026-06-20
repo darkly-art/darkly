@@ -61,25 +61,25 @@ function reset() {
 describe('startPick', () => {
     beforeEach(reset);
 
-    it('passes layer_id=-1 in "merged" mode regardless of activeLayerId', () => {
+    it('passes id=-1 in "merged" mode regardless of activeLayerId', () => {
         fakeConfig._mode = 'merged';
         fakeApp.activeLayerId = 42;
         startPick(engine as any, 10, 20);
-        expect(pickColorPayload()).toEqual({ x: 10, y: 20, layer_id: -1 });
+        expect(pickColorPayload()).toEqual({ x: 10, y: 20, id: -1 });
     });
 
     it('passes the active layer id in "currentLayer" mode when one is set', () => {
         fakeConfig._mode = 'currentLayer';
         fakeApp.activeLayerId = 42;
         startPick(engine as any, 10, 20);
-        expect(pickColorPayload()).toEqual({ x: 10, y: 20, layer_id: 42 });
+        expect(pickColorPayload()).toEqual({ x: 10, y: 20, id: 42 });
     });
 
     it('falls back to -1 in "currentLayer" mode when no layer is active', () => {
         fakeConfig._mode = 'currentLayer';
         fakeApp.activeLayerId = null;
         startPick(engine as any, 10, 20);
-        expect(pickColorPayload()).toEqual({ x: 10, y: 20, layer_id: -1 });
+        expect(pickColorPayload()).toEqual({ x: 10, y: 20, id: -1 });
     });
 });
 

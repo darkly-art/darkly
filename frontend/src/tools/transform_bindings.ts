@@ -53,7 +53,7 @@ export function voidTransformBinding(layerId: number): TransformBinding {
         async read() {
             const raw = await app.engine?.send<
                 { ox: number; oy: number; w: number; h: number; mode: number; matrix: number[] } | null
-            >('void_transform_info', { layer_id: layerId });
+            >('void_transform_info', { id: layerId });
             if (!raw) return null;
             const affine = raw.matrix as Affine2D;
             if (original === null) original = [...affine];
@@ -67,7 +67,7 @@ export function voidTransformBinding(layerId: number): TransformBinding {
         },
         update(affine: Affine2D, modeTag: number) {
             app.engine?.post('update_void_transform', {
-                layer_id: layerId,
+                id: layerId,
                 mode_tag: modeTag,
                 payload: Array.from(affine),
             });
@@ -78,7 +78,7 @@ export function voidTransformBinding(layerId: number): TransformBinding {
         cancel() {
             if (original) {
                 app.engine?.post('update_void_transform', {
-                    layer_id: layerId,
+                    id: layerId,
                     mode_tag: 0,
                     payload: Array.from(original),
                 });

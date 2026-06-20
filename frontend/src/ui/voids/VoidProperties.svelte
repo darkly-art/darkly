@@ -21,7 +21,7 @@
         for (const p of node.params) {
             params[p.name] = p.value ?? p.default;
         }
-        app.engine.post('update_void_params', { layer_id: node.id, params });
+        app.engine.post('update_void_params', { id: node.id, params });
         app.refreshLayerTree();
         app.requestFrame();
     }

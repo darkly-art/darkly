@@ -23,7 +23,7 @@ export function startPick(engine: Engine, cx: number, cy: number): void {
     const mode = config.get('tools.colorPickerSampleSource');
     const layerId =
         mode === 'currentLayer' && app.activeLayerId != null ? app.activeLayerId : -1;
-    engine.post('pick_color', { x: cx, y: cy, layer_id: layerId });
+    engine.post('pick_color', { x: cx, y: cy, id: layerId });
     waitingForPick = true;
 }
 

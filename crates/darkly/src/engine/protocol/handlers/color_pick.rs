@@ -15,11 +15,11 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 struct Req {
                     x: f32,
                     y: f32,
-                    layer_id: f64,
+                    id: f64,
                 }
                 let r: Req = decode(payload)?;
-                let source = if r.layer_id >= 0.0 {
-                    PickSource::Layer(LayerId::from_ffi(r.layer_id as u64))
+                let source = if r.id >= 0.0 {
+                    PickSource::Layer(LayerId::from_ffi(r.id as u64))
                 } else {
                     PickSource::Merged
                 };
