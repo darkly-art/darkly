@@ -244,6 +244,16 @@ pub struct VoidRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
     pub params: &'static [ParamDef],
+    /// Iconify icon name (e.g. `"tabler:galaxy"`). Always present — the layer
+    /// panel renders it for void layers of this kind, and the picker falls back
+    /// to it when the void declares no rendered preview.
+    pub icon: &'static str,
+    /// Whether this void can render a meaningful picker thumbnail. When true the
+    /// "Add Void" picker shows a live rendered preview; when false it shows
+    /// [`icon`](Self::icon) instead. (The camera void opts out — its aux texture
+    /// is a 1×1 placeholder until a webcam frame arrives, so there's nothing to
+    /// render at preview time.)
+    pub supports_preview: bool,
     /// Whether this void exposes a live, user-editable transform (driven by the
     /// generic gizmo, stored on [`crate::layer::VoidLayer::transform`]). Voids
     /// that opt in implement [`Void::set_transform`]; the rest leave it false
@@ -266,6 +276,8 @@ struct RegistryEntry {
     display_name: &'static str,
     create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
     params: &'static [ParamDef],
+    icon: &'static str,
+    supports_preview: bool,
     supports_live_transform: bool,
     from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Void>,
     cached_pipeline: Option<Arc<EffectPipeline>>,
@@ -287,6 +299,8 @@ impl VoidRegistry {
                     display_name: reg.display_name,
                     create_pipeline: reg.create_pipeline,
                     params: reg.params,
+                    icon: reg.icon,
+                    supports_preview: reg.supports_preview,
                     supports_live_transform: reg.supports_live_transform,
                     from_params: reg.from_params,
                     cached_pipeline: None,
@@ -296,20 +310,44 @@ impl VoidRegistry {
         VoidRegistry { entries }
     }
 
-    /// Return all registered void types with display name and parameter
-    /// definitions. Sorted by `type_id` for deterministic UI ordering.
-    pub fn types(&self) -> Vec<(&'static str, &'static str, &'static [ParamDef])> {
+    /// Return all registered void types with display name, parameter
+    /// definitions, iconify icon, and whether they support a rendered preview.
+    /// Sorted by `type_id` for deterministic UI ordering.
+    #[allow(clippy::type_complexity)]
+    pub fn types(
+        &self,
+    ) -> Vec<(
+        &'static str,
+        &'static str,
+        &'static [ParamDef],
+        &'static str,
+        bool,
+    )> {
         let mut types: Vec<_> = self
             .entries
             .iter()
-            .map(|(&id, e)| (id, e.display_name, e.params))
+            .map(|(&id, e)| (id, e.display_name, e.params, e.icon, e.supports_preview))
             .collect();
-        types.sort_by_key(|(id, _, _)| *id);
+        types.sort_by_key(|(id, ..)| *id);
         types
     }
 
     pub fn param_defs(&self, type_id: &str) -> &'static [ParamDef] {
         self.entries.get(type_id).map(|e| e.params).unwrap_or(&[])
+    }
+
+    /// The iconify icon name for a void kind (layer-panel icon + picker
+    /// fallback). Empty for unknown types.
+    pub fn icon(&self, type_id: &str) -> &'static str {
+        self.entries.get(type_id).map(|e| e.icon).unwrap_or("")
+    }
+
+    /// Resolve a runtime `&str` type id to the registry's `&'static str` key,
+    /// or `None` if the type is unknown. Callers keying long-lived state by
+    /// type id (the preview cache + its readback context) use this to obtain a
+    /// `'static` id without leaking. Mirrors `VeilRegistry::static_type_id`.
+    pub fn static_type_id(&self, type_id: &str) -> Option<&'static str> {
+        self.entries.get_key_value(type_id).map(|(k, _)| *k)
     }
 
     /// Whether the named void kind exposes a live, user-editable transform.

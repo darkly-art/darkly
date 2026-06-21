@@ -494,7 +494,8 @@ impl DarklyEngine {
                     self.compositor.mark_needs_present();
                 }
             }
-            ReadbackContext::VeilPreviewFrame {
+            ReadbackContext::PreviewFrame {
+                kind,
                 type_id,
                 frame_idx,
                 total,
@@ -503,7 +504,7 @@ impl DarklyEngine {
                 // putImageData. Guard against a stale generation (frame count
                 // mismatch) so a superseded request can't write into a freshly
                 // sized buffer.
-                if let Some(job) = self.veil_previews.get_mut(type_id) {
+                if let Some(job) = self.previews.get_mut(&(kind, type_id)) {
                     if job.frames.len() == total as usize {
                         if let Some(slot) = job.frames.get_mut(frame_idx as usize) {
                             *slot = Some(pixels);

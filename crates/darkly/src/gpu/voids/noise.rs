@@ -100,6 +100,8 @@ pub fn register() -> VoidRegistration {
         type_id: TYPE_ID,
         display_name: "Noise",
         params: PARAMS,
+        icon: "tabler:galaxy",
+        supports_preview: true,
         supports_live_transform: true,
         create_pipeline,
         from_params: |params, shared| Box::new(Noise::from_params(params, shared)),

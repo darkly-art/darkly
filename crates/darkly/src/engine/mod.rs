@@ -23,6 +23,7 @@ mod selection_support;
 pub mod types;
 mod undo_dispatch;
 mod veils;
+mod voids;
 
 pub use export::ExportImageResult;
 pub use load::LoadDocument;
@@ -30,7 +31,7 @@ pub use rendering::{PickSource, DEFAULT_THUMB_SIZE};
 pub use save::{SaveError, SaveJob, SavePurpose, SaveReadbackKind};
 pub use types::{
     BlendModeTypeInfo, ClipboardExport, EngineState, LayerInfo, LayerKindTypeInfo, ModifierInfo,
-    ModifierTypeInfo, ParamInfo, StrokeOp, ToolTypeInfo, VeilInfo, VeilTypeInfo,
+    ModifierTypeInfo, ParamInfo, StrokeOp, ToolTypeInfo, VeilInfo, VeilTypeInfo, VoidTypeInfo,
 };
 
 pub use perf::{BrushPerfDelta, FrameRenderPhases};
@@ -59,6 +60,7 @@ use crate::gpu::selection::SelectionPipelines;
 use crate::gpu::transform::FloatingContent;
 use crate::gpu::veil_preview::VeilPreviewRenderer;
 use crate::gpu::view::{ViewParams, ViewTransform};
+use crate::gpu::void_preview::VoidPreviewRenderer;
 use crate::layer::LayerId;
 use crate::undo::UndoStack;
 use std::collections::HashMap;
@@ -260,23 +262,34 @@ pub(crate) enum ReadbackContext {
     UndoRegionReady {
         cell: std::rc::Rc<std::cell::RefCell<EntryPixels>>,
     },
-    /// Async readback of one veil preview frame, rendered offscreen over the
-    /// current canvas (`gpu::veil_preview`). Completion drops the raw RGBA bytes
-    /// into `veil_previews[type_id].frames[frame_idx]`; the frontend drains all
+    /// Async readback of one picker preview frame, rendered offscreen
+    /// (`gpu::veil_preview` for veils over the current canvas, `gpu::void_preview`
+    /// for voids from scratch). Completion drops the raw RGBA bytes into
+    /// `previews[(kind, type_id)].frames[frame_idx]`; the frontend drains all
     /// `total` frames once they land and plays them as a loop. Each frame is the
     /// job's aspect-fit `width × height` RGBA.
-    VeilPreviewFrame {
+    PreviewFrame {
+        kind: PreviewKind,
         type_id: &'static str,
         frame_idx: u32,
         total: u32,
     },
 }
 
-/// One veil picker preview generation: the chosen preview dimensions plus the
+/// Which kind of effect a picker preview is generating. Keys the shared
+/// `previews` map alongside the effect's `'static` type id, so a veil and a void
+/// that happen to share a type-id string never collide.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub enum PreviewKind {
+    Veil,
+    Void,
+}
+
+/// One picker preview generation: the chosen preview dimensions plus the
 /// per-frame RGBA slots, each filled when its async readback lands. `width` /
-/// `height` are carried so `poll_veil_preview` and the WASM bridge report the
-/// real (aspect-fit) thumbnail size, which varies with the document's shape.
-pub(crate) struct VeilPreviewJob {
+/// `height` are carried so `poll_preview` and the WASM bridge report the real
+/// (aspect-fit) thumbnail size, which varies with the document's shape.
+pub(crate) struct PreviewJob {
     pub width: u32,
     pub height: u32,
     pub frames: Vec<Option<Vec<u8>>>,
@@ -423,18 +436,21 @@ pub struct DarklyEngine {
     pub(crate) preview_theme_fg: [f32; 4],
     pub(crate) preview_theme_bg: [f32; 4],
 
-    // --- Veil picker preview ---
+    // --- Picker previews (veil + void) ---
     /// Offscreen renderer for the veil picker's looping thumbnail previews.
     /// Reused across veils; holds its own preview-sized scratch textures and
     /// is fully independent of the live veil chain and document.
     pub(crate) veil_preview_renderer: VeilPreviewRenderer,
-    /// In-flight + completed preview jobs per veil type. Frame slots fill in
-    /// asynchronously as `ReadbackContext::VeilPreviewFrame` readbacks land;
-    /// `poll_veil_preview` hands back the frames once every slot is `Some`.
-    /// Keyed by the registry's `&'static str` type id. Overwritten on each
-    /// `start_veil_preview` so the picker always reflects the current canvas
-    /// (no cross-open caching).
-    pub(crate) veil_previews: HashMap<&'static str, VeilPreviewJob>,
+    /// Offscreen renderer for the void picker's looping thumbnail previews.
+    /// Reused across voids; holds its own preview-sized output texture and is
+    /// fully independent of the live layer stack and document.
+    pub(crate) void_preview_renderer: VoidPreviewRenderer,
+    /// In-flight + completed preview jobs, keyed by `(kind, &'static str type
+    /// id)`. Frame slots fill in asynchronously as `ReadbackContext::PreviewFrame`
+    /// readbacks land; `poll_preview` hands back the frames once every slot is
+    /// `Some`. Overwritten on each `start_*_preview` so the picker always
+    /// reflects the current document (no cross-open caching).
+    pub(crate) previews: HashMap<(PreviewKind, &'static str), PreviewJob>,
 
     // --- Brush Library ---
     pub(crate) brush_library: BrushLibrary,
@@ -611,7 +627,8 @@ impl DarklyEngine {
             preview_theme_fg: [1.0, 1.0, 1.0, 1.0],
             preview_theme_bg: [0.0, 0.0, 0.0, 1.0],
             veil_preview_renderer: VeilPreviewRenderer::new(),
-            veil_previews: HashMap::new(),
+            void_preview_renderer: VoidPreviewRenderer::new(),
+            previews: HashMap::new(),
             brush_library: {
                 let mut lib = BrushLibrary::new();
                 for brush in crate::brush::builtin_brushes::all() {
@@ -669,6 +686,69 @@ impl DarklyEngine {
         );
 
         engine
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared picker-preview plumbing
+// ---------------------------------------------------------------------------
+
+impl DarklyEngine {
+    /// Encode one preview frame and submit its async readback. The effect-
+    /// specific render — a veil's ping-pong pass or a void's generate pass —
+    /// lives in the `encode` closure; everything else (the command encode, the
+    /// readback request keyed by `(kind, type_id, frame_idx, total)`, and the
+    /// scheduler submission) is shared between the veil and void preview paths.
+    ///
+    /// An associated function rather than a `&mut self` method so the caller can
+    /// hand it disjoint borrows: `gpu` / `readbacks` here, while `encode` and
+    /// `output` borrow the per-effect preview renderer.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn encode_preview_frame(
+        gpu: &GpuContext,
+        readbacks: &mut ReadbackScheduler<ReadbackContext>,
+        kind: PreviewKind,
+        type_id: &'static str,
+        frame_idx: u32,
+        total: u32,
+        output: &wgpu::Texture,
+        format: wgpu::TextureFormat,
+        rect: crate::coord::LayerRect,
+        encode: impl FnOnce(&mut wgpu::CommandEncoder),
+    ) {
+        gpu.encode("preview-frame", |encoder| {
+            encode(encoder);
+            let request =
+                crate::gpu::readback::request_readback(&gpu.device, encoder, output, format, rect);
+            readbacks.submit(
+                request,
+                ReadbackContext::PreviewFrame {
+                    kind,
+                    type_id,
+                    frame_idx,
+                    total,
+                },
+            );
+        });
+    }
+
+    /// Return the completed preview for `(kind, type_id)` as
+    /// `(width, height, frames)` once every frame has landed, else `None`. Each
+    /// frame is `width × height` tightly-packed RGBA8. Shared by both pickers.
+    pub fn poll_preview(
+        &self,
+        kind: PreviewKind,
+        type_id: &str,
+    ) -> Option<(u32, u32, Vec<Vec<u8>>)> {
+        let (_, job) = self
+            .previews
+            .iter()
+            .find(|((k, t), _)| *k == kind && *t == type_id)?;
+        if job.frames.is_empty() || job.frames.iter().any(Option::is_none) {
+            return None;
+        }
+        let frames = job.frames.iter().map(|f| f.clone().unwrap()).collect();
+        Some((job.width, job.height, frames))
     }
 }
 

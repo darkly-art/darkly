@@ -76,6 +76,11 @@ pub enum LayerInfo {
         /// Stable `type_id` from the void registry — UI resolves to a
         /// display label via `void_types()`.
         void_type: String,
+        /// Iconify icon for this void kind (e.g. `"tabler:galaxy"`), declared on
+        /// the void's registration. The layer panel renders it as the void
+        /// layer's thumbnail; type-owned, so a new void kind brings its own
+        /// icon with no consumer-side change.
+        icon: &'static str,
         /// Param schema + current values, in the order the void's
         /// `ParamDef` slice declares them. Same shape the veil panel uses.
         params: Vec<ParamInfo>,
@@ -120,6 +125,22 @@ pub struct VeilTypeInfo {
     pub type_id: &'static str,
     pub display_name: &'static str,
     pub params: Vec<ParamInfo>,
+}
+
+/// Registry view of a void type for the "Add Void" picker. Mirrors
+/// [`VeilTypeInfo`] but additionally carries the void's iconify `icon` (always
+/// present — the picker's fallback when there's no rendered preview) and
+/// `supportsPreview` (whether to render a live thumbnail at all). `icon` is
+/// void-only and intentionally not symmetrized onto [`VeilTypeInfo`].
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoidTypeInfo {
+    #[serde(rename = "type")]
+    pub type_id: &'static str,
+    pub display_name: &'static str,
+    pub params: Vec<ParamInfo>,
+    pub icon: &'static str,
+    pub supports_preview: bool,
 }
 
 /// Flat serialization-friendly view of a tool's registration metadata.
@@ -398,6 +419,7 @@ pub(crate) fn node_to_layer_info(
                         .filter_map(|mid| doc.find_modifier(*mid).map(|m| modifier_to_info(doc, m)))
                         .collect(),
                     void_type: v.void_type.clone(),
+                    icon: void_registry.icon(&v.void_type),
                     params,
                 }
             }
