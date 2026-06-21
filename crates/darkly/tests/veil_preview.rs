@@ -8,10 +8,10 @@
 //! (`test_flush_readbacks`) — native-only; the wasm path drains the same
 //! `ReadbackScheduler` via the rAF render loop.
 
-use darkly::engine::DarklyEngine;
+use darkly::engine::{DarklyEngine, PreviewKind};
 use darkly::gpu::context::GpuContext;
+use darkly::gpu::preview::ANIMATED_FRAMES;
 use darkly::gpu::test_utils::test_device;
-use darkly::gpu::veil_preview::ANIMATED_FRAMES;
 
 /// Headless engine with a solid-filled canvas so the composite the preview
 /// samples has real content.
@@ -29,7 +29,7 @@ fn headless_engine() -> DarklyEngine {
 /// readbacks, all submitted up front). Returns `(width, height, frames)`.
 fn drain_preview(engine: &mut DarklyEngine, type_id: &str) -> (u32, u32, Vec<Vec<u8>>) {
     for _ in 0..256 {
-        if let Some(result) = engine.poll_veil_preview(type_id) {
+        if let Some(result) = engine.poll_preview(PreviewKind::Veil, type_id) {
             return result;
         }
         engine.test_flush_readbacks();
@@ -101,5 +101,7 @@ fn veil_preview_regenerates_on_each_open() {
 fn unknown_veil_type_is_ignored() {
     let mut engine = headless_engine();
     engine.start_veil_preview("does_not_exist");
-    assert!(engine.poll_veil_preview("does_not_exist").is_none());
+    assert!(engine
+        .poll_preview(PreviewKind::Veil, "does_not_exist")
+        .is_none());
 }

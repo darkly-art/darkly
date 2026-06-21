@@ -16,6 +16,7 @@ pub mod layers;
 pub mod mask;
 pub mod overlay;
 pub mod painting;
+pub mod preview;
 pub mod preview_config;
 pub mod registry_types;
 pub mod selection;
@@ -42,6 +43,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
     all.extend(mask::registrations());
     all.extend(overlay::registrations());
     all.extend(painting::registrations());
+    all.extend(preview::registrations());
     all.extend(preview_config::registrations());
     all.extend(registry_types::registrations());
     all.extend(selection::registrations());

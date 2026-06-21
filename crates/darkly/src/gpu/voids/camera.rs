@@ -80,6 +80,8 @@ pub fn register() -> VoidRegistration {
         type_id: TYPE_ID,
         display_name: "Camera",
         params: PARAMS,
+        icon: "tabler:camera",
+        supports_preview: false,
         supports_live_transform: true,
         create_pipeline,
         from_params: |params, shared| Box::new(Camera::from_params(params, shared)),

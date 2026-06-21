@@ -109,8 +109,8 @@ export type RequestKind =
     | 'poll_copy_result'
     | 'poll_copy_rich_result'
     | 'poll_export_result'
+    | 'poll_preview'
     | 'poll_save_result'
-    | 'poll_veil_preview'
     | 'redo'
     | 'refresh_brush_cursor_preview'
     | 'remove_layer'
@@ -147,8 +147,8 @@ export type RequestKind =
     | 'shrink_selection'
     | 'smooth_selection'
     | 'start_export'
+    | 'start_preview'
     | 'start_save_document'
-    | 'start_veil_preview'
     | 'stroke_to'
     | 'tool_types'
     | 'undo'
@@ -270,8 +270,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'poll_copy_result',
     'poll_copy_rich_result',
     'poll_export_result',
+    'poll_preview',
     'poll_save_result',
-    'poll_veil_preview',
     'redo',
     'refresh_brush_cursor_preview',
     'remove_layer',
@@ -308,8 +308,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'shrink_selection',
     'smooth_selection',
     'start_export',
+    'start_preview',
     'start_save_document',
-    'start_veil_preview',
     'stroke_to',
     'tool_types',
     'undo',

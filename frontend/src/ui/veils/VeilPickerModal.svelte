@@ -1,6 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
-    import VeilPreview from './VeilPreview.svelte';
+    import EffectPreview from '../EffectPreview.svelte';
     import Modal from '../Modal.svelte';
 
     let { onclose }: { onclose: () => void } = $props();
@@ -44,7 +44,7 @@
     <div class="grid">
         {#each veilTypes as vt (vt.type)}
             <button class="card" onclick={() => pick(vt)}>
-                <VeilPreview veilType={vt.type} />
+                <EffectPreview kind="veil" type={vt.type} />
                 <span class="card-name">{vt.displayName}</span>
             </button>
         {/each}

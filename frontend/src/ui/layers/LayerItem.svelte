@@ -21,6 +21,9 @@
             editable?: boolean;
             opacity?: number; blendMode?: string;
             modifiers?: Modifier[];
+            // Iconify icon for void layers (declared by the void's registration);
+            // the layer panel renders it as the void's thumbnail.
+            icon?: string;
         };
         depth?: number;
         onupdate: () => void;
@@ -366,7 +369,7 @@
             class:thumb-active={isActive && !isEditingMask}
             title="Void layer"
         >
-            <Icon name="tabler:galaxy" />
+            <Icon name={layer.icon ?? 'tabler:galaxy'} />
         </span>
     {/if}
 

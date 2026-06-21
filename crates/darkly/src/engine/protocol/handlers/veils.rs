@@ -1,7 +1,6 @@
 //! Veils (viewport post-process effects): list, mutate, and preview.
 
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::engine::protocol::{decode, params_from_json, RequestRegistration, Response};
 
@@ -86,46 +85,6 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 let pv = params_from_json(&r.params, engine.veil_param_defs(&type_id));
                 engine.update_veil(r.index, &pv);
                 Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "start_veil_preview",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    veil_type: String,
-                }
-                let r: Req = decode(payload)?;
-                engine.start_veil_preview(&r.veil_type);
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "poll_veil_preview",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    veil_type: String,
-                }
-                let r: Req = decode(payload)?;
-                let Some((width, height, frames)) = engine.poll_veil_preview(&r.veil_type) else {
-                    return Ok(Response::json(serde_json::Value::Null));
-                };
-                // Frames are concatenated into the single bytes side-channel;
-                // the JS edge slices them back out using width*height*4 stride.
-                let fps = crate::gpu::veil_preview::PREVIEW_FPS;
-                let frame_count = frames.len();
-                let mut bytes = Vec::new();
-                for f in &frames {
-                    bytes.extend_from_slice(f);
-                }
-                let value = json!({
-                    "width": width,
-                    "height": height,
-                    "fps": fps,
-                    "frameCount": frame_count,
-                });
-                Ok(Response::binary(value, bytes))
             },
         },
     ]

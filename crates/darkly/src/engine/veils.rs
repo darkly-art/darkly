@@ -5,12 +5,13 @@ use super::types::{
     ParamInfo, ToolTypeInfo, VeilInfo, VeilTypeInfo,
 };
 use super::DarklyEngine;
+use super::PreviewJob;
+use super::PreviewKind;
 use super::ReadbackContext;
-use super::VeilPreviewJob;
 use crate::coord::LayerRect;
 use crate::gpu::params::{ParamDef, ParamValue};
+use crate::gpu::preview::ANIMATED_FRAMES;
 use crate::gpu::veil::Veil;
-use crate::gpu::veil_preview::ANIMATED_FRAMES;
 
 impl DarklyEngine {
     // --- Veils ---
@@ -83,9 +84,13 @@ impl DarklyEngine {
         // Don't queue a duplicate generation while one is in flight. (We do not
         // skip when frames already exist — each open re-renders the live
         // canvas, which may have changed since last time.)
-        if self.readbacks.any(
-            |c| matches!(c, ReadbackContext::VeilPreviewFrame { type_id: t, .. } if *t == static_id),
-        ) {
+        if self.readbacks.any(|c| {
+            matches!(
+                c,
+                ReadbackContext::PreviewFrame { kind: PreviewKind::Veil, type_id: t, .. }
+                    if *t == static_id
+            )
+        }) {
             return;
         }
 
@@ -150,9 +155,9 @@ impl DarklyEngine {
             1
         };
         let dt = self.veil_preview_renderer.frame_dt();
-        self.veil_previews.insert(
-            static_id,
-            VeilPreviewJob {
+        self.previews.insert(
+            (PreviewKind::Veil, static_id),
+            PreviewJob {
                 width: pw,
                 height: ph,
                 frames: vec![None; total as usize],
@@ -170,38 +175,26 @@ impl DarklyEngine {
                 veil.update_time(&self.gpu.queue, &cache, dt);
             }
             let veil_ref: &dyn Veil = veil.as_ref();
-            self.gpu.encode("veil-preview-frame", |encoder| {
-                self.veil_preview_renderer
-                    .encode_frame(encoder, veil_ref, &cache);
-                let request = crate::gpu::readback::request_readback(
-                    &self.gpu.device,
-                    encoder,
-                    self.veil_preview_renderer.output_texture(),
-                    format,
-                    rect,
-                );
-                self.readbacks.submit(
-                    request,
-                    ReadbackContext::VeilPreviewFrame {
-                        type_id: static_id,
-                        frame_idx,
-                        total,
-                    },
-                );
-            });
+            let Self {
+                gpu,
+                readbacks,
+                veil_preview_renderer,
+                ..
+            } = self;
+            let output = veil_preview_renderer.output_texture();
+            Self::encode_preview_frame(
+                gpu,
+                readbacks,
+                PreviewKind::Veil,
+                static_id,
+                frame_idx,
+                total,
+                output,
+                format,
+                rect,
+                |encoder| veil_preview_renderer.encode_frame(encoder, veil_ref, &cache),
+            );
         }
-    }
-
-    /// Return the completed preview for `type_id` as `(width, height, frames)`
-    /// once every frame has landed, else `None`. Each frame is
-    /// `width × height` tightly-packed RGBA8.
-    pub fn poll_veil_preview(&self, type_id: &str) -> Option<(u32, u32, Vec<Vec<u8>>)> {
-        let job = self.veil_previews.get(type_id)?;
-        if job.frames.is_empty() || job.frames.iter().any(Option::is_none) {
-            return None;
-        }
-        let frames = job.frames.iter().map(|f| f.clone().unwrap()).collect();
-        Some((job.width, job.height, frames))
     }
 
     // --- Queries ---
@@ -257,41 +250,6 @@ impl DarklyEngine {
     /// Get the parameter definitions for a veil type.
     pub fn veil_param_defs(&self, type_id: &str) -> &'static [ParamDef] {
         self.compositor.veil_chain().registry().param_defs(type_id)
-    }
-
-    /// Return all registered void types with their parameter definitions.
-    /// Same shape as `veil_types()` — the UI consumes both through the
-    /// shared `VeilTypeInfo` struct (renamed `VoidTypeInfo` would just be a
-    /// type alias; reusing the existing one keeps the JSON identical and
-    /// the frontend's render code generic).
-    pub fn void_types(&self) -> Vec<VeilTypeInfo> {
-        self.compositor
-            .void_registry()
-            .types()
-            .into_iter()
-            .map(|(type_id, display_name, defs)| VeilTypeInfo {
-                type_id,
-                display_name,
-                params: defs.iter().map(|d| ParamInfo::from_def(d, None)).collect(),
-            })
-            .collect()
-    }
-
-    /// Get the parameter definitions for a void type.
-    pub fn void_param_defs(&self, type_id: &str) -> &'static [ParamDef] {
-        self.compositor.void_registry().param_defs(type_id)
-    }
-
-    /// Resolve a layer id to its void type, if the layer is a void.
-    /// Helper for the WASM bridge so callers don't need to import the layer
-    /// enum to query the active void's schema.
-    pub fn void_layer_type(&self, layer_id: crate::layer::LayerId) -> Option<String> {
-        match self.doc.find_node(layer_id)? {
-            crate::layer::LayerNode::Layer(crate::layer::Layer::Void(v)) => {
-                Some(v.void_type.clone())
-            }
-            _ => None,
-        }
     }
 
     /// Return all registered tool types with display name and parameter definitions.

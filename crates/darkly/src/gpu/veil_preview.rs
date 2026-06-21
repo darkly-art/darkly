@@ -21,19 +21,8 @@
 
 use super::effect::{self, EffectPipeline};
 use super::params::ParamValue;
+use super::preview::{fit_preview_dims, PREVIEW_DT};
 use super::veil::{Veil, VeilRegistry};
-
-/// Longest preview-thumbnail edge, in pixels. The composite is fit into this
-/// box preserving its aspect ratio, so previews aren't distorted regardless of
-/// the document's shape.
-pub const PREVIEW_MAX_DIM: u32 = 256;
-/// Frames captured for an animated veil (≈2s at [`PREVIEW_FPS`]). Static veils
-/// render a single frame.
-pub const ANIMATED_FRAMES: u32 = 48;
-/// Capture / playback rate, in frames per second.
-pub const PREVIEW_FPS: u32 = 24;
-/// Per-frame delta time (seconds) fed to animated veils' `update_time`.
-const PREVIEW_DT: f32 = 1.0 / PREVIEW_FPS as f32;
 
 /// Ping-pong textures sized to the preview thumbnail. `pingpong[0]` holds the
 /// downscaled composite (veil input); `pingpong[1]` receives each veil output.
@@ -214,21 +203,6 @@ impl Default for VeilPreviewRenderer {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Fit a `w × h` source into a box of [`PREVIEW_MAX_DIM`] on its longest edge,
-/// preserving aspect ratio. Sources already within the box are kept as-is.
-fn fit_preview_dims(w: u32, h: u32) -> (u32, u32) {
-    let w = w.max(1);
-    let h = h.max(1);
-    let longest = w.max(h);
-    if longest <= PREVIEW_MAX_DIM {
-        return (w, h);
-    }
-    let scale = PREVIEW_MAX_DIM as f32 / longest as f32;
-    let pw = ((w as f32 * scale).round() as u32).max(1);
-    let ph = ((h as f32 * scale).round() as u32).max(1);
-    (pw, ph)
 }
 
 fn make_textures(

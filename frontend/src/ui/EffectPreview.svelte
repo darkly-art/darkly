@@ -1,9 +1,9 @@
 <script lang="ts">
     import { onDestroy } from 'svelte';
-    import { app } from '../../state/app.svelte';
-    import { pollPreview, type PreviewData } from './veil_preview_frames';
+    import { app } from '../state/app.svelte';
+    import { pollPreview, type PreviewData, type PreviewKind } from './preview_frames';
 
-    let { veilType }: { veilType: string } = $props();
+    let { kind, type }: { kind: PreviewKind; type: string } = $props();
 
     /** Frames during which we actively poll WASM for the async readbacks to
      *  land. Generation is a handful of frames; this is a generous ceiling. */
@@ -36,7 +36,7 @@
             if (framesRemaining <= 0 || !app.engine) return;
             framesRemaining--;
             app.requestFrame();
-            const pd = await pollPreview(app.engine, veilType);
+            const pd = await pollPreview(app.engine, kind, type);
             if (pd) {
                 data = pd;
                 prevTime = now;
@@ -66,17 +66,18 @@
         rafHandle = requestAnimationFrame(tick);
     }
 
-    // Kick off a fresh render whenever the type changes. No caching — the
-    // engine re-renders against the current canvas each time the picker opens.
+    // Kick off a fresh render whenever the kind/type changes. No caching — the
+    // engine re-renders against the current document each time the picker opens.
     $effect(() => {
-        void veilType;
+        void kind;
+        void type;
         frameIdx = 0;
         lastDrawn = -1;
         accum = 0;
         prevTime = 0;
         data = null;
         framesRemaining = POLL_FRAMES;
-        app.engine?.post('start_veil_preview', { veil_type: veilType });
+        app.engine?.post('start_preview', { kind, type });
         schedule();
     });
 
@@ -89,7 +90,7 @@
      ratio from the start (placeholder uses doc dims, real frames match). The
      element scales to the card width; height follows proportionally. -->
 <canvas
-    class="veil-preview"
+    class="effect-preview"
     bind:this={canvasEl}
     width={data?.width ?? app.docW}
     height={data?.height ?? app.docH}
@@ -97,7 +98,7 @@
 ></canvas>
 
 <style>
-    .veil-preview {
+    .effect-preview {
         display: block;
         width: 100%;
         height: auto;
@@ -106,7 +107,7 @@
         image-rendering: auto;
     }
     /* Faint shimmer while the engine renders the frames. */
-    .veil-preview.loading {
+    .effect-preview.loading {
         background-image: linear-gradient(
             45deg,
             color-mix(in srgb, var(--accent) 20%, transparent) 0%,
