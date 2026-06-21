@@ -55,6 +55,11 @@ hotkeys:
   # Selection.
   clearSelection: $mod+Shift+KeyA
   invertSelection: $mod+Shift+KeyI
+  # Colors. Krita binds Ctrl+I to Invert (`krita_filter_invert`); Invert
+  # Selection is the Shift variant above. Photoshop agrees (Ctrl+I → Image >
+  # Adjustments > Invert); GIMP does NOT (Ctrl+I is its Invert Selection), so
+  # this is per-overlay, not a default.
+  adjustInvert: $mod+KeyI
 
 mouse_clicks:
   # Krita's default "Sample FG color from merged image" — Ctrl+drag on

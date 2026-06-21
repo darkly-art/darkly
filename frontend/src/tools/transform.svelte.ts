@@ -22,7 +22,7 @@ let gizmo: TransformGizmo | null = null;
 async function activate(): Promise<void> {
     if (!gizmo || !app.engine || app.activeLayerId == null) return;
     const { value: cap } = await app.engine.send<{ value: string }>('layer_transform_capability', {
-        layer_id: app.activeLayerId,
+        id: app.activeLayerId,
     });
     if (cap === 'live') {
         await gizmo.attach(voidTransformBinding(app.activeLayerId));
@@ -115,6 +115,9 @@ export const transformTool: Tool = {
                 return;
             }
         }
-        gizmo.commit();
+        // The awaits above can outlive the gizmo: a tool switch or layer change
+        // may run onDeactivate (which already commits) and null it out before we
+        // resume. Re-check so we neither dereference null nor double-commit.
+        gizmo?.commit();
     },
 };

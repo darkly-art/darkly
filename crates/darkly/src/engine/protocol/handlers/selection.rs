@@ -88,7 +88,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    layer_id: u64,
+                    id: u64,
                     seed_x: i32,
                     seed_y: i32,
                     tolerance: u8,
@@ -96,7 +96,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 }
                 let r: Req = decode(payload)?;
                 engine.select_magic_wand(
-                    crate::layer::LayerId::from_ffi(r.layer_id),
+                    crate::layer::LayerId::from_ffi(r.id),
                     crate::coord::CanvasPoint::new(r.seed_x, r.seed_y),
                     r.tolerance,
                     parse_mode(&r.mode),

@@ -401,6 +401,9 @@ impl DarklyEngine {
                     if let Some(pf) = self.pending_flip.take() {
                         self.flip_node(pf.node_id, pf.xform);
                     }
+                    if let Some(pa) = self.pending_adjustment.take() {
+                        self.apply_adjustment(pa.node_id, &pa.adjustment_type);
+                    }
                 }
             }
             ReadbackContext::Thumbnail {

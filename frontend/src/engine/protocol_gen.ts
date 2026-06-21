@@ -7,7 +7,9 @@ export type RequestKind =
     | 'add_raster'
     | 'add_veil'
     | 'add_void'
+    | 'adjustment_types'
     | 'antialias_selection'
+    | 'apply_adjustment'
     | 'apply_mask'
     | 'begin_stroke'
     | 'begin_transform'
@@ -168,7 +170,9 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'add_raster',
     'add_veil',
     'add_void',
+    'adjustment_types',
     'antialias_selection',
+    'apply_adjustment',
     'apply_mask',
     'begin_stroke',
     'begin_transform',

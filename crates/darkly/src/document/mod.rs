@@ -669,7 +669,8 @@ impl Document {
     }
 
     /// Add a [`MaskModifier`] to a host node, returning the new modifier's id.
-    /// Bounds default to the host's pixel bounds (raster) or canvas (group).
+    /// Bounds default to the full canvas for every host kind; the mask then
+    /// owns and grows its bounds independently (see [`Self::host_default_bounds`]).
     /// Returns `None` if the host id is unknown.
     ///
     /// Note: only one mask per host is enforced at the UI layer, not here —
@@ -962,13 +963,17 @@ impl Document {
         }
     }
 
+    /// Creation-default bounds for a fresh mask on `host_id`: the full canvas,
+    /// for every host kind. A mask owns its bounds independently of its host
+    /// (it grows itself via `grow_modifier`); the host's extent is only a
+    /// historical seed, not a runtime dependency — mirroring Krita's
+    /// parent-extent *fallback* (a default bbox, not a coupling). The
+    /// mask-apply pass samples the mask in its own space, so the default size
+    /// is just "cover the visible canvas".
     fn host_default_bounds(&self, host_id: LayerId) -> Option<CanvasRect> {
-        match self.find_node(host_id)? {
-            LayerNode::Layer(Layer::Raster(r)) => Some(r.pixels.bounds),
-            // Voids and groups have no pixel buffer — masks on them default
-            // to the full canvas, matching how group masks already behave.
-            LayerNode::Layer(Layer::Void(_)) | LayerNode::Group(_) => Some(self.canvas_rect()),
-        }
+        // `?` keeps the "unknown host → no mask" guard the callers rely on.
+        self.find_node(host_id)?;
+        Some(self.canvas_rect())
     }
 }
 

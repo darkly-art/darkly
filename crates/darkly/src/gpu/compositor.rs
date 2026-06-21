@@ -113,6 +113,108 @@ fn create_ortho_scratch(
     })
 }
 
+/// Copy a node's `region` into a scratch texture, run a caller-supplied pass
+/// into a second scratch, and copy the result back in place — the shared
+/// copy-out → pass → copy-back plumbing behind both the layer/selection flip
+/// ([`Compositor::flip_node_region`]) and destructive adjustments
+/// ([`Compositor::filter_node_region`]). `run_pass` is handed `(device, queue,
+/// encoder, src_view, mask_view, out_view, w, h, format)` and writes the
+/// transformed region into `out_view`; `mask_view` is forwarded untouched so a
+/// pass can gate on a selection shape. Returns `true` when the region was
+/// non-empty and the pass ran (the caller marks the node dirty), `false` when
+/// the node is missing or the clipped region is empty.
+///
+/// Takes `&node_textures` (not `&mut self`) so a caller can borrow it alongside
+/// a disjoint `&self.<pass>` field captured by `run_pass` — an `&mut self`
+/// method couldn't express that split (cf. `commit_undo_region`).
+#[allow(clippy::too_many_arguments)]
+fn run_filter_region<F>(
+    node_textures: &HashMap<LayerId, LayerTexture>,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    node_id: LayerId,
+    region: CanvasRect,
+    mask_view: Option<&wgpu::TextureView>,
+    run_pass: F,
+) -> bool
+where
+    F: FnOnce(
+        &wgpu::Device,
+        &wgpu::Queue,
+        &mut wgpu::CommandEncoder,
+        &wgpu::TextureView,
+        Option<&wgpu::TextureView>,
+        &wgpu::TextureView,
+        u32,
+        u32,
+        wgpu::TextureFormat,
+    ),
+{
+    let (extent, format) = match node_textures.get(&node_id) {
+        Some(t) => (t.canvas_extent(), t.format()),
+        None => return false,
+    };
+    let region = match extent.intersect(region) {
+        Some(r) if r.width > 0 && r.height > 0 => r,
+        _ => return false,
+    };
+    let (w, h) = (region.width, region.height);
+    let lx = (region.origin.x - extent.origin.x) as u32;
+    let ly = (region.origin.y - extent.origin.y) as u32;
+
+    let src_scratch = create_ortho_scratch(device, w, h, format);
+    let out_scratch = create_ortho_scratch(device, w, h, format);
+    let node_tex = node_textures[&node_id].texture();
+
+    encoder.copy_texture_to_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: node_tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: lx, y: ly, z: 0 },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyTextureInfo {
+            texture: &src_scratch,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+    );
+
+    let src_view = src_scratch.create_view(&wgpu::TextureViewDescriptor::default());
+    let out_view = out_scratch.create_view(&wgpu::TextureViewDescriptor::default());
+    run_pass(
+        device, queue, encoder, &src_view, mask_view, &out_view, w, h, format,
+    );
+
+    encoder.copy_texture_to_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &out_scratch,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyTextureInfo {
+            texture: node_tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: lx, y: ly, z: 0 },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+    );
+    true
+}
+
 /// Read-only handle to an entity's GPU pixel storage. Returned by
 /// [`Compositor::pixel_data_for`] so callers that need to schedule a
 /// readback (today: the save pipeline) can find the texture for any
@@ -337,6 +439,23 @@ pub(super) struct CanvasUniform {
     pub(super) canvas_origin: [f32; 2],
 }
 
+/// Uniforms for the passthrough-group mask lerp (`mask_lerp.wgsl`). Carries the
+/// canvas-window + mask geometry inline so the lerp samples the group mask in
+/// its own plane space (matching `apply_mask`) without the pipeline needing the
+/// shared canvas bind group.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct LerpUniforms {
+    canvas_origin: [f32; 2],
+    canvas_size: [f32; 2],
+    mask_offset: [f32; 2],
+    mask_size: [f32; 2],
+    isolated: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
 /// GPU state for a passthrough group that has a mask (Photoshop-style).
 /// Stores a snapshot texture for the parent accumulator and a uniform buffer
 /// for the lerp pass.
@@ -346,6 +465,33 @@ struct PassthroughMaskState {
     snapshot_view: wgpu::TextureView,
     /// Uniform buffer for the mask lerp shader (isolated flag).
     uniform_buf: wgpu::Buffer,
+}
+
+/// Lean per-host projection for a leaf layer (raster / void) that carries a
+/// visible mask modifier. The host's content composites into this isolated
+/// window-sized buffer; the mask modulates it (`apply_mask`); the finished
+/// projection blends down onto the parent — so the mask never samples the host
+/// layer's texture or geometry. This is the de-fused replacement for the fused
+/// mask that used to live inside the layer-blend pass.
+///
+/// Leaner than a [`GroupState`]: just a ping-pong pair (content → masked) and
+/// the three uniform buffers the three passes need. No composite cache, no
+/// child caching — a leaf has exactly one piece of content.
+struct ProjectionState {
+    /// `[0]` receives the composited host content; `[1]` receives the
+    /// mask-modulated result. (Two textures, not a true ping-pong loop.)
+    accum: AccumPair,
+    /// Compose-content-into-projection uniform: opacity 1, Normal blend, the
+    /// host layer texture's own offset/size (so the content samples cleanly).
+    content_uniform_buf: wgpu::Buffer,
+    /// Down-composite uniform: the host's opacity + blend mode, canvas-window
+    /// geometry (the projection occupies exactly the canvas window in plane).
+    down_uniform_buf: wgpu::Buffer,
+    /// `apply_mask` uniform: the mask texture's plane offset/size + isolated.
+    mask_uniform_buf: wgpu::Buffer,
+    /// Dimensions this state was allocated at; rebuilt when the canvas resizes.
+    padded_w: u32,
+    padded_h: u32,
 }
 
 pub struct Compositor {
@@ -397,6 +543,15 @@ pub struct Compositor {
     mask_lerp_pipeline: wgpu::RenderPipeline,
     /// Per-group GPU state for passthrough groups with masks.
     passthrough_mask_state: HashMap<LayerId, PassthroughMaskState>,
+
+    // --- Leaf mask (de-fused projection + apply_mask) ---
+    /// Pass that modulates a projection's alpha by a mask in the mask's own
+    /// space (`apply_mask.wgsl`).
+    apply_mask_pipeline: crate::gpu::apply_mask::ApplyMaskPipeline,
+    /// Pooled per-host projection state, allocated lazily for leaf layers with
+    /// a visible mask and released on mask remove/hide, host delete, or canvas
+    /// resize. Keyed by the host layer id.
+    projection_states: HashMap<LayerId, ProjectionState>,
 
     present_pipeline: wgpu::RenderPipeline,
     /// Present pipeline targeting the accum format (Rgba8Unorm) for veil input.
@@ -646,6 +801,13 @@ impl Compositor {
 
         let blend_pipelines = BlendPipelines::new(device, accum_format);
 
+        let apply_mask_pipeline = crate::gpu::apply_mask::ApplyMaskPipeline::new(
+            device,
+            accum_format,
+            &blend_pipelines.mask_bind_group_layout,
+            &blend_pipelines.canvas_bind_group_layout,
+        );
+
         // Create default 1x1 white mask texture (mask_alpha=1.0 = no effect)
         let default_mask_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("default-mask-1x1"),
@@ -698,7 +860,10 @@ impl Compositor {
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("mask-lerp-shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("../../../../shaders/mask_lerp.wgsl").into(),
+                    crate::gpu::canvas_lib::with_canvas_lib(include_str!(
+                        "../../../../shaders/mask_lerp.wgsl"
+                    ))
+                    .into(),
                 ),
             });
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -916,6 +1081,8 @@ impl Compositor {
             blend_pipelines,
             mask_lerp_pipeline,
             passthrough_mask_state: HashMap::new(),
+            apply_mask_pipeline,
+            projection_states: HashMap::new(),
             present_pipeline,
             present_to_veil_pipeline,
             _present_bind_group_layout,
@@ -1278,76 +1445,63 @@ impl Compositor {
         xform: crate::gpu::ortho_transform::OrthoXform,
         mask_view: Option<&wgpu::TextureView>,
     ) {
-        let (extent, format) = match self.node_textures.get(&node_id) {
-            Some(t) => (t.canvas_extent(), t.format()),
-            None => return,
-        };
-        let region = match extent.intersect(region) {
-            Some(r) if r.width > 0 && r.height > 0 => r,
-            _ => return,
-        };
-        let (w, h) = (region.width, region.height);
-        let lx = (region.origin.x - extent.origin.x) as u32;
-        let ly = (region.origin.y - extent.origin.y) as u32;
-
-        let src_scratch = create_ortho_scratch(device, w, h, format);
-        let out_scratch = create_ortho_scratch(device, w, h, format);
-        let node_tex = self.node_textures[&node_id].texture();
-
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: node_tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x: lx, y: ly, z: 0 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &src_scratch,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
+        let ran = run_filter_region(
+            &self.node_textures,
+            device,
+            queue,
+            encoder,
+            node_id,
+            region,
+            mask_view,
+            |dev, q, enc, src, mask, out, w, h, fmt| match mask {
+                Some(mv) => self
+                    .ortho_pass
+                    .render_mirror_masked(dev, q, enc, src, mv, out, w, h, xform, fmt),
+                None => self
+                    .ortho_pass
+                    .render_remap(dev, q, enc, src, out, w, h, xform, fmt),
             },
         );
-
-        let src_view = src_scratch.create_view(&wgpu::TextureViewDescriptor::default());
-        let out_view = out_scratch.create_view(&wgpu::TextureViewDescriptor::default());
-        match mask_view {
-            Some(mv) => self.ortho_pass.render_mirror_masked(
-                device, queue, encoder, &src_view, mv, &out_view, w, h, xform, format,
-            ),
-            None => self.ortho_pass.render_remap(
-                device, queue, encoder, &src_view, &out_view, w, h, xform, format,
-            ),
+        if ran {
+            self.mark_node_pixels_dirty(node_id);
+            self.mark_dirty();
         }
+    }
 
-        let node_tex = self.node_textures[&node_id].texture();
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &out_scratch,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: node_tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x: lx, y: ly, z: 0 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
+    /// Run a `MaskedFilterPipeline` over a node's `region` in place — the
+    /// destructive-adjustment counterpart of
+    /// [`flip_node_region`](Self::flip_node_region), riding the same copy-out →
+    /// pass → copy-back plumbing (`run_filter_region`). Where `mask_view` (a
+    /// region-sized R8) is selected the texel takes the filtered value,
+    /// elsewhere it passes through; `None` filters the whole region. Node-
+    /// generic — the pipeline's format dispatch handles RGBA8 layers and R8
+    /// masks alike, so masks invert for free.
+    pub fn filter_node_region(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        node_id: LayerId,
+        region: CanvasRect,
+        mask_view: Option<&wgpu::TextureView>,
+        pipeline: &crate::gpu::effect::MaskedFilterPipeline,
+    ) {
+        let ran = run_filter_region(
+            &self.node_textures,
+            device,
+            queue,
+            encoder,
+            node_id,
+            region,
+            mask_view,
+            |dev, _q, enc, src, mask, out, _w, _h, fmt| {
+                pipeline.render(dev, enc, src, mask, out, fmt)
             },
         );
-
-        self.mark_node_pixels_dirty(node_id);
-        self.mark_dirty();
+        if ran {
+            self.mark_node_pixels_dirty(node_id);
+            self.mark_dirty();
+        }
     }
 
     /// Ensure a non-passthrough group has GPU state allocated.
@@ -1425,6 +1579,9 @@ impl Compositor {
         // Passthrough-mask snapshots are parent-accumulator-sized and the
         // blend bind groups reference now-replaced accumulator views.
         self.passthrough_mask_state.clear();
+        // Per-host projections are canvas-window-sized; drop them so the next
+        // frame reallocates at the new dimensions.
+        self.projection_states.clear();
         self.blend_bind_groups.clear();
 
         // Present samples the root composite cache — rebind to the fresh view.
@@ -1480,11 +1637,9 @@ impl Compositor {
             };
             queue.write_buffer(&gs.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         }
-        // Also update passthrough mask state uniform (isolated only).
-        if let Some(pms) = self.passthrough_mask_state.get(&group_id) {
-            let val = isolated as u32;
-            queue.write_buffer(&pms.uniform_buf, 0, bytemuck::bytes_of(&val));
-        }
+        // The passthrough-mask lerp uniform (mask geometry + isolated) is
+        // refreshed per-frame in `sync_projection_states`, where the mask's
+        // current extent is available.
     }
 
     /// Set the session-level isolation target. The render walk filters off-
@@ -1843,7 +1998,7 @@ impl Compositor {
         );
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&format!("pt-lerp-uniforms-{host_id:?}")),
-            size: 4,
+            size: std::mem::size_of::<LerpUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1949,6 +2104,9 @@ impl Compositor {
         self.blend_bind_groups
             .retain(|(parent, child, _), _| *parent != node_id && *child != node_id);
         self.layer_cache.remove(&node_id);
+        // A deleted host's projection is released immediately; a deleted mask
+        // is caught by the next `sync_projection_states` stale sweep.
+        self.projection_states.remove(&node_id);
         self.dirty_node_pixels.remove(&node_id);
         self.mark_dirty();
     }
@@ -2629,6 +2787,11 @@ impl Compositor {
             });
         }
 
+        // Refresh per-host projection uniforms so masked leaves in the baked
+        // subtree composite through the same projection path the live render
+        // uses (isolation already cleared above → masks bake non-isolated).
+        self.sync_projection_states(device, queue, doc);
+
         // Composite the sources into the bake accum. `compose_children`
         // handles rasters, groups (recursing through `compose_group` which
         // updates each group's own composite_cache), and passthrough groups.
@@ -2692,6 +2855,10 @@ impl Compositor {
         // Regenerate any dirty void textures before the tree walk so the
         // downstream blend pass samples up-to-date pixels.
         self.encode_dirty_layer_content(&mut encoder);
+
+        // Allocate + refresh per-host projection uniforms (needs `queue`)
+        // before the compose walk, which only binds.
+        self.sync_projection_states(device, queue, doc);
 
         let root_id = self.root_id;
         self.compose_group(&mut encoder, device, doc, root_id, scissor);
@@ -3008,6 +3175,443 @@ impl Compositor {
         }
     }
 
+    /// The mask id a leaf host should route through the de-fused projection
+    /// path, or `None` to keep the fast (fused) path. A host qualifies whenever
+    /// it carries a *visible* mask modifier — including while a transform
+    /// preview is active on the host or its mask, in which case the projection
+    /// swaps in the preview content/mask (see
+    /// [`Self::compose_layer_through_projection`]).
+    fn host_active_mask_for_projection(&self, doc: &Document, host_id: LayerId) -> Option<LayerId> {
+        doc.mask_modifier(host_id)
+            .filter(|m| m.common.visible)
+            .map(|m| m.id)
+    }
+
+    /// During an active transform, the roles a masked host's preview can play:
+    /// `(layer_transforming, mask_transforming)`. At most one is true — the
+    /// layer or the mask is being dragged, not both. Drives whether the
+    /// projection samples the preview layer / preview mask vs. the live ones.
+    fn projection_transform_roles(&self, host_id: LayerId, mask_id: LayerId) -> (bool, bool) {
+        match self.transform_pass.active.as_ref() {
+            Some(s) => (s.target_layer == host_id, s.target_layer == mask_id),
+            None => (false, false),
+        }
+    }
+
+    /// Allocate a [`ProjectionState`] for `host_id` at the given dimensions,
+    /// reusing an existing one if it already matches (pooling). Released by
+    /// [`Self::dispose_projection_state`] on mask remove/hide / host delete and
+    /// cleared wholesale on canvas resize.
+    fn ensure_projection_state(
+        &mut self,
+        device: &wgpu::Device,
+        host_id: LayerId,
+        padded_w: u32,
+        padded_h: u32,
+    ) {
+        let fits = self
+            .projection_states
+            .get(&host_id)
+            .is_some_and(|ps| ps.padded_w == padded_w && ps.padded_h == padded_h);
+        if fits {
+            return;
+        }
+        let ps = Self::create_projection_state(device, padded_w, padded_h, host_id);
+        self.projection_states.insert(host_id, ps);
+    }
+
+    fn create_projection_state(
+        device: &wgpu::Device,
+        padded_w: u32,
+        padded_h: u32,
+        host_id: LayerId,
+    ) -> ProjectionState {
+        let (a0, v0) =
+            Self::make_accum_texture(device, padded_w, padded_h, &format!("proj-{host_id:?}-0"));
+        let (a1, v1) =
+            Self::make_accum_texture(device, padded_w, padded_h, &format!("proj-{host_id:?}-1"));
+        let mk = |label: &str, size: u64| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let blend_sz = std::mem::size_of::<BlendUniforms>() as u64;
+        let mask_sz = std::mem::size_of::<crate::gpu::apply_mask::MaskUniform>() as u64;
+        ProjectionState {
+            accum: AccumPair {
+                textures: [a0, a1],
+                views: [v0, v1],
+            },
+            content_uniform_buf: mk("proj-content-uniform", blend_sz),
+            down_uniform_buf: mk("proj-down-uniform", blend_sz),
+            mask_uniform_buf: mk("proj-mask-uniform", mask_sz),
+            padded_w,
+            padded_h,
+        }
+    }
+
+    /// Release a host's pooled projection state. Called on mask remove/hide and
+    /// host delete; idempotent.
+    pub fn dispose_projection_state(&mut self, host_id: LayerId) {
+        self.projection_states.remove(&host_id);
+    }
+
+    /// Pre-walk pass (has `queue`): ensure a projection state exists and its
+    /// three uniform buffers are current for every leaf host that needs one,
+    /// and drop states whose host no longer qualifies (mask hidden/removed).
+    /// The compose walk that follows only binds — it never allocates or writes.
+    fn sync_projection_states(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        doc: &Document,
+    ) {
+        let padded_w = self.padded_width;
+        let padded_h = self.padded_height;
+
+        // Drop projections whose host no longer needs one (mask hidden/removed
+        // or now transform-previewing) — the "released on mask remove/hide"
+        // requirement, plus the host-delete case (the layer_cache entry is
+        // gone so it never re-qualifies below).
+        let stale: Vec<LayerId> = self
+            .projection_states
+            .keys()
+            .copied()
+            .filter(|h| self.host_active_mask_for_projection(doc, *h).is_none())
+            .collect();
+        for h in stale {
+            self.projection_states.remove(&h);
+        }
+
+        let normal = crate::gpu::blend_mode::registry().default().gpu_value;
+        let canvas_size = [padded_w as f32, padded_h as f32];
+        let host_ids: Vec<LayerId> = self.layer_cache.keys().copied().collect();
+        for host_id in host_ids {
+            let mask_id = match self.host_active_mask_for_projection(doc, host_id) {
+                Some(m) => m,
+                None => continue,
+            };
+            let layer_ext = match self.node_textures.get(&host_id) {
+                Some(t) => t.canvas_extent(),
+                None => continue,
+            };
+            let mask_ext = match self.node_textures.get(&mask_id) {
+                Some(t) => t.canvas_extent(),
+                None => continue,
+            };
+            let (opacity, blend_mode) = {
+                let c = &self.layer_cache[&host_id];
+                (c.opacity, c.blend_mode)
+            };
+            let isolated = self.isolated_node == Some(mask_id);
+            let (layer_transforming, mask_transforming) =
+                self.projection_transform_roles(host_id, mask_id);
+            let canvas_origin = [self.canvas_origin.x as f32, self.canvas_origin.y as f32];
+
+            self.ensure_projection_state(device, host_id, padded_w, padded_h);
+
+            // Compose-content uniform: straight host content (opacity 1, Normal).
+            // When the *layer* is transform-previewing, the content comes from
+            // the canvas-aligned preview texture, so it samples at the canvas
+            // window; otherwise it samples the live layer in its own frame.
+            let (content_offset, content_size) = if layer_transforming {
+                (canvas_origin, canvas_size)
+            } else {
+                (
+                    [layer_ext.x0() as f32, layer_ext.y0() as f32],
+                    [layer_ext.width as f32, layer_ext.height as f32],
+                )
+            };
+            let content = BlendUniforms {
+                opacity: 1.0,
+                blend_mode: normal,
+                isolated: 0,
+                _pad1: 0.0,
+                layer_offset: content_offset,
+                layer_size: content_size,
+            };
+            // Down-composite uniform: the host's opacity + blend mode, canvas-
+            // window geometry (the projection fills exactly the canvas window).
+            let down = BlendUniforms {
+                opacity,
+                blend_mode,
+                isolated: 0,
+                _pad1: 0.0,
+                layer_offset: canvas_origin,
+                layer_size: canvas_size,
+            };
+            // Mask uniform: when the *mask* is transform-previewing, the preview
+            // mask is a canvas-aligned R8 texture, so it samples at the canvas
+            // window; otherwise the live mask samples in its own frame.
+            let (mask_offset, mask_size) = if mask_transforming {
+                (canvas_origin, canvas_size)
+            } else {
+                (
+                    [mask_ext.x0() as f32, mask_ext.y0() as f32],
+                    [mask_ext.width as f32, mask_ext.height as f32],
+                )
+            };
+            let mu = crate::gpu::apply_mask::MaskUniform {
+                mask_offset,
+                mask_size,
+                isolated: isolated as u32,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+            };
+            let ps = &self.projection_states[&host_id];
+            queue.write_buffer(&ps.content_uniform_buf, 0, bytemuck::bytes_of(&content));
+            queue.write_buffer(&ps.down_uniform_buf, 0, bytemuck::bytes_of(&down));
+            queue.write_buffer(&ps.mask_uniform_buf, 0, bytemuck::bytes_of(&mu));
+        }
+
+        // (Re-)ensure a passthrough-mask snapshot exists for every passthrough
+        // group with a visible mask. The snapshot is parent-accumulator-sized,
+        // so `set_canvas_rect` drops it on a crop/resize; without this re-ensure
+        // the group mask would silently disable after a crop (compose falls back
+        // to plain passthrough).
+        let masked_passthrough: Vec<LayerId> = doc
+            .all_groups()
+            .iter()
+            .filter(|g| g.passthrough)
+            .map(|g| g.id)
+            .filter(|gid| {
+                doc.mask_modifier(*gid)
+                    .map(|m| m.common.visible)
+                    .unwrap_or(false)
+            })
+            .collect();
+        for gid in &masked_passthrough {
+            self.ensure_passthrough_mask_state(device, *gid);
+        }
+
+        // Refresh the passthrough-group mask lerp uniforms (canvas + mask
+        // geometry + isolated) so a group mask that grew independently of the
+        // canvas window samples in its own space — same `sample_mask_window`
+        // path as the leaf projection.
+        let canvas_origin = [self.canvas_origin.x as f32, self.canvas_origin.y as f32];
+        let group_ids: Vec<LayerId> = self.passthrough_mask_state.keys().copied().collect();
+        for group_id in group_ids {
+            let mask_id = match doc.mask_modifier(group_id).filter(|m| m.common.visible) {
+                Some(m) => m.id,
+                None => continue,
+            };
+            // A mask being transform-previewed is canvas-aligned; otherwise it
+            // samples in its live extent.
+            let mask_transforming = self
+                .transform_pass
+                .active
+                .as_ref()
+                .is_some_and(|s| s.target_layer == mask_id);
+            let (mask_offset, mask_size) = if mask_transforming {
+                (canvas_origin, canvas_size)
+            } else {
+                match self.node_textures.get(&mask_id).map(|t| t.canvas_extent()) {
+                    Some(e) => (
+                        [e.x0() as f32, e.y0() as f32],
+                        [e.width as f32, e.height as f32],
+                    ),
+                    None => continue,
+                }
+            };
+            let lu = LerpUniforms {
+                canvas_origin,
+                canvas_size,
+                mask_offset,
+                mask_size,
+                isolated: (self.isolated_node == Some(mask_id)) as u32,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+            };
+            let pms = &self.passthrough_mask_state[&group_id];
+            queue.write_buffer(&pms.uniform_buf, 0, bytemuck::bytes_of(&lu));
+        }
+    }
+
+    /// De-fused leaf-mask compose: host content → projection, mask modulates
+    /// the projection (`apply_mask`), projection blends down onto the parent.
+    /// The mask samples only `(projection, mask)` in its own space — never the
+    /// host layer texture or geometry. Uniforms are pre-written by
+    /// [`Self::sync_projection_states`]; this only encodes the three passes.
+    fn compose_layer_through_projection(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        parent_group: LayerId,
+        host_id: LayerId,
+        mask_id: LayerId,
+        scissor: (u32, u32, u32, u32),
+    ) {
+        let (sx, sy, sw, sh) = scissor;
+
+        // Advance the parent ping-pong up front so the rest can borrow `&self`.
+        let (parent_src, parent_dst) = {
+            let gsp = self.group_state.get_mut(&parent_group).unwrap();
+            let src = gsp.current_accum;
+            let dst = 1 - src;
+            gsp.current_accum = dst;
+            (src, dst)
+        };
+
+        let ps = match self.projection_states.get(&host_id) {
+            Some(p) => p,
+            None => return,
+        };
+
+        // Transform-preview swap: sample the (canvas-aligned) preview layer when
+        // the layer is being dragged, and the preview mask when the mask is.
+        // Geometry for these is set to match in `sync_projection_states`.
+        let (layer_transforming, mask_transforming) =
+            self.projection_transform_roles(host_id, mask_id);
+        let preview = self.transform_pass.active.as_ref();
+
+        let layer_view = if layer_transforming {
+            match preview {
+                Some(s) => &s.preview_view,
+                None => return,
+            }
+        } else {
+            match self.node_textures.get(&host_id) {
+                Some(t) => t.view(),
+                None => return,
+            }
+        };
+        let live_mask_bg = self
+            .mask_bind_groups
+            .get(&mask_id)
+            .unwrap_or(&self.default_mask_bind_group);
+        let mask_bg = if mask_transforming {
+            preview
+                .and_then(|s| s.preview_mask_bind_group.as_ref())
+                .unwrap_or(live_mask_bg)
+        } else {
+            live_mask_bg
+        };
+
+        // Build the (non-hot) bind groups fresh — masked leaves are rare.
+        // Pass 1 reads the cleared accum[1] as a transparent background.
+        let content_bg = self.create_blend_bind_group(
+            device,
+            &ps.accum.views[1],
+            layer_view,
+            &ps.content_uniform_buf,
+            "proj-content",
+        );
+        let apply_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("proj-apply-mask-bg"),
+            layout: &self.apply_mask_pipeline.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&ps.accum.views[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: ps.mask_uniform_buf.as_entire_binding(),
+                },
+            ],
+        });
+        let down_bg = self.create_blend_bind_group(
+            device,
+            &self.group_state[&parent_group].accum.views[parent_src],
+            &ps.accum.views[1],
+            &ps.down_uniform_buf,
+            "proj-down",
+        );
+
+        // Pass 0: clear accum[1] (the transparent background for pass 1).
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("proj-clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &ps.accum.views[1],
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+
+        // Pass 1: composite straight host content into accum[0].
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("proj-content"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &ps.accum.views[0],
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            rpass.set_scissor_rect(sx, sy, sw, sh);
+            rpass.set_pipeline(self.blend_pipelines.pipeline());
+            rpass.set_bind_group(0, &content_bg, &[]);
+            rpass.set_bind_group(1, &self.default_mask_bind_group, &[]);
+            rpass.set_bind_group(2, &self.canvas_bind_group, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+
+        // Pass 2: modulate the projection's alpha by the mask → accum[1].
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("proj-apply-mask"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &ps.accum.views[1],
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            rpass.set_scissor_rect(sx, sy, sw, sh);
+            rpass.set_pipeline(self.apply_mask_pipeline.pipeline());
+            rpass.set_bind_group(0, &apply_bg, &[]);
+            rpass.set_bind_group(1, mask_bg, &[]);
+            rpass.set_bind_group(2, &self.canvas_bind_group, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+
+        // Pass 3: blend the masked projection down onto the parent accum.
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("proj-down"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.group_state[&parent_group].accum.views[parent_dst],
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            rpass.set_scissor_rect(sx, sy, sw, sh);
+            rpass.set_pipeline(self.blend_pipelines.pipeline());
+            rpass.set_bind_group(0, &down_bg, &[]);
+            rpass.set_bind_group(1, &self.default_mask_bind_group, &[]);
+            rpass.set_bind_group(2, &self.canvas_bind_group, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+    }
+
     /// Composite a content layer (raster or void) into its parent group's
     /// ping-pong accumulators. One blend arm for both raster and procedural
     /// content — the procedural texture lives in `node_textures` keyed by
@@ -3026,6 +3630,23 @@ impl Compositor {
     ) {
         let (scissor_x, scissor_y, scissor_w, scissor_h) = scissor;
         let layer_id = layer.id();
+
+        // De-fused leaf mask: a host carrying a visible mask composites through
+        // its own projection (content → apply_mask → blend down) so the mask
+        // never samples the host's texture or geometry. The fused path below
+        // runs only for unmasked hosts (default white mask) and the transform-
+        // preview detour (still fused until B3).
+        if let Some(mask_id) = self.host_active_mask_for_projection(doc, layer_id) {
+            self.compose_layer_through_projection(
+                encoder,
+                device,
+                parent_group,
+                layer_id,
+                mask_id,
+                scissor,
+            );
+            return;
+        }
 
         // Effective view + uniforms: when this layer is the floating
         // target, swap the live texture view for the (canvas-aligned)

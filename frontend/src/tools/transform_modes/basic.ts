@@ -188,8 +188,14 @@ export const basicMode: TransformMode = {
         if (handle === Handle.Rotate) {
             let angle = Math.atan2(cy - centerCanvas[1], cx - centerCanvas[0]) - startAngle;
             if (shift) {
+                // Snap the content's absolute orientation to 15° marks, not the
+                // rotation delta — otherwise the snap grid is anchored to where
+                // the gesture began (off by the free rotation already accrued
+                // when Shift is pressed mid-drag). `atan2(c, a)` recovers the
+                // base rotation baked into `initialMatrix`.
                 const snap = Math.PI / 12;
-                angle = Math.round(angle / snap) * snap;
+                const base = Math.atan2(initialMatrix[3], initialMatrix[0]);
+                angle = Math.round((base + angle) / snap) * snap - base;
             }
             const cLocal: [number, number] = [srcW / 2, srcH / 2];
             const cOffset = affineTransform(initialMatrix, cLocal[0], cLocal[1]);

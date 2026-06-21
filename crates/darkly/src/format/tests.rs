@@ -533,6 +533,106 @@ fn round_trip_kitchen_sink_document() {
     );
 }
 
+/// A *sub-canvas* mask (bounds smaller than the canvas window) round-trips
+/// through save/load with its independent bounds + pixels intact. Mask bounds
+/// serialize independently of the host (Document Authority Principle); the
+/// de-fused mask-apply pass samples the mask in its own space, so a reloaded
+/// sub-canvas mask hides the same region it did before. Cropped first.
+#[test]
+fn sub_canvas_mask_survives_save_load_round_trip() {
+    use crate::coord::CanvasRect;
+    use crate::engine::types::StrokeOp;
+
+    // Small canvas so the mask is created at 32×32, then enlarge + offset the
+    // canvas window → the mask stays 32×32 (sub-canvas).
+    let mut original = kitchen_sink_engine(32, 32);
+    let host = original.add_raster_layer(None);
+    // Fill the host opaque so the mask's hiding is observable in the composite.
+    original.begin_stroke(host);
+    original.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r: 0,
+        g: 0,
+        b: 255,
+        a: 255,
+        tolerance: 255,
+    });
+    original.end_stroke();
+    original.render(0.0);
+
+    original.add_mask(host);
+    let mask_id = original.host_mask_id(host).expect("mask");
+    // Black dab on the mask → a distinct hidden region.
+    original.begin_stroke(mask_id);
+    original.stroke_to(StrokeOp::BrushStroke {
+        x: 10.0,
+        y: 10.0,
+        pressure: 1.0,
+        x_tilt: 0.0,
+        y_tilt: 0.0,
+        rotation: 0.0,
+        tangential_pressure: 0.0,
+        time_ms: 0.0,
+        cr: 0.0,
+        cg: 0.0,
+        cb: 0.0,
+        ca: 1.0,
+    });
+    original.end_stroke();
+    original.render(0.0);
+
+    // Enlarge + offset the canvas window so the 32×32 mask is sub-canvas.
+    original.resize_canvas(CanvasRect::from_xywh(12, 8, 64, 48));
+    original.render(0.0);
+    let bounds_before = original.node_pixel_bounds(mask_id).expect("mask bounds");
+    assert!(
+        bounds_before.width < 64 && bounds_before.height < 48,
+        "test setup: the mask must be sub-canvas; got {bounds_before:?}"
+    );
+
+    let bundle = drive_save_to_completion(&mut original);
+    let zip_bytes = assemble_zip(&bundle);
+
+    let mut reloaded = kitchen_sink_engine(1, 1);
+    reloaded
+        .open_document(&zip_bytes)
+        .expect("sub-canvas-mask reload happy path");
+
+    // Find the reloaded host (the raster carrying a mask) and its mask.
+    let r_host = reloaded
+        .doc
+        .all_raster_layers()
+        .iter()
+        .map(|r| r.id)
+        .find(|id| reloaded.doc.has_mask(*id))
+        .expect("reloaded doc must have a masked raster");
+    let r_mask = reloaded.host_mask_id(r_host).expect("reloaded mask");
+    let bounds_after = reloaded
+        .node_pixel_bounds(r_mask)
+        .expect("reloaded mask bounds");
+    assert_eq!(
+        bounds_after, bounds_before,
+        "sub-canvas mask bounds must round-trip independently of the host"
+    );
+
+    // The mask's R8 pixels round-trip byte-for-byte (its bulk-pixel authority
+    // serialized independently of the host) — the precise claim of this test.
+    let mask_a = original.test_readback_mask(host);
+    let mask_b = reloaded.test_readback_mask(r_host);
+    assert_eq!(
+        mask_a, mask_b,
+        "sub-canvas mask pixels must round-trip byte-for-byte across save/reload"
+    );
+    // And the host's own pixels survive too.
+    let host_a = original.test_readback_layer(host);
+    let host_b = reloaded.test_readback_layer(r_host);
+    assert_eq!(
+        host_a, host_b,
+        "masked host pixels must round-trip across save/reload"
+    );
+}
+
 /// Regression: after `open_document`, the layer panel must show
 /// thumbnails immediately — not wait until the user's first edit.
 ///

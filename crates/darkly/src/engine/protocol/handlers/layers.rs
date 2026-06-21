@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::engine::protocol::{
-    decode, params_from_json, ProtocolError, RequestRegistration, Response,
+    decode, layer_id, params_from_json, ProtocolError, RequestRegistration, Response,
 };
 use crate::gpu::params::ParamDef;
 use crate::layer::LayerId;
@@ -78,11 +78,11 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    layer_id: u64,
+                    id: u64,
                     params: serde_json::Value,
                 }
                 let r: Req = decode(payload)?;
-                let id = LayerId::from_ffi(r.layer_id);
+                let id = LayerId::from_ffi(r.id);
                 let type_id = match engine.void_layer_type(id) {
                     Some(t) => t,
                     None => return Ok(Response::empty()),
@@ -98,13 +98,13 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    layer_id: u64,
+                    id: u64,
                     #[serde(default)]
                     mode_tag: u32,
                     payload: Vec<f32>,
                 }
                 let r: Req = decode(payload)?;
-                let id = LayerId::from_ffi(r.layer_id);
+                let id = LayerId::from_ffi(r.id);
                 // Basic mode (tag 0) carries the 6 affine components. Unknown
                 // modes / short payloads are ignored (no-op).
                 if r.mode_tag == 0 && r.payload.len() >= 6 {
@@ -124,12 +124,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
         RequestRegistration {
             kind: "void_transform_info",
             handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    layer_id: u64,
-                }
-                let r: Req = decode(payload)?;
-                let id = LayerId::from_ffi(r.layer_id);
+                let id = layer_id(payload)?;
                 let value = match engine.void_transform_info(id) {
                     Some((ox, oy, w, h, t)) => json!({
                         "ox": ox, "oy": oy, "w": w, "h": h,
@@ -143,12 +138,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
         RequestRegistration {
             kind: "layer_transform_capability",
             handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    layer_id: u64,
-                }
-                let r: Req = decode(payload)?;
-                let id = LayerId::from_ffi(r.layer_id);
+                let id = layer_id(payload)?;
                 Ok(Response::json(
                     json!({ "value": engine.layer_transform_capability(id) }),
                 ))

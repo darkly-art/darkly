@@ -10,7 +10,6 @@
 //! `apply_undo` (`engine/rendering.rs`).
 
 use super::canvas_resize::MAX_CANVAS_DIM;
-use super::rendering::commit_undo_region;
 use super::DarklyEngine;
 use crate::coord::CanvasRect;
 use crate::gpu::compositor::scaled_extent_about;
@@ -74,25 +73,9 @@ impl DarklyEngine {
         // 1. Snapshot each node's current pixels (old direction) for undo.
         let mut regions: Vec<UndoRegionEntry> = Vec::with_capacity(nodes.len());
         for (id, old_extent, format) in &nodes {
-            let frame = self
-                .compositor
-                .node_texture(*id)
-                .expect("node texture present")
-                .canvas_frame();
-            let snap = self.gpu.encode_ret("rescale-save", |enc| {
-                self.region_scratch
-                    .save_region(&self.gpu.device, enc, &frame, *format, *old_extent)
-            });
-            let entry = commit_undo_region(
-                &self.gpu,
-                &self.region_scratch,
-                &mut self.readbacks,
-                "rescale-commit",
-                *id,
-                &frame,
-                &snap,
-                *old_extent,
-            );
+            let entry = self
+                .snapshot_region_entry(*id, *old_extent, *format, "rescale-save", "rescale-commit")
+                .expect("node texture present");
             regions.push(entry);
         }
 

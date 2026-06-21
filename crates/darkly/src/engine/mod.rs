@@ -1,3 +1,4 @@
+mod adjustments;
 mod bake_common;
 mod brush_graph;
 mod brush_library;
@@ -18,6 +19,7 @@ mod painting;
 pub mod protocol;
 pub mod rendering;
 pub mod save;
+mod selection_support;
 pub mod types;
 mod undo_dispatch;
 mod veils;
@@ -77,6 +79,14 @@ pub(crate) struct PendingTransform {
 pub(crate) struct PendingFlip {
     pub node_id: LayerId,
     pub xform: crate::gpu::ortho_transform::OrthoXform,
+}
+
+/// Deferred destructive adjustment — waiting for the selection CPU cache (the
+/// adjustment region is the selection bbox, read from that cache). Mirrors
+/// [`PendingFlip`].
+pub(crate) struct PendingAdjustment {
+    pub node_id: LayerId,
+    pub adjustment_type: String,
 }
 
 /// Deferred copy/cut — waiting for selection CPU cache to be populated.
@@ -438,6 +448,11 @@ pub struct DarklyEngine {
     // --- Stabilizer ---
     pub(crate) stabilizer_registry: StabilizerRegistry,
 
+    /// Destructive color-adjustment registry (invert, …). Lazily caches the
+    /// shared `MaskedFilterPipeline` per type; engine-owned because adjustments
+    /// are one-shot document edits, not compositor-driven render state.
+    pub(crate) adjustment_registry: crate::gpu::adjustment::AdjustmentRegistry,
+
     /// Composite blend mode for the current stroke: 0 = paint, 1 = erase.
     pub(crate) brush_blend_mode: u32,
 
@@ -457,6 +472,8 @@ pub struct DarklyEngine {
     pub(crate) pending_transform: Option<PendingTransform>,
     /// Pending layer/selection flip waiting for the selection CPU cache.
     pub(crate) pending_flip: Option<PendingFlip>,
+    /// Pending destructive adjustment waiting for the selection CPU cache.
+    pub(crate) pending_adjustment: Option<PendingAdjustment>,
     /// Pending copy/cut waiting for selection CPU cache.
     pub(crate) pending_copy: Option<PendingCopy>,
 
@@ -605,12 +622,14 @@ impl DarklyEngine {
             stroke_buffer: None,
             checkpoint_ring: CheckpointRing::new(),
             stabilizer_registry: StabilizerRegistry::new(),
+            adjustment_registry: crate::gpu::adjustment::AdjustmentRegistry::new(),
             brush_blend_mode: 0,
             diff_rect,
             pending_undo_commit: None,
             selection_pipelines,
             pending_transform: None,
             pending_flip: None,
+            pending_adjustment: None,
             pending_copy: None,
             readbacks: ReadbackScheduler::new(),
             pending_copy_result: None,
