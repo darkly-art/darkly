@@ -113,6 +113,108 @@ fn create_ortho_scratch(
     })
 }
 
+/// Copy a node's `region` into a scratch texture, run a caller-supplied pass
+/// into a second scratch, and copy the result back in place — the shared
+/// copy-out → pass → copy-back plumbing behind both the layer/selection flip
+/// ([`Compositor::flip_node_region`]) and destructive adjustments
+/// ([`Compositor::filter_node_region`]). `run_pass` is handed `(device, queue,
+/// encoder, src_view, mask_view, out_view, w, h, format)` and writes the
+/// transformed region into `out_view`; `mask_view` is forwarded untouched so a
+/// pass can gate on a selection shape. Returns `true` when the region was
+/// non-empty and the pass ran (the caller marks the node dirty), `false` when
+/// the node is missing or the clipped region is empty.
+///
+/// Takes `&node_textures` (not `&mut self`) so a caller can borrow it alongside
+/// a disjoint `&self.<pass>` field captured by `run_pass` — an `&mut self`
+/// method couldn't express that split (cf. `commit_undo_region`).
+#[allow(clippy::too_many_arguments)]
+fn run_filter_region<F>(
+    node_textures: &HashMap<LayerId, LayerTexture>,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    node_id: LayerId,
+    region: CanvasRect,
+    mask_view: Option<&wgpu::TextureView>,
+    run_pass: F,
+) -> bool
+where
+    F: FnOnce(
+        &wgpu::Device,
+        &wgpu::Queue,
+        &mut wgpu::CommandEncoder,
+        &wgpu::TextureView,
+        Option<&wgpu::TextureView>,
+        &wgpu::TextureView,
+        u32,
+        u32,
+        wgpu::TextureFormat,
+    ),
+{
+    let (extent, format) = match node_textures.get(&node_id) {
+        Some(t) => (t.canvas_extent(), t.format()),
+        None => return false,
+    };
+    let region = match extent.intersect(region) {
+        Some(r) if r.width > 0 && r.height > 0 => r,
+        _ => return false,
+    };
+    let (w, h) = (region.width, region.height);
+    let lx = (region.origin.x - extent.origin.x) as u32;
+    let ly = (region.origin.y - extent.origin.y) as u32;
+
+    let src_scratch = create_ortho_scratch(device, w, h, format);
+    let out_scratch = create_ortho_scratch(device, w, h, format);
+    let node_tex = node_textures[&node_id].texture();
+
+    encoder.copy_texture_to_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: node_tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: lx, y: ly, z: 0 },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyTextureInfo {
+            texture: &src_scratch,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+    );
+
+    let src_view = src_scratch.create_view(&wgpu::TextureViewDescriptor::default());
+    let out_view = out_scratch.create_view(&wgpu::TextureViewDescriptor::default());
+    run_pass(
+        device, queue, encoder, &src_view, mask_view, &out_view, w, h, format,
+    );
+
+    encoder.copy_texture_to_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &out_scratch,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyTextureInfo {
+            texture: node_tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: lx, y: ly, z: 0 },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+    );
+    true
+}
+
 /// Read-only handle to an entity's GPU pixel storage. Returned by
 /// [`Compositor::pixel_data_for`] so callers that need to schedule a
 /// readback (today: the save pipeline) can find the texture for any
@@ -1343,76 +1445,63 @@ impl Compositor {
         xform: crate::gpu::ortho_transform::OrthoXform,
         mask_view: Option<&wgpu::TextureView>,
     ) {
-        let (extent, format) = match self.node_textures.get(&node_id) {
-            Some(t) => (t.canvas_extent(), t.format()),
-            None => return,
-        };
-        let region = match extent.intersect(region) {
-            Some(r) if r.width > 0 && r.height > 0 => r,
-            _ => return,
-        };
-        let (w, h) = (region.width, region.height);
-        let lx = (region.origin.x - extent.origin.x) as u32;
-        let ly = (region.origin.y - extent.origin.y) as u32;
-
-        let src_scratch = create_ortho_scratch(device, w, h, format);
-        let out_scratch = create_ortho_scratch(device, w, h, format);
-        let node_tex = self.node_textures[&node_id].texture();
-
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: node_tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x: lx, y: ly, z: 0 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &src_scratch,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
+        let ran = run_filter_region(
+            &self.node_textures,
+            device,
+            queue,
+            encoder,
+            node_id,
+            region,
+            mask_view,
+            |dev, q, enc, src, mask, out, w, h, fmt| match mask {
+                Some(mv) => self
+                    .ortho_pass
+                    .render_mirror_masked(dev, q, enc, src, mv, out, w, h, xform, fmt),
+                None => self
+                    .ortho_pass
+                    .render_remap(dev, q, enc, src, out, w, h, xform, fmt),
             },
         );
-
-        let src_view = src_scratch.create_view(&wgpu::TextureViewDescriptor::default());
-        let out_view = out_scratch.create_view(&wgpu::TextureViewDescriptor::default());
-        match mask_view {
-            Some(mv) => self.ortho_pass.render_mirror_masked(
-                device, queue, encoder, &src_view, mv, &out_view, w, h, xform, format,
-            ),
-            None => self.ortho_pass.render_remap(
-                device, queue, encoder, &src_view, &out_view, w, h, xform, format,
-            ),
+        if ran {
+            self.mark_node_pixels_dirty(node_id);
+            self.mark_dirty();
         }
+    }
 
-        let node_tex = self.node_textures[&node_id].texture();
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &out_scratch,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: node_tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x: lx, y: ly, z: 0 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
+    /// Run a `MaskedFilterPipeline` over a node's `region` in place — the
+    /// destructive-adjustment counterpart of
+    /// [`flip_node_region`](Self::flip_node_region), riding the same copy-out →
+    /// pass → copy-back plumbing (`run_filter_region`). Where `mask_view` (a
+    /// region-sized R8) is selected the texel takes the filtered value,
+    /// elsewhere it passes through; `None` filters the whole region. Node-
+    /// generic — the pipeline's format dispatch handles RGBA8 layers and R8
+    /// masks alike, so masks invert for free.
+    pub fn filter_node_region(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        node_id: LayerId,
+        region: CanvasRect,
+        mask_view: Option<&wgpu::TextureView>,
+        pipeline: &crate::gpu::effect::MaskedFilterPipeline,
+    ) {
+        let ran = run_filter_region(
+            &self.node_textures,
+            device,
+            queue,
+            encoder,
+            node_id,
+            region,
+            mask_view,
+            |dev, _q, enc, src, mask, out, _w, _h, fmt| {
+                pipeline.render(dev, enc, src, mask, out, fmt)
             },
         );
-
-        self.mark_node_pixels_dirty(node_id);
-        self.mark_dirty();
+        if ran {
+            self.mark_node_pixels_dirty(node_id);
+            self.mark_dirty();
+        }
     }
 
     /// Ensure a non-passthrough group has GPU state allocated.

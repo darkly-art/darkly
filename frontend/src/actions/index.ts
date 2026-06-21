@@ -834,6 +834,34 @@ export function registerActions() {
             app.requestFrame();
         },
     });
+    // Destructive color adjustments (invert, …) are registered dynamically
+    // from the Rust adjustment registry (fetched into `app.adjustmentTypes`
+    // during `loadRegistries`), so a new adjustment in the core surfaces a
+    // Colors-menu entry with no frontend edit. The target is the active *node*
+    // (`activeLayerId` is the mask modifier id when a mask is selected), which
+    // is what makes "invert the mask" reachable from the same entry.
+    for (const adj of app.adjustmentTypes ?? []) {
+        const adjustmentType = adj.type;
+        actions.register({
+            id: `adjust${adjustmentType.charAt(0).toUpperCase()}${adjustmentType.slice(1)}`,
+            displayName: adj.displayName,
+            category: 'layers',
+            description: `Apply "${adj.displayName}" to the active layer or mask (respecting any selection).`,
+            icon: 'fa6-solid:circle-half-stroke',
+            menuPath: ['Colors:10'],
+            enabled: () => app.activeLayerId !== null || 'No active layer',
+            handler: async () => {
+                const engine = app.engine;
+                if (!engine || app.activeLayerId === null) return;
+                await engine.send('apply_adjustment', {
+                    node_id: app.activeLayerId,
+                    adjustment_type: adjustmentType,
+                });
+                app.requestFrame();
+            },
+        });
+    }
+
     actions.register({
         id: 'mergeDown',
         displayName: 'Merge Down',

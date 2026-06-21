@@ -137,6 +137,12 @@ export class DarklyInstance {
     modifierDisplayNames = $state<Record<string, string>>({});
     layerKindDisplayNames = $state<Record<string, string>>({});
 
+    /** Registered destructive color-adjustment types (invert, …), fetched once
+     *  at startup. Drives the dynamic, auto-discovered Colors-menu actions in
+     *  `registerActions` — a new adjustment in the Rust core surfaces a menu
+     *  entry with zero frontend edits. */
+    adjustmentTypes = $state<Array<{ type: string; displayName: string }>>([]);
+
     toolDisplayName(id: string): string {
         return this.toolDisplayNames[id] ?? id;
     }
@@ -168,13 +174,14 @@ export class DarklyInstance {
             for (const e of arr ?? []) m[e.type] = e.displayName;
             return m;
         };
-        const [tools, veils, voids, blends, modifiers, layerKinds] = await Promise.all([
+        const [tools, veils, voids, blends, modifiers, layerKinds, adjustments] = await Promise.all([
             engine.send('tool_types'),
             engine.send('veil_types'),
             engine.send('void_types'),
             engine.send('blend_mode_types'),
             engine.send('modifier_types'),
             engine.send('layer_kind_types'),
+            engine.send('adjustment_types'),
         ]);
         this.toolDisplayNames = buildMap(tools);
         this.veilDisplayNames = buildMap(veils);
@@ -182,6 +189,7 @@ export class DarklyInstance {
         this.blendModeDisplayNames = buildMap(blends);
         this.modifierDisplayNames = buildMap(modifiers);
         this.layerKindDisplayNames = buildMap(layerKinds);
+        this.adjustmentTypes = adjustments ?? [];
     }
 
     /** Add a veil with a partial overrides record. Param names match the

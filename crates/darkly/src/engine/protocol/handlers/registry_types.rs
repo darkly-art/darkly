@@ -39,6 +39,14 @@ pub fn registrations() -> Vec<RequestRegistration> {
             },
         },
         RequestRegistration {
+            kind: "adjustment_types",
+            handle: |engine, _payload, _b| {
+                Ok(Response::json(
+                    serde_json::to_value(engine.adjustment_types()).map_err(bad_payload)?,
+                ))
+            },
+        },
+        RequestRegistration {
             kind: "tool_types",
             handle: |engine, _payload, _b| {
                 Ok(Response::json(

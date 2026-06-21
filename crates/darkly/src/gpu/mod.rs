@@ -92,6 +92,8 @@ pub fn blit_region(
     );
 }
 
+pub mod adjustment;
+pub mod adjustments;
 pub mod apply_mask;
 pub mod atlas;
 pub mod blend;

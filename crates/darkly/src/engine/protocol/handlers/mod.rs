@@ -2,6 +2,7 @@
 // To add request kinds, create or edit a domain .rs file in this
 // directory that exports `pub fn registrations() -> Vec<crate::engine::protocol::RequestRegistration>`.
 
+pub mod adjustments;
 pub mod brush_graph;
 pub mod brush_library;
 pub mod brush_preview;
@@ -28,6 +29,7 @@ use crate::engine::protocol::RequestRegistration;
 #[rustfmt::skip]
 pub fn registrations() -> Vec<RequestRegistration> {
     let mut all = Vec::new();
+    all.extend(adjustments::registrations());
     all.extend(brush_graph::registrations());
     all.extend(brush_library::registrations());
     all.extend(brush_preview::registrations());
