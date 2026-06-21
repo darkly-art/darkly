@@ -732,7 +732,7 @@ export function registerActions() {
         id: 'deleteLayer',
         displayName: 'Delete Layer',
         category: 'layers',
-        description: 'Delete the selected layers (or remove the active veil).',
+        description: 'Delete the selected layers.',
         icon: 'fa6-solid:trash',
         menuPath: ['Layer:60'],
         handler: async () => {
