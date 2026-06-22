@@ -562,6 +562,10 @@ export class DarklyInstance {
         const src = new MediaStreamSource(layerId, this.engine, captureKind, (id) =>
             this.onMediaStreamEnded(id),
         );
+        // Cap uploads to the document resolution up front so the very first
+        // frame is already downscaled (the reconciler keeps it current after
+        // a canvas resize).
+        src.setMaxSourceDimension(Math.max(this.docW, this.docH));
         // Register immediately so the properties panel can surface error/Resume
         // state even if acquisition failed. Reassign the Map so Svelte sees a
         // new identity (in-place Map mutation isn't reactive in Svelte 5).
@@ -682,16 +686,19 @@ export class DarklyInstance {
             }
         }
 
-        // Push the latest `freeze`, `frame_divisor`, and effective-visibility
-        // into every live source. Freeze suppresses uploads (holding the last
-        // GPU frame) without closing the stream; slider / eye-toggle /
-        // parent-hide changes take effect on the next rAF.
+        // Push the latest `freeze`, `frame_divisor`, effective-visibility, and
+        // upload resolution cap into every live source. Freeze suppresses
+        // uploads (holding the last GPU frame) without closing the stream;
+        // slider / eye-toggle / parent-hide / canvas-resize changes take effect
+        // on the next rAF.
+        const maxSourceDimension = Math.max(this.docW, this.docH);
         for (const [id, { frozen, frameDivisor, visible }] of desired) {
             const src = this.mediaStreamSources.get(id);
             if (!src) continue;
             src.setFrozen(frozen);
             src.setFrameDivisor(frameDivisor);
             src.setVisible(visible);
+            src.setMaxSourceDimension(maxSourceDimension);
         }
 
         // Drop session-started ids whose layer is gone so a future undo that

@@ -78,6 +78,17 @@ export class MediaStreamSource {
      *  call) and Rust is the canonical correctness guard. */
     private visible = true;
 
+    /** Longest edge (px) the blit canvas — and therefore the GPU upload — is
+     *  allowed to reach; the source is downscaled to fit, preserving aspect.
+     *  Pushed in by the reconciler as the document-canvas long edge. The
+     *  compositor renders this void cover-fit into a canvas-resolution target,
+     *  so source detail finer than the canvas can never be displayed — uploading
+     *  it just burns `copyExternalImageToTexture` CPU time every frame. This
+     *  matters for screenshare, where the source can be a full 4K monitor
+     *  (~33 MB/frame) feeding a far smaller document. `0` means "no cap" (the
+     *  safe fallback before a value is pushed). */
+    private maxSourceDimension = 0;
+
     /** Whether the void's `freeze` param is on. Pushed in by the reconciler.
      *  When frozen, `tick()` stops uploading so the GPU holds the last received
      *  frame — but the `MediaStream` stays **open**, so unfreezing resumes
@@ -226,12 +237,31 @@ export class MediaStreamSource {
         const vw = this.video.videoWidth;
         const vh = this.video.videoHeight;
         if (vw === 0 || vh === 0) return;
-        if (this.canvas.width !== vw || this.canvas.height !== vh) {
-            this.canvas.width = vw;
-            this.canvas.height = vh;
+        // Downscale to the display cap before the blit, so both `drawImage` and
+        // the GPU upload operate on canvas-resolution pixels rather than the
+        // source's native (potentially 4K) frame. `drawImage`'s dest-rect form
+        // does the scale GPU-side; the smaller canvas is what actually slashes
+        // the per-frame `copyExternalImageToTexture` cost.
+        const [tw, th] = this.cappedDimensions(vw, vh);
+        if (this.canvas.width !== tw || this.canvas.height !== th) {
+            this.canvas.width = tw;
+            this.canvas.height = th;
         }
-        this.ctx.drawImage(this.video, 0, 0, vw, vh);
+        this.ctx.drawImage(this.video, 0, 0, tw, th);
         this.engine.uploadVoidExternalImage(this.layerId, this.canvas);
+    }
+
+    /** Source dimensions clamped so the longest edge is at most
+     *  `maxSourceDimension`, preserving aspect ratio (so the void's cover-fit
+     *  math, which keys off the uploaded texture's aspect, is unaffected).
+     *  Returns the input unchanged when uncapped or already within bounds. */
+    private cappedDimensions(w: number, h: number): [number, number] {
+        const longEdge = Math.max(w, h);
+        if (this.maxSourceDimension <= 0 || longEdge <= this.maxSourceDimension) {
+            return [w, h];
+        }
+        const scale = this.maxSourceDimension / longEdge;
+        return [Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale))];
     }
 
     /** Update the upload throttle. Called by the layer-tree reconciler when
@@ -240,6 +270,12 @@ export class MediaStreamSource {
      *  current divisor, so a slider change takes effect on the next rAF. */
     setFrameDivisor(n: number): void {
         this.frameDivisor = Math.max(1, Math.floor(n));
+    }
+
+    /** Update the upload resolution cap (document-canvas long edge). Called by
+     *  the layer-tree reconciler and at start; takes effect on the next blit. */
+    setMaxSourceDimension(n: number): void {
+        this.maxSourceDimension = Math.max(0, Math.floor(n));
     }
 
     /** Update the effective-visibility flag. Called by the layer-tree

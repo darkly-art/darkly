@@ -66,19 +66,26 @@ export class TransformGizmo {
      *  gizmo became active (the binding had a valid target). */
     async attach(binding: TransformBinding): Promise<boolean> {
         this.binding = binding;
-        if (!(await this.adopt())) {
-            this.clear();
+        if ((await this.adopt(binding)) !== 'adopted') {
+            // 'stale' means we were re-attached to a newer binding mid-read —
+            // leave that one alone; only clear if we're still on this binding.
+            if (this.binding === binding) this.clear();
             return false;
         }
         this.rebuildOverlay();
         return true;
     }
 
-    /** Pull the current bbox + transform from the binding into local geometry.
-     *  Returns false (and leaves geometry stale) if the target is gone. */
-    private async adopt(): Promise<boolean> {
-        const info = await this.binding?.read();
-        if (!info) return false;
+    /** Pull the current bbox + transform from `binding` into local geometry.
+     *  The read crosses the async transport, so the gizmo can be committed /
+     *  cancelled (cleared) or re-attached to a different binding while it's in
+     *  flight: `'stale'` reports that, so a resolved read from a torn-down
+     *  session can't resurrect the overlay. `'gone'` means the binding's target
+     *  is genuinely no longer valid (e.g. floating committed by an undo). */
+    private async adopt(binding: TransformBinding): Promise<'adopted' | 'gone' | 'stale'> {
+        const info = await binding.read();
+        if (this.binding !== binding) return 'stale';
+        if (!info) return 'gone';
         this.geo = {
             matrix: [...info.affine],
             origin: [...info.origin],
@@ -86,16 +93,21 @@ export class TransformGizmo {
             srcH: info.h,
         };
         this.mode = modeForTag(info.mode);
-        return true;
+        return 'adopted';
     }
 
     /** Per-frame reconcile: drop if the target vanished (e.g. floating
      *  committed by an unrelated edit / undo), otherwise resync geometry when
      *  idle (so an external change like undo is reflected) and redraw. */
     async frame(): Promise<void> {
-        if (!this.binding) return;
+        const binding = this.binding;
+        if (!binding) return;
         if (!this.drag) {
-            if (!(await this.adopt())) {
+            const status = await this.adopt(binding);
+            // A commit / cancel / re-attach landed while the read was in flight;
+            // the resolved geometry belongs to a session that's already gone.
+            if (status === 'stale' || this.binding !== binding) return;
+            if (status === 'gone') {
                 this.clear();
                 return;
             }

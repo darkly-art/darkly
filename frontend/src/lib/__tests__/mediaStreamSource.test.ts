@@ -102,3 +102,60 @@ describe('MediaStreamSource freeze suppresses uploads without closing', () => {
         expect(uploads).toEqual([5, 5]);
     });
 });
+
+describe('MediaStreamSource caps upload resolution to the display target', () => {
+    // Regression: a 4K screenshare uploaded its native 3840×2160 frame every
+    // tick, and the synchronous `copyExternalImageToTexture` of ~33 MB stalled
+    // the render loop (~26 ms drains). The compositor only samples the void at
+    // canvas resolution, so the blit canvas must be downscaled to the cap
+    // before the upload — preserving aspect so cover-fit is unaffected.
+    function primedSource(videoWidth: number, videoHeight: number) {
+        // Record the blit-canvas dimensions at upload time (the upload happens
+        // after tick() has sized the canvas and drawn into it).
+        const uploads: Array<{ w: number; h: number }> = [];
+        const canvas = { width: 0, height: 0 };
+        const engine = {
+            uploadVoidExternalImage: () => uploads.push({ w: canvas.width, h: canvas.height }),
+        } as unknown as Engine;
+        const src = new MediaStreamSource(7, engine, 'display');
+        const draws: Array<{ w: number; h: number }> = [];
+        const fields = src as unknown as {
+            video: unknown;
+            canvas: unknown;
+            ctx: unknown;
+            hasFrame: boolean;
+        };
+        fields.video = { videoWidth, videoHeight };
+        fields.canvas = canvas;
+        fields.ctx = {
+            drawImage: (_img: unknown, _x: number, _y: number, w: number, h: number) =>
+                draws.push({ w, h }),
+        };
+        fields.hasFrame = true;
+        return { src, uploads, draws };
+    }
+
+    it('downscales an oversized source to the cap, preserving aspect', () => {
+        const { src, uploads, draws } = primedSource(3840, 2160);
+        src.setMaxSourceDimension(1000);
+        src.tick(4);
+        // Long edge clamped to 1000; 2160 * (1000/3840) ≈ 563.
+        expect(uploads).toEqual([{ w: 1000, h: 563 }]);
+        // The blit drew into the capped dest rect (GPU-side downscale).
+        expect(draws).toEqual([{ w: 1000, h: 563 }]);
+    });
+
+    it('leaves a source already within the cap untouched', () => {
+        const { src, uploads } = primedSource(640, 480);
+        src.setMaxSourceDimension(1000);
+        src.tick(4);
+        expect(uploads).toEqual([{ w: 640, h: 480 }]);
+    });
+
+    it('treats a zero/unset cap as no cap', () => {
+        const { src, uploads } = primedSource(3840, 2160);
+        // Never called setMaxSourceDimension — default 0 means upload native.
+        src.tick(4);
+        expect(uploads).toEqual([{ w: 3840, h: 2160 }]);
+    });
+});
