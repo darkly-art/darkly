@@ -125,8 +125,15 @@ export class Engine {
         return this.handle.engine_default_thumb_size();
     }
 
-    /** Release the underlying wasm handle (wasm-bindgen destructor). */
+    /** Release the underlying wasm handle (wasm-bindgen destructor). Any
+     *  in-flight requests — including deferred readbacks (copy / export / save)
+     *  whose result can no longer land once the engine is gone — are rejected
+     *  so their promises never dangle. */
     free(): void {
+        for (const [, p] of this.pending) {
+            p.reject({ kind: 'engine_error', message: 'engine disposed' });
+        }
+        this.pending.clear();
         this.handle.free();
     }
 

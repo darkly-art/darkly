@@ -143,3 +143,50 @@ fn binary_side_channel_round_trips() {
     assert_eq!(resp.bytes, Some(payload));
     assert_eq!(resp.value.get("len").and_then(|v| v.as_u64()), Some(5));
 }
+
+/// Regression: a one-shot readback op (`copy`) defers — the request that kicked
+/// the readback is the request that resolves with the result, on a *later*
+/// drain, with no separate `poll_*` round-trip. Under the old poll model the
+/// kicking dispatch resolved immediately with `null`; this test pins the
+/// deferred-resolution contract Phase A introduced.
+#[test]
+fn deferred_copy_resolves_originating_request_on_a_later_drain() {
+    use darkly::engine::protocol::Transport;
+    use darkly::engine::ClipboardExport;
+
+    let mut engine = test_engine(32, 32);
+    // `paste_image` allocates the raster layer's GPU texture and uploads
+    // pixels, so the copy readback has something real to read back.
+    let rgba = vec![128u8; (32 * 32 * 4) as usize];
+    let layer = engine.paste_image(32, 32, &rgba, 0, 0, None);
+
+    let transport = Transport::new();
+    const REQ: u64 = 4242;
+    transport.enqueue(REQ, "copy", json!({ "id": layer.to_ffi() }), Vec::new());
+
+    // First drain dispatches `copy`, which kicks the readback and defers: no
+    // outcome for REQ yet (the poll model would have resolved it now, with
+    // null).
+    let first = transport.drain_with(&mut engine);
+    assert!(
+        !first.iter().any(|o| o.id == REQ),
+        "copy must defer — no outcome on the drain that kicked the readback"
+    );
+
+    // Drive the readback, then drain again: the originating request resolves
+    // with the ClipboardExport — no `poll_copy_result` hop.
+    engine.test_flush_readbacks();
+    let second = transport.drain_with(&mut engine);
+    let outcome = second
+        .iter()
+        .find(|o| o.id == REQ)
+        .expect("copy resolves the originating request on a later drain");
+    let resp = outcome
+        .result
+        .as_ref()
+        .expect("copy resolved, not rejected");
+    let export: ClipboardExport =
+        serde_json::from_value(resp.value.clone()).expect("copy response is a ClipboardExport");
+    assert_eq!(export.width, 32, "copied region spans the full canvas");
+    assert_eq!(export.height, 32);
+}

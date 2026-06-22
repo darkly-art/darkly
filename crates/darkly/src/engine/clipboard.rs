@@ -1,5 +1,7 @@
 //! Copy, cut, paste operations.
 
+use serde_json::Value;
+
 use super::rendering::commit_undo_region;
 use super::types::ClipboardExport;
 use super::{DarklyEngine, PendingCopy, ReadbackContext, RichCopyMask, RichCopyMetadata};
@@ -7,6 +9,7 @@ use crate::clipboard::{
     Clipboard, ClipboardRect, ImageClip, LayerClipboard, MaskClipboard,
     LAYER_CLIPBOARD_SCHEMA_VERSION,
 };
+use crate::engine::protocol::Response;
 use crate::gpu::blend_mode;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::readback;
@@ -15,15 +18,19 @@ use crate::undo::{GpuRegionAction, LayerAddAction};
 
 impl DarklyEngine {
     /// Copy the active layer's content (masked by selection) into the internal
-    /// clipboard. Kicks off an async GPU readback — the result is available via
-    /// `poll_copy_result()` on the next frame. Returns `None` immediately.
-    pub fn copy(&mut self, layer_id: LayerId) -> Option<ClipboardExport> {
+    /// clipboard. Defers: the originating request's promise resolves with the
+    /// [`ClipboardExport`] once the async GPU readback lands (typically the next
+    /// frame). When there's nothing to copy, resolves immediately with `null`.
+    pub fn copy(&mut self, layer_id: LayerId) {
+        let request = self.current_request();
+
         // The copy target is any pixel-bearing node: a raster/void layer, or a
         // modifier (the active paint target when editing a mask is the mask
         // modifier id directly). `start_copy_readback` gates on the node's
         // texture, so a non-pixel target simply no-ops there.
         if self.doc.layer(layer_id).is_none() && !self.doc.is_modifier(layer_id) {
-            return None;
+            self.resolve_request(request, Response::json(Value::Null));
+            return;
         }
 
         if self.has_selection() && self.selection_cpu_cache().is_none() {
@@ -31,18 +38,12 @@ impl DarklyEngine {
             self.pending_copy = Some(PendingCopy {
                 layer_id,
                 is_cut: false,
+                request,
             });
-            return None;
+            return;
         }
 
-        self.start_copy_readback(layer_id, false);
-        None
-    }
-
-    /// Poll for a completed copy result. Returns the ClipboardExport once the
-    /// GPU readback has completed (typically the next frame after copy/cut).
-    pub fn poll_copy_result(&mut self) -> Option<ClipboardExport> {
-        self.pending_copy_result.take()
+        self.start_copy_readback(layer_id, false, request);
     }
 
     /// Start a GPU readback for copy (or cut).
@@ -55,7 +56,7 @@ impl DarklyEngine {
     ///
     /// Both extraction and erase use GPU float math on the same selection
     /// texture, guaranteeing `extracted + remaining == original`.
-    pub(crate) fn start_copy_readback(&mut self, layer_id: LayerId, is_cut: bool) {
+    pub(crate) fn start_copy_readback(&mut self, layer_id: LayerId, is_cut: bool, request: u64) {
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
 
@@ -64,27 +65,36 @@ impl DarklyEngine {
         // call. Caller's id alone selects the surface; format follows.
         let format = match self.compositor.node_texture(layer_id) {
             Some(t) => t.format(),
-            None => return,
+            // No GPU texture for this target — nothing to read back.
+            None => {
+                self.resolve_request(request, Response::json(Value::Null));
+                return;
+            }
         };
 
         // Compute copy region from selection bounds (or full canvas).
         let region = match self.copy_region_from_selection(canvas_w, canvas_h) {
             Some(r) => r,
             None => {
-                // Selection bounds unknown — defer.
-                self.pending_copy = Some(PendingCopy { layer_id, is_cut });
+                // Selection bounds unknown — defer until the cache populates.
+                self.pending_copy = Some(PendingCopy {
+                    layer_id,
+                    is_cut,
+                    request,
+                });
                 return;
             }
         };
         let [_, _, rw, rh] = region;
         if rw == 0 || rh == 0 {
+            self.resolve_request(request, Response::json(Value::Null));
             return;
         }
 
         if self.has_selection() {
-            self.copy_with_selection(layer_id, region, is_cut, format);
+            self.copy_with_selection(layer_id, region, is_cut, format, request);
         } else {
-            self.copy_without_selection(layer_id, region, is_cut, format);
+            self.copy_without_selection(layer_id, region, is_cut, format, request);
         }
     }
 
@@ -98,6 +108,7 @@ impl DarklyEngine {
         region: [u32; 4],
         is_cut: bool,
         format: wgpu::TextureFormat,
+        request: u64,
     ) {
         let [rx, ry, rw, rh] = region;
         // The copy `region` is window-local; layer reads operate in plane space,
@@ -225,7 +236,7 @@ impl DarklyEngine {
             }
 
             // 4. Kick async readback of the masked staging texture.
-            let request = readback::request_readback(
+            let readback_req = readback::request_readback(
                 &self.gpu.device,
                 encoder,
                 &staging_tex,
@@ -233,11 +244,12 @@ impl DarklyEngine {
                 crate::coord::LayerRect::from_xywh(0, 0, rw, rh),
             );
             self.readbacks.submit(
-                request,
+                readback_req,
                 ReadbackContext::Copy {
                     node_id: layer_id,
                     region,
                     is_cut,
+                    request,
                 },
             );
         });
@@ -268,6 +280,7 @@ impl DarklyEngine {
         region: [u32; 4],
         is_cut: bool,
         format: wgpu::TextureFormat,
+        request: u64,
     ) {
         let [rx, ry, rw, rh] = region;
         // `region` is the canvas window in window-local coords; lift it to plane
@@ -288,14 +301,15 @@ impl DarklyEngine {
         };
 
         self.gpu.encode("copy-readback", |encoder| {
-            let request =
+            let readback_req =
                 readback::request_readback(&self.gpu.device, encoder, texture, format, layer_rect);
             self.readbacks.submit(
-                request,
+                readback_req,
                 ReadbackContext::Copy {
                     node_id: layer_id,
                     region,
                     is_cut,
+                    request,
                 },
             );
         });
@@ -343,6 +357,7 @@ impl DarklyEngine {
         node_id: LayerId,
         region: [u32; 4],
         is_cut: bool,
+        request: u64,
         pixels: Vec<u8>,
     ) {
         let [rx, ry, rw, rh] = region;
@@ -378,18 +393,23 @@ impl DarklyEngine {
         let o = self.doc.canvas_origin;
         let clip = ImageClip::from_rgba(rw, rh, rgba, rx as i32 + o.x, ry as i32 + o.y);
         let (export_rgba, ew, eh, eox, eoy) = clip.to_rgba();
-        self.pending_copy_result = Some(ClipboardExport {
+        let export = ClipboardExport {
             rgba: export_rgba.to_vec(),
             width: ew,
             height: eh,
             offset_x: eox,
             offset_y: eoy,
-        });
+        };
+        let mut value = match serde_json::to_value(&export) {
+            Ok(v) => v,
+            Err(_) => Value::Null,
+        };
 
         // Promote to a `LayerClipboard` if `copy_layer_rich` captured the
         // source layer's metadata. The pixels we just received become the
         // base64 payload; everything else (blend mode, opacity, …) was
-        // snapshotted at copy time.
+        // snapshotted at copy time. The rich JSON folds into the same copy
+        // promise (a `rich` field on the response) — no second poll hop.
         if let Some(meta) = self.pending_rich_metadata.take() {
             use base64::{engine::general_purpose::STANDARD, Engine as _};
             let layer_clip = LayerClipboard {
@@ -418,37 +438,45 @@ impl DarklyEngine {
                     pixels_b64: String::new(),
                 }),
             };
-            self.pending_layer_clip = Some(layer_clip.to_json());
+            if let Value::Object(map) = &mut value {
+                map.insert("rich".to_string(), Value::String(layer_clip.to_json()));
+            }
             self.clipboard = Some(Clipboard::Layer(layer_clip));
         } else {
             self.clipboard = Some(Clipboard::ImageData(clip));
         }
 
         let _ = is_cut;
+        self.resolve_request(request, Response::json(value));
     }
 
     /// Cut = copy + clear. The clear happens on GPU during start_copy_readback.
-    /// Returns `None` immediately; result available via `poll_copy_result()`.
-    pub fn cut(&mut self, layer_id: LayerId) -> Option<ClipboardExport> {
+    /// Defers like [`Self::copy`]; the request resolves with the
+    /// [`ClipboardExport`] once the readback lands.
+    pub fn cut(&mut self, layer_id: LayerId) {
+        let request = self.current_request();
+
         // Accept a modifier id (mask edit target) as well as a layer — see
         // `copy`. The actual texture gate lives in `start_copy_readback`.
         if self.doc.layer(layer_id).is_none() && !self.doc.is_modifier(layer_id) {
-            return None;
+            self.resolve_request(request, Response::json(Value::Null));
+            return;
         }
         if !self.doc.is_node_editable(layer_id) {
-            return None;
+            self.resolve_request(request, Response::json(Value::Null));
+            return;
         }
 
         if self.has_selection() && self.selection_cpu_cache().is_none() {
             self.pending_copy = Some(PendingCopy {
                 layer_id,
                 is_cut: true,
+                request,
             });
-            return None;
+            return;
         }
 
-        self.start_copy_readback(layer_id, true);
-        None
+        self.start_copy_readback(layer_id, true, request);
     }
 
     /// Paste raw RGBA bytes as a new layer. Used for both internal and external
@@ -519,9 +547,10 @@ impl DarklyEngine {
     /// paste. Pixel bytes still flow through the existing async readback;
     /// the metadata is stitched in when `complete_copy` runs.
     ///
-    /// Returns `None` immediately. The result is available via
-    /// `poll_copy_rich_result()` once the readback lands (next frame).
-    pub fn copy_layer_rich(&mut self, layer_id: LayerId) -> Option<()> {
+    /// Defers like [`Self::copy`]; the request resolves once the readback
+    /// lands, with the [`ClipboardExport`] fields plus a `rich` field carrying
+    /// the JSON-serialised `LayerClipboard` (folded into the one promise).
+    pub fn copy_layer_rich(&mut self, layer_id: LayerId) {
         // Snapshot metadata up-front. Layers can mutate while the readback
         // is in flight; pinning at copy time matches user intent and keeps
         // the snapshot independent of whatever happens before completion.
@@ -559,30 +588,26 @@ impl DarklyEngine {
             // Mask modifier: copy pixels only, no rich metadata.
             _ if self.doc.is_modifier(layer_id) => None,
             // Groups / voids / unknown ids have no pixel-readback path here.
-            _ => return None,
+            _ => {
+                self.resolve_request(self.current_request(), Response::json(Value::Null));
+                return;
+            }
         };
+        let request = self.current_request();
         self.pending_rich_metadata = meta;
 
         // Reuse the standard copy path for the pixel readback. When
         // `complete_copy` runs and finds `pending_rich_metadata` populated,
-        // it builds the `LayerClipboard` JSON and stashes it on
-        // `pending_layer_clip`.
+        // it folds the `LayerClipboard` JSON into the copy promise's response.
         if self.has_selection() && self.selection_cpu_cache().is_none() {
             self.pending_copy = Some(PendingCopy {
                 layer_id,
                 is_cut: false,
+                request,
             });
-            return None;
+            return;
         }
-        self.start_copy_readback(layer_id, false);
-        None
-    }
-
-    /// Drain the most recent rich-copy result. Returns the JSON-serialised
-    /// `LayerClipboard` when the async readback has completed, otherwise
-    /// `None`. Mirrors `poll_copy_result`.
-    pub fn poll_copy_rich_result(&mut self) -> Option<String> {
-        self.pending_layer_clip.take()
+        self.start_copy_readback(layer_id, false, request);
     }
 
     /// Paste a `LayerClipboard` JSON envelope as a new layer. Restores the

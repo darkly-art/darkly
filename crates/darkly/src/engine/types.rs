@@ -364,7 +364,7 @@ pub enum StrokeOp {
 
 /// Data returned to the WASM bridge on copy/cut — always RGBA pixels regardless
 /// of the internal clipboard variant.
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct ClipboardExport {
     pub rgba: Vec<u8>,
     pub width: u32,

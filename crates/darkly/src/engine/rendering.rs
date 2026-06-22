@@ -316,12 +316,9 @@ impl DarklyEngine {
 
     /// Poll the GPU readback scheduler once (non-blocking `device.poll`)
     /// and dispatch every completed readback to its handler. Returns true
-    /// if any landed.
-    ///
-    /// Factored out of [`Self::poll_pending`] so the save flow can drain
-    /// its own readbacks from [`Self::poll_save_result`] — letting a
-    /// backgrounded tab finish a recovery snapshot without running a full
-    /// `render()`/present (only the focused tab renders).
+    /// if any landed. Run once per frame from [`Self::poll_pending`]; this is
+    /// what drives deferred ops (copy / export / save) to completion and
+    /// resolves their requests.
     pub(crate) fn drain_readbacks(&mut self) -> bool {
         let completed = self.readbacks.poll(&self.gpu.device);
         if completed.is_empty() {
@@ -354,8 +351,9 @@ impl DarklyEngine {
                 node_id,
                 region,
                 is_cut,
+                request,
             } => {
-                self.complete_copy(node_id, region, is_cut, pixels);
+                self.complete_copy(node_id, region, is_cut, request, pixels);
             }
             ReadbackContext::MagicWand {
                 was_active,
@@ -375,8 +373,12 @@ impl DarklyEngine {
                     pixels,
                 );
             }
-            ReadbackContext::ExportImage { width, height } => {
-                self.complete_export(width, height, pixels);
+            ReadbackContext::ExportImage {
+                width,
+                height,
+                request,
+            } => {
+                self.complete_export(width, height, request, pixels);
             }
             ReadbackContext::SaveDocument {
                 kind,
@@ -390,7 +392,7 @@ impl DarklyEngine {
                 // Resume deferred operations that were waiting for
                 // selection cpu_cache / pixel_bounds.
                 if let Some(pc) = self.pending_copy.take() {
-                    self.start_copy_readback(pc.layer_id, pc.is_cut);
+                    self.start_copy_readback(pc.layer_id, pc.is_cut, pc.request);
                 }
                 if self.selection_pixel_bounds().is_some() {
                     if let Some(pt) = self.pending_transform.take() {

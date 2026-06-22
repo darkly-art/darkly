@@ -44,6 +44,15 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
     DarklyEngine::new(gpu, width, height)
 }
 
+/// Drive a directly-called deferred copy/cut/export op to completion and parse
+/// its `ClipboardExport` result. Direct test calls use the default request id 0.
+fn drive_copy_result(engine: &mut DarklyEngine) -> darkly::engine::ClipboardExport {
+    let resp = engine
+        .test_drive_completed(0)
+        .expect("deferred copy/cut should resolve after flushing readbacks");
+    serde_json::from_value(resp.value).expect("copy response deserializes as ClipboardExport")
+}
+
 /// Paint a horizontal brush stroke across the canvas at vertical center.
 fn paint_full_stroke(engine: &mut DarklyEngine, layer_id: LayerId, w: u32, h: u32) {
     engine.begin_stroke(layer_id);
@@ -3420,11 +3429,7 @@ fn copy_selected_mask_region_populates_clipboard() {
     engine.select_rect(10.0, 10.0, 24.0, 24.0, SelectionMode::Replace, false, 0.0);
     engine.test_flush_readbacks();
     engine.copy_layer_rich(mask_id);
-    engine.test_flush_readbacks();
-
-    let result = engine
-        .poll_copy_result()
-        .expect("copying a selected mask region must produce a clipboard result");
+    let result = drive_copy_result(&mut engine);
     assert!(
         result.width > 0 && result.height > 0 && !result.rgba.is_empty(),
         "mask copy must carry the selected region's pixels; got {}x{} ({} bytes)",
@@ -4242,7 +4247,7 @@ fn long_stabilized_stroke_no_fallback() {
 // Image export — async readback of the composited canvas
 // ============================================================================
 
-/// Verify that `start_export` → readback → `poll_export_result` produces
+/// Verify that `start_export` → readback → deferred resolution produces
 /// RGBA8 pixels that match the same bytes the test-only
 /// `test_readback_canvas` returns from the composited texture. The async
 /// path is what JS uses in production; the blocking path is what tests
@@ -4268,45 +4273,41 @@ fn export_readback_produces_rgba8_matching_composite() {
     let reference = engine.test_readback_canvas();
     assert_eq!(reference.len(), (cw * ch * 4) as usize);
 
-    // Start the export and pump the frame loop until the result lands.
+    // Start the export and drive the readback to completion; the originating
+    // request resolves with `{ width, height }` + the RGBA8 bytes side-channel.
     engine.start_export();
-    let mut result = None;
-    for _ in 0..16 {
-        engine.test_flush_readbacks();
-        engine.render(0.0);
-        if let Some(r) = engine.poll_export_result() {
-            result = Some(r);
-            break;
-        }
-    }
-    let export = result.expect("export readback did not complete within 16 iterations");
+    let resp = engine
+        .test_drive_completed(0)
+        .expect("export readback did not complete");
+    let width = resp.value["width"].as_u64().unwrap() as u32;
+    let height = resp.value["height"].as_u64().unwrap() as u32;
+    let rgba = resp.bytes.expect("export resolves with the RGBA8 bytes");
 
-    assert_eq!(export.width, cw);
-    assert_eq!(export.height, ch);
+    assert_eq!(width, cw);
+    assert_eq!(height, ch);
     assert_eq!(
-        export.rgba.len(),
+        rgba.len(),
         (cw * ch * 4) as usize,
         "export must be tightly packed RGBA8 with no row padding"
     );
     assert_eq!(
-        export.rgba, reference,
+        rgba, reference,
         "async export bytes must equal the blocking composite readback — \
          the production export path would otherwise lie about canvas contents"
     );
 }
 
-/// A pending export readback returns `None` from `poll_export_result`
-/// until completion. The frontend's per-frame poll relies on this for
-/// "result not ready yet, try again next frame".
+/// A pending export readback emits no completion until the readback lands —
+/// the deferred request stays pending across frames rather than resolving early.
 #[test]
-fn poll_export_result_returns_none_before_completion() {
+fn export_request_pends_until_readback_completes() {
     let mut engine = test_engine(8, 8);
     let _layer = engine.add_raster_layer(None);
 
     engine.start_export();
     // No flush yet — the readback is queued but the GPU work isn't drained.
     assert!(
-        engine.poll_export_result().is_none(),
+        engine.test_take_completed(0).is_none(),
         "result must not be available before the readback completes"
     );
 }
@@ -4556,11 +4557,9 @@ fn copy_with_aa_rect_selection_has_no_transparent_border() {
     );
 
     engine.copy(layer_id);
-    // Force the async readback to complete deterministically.
-    engine.test_flush_readbacks();
-    let exported = engine
-        .poll_copy_result()
-        .expect("copy result should be available after flushing readbacks");
+    // Drive the async readback to completion (selection-cache resume + copy
+    // readback) and read the resolved clipboard export.
+    let exported = drive_copy_result(&mut engine);
 
     assert_eq!(
         exported.width, sel_w as u32,

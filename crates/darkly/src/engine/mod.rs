@@ -25,7 +25,6 @@ mod undo_dispatch;
 mod veils;
 mod voids;
 
-pub use export::ExportImageResult;
 pub use load::LoadDocument;
 pub use rendering::{PickSource, DEFAULT_THUMB_SIZE};
 pub use save::{SaveError, SaveJob, SavePurpose, SaveReadbackKind};
@@ -92,9 +91,12 @@ pub(crate) struct PendingAdjustment {
 }
 
 /// Deferred copy/cut — waiting for selection CPU cache to be populated.
+/// `request` is the originating protocol request id; it travels through the
+/// resume so the copy's promise resolves when the readback finally lands.
 pub(crate) struct PendingCopy {
     pub layer_id: LayerId,
     pub is_cut: bool,
+    pub request: u64,
 }
 
 /// Layer metadata snapshot captured at `copy_layer_rich` time. Combined with
@@ -148,6 +150,10 @@ pub(crate) enum ReadbackContext {
         node_id: LayerId,
         region: [u32; 4],
         is_cut: bool,
+        /// Originating copy/cut request id — resolved with the
+        /// `ClipboardExport` (plus rich-layer JSON for `copy_layer_rich`) when
+        /// the masked staging readback lands.
+        request: u64,
     },
     MagicWand {
         was_active: bool,
@@ -161,17 +167,18 @@ pub(crate) enum ReadbackContext {
     /// Async readback of the selection GPU texture for CPU cache update.
     SelectionReadback,
     /// Async readback of the full composited canvas for image export
-    /// (PNG/JPEG/WebP). Result lands on `pending_export_result` and is
-    /// drained by `poll_export_result`.
+    /// (PNG/JPEG/WebP). On completion resolves the originating `request` with
+    /// `{ width, height }` + the RGBA8 bytes side-channel.
     ExportImage {
         width: u32,
         height: u32,
+        request: u64,
     },
     /// Async readback for `.darkly` save flow. One readback per pixel-bearing
     /// entity (raster layer, mask, selection) plus one for the composite.
     /// The destination (blob path or composite slot) is encoded in `kind`;
     /// on completion, `complete_save_readback` routes the pixels accordingly.
-    /// When every blob lands, `poll_save_result` hands back a `SaveBundle`.
+    /// When every blob lands, the save request resolves with the `SaveBundle`.
     SaveDocument {
         kind: save::SaveReadbackKind,
         /// Source texture dimensions in pixels — readback rows come back
@@ -495,26 +502,32 @@ pub struct DarklyEngine {
 
     // --- Async readback ---
     pub(crate) readbacks: ReadbackScheduler<ReadbackContext>,
-    /// Completed copy result — picked up by the frontend on the next poll.
-    pub(crate) pending_copy_result: Option<ClipboardExport>,
     /// Metadata snapshot captured at `copy_layer_rich` time. When the async
     /// pixel readback completes, this snapshot is combined with the pixels
-    /// to build a `LayerClipboard` and stash it in `pending_layer_clip`.
+    /// to build a `LayerClipboard` folded into the copy promise's response.
     pub(crate) pending_rich_metadata: Option<RichCopyMetadata>,
-    /// Completed rich-copy result, ready for the frontend to drain. Holds
-    /// the JSON-serialised `LayerClipboard` for transmission via the
-    /// system clipboard's `web application/x-darkly-layer` custom MIME.
-    pub(crate) pending_layer_clip: Option<String>,
     /// Last picked color — returned immediately while async readback is in flight.
     pub(crate) last_picked_color: [u8; 4],
-    /// Completed image-export result — drained by `poll_export_result()`.
-    pub(crate) pending_export_result: Option<ExportImageResult>,
-    /// Active save job — populated by `start_save_document`, drained by
-    /// `poll_save_result` once every pixel blob and the composite have
-    /// landed. Only one save can be in flight per engine; a second
-    /// `start_save_document` while this is `Some` errors with
-    /// [`SaveError::InProgress`].
+    /// Active save job — populated by `start_save_document`, finished by
+    /// `complete_save_readback` once every pixel blob and the composite have
+    /// landed (which resolves the originating save request). Only one save can
+    /// be in flight per engine; a second `start_save_document` while this is
+    /// `Some` errors with [`SaveError::InProgress`].
     pub(crate) active_save_job: Option<SaveJob>,
+
+    // --- Deferred request resolution ---
+    /// The protocol request id currently being dispatched. Set by
+    /// [`crate::engine::protocol::Transport::drain_with`] before each handler
+    /// runs; read by the one-shot readback ops (copy / cut / export / save) via
+    /// [`Self::current_request`] so they can stash it in their readback context
+    /// and resolve the right promise when the readback lands. `0` outside of a
+    /// dispatch (and the default in direct test calls).
+    pub(crate) current_request_id: u64,
+    /// Terminal outcomes for deferred requests whose async readback has landed
+    /// (or which resolved immediately because there was nothing to read back).
+    /// Drained by `drain_with` and after `render`, then merged into the
+    /// outcomes the transport hands back to the JS id→promise table.
+    pub(crate) completed_requests: Vec<protocol::RequestOutcome>,
     pub(crate) thumbnail_cache: ThumbnailCache,
     /// Monotonic counter bumped each time a thumbnail readback lands in
     /// the cache. Mirrored to a Svelte-reactive epoch in the frontend so
@@ -649,12 +662,11 @@ impl DarklyEngine {
             pending_adjustment: None,
             pending_copy: None,
             readbacks: ReadbackScheduler::new(),
-            pending_copy_result: None,
             pending_rich_metadata: None,
-            pending_layer_clip: None,
             last_picked_color: [0, 0, 0, 0],
-            pending_export_result: None,
             active_save_job: None,
+            current_request_id: 0,
+            completed_requests: Vec::new(),
             thumbnail_cache: ThumbnailCache::new(),
             thumbnail_version: 0,
             layer_growth_capped: false,
@@ -686,6 +698,58 @@ impl DarklyEngine {
         );
 
         engine
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Deferred request resolution
+// ---------------------------------------------------------------------------
+//
+// One-shot GPU readback ops (copy / cut / export / save) can't return their
+// result in the same FFI call — the bytes land a frame later. Instead of a
+// separate `poll_*` request, the op stashes the originating request id and
+// pushes the terminal outcome onto `completed_requests` when the readback
+// lands; the transport merges that into the outcomes it hands the JS
+// id→promise table, so the request that kicked the readback is the request
+// that resolves with the result.
+
+impl DarklyEngine {
+    /// Record the request id the transport is about to dispatch. Read by a
+    /// deferring op via [`Self::current_request`].
+    pub(crate) fn set_current_request(&mut self, id: u64) {
+        self.current_request_id = id;
+    }
+
+    /// The request id currently being dispatched. A deferring op captures this
+    /// into its readback context so completion resolves the right promise.
+    pub(crate) fn current_request(&self) -> u64 {
+        self.current_request_id
+    }
+
+    /// Resolve a deferred request with its result. Pushed onto the outbound
+    /// queue and flushed by the next `drain_with` / post-`render` step.
+    pub(crate) fn resolve_request(&mut self, id: u64, response: protocol::Response) {
+        self.completed_requests.push(protocol::RequestOutcome {
+            id,
+            result: Ok(response),
+        });
+    }
+
+    /// Reject a deferred request — the readback failed or the op found nothing
+    /// to do and chose to surface that as a rejection. Exactly one terminal
+    /// outcome (resolve or reject) per deferred request is guaranteed.
+    #[allow(dead_code)]
+    pub(crate) fn reject_request(&mut self, id: u64, err: protocol::ProtocolError) {
+        self.completed_requests.push(protocol::RequestOutcome {
+            id,
+            result: Err(err),
+        });
+    }
+
+    /// Drain the outbound completion queue. Called by the transport's
+    /// `drain_with` and by the WASM `render` after compositing.
+    pub fn take_completed_requests(&mut self) -> Vec<protocol::RequestOutcome> {
+        std::mem::take(&mut self.completed_requests)
     }
 }
 
@@ -1135,6 +1199,38 @@ impl DarklyEngine {
         brush.topology_version = brush.topology_version.wrapping_add(1);
     }
 
+    /// Set the request id a directly-called deferring op (copy / export / …)
+    /// will stash. Production code goes through the transport, which sets this
+    /// per dispatch; direct test callers set it explicitly so they can fetch
+    /// the resolved outcome by id via [`Self::test_drive_completed`].
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_set_request_id(&mut self, id: u64) {
+        self.current_request_id = id;
+    }
+
+    /// Remove and return the already-landed terminal response for deferred
+    /// request `id`, without driving any readbacks. `None` if it hasn't
+    /// resolved yet (or rejected).
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_take_completed(&mut self, id: u64) -> Option<protocol::Response> {
+        let pos = self.completed_requests.iter().position(|o| o.id == id)?;
+        self.completed_requests.remove(pos).result.ok()
+    }
+
+    /// Drive pending readbacks to completion and return the terminal response
+    /// for the deferred request `id`, or `None` if it never resolves. Test
+    /// stand-in for the frame loop that flushes `completed_requests`.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_drive_completed(&mut self, id: u64) -> Option<protocol::Response> {
+        for _ in 0..32 {
+            self.test_flush_readbacks();
+            if let Some(resp) = self.test_take_completed(id) {
+                return Some(resp);
+            }
+        }
+        None
+    }
+
     /// Block until all pending async readbacks complete. For tests only.
     /// Uses `device.poll(Wait)` to ensure mapping callbacks fire, then
     /// dispatches every completed readback through the shared handler —
@@ -1148,19 +1244,6 @@ impl DarklyEngine {
         for (ctx, pixels) in completed {
             self.handle_completed_readback(ctx, pixels);
         }
-    }
-
-    /// Block on the GPU device only — fire map callbacks — WITHOUT
-    /// polling or dispatching the readback scheduler. On native this
-    /// stands in for the browser event loop that resolves buffer
-    /// mappings on web. For tests that must verify another code path
-    /// (e.g. `poll_save_result`) does the scheduler drain itself.
-    #[cfg(test)]
-    pub fn test_wait_gpu(&mut self) {
-        let _ = self.gpu.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        });
     }
 }
 

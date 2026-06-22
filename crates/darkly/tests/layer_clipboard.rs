@@ -38,14 +38,18 @@ fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32) {
     engine.render(0.0);
 }
 
-/// Block until the rich-copy readback completes and return its JSON. Uses
-/// the engine's test-only `test_flush_readbacks` helper, which calls
-/// `device.poll(Wait)` to drive WebGPU mapping callbacks synchronously.
+/// Drive the rich-copy readback to completion and return its `LayerClipboard`
+/// JSON, folded into the copy response's `rich` field. Direct test calls use
+/// the default request id 0.
 fn drain_rich_copy(engine: &mut DarklyEngine) -> String {
-    engine.test_flush_readbacks();
-    engine
-        .poll_copy_rich_result()
-        .expect("rich copy never produced a result")
+    let resp = engine
+        .test_drive_completed(0)
+        .expect("rich copy never produced a result");
+    resp.value
+        .get("rich")
+        .and_then(|v| v.as_str())
+        .expect("rich copy response carries the LayerClipboard JSON in `rich`")
+        .to_string()
 }
 
 /// Find a top-level raster layer by id in the engine's serializable tree.

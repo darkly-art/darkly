@@ -43,24 +43,25 @@
         downloadBlob(blob, filename);
     }
 
-    function confirm() {
+    async function confirm() {
         if (!app.engine || exporting) return;
         exporting = true;
         const engine = app.engine;
-        app.onExportResult(async (result) => {
-            try {
-                if (result?.rgba) {
-                    await encodeAndDownload(result.width, result.height, result.rgba);
-                }
-            } catch (e) {
-                console.error('[export-image] encode failed', e);
-                alert('Export failed — see console for details.');
-            } finally {
-                exporting = false;
-                exportImage.open = false;
+        app.requestFrame();
+        try {
+            const result = await engine.send<{ width: number; height: number; bytes: Uint8Array }>(
+                'start_export',
+            );
+            if (result?.bytes) {
+                await encodeAndDownload(result.width, result.height, result.bytes);
             }
-        });
-        engine.post('start_export');
+        } catch (e) {
+            console.error('[export-image] encode failed', e);
+            alert('Export failed — see console for details.');
+        } finally {
+            exporting = false;
+            exportImage.open = false;
+        }
     }
 </script>
 

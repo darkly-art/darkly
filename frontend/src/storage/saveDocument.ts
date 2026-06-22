@@ -23,8 +23,8 @@ import { sessionId } from '../state/recoverySession';
  *  clears it. */
 export type SavePurpose = 'file' | 'snapshot';
 
-/** Wire shape reconstructed from the `poll_save_result` request (the engine
- *  packs it; `app.svelte.ts::unpackSaveBundle` slices it back out). Mirrors
+/** Wire shape reconstructed from the `start_save_document` response (the engine
+ *  packs it; {@link unpackSaveBundle} slices it back out). Mirrors
  *  `crates/darkly/src/format/manifest.rs::SaveBundle`. */
 export interface SaveBundle {
     manifestJson: Uint8Array;
@@ -32,6 +32,39 @@ export interface SaveBundle {
     compositeHeight: number;
     compositeRgba: Uint8Array;
     blobs: Array<{ path: string; bytes: Uint8Array }>;
+}
+
+/** Packed `start_save_document` response: every byte blob concatenated into one
+ *  `bytes` buffer, with the lengths needed to slice them back out. */
+interface PackedSaveResult {
+    manifestLen: number;
+    compositeWidth: number;
+    compositeHeight: number;
+    compositeLen: number;
+    blobs: Array<{ path: string; len: number }>;
+    bytes: Uint8Array;
+}
+
+/** Reconstruct the {@link SaveBundle} from the packed protocol result
+ *  (manifest ++ composite ++ blob0 ++ blob1 ++ … in `bytes`). */
+function unpackSaveBundle(p: PackedSaveResult): SaveBundle {
+    let off = 0;
+    const manifestJson = p.bytes.subarray(off, off + p.manifestLen);
+    off += p.manifestLen;
+    const compositeRgba = p.bytes.subarray(off, off + p.compositeLen);
+    off += p.compositeLen;
+    const blobs = p.blobs.map((b) => {
+        const bytes = p.bytes.subarray(off, off + b.len);
+        off += b.len;
+        return { path: b.path, bytes };
+    });
+    return {
+        manifestJson,
+        compositeWidth: p.compositeWidth,
+        compositeHeight: p.compositeHeight,
+        compositeRgba,
+        blobs,
+    };
 }
 
 const THUMBNAIL_MAX_DIM = 256;
@@ -80,11 +113,11 @@ export async function saveDocument({ forceAs = false }: { forceAs?: boolean } = 
 /**
  * Drive a `.darkly` save for `instance` to completion and return the
  * assembled zip bytes — the destination-agnostic core shared by file-save
- * (above) and autosave snapshots. It kicks `start_save_document` over the
- * async transport and awaits the `poll_save_result` callback, which the
- * instance's render loop drives to completion (`onSaveResult` keeps that
- * loop alive even for a backgrounded tab; the Rust `poll_save_result`
- * drains the readback scheduler itself).
+ * (above) and autosave snapshots. It kicks `start_save_document`, whose
+ * promise resolves with the packed `SaveBundle` once every readback lands.
+ * The instance's render loop drives those readbacks to completion (the save
+ * keeps `needsMore` true while it's in flight, so the loop self-schedules —
+ * even a backgrounded tab completes on its own render loop).
  *
  * Rejects if a save is already in flight on the engine
  * (`SaveError::InProgress`) — autosave catches this and skips the tick so
@@ -118,25 +151,21 @@ async function acquireHandle(forceAs: boolean): Promise<FileSystemFileHandle | n
     return handle;
 }
 
-/** Kick `start_save_document` on `instance` and await the
- *  `poll_save_result` callback. `snapshot` marks an autosave save (which
- *  must not clear the document's dirty flag — see the Rust `SavePurpose`).
- *  The instance's render loop polls `poll_save_result` until the bundle
- *  lands; `onSaveResult` keeps that loop alive even for a backgrounded tab. */
-function runSaveBundle(instance: DarklyInstance, snapshot: boolean): Promise<SaveBundle> {
-    return new Promise((resolve, reject) => {
-        const engine = instance.engine;
-        if (!engine) {
-            reject(new Error('no engine handle'));
-            return;
-        }
-        instance.onSaveResult((bundle: SaveBundle) => resolve(bundle));
-        // `start_save_document` rejects on error; surface that as the save
-        // failure rather than waiting forever for a callback that won't fire.
-        engine
-            .send('start_save_document', { snapshot })
-            .catch((e) => reject(e instanceof Error ? e : new Error(String(e))));
-    });
+/** Kick `start_save_document` on `instance` and await its deferred result.
+ *  The request's promise resolves with the packed bundle once every readback
+ *  lands — the instance's render loop drives them to completion (the save
+ *  keeps the loop alive while in flight, even for a backgrounded tab).
+ *  `snapshot` marks an autosave save (which must not clear the document's
+ *  dirty flag — see the Rust `SavePurpose`). Rejects on `SaveError::InProgress`
+ *  or any transport failure. */
+async function runSaveBundle(instance: DarklyInstance, snapshot: boolean): Promise<SaveBundle> {
+    const engine = instance.engine;
+    if (!engine) throw new Error('no engine handle');
+    // Keep the render loop ticking so the save's readbacks get driven to
+    // completion even if nothing else requests frames.
+    instance.requestFrame();
+    const packed = await engine.send<PackedSaveResult>('start_save_document', { snapshot });
+    return unpackSaveBundle(packed);
 }
 
 /** Build the .darkly zip bytes from a SaveBundle. */

@@ -400,17 +400,13 @@ fn copy_selection_after_crop_extracts_plane_pixels_and_offset() {
     engine.select_rect(30.0, 28.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
     engine.copy(layer_id);
 
-    // Drive the async copy readback to completion.
-    let mut export = None;
-    for _ in 0..8 {
-        engine.test_flush_readbacks();
-        engine.render(0.0);
-        if let Some(e) = engine.poll_copy_result() {
-            export = Some(e);
-            break;
-        }
-    }
-    let export = export.expect("copy readback should complete");
+    // Drive the async copy readback to completion; the request resolves with
+    // the clipboard export once the readback lands.
+    let resp = engine
+        .test_drive_completed(0)
+        .expect("copy readback should complete");
+    let export: darkly::engine::ClipboardExport =
+        serde_json::from_value(resp.value).expect("copy response is a ClipboardExport");
 
     // Clipboard offset is the PLANE position of the selection (30, 28) — not the
     // window-local (14, 16) the pre-fix code produced.

@@ -108,11 +108,7 @@ export type RequestKind =
     | 'paste_in_place_floating'
     | 'paste_layer_rich'
     | 'pick_color'
-    | 'poll_copy_result'
-    | 'poll_copy_rich_result'
-    | 'poll_export_result'
     | 'poll_preview'
-    | 'poll_save_result'
     | 'redo'
     | 'refresh_brush_cursor_preview'
     | 'remove_layer'
@@ -271,11 +267,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'paste_in_place_floating',
     'paste_layer_rich',
     'pick_color',
-    'poll_copy_result',
-    'poll_copy_rich_result',
-    'poll_export_result',
     'poll_preview',
-    'poll_save_result',
     'redo',
     'refresh_brush_cursor_preview',
     'remove_layer',

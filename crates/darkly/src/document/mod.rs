@@ -92,7 +92,7 @@ pub struct Document {
 
     /// Sticky "has unsaved changes" bit. Set at the [`UndoStack::push`]
     /// chokepoint — any new undoable mutation flips it true. Cleared
-    /// only by a successful save (`poll_save_result`) or a load
+    /// only by a successful save (`start_save_document`) or a load
     /// (`open_document` installs a fresh staging doc with `dirty = false`).
     /// Not undoable on purpose: an undo back to the original state
     /// shouldn't pretend the work was never done. Not serialized — the

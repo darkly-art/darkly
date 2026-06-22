@@ -1,11 +1,13 @@
 //! Image export (PNG/JPEG/WebP readback) and native `.darkly` save / open.
 //!
-//! Multi-blob outputs (`poll_save_result`) concatenate every byte buffer into
-//! the single [`Response`] `bytes` side-channel; the JSON value carries the
-//! lengths so the JS edge can slice them back out in order.
+//! `start_export` and `start_save_document` defer: each resolves its own
+//! request's promise once the async GPU readback(s) land. The save result is a
+//! multi-blob binary payload — every byte buffer concatenated into the single
+//! [`Response`] `bytes` side-channel with the lengths in the JSON value
+//! (packed by `engine::save::pack_save_bundle`), so the JS edge can slice them
+//! back out in order.
 
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::engine::protocol::{bad_payload, ProtocolError, RequestRegistration, Response};
 use crate::engine::SavePurpose;
@@ -16,17 +18,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
             kind: "start_export",
             handle: |engine, _payload, _b| {
                 engine.start_export();
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "poll_export_result",
-            handle: |engine, _payload, _b| {
-                let Some(result) = engine.poll_export_result() else {
-                    return Ok(Response::json(serde_json::Value::Null));
-                };
-                let value = json!({ "width": result.width, "height": result.height });
-                Ok(Response::binary(value, result.rgba))
+                Ok(Response::deferred())
             },
         },
         RequestRegistration {
@@ -47,37 +39,10 @@ pub fn registrations() -> Vec<RequestRegistration> {
                     SavePurpose::File
                 };
                 match engine.start_save_document(purpose) {
-                    Ok(()) => Ok(Response::empty()),
+                    // The bundle resolves this request when every readback lands.
+                    Ok(()) => Ok(Response::deferred()),
                     Err(e) => Err(ProtocolError::engine(e.to_string())),
                 }
-            },
-        },
-        RequestRegistration {
-            kind: "poll_save_result",
-            handle: |engine, _payload, _b| {
-                let Some(bundle) = engine.poll_save_result() else {
-                    return Ok(Response::json(serde_json::Value::Null));
-                };
-                // Pack: manifest ++ composite ++ blob0 ++ blob1 ++ ...
-                let mut bytes = Vec::new();
-                bytes.extend_from_slice(&bundle.manifest_json);
-                bytes.extend_from_slice(&bundle.composite_rgba);
-                let blobs: Vec<serde_json::Value> = bundle
-                    .blobs
-                    .iter()
-                    .map(|b| {
-                        bytes.extend_from_slice(&b.bytes);
-                        json!({ "path": b.path, "len": b.bytes.len() })
-                    })
-                    .collect();
-                let value = json!({
-                    "manifestLen": bundle.manifest_json.len(),
-                    "compositeWidth": bundle.composite_width,
-                    "compositeHeight": bundle.composite_height,
-                    "compositeLen": bundle.composite_rgba.len(),
-                    "blobs": blobs,
-                });
-                Ok(Response::binary(value, bytes))
             },
         },
         RequestRegistration {

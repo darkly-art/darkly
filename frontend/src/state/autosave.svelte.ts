@@ -3,8 +3,9 @@
  * tab (when dirty and idle) to OPFS for crash recovery, and it snapshots a
  * tab when you switch away from it so every open document is covered. The
  * snapshot bytes come from `produceDarklyBytes`, which keeps the tab's
- * render loop alive (via `onSaveResult`) until the readback lands — so even
- * a backgrounded tab completes without the user looking at it.
+ * render loop alive until the save's readbacks land (the in-flight save keeps
+ * `needsMore` true) — so even a backgrounded tab completes without the user
+ * looking at it.
  *
  * Snapshots reuse the exact `.darkly` save pipeline and are marked
  * `'snapshot'` so they leave the document's dirty flag set (nothing

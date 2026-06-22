@@ -37,21 +37,18 @@ export function registerClipboardActions(): void {
         description: 'Copy the active layer to the clipboard.',
         icon: 'fa6-solid:copy',
         menuPath: ['Edit:40'],
-        handler: () => {
+        handler: async () => {
             const engine = app.engine;
             if (!engine || app.activeLayerId == null) return;
             // `copy_layer_rich` snapshots metadata up front and then drives
             // the same async pixel readback that `copy` does — it's a
-            // superset, so we don't need to call both.
-            engine.post('copy_layer_rich', { id: app.activeLayerId });
-            app.onCopyResult(async (result) => {
-                if (!result?.rgba) return;
-                // The rich JSON lands one frame later, on the same readback
-                // completion path. Polling here is safe because we got the
-                // pixel result; the rich result is set before this callback.
-                const richJson = (await engine.send('poll_copy_rich_result')) ?? undefined;
-                copyToSystemClipboard(result.rgba, result.width, result.height, richJson);
-            });
+            // superset, so we don't need to call both. The request resolves
+            // once the readback lands, with the pixel result plus the rich
+            // JSON folded in as `rich`.
+            app.requestFrame();
+            const result = await engine.send('copy_layer_rich', { id: app.activeLayerId });
+            if (!result?.rgba) return;
+            copyToSystemClipboard(result.rgba, result.width, result.height, result.rich ?? undefined);
         },
     });
     actions.register({
@@ -67,13 +64,12 @@ export function registerClipboardActions(): void {
             // No `cut_layer_rich` yet — fall back to the pixels-only path
             // for cut. Cross-tab paste of a cut layer still works (PNG
             // fallback restores the bitmap) but loses blend mode/opacity.
-            // Worth a follow-up.
-            await engine.send('cut', { id: app.activeLayerId });
-            app.onCopyResult((result) => {
-                if (result?.rgba) {
-                    copyToSystemClipboard(result.rgba, result.width, result.height);
-                }
-            });
+            // Worth a follow-up. The request resolves once the readback lands.
+            app.requestFrame();
+            const result = await engine.send('cut', { id: app.activeLayerId });
+            if (result?.rgba) {
+                copyToSystemClipboard(result.rgba, result.width, result.height);
+            }
             app.requestFrame();
         },
     });

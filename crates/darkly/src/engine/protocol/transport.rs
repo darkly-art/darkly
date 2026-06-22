@@ -95,16 +95,39 @@ impl Transport {
     /// Drain and dispatch every queued request **under an already-held engine
     /// borrow** — the `render` path, which composites in the same borrow right
     /// after. Requests are dispatched in FIFO submission order.
+    ///
+    /// Two kinds of outcome flow out of here:
+    ///
+    /// 1. **Inline** — a handler that returns a normal [`Response`] resolves its
+    ///    request now; its `(id, result)` is emitted this drain.
+    /// 2. **Deferred** — a handler that kicked an async readback returns
+    ///    [`Response::deferred`]; no outcome is emitted for it now. The
+    ///    request's `id` is recorded on the engine (`current_request`) so the
+    ///    readback's completion handler can push the terminal outcome onto the
+    ///    engine's `completed_requests` queue, which is flushed here (and after
+    ///    `render`) — letting a later frame resolve an earlier-dispatched id.
     pub fn drain_with(&self, engine: &mut DarklyEngine) -> Vec<RequestOutcome> {
         let reqs: Vec<QueuedRequest> = self.queue.borrow_mut().drain(..).collect();
-        reqs.into_iter()
-            .map(|req| RequestOutcome {
-                id: req.id,
-                result: self
-                    .registry
-                    .dispatch(engine, &req.kind, req.payload, &req.bytes),
-            })
-            .collect()
+        let mut outcomes = Vec::with_capacity(reqs.len());
+        for req in reqs {
+            // Record the id being dispatched so a deferring op can stash it in
+            // its readback context and resolve the right promise on completion.
+            engine.set_current_request(req.id);
+            let result = self
+                .registry
+                .dispatch(engine, &req.kind, req.payload, &req.bytes);
+            // A deferred response carries no result yet — skip it; the engine
+            // emits this id's terminal outcome via `completed_requests`.
+            if matches!(&result, Ok(r) if r.deferred) {
+                continue;
+            }
+            outcomes.push(RequestOutcome { id: req.id, result });
+        }
+        // Flush any deferred completions that have landed: immediate
+        // self-resolves queued during this drain, plus readback completions
+        // from prior frames' renders.
+        outcomes.extend(engine.take_completed_requests());
+        outcomes
     }
 
     /// Non-blocking drain — the scheduler path. `try_borrow_mut`s the engine and

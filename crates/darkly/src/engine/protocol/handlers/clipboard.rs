@@ -1,9 +1,9 @@
 //! Copy / cut / paste, including rich (metadata-bearing) layer clipboard.
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 
-use crate::engine::protocol::{bad_payload, decode, layer_id, RequestRegistration, Response};
+use crate::engine::protocol::{decode, layer_id, RequestRegistration, Response};
 use crate::layer::LayerId;
 
 /// `active_layer_id` follows the f64 negative-means-none FFI convention.
@@ -11,53 +11,30 @@ fn active(id: i64) -> Option<LayerId> {
     (id >= 0).then(|| LayerId::from_ffi(id as u64))
 }
 
-fn export_value(
-    export: Option<crate::engine::ClipboardExport>,
-) -> Result<Value, crate::engine::protocol::ProtocolError> {
-    match export {
-        Some(e) => serde_json::to_value(&e).map_err(bad_payload),
-        None => Ok(Value::Null),
-    }
-}
-
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
+        // Copy / cut / rich-copy defer: the request's promise resolves with the
+        // `ClipboardExport` (plus a `rich` field for `copy_layer_rich`) once the
+        // async GPU readback lands — no separate `poll_*` round-trip.
         RequestRegistration {
             kind: "copy",
             handle: |engine, payload, _b| {
-                let export = engine.copy(layer_id(payload)?);
-                Ok(Response::json(export_value(export)?))
+                engine.copy(layer_id(payload)?);
+                Ok(Response::deferred())
             },
         },
         RequestRegistration {
             kind: "cut",
             handle: |engine, payload, _b| {
-                let export = engine.cut(layer_id(payload)?);
-                Ok(Response::json(export_value(export)?))
-            },
-        },
-        RequestRegistration {
-            kind: "poll_copy_result",
-            handle: |engine, _payload, _b| {
-                let export = engine.poll_copy_result();
-                Ok(Response::json(export_value(export)?))
+                engine.cut(layer_id(payload)?);
+                Ok(Response::deferred())
             },
         },
         RequestRegistration {
             kind: "copy_layer_rich",
             handle: |engine, payload, _b| {
                 engine.copy_layer_rich(layer_id(payload)?);
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "poll_copy_rich_result",
-            handle: |engine, _payload, _b| {
-                let value = match engine.poll_copy_rich_result() {
-                    Some(s) => Value::String(s),
-                    None => Value::Null,
-                };
-                Ok(Response::json(value))
+                Ok(Response::deferred())
             },
         },
         RequestRegistration {

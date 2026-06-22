@@ -1,5 +1,4 @@
 import type { Engine, EngineState } from '../engine/protocol';
-import type { SaveBundle } from '../storage/saveDocument';
 import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry } from '../tools/registry';
 import { pollPick } from '../tools/color_pick_sync';
@@ -8,39 +7,6 @@ import { CameraSource } from '../lib/cameraSource';
 
 export interface Color {
     r: number; g: number; b: number; a: number;
-}
-
-/** Packed `poll_save_result` payload: every byte blob concatenated into one
- *  `bytes` buffer, with the lengths needed to slice them back out. */
-interface PackedSaveResult {
-    manifestLen: number;
-    compositeWidth: number;
-    compositeHeight: number;
-    compositeLen: number;
-    blobs: Array<{ path: string; len: number }>;
-    bytes: Uint8Array;
-}
-
-/** Reconstruct the {@link SaveBundle} `saveDocument.ts` expects from the packed
- *  protocol result (manifest ++ composite ++ blob0 ++ blob1 ++ … in `bytes`). */
-function unpackSaveBundle(p: PackedSaveResult): SaveBundle {
-    let off = 0;
-    const manifestJson = p.bytes.subarray(off, off + p.manifestLen);
-    off += p.manifestLen;
-    const compositeRgba = p.bytes.subarray(off, off + p.compositeLen);
-    off += p.compositeLen;
-    const blobs = p.blobs.map((b) => {
-        const bytes = p.bytes.subarray(off, off + b.len);
-        off += b.len;
-        return { path: b.path, bytes };
-    });
-    return {
-        manifestJson,
-        compositeWidth: p.compositeWidth,
-        compositeHeight: p.compositeHeight,
-        compositeRgba,
-        blobs,
-    };
 }
 
 /**
@@ -742,41 +708,6 @@ export class DarklyInstance {
         this.veilList = Array.isArray(list) ? list : [];
     }
 
-    // --- Async copy result callback ---
-
-    private _copyCallback: ((result: any) => void) | null = null;
-
-    /** Register a one-shot callback for when the async copy readback completes. */
-    onCopyResult(cb: (result: any) => void) {
-        this._copyCallback = cb;
-        this.requestFrame();
-    }
-
-    // --- Async export result callback ---
-
-    private _exportCallback:
-        | ((result: { width: number; height: number; rgba: Uint8Array }) => void)
-        | null = null;
-
-    /** Register a one-shot callback for when the async export readback completes. */
-    onExportResult(cb: (result: { width: number; height: number; rgba: Uint8Array }) => void) {
-        this._exportCallback = cb;
-        this.requestFrame();
-    }
-
-    // --- Async save result callback ---
-
-    private _saveCallback: ((bundle: SaveBundle) => void) | null = null;
-
-    /** Register a one-shot callback for when the async `.darkly` save
-     *  readback completes (manifest JSON + composite RGBA + per-blob
-     *  bytes arrive together). The caller PNG-encodes the composite +
-     *  thumbnail and assembles the zip; see `storage/saveDocument.ts`. */
-    onSaveResult(cb: (bundle: SaveBundle) => void) {
-        this._saveCallback = cb;
-        this.requestFrame();
-    }
-
     // --- Demand-driven rendering ---
 
     private _framePending = false;
@@ -865,52 +796,14 @@ export class DarklyInstance {
             // committed by `pollPick`. Cheap when nothing changed.
             tickColorPickerCursor();
 
-            // Check for completed async copy/cut readback.
-            if (this._copyCallback) {
-                engine.send('poll_copy_result').then((result) => {
-                    if (result && this._copyCallback) {
-                        const cb = this._copyCallback;
-                        this._copyCallback = null;
-                        cb(result);
-                    }
-                });
-            }
-
-            // Check for completed async export readback.
-            if (this._exportCallback) {
-                engine
-                    .send<{ width: number; height: number; bytes: Uint8Array }>('poll_export_result')
-                    .then((result) => {
-                        if (result && this._exportCallback) {
-                            const cb = this._exportCallback;
-                            this._exportCallback = null;
-                            cb({ width: result.width, height: result.height, rgba: result.bytes });
-                        }
-                    });
-            }
-
-            // Check for completed async `.darkly` save readbacks. The bundle's
-            // byte blobs arrive concatenated in `bytes`; slice them back out
-            // into the per-blob shape `saveDocument.ts` expects.
-            if (this._saveCallback) {
-                engine.send<PackedSaveResult>('poll_save_result').then((packed) => {
-                    if (!packed || !this._saveCallback) return;
-                    const cb = this._saveCallback;
-                    this._saveCallback = null;
-                    cb(unpackSaveBundle(packed));
-                });
-            }
-
             // Continue animation loop only when no UI interaction is
             // monopolizing the main thread.  One-shot renders (tool
             // actions, resize, etc.) always go through — only the
-            // self-scheduling continuous loop is suppressed.
-            const shouldContinue =
-                frame.needsMore ||
-                this._copyCallback ||
-                this._exportCallback ||
-                this._saveCallback;
-            if (shouldContinue && this._interactionCount === 0) {
+            // self-scheduling continuous loop is suppressed. `needsMore`
+            // stays true while any async readback (copy / export / save) is
+            // in flight, so the loop keeps driving them to completion and the
+            // deferred request promises resolve on their own.
+            if (frame.needsMore && this._interactionCount === 0) {
                 this.requestFrame();
             }
         });

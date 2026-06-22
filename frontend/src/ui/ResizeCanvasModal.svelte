@@ -78,22 +78,24 @@
     // Reuse the async export readback (offscreen composite → GPU readback →
     // poll). The result is the current canvas window at oldW×oldH, so it maps
     // 1:1 onto the content rect.
-    function requestComposite() {
-        if (!app.engine) return;
-        app.engine.post('start_export');
-        app.onExportResult((result) => {
-            if (!resizeCanvas.open) return; // modal closed before it landed
-            const cv = document.createElement('canvas');
-            cv.width = result.width;
-            cv.height = result.height;
-            const cctx = cv.getContext('2d');
-            if (!cctx) return;
-            const clamped = new Uint8ClampedArray(result.rgba.length);
-            clamped.set(result.rgba);
-            cctx.putImageData(new ImageData(clamped, result.width, result.height), 0, 0);
-            compositeCanvas = cv;
-            compositeVersion++;
-        });
+    async function requestComposite() {
+        const engine = app.engine;
+        if (!engine) return;
+        app.requestFrame();
+        const result = await engine.send<{ width: number; height: number; bytes: Uint8Array }>(
+            'start_export',
+        );
+        if (!resizeCanvas.open || !result?.bytes) return; // modal closed before it landed
+        const cv = document.createElement('canvas');
+        cv.width = result.width;
+        cv.height = result.height;
+        const cctx = cv.getContext('2d');
+        if (!cctx) return;
+        const clamped = new Uint8ClampedArray(result.bytes.length);
+        clamped.set(result.bytes);
+        cctx.putImageData(new ImageData(clamped, result.width, result.height), 0, 0);
+        compositeCanvas = cv;
+        compositeVersion++;
     }
 
     // --- Numeric / anchor controls --------------------------------------

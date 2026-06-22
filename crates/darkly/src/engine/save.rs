@@ -33,8 +33,8 @@ use crate::layer::LayerId;
 /// Errors `start_save_document` can return synchronously.
 #[derive(Debug)]
 pub enum SaveError {
-    /// A save is already in flight on this engine. Wait for
-    /// `poll_save_result` to return `Some` before kicking off another.
+    /// A save is already in flight on this engine. Wait for the in-flight
+    /// `start_save_document` request to resolve before kicking off another.
     /// The UI disables the Save action for that tab during a save.
     InProgress,
 }
@@ -84,9 +84,9 @@ pub enum SaveReadbackKind {
 }
 
 /// In-flight save state — created by [`DarklyEngine::start_save_document`]
-/// and drained by [`DarklyEngine::poll_save_result`]. The fields capture
-/// everything the save needs that's *not* a pixel readback (those land
-/// asynchronously into `pending_blobs` / `composite`).
+/// and finished by `complete_save_readback` once every readback lands. The
+/// fields capture everything the save needs that's *not* a pixel readback
+/// (those land asynchronously into `pending_blobs` / `composite`).
 pub struct SaveJob {
     /// Manifest built synchronously at submit time. Captures the
     /// document's tree / modifier / veil / requires state at the moment
@@ -106,9 +106,12 @@ pub struct SaveJob {
     /// Composite readback result. `None` until the `Composite` arm
     /// fires.
     composite: Option<(u32, u32, Vec<u8>)>,
-    /// Why this save was started — gates whether the drain clears
+    /// Why this save was started — gates whether finishing clears
     /// `doc.dirty` (see [`SavePurpose`]).
     purpose: SavePurpose,
+    /// Originating `start_save_document` request id. When the last readback
+    /// lands, the assembled [`SaveBundle`] resolves this request's promise.
+    request: u64,
 }
 
 impl SaveJob {
@@ -121,8 +124,8 @@ impl SaveJob {
 
 impl DarklyEngine {
     /// Kick off a save. Synchronously builds the [`Manifest`], pins
-    /// every source texture, and queues all readbacks. Returns
-    /// immediately; the result lands on [`Self::poll_save_result`] once
+    /// every source texture, and queues all readbacks. Defers: the
+    /// originating request resolves with the packed `SaveBundle` once
     /// every readback completes (typically within a few frames).
     ///
     /// `purpose` decides whether the eventual drain clears `doc.dirty`:
@@ -132,6 +135,7 @@ impl DarklyEngine {
         if self.active_save_job.is_some() {
             return Err(SaveError::InProgress);
         }
+        let request = self.current_request();
 
         let (manifest, pixel_blobs) = build_manifest(self);
 
@@ -184,68 +188,16 @@ impl DarklyEngine {
             pending_blobs,
             composite: None,
             purpose,
+            request,
         });
 
         Ok(())
     }
 
-    /// Drain a completed save. Returns `None` while any readback is
-    /// still in flight; returns `Some(SaveBundle)` once every pixel
-    /// blob and the composite have landed.
-    ///
-    /// A [`SavePurpose::File`] drain also clears the [`Document::dirty`]
-    /// flag — the bundle handoff is the moment the document's contents
-    /// are no longer "unsaved." Edits queued between `start_save_document`
-    /// and this drain are intentionally lost from the dirty flag's POV:
-    /// the snapshot built at submit time is what's leaving the engine, so
-    /// the document on disk matches the snapshot we just sealed. A
-    /// [`SavePurpose::Snapshot`] (autosave) drain leaves `dirty` alone.
-    ///
-    /// Drives the readback scheduler itself before checking completion,
-    /// so a backgrounded tab — whose `render()` loop isn't running — can
-    /// still finish its snapshot when pumped via this method alone.
-    pub fn poll_save_result(&mut self) -> Option<SaveBundle> {
-        // Advance any in-flight GPU readbacks (non-blocking) so a save can
-        // complete without a full render/present. Harmless no-op when the
-        // frame loop already drained this frame.
-        if self.active_save_job.is_some() {
-            self.drain_readbacks();
-        }
-        let job = self.active_save_job.as_ref()?;
-        if !job.is_complete() {
-            return None;
-        }
-        let job = self.active_save_job.take().unwrap();
-        let manifest_json = serde_json::to_vec_pretty(&job.manifest).ok()?;
-        let (composite_width, composite_height, composite_rgba) = job.composite.unwrap();
-        let mut blobs: Vec<SaveBlob> = job
-            .pending_blobs
-            .into_iter()
-            .map(|(path, bytes)| SaveBlob {
-                path,
-                bytes: bytes.unwrap_or_default(),
-            })
-            .collect();
-        // Stable ordering for tests + bit-stable output.
-        blobs.sort_by(|a, b| a.path.cmp(&b.path));
-        // Only a real file save means "disk matches" — an autosave snapshot
-        // wrote to OPFS, not the user's file, so it must leave `dirty` set.
-        if job.purpose == SavePurpose::File {
-            self.doc.dirty = false;
-        }
-        Some(SaveBundle {
-            manifest_json,
-            composite_width,
-            composite_height,
-            composite_rgba,
-            blobs,
-        })
-    }
-
     /// Dispatch from `handle_completed_readback` — populate the matching
-    /// blob slot or the composite triple. Unknown keys are silently
-    /// dropped (the save was cancelled or a stale readback completed
-    /// after `poll_save_result` drained the job).
+    /// blob slot or the composite triple, then finish the save once every
+    /// readback has landed. Unknown keys are silently dropped (the save was
+    /// cancelled or a stale readback completed after the job finished).
     pub(crate) fn complete_save_readback(
         &mut self,
         kind: SaveReadbackKind,
@@ -267,7 +219,82 @@ impl DarklyEngine {
                 }
             }
         }
+        if job.is_complete() {
+            self.finish_save_job();
+        }
     }
+
+    /// Assemble the [`SaveBundle`] from the completed job and resolve the
+    /// originating `start_save_document` request with the packed binary
+    /// response. A [`SavePurpose::File`] save also clears [`Document::dirty`]
+    /// — the bundle handoff is the moment the document's contents are no
+    /// longer "unsaved." Edits queued between `start_save_document` and here
+    /// are intentionally invisible to the dirty flag: the snapshot built at
+    /// submit time is what's leaving the engine. A [`SavePurpose::Snapshot`]
+    /// (autosave) save leaves `dirty` alone.
+    fn finish_save_job(&mut self) {
+        let Some(job) = self.active_save_job.take() else {
+            return;
+        };
+        let request = job.request;
+        let Ok(manifest_json) = serde_json::to_vec_pretty(&job.manifest) else {
+            self.reject_request(
+                request,
+                crate::engine::protocol::ProtocolError::engine("save manifest serialize failed"),
+            );
+            return;
+        };
+        let (composite_width, composite_height, composite_rgba) = job.composite.unwrap();
+        let mut blobs: Vec<SaveBlob> = job
+            .pending_blobs
+            .into_iter()
+            .map(|(path, bytes)| SaveBlob {
+                path,
+                bytes: bytes.unwrap_or_default(),
+            })
+            .collect();
+        // Stable ordering for tests + bit-stable output.
+        blobs.sort_by(|a, b| a.path.cmp(&b.path));
+        // Only a real file save means "disk matches" — an autosave snapshot
+        // wrote to OPFS, not the user's file, so it must leave `dirty` set.
+        if job.purpose == SavePurpose::File {
+            self.doc.dirty = false;
+        }
+        let bundle = SaveBundle {
+            manifest_json,
+            composite_width,
+            composite_height,
+            composite_rgba,
+            blobs,
+        };
+        self.resolve_request(request, pack_save_bundle(bundle));
+    }
+}
+
+/// Pack a [`SaveBundle`] into the binary protocol response the JS save flow
+/// unpacks: every byte buffer (manifest ++ composite ++ each blob) concatenated
+/// into the single `bytes` side-channel, with the lengths carried in the JSON
+/// value so the JS edge can slice them back out in order.
+fn pack_save_bundle(bundle: SaveBundle) -> crate::engine::protocol::Response {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&bundle.manifest_json);
+    bytes.extend_from_slice(&bundle.composite_rgba);
+    let blobs: Vec<serde_json::Value> = bundle
+        .blobs
+        .iter()
+        .map(|b| {
+            bytes.extend_from_slice(&b.bytes);
+            serde_json::json!({ "path": b.path, "len": b.bytes.len() })
+        })
+        .collect();
+    let value = serde_json::json!({
+        "manifestLen": bundle.manifest_json.len(),
+        "compositeWidth": bundle.composite_width,
+        "compositeHeight": bundle.composite_height,
+        "compositeLen": bundle.composite_rgba.len(),
+        "blobs": blobs,
+    });
+    crate::engine::protocol::Response::binary(value, bytes)
 }
 
 /// Walk the live document via the layer-kind / modifier registries and
@@ -544,17 +571,11 @@ mod tests {
         engine
             .start_save_document(SavePurpose::File)
             .expect("save kicks off");
-        // Drive readbacks to completion.
-        let mut bundle = None;
-        for _ in 0..16 {
-            engine.test_flush_readbacks();
-            engine.render(0.0);
-            if let Some(b) = engine.poll_save_result() {
-                bundle = Some(b);
-                break;
-            }
-        }
-        bundle.expect("save should complete within 16 frames");
+        // Drive readbacks to completion; the save request resolves with the
+        // packed bundle and clears dirty as part of finishing the job.
+        engine
+            .test_drive_completed(0)
+            .expect("save should complete");
         assert!(
             !engine.is_dirty(),
             "successful save must clear dirty — bundle handoff matches disk"
@@ -574,26 +595,19 @@ mod tests {
         engine
             .start_save_document(SavePurpose::Snapshot)
             .expect("snapshot save kicks off");
-        let mut bundle = None;
-        for _ in 0..16 {
-            engine.test_flush_readbacks();
-            engine.render(0.0);
-            if let Some(b) = engine.poll_save_result() {
-                bundle = Some(b);
-                break;
-            }
-        }
-        bundle.expect("snapshot should complete within 16 frames");
+        engine
+            .test_drive_completed(0)
+            .expect("snapshot should complete");
         assert!(
             engine.is_dirty(),
             "autosave snapshot must NOT clear dirty — nothing reached the user's file"
         );
     }
 
-    /// A snapshot save must be drivable to completion via
-    /// `poll_save_result` alone — no `render()`/present — because a
-    /// backgrounded tab's render loop isn't running. `poll_save_result`
-    /// drains the readback scheduler itself.
+    /// A snapshot save must be drivable to completion by flushing readbacks
+    /// alone — no `render()`/present — because a backgrounded tab's render
+    /// loop isn't running. Completing the readbacks resolves the save request
+    /// with the packed bundle.
     #[test]
     fn snapshot_completes_without_render() {
         let mut engine = headless_engine(32, 32);
@@ -602,28 +616,26 @@ mod tests {
         engine
             .start_save_document(SavePurpose::Snapshot)
             .expect("snapshot save kicks off");
-        let mut bundle = None;
-        for _ in 0..32 {
-            // Native stand-in for the browser event loop: fire the GPU map
-            // callbacks but DON'T poll/dispatch the scheduler here — leave
-            // that to poll_save_result. NO engine.render() — the whole point.
-            engine.test_wait_gpu();
-            if let Some(b) = engine.poll_save_result() {
-                bundle = Some(b);
-                break;
-            }
-        }
-        let bundle = bundle.expect("snapshot must complete via poll alone, without render()");
-        assert!(
-            bundle.composite_width == 32 && bundle.composite_height == 32,
-            "composite dimensions should match the canvas"
+        // `test_drive_completed` drives the readback scheduler (no render()).
+        let resp = engine
+            .test_drive_completed(0)
+            .expect("snapshot must complete via flush alone, without render()");
+        assert_eq!(
+            resp.value["compositeWidth"].as_u64(),
+            Some(32),
+            "composite width should match the canvas"
+        );
+        assert_eq!(
+            resp.value["compositeHeight"].as_u64(),
+            Some(32),
+            "composite height should match the canvas"
         );
     }
 
     /// The save snapshot must survive concurrent edits — the manifest
     /// is built at submit time, GPU textures are refcount-pinned, and
     /// readbacks see GPU command-buffer state at submit time. Adding a
-    /// layer between start_save and poll_save_result must *not* end up
+    /// layer between start_save and the save's completion must *not* end up
     /// in the saved manifest.
     #[test]
     fn save_concurrent_edit_does_not_corrupt() {
@@ -636,18 +648,14 @@ mod tests {
         // Mutate the document mid-save.
         let _added_mid_save = engine.add_raster_layer(None);
 
-        // Drive readbacks to completion.
-        let mut bundle = None;
-        for _ in 0..16 {
-            engine.test_flush_readbacks();
-            engine.render(0.0);
-            if let Some(b) = engine.poll_save_result() {
-                bundle = Some(b);
-                break;
-            }
-        }
-        let bundle = bundle.expect("save should complete within 16 frames");
-        let manifest: Manifest = serde_json::from_slice(&bundle.manifest_json).unwrap();
+        // Drive readbacks to completion and recover the manifest from the
+        // packed bundle (manifest ++ composite ++ blobs in the bytes channel).
+        let resp = engine
+            .test_drive_completed(0)
+            .expect("save should complete");
+        let manifest_len = resp.value["manifestLen"].as_u64().unwrap() as usize;
+        let bytes = resp.bytes.expect("save resolves with packed bytes");
+        let manifest: Manifest = serde_json::from_slice(&bytes[..manifest_len]).unwrap();
 
         let raster_count = manifest
             .nodes

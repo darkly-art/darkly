@@ -445,20 +445,47 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
     }
 }
 
-/// Pump the engine until a save completes. Caps iterations so a stuck
-/// readback fails the test rather than hanging.
+/// Pump the engine until a save completes, then reconstruct the [`SaveBundle`]
+/// from the packed protocol response (manifest ++ composite ++ blobs in the
+/// bytes channel — the same shape the JS save flow unpacks).
 fn drive_save_to_completion(engine: &mut DarklyEngine) -> SaveBundle {
+    use crate::format::manifest::SaveBlob;
     engine
         .start_save_document(crate::engine::SavePurpose::File)
         .expect("start save");
-    for _ in 0..32 {
-        engine.test_flush_readbacks();
-        engine.render(0.0);
-        if let Some(b) = engine.poll_save_result() {
-            return b;
-        }
+    let resp = engine
+        .test_drive_completed(0)
+        .expect("save did not complete");
+    let v = &resp.value;
+    let bytes = resp.bytes.expect("save resolves with packed bytes");
+    let manifest_len = v["manifestLen"].as_u64().unwrap() as usize;
+    let composite_len = v["compositeLen"].as_u64().unwrap() as usize;
+    let mut off = 0;
+    let manifest_json = bytes[off..off + manifest_len].to_vec();
+    off += manifest_len;
+    let composite_rgba = bytes[off..off + composite_len].to_vec();
+    off += composite_len;
+    let blobs = v["blobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| {
+            let len = b["len"].as_u64().unwrap() as usize;
+            let slice = bytes[off..off + len].to_vec();
+            off += len;
+            SaveBlob {
+                path: b["path"].as_str().unwrap().to_string(),
+                bytes: slice,
+            }
+        })
+        .collect();
+    SaveBundle {
+        manifest_json,
+        composite_width: v["compositeWidth"].as_u64().unwrap() as u32,
+        composite_height: v["compositeHeight"].as_u64().unwrap() as u32,
+        composite_rgba,
+        blobs,
     }
-    panic!("save did not complete within 32 frames");
 }
 
 /// Coarse structural comparison: same canvas size, same number of

@@ -299,12 +299,17 @@ impl DarklyHandle {
         let frame_start = web_time::Instant::now();
         let drain_start = web_time::Instant::now();
         self.apply_pending_images(&mut e);
-        let outcomes = self.transport.drain_with(&mut e);
+        let mut outcomes = self.transport.drain_with(&mut e);
         let drain_us = drain_start.elapsed().as_micros() as u64;
 
         let render_start = web_time::Instant::now();
         let needs_more = e.render(time_secs);
         let render_us = render_start.elapsed().as_micros() as u64;
+
+        // Deferred readbacks (copy / export / save) complete inside `render`'s
+        // poll — flush their terminal outcomes so they resolve this frame
+        // rather than waiting for the next drain.
+        outcomes.extend(e.take_completed_requests());
 
         let frame_us = frame_start.elapsed().as_micros() as u64;
         if frame_us > 25_000 {

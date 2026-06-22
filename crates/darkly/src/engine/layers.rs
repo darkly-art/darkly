@@ -750,7 +750,7 @@ impl DarklyEngine {
 
     /// True when the document has unsaved changes. Set sticky at the
     /// [`crate::undo::UndoStack::push`] chokepoint; cleared on a
-    /// successful save (`poll_save_result`) or load (`open_document`
+    /// successful save (`start_save_document`) or load (`open_document`
     /// installs a fresh `dirty = false` doc). UI close-tab and
     /// `beforeunload` flows consult this to decide whether to prompt.
     pub fn is_dirty(&self) -> bool {

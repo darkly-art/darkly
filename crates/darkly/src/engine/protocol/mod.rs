@@ -44,12 +44,25 @@ pub use crate::gpu::params::param_values_from_json as params_from_json;
 pub struct Response {
     pub value: Value,
     pub bytes: Option<Vec<u8>>,
+    /// When `true`, the handler kicked an async GPU readback instead of
+    /// producing a result inline: the transport emits **no** outcome for the
+    /// request this drain, and the engine pushes the request's terminal
+    /// outcome onto its `completed_requests` queue once the readback lands (or
+    /// fails). The `value`/`bytes` of a deferred response are ignored. Used by
+    /// the one-shot readback ops (copy / cut / export / save) so the request
+    /// that kicked the readback is the request that resolves with its result —
+    /// no separate `poll_*` round-trip.
+    pub deferred: bool,
 }
 
 impl Response {
     /// JSON-only response (the common case).
     pub fn json(value: Value) -> Self {
-        Response { value, bytes: None }
+        Response {
+            value,
+            bytes: None,
+            deferred: false,
+        }
     }
 
     /// JSON envelope + binary side-channel payload (always surfaces a `bytes`
@@ -58,6 +71,7 @@ impl Response {
         Response {
             value,
             bytes: Some(bytes),
+            deferred: false,
         }
     }
 
@@ -66,6 +80,18 @@ impl Response {
         Response {
             value: Value::Null,
             bytes: None,
+            deferred: false,
+        }
+    }
+
+    /// A deferred response: the handler kicked an async readback and the
+    /// request's promise stays pending until the engine resolves it via
+    /// `completed_requests`. See [`Response::deferred`].
+    pub fn deferred() -> Self {
+        Response {
+            value: Value::Null,
+            bytes: None,
+            deferred: true,
         }
     }
 }

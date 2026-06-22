@@ -4,24 +4,23 @@
 //! bytes for the JS side to encode via `OffscreenCanvas`.
 
 use super::{DarklyEngine, ReadbackContext};
+use crate::engine::protocol::Response;
 use crate::gpu::readback;
 
-/// Completed export readback — drained by `poll_export_result`.
-pub struct ExportImageResult {
-    pub width: u32,
-    pub height: u32,
-    pub rgba: Vec<u8>,
-}
-
 impl DarklyEngine {
-    /// Start an async readback of the full composited canvas. Returns
-    /// immediately; the result lands on `pending_export_result` once the
-    /// readback completes (typically the next frame).
+    /// Start an async readback of the full composited canvas. Defers: the
+    /// originating request's promise resolves with `{ width, height }` plus the
+    /// RGBA8 bytes side-channel once the readback completes (typically the next
+    /// frame). The JS side encodes the bytes via `OffscreenCanvas`.
     pub fn start_export(&mut self) {
+        let request = self.current_request();
+
         if self
             .readbacks
             .any(|c| matches!(c, ReadbackContext::ExportImage { .. }))
         {
+            // An export is already in flight — nothing new to read back.
+            self.resolve_request(request, Response::json(serde_json::Value::Null));
             return;
         }
 
@@ -39,30 +38,28 @@ impl DarklyEngine {
         let texture = self.compositor.composited_texture();
 
         self.gpu.encode("export-readback", |encoder| {
-            let request = readback::request_readback(
+            let req = readback::request_readback(
                 &self.gpu.device,
                 encoder,
                 texture,
                 wgpu::TextureFormat::Rgba8Unorm,
                 crate::coord::LayerRect::from_xywh(0, 0, width, height),
             );
-            self.readbacks
-                .submit(request, ReadbackContext::ExportImage { width, height });
+            self.readbacks.submit(
+                req,
+                ReadbackContext::ExportImage {
+                    width,
+                    height,
+                    request,
+                },
+            );
         });
     }
 
-    /// Drain the most recent export result. Returns `None` until the
-    /// async readback completes (next frame after `start_export`).
-    pub fn poll_export_result(&mut self) -> Option<ExportImageResult> {
-        self.pending_export_result.take()
-    }
-
-    /// Stash a completed export readback. Called by `handle_completed_readback`.
-    pub(crate) fn complete_export(&mut self, width: u32, height: u32, rgba: Vec<u8>) {
-        self.pending_export_result = Some(ExportImageResult {
-            width,
-            height,
-            rgba,
-        });
+    /// Resolve the export request with the completed readback bytes. Called by
+    /// `handle_completed_readback`.
+    pub(crate) fn complete_export(&mut self, width: u32, height: u32, request: u64, rgba: Vec<u8>) {
+        let value = serde_json::json!({ "width": width, "height": height });
+        self.resolve_request(request, Response::binary(value, rgba));
     }
 }
