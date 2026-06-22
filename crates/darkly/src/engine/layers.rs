@@ -170,9 +170,22 @@ impl DarklyEngine {
         // Default-name the layer after the void's display label so the
         // panel reads "Noise 1" / "Noise 2" rather than a generic "Void N".
         let display_label = self.compositor.void_registry().display_name(void_type);
-        let id =
-            self.doc
-                .add_void_layer(void_type.to_string(), display_label, params.clone(), anchor);
+        // Seed the kind's initial gizmo transform (camera = selfie flip,
+        // everything else = identity) atomically with creation, so it's one
+        // undo step and round-trips through save/load like any later edit.
+        let canvas = self.doc.canvas_rect();
+        let initial_transform = self.compositor.void_registry().default_transform(
+            void_type,
+            canvas.width,
+            canvas.height,
+        );
+        let id = self.doc.add_void_layer(
+            void_type.to_string(),
+            display_label,
+            params.clone(),
+            initial_transform,
+            anchor,
+        );
         // Build the trait object here (engine), then hand it to the
         // compositor — the compositor stops caring about `(type_id,
         // params)` as a pair, owning only the constructed `Box<dyn Void>`.

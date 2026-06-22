@@ -1,71 +1,88 @@
 /**
- * MediaStream lifecycle for the Camera void.
+ * MediaStream lifecycle for video-stream voids (camera + screenshare).
  *
- * Owns one `<video>` element backed by `getUserMedia({ video: true })`, and
- * exposes a `tick()` method that hands the live frame to the WASM bridge.
- * Each tick blits the video into a backing `OffscreenCanvas` via
- * `drawImage`, then passes that canvas to `copy_external_image_to_texture`.
+ * Owns one `<video>` element backed by a `MediaStream` the caller has already
+ * acquired (`getUserMedia` for the camera, `getDisplayMedia` for screenshare —
+ * see `app.acquireMediaStream`). Exposes a `tick()` method that hands the live
+ * frame to the WASM bridge. Each tick blits the video into a backing
+ * `OffscreenCanvas` via `drawImage`, then passes that canvas to
+ * `copy_external_image_to_texture`.
  *
  * Why the canvas hop? The WebGPU spec's `GPUCopyExternalImage.source` lists
  * `HTMLVideoElement`, but Firefox's WebGPU rejects it at runtime (only
  * canvas-family + ImageBitmap + HTMLImageElement sources are accepted), and
- * some Chromium configurations silently no-op the video-direct path
- * (texture stays zero). The canvas route is the cross-browser path used by
- * the official WebGPU samples; the `drawImage` stays GPU-side in modern
- * Chromium (no CPU readback).
+ * some Chromium configurations silently no-op the video-direct path (texture
+ * stays zero). The canvas route is the cross-browser path used by the official
+ * WebGPU samples; the `drawImage` stays GPU-side in modern Chromium (no CPU
+ * readback).
  *
- * Permission UX: we delegate entirely to the browser. `getUserMedia`'s
- * native prompt includes a device picker on Chromium when multiple cameras
- * are present, so we don't ship our own picker.
+ * Acquisition lives in the gesture (`app.acquireMediaStream`), NOT here:
+ * `getDisplayMedia` requires transient user activation, which expires across the
+ * picker → add_void → reconcile round-trip. By acquiring the stream up front and
+ * handing it to `start(stream)`, this class never sits between the click and the
+ * capture API.
  *
  * Electron: identical code path. The host's main process must grant the
- * `'media'` permission (see the camera-void plan); otherwise
- * `getUserMedia` rejects with `NotAllowedError` and `this.error` surfaces
- * a notice in `VoidProperties.svelte`.
+ * `'media'` (and, for screenshare, the display-capture) permission; otherwise
+ * acquisition rejects with `NotAllowedError` and `describeMediaError` surfaces a
+ * notice in `VoidProperties.svelte`.
  */
 
 import type { Engine } from '../engine/protocol';
 
-export class CameraSource {
+/** Browser capture API a void's frames come from. Mirrors the Rust
+ *  `CaptureKind` serialization (`engine/void.rs`). */
+export type CaptureKind = 'camera' | 'display';
+
+export class MediaStreamSource {
     readonly layerId: number;
+    readonly captureKind: CaptureKind;
     private readonly engine: Engine;
+    /** Invoked when the capture track ends *externally* (the user clicks the
+     *  browser's "Stop sharing" bar, or unplugs the webcam). The app uses it to
+     *  prune the source and re-show the "Resume" affordance. */
+    private readonly onEnded: ((layerId: number) => void) | null;
     private video: HTMLVideoElement | null = null;
     private stream: MediaStream | null = null;
     private starting = false;
     private stopped = false;
+    /** True once the capture track has ended externally. Observable so the
+     *  properties panel can distinguish "never started" from "stopped by the
+     *  OS" and offer Resume in both cases. */
+    ended = false;
     /** True once `requestVideoFrameCallback` has fired at least once,
      *  confirming a decoded frame is available. Gates the first upload. */
     private hasFrame = false;
 
     /** How many `tick()` calls to skip between actual uploads. Mirrors the
-     *  `frame_divisor` param on the Rust-side `Camera` void; the value is
-     *  pushed in by the layer-tree reconciler whenever the user adjusts the
-     *  slider. 1 = upload every rAF, 4 = upload every 4th rAF (~15fps at
-     *  60Hz; the default), etc. Higher values save the per-frame canvas
-     *  blit, GPU copy, void shader pass, and full compositor re-encode.
+     *  `frame_divisor` param on the Rust-side void; the value is pushed in by
+     *  the layer-tree reconciler whenever the user adjusts the slider. 1 =
+     *  upload every rAF, 4 = upload every 4th rAF (~15fps at 60Hz; the
+     *  default), etc. Higher values save the per-frame canvas blit, GPU copy,
+     *  void shader pass, and full compositor re-encode.
      *
-     *  The gate is `frameCount % frameDivisor === 0`, where `frameCount` is
-     *  the canonical master counter from the compositor (`handle.frame_count`).
-     *  This is the same counter the Rust-side veil / overlay / void
-     *  animation divisors gate against (see
-     *  `Compositor::update_animations`), so a camera `divisor=N` fires on
-     *  the exact rAF a veil `divisor=N` fires on — the throttled upload
-     *  lands on a frame the compositor was going to re-render anyway. */
+     *  The gate is `frameCount % frameDivisor === 0`, where `frameCount` is the
+     *  canonical master counter from the compositor (`handle.frame_count`).
+     *  This is the same counter the Rust-side veil / overlay / void animation
+     *  divisors gate against (see `Compositor::update_animations`), so a
+     *  `divisor=N` source fires on the exact rAF a veil `divisor=N` fires on —
+     *  the throttled upload lands on a frame the compositor was going to
+     *  re-render anyway. */
     private frameDivisor = 4;
 
     /** Effective visibility (self + every ancestor visible) for the void's
      *  layer. Pushed in by the layer-tree reconciler. When false, `tick()`
      *  short-circuits — no canvas blit, no WASM call, no GPU work. The Rust
      *  side also gates `wants_external_input` on its own visibility flag, so
-     *  this is the JS-local optimization (skip the `drawImage` and the
-     *  bridge call) and Rust is the canonical correctness guard. */
+     *  this is the JS-local optimization (skip the `drawImage` and the bridge
+     *  call) and Rust is the canonical correctness guard. */
     private visible = true;
 
     /** 2D-context-backed canvas we blit the video frame into each tick.
      *  Required because Firefox's WebGPU rejects `HTMLVideoElement` as a
-     *  `copyExternalImageToTexture` source, and some Chromium configs
-     *  silently no-op the video-direct path. The blit itself stays GPU-side
-     *  in modern Chromium. */
+     *  `copyExternalImageToTexture` source, and some Chromium configs silently
+     *  no-op the video-direct path. The blit itself stays GPU-side in modern
+     *  Chromium. */
     private canvas: OffscreenCanvas | null = null;
     private ctx: OffscreenCanvasRenderingContext2D | null = null;
 
@@ -73,32 +90,38 @@ export class CameraSource {
      *  etc.). Reactive Svelte readers in VoidProperties pull this directly. */
     error: string | null = null;
 
-    constructor(layerId: number, engine: Engine) {
+    constructor(
+        layerId: number,
+        engine: Engine,
+        captureKind: CaptureKind,
+        onEnded: ((layerId: number) => void) | null = null,
+    ) {
         this.layerId = layerId;
         this.engine = engine;
+        this.captureKind = captureKind;
+        this.onEnded = onEnded;
     }
 
-    /** Begin the MediaStream. Resolves once the first frame is available or
-     *  rejects with a user-friendly error string assigned to `this.error`.
-     *  Idempotent: calling twice is a no-op. */
-    async start(): Promise<void> {
-        if (this.starting || this.video || this.stopped) return;
+    /** Wire up an already-acquired `MediaStream`: attach a `<video>` element,
+     *  allocate the blit canvas, gate the first upload on a presented frame,
+     *  and listen for external track-end. Resolves once the element is playing.
+     *  Idempotent: calling twice (or after stop) is a no-op. */
+    async start(stream: MediaStream): Promise<void> {
+        if (this.starting || this.video || this.stopped) {
+            // We took ownership of the stream; if we're not going to use it,
+            // stop its tracks so the OS capture indicator doesn't linger.
+            if (this.stopped) stream.getTracks().forEach((t) => t.stop());
+            return;
+        }
         this.starting = true;
+        this.stream = stream;
         try {
-            // `getUserMedia` triggers the browser's native consent UI on
-            // first use. On Chromium the prompt includes the device picker,
-            // so multi-camera systems work without our own picker.
-            this.stream = await navigator.mediaDevices.getUserMedia({
-                video: true,
-                audio: false,
-            });
-            // The browser may have stopped the layer between request and
-            // grant — bail without wiring up the video element.
-            if (this.stopped) {
-                this.stream.getTracks().forEach((t) => t.stop());
-                this.stream = null;
-                return;
-            }
+            // Fire `onEnded` when the capture stops outside our control — the
+            // common path for screenshare (the user clicks the browser's "Stop
+            // sharing" bar), and possible for the camera (device unplugged).
+            const track = stream.getVideoTracks()[0];
+            track?.addEventListener('ended', () => this.handleTrackEnded());
+
             const video = document.createElement('video');
             video.autoplay = true;
             video.playsInline = true;
@@ -120,6 +143,14 @@ export class CameraSource {
             document.body.appendChild(video);
             video.srcObject = this.stream;
             await video.play();
+            // The stream may have been torn down (track ended, layer deleted)
+            // between attach and play — bail without leaving a live element.
+            if (this.stopped) {
+                video.pause();
+                video.srcObject = null;
+                video.remove();
+                return;
+            }
             this.video = video;
             // Allocate the blit canvas at the video's current dimensions.
             // We resize lazily in `tick()` if the video reports new dims
@@ -149,7 +180,7 @@ export class CameraSource {
         } catch (err: any) {
             // Translate the cryptic DOMException names into something the
             // VoidProperties notice can show without a switch on the JS side.
-            this.error = describeMediaError(err);
+            this.error = describeMediaError(err, this.captureKind);
             if (this.stream) {
                 this.stream.getTracks().forEach((t) => t.stop());
                 this.stream = null;
@@ -159,15 +190,25 @@ export class CameraSource {
         }
     }
 
+    /** External track-end handler — also the unit-test seam, since a live
+     *  `MediaStreamTrack` can't be faked in the node vitest env. Tears the
+     *  source down, flips `ended`, and notifies the app so it can prune the
+     *  source and re-show Resume. Idempotent. */
+    handleTrackEnded(): void {
+        if (this.ended) return;
+        this.ended = true;
+        this.stop();
+        this.onEnded?.(this.layerId);
+    }
+
     /** Push the current frame into the void's input texture. Cheap when the
      *  video isn't ready yet (no-op) — safe to call every animation frame.
      *
      *  `frameCount` is the canonical master tick from the compositor (see
      *  `DarklyHandle.frame_count`). Using it directly — rather than a
      *  per-source rolling counter — keeps the gate phase-locked with every
-     *  other divisor-throttled system in the engine: a camera with
-     *  `divisor=4` will fire on the same rAF as a veil with `divisor=4`,
-     *  not one rAF off. */
+     *  other divisor-throttled system in the engine: a source with `divisor=4`
+     *  fires on the same rAF as a veil with `divisor=4`, not one rAF off. */
     tick(frameCount: number): void {
         if (!this.visible) return;
         if (frameCount % this.frameDivisor !== 0) return;
@@ -192,8 +233,8 @@ export class CameraSource {
     }
 
     /** Update the effective-visibility flag. Called by the layer-tree
-     *  reconciler whenever any node on the path from root to this camera
-     *  void changes its eye state. */
+     *  reconciler whenever any node on the path from root to this void
+     *  changes its eye state. */
     setVisible(visible: boolean): void {
         this.visible = visible;
     }
@@ -218,24 +259,34 @@ export class CameraSource {
     }
 }
 
-function describeMediaError(err: unknown): string {
-    // DOMException codes from the MediaStream spec.
+/** Translate a `MediaDevices` rejection into a human-readable, capture-kind-aware
+ *  message for the VoidProperties notice. Exported for unit testing. */
+export function describeMediaError(err: unknown, captureKind: CaptureKind): string {
     const name = (err as { name?: string })?.name;
+    const subject = captureKind === 'display' ? 'Screen share' : 'Camera';
     switch (name) {
         case 'NotAllowedError':
         case 'PermissionDeniedError':
-            return 'Camera access was denied.';
+            // getDisplayMedia rejects with NotAllowedError both when the user
+            // cancels the OS picker and when sharing is policy-blocked.
+            return captureKind === 'display'
+                ? 'Screen share was denied or cancelled.'
+                : 'Camera access was denied.';
         case 'NotFoundError':
         case 'DevicesNotFoundError':
-            return 'No camera was found on this device.';
+            return captureKind === 'display'
+                ? 'No screen or window was available to share.'
+                : 'No camera was found on this device.';
         case 'NotReadableError':
         case 'TrackStartError':
-            return 'The camera is already in use by another application.';
+            return `${subject} is already in use by another application.`;
         case 'OverconstrainedError':
-            return 'No camera satisfies the requested constraints.';
+            return `No ${captureKind === 'display' ? 'display' : 'camera'} satisfies the requested constraints.`;
         case 'SecurityError':
-            return 'Camera access blocked by browser security settings.';
+            return `${subject} blocked by browser security settings.`;
+        case 'AbortError':
+            return `${subject} could not start (aborted).`;
         default:
-            return `Camera failed to start: ${(err as Error)?.message ?? String(err)}`;
+            return `${subject} failed to start: ${(err as Error)?.message ?? String(err)}`;
     }
 }

@@ -239,6 +239,18 @@ pub trait Void: std::fmt::Debug {
     }
 }
 
+/// How a void's per-frame external image is captured on the browser side.
+/// Carried on [`VoidRegistration`] and surfaced to the frontend (serialized as
+/// `"camera"` / `"display"`) so the app knows which `MediaDevices` API to call
+/// for each void kind — `getUserMedia` for [`Self::Camera`], `getDisplayMedia`
+/// for [`Self::Display`]. Purely procedural voids (noise) declare `None`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CaptureKind {
+    Camera,
+    Display,
+}
+
 /// What each void module returns from its `register()` function.
 pub struct VoidRegistration {
     pub type_id: &'static str,
@@ -259,6 +271,16 @@ pub struct VoidRegistration {
     /// that opt in implement [`Void::set_transform`]; the rest leave it false
     /// and the engine never hands them a transform.
     pub supports_live_transform: bool,
+    /// How this void's external frames are captured in the browser, or `None`
+    /// for procedural voids that consume no external input. The frontend reads
+    /// this to pick `getUserMedia` vs `getDisplayMedia`.
+    pub capture_kind: Option<CaptureKind>,
+    /// The void's initial gizmo transform, given the canvas dimensions at
+    /// creation time. Lets a kind seed a non-identity affine — the camera seeds
+    /// a horizontal flip about the canvas center (selfie view); everything else
+    /// returns identity. Stored on [`crate::layer::VoidLayer::transform`] at
+    /// creation so it round-trips through save/load and undo like any edit.
+    pub default_transform: fn(u32, u32) -> crate::transform::Transform,
     pub create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
     pub from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Void>,
 }
@@ -273,13 +295,10 @@ pub struct VoidRegistry {
 }
 
 struct RegistryEntry {
-    display_name: &'static str,
-    create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
-    params: &'static [ParamDef],
-    icon: &'static str,
-    supports_preview: bool,
-    supports_live_transform: bool,
-    from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Void>,
+    /// The full registration this entry was built from. All metadata accessors
+    /// read straight off this, so a new `VoidRegistration` field is exposed
+    /// without widening any tuple or touching the registry.
+    reg: VoidRegistration,
     cached_pipeline: Option<Arc<EffectPipeline>>,
 }
 
@@ -296,13 +315,7 @@ impl VoidRegistry {
             entries.insert(
                 reg.type_id,
                 RegistryEntry {
-                    display_name: reg.display_name,
-                    create_pipeline: reg.create_pipeline,
-                    params: reg.params,
-                    icon: reg.icon,
-                    supports_preview: reg.supports_preview,
-                    supports_live_transform: reg.supports_live_transform,
-                    from_params: reg.from_params,
+                    reg,
                     cached_pipeline: None,
                 },
             );
@@ -310,36 +323,40 @@ impl VoidRegistry {
         VoidRegistry { entries }
     }
 
-    /// Return all registered void types with display name, parameter
-    /// definitions, iconify icon, and whether they support a rendered preview.
-    /// Sorted by `type_id` for deterministic UI ordering.
-    #[allow(clippy::type_complexity)]
-    pub fn types(
-        &self,
-    ) -> Vec<(
-        &'static str,
-        &'static str,
-        &'static [ParamDef],
-        &'static str,
-        bool,
-    )> {
-        let mut types: Vec<_> = self
-            .entries
-            .iter()
-            .map(|(&id, e)| (id, e.display_name, e.params, e.icon, e.supports_preview))
-            .collect();
-        types.sort_by_key(|(id, ..)| *id);
+    /// Return every registered void's full [`VoidRegistration`], sorted by
+    /// `type_id` for deterministic UI ordering. Callers read whatever fields
+    /// they need off the registration — a new field is free here.
+    pub fn types(&self) -> Vec<&VoidRegistration> {
+        let mut types: Vec<&VoidRegistration> = self.entries.values().map(|e| &e.reg).collect();
+        types.sort_by_key(|reg| reg.type_id);
         types
     }
 
     pub fn param_defs(&self, type_id: &str) -> &'static [ParamDef] {
-        self.entries.get(type_id).map(|e| e.params).unwrap_or(&[])
+        self.entries
+            .get(type_id)
+            .map(|e| e.reg.params)
+            .unwrap_or(&[])
     }
 
     /// The iconify icon name for a void kind (layer-panel icon + picker
     /// fallback). Empty for unknown types.
     pub fn icon(&self, type_id: &str) -> &'static str {
-        self.entries.get(type_id).map(|e| e.icon).unwrap_or("")
+        self.entries.get(type_id).map(|e| e.reg.icon).unwrap_or("")
+    }
+
+    /// The initial gizmo transform for a freshly-created void of this kind at
+    /// the given canvas size. Identity for unknown types.
+    pub fn default_transform(
+        &self,
+        type_id: &str,
+        canvas_w: u32,
+        canvas_h: u32,
+    ) -> crate::transform::Transform {
+        self.entries
+            .get(type_id)
+            .map(|e| (e.reg.default_transform)(canvas_w, canvas_h))
+            .unwrap_or_else(crate::transform::Transform::identity)
     }
 
     /// Resolve a runtime `&str` type id to the registry's `&'static str` key,
@@ -356,7 +373,7 @@ impl VoidRegistry {
     pub fn supports_live_transform(&self, type_id: &str) -> bool {
         self.entries
             .get(type_id)
-            .map(|e| e.supports_live_transform)
+            .map(|e| e.reg.supports_live_transform)
             .unwrap_or(false)
     }
 
@@ -367,7 +384,7 @@ impl VoidRegistry {
     pub fn display_name(&self, type_id: &str) -> &'static str {
         self.entries
             .get(type_id)
-            .map(|e| e.display_name)
+            .map(|e| e.reg.display_name)
             .unwrap_or("")
     }
 
@@ -387,7 +404,7 @@ impl VoidRegistry {
             .unwrap_or_else(|| panic!("Unknown void type: {type_id}"));
         entry
             .cached_pipeline
-            .get_or_insert_with(|| Arc::new((entry.create_pipeline)(device, format)))
+            .get_or_insert_with(|| Arc::new((entry.reg.create_pipeline)(device, format)))
             .clone()
     }
 
@@ -405,9 +422,9 @@ impl VoidRegistry {
             .unwrap_or_else(|| panic!("Unknown void type: {type_id}"));
         let pipeline = entry
             .cached_pipeline
-            .get_or_insert_with(|| Arc::new((entry.create_pipeline)(device, format)))
+            .get_or_insert_with(|| Arc::new((entry.reg.create_pipeline)(device, format)))
             .clone();
-        (entry.from_params)(params, pipeline)
+        (entry.reg.from_params)(params, pipeline)
     }
 }
 

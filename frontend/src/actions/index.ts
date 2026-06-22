@@ -757,11 +757,11 @@ export function registerActions() {
                 : app.activeLayerId !== null ? [app.activeLayerId] : [];
             if (targets.length === 0) return;
             try {
-                // Stop any associated camera MediaStreams before the
-                // layers go away. `refreshLayerTree` reaps as a safety
-                // net, but stopping eagerly turns off the OS camera
+                // Stop any associated MediaStreams (camera / screenshare)
+                // before the layers go away. `refreshLayerTree` reaps as a
+                // safety net, but stopping eagerly turns off the OS capture
                 // indicator immediately.
-                for (const id of targets) app.stopCameraVoid(id);
+                for (const id of targets) app.stopMediaStreamVoid(id);
                 if (targets.length === 1) {
                     await engine.send('remove_layer', { id: targets[0] });
                     app.clearSelection();

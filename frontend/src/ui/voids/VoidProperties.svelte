@@ -48,21 +48,32 @@
 
     const voidLabel = $derived(app.voidDisplayName(node.voidType));
 
-    // Camera voids surface MediaStream-level errors here so the user sees a
-    // human-readable reason ("Camera access was denied", "No camera was
-    // found", …) instead of a silently-transparent layer.
-    const cameraError = $derived(
-        node.voidType === 'camera' ? app.cameraSourceFor(node.id)?.error ?? null : null,
+    // Capture kind (camera / screenshare) for this void, or undefined for
+    // procedural voids — the single signal that gates every stream-related
+    // affordance below.
+    const captureKind = $derived(app.voidCaptureKind.get(node.voidType));
+
+    // Stream-backed voids surface MediaStream-level errors here so the user
+    // sees a human-readable reason ("Camera access was denied", "Screen share
+    // was denied or cancelled", …) instead of a silently-transparent layer.
+    const streamError = $derived(
+        captureKind ? app.mediaStreamSourceFor(node.id)?.error ?? null : null,
     );
 
-    // True for a camera void whose layer exists but isn't currently
-    // streaming and hasn't been opted into this session — i.e. the user
-    // loaded a `.darkly` and is looking at the saved last frame. Showing
-    // a "Resume" button here is how they explicitly re-grant the camera.
+    // True for a stream-backed void whose layer exists but isn't currently
+    // streaming — either loaded from a `.darkly` (showing the saved last frame)
+    // or stopped externally (the browser's "Stop sharing" bar). Showing a
+    // "Resume" button is how the user explicitly re-grants the capture. The
+    // session opt-in is cleared on external stop, so this re-appears then too.
     const showResume = $derived(
-        node.voidType === 'camera'
+        !!captureKind
             && !isFrozen(node.params)
-            && !app.cameraSessionStarted.has(node.id),
+            && !app.mediaStreamSessionStarted.has(node.id),
+    );
+
+    // Per-kind verbs for the button + resume label.
+    const resumeLabel = $derived(
+        captureKind === 'display' ? 'Resume screen share' : 'Resume camera',
     );
 
     function isFrozen(params: VoidParam[]): boolean {
@@ -70,8 +81,12 @@
         return (f?.value ?? f?.default) === true;
     }
 
-    function resumeCamera() {
-        app.markCameraVoidStarted(node.id);
+    function resumeStream() {
+        if (!captureKind) return;
+        // Resume is a user gesture — acquire + start in-gesture so
+        // getDisplayMedia's activation requirement holds.
+        app.markMediaStreamVoidStarted(node.id);
+        app.startMediaStreamVoid(node.id, captureKind);
     }
 </script>
 
@@ -87,17 +102,17 @@
     </button>
 </div>
 
-{#if cameraError}
+{#if streamError}
     <div class="notice">
         <Icon name="fa6-solid:triangle-exclamation" />
-        <span>{cameraError}</span>
+        <span>{streamError}</span>
     </div>
 {/if}
 
 {#if showResume}
-    <button class="resume-btn" onclick={resumeCamera}>
+    <button class="resume-btn" onclick={resumeStream}>
         <Icon name="fa6-solid:video" />
-        <span>Resume camera</span>
+        <span>{resumeLabel}</span>
     </button>
 {/if}
 

@@ -437,7 +437,7 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
         .void_registry()
         .types()
         .into_iter()
-        .map(|(id, _name, params, _icon, _preview)| (id, params))
+        .map(|reg| (reg.type_id, reg.params))
         .collect();
     for (type_id, schema) in void_types {
         let defaults = defaults_of(schema);

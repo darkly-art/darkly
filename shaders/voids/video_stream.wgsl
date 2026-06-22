@@ -1,23 +1,25 @@
-// Camera void — sample an external image (webcam frame) with a user transform.
+// Video-stream void — sample an external image (webcam / screenshare frame)
+// with a user transform.
 //
 // Bind group 0:
-//   0: Params uniform (inverse user-transform affine, webcam/canvas dims, mirror)
-//   1: Source texture (the webcam frame, uploaded by upload_external_image)
+//   0: Params uniform (inverse user-transform affine, cover-fit content rect)
+//   1: Source texture (the video frame, uploaded by upload_external_image)
 //   2: Sampler (linear clamp-to-edge)
 //
-// MUST stay in lockstep with the CPU mirror `Camera::src_uv` in camera.rs —
-// the tests pin them together. Coordinate flow per fragment (all window-local
-// pixels; the gizmo edits the affine in the content rect's local frame, so
-// `canvas_origin` cancels and never appears here):
+// MUST stay in lockstep with the CPU mirror `VideoStreamVoid::src_uv` in
+// video_stream_void.rs — the tests pin them together. Coordinate flow per
+// fragment (all window-local pixels; the gizmo edits the affine in the content
+// rect's local frame, so `canvas_origin` cancels and never appears here):
 //   FragCoord.xy → subtract content_origin → content-local pixel
 //                → inverse user affine → pre-transform content-local pixel
 //                → normalize by content_size → src_uv ∈ [0, 1]
-//                → mirror about the UV center
 //   src_uv outside [0, 1] → transparent.
 //
 // Cover-fit is baked into the content rect (origin + size), computed CPU-side
-// in `Camera::content_rect`; at the identity transform the webcam exactly fills
-// that rect, which overhangs the canvas on the cropped axis.
+// in `VideoStreamVoid::content_rect`; at the identity transform the source
+// exactly fills that rect, which overhangs the canvas on the cropped axis.
+// Mirroring is no longer a shader concern — it's expressed as a negative scale
+// in the gizmo affine, which the inverse above samples through for free.
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
@@ -38,12 +40,6 @@ struct Params {
     // canvas on the cropped axis). Cover-fit is baked in CPU-side.
     content_origin: vec2f,
     content_size: vec2f,
-    // 0.0 or 1.0. `1.0 - 2.0 * mirror` is the sign multiplier — flips
-    // the corresponding axis when on, identity when off.
-    mirror_h: f32,
-    mirror_v: f32,
-    _pad0: f32,
-    _pad1: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -58,11 +54,8 @@ struct Params {
         params.inv_row1.x * cl.x + params.inv_row1.y * cl.y + params.inv_row1.z,
     );
 
-    // Normalize to the source UV, then mirror about the UV center so flipping
-    // is along the camera's own axis (not the rotated one).
-    var src_uv = pre / params.content_size;
-    let mirror = vec2f(1.0 - 2.0 * params.mirror_h, 1.0 - 2.0 * params.mirror_v);
-    src_uv = vec2f(0.5) + (src_uv - vec2f(0.5)) * mirror;
+    // Normalize to the source UV.
+    let src_uv = pre / params.content_size;
 
     // textureSample must be called from uniform control flow — sample
     // unconditionally and mask out-of-frame after the fact.

@@ -103,6 +103,9 @@ pub fn register() -> VoidRegistration {
         icon: "tabler:galaxy",
         supports_preview: true,
         supports_live_transform: true,
+        // Purely procedural — no external capture, identity seed transform.
+        capture_kind: None,
+        default_transform: |_, _| crate::transform::Transform::identity(),
         create_pipeline,
         from_params: |params, shared| Box::new(Noise::from_params(params, shared)),
     }

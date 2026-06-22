@@ -4,7 +4,7 @@ import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry } from '../tools/registry';
 import { pollPick } from '../tools/color_pick_sync';
 import { tickColorPickerCursor } from '../tools/colorpicker_cursor';
-import { CameraSource } from '../lib/cameraSource';
+import { MediaStreamSource, describeMediaError, type CaptureKind } from '../lib/mediaStreamSource';
 
 export interface Color {
     r: number; g: number; b: number; a: number;
@@ -133,6 +133,12 @@ export class DarklyInstance {
     toolDisplayNames = $state<Record<string, string>>({});
     veilDisplayNames = $state<Record<string, string>>({});
     voidDisplayNames = $state<Record<string, string>>({});
+    /** `voidType → CaptureKind` for voids backed by a browser MediaStream
+     *  (camera / screenshare). Built from `void_types` in `loadRegistries`;
+     *  procedural voids are absent. Drives which `MediaDevices` API to call and
+     *  is the single source of truth for "is this a stream-backed void?" across
+     *  the reconciler, picker, and properties panel. */
+    voidCaptureKind = $state<Map<string, CaptureKind>>(new Map());
     blendModeDisplayNames = $state<Record<string, string>>({});
     modifierDisplayNames = $state<Record<string, string>>({});
     layerKindDisplayNames = $state<Record<string, string>>({});
@@ -186,6 +192,15 @@ export class DarklyInstance {
         this.toolDisplayNames = buildMap(tools);
         this.veilDisplayNames = buildMap(veils);
         this.voidDisplayNames = buildMap(voids);
+        // Map each void type to its browser capture API, if any. Voids with a
+        // `captureKind` (camera / screenshare) drive the generic MediaStream
+        // lifecycle; procedural voids (noise) omit the field and never appear
+        // here. Built once from the same `void_types` query.
+        const capKinds = new Map<string, CaptureKind>();
+        for (const v of (voids ?? []) as Array<{ type: string; captureKind?: CaptureKind }>) {
+            if (v.captureKind) capKinds.set(v.type, v.captureKind);
+        }
+        this.voidCaptureKind = capKinds;
         this.blendModeDisplayNames = buildMap(blends);
         this.modifierDisplayNames = buildMap(modifiers);
         this.layerKindDisplayNames = buildMap(layerKinds);
@@ -440,7 +455,7 @@ export class DarklyInstance {
      *  so this code path stays write-only on `layerTree` — reading it here
      *  would tie the LayerPanel's `$effect` to the very state the method
      *  just wrote, looping Svelte's update guard. Same pattern as
-     *  `reconcileCameraSources(next)`. */
+     *  `reconcileMediaStreamSources(next)`. */
     private pruneSelectionAgainstTree(tree: any[]) {
         const alive = new Set<number>();
         const visibleOrder: number[] = [];
@@ -490,102 +505,147 @@ export class DarklyInstance {
         this.activeVeilIndex = null;
     }
 
-    /** Active webcam (and future screenshare) MediaStream-backed inputs, keyed
-     *  by the void layer's id. Each entry holds a `<video>` element, a live
+    /** Active MediaStream-backed void inputs (camera + screenshare), keyed by
+     *  the void layer's id. Each entry holds a `<video>` element, a live
      *  `MediaStream`, and per-frame upload logic. `refreshLayerTree` reaps
      *  entries whose layer no longer exists (covers undo / explicit delete /
-     *  document close). Reactive `$state` so the properties panel
-     *  re-renders when an entry's `error` string changes. */
-    cameraSources = $state<Map<number, CameraSource>>(new Map());
+     *  document close). Reactive `$state` so the properties panel re-renders
+     *  when an entry's `error` string changes. */
+    mediaStreamSources = $state<Map<number, MediaStreamSource>>(new Map());
 
-    /** Set of camera-void layer IDs the user has explicitly authorized for
-     *  this session. The picker adds the id when a new layer is created;
-     *  the "Resume" button in VoidProperties adds it for layers loaded from
-     *  a `.darkly`. The reconciler only starts a MediaStream for layers in
-     *  this set, so reopening a document doesn't pop a permission prompt or
-     *  silently re-enable the camera — the saved last frame is displayed
-     *  until the user opts back in. Session-only: never persisted, cleared
-     *  on document open / page reload. */
-    cameraSessionStarted = $state<Set<number>>(new Set());
+    /** Set of stream-backed void layer IDs the user has explicitly authorized
+     *  for this session. The picker adds the id when a new layer is created;
+     *  the "Resume" button in VoidProperties adds it for layers loaded from a
+     *  `.darkly` (or after an external stop). Reopening a document does NOT add
+     *  to this set, so the saved last frame is shown until the user opts back
+     *  in — no surprise permission prompt or capture indicator. Session-only:
+     *  never persisted, cleared on document open / page reload. */
+    mediaStreamSessionStarted = $state<Set<number>>(new Set());
 
-    /** Mark a camera void as explicitly user-started for this session.
-     *  Idempotent. Triggers a layer-tree refresh so the reconciler picks
-     *  the new state up and spins up the MediaStream. */
-    markCameraVoidStarted(layerId: number) {
-        if (this.cameraSessionStarted.has(layerId)) return;
-        this.cameraSessionStarted = new Set(this.cameraSessionStarted).add(layerId);
+    /** Mark a stream-backed void as explicitly user-started for this session.
+     *  Idempotent. Triggers a layer-tree refresh so the reconciler picks the
+     *  new state up (drives `showResume` in VoidProperties). The actual stream
+     *  is started by the gesture via `startMediaStreamVoid`, not here. */
+    markMediaStreamVoidStarted(layerId: number) {
+        if (this.mediaStreamSessionStarted.has(layerId)) return;
+        this.mediaStreamSessionStarted = new Set(this.mediaStreamSessionStarted).add(layerId);
         this.refreshLayerTree();
     }
 
-    /** Start a MediaStream for a camera void. Called from the reconciler
-     *  once the layer is in the tree, the user has opted in (added to
-     *  `cameraSessionStarted`), and the void isn't frozen. Idempotent. */
-    startCameraVoid(layerId: number) {
-        if (!this.engine) return;
-        if (this.cameraSources.has(layerId)) return;
-        const src = new CameraSource(layerId, this.engine);
-        // Reassign the Map so Svelte sees a new identity (Map mutations
-        // don't trigger reactivity on their own in current Svelte 5).
-        this.cameraSources = new Map(this.cameraSources).set(layerId, src);
-        src.start().then(() => {
-            // Force a redraw — `error` may have just been set, and we want
-            // a frame so the void either starts presenting frames or the
-            // VoidProperties notice appears.
-            this.cameraSources = new Map(this.cameraSources);
-            this.requestFrame();
-        });
+    /** Acquire a `MediaStream` for the given capture kind. MUST be called
+     *  synchronously inside a user gesture (before any awaitable round-trip) —
+     *  `getDisplayMedia` requires transient activation, which expires if an
+     *  `await` runs first. Rejects with a `DOMException` the caller maps via
+     *  `describeMediaError`. */
+    acquireMediaStream(captureKind: CaptureKind): Promise<MediaStream> {
+        if (captureKind === 'display') {
+            return navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+        }
+        return navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     }
 
-    /** Stop and unregister a camera void's MediaStream. Called by the delete
-     *  action and by `refreshLayerTree` for orphaned entries. */
-    stopCameraVoid(layerId: number) {
-        const src = this.cameraSources.get(layerId);
+    /** Start (or adopt) a MediaStream for a stream-backed void. The reconciler
+     *  no longer starts sources — only gestures do (the picker and the Resume
+     *  button), which keeps every start inside a user activation regardless of
+     *  capture kind. The picker, which has already `await`ed `add_void`, passes
+     *  its in-gesture pre-acquired `stream` (or `acquireError` if the user
+     *  cancelled); Resume passes neither and acquires in-gesture here.
+     *  Idempotent. */
+    async startMediaStreamVoid(
+        layerId: number,
+        captureKind: CaptureKind,
+        stream?: MediaStream,
+        acquireError?: unknown,
+    ) {
+        if (!this.engine) return;
+        if (this.mediaStreamSources.has(layerId)) return;
+        const src = new MediaStreamSource(layerId, this.engine, captureKind, (id) =>
+            this.onMediaStreamEnded(id),
+        );
+        // Register immediately so the properties panel can surface error/Resume
+        // state even if acquisition failed. Reassign the Map so Svelte sees a
+        // new identity (in-place Map mutation isn't reactive in Svelte 5).
+        this.mediaStreamSources = new Map(this.mediaStreamSources).set(layerId, src);
+        if (acquireError !== undefined) {
+            src.error = describeMediaError(acquireError, captureKind);
+        } else {
+            try {
+                const s = stream ?? (await this.acquireMediaStream(captureKind));
+                await src.start(s);
+            } catch (err) {
+                src.error = describeMediaError(err, captureKind);
+            }
+        }
+        // Force a redraw — `error` may have just been set, and we want a frame
+        // so the void either starts presenting frames or the notice appears.
+        this.mediaStreamSources = new Map(this.mediaStreamSources);
+        this.requestFrame();
+    }
+
+    /** Stop and unregister a stream-backed void's MediaStream. Called by the
+     *  delete action and by `refreshLayerTree` for orphaned entries. */
+    stopMediaStreamVoid(layerId: number) {
+        const src = this.mediaStreamSources.get(layerId);
         if (!src) return;
         src.stop();
-        const next = new Map(this.cameraSources);
+        const next = new Map(this.mediaStreamSources);
         next.delete(layerId);
-        this.cameraSources = next;
+        this.mediaStreamSources = next;
     }
 
-    /** Surface a camera source's current state to the properties panel.
+    /** React to a stream ending *externally* (the browser's "Stop sharing" bar,
+     *  a webcam unplug). Tear the source down and drop the session opt-in so
+     *  VoidProperties shows "Resume" again. */
+    private onMediaStreamEnded(layerId: number) {
+        this.stopMediaStreamVoid(layerId);
+        if (this.mediaStreamSessionStarted.has(layerId)) {
+            const next = new Set(this.mediaStreamSessionStarted);
+            next.delete(layerId);
+            this.mediaStreamSessionStarted = next;
+        }
+        this.requestFrame();
+    }
+
+    /** Surface a stream source's current state to the properties panel.
      *  Returns null when there's no source registered for the id (i.e. the
-     *  layer isn't a camera void or the source hasn't been created yet). */
-    cameraSourceFor(layerId: number): CameraSource | null {
-        return this.cameraSources.get(layerId) ?? null;
+     *  layer isn't a stream-backed void or the source hasn't been created
+     *  yet). */
+    mediaStreamSourceFor(layerId: number): MediaStreamSource | null {
+        return this.mediaStreamSources.get(layerId) ?? null;
     }
 
-    /** Reconcile the live `cameraSources` map against the latest layer tree:
-     *  every unfrozen camera void should have a running source, every frozen
-     *  / deleted / undone camera void should not. Called from
-     *  `refreshLayerTree` after every layer mutation (add / remove / undo /
-     *  redo / freeze toggle / document open), so dead MediaStreams are reaped
-     *  and the OS camera indicator turns off exactly when the user expects.
+    /** Reconcile the live `mediaStreamSources` map against the latest layer
+     *  tree. Responsibilities: tear down sources whose void was frozen /
+     *  deleted / undone, push the latest `frame_divisor` + effective-visibility
+     *  into each live source, and prune the session-opt-in set. It does NOT
+     *  start sources — that's a gesture-only concern (see `startMediaStreamVoid`)
+     *  so activation never expires. Called from `refreshLayerTree` after every
+     *  layer mutation so dead streams are reaped and the OS capture indicator
+     *  turns off exactly when the user expects.
      *
-     *  Takes the tree as a parameter (rather than reading `this.layerTree`)
-     *  so the caller — `refreshLayerTree` — doesn't accidentally read the
-     *  same reactive store it's about to write. Reading + writing the same
-     *  `$state` inside an effect-tracked code path causes Svelte to loop
-     *  the enclosing effect into the infinite-update guard. */
-    private reconcileCameraSources(tree: any[]) {
+     *  Takes the tree as a parameter (rather than reading `this.layerTree`) so
+     *  the caller — `refreshLayerTree` — doesn't accidentally read the same
+     *  reactive store it's about to write, which would loop Svelte's
+     *  infinite-update guard. */
+    private reconcileMediaStreamSources(tree: any[]) {
         const desired = new Map<
             number,
             { frozen: boolean; frameDivisor: number; visible: boolean }
         >();
-        // Thread `parentVisible` through the walk: a camera void is
-        // effectively visible only if every ancestor up to the root is
-        // visible, matching the compositor's nested-visibility semantics
-        // (see `Doc::effective_visible`). The eye on the camera's own row
-        // is necessary but not sufficient — hiding the parent group must
-        // also halt uploads.
+        // Thread `parentVisible` through the walk: a stream void is effectively
+        // visible only if every ancestor up to the root is visible, matching
+        // the compositor's nested-visibility semantics (see
+        // `Doc::effective_visible`). The eye on the void's own row is necessary
+        // but not sufficient — hiding the parent group must also halt uploads.
         const walk = (nodes: any[], parentVisible: boolean) => {
             for (const n of nodes) {
                 const selfVisible = n?.visible !== false; // default true
                 const effectiveVisible = parentVisible && selfVisible;
                 // `type` (not `kind`) is the serde variant tag on `LayerInfo`
-                // — set by `#[serde(tag = "type")]` in engine/types.rs. The
-                // word `kind` is also used on the inner `ParamInfo`, which
-                // is what we confused them for earlier.
-                if (n?.type === 'void' && n?.voidType === 'camera') {
+                // — set by `#[serde(tag = "type")]` in engine/types.rs. Any
+                // void whose kind declares a `captureKind` is stream-backed.
+                const cap = this.voidCaptureKind.get(n?.voidType);
+                if (n?.type === 'void' && cap) {
                     const params = (n.params ?? []) as Array<{
                         name: string;
                         value?: unknown;
@@ -611,46 +671,33 @@ export class DarklyInstance {
         walk(tree, true);
 
         // Stop sources for layers that disappeared or that are now frozen.
-        for (const id of [...this.cameraSources.keys()]) {
+        for (const id of [...this.mediaStreamSources.keys()]) {
             const entry = desired.get(id);
             if (entry === undefined || entry.frozen) {
-                this.stopCameraVoid(id);
-            }
-        }
-        // Start sources for camera voids that should be running.
-        // Gate on `cameraSessionStarted` so loading a `.darkly` doesn't
-        // silently re-enable the camera — the user must explicitly opt in
-        // (via the picker for new layers, or the Resume button in
-        // VoidProperties for loaded layers).
-        for (const [id, { frozen }] of desired) {
-            if (!frozen && this.cameraSessionStarted.has(id) && !this.cameraSources.has(id)) {
-                this.startCameraVoid(id);
+                this.stopMediaStreamVoid(id);
             }
         }
 
-        // Push the latest `frame_divisor` and effective-visibility into
-        // every live source. Slider / eye-toggle / parent-hide changes
-        // take effect on the next rAF without restarting the MediaStream.
-        // Done after start so a freshly-started source picks up the user's
-        // current values rather than the constructor defaults.
+        // Push the latest `frame_divisor` and effective-visibility into every
+        // live source. Slider / eye-toggle / parent-hide changes take effect on
+        // the next rAF without restarting the MediaStream.
         for (const [id, { frameDivisor, visible }] of desired) {
-            const src = this.cameraSources.get(id);
+            const src = this.mediaStreamSources.get(id);
             if (!src) continue;
             src.setFrameDivisor(frameDivisor);
             src.setVisible(visible);
         }
 
-        // Drop session-started ids whose layer is gone so a future undo
-        // that re-adds a different layer at the same id doesn't auto-start
-        // by accident.
+        // Drop session-started ids whose layer is gone so a future undo that
+        // re-adds a different layer at the same id doesn't carry a stale opt-in.
         let pruned: Set<number> | null = null;
-        for (const id of this.cameraSessionStarted) {
+        for (const id of this.mediaStreamSessionStarted) {
             if (!desired.has(id)) {
-                pruned ??= new Set(this.cameraSessionStarted);
+                pruned ??= new Set(this.mediaStreamSessionStarted);
                 pruned.delete(id);
             }
         }
-        if (pruned) this.cameraSessionStarted = pruned;
+        if (pruned) this.mediaStreamSessionStarted = pruned;
     }
 
     /** Remove a veil and keep `activeVeilIndex` consistent with the new list. */
@@ -719,13 +766,14 @@ export class DarklyInstance {
         if (!this.engine) return;
         const parsed = await this.engine.send('layer_tree');
         const next: any[] = Array.isArray(parsed) ? parsed : [];
-        // Camera voids own a MediaStream + <video>; reconcile the live set
-        // against the new tree so freshly-added voids spin up, deleted /
-        // frozen / undone voids tear down (turning off the OS camera
-        // indicator). Done BEFORE assignment so this method only *writes*
-        // `layerTree` (never reads it), keeping it out of any enclosing
-        // effect's dependency set — otherwise the write loops back through it.
-        this.reconcileCameraSources(next);
+        // Stream-backed voids (camera / screenshare) own a MediaStream +
+        // <video>; reconcile the live set against the new tree so deleted /
+        // frozen / undone voids tear down (turning off the OS capture
+        // indicator) and divisor/visibility changes propagate. Done BEFORE
+        // assignment so this method only *writes* `layerTree` (never reads it),
+        // keeping it out of any enclosing effect's dependency set — otherwise
+        // the write loops back through it.
+        this.reconcileMediaStreamSources(next);
         this.pruneSelectionAgainstTree(next);
         this.layerTree = next;
         // Schedule a render frame: callers invoke this after layer mutations
@@ -834,7 +882,7 @@ export class DarklyInstance {
             // can't read `frame_count` directly anymore — it would be a third
             // competing engine borrow; render returns it on the state mirror.)
             const nextFrameCount = (this.engineState?.frameCount ?? 0) + 1;
-            for (const src of this.cameraSources.values()) {
+            for (const src of this.mediaStreamSources.values()) {
                 src.tick(nextFrameCount);
             }
 
