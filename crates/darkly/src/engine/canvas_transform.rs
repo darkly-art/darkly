@@ -1,7 +1,7 @@
 //! Canvas flip & 90°-rotate.
 //!
 //! Like [`image_rescale`](super::image_rescale), this permutes **every
-//! pixel-bearing node** (raster layers + mask modifiers) — but exactly, via the
+//! pixel-bearing node** (raster layers + mask filters) — but exactly, via the
 //! ortho GPU pass rather than a resample. Each node moves to its transformed
 //! extent about the canvas window; rotations additionally swap the canvas
 //! dimensions and recentre `canvas_origin` (GIMP's `offset = (old − new)/2`).
@@ -36,7 +36,7 @@ impl DarklyEngine {
         let old_origin = self.doc.canvas_origin;
 
         // Enumerate pixel-bearing nodes that own a texture in the unified pool
-        // (raster layers + mask modifiers; voids regenerate, selection lives in
+        // (raster layers + mask filters; voids regenerate, selection lives in
         // selection_state). Identical capability scan to image rescale.
         let mut candidate_ids: Vec<LayerId> = Vec::new();
         for l in self.doc.all_content_layers() {
@@ -44,7 +44,7 @@ impl DarklyEngine {
                 candidate_ids.push(l.id());
             }
         }
-        for m in self.doc.all_modifiers() {
+        for m in self.doc.all_filters() {
             if m.pixels().is_some() {
                 candidate_ids.push(m.id);
             }

@@ -1,28 +1,28 @@
-//! Destructive color adjustments — apply a `MaskedFilterPipeline` to a node's
+//! Destructive color filters — apply a `MaskedFilterPipeline` to a node's
 //! pixels in place, respecting an active selection.
 //!
-//! Mirrors [`layer_flip`](super::layer_flip)'s structure: the region machinery
+//! Mirrors [`layer_flip`](super::super::layer_flip)'s structure: the region machinery
 //! is node-generic (layers and masks both live in `node_textures` keyed by
-//! `LayerId`, RGBA8 vs R8 driven by format), so a single `apply_adjustment`
+//! `LayerId`, RGBA8 vs R8 driven by format), so a single `apply_filter`
 //! inverts a raster layer or a mask with no per-kind branching. With an active
 //! selection only the selected region changes — clipped to the selection
 //! *shape* via the uploaded mask; with none, the whole node is filtered. The
 //! pixel extent never changes, so undo is a single [`GpuRegionAction`].
 
-use super::rendering::commit_undo_region;
-use super::{DarklyEngine, PendingAdjustment};
+use super::super::rendering::commit_undo_region;
+use super::super::{DarklyEngine, PendingFilter};
 use crate::coord::WindowRect;
 use crate::engine::types::VeilTypeInfo;
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
 impl DarklyEngine {
-    /// All registered adjustment types (id + display name), as the same
-    /// `VeilTypeInfo` shape veils/voids use — adjustments carry no params, so
+    /// All registered filter types (id + display name), as the same
+    /// `VeilTypeInfo` shape veils/voids use — filters carry no params, so
     /// the list is empty there. Drives the frontend's dynamic Colors-menu
     /// action registration.
-    pub fn adjustment_types(&self) -> Vec<VeilTypeInfo> {
-        self.adjustment_registry
+    pub fn filter_types(&self) -> Vec<VeilTypeInfo> {
+        self.filter_pipeline_registry
             .types()
             .into_iter()
             .map(|(type_id, display_name)| VeilTypeInfo {
@@ -33,19 +33,19 @@ impl DarklyEngine {
             .collect()
     }
 
-    /// Apply a destructive adjustment (by registered `adjustment_type` id) to
-    /// the given node (raster layer or mask modifier). Returns `false` if the
+    /// Apply a destructive filter (by registered `filter_type` id) to
+    /// the given node (raster layer or mask filter). Returns `false` if the
     /// node isn't editable, has no texture, the type is unknown, or the
-    /// adjustment was deferred waiting on the selection cache.
-    pub fn apply_adjustment(&mut self, node_id: LayerId, adjustment_type: &str) -> bool {
+    /// filter was deferred waiting on the selection cache.
+    pub fn apply_filter(&mut self, node_id: LayerId, filter_type: &str) -> bool {
         if !self.doc.is_node_editable(node_id) {
             return false;
         }
-        if !self.adjustment_registry.has(adjustment_type) {
+        if !self.filter_pipeline_registry.has(filter_type) {
             return false;
         }
         self.auto_commit_floating();
-        if self.doc.layer(node_id).is_none() && self.doc.find_modifier(node_id).is_none() {
+        if self.doc.layer(node_id).is_none() && self.doc.find_filter(node_id).is_none() {
             return false;
         }
         let (node_extent, format) = match self.compositor.node_texture(node_id) {
@@ -70,9 +70,9 @@ impl DarklyEngine {
                             b
                         }
                         None => {
-                            self.pending_adjustment = Some(PendingAdjustment {
+                            self.pending_filter = Some(PendingFilter {
                                 node_id,
-                                adjustment_type: adjustment_type.to_string(),
+                                filter_type: filter_type.to_string(),
                             });
                             self.kick_selection_readback();
                             return false;
@@ -103,8 +103,8 @@ impl DarklyEngine {
         // Resolve the (lazily-built, shared) pipeline before touching undo so a
         // missing type fails before we snapshot. `has()` above guarantees Some.
         let pipeline = match self
-            .adjustment_registry
-            .pipeline(adjustment_type, &self.gpu.device)
+            .filter_pipeline_registry
+            .pipeline(filter_type, &self.gpu.device)
         {
             Some(p) => p,
             None => return false,
@@ -116,7 +116,7 @@ impl DarklyEngine {
             .node_texture(node_id)
             .expect("checked above")
             .canvas_frame();
-        let snap = self.gpu.encode_ret("adjustment-save", |enc| {
+        let snap = self.gpu.encode_ret("filter-save", |enc| {
             self.region_scratch
                 .save_region(&self.gpu.device, enc, &frame, format, region)
         });
@@ -124,7 +124,7 @@ impl DarklyEngine {
             &self.gpu,
             &self.region_scratch,
             &mut self.readbacks,
-            "adjustment-commit",
+            "filter-commit",
             node_id,
             &frame,
             &snap,
@@ -135,7 +135,7 @@ impl DarklyEngine {
         let mask_view = mask_tex
             .as_ref()
             .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
-        self.gpu.encode("apply-adjustment", |enc| {
+        self.gpu.encode("apply-filter", |enc| {
             self.compositor.filter_node_region(
                 &self.gpu.device,
                 &self.gpu.queue,

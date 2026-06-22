@@ -281,11 +281,11 @@ impl DarklyEngine {
             .collect()
     }
 
-    /// Return all registered modifier kinds. UI uses this to resolve
+    /// Return all registered filter kinds. UI uses this to resolve
     /// `ModifierInfo.kind` to a display label and to populate the
-    /// "Add modifier" menu.
+    /// "Add filter" menu.
     pub fn modifier_types(&self) -> Vec<ModifierTypeInfo> {
-        crate::document::modifier::registry()
+        crate::document::filter::registry()
             .all()
             .into_iter()
             .map(|reg| ModifierTypeInfo {

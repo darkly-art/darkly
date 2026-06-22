@@ -1,4 +1,3 @@
-mod adjustments;
 mod bake_common;
 mod brush_graph;
 mod brush_library;
@@ -7,6 +6,7 @@ mod canvas_transform;
 mod clipboard;
 mod duplicate;
 mod export;
+mod filters;
 mod flatten;
 mod floating;
 mod image_rescale;
@@ -14,7 +14,6 @@ mod layer_flip;
 mod layers;
 mod load;
 mod merge;
-mod modifiers;
 mod painting;
 pub mod protocol;
 pub mod rendering;
@@ -70,7 +69,7 @@ use std::collections::HashMap;
 // ---------------------------------------------------------------------------
 
 /// Deferred transform setup — waiting for async content bounds from the compositor.
-/// `node_id` may refer to a raster layer or a mask modifier; the format is
+/// `node_id` may refer to a raster layer or a mask filter; the format is
 /// derived from the node's [`PixelBuffer`].
 pub(crate) struct PendingTransform {
     pub node_id: LayerId,
@@ -83,12 +82,12 @@ pub(crate) struct PendingFlip {
     pub xform: crate::gpu::ortho_transform::OrthoXform,
 }
 
-/// Deferred destructive adjustment — waiting for the selection CPU cache (the
-/// adjustment region is the selection bbox, read from that cache). Mirrors
+/// Deferred destructive filter — waiting for the selection CPU cache (the
+/// filter region is the selection bbox, read from that cache). Mirrors
 /// [`PendingFlip`].
-pub(crate) struct PendingAdjustment {
+pub(crate) struct PendingFilter {
     pub node_id: LayerId,
-    pub adjustment_type: String,
+    pub filter_type: String,
 }
 
 /// Deferred copy/cut — waiting for selection CPU cache to be populated.
@@ -106,7 +105,7 @@ pub(crate) struct RichCopyMetadata {
     pub locked: bool,
     pub opacity: f32,
     pub blend_mode: String,
-    /// Snapshot of any mask modifier on the source. Pixel data is NOT
+    /// Snapshot of any mask filter on the source. Pixel data is NOT
     /// captured in v1 — it requires a parallel readback that lands in v2.
     pub mask: Option<RichCopyMask>,
 }
@@ -127,7 +126,7 @@ pub(crate) struct PendingUndoCommit {
 /// is returned alongside the pixel data on completion.
 ///
 /// All variants carry a `node_id` (where applicable) that may refer to either
-/// a raster layer or a mask modifier; the format is derived from the node's
+/// a raster layer or a mask filter; the format is derived from the node's
 /// [`PixelBuffer`] when the readback completes.
 pub(crate) enum ReadbackContext {
     FloodFill {
@@ -296,7 +295,7 @@ pub(crate) struct PreviewJob {
 }
 
 /// Cached thumbnail RGBA bytes per node id. Keyed uniformly across layers,
-/// groups, and modifiers — the node id is sufficient to disambiguate, so the
+/// groups, and filters — the node id is sufficient to disambiguate, so the
 /// previous separate `layer` and `mask` maps collapse into one.
 pub(crate) struct ThumbnailCache {
     bytes: HashMap<LayerId, Vec<u8>>,
@@ -331,7 +330,7 @@ pub struct DarklyEngine {
     /// Session-level "isolate this node" flag. When set, the renderer shows
     /// only this node's contribution (e.g. an R8 mask is rendered grayscale,
     /// a layer is rendered without siblings/parents). Universal across node
-    /// kinds — works for any future filter / adjustment modifier too.
+    /// kinds — works for any future filter / filter filter too.
     pub(crate) isolated_node: Option<LayerId>,
     pub(crate) view_transform: ViewTransform,
     /// Decomposed view inputs from which `view_transform` is derived. The
@@ -464,10 +463,10 @@ pub struct DarklyEngine {
     // --- Stabilizer ---
     pub(crate) stabilizer_registry: StabilizerRegistry,
 
-    /// Destructive color-adjustment registry (invert, …). Lazily caches the
-    /// shared `MaskedFilterPipeline` per type; engine-owned because adjustments
+    /// Destructive color-filter registry (invert, …). Lazily caches the
+    /// shared `MaskedFilterPipeline` per type; engine-owned because filters
     /// are one-shot document edits, not compositor-driven render state.
-    pub(crate) adjustment_registry: crate::gpu::adjustment::AdjustmentRegistry,
+    pub(crate) filter_pipeline_registry: crate::gpu::filter::FilterPipelineRegistry,
 
     /// Composite blend mode for the current stroke: 0 = paint, 1 = erase.
     pub(crate) brush_blend_mode: u32,
@@ -480,7 +479,7 @@ pub struct DarklyEngine {
     /// Reusable GPU pipelines for selection boolean / invert operations.
     /// The selection's R8 textures + bind groups live in
     /// `compositor.selection_state`; the active toggle, tight bounds, and
-    /// CPU readback cache live on `doc.selection.kind` (`SelectionModifier`).
+    /// CPU readback cache live on `doc.selection.kind` (`SelectionFilter`).
     pub(crate) selection_pipelines: SelectionPipelines,
 
     // --- Deferred operations ---
@@ -488,8 +487,8 @@ pub struct DarklyEngine {
     pub(crate) pending_transform: Option<PendingTransform>,
     /// Pending layer/selection flip waiting for the selection CPU cache.
     pub(crate) pending_flip: Option<PendingFlip>,
-    /// Pending destructive adjustment waiting for the selection CPU cache.
-    pub(crate) pending_adjustment: Option<PendingAdjustment>,
+    /// Pending destructive filter waiting for the selection CPU cache.
+    pub(crate) pending_filter: Option<PendingFilter>,
     /// Pending copy/cut waiting for selection CPU cache.
     pub(crate) pending_copy: Option<PendingCopy>,
 
@@ -639,14 +638,14 @@ impl DarklyEngine {
             stroke_buffer: None,
             checkpoint_ring: CheckpointRing::new(),
             stabilizer_registry: StabilizerRegistry::new(),
-            adjustment_registry: crate::gpu::adjustment::AdjustmentRegistry::new(),
+            filter_pipeline_registry: crate::gpu::filter::FilterPipelineRegistry::new(),
             brush_blend_mode: 0,
             diff_rect,
             pending_undo_commit: None,
             selection_pipelines,
             pending_transform: None,
             pending_flip: None,
-            pending_adjustment: None,
+            pending_filter: None,
             pending_copy: None,
             readbacks: ReadbackScheduler::new(),
             pending_copy_result: None,
@@ -673,12 +672,12 @@ impl DarklyEngine {
         // the user to trigger a `compile_active` via a param change.
         engine.regenerate_brush_cursor_preview();
 
-        // Eagerly allocate the document selection modifier + its GPU state.
-        // The selection is a typed Modifier on `doc.selection`; the R8 GPU
+        // Eagerly allocate the document selection filter + its GPU state.
+        // The selection is a typed Filter on `doc.selection`; the R8 GPU
         // textures + bind groups live in `compositor.selection_state`. Both
         // are zero-cost when no selection is active (visible=false), so
         // allocating up-front keeps the consumer code branch-free.
-        let selection_mod_id = engine.doc.ensure_selection_modifier();
+        let selection_mod_id = engine.doc.ensure_selection_filter();
         engine.compositor.ensure_selection_state(
             &engine.gpu.device,
             selection_mod_id,
@@ -817,8 +816,8 @@ impl DarklyEngine {
         ))
     }
 
-    /// Test-only public accessor for the selection modifier's id.
-    pub fn selection_modifier_id_test(&self) -> Option<LayerId> {
+    /// Test-only public accessor for the selection filter's id.
+    pub fn selection_filter_id_test(&self) -> Option<LayerId> {
         self.doc.selection_id()
     }
 
@@ -832,20 +831,18 @@ impl DarklyEngine {
         &self.doc
     }
 
-    /// Test-only assertion that the document's selection slot holds a Modifier
+    /// Test-only assertion that the document's selection slot holds a Filter
     /// whose kind is `Selection`. Returns `None` if the slot is empty.
-    pub fn test_selection_modifier_kind_is_selection(&self) -> Option<bool> {
+    pub fn test_selection_filter_kind_is_selection(&self) -> Option<bool> {
         let id = self.doc.selection?;
-        self.doc
-            .find_modifier(id)
-            .map(|m| m.as_selection().is_some())
+        self.doc.find_filter(id).map(|m| m.as_selection().is_some())
     }
 
     /// Test-only access to the selection's `PixelBuffer.bounds`.
     pub fn test_selection_pixel_buffer_bounds(&self) -> Option<crate::coord::CanvasRect> {
         let id = self.doc.selection?;
         self.doc
-            .find_modifier(id)
+            .find_filter(id)
             .and_then(|m| m.pixels())
             .map(|p| p.bounds)
     }
@@ -862,27 +859,27 @@ impl DarklyEngine {
     }
 
     /// Test-only: a pixel-bearing node's document-side `PixelBuffer.bounds`
-    /// (raster layer or mask modifier). Used to assert extents scale on rescale.
+    /// (raster layer or mask filter). Used to assert extents scale on rescale.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_node_pixel_bounds(&self, id: LayerId) -> Option<crate::coord::CanvasRect> {
         self.doc.node_pixel_bounds(id)
     }
 
-    /// Test-only: the mask modifier id attached to `host_id`, if any (the first
-    /// non-selection pixel-bearing modifier on the host).
+    /// Test-only: the mask filter id attached to `host_id`, if any (the first
+    /// non-selection pixel-bearing filter on the host).
     #[cfg(any(test, feature = "testing"))]
     pub fn test_mask_id(&self, host_id: LayerId) -> Option<LayerId> {
         let node = self.doc.find_node(host_id)?;
-        node.modifiers().iter().copied().find(|&mid| {
+        node.filters().iter().copied().find(|&mid| {
             self.doc
-                .find_modifier(mid)
+                .find_filter(mid)
                 .map(|m| m.as_selection().is_none() && m.pixels().is_some())
                 .unwrap_or(false)
         })
     }
 
     /// Number of GPU textures the compositor currently holds across the
-    /// unified node-texture pool (raster layers and pixel-bearing modifiers
+    /// unified node-texture pool (raster layers and pixel-bearing filters
     /// like masks). Test-only metric for leak-cycle regression tests (P3).
     pub fn test_node_texture_count(&self) -> usize {
         self.compositor.test_node_texture_count()
@@ -897,9 +894,9 @@ impl DarklyEngine {
     }
 
     /// Blocking readback of a node's GPU texture (raster layer or mask
-    /// modifier). For test assertions only. Format and extent come from the
+    /// filter). For test assertions only. Format and extent come from the
     /// texture's own metadata — callers don't need to know whether the id
-    /// refers to a layer or a modifier.
+    /// refers to a layer or a filter.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_layer(&self, node_id: LayerId) -> Vec<u8> {
         let tex = self
@@ -1017,15 +1014,15 @@ impl DarklyEngine {
             .update_animations(&self.gpu.queue, wall_time, &self.doc);
     }
 
-    /// Blocking readback of a mask modifier's R8 texture. For test assertions
-    /// only. Resolves the mask modifier on the host and reads its texture
+    /// Blocking readback of a mask filter's R8 texture. For test assertions
+    /// only. Resolves the mask filter on the host and reads its texture
     /// from the unified node-texture pool. Returns one byte per pixel.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_mask(&self, host_id: LayerId) -> Vec<u8> {
         let mask_id = self
             .doc
-            .mask_modifier_id(host_id)
-            .expect("host has no mask modifier");
+            .mask_filter_id(host_id)
+            .expect("host has no mask filter");
         let tex = self
             .compositor
             .node_texture(mask_id)

@@ -18,7 +18,7 @@ use crate::layer::{LayerId, LayerNode};
 /// Map from manifest-old ids (`u64`) to fresh slotmap ids — populated
 /// in pass 1 of the load (allocate-every-entity), consumed in pass 2
 /// (rewrite cross-references). Each kind's [`LayerKindRegistration::remap_ids`]
-/// receives a reference and uses it to translate children / modifiers /
+/// receives a reference and uses it to translate children / filters /
 /// any future kind-specific id field.
 pub type IdMap = HashMap<u64, LayerId>;
 
@@ -27,7 +27,7 @@ pub struct SerializedEntity {
     /// The opaque body to embed in the entity's [`crate::format::manifest::ManifestEntry`].
     pub body: serde_json::Value,
     /// Per-entity pixel-blob declarations. Empty for entities with no
-    /// pixel storage (e.g. groups, future transform-only modifiers).
+    /// pixel storage (e.g. groups, future transform-only filters).
     pub pixel_blobs: Vec<PixelBlobSpec>,
 }
 
@@ -72,7 +72,7 @@ pub struct LayerKindRegistration {
     /// [`Self::remap_ids`] after every entity has been allocated.
     pub deserialize: fn(body: &serde_json::Value, id: LayerId) -> Result<LayerNode, LoadError>,
 
-    /// Rewrite every cross-reference (children, modifiers, any future
+    /// Rewrite every cross-reference (children, filters, any future
     /// kind-specific id field) in `entity` from manifest-old id to
     /// fresh slotmap id. Non-optional — the contract that a future kind
     /// can't silently break the load by storing ids in a private field

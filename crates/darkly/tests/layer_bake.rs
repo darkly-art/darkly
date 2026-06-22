@@ -40,13 +40,13 @@ fn alpha_at(pixels: &[u8], w: u32, x: u32, y: u32) -> u8 {
     pixels[((y * w + x) * 4 + 3) as usize]
 }
 
-/// Paint a black dab onto a host's mask modifier — R8 value drops toward 0
+/// Paint a black dab onto a host's mask filter — R8 value drops toward 0
 /// where the brush lands, leaving the rest of the mask at its prior value
 /// (255 for a freshly-added, all-reveal mask).
 fn paint_mask_dot(engine: &mut DarklyEngine, host_id: LayerId, x: f32, y: f32) {
     let mask_id = engine
         .host_mask_id(host_id)
-        .expect("paint_mask_dot requires the host to have a mask modifier");
+        .expect("paint_mask_dot requires the host to have a mask filter");
     engine.begin_stroke(mask_id);
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
@@ -298,7 +298,7 @@ fn flatten_node_fails_on_layer_without_mask() {
 
 #[test]
 fn flatten_node_on_layer_with_mask_applies_it() {
-    // Sanity: after flatten_node, the layer no longer has a mask modifier.
+    // Sanity: after flatten_node, the layer no longer has a mask filter.
     let mut engine = test_engine(64, 64);
     let layer = engine.add_raster_layer(None);
     paint_dot(&mut engine, layer, 32.0, 32.0, [1.0, 0.0, 0.0]);

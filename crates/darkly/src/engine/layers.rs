@@ -385,7 +385,7 @@ impl DarklyEngine {
     }
 
     /// Returns the pixel-space bounds of any pixel-bearing node id (raster
-    /// layer or mask modifier). Generalization of [`Self::layer_bounds`] —
+    /// layer or mask filter). Generalization of [`Self::layer_bounds`] —
     /// when callers hold a node id without knowing its kind, this resolves
     /// against the document's unified `pixels()` accessor. Returns `None`
     /// for groups (no pixel buffer) or unknown ids.
@@ -394,7 +394,7 @@ impl DarklyEngine {
             return Some(rect);
         }
         self.doc
-            .find_modifier(node_id)
+            .find_filter(node_id)
             .and_then(|m| m.pixels())
             .map(|p| p.bounds)
     }
@@ -653,17 +653,17 @@ impl DarklyEngine {
         }
     }
 
-    /// Set the `visible` flag on any node — layer, group, or modifier.
+    /// Set the `visible` flag on any node — layer, group, or filter.
     /// Works uniformly across kinds because they all carry [`NodeCommon`].
     pub fn set_layer_visible(&mut self, node_id: LayerId, visible: bool) {
-        // Try layers/groups first; fall through to modifiers.
+        // Try layers/groups first; fall through to filters.
         let old_visible = if let Some(node) = self.doc.find_node_mut(node_id) {
             let old = node.common().visible;
             node.common_mut().visible = visible;
             Some(old)
-        } else if let Some(modifier) = self.doc.find_modifier_mut(node_id) {
-            let old = modifier.common.visible;
-            modifier.common.visible = visible;
+        } else if let Some(filter) = self.doc.find_filter_mut(node_id) {
+            let old = filter.common.visible;
+            filter.common.visible = visible;
             Some(old)
         } else {
             None
@@ -674,15 +674,15 @@ impl DarklyEngine {
         }
     }
 
-    /// Set the `locked` flag on any node — layer, group, or modifier.
+    /// Set the `locked` flag on any node — layer, group, or filter.
     pub fn set_node_locked(&mut self, node_id: LayerId, locked: bool) {
         let old_locked = if let Some(node) = self.doc.find_node_mut(node_id) {
             let old = node.common().locked;
             node.common_mut().locked = locked;
             Some(old)
-        } else if let Some(modifier) = self.doc.find_modifier_mut(node_id) {
-            let old = modifier.common.locked;
-            modifier.common.locked = locked;
+        } else if let Some(filter) = self.doc.find_filter_mut(node_id) {
+            let old = filter.common.locked;
+            filter.common.locked = locked;
             Some(old)
         } else {
             None
@@ -696,7 +696,7 @@ impl DarklyEngine {
     ///
     /// When `Some(id)`, the renderer treats `id`'s subtree as the only
     /// thing on the canvas: the compose walk skips off-path siblings and,
-    /// when `id` is a mask modifier, the host's blend pass renders the
+    /// when `id` is a mask filter, the host's blend pass renders the
     /// mask channel as grayscale.
     ///
     /// Pure session state — no document mutation. The eye-icon column on
@@ -710,7 +710,7 @@ impl DarklyEngine {
         self.isolated_node = id;
         // Mirror to the compositor so the render walk can filter off-path
         // subtrees, then resync host uniforms — the `isolated` flag on a
-        // host flips depending on whether one of its modifiers is the new
+        // host flips depending on whether one of its filters is the new
         // target.
         self.compositor.set_isolated_node(id);
         self.sync_compositor_layers();
@@ -723,13 +723,13 @@ impl DarklyEngine {
     }
 
     /// True when the host's `isolated` blend uniform should fire — i.e. the
-    /// current isolation target is one of `host_id`'s modifiers (the user
+    /// current isolation target is one of `host_id`'s filters (the user
     /// asked to see the mask channel as grayscale on canvas). Isolating the
     /// host itself doesn't trigger this; the host renders normally and the
     /// compose walk hides its siblings instead.
     pub(crate) fn host_renders_isolated(&self, host_id: LayerId) -> bool {
         match self.isolated_node {
-            Some(t) => self.doc.modifiers_of(host_id).contains(&t),
+            Some(t) => self.doc.filters_of(host_id).contains(&t),
             None => false,
         }
     }

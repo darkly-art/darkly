@@ -1,12 +1,12 @@
+pub mod filter;
+pub mod filters;
 pub mod layer_kind;
 pub mod layer_kinds;
-pub mod modifier;
-pub mod modifiers;
 
+pub use filter::{Filter, FilterEntityRegistration, FilterKind, FilterRegistry};
+pub use filters::mask::MaskFilter;
+pub use filters::selection::{SelectionCpuCache, SelectionFilter};
 pub use layer_kind::{LayerKindRegistration, LayerKindRegistry};
-pub use modifier::{Modifier, ModifierKind, ModifierRegistration, ModifierRegistry};
-pub use modifiers::mask::MaskModifier;
-pub use modifiers::selection::{SelectionCpuCache, SelectionModifier};
 
 use std::collections::HashMap;
 
@@ -31,38 +31,38 @@ pub enum MoveTarget {
 }
 
 /// One slot in [`Document::entities`]. Tree nodes (layers + groups) and
-/// modifiers share a single id space and a single storage map so callers can
+/// filters share a single id space and a single storage map so callers can
 /// pass any [`LayerId`] through the same lookup surface.
 pub enum Entity {
     Node(LayerNode),
-    Modifier(Modifier),
+    Filter(Filter),
 }
 
 impl Entity {
     pub fn as_node(&self) -> Option<&LayerNode> {
         match self {
             Entity::Node(n) => Some(n),
-            Entity::Modifier(_) => None,
+            Entity::Filter(_) => None,
         }
     }
 
     pub fn as_node_mut(&mut self) -> Option<&mut LayerNode> {
         match self {
             Entity::Node(n) => Some(n),
-            Entity::Modifier(_) => None,
+            Entity::Filter(_) => None,
         }
     }
 
-    pub fn as_modifier(&self) -> Option<&Modifier> {
+    pub fn as_modifier(&self) -> Option<&Filter> {
         match self {
-            Entity::Modifier(m) => Some(m),
+            Entity::Filter(m) => Some(m),
             Entity::Node(_) => None,
         }
     }
 
-    pub fn as_modifier_mut(&mut self) -> Option<&mut Modifier> {
+    pub fn as_modifier_mut(&mut self) -> Option<&mut Filter> {
         match self {
-            Entity::Modifier(m) => Some(m),
+            Entity::Filter(m) => Some(m),
             Entity::Node(_) => None,
         }
     }
@@ -99,17 +99,17 @@ pub struct Document {
     /// flag describes editor session state, not file content.
     pub dirty: bool,
 
-    /// Single shared slot store for every layer, group, and modifier in this
+    /// Single shared slot store for every layer, group, and filter in this
     /// document. Lookups are O(1); generational keys mean stale ids return
     /// `None` instead of aliasing onto a recycled slot.
     pub entities: SlotMap<LayerId, Entity>,
 
     /// Parent pointer for every linked entity:
     /// - For a tree node: its tree parent (a group). Root has no entry.
-    /// - For a modifier: its host node. Selection has no entry.
+    /// - For a filter: its host node. Selection has no entry.
     ///
     /// Entities present in `entities` but absent from `parent` are *orphans* —
-    /// either the root itself, the selection modifier, or a subtree that has
+    /// either the root itself, the selection filter, or a subtree that has
     /// been detached for undo and is waiting to be reattached.
     pub parent: SecondaryMap<LayerId, LayerId>,
 
@@ -118,7 +118,7 @@ pub struct Document {
     /// never exposed to the UI — only its children are.
     pub root: LayerId,
 
-    /// Global selection modifier id, if allocated. The modifier itself lives
+    /// Global selection filter id, if allocated. The filter itself lives
     /// in [`Self::entities`]; this just remembers which entry it is. Once
     /// allocated it stays for the document's lifetime, with `common.visible`
     /// toggling whether ops respect the selection.
@@ -132,7 +132,7 @@ pub struct Document {
     /// after heavy churn.
     ///
     /// One uniform mechanism across every kind that lays down a layer or
-    /// modifier — raster, group, mask, void (per void-type), and any future
+    /// filter — raster, group, mask, void (per void-type), and any future
     /// kind. The base label is the caller's responsibility: hardcoded for
     /// fixed kinds (`"Layer"`, `"Group"`, `"Mask"`), registry-resolved for
     /// dynamic ones (the void's display name, e.g. `"Noise"`).
@@ -201,48 +201,48 @@ impl Document {
         self.entities.get_mut(id).and_then(Entity::as_node_mut)
     }
 
-    pub fn find_modifier(&self, id: LayerId) -> Option<&Modifier> {
+    pub fn find_filter(&self, id: LayerId) -> Option<&Filter> {
         self.entities.get(id).and_then(Entity::as_modifier)
     }
 
-    pub fn find_modifier_mut(&mut self, id: LayerId) -> Option<&mut Modifier> {
+    pub fn find_filter_mut(&mut self, id: LayerId) -> Option<&mut Filter> {
         self.entities.get_mut(id).and_then(Entity::as_modifier_mut)
     }
 
     /// Canvas-space pixel bounds of any pixel-bearing node — a raster layer or
-    /// a mask/selection modifier. `None` for nodes that have no pixels (groups,
+    /// a mask/selection filter. `None` for nodes that have no pixels (groups,
     /// void layers) or unknown ids. Lets callers treat "things with pixels"
-    /// uniformly without branching on layer vs modifier or on layer kind.
+    /// uniformly without branching on layer vs filter or on layer kind.
     pub fn node_pixel_bounds(&self, id: LayerId) -> Option<CanvasRect> {
         if let Some(b) = self.find_node(id).and_then(|n| n.pixels()) {
             return Some(b.bounds);
         }
-        self.find_modifier(id)
+        self.find_filter(id)
             .and_then(|m| m.pixels())
             .map(|b| b.bounds)
     }
 
-    /// Set the canvas-space pixel bounds of a raster layer or modifier. No-op
+    /// Set the canvas-space pixel bounds of a raster layer or filter. No-op
     /// for nodes without pixels or unknown ids. Pairs with
     /// [`node_pixel_bounds`](Self::node_pixel_bounds); used by image rescale to
     /// keep the document's extents in step with the resampled GPU textures.
     pub fn set_node_pixel_bounds(&mut self, id: LayerId, bounds: CanvasRect) {
         if let Some(b) = self.find_node_mut(id).and_then(|n| n.pixels_mut()) {
             b.bounds = bounds;
-        } else if let Some(b) = self.find_modifier_mut(id).and_then(|m| m.pixels_mut()) {
+        } else if let Some(b) = self.find_filter_mut(id).and_then(|m| m.pixels_mut()) {
             b.bounds = bounds;
         }
     }
 
-    /// Find the host node a modifier is attached to (the layer or group that
-    /// owns it on its `modifiers` list).
-    pub fn find_modifier_host(&self, modifier_id: LayerId) -> Option<&LayerNode> {
-        let host_id = *self.parent.get(modifier_id)?;
+    /// Find the host node a filter is attached to (the layer or group that
+    /// owns it on its `filters` list).
+    pub fn find_filter_host(&self, filter_id: LayerId) -> Option<&LayerNode> {
+        let host_id = *self.parent.get(filter_id)?;
         self.find_node(host_id)
     }
 
-    pub fn find_modifier_host_mut(&mut self, modifier_id: LayerId) -> Option<&mut LayerNode> {
-        let host_id = *self.parent.get(modifier_id)?;
+    pub fn find_filter_host_mut(&mut self, filter_id: LayerId) -> Option<&mut LayerNode> {
+        let host_id = *self.parent.get(filter_id)?;
         self.find_node_mut(host_id)
     }
 
@@ -260,15 +260,15 @@ impl Document {
         }
     }
 
-    /// True if `id` refers to a modifier (rather than a layer/group). Cheap
+    /// True if `id` refers to a filter (rather than a layer/group). Cheap
     /// disambiguator for callers that hold a node id and need to dispatch.
-    pub fn is_modifier(&self, id: LayerId) -> bool {
-        matches!(self.entities.get(id), Some(Entity::Modifier(_)))
+    pub fn is_filter(&self, id: LayerId) -> bool {
+        matches!(self.entities.get(id), Some(Entity::Filter(_)))
     }
 
     /// True when `id` may be mutated by the user.
     ///
-    /// `false` when the node itself or any ancestor (host for a modifier;
+    /// `false` when the node itself or any ancestor (host for a filter;
     /// parent group for a layer/group, walked to the root) carries
     /// `locked = true`. Mirrors Krita's `KisBaseNode::isEditable` — locks
     /// cascade down the tree so locking a group also protects its contents.
@@ -282,7 +282,7 @@ impl Document {
         loop {
             match self.entities.get(cur) {
                 Some(Entity::Node(n)) if n.common().locked => return false,
-                Some(Entity::Modifier(m)) if m.common.locked => return false,
+                Some(Entity::Filter(m)) if m.common.locked => return false,
                 Some(_) => {}
                 None => return true,
             }
@@ -294,19 +294,19 @@ impl Document {
     }
 
     /// Pixel-buffer accessor that works for any pixel-bearing entity — raster
-    /// layers and pixel-storing modifiers (today: masks, selection). Returns
-    /// `None` for groups, pure-effect modifiers, or unknown ids.
+    /// layers and pixel-storing filters (today: masks, selection). Returns
+    /// `None` for groups, pure-effect filters, or unknown ids.
     pub fn pixel_buffer(&self, id: LayerId) -> Option<&PixelBuffer> {
         match self.entities.get(id)? {
             Entity::Node(n) => n.pixels(),
-            Entity::Modifier(m) => m.pixels(),
+            Entity::Filter(m) => m.pixels(),
         }
     }
 
     pub fn pixel_buffer_mut(&mut self, id: LayerId) -> Option<&mut PixelBuffer> {
         match self.entities.get_mut(id)? {
             Entity::Node(n) => n.pixels_mut(),
-            Entity::Modifier(m) => m.pixels_mut(),
+            Entity::Filter(m) => m.pixels_mut(),
         }
     }
 
@@ -353,12 +353,12 @@ impl Document {
 
     /// Index of an entity within its parent container.
     /// - For a tree node: position in its parent group's `children` Vec.
-    /// - For a modifier: position in its host node's `modifiers` Vec.
+    /// - For a filter: position in its host node's `filters` Vec.
     pub fn position_in_parent(&self, id: LayerId) -> Option<usize> {
         let parent_id = *self.parent.get(id)?;
         let parent_node = self.find_node(parent_id)?;
-        if self.is_modifier(id) {
-            parent_node.modifiers().iter().position(|c| *c == id)
+        if self.is_filter(id) {
+            parent_node.filters().iter().position(|c| *c == id)
         } else {
             match parent_node {
                 LayerNode::Group(g) => g.children.iter().position(|c| *c == id),
@@ -367,31 +367,31 @@ impl Document {
         }
     }
 
-    /// First mask modifier on a host, if any. Replaces the old
-    /// `host.modifiers().mask()` pattern — that helper used to live on
+    /// First mask filter on a host, if any. Replaces the old
+    /// `host.filters().mask()` pattern — that helper used to live on
     /// `ModifierList`, but with id-references it needs the document to
     /// resolve.
-    pub fn mask_modifier_id(&self, host_id: LayerId) -> Option<LayerId> {
+    pub fn mask_filter_id(&self, host_id: LayerId) -> Option<LayerId> {
         let host = self.find_node(host_id)?;
-        host.modifiers().iter().copied().find(|mid| {
-            self.find_modifier(*mid)
-                .map(|m| matches!(m.kind, ModifierKind::Mask(_)))
+        host.filters().iter().copied().find(|mid| {
+            self.find_filter(*mid)
+                .map(|m| matches!(m.kind, FilterKind::Mask(_)))
                 .unwrap_or(false)
         })
     }
 
-    pub fn mask_modifier(&self, host_id: LayerId) -> Option<&Modifier> {
-        self.find_modifier(self.mask_modifier_id(host_id)?)
+    pub fn mask_filter(&self, host_id: LayerId) -> Option<&Filter> {
+        self.find_filter(self.mask_filter_id(host_id)?)
     }
 
     pub fn has_mask(&self, host_id: LayerId) -> bool {
-        self.mask_modifier_id(host_id).is_some()
+        self.mask_filter_id(host_id).is_some()
     }
 
-    /// Modifier-id list for a host node, in bottom-up order.
-    pub fn modifiers_of(&self, host_id: LayerId) -> &[LayerId] {
+    /// Filter-id list for a host node, in bottom-up order.
+    pub fn filters_of(&self, host_id: LayerId) -> &[LayerId] {
         match self.find_node(host_id) {
-            Some(n) => n.modifiers(),
+            Some(n) => n.filters(),
             None => &[],
         }
     }
@@ -498,22 +498,22 @@ impl Document {
         }
     }
 
-    /// Every modifier attached to any host in the tree. The global selection
-    /// modifier is *not* included (it has no host); use
+    /// Every filter attached to any host in the tree. The global selection
+    /// filter is *not* included (it has no host); use
     /// [`Document::selection_id`] for that.
-    pub fn all_modifiers(&self) -> Vec<&Modifier> {
+    pub fn all_filters(&self) -> Vec<&Filter> {
         let mut out = Vec::new();
-        self.collect_modifiers(self.root, &mut out);
+        self.collect_filters(self.root, &mut out);
         out
     }
 
-    fn collect_modifiers<'a>(&'a self, group_id: LayerId, out: &mut Vec<&'a Modifier>) {
+    fn collect_filters<'a>(&'a self, group_id: LayerId, out: &mut Vec<&'a Filter>) {
         let Some(LayerNode::Group(g)) = self.find_node(group_id) else {
             return;
         };
-        // Modifiers on the group itself.
-        for &mid in &g.modifiers {
-            if let Some(m) = self.find_modifier(mid) {
+        // Filters on the group itself.
+        for &mid in &g.filters {
+            if let Some(m) = self.find_filter(mid) {
                 out.push(m);
             }
         }
@@ -521,20 +521,20 @@ impl Document {
         for &child_id in &g.children {
             match self.find_node(child_id) {
                 Some(LayerNode::Layer(l)) => {
-                    for &mid in l.modifiers() {
-                        if let Some(m) = self.find_modifier(mid) {
+                    for &mid in l.filters() {
+                        if let Some(m) = self.find_filter(mid) {
                             out.push(m);
                         }
                     }
                 }
-                Some(LayerNode::Group(_)) => self.collect_modifiers(child_id, out),
+                Some(LayerNode::Group(_)) => self.collect_filters(child_id, out),
                 None => {}
             }
         }
     }
 
     /// Count of all tree nodes (layers + groups, excluding the root and
-    /// modifiers). Walks the tree; intended for tests and rare diagnostics.
+    /// filters). Walks the tree; intended for tests and rare diagnostics.
     pub fn node_count(&self) -> usize {
         fn walk(doc: &Document, group_id: LayerId, counter: &mut usize) {
             let Some(LayerNode::Group(g)) = doc.find_node(group_id) else {
@@ -558,7 +558,7 @@ impl Document {
 
     /// All tree-node ids (layers + groups) in display order (DFS over the
     /// full tree, descending into every group regardless of visibility or
-    /// collapsed-state). Excludes the implicit root and modifiers. Used by
+    /// collapsed-state). Excludes the implicit root and filters. Used by
     /// batch ops that need a stable total order across a selection that
     /// mixes layers and groups, including cross-parent selections.
     ///
@@ -588,7 +588,7 @@ impl Document {
     // ---------------------------------------------------------------
     // Mutation — every entry point that adds, removes, or reparents an
     // entity goes through here so the slotmap, the parent map, and the
-    // children/modifier Vecs stay consistent.
+    // children/filter Vecs stay consistent.
     // ---------------------------------------------------------------
 
     /// Add a new raster layer, positioning it relative to `anchor` per
@@ -668,7 +668,7 @@ impl Document {
         id
     }
 
-    /// Add a [`MaskModifier`] to a host node, returning the new modifier's id.
+    /// Add a [`MaskFilter`] to a host node, returning the new filter's id.
     /// Bounds default to the full canvas for every host kind; the mask then
     /// owns and grows its bounds independently (see [`Self::host_default_bounds`]).
     /// Returns `None` if the host id is unknown.
@@ -676,18 +676,18 @@ impl Document {
     /// Note: only one mask per host is enforced at the UI layer, not here —
     /// the model supports N. Callers that want the singleton invariant should
     /// check [`Document::has_mask`] before adding.
-    pub fn add_mask_modifier(&mut self, host_id: LayerId) -> Option<LayerId> {
+    pub fn add_mask_filter(&mut self, host_id: LayerId) -> Option<LayerId> {
         let bounds = self.host_default_bounds(host_id)?;
         let name = self.next_name("Mask");
         let id = self.entities.insert_with_key(|key| {
-            Entity::Modifier(Modifier {
+            Entity::Filter(Filter {
                 id: key,
                 common: NodeCommon::new(name),
-                kind: ModifierKind::mask_with_bounds(bounds),
+                kind: FilterKind::mask_with_bounds(bounds),
             })
         });
-        // Patch the modifier's id field to match its slot key.
-        if let Some(Entity::Modifier(m)) = self.entities.get_mut(id) {
+        // Patch the filter's id field to match its slot key.
+        if let Some(Entity::Filter(m)) = self.entities.get_mut(id) {
             m.id = id;
         }
         // Link to the host.
@@ -701,44 +701,44 @@ impl Document {
         }
     }
 
-    /// Allocate the global selection modifier if not already present, sized
-    /// to the canvas. Idempotent — returns the modifier id either way.
-    pub fn ensure_selection_modifier(&mut self) -> LayerId {
+    /// Allocate the global selection filter if not already present, sized
+    /// to the canvas. Idempotent — returns the filter id either way.
+    pub fn ensure_selection_filter(&mut self) -> LayerId {
         if let Some(id) = self.selection {
             return id;
         }
         let bounds = self.canvas_rect();
         let id = self.entities.insert_with_key(|key| {
-            let mut m = Modifier {
+            let mut m = Filter {
                 id: key,
                 common: NodeCommon::new("Selection".to_string()),
-                kind: ModifierKind::selection_with_bounds(bounds),
+                kind: FilterKind::selection_with_bounds(bounds),
             };
             // Default `visible = false` mirrors today's "always allocated,
             // .active toggles whether ops respect it" semantics.
             m.common.visible = false;
-            Entity::Modifier(m)
+            Entity::Filter(m)
         });
         // Patch id field to slot key.
-        if let Some(Entity::Modifier(m)) = self.entities.get_mut(id) {
+        if let Some(Entity::Filter(m)) = self.entities.get_mut(id) {
             m.id = id;
         }
         self.selection = Some(id);
         // Per the plan, the selection lives "at the document root rather than
-        // on a host's `modifiers` list" — so no entry in `parent`.
+        // on a host's `filters` list" — so no entry in `parent`.
         id
     }
 
-    /// Selection modifier id, if allocated.
+    /// Selection filter id, if allocated.
     pub fn selection_id(&self) -> Option<LayerId> {
         self.selection
     }
 
-    /// True when the selection modifier is allocated AND its `common.visible`
+    /// True when the selection filter is allocated AND its `common.visible`
     /// flag is set — equivalent to today's `gpu_selection.active`.
     pub fn selection_active(&self) -> bool {
         self.selection
-            .and_then(|id| self.find_modifier(id))
+            .and_then(|id| self.find_filter(id))
             .is_some_and(|m| m.common.visible)
     }
 
@@ -767,28 +767,28 @@ impl Document {
         self.link_child(id, parent_id, Some(position));
     }
 
-    /// Detach a modifier from its host for undo purposes. The modifier stays
-    /// in `entities`, so reattach via [`Document::reinsert_modifier`] preserves
+    /// Detach a filter from its host for undo purposes. The filter stays
+    /// in `entities`, so reattach via [`Document::reinsert_filter`] preserves
     /// the id.
-    pub fn detach_modifier_for_undo(&mut self, id: LayerId) -> Option<LayerId> {
-        self.unlink_modifier(id)
+    pub fn detach_filter_for_undo(&mut self, id: LayerId) -> Option<LayerId> {
+        self.unlink_filter(id)
     }
 
-    /// Reattach a previously detached modifier to a host. Append-only — the
+    /// Reattach a previously detached filter to a host. Append-only — the
     /// model doesn't expose a position parameter today because masks use
     /// "first mask" lookup rather than positional access.
-    pub fn reinsert_modifier(&mut self, modifier_id: LayerId, host_id: LayerId) {
-        if !self.is_modifier(modifier_id) {
+    pub fn reinsert_filter(&mut self, filter_id: LayerId, host_id: LayerId) {
+        if !self.is_filter(filter_id) {
             return;
         }
         if let Some(host) = self.find_node_mut(host_id) {
-            host.modifiers_mut().push(modifier_id);
-            self.parent.insert(modifier_id, host_id);
+            host.modifiers_mut().push(filter_id);
+            self.parent.insert(filter_id, host_id);
         }
     }
 
     /// Remove a node (layer or group) and everything beneath it (descendant
-    /// nodes, all modifiers on every node in the subtree) from `entities`.
+    /// nodes, all filters on every node in the subtree) from `entities`.
     /// Permanent — call [`Document::detach_for_undo`] instead if the caller
     /// wants id-stable detach for undo.
     pub fn remove_node(&mut self, id: LayerId) {
@@ -801,10 +801,10 @@ impl Document {
         self.purge_subtree(id);
     }
 
-    /// Permanently remove a modifier from `entities` (and its host's modifier
+    /// Permanently remove a filter from `entities` (and its host's filter
     /// list, if still attached).
-    pub fn remove_modifier(&mut self, id: LayerId) {
-        self.unlink_modifier(id);
+    pub fn remove_filter(&mut self, id: LayerId) {
+        self.unlink_filter(id);
         // Selection sentinel: if this was the selection, clear the field too.
         if self.selection == Some(id) {
             self.selection = None;
@@ -854,9 +854,9 @@ impl Document {
         Some(id)
     }
 
-    /// Unlink a modifier from its host's modifiers Vec and from the parent
-    /// map. Returns the modifier's id if it was linked.
-    fn unlink_modifier(&mut self, id: LayerId) -> Option<LayerId> {
+    /// Unlink a filter from its host's filters Vec and from the parent
+    /// map. Returns the filter's id if it was linked.
+    fn unlink_filter(&mut self, id: LayerId) -> Option<LayerId> {
         let host_id = self.parent.remove(id)?;
         if let Some(host) = self.find_node_mut(host_id) {
             host.modifiers_mut().retain(|m| *m != id);
@@ -869,14 +869,14 @@ impl Document {
     /// where the user expects.
     ///
     /// - `None` / unknown / stale id → top of root.
-    /// - Modifier id → recurse against the modifier's host.
+    /// - Filter id → recurse against the filter's host.
     /// - Group id → top of that group's children.
     /// - Layer id → sibling immediately above the anchor.
     pub fn resolve_anchor_target(&self, anchor: Option<LayerId>) -> MoveTarget {
         let Some(id) = anchor else {
             return MoveTarget::IntoGroupTop(self.root);
         };
-        if self.is_modifier(id) {
+        if self.is_filter(id) {
             return match self.parent.get(id).copied() {
                 Some(host) => self.resolve_anchor_target(Some(host)),
                 None => MoveTarget::IntoGroupTop(self.root),
@@ -929,7 +929,7 @@ impl Document {
     }
 
     /// Recursively remove a subtree (the node, its descendants, and every
-    /// modifier on every node in the subtree) from `entities` and the parent
+    /// filter on every node in the subtree) from `entities` and the parent
     /// map. Caller is responsible for unlinking the subtree's root from its
     /// parent first.
     fn purge_subtree(&mut self, id: LayerId) {
@@ -938,9 +938,9 @@ impl Document {
         let mut nodes_to_purge = Vec::new();
         self.collect_subtree_ids(id, &mut nodes_to_purge);
         for nid in nodes_to_purge {
-            // Drop modifiers attached to this node first.
+            // Drop filters attached to this node first.
             let mod_ids: Vec<LayerId> = match self.find_node(nid) {
-                Some(n) => n.modifiers().to_vec(),
+                Some(n) => n.filters().to_vec(),
                 None => Vec::new(),
             };
             for mid in mod_ids {
@@ -965,7 +965,7 @@ impl Document {
 
     /// Creation-default bounds for a fresh mask on `host_id`: the full canvas,
     /// for every host kind. A mask owns its bounds independently of its host
-    /// (it grows itself via `grow_modifier`); the host's extent is only a
+    /// (it grows itself via `grow_filter`); the host's extent is only a
     /// historical seed, not a runtime dependency — mirroring Krita's
     /// parent-extent *fallback* (a default bbox, not a coupling). The
     /// mask-apply pass samples the mask in its own space, so the default size
@@ -1099,34 +1099,34 @@ mod tests {
     fn add_modifier_attaches_to_host() {
         let mut doc = Document::new(256, 256);
         let l = doc.add_raster_layer(None);
-        assert!(doc.modifiers_of(l).is_empty());
+        assert!(doc.filters_of(l).is_empty());
 
-        let mod_id = doc.add_mask_modifier(l).unwrap();
-        assert_eq!(doc.modifiers_of(l).len(), 1);
-        assert_eq!(doc.mask_modifier_id(l), Some(mod_id));
+        let mod_id = doc.add_mask_filter(l).unwrap();
+        assert_eq!(doc.filters_of(l).len(), 1);
+        assert_eq!(doc.mask_filter_id(l), Some(mod_id));
 
-        assert!(doc.is_modifier(mod_id));
-        assert!(!doc.is_modifier(l));
+        assert!(doc.is_filter(mod_id));
+        assert!(!doc.is_filter(l));
     }
 
     #[test]
     fn remove_modifier_detaches() {
         let mut doc = Document::new(256, 256);
         let l = doc.add_raster_layer(None);
-        let mod_id = doc.add_mask_modifier(l).unwrap();
+        let mod_id = doc.add_mask_filter(l).unwrap();
 
-        doc.remove_modifier(mod_id);
-        assert!(doc.modifiers_of(l).is_empty());
-        assert!(!doc.is_modifier(mod_id));
+        doc.remove_filter(mod_id);
+        assert!(doc.filters_of(l).is_empty());
+        assert!(!doc.is_filter(mod_id));
         // Truly purged from entities (not just unlinked).
-        assert!(doc.find_modifier(mod_id).is_none());
+        assert!(doc.find_filter(mod_id).is_none());
     }
 
     #[test]
     fn pixel_buffer_dispatches_layer_or_modifier() {
         let mut doc = Document::new(256, 256);
         let l = doc.add_raster_layer(None);
-        let mod_id = doc.add_mask_modifier(l).unwrap();
+        let mod_id = doc.add_mask_filter(l).unwrap();
 
         let layer_buf = doc.pixel_buffer(l).unwrap();
         assert_eq!(layer_buf.format, wgpu::TextureFormat::Rgba8Unorm);
@@ -1142,9 +1142,9 @@ mod tests {
     fn modifier_host_lookup() {
         let mut doc = Document::new(256, 256);
         let l = doc.add_raster_layer(None);
-        let mod_id = doc.add_mask_modifier(l).unwrap();
+        let mod_id = doc.add_mask_filter(l).unwrap();
 
-        let host = doc.find_modifier_host(mod_id).unwrap();
+        let host = doc.find_filter_host(mod_id).unwrap();
         assert_eq!(host.id(), l);
         assert_eq!(doc.parent_of(mod_id), Some(l));
     }
@@ -1167,7 +1167,7 @@ mod tests {
         assert!(doc.find_node(stale).is_none());
         assert!(doc.layer(stale).is_none());
         assert!(doc.parent_of(stale).is_none());
-        assert!(!doc.is_modifier(stale));
+        assert!(!doc.is_filter(stale));
     }
 
     #[test]
@@ -1186,12 +1186,12 @@ mod tests {
 
     #[test]
     fn detach_for_undo_preserves_id() {
-        // Detach is orphan-keep: id stays valid in `entities`, modifiers
+        // Detach is orphan-keep: id stays valid in `entities`, filters
         // attached to the detached node stay attached, and reattach restores
         // everything at the requested position.
         let mut doc = Document::new(256, 256);
         let l = doc.add_raster_layer(None);
-        let m = doc.add_mask_modifier(l).unwrap();
+        let m = doc.add_mask_filter(l).unwrap();
 
         let parent = doc.parent_of(l);
         let pos = doc.position_in_parent(l).unwrap();
@@ -1201,16 +1201,16 @@ mod tests {
         assert!(doc.parent_of(l).is_none());
         // Still resolvable in entities.
         assert!(doc.find_node(l).is_some());
-        // Modifier still attached to the detached node.
+        // Filter still attached to the detached node.
         assert_eq!(doc.parent_of(m), Some(l));
-        assert_eq!(doc.modifiers_of(l), &[m]);
+        assert_eq!(doc.filters_of(l), &[m]);
         // Not in the tree.
         assert!(doc.flat_layers().is_empty());
 
         doc.reinsert_node(l, parent, pos);
         assert_eq!(doc.parent_of(l), parent.or(Some(doc.root)));
         assert_eq!(doc.flat_layers().len(), 1);
-        assert_eq!(doc.mask_modifier_id(l), Some(m));
+        assert_eq!(doc.mask_filter_id(l), Some(m));
     }
 
     #[test]
@@ -1219,7 +1219,7 @@ mod tests {
         let mut doc = Document::new(256, 256);
         let g = doc.add_group(None);
         let l = doc.add_raster_layer(Some(g));
-        let m = doc.add_mask_modifier(l).unwrap();
+        let m = doc.add_mask_filter(l).unwrap();
         let inner_g = doc.add_group(None);
         // Reparent inner_g under g.
         doc.move_layer(inner_g, MoveTarget::IntoGroupTop(g));
@@ -1285,9 +1285,9 @@ mod tests {
         let mut doc = Document::new(256, 256);
         let l1 = doc.add_raster_layer(None);
         let l2 = doc.add_raster_layer(None);
-        let mask = doc.add_mask_modifier(l1).unwrap();
+        let mask = doc.add_mask_filter(l1).unwrap();
         let new_id = doc.add_raster_layer(Some(mask));
-        // Modifier resolves to its host layer → After(host) in root.
+        // Filter resolves to its host layer → After(host) in root.
         assert_eq!(doc.children_of(doc.root), &[l1, new_id, l2]);
     }
 

@@ -53,7 +53,7 @@ fn serialize(node: &LayerNode) -> SerializedEntity {
         passthrough: g.passthrough,
         collapsed: g.collapsed,
         children: g.children.iter().map(|c| c.to_ffi()).collect(),
-        modifiers: g.modifiers.iter().map(|m| m.to_ffi()).collect(),
+        modifiers: g.filters.iter().map(|m| m.to_ffi()).collect(),
     };
     SerializedEntity {
         body: serde_json::to_value(&body).expect("derived serde for GroupBody is infallible"),
@@ -88,7 +88,7 @@ fn deserialize(body: &serde_json::Value, id: LayerId) -> Result<LayerNode, LoadE
             blend_mode: blend_reg,
         },
         children: body.children.into_iter().map(LayerId::from_ffi).collect(),
-        modifiers: body.modifiers.into_iter().map(LayerId::from_ffi).collect(),
+        filters: body.modifiers.into_iter().map(LayerId::from_ffi).collect(),
         passthrough: body.passthrough,
         collapsed: body.collapsed,
     }))
@@ -103,7 +103,7 @@ fn remap_ids(node: &mut LayerNode, id_map: &IdMap) {
             *c = *new_id;
         }
     }
-    for m in g.modifiers.iter_mut() {
+    for m in g.filters.iter_mut() {
         if let Some(new_id) = id_map.get(&m.to_ffi()) {
             *m = *new_id;
         }

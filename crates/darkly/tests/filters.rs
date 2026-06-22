@@ -1,5 +1,5 @@
-//! Destructive color-adjustment integration tests — the "Invert Colors"
-//! adjustment over the shared `filter_node_region` substrate.
+//! Destructive color-filter integration tests — the "Invert Colors"
+//! filter over the shared `filter_node_region` substrate.
 //!
 //! These are **regression** tests for the node-generic invert path: they pin
 //! `1 - c` exactly (per-pixel, RGBA8 layer *and* R8 mask — masks ride the same
@@ -7,7 +7,7 @@
 //! undo/redo, and selection clipping (rect on a layer, ellipse shape-clip, and
 //! a selection on a *mask* node). A no-op invert would fail the once-checks.
 //!
-//! Run with: `cargo test -p darkly --test adjustments --features testing -- --test-threads=1`
+//! Run with: `cargo test -p darkly --test filters --features testing -- --test-threads=1`
 
 use darkly::coord::{CanvasPoint, CanvasRect};
 use darkly::document::SelectionMode;
@@ -82,7 +82,7 @@ fn invert_layer_negates_every_channel() {
     let layer = e.paste_image(w, h, &distinct_rgba(w, h), 0, 0, None);
     let before = e.test_readback_layer(layer);
 
-    assert!(e.apply_adjustment(layer, "invert"));
+    assert!(e.apply_filter(layer, "invert"));
     let after = e.test_readback_layer(layer);
     for y in 0..h {
         for x in 0..w {
@@ -102,8 +102,8 @@ fn invert_layer_twice_is_identity() {
     let layer = e.paste_image(w, h, &distinct_rgba(w, h), 0, 0, None);
     let before = e.test_readback_layer(layer);
 
-    assert!(e.apply_adjustment(layer, "invert"));
-    assert!(e.apply_adjustment(layer, "invert"));
+    assert!(e.apply_filter(layer, "invert"));
+    assert!(e.apply_filter(layer, "invert"));
     assert_eq!(
         e.test_readback_layer(layer),
         before,
@@ -118,7 +118,7 @@ fn invert_layer_undo_redo_round_trips() {
     let layer = e.paste_image(w, h, &distinct_rgba(w, h), 0, 0, None);
     let before = e.test_readback_layer(layer);
 
-    assert!(e.apply_adjustment(layer, "invert"));
+    assert!(e.apply_filter(layer, "invert"));
     let inverted = e.test_readback_layer(layer);
 
     e.undo();
@@ -140,13 +140,13 @@ fn invert_unknown_type_is_a_noop() {
     let before = e.test_readback_layer(layer);
 
     assert!(
-        !e.apply_adjustment(layer, "no_such_adjustment"),
+        !e.apply_filter(layer, "no_such_adjustment"),
         "an unregistered type must return false"
     );
     assert_eq!(
         e.test_readback_layer(layer),
         before,
-        "an unknown adjustment must not touch pixels"
+        "an unknown filter must not touch pixels"
     );
 }
 
@@ -161,7 +161,7 @@ fn invert_layer_with_rect_selection_only_inverts_selection() {
 
     // Rect x,y ∈ [3,8).
     e.select_rect(3.0, 3.0, 5.0, 5.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_adjustment(layer, "invert"));
+    assert!(e.apply_filter(layer, "invert"));
     let after = e.test_readback_layer(layer);
 
     // Inside the selection: inverted.
@@ -188,7 +188,7 @@ fn invert_layer_with_ellipse_selection_clips_to_shape() {
 
     // Ellipse in bbox x,y ∈ [2,10): centre (6,6).
     e.select_ellipse(2.0, 2.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_adjustment(layer, "invert"));
+    assert!(e.apply_filter(layer, "invert"));
     let after = e.test_readback_layer(layer);
 
     // A bbox corner is outside the ellipse → untouched (shape-masked, not bbox).
@@ -223,13 +223,13 @@ fn invert_mask_negates_r8_and_round_trips() {
         "mask is R8 — one byte/pixel"
     );
 
-    assert!(e.apply_adjustment(mask, "invert"));
+    assert!(e.apply_filter(mask, "invert"));
     let after = e.test_readback_layer(mask);
     for i in 0..before.len() {
         assert_eq!(after[i], 255 - before[i], "mask byte {i} should be 1-r");
     }
 
-    assert!(e.apply_adjustment(mask, "invert"));
+    assert!(e.apply_filter(mask, "invert"));
     assert_eq!(
         e.test_readback_layer(mask),
         before,
@@ -248,7 +248,7 @@ fn invert_mask_with_selection_only_inverts_selected_region() {
 
     // Rect x,y ∈ [3,8) — only this region of the mask inverts.
     e.select_rect(3.0, 3.0, 5.0, 5.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_adjustment(mask, "invert"));
+    assert!(e.apply_filter(mask, "invert"));
     let after = e.test_readback_layer(mask);
 
     let at = |buf: &[u8], x: u32, y: u32| buf[(y * w + x) as usize];
@@ -270,7 +270,7 @@ fn invert_mask_with_selection_only_inverts_selected_region() {
 // ---- Selection × coordinate frames (crop / rescale) ------------------------
 //
 // The single most recurring bug class here is carrying a value into the wrong
-// coordinate frame (see docs/coordinate-systems.md). `apply_adjustment` takes
+// coordinate frame (see docs/coordinate-systems.md). `apply_filter` takes
 // the window-local selection bbox → plane (`to_canvas(canvas_origin)`) → node-
 // local, exactly as `flip_node` does; these intermix a selection with a crop
 // (non-zero `canvas_origin`) and a rescale (changed dims) to pin that it lands
@@ -289,10 +289,10 @@ fn invert_layer_with_selection_after_crop_uses_plane_coords() {
     e.resize_canvas(CanvasRect::new(CanvasPoint::new(8, 8), 16, 16));
 
     // Selection input is plane-space: plane rect [10,18)². `select_rect`
-    // shifts it to window-local [2,10)²; `apply_adjustment` must shift it back
+    // shifts it to window-local [2,10)²; `apply_filter` must shift it back
     // to plane [10,18)² via `canvas_origin` before touching pixels.
     e.select_rect(10.0, 10.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_adjustment(layer, "invert"));
+    assert!(e.apply_filter(layer, "invert"));
     let after = e.test_readback_layer(layer);
 
     // Inside the selected PLANE region — inverted.
@@ -333,7 +333,7 @@ fn invert_layer_with_selection_after_rescale() {
 
     // Select a plane rect in the rescaled (origin-(0,0)) doc: plane [8,24)².
     e.select_rect(8.0, 8.0, 16.0, 16.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_adjustment(layer, "invert"));
+    assert!(e.apply_filter(layer, "invert"));
     let after = e.test_readback_layer(layer);
 
     // Inside the selection — inverted; outside — untouched. Confirms the bbox
@@ -376,7 +376,7 @@ fn invert_mask_with_selection_after_crop() {
 
     // Plane selection [10,18)² — same plane region a layer would invert.
     e.select_rect(10.0, 10.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_adjustment(mask, "invert"));
+    assert!(e.apply_filter(mask, "invert"));
     let after = e.test_readback_layer(mask);
 
     let at = |buf: &[u8], x: u32, y: u32| buf[(y * w + x) as usize];

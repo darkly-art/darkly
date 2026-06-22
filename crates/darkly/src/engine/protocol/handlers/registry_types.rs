@@ -1,5 +1,5 @@
 //! Registry / type-list queries — the introspection surface the frontend uses
-//! to populate menus (tools, blend modes, veils, voids, modifiers, layer kinds)
+//! to populate menus (tools, blend modes, veils, voids, filters, layer kinds)
 //! and to render the layer tree. All read-only, all `serde::Serialize` lists.
 
 use crate::engine::protocol::{bad_payload, RequestRegistration, Response};
@@ -39,10 +39,10 @@ pub fn registrations() -> Vec<RequestRegistration> {
             },
         },
         RequestRegistration {
-            kind: "adjustment_types",
+            kind: "filter_types",
             handle: |engine, _payload, _b| {
                 Ok(Response::json(
-                    serde_json::to_value(engine.adjustment_types()).map_err(bad_payload)?,
+                    serde_json::to_value(engine.filter_types()).map_err(bad_payload)?,
                 ))
             },
         },

@@ -19,10 +19,10 @@ impl DarklyEngine {
     /// `poll_copy_result()` on the next frame. Returns `None` immediately.
     pub fn copy(&mut self, layer_id: LayerId) -> Option<ClipboardExport> {
         // The copy target is any pixel-bearing node: a raster/void layer, or a
-        // modifier (the active paint target when editing a mask is the mask
-        // modifier id directly). `start_copy_readback` gates on the node's
+        // filter (the active paint target when editing a mask is the mask
+        // filter id directly). `start_copy_readback` gates on the node's
         // texture, so a non-pixel target simply no-ops there.
-        if self.doc.layer(layer_id).is_none() && !self.doc.is_modifier(layer_id) {
+        if self.doc.layer(layer_id).is_none() && !self.doc.is_filter(layer_id) {
             return None;
         }
 
@@ -60,7 +60,7 @@ impl DarklyEngine {
         let canvas_h = self.doc.height;
 
         // Determine format from the unified node-texture pool — both raster
-        // (RGBA8) and mask modifier (R8) targets resolve through the same
+        // (RGBA8) and mask filter (R8) targets resolve through the same
         // call. Caller's id alone selects the surface; format follows.
         let format = match self.compositor.node_texture(layer_id) {
             Some(t) => t.format(),
@@ -430,9 +430,9 @@ impl DarklyEngine {
     /// Cut = copy + clear. The clear happens on GPU during start_copy_readback.
     /// Returns `None` immediately; result available via `poll_copy_result()`.
     pub fn cut(&mut self, layer_id: LayerId) -> Option<ClipboardExport> {
-        // Accept a modifier id (mask edit target) as well as a layer — see
+        // Accept a filter id (mask edit target) as well as a layer — see
         // `copy`. The actual texture gate lives in `start_copy_readback`.
-        if self.doc.layer(layer_id).is_none() && !self.doc.is_modifier(layer_id) {
+        if self.doc.layer(layer_id).is_none() && !self.doc.is_filter(layer_id) {
             return None;
         }
         if !self.doc.is_node_editable(layer_id) {
@@ -485,7 +485,7 @@ impl DarklyEngine {
             .upload_node_pixels(&self.gpu.queue, id, rgba);
 
         // Position relative to the active node. `resolve_anchor_target` maps a
-        // modifier anchor (the active id while editing a mask) to its host, so
+        // filter anchor (the active id while editing a mask) to its host, so
         // the pasted layer lands as the host's sibling rather than nested under
         // it — the same anchor resolution the document's `add_*` helpers use.
         let target = self.doc.resolve_anchor_target(active_layer_id);
@@ -528,15 +528,15 @@ impl DarklyEngine {
         //
         // Rich metadata (blend mode, opacity, …) only exists for raster
         // layers. The active paint target when editing a mask is the mask
-        // *modifier* id, which has no layer metadata — fall through to a plain
+        // *filter* id, which has no layer metadata — fall through to a plain
         // pixel copy (`pending_rich_metadata` left `None` → `complete_copy`
         // builds an image clip). Voids regenerate from params, so there's
         // nothing to read back; cross-tab clipboard for voids would need its
         // own JSON path (out of scope for this change).
         let meta = match self.doc.layer(layer_id) {
             Some(Layer::Raster(layer)) => {
-                let mask = layer.modifiers.iter().find_map(|mid| {
-                    let m = self.doc.find_modifier(*mid)?;
+                let mask = layer.filters.iter().find_map(|mid| {
+                    let m = self.doc.find_filter(*mid)?;
                     if !m.is_mask() {
                         return None;
                     }
@@ -556,8 +556,8 @@ impl DarklyEngine {
                     mask,
                 })
             }
-            // Mask modifier: copy pixels only, no rich metadata.
-            _ if self.doc.is_modifier(layer_id) => None,
+            // Mask filter: copy pixels only, no rich metadata.
+            _ if self.doc.is_filter(layer_id) => None,
             // Groups / voids / unknown ids have no pixel-readback path here.
             _ => return None,
         };

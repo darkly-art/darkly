@@ -56,7 +56,7 @@ pub enum LayerInfo {
         /// `"normal"`, `"color_burn"`). Resolve to a display label via the
         /// blend-mode registry, not a sibling field on this struct.
         blend_mode: &'static str,
-        /// Modifiers attached to this layer (today: at most one mask).
+        /// Filters attached to this layer (today: at most one mask).
         modifiers: Vec<ModifierInfo>,
         /// Pixel-space bounds of the layer's GPU texture in canvas coords.
         bounds: crate::coord::CanvasRect,
@@ -392,9 +392,9 @@ pub(crate) fn node_to_layer_info(
                 opacity: r.blend.opacity,
                 blend_mode: r.blend.blend_mode.type_id,
                 modifiers: r
-                    .modifiers
+                    .filters
                     .iter()
-                    .filter_map(|mid| doc.find_modifier(*mid).map(|m| modifier_to_info(doc, m)))
+                    .filter_map(|mid| doc.find_filter(*mid).map(|m| modifier_to_info(doc, m)))
                     .collect(),
                 bounds: r.pixels.bounds,
             },
@@ -414,9 +414,9 @@ pub(crate) fn node_to_layer_info(
                     opacity: v.blend.opacity,
                     blend_mode: v.blend.blend_mode.type_id,
                     modifiers: v
-                        .modifiers
+                        .filters
                         .iter()
-                        .filter_map(|mid| doc.find_modifier(*mid).map(|m| modifier_to_info(doc, m)))
+                        .filter_map(|mid| doc.find_filter(*mid).map(|m| modifier_to_info(doc, m)))
                         .collect(),
                     void_type: v.void_type.clone(),
                     icon: void_registry.icon(&v.void_type),
@@ -435,9 +435,9 @@ pub(crate) fn node_to_layer_info(
             opacity: g.blend.opacity,
             blend_mode: g.blend.blend_mode.type_id,
             modifiers: g
-                .modifiers
+                .filters
                 .iter()
-                .filter_map(|mid| doc.find_modifier(*mid).map(|m| modifier_to_info(doc, m)))
+                .filter_map(|mid| doc.find_filter(*mid).map(|m| modifier_to_info(doc, m)))
                 .collect(),
             children: g
                 .children
@@ -452,7 +452,7 @@ pub(crate) fn node_to_layer_info(
 
 pub(crate) fn modifier_to_info(
     doc: &crate::document::Document,
-    modifier: &crate::document::Modifier,
+    modifier: &crate::document::Filter,
 ) -> ModifierInfo {
     ModifierInfo {
         id: modifier.id.to_ffi() as f64,

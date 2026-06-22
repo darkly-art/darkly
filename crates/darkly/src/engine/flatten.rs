@@ -108,7 +108,7 @@ impl DarklyEngine {
 
     /// Flatten a single node into a raster:
     ///
-    /// - For a **raster layer**: bakes its modifiers (the mask) into the
+    /// - For a **raster layer**: bakes its filters (the mask) into the
     ///   layer's RGBA and removes them. The layer keeps its id, blend
     ///   props, and tree position. Implemented as a re-use of
     ///   [`Self::apply_mask`] — same semantics, just a different entry name
@@ -119,18 +119,18 @@ impl DarklyEngine {
     ///   The group's children and the group itself are tombstoned for undo.
     ///
     /// Errors when the source isn't a flattenable shape (e.g. a raster with
-    /// no modifiers — flattening would be a no-op).
+    /// no filters — flattening would be a no-op).
     pub fn flatten_node(&mut self, node_id: LayerId) -> Result<LayerId, String> {
         if !self.doc.is_node_editable(node_id) {
             return Err("Layer is locked".into());
         }
         match self.doc.find_node(node_id) {
             Some(LayerNode::Layer(_)) => {
-                if self.doc.mask_modifier_id(node_id).is_some() {
+                if self.doc.mask_filter_id(node_id).is_some() {
                     self.apply_mask(node_id);
                     Ok(node_id)
                 } else {
-                    Err("Layer has no modifiers to flatten".into())
+                    Err("Layer has no filters to flatten".into())
                 }
             }
             Some(LayerNode::Group(_)) => self.flatten_group(node_id),
@@ -139,10 +139,10 @@ impl DarklyEngine {
     }
 
     /// Per-node flatten predicate used by the frontend right-click menu.
-    /// Layers are flattenable iff they own modifiers; groups always.
+    /// Layers are flattenable iff they own filters; groups always.
     pub fn can_flatten_node(&self, node_id: LayerId) -> bool {
         match self.doc.find_node(node_id) {
-            Some(LayerNode::Layer(_)) => self.doc.mask_modifier_id(node_id).is_some(),
+            Some(LayerNode::Layer(_)) => self.doc.mask_filter_id(node_id).is_some(),
             Some(LayerNode::Group(_)) => true,
             None => false,
         }

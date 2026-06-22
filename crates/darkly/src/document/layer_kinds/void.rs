@@ -85,7 +85,7 @@ fn serialize(node: &LayerNode) -> SerializedEntity {
         void_type: v.void_type.clone(),
         params: v.params.clone(),
         transform: v.transform,
-        modifiers: v.modifiers.iter().map(|m| m.to_ffi()).collect(),
+        modifiers: v.filters.iter().map(|m| m.to_ffi()).collect(),
         pixels: v.frame.clone(),
     };
     let pixel_blobs = match &v.frame {
@@ -130,7 +130,7 @@ fn deserialize(body: &serde_json::Value, id: LayerId) -> Result<LayerNode, LoadE
         void_type: body.void_type,
         params: body.params,
         transform: body.transform,
-        modifiers: body.modifiers.into_iter().map(LayerId::from_ffi).collect(),
+        filters: body.modifiers.into_iter().map(LayerId::from_ffi).collect(),
         frame: body.pixels,
     })))
 }
@@ -139,7 +139,7 @@ fn remap_ids(node: &mut LayerNode, id_map: &IdMap) {
     let LayerNode::Layer(Layer::Void(v)) = node else {
         panic!("void::remap_ids received non-void LayerNode");
     };
-    for m in v.modifiers.iter_mut() {
+    for m in v.filters.iter_mut() {
         let old_ffi = m.to_ffi();
         if let Some(new_id) = id_map.get(&old_ffi) {
             *m = *new_id;

@@ -59,12 +59,12 @@ fn raster_props(engine: &DarklyEngine, id: LayerId) -> (String, f32, String, usi
             name,
             opacity,
             blend_mode,
-            modifiers,
+            modifiers: filters,
             ..
         } = info
         {
             if (lid - id_f).abs() < 0.5 {
-                return (name, opacity, blend_mode.to_string(), modifiers.len());
+                return (name, opacity, blend_mode.to_string(), filters.len());
             }
         }
     }
@@ -143,7 +143,7 @@ fn rich_paste_records_mask_presence_v1() {
     let (_, _, _, modifier_count) = raster_props(&sink, pasted_id);
     assert!(
         modifier_count > 0,
-        "pasted layer should have a modifier (the mask)"
+        "pasted layer should have a filter (the mask)"
     );
 }
 

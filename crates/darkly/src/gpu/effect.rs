@@ -143,7 +143,7 @@ fn create_filter_pipeline(
 
 /// A `textureLoad`-based filter that runs over a node region with an optional
 /// selection mask — the shared home for masked, parameter-free region filters
-/// (the destructive-adjustment substrate). One object holds the four pipelines
+/// (the destructive-filter substrate). One object holds the four pipelines
 /// a node filter needs: plain vs. masked × RGBA8 (layer) vs. R8 (mask), so a
 /// single registration serves layers and masks alike. The compositor drives it
 /// via `filter_node_region` (see `compositor.rs`).

@@ -834,28 +834,28 @@ export function registerActions() {
             app.requestFrame();
         },
     });
-    // Destructive color adjustments (invert, …) are registered dynamically
-    // from the Rust adjustment registry (fetched into `app.adjustmentTypes`
-    // during `loadRegistries`), so a new adjustment in the core surfaces a
+    // Destructive color filters (invert, …) are registered dynamically
+    // from the Rust filter-pipeline registry (fetched into `app.filterTypes`
+    // during `loadRegistries`), so a new filter in the core surfaces a
     // Colors-menu entry with no frontend edit. The target is the active *node*
-    // (`activeLayerId` is the mask modifier id when a mask is selected), which
+    // (`activeLayerId` is the mask filter id when a mask is selected), which
     // is what makes "invert the mask" reachable from the same entry.
-    for (const adj of app.adjustmentTypes ?? []) {
-        const adjustmentType = adj.type;
+    for (const flt of app.filterTypes ?? []) {
+        const filterType = flt.type;
         actions.register({
-            id: `adjust${adjustmentType.charAt(0).toUpperCase()}${adjustmentType.slice(1)}`,
-            displayName: adj.displayName,
+            id: `filter${filterType.charAt(0).toUpperCase()}${filterType.slice(1)}`,
+            displayName: flt.displayName,
             category: 'layers',
-            description: `Apply "${adj.displayName}" to the active layer or mask (respecting any selection).`,
+            description: `Apply "${flt.displayName}" to the active layer or mask (respecting any selection).`,
             icon: 'fa6-solid:circle-half-stroke',
             menuPath: ['Colors:10'],
             enabled: () => app.activeLayerId !== null || 'No active layer',
             handler: async () => {
                 const engine = app.engine;
                 if (!engine || app.activeLayerId === null) return;
-                await engine.send('apply_adjustment', {
+                await engine.send('apply_filter', {
                     node_id: app.activeLayerId,
-                    adjustment_type: adjustmentType,
+                    filter_type: filterType,
                 });
                 app.requestFrame();
             },

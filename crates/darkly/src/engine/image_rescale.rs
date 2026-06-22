@@ -2,7 +2,7 @@
 //!
 //! Unlike [`canvas_resize`](super::canvas_resize), which only moves the canvas
 //! window, this **resamples every pixel-bearing node** (raster layers + mask
-//! modifiers) to new document dimensions, scaling content about the canvas
+//! filters) to new document dimensions, scaling content about the canvas
 //! origin. It is lossy and undoable: each node's pre-rescale pixels are
 //! snapshotted, and the dims + per-node extents ride one [`ImageRescaleAction`]
 //! (which also folds in the selection clear). The GPU resampling lives in
@@ -39,7 +39,7 @@ impl DarklyEngine {
         let origin = self.doc.canvas_origin;
 
         // Enumerate pixel-bearing nodes by capability: raster layers + mask
-        // modifiers. Void layers answer `pixels() == None` and are skipped
+        // filters. Void layers answer `pixels() == None` and are skipped
         // (they regenerate to fill the new canvas).
         let mut candidate_ids: Vec<LayerId> = Vec::new();
         for l in self.doc.all_content_layers() {
@@ -47,13 +47,13 @@ impl DarklyEngine {
                 candidate_ids.push(l.id());
             }
         }
-        for m in self.doc.all_modifiers() {
+        for m in self.doc.all_filters() {
             if m.pixels().is_some() {
                 candidate_ids.push(m.id);
             }
         }
         // Keep only nodes that own a GPU texture in the unified pool. The
-        // selection modifier's pixels live in the compositor's selection_state
+        // selection filter's pixels live in the compositor's selection_state
         // (window-sized), not node_textures — it's cleared separately below.
         let mut nodes: Vec<(LayerId, CanvasRect, wgpu::TextureFormat)> = Vec::new();
         for id in candidate_ids {

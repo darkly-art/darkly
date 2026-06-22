@@ -3,7 +3,7 @@ use crate::gpu::blend_mode::{self, BlendModeRegistration};
 use crate::gpu::params::ParamValue;
 
 slotmap::new_key_type! {
-    /// Unique identifier for any node, group, or modifier in a [`Document`].
+    /// Unique identifier for any node, group, or filter in a [`Document`].
     /// Backed by a slotmap key — generational, so stale ids return `None` from
     /// [`Document`] lookups instead of aliasing onto a recycled slot.
     ///
@@ -32,7 +32,7 @@ impl LayerId {
 }
 
 /// Properties shared by every node in the tree — raster layers, groups, and
-/// modifiers. Lock prevents any mutation; lives on every node by construction
+/// filters. Lock prevents any mutation; lives on every node by construction
 /// so the universal check is one line at every mutation entry point.
 pub struct NodeCommon {
     pub name: String,
@@ -51,7 +51,7 @@ impl NodeCommon {
 }
 
 /// Compositing properties for nodes that participate in normal blending
-/// (raster layers and groups). Modifiers don't have one — masks structurally
+/// (raster layers and groups). Filters don't have one — masks structurally
 /// have no opacity or blend mode.
 ///
 /// `blend_mode` is a registry reference, not an enum: `type_id` is the
@@ -80,7 +80,7 @@ impl Default for BlendProps {
 }
 
 /// Pixel-storage metadata for any node holding GPU pixels (raster layers, mask
-/// modifiers, future filter caches). Bulk pixel data is GPU-authoritative; this
+/// filters, future filter caches). Bulk pixel data is GPU-authoritative; this
 /// struct only carries canvas-space metadata: extent and texture format.
 ///
 /// Every `PixelBuffer` is sampled independently — the blend shader computes UV
@@ -104,11 +104,11 @@ pub struct RasterLayer {
     pub common: NodeCommon,
     pub blend: BlendProps,
     pub pixels: PixelBuffer,
-    /// Modifiers attached to this layer, in bottom-up order. Each entry is a
+    /// Filters attached to this layer, in bottom-up order. Each entry is a
     /// [`LayerId`] resolvable in the owning [`Document`]'s entity store.
     ///
     /// [`Document`]: crate::document::Document
-    pub modifiers: Vec<LayerId>,
+    pub filters: Vec<LayerId>,
 }
 
 impl RasterLayer {
@@ -123,7 +123,7 @@ impl RasterLayer {
             common: NodeCommon::new(name),
             blend: BlendProps::new(),
             pixels: PixelBuffer::new(bounds, wgpu::TextureFormat::Rgba8Unorm),
-            modifiers: Vec::new(),
+            filters: Vec::new(),
         }
     }
 }
@@ -154,7 +154,7 @@ pub struct VoidLayer {
     /// (see [`crate::gpu::void::VoidRegistration::supports_live_transform`])
     /// simply leave this at identity. Default `Basic(IDENTITY)`.
     pub transform: crate::transform::Transform,
-    pub modifiers: Vec<LayerId>,
+    pub filters: Vec<LayerId>,
     /// Optional persistent frame snapshot. Most voids leave this `None`
     /// (their output is purely procedural — replays from params). The
     /// camera void uses it to round-trip the last received webcam frame
@@ -175,7 +175,7 @@ impl VoidLayer {
             void_type,
             params,
             transform: crate::transform::Transform::identity(),
-            modifiers: Vec::new(),
+            filters: Vec::new(),
             frame: None,
         }
     }
@@ -190,7 +190,7 @@ pub struct LayerGroup {
     ///
     /// [`Document`]: crate::document::Document
     pub children: Vec<LayerId>,
-    pub modifiers: Vec<LayerId>,
+    pub filters: Vec<LayerId>,
     /// True = passthrough (default), false = normal isolated group.
     pub passthrough: bool,
     /// UI state: whether the group is visually collapsed in the layer panel.
@@ -206,7 +206,7 @@ impl LayerGroup {
             common: NodeCommon::new(name),
             blend: BlendProps::new(),
             children: Vec::new(),
-            modifiers: Vec::new(),
+            filters: Vec::new(),
             passthrough: true,
             collapsed: false,
         }
@@ -214,7 +214,7 @@ impl LayerGroup {
 }
 
 /// A node in the layer tree — either a leaf layer or a group containing children.
-/// Modifiers are NOT [`LayerNode`]s; they live on a host's `modifiers` list as
+/// Filters are NOT [`LayerNode`]s; they live on a host's `filters` list as
 /// [`LayerId`] references and are resolved through the owning [`Document`].
 ///
 /// [`Document`]: crate::document::Document
@@ -259,17 +259,17 @@ impl LayerNode {
         }
     }
 
-    pub fn modifiers(&self) -> &[LayerId] {
+    pub fn filters(&self) -> &[LayerId] {
         match self {
-            LayerNode::Layer(l) => l.modifiers(),
-            LayerNode::Group(g) => &g.modifiers,
+            LayerNode::Layer(l) => l.filters(),
+            LayerNode::Group(g) => &g.filters,
         }
     }
 
     pub fn modifiers_mut(&mut self) -> &mut Vec<LayerId> {
         match self {
             LayerNode::Layer(l) => l.modifiers_mut(),
-            LayerNode::Group(g) => &mut g.modifiers,
+            LayerNode::Group(g) => &mut g.filters,
         }
     }
 
@@ -409,17 +409,17 @@ impl Layer {
         }
     }
 
-    pub fn modifiers(&self) -> &[LayerId] {
+    pub fn filters(&self) -> &[LayerId] {
         match self {
-            Layer::Raster(r) => &r.modifiers,
-            Layer::Void(v) => &v.modifiers,
+            Layer::Raster(r) => &r.filters,
+            Layer::Void(v) => &v.filters,
         }
     }
 
     pub fn modifiers_mut(&mut self) -> &mut Vec<LayerId> {
         match self {
-            Layer::Raster(r) => &mut r.modifiers,
-            Layer::Void(v) => &mut v.modifiers,
+            Layer::Raster(r) => &mut r.filters,
+            Layer::Void(v) => &mut v.filters,
         }
     }
 

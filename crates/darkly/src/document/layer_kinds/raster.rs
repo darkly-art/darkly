@@ -32,7 +32,7 @@ struct RasterBody {
     blend_mode: String,
     /// Pixel storage descriptor — bounds + format + zip-relative path.
     pixels: ManifestPixelRef,
-    /// Modifier ids attached to this layer, in bottom-up order. Each id
+    /// Filter ids attached to this layer, in bottom-up order. Each id
     /// resolves to an entry in [`crate::format::manifest::Manifest::modifiers`].
     #[serde(default)]
     modifiers: Vec<u64>,
@@ -66,7 +66,7 @@ fn serialize(node: &LayerNode) -> SerializedEntity {
         opacity: r.blend.opacity,
         blend_mode: r.blend.blend_mode.type_id.to_string(),
         pixels: pixels.clone(),
-        modifiers: r.modifiers.iter().map(|m| m.to_ffi()).collect(),
+        modifiers: r.filters.iter().map(|m| m.to_ffi()).collect(),
     };
     SerializedEntity {
         body: serde_json::to_value(&body).expect("derived serde for RasterBody is infallible"),
@@ -113,10 +113,10 @@ fn deserialize(body: &serde_json::Value, id: LayerId) -> Result<LayerNode, LoadE
             blend_mode: blend_reg,
         },
         pixels: PixelBuffer::new(body.pixels.bounds, format),
-        // Modifier ids on the body still carry manifest-old values; the
+        // Filter ids on the body still carry manifest-old values; the
         // load's second pass calls `remap_ids` to rewrite them. Insert
         // them as-is so the second pass has something to map.
-        modifiers: body.modifiers.into_iter().map(LayerId::from_ffi).collect(),
+        filters: body.modifiers.into_iter().map(LayerId::from_ffi).collect(),
     })))
 }
 
@@ -124,7 +124,7 @@ fn remap_ids(node: &mut LayerNode, id_map: &IdMap) {
     let LayerNode::Layer(Layer::Raster(r)) = node else {
         panic!("raster::remap_ids received non-raster LayerNode");
     };
-    for m in r.modifiers.iter_mut() {
+    for m in r.filters.iter_mut() {
         let old_ffi = m.to_ffi();
         if let Some(new_id) = id_map.get(&old_ffi) {
             *m = *new_id;

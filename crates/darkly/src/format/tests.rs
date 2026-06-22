@@ -1,7 +1,7 @@
 //! Auto-iterating round-trip tests for the wire format.
 //!
 //! These tests are the contract that protects modular extensions: adding a
-//! new veil / stabilizer / brush node / blend mode / layer kind / modifier
+//! new veil / stabilizer / brush node / blend mode / layer kind / filter
 //! kind lights up testing automatically here, with no edits. The shape
 //! check is the same in every test — `(type_id, params)` (or just
 //! `type_id` for closed-set kinds) must survive a JSON round-trip and
@@ -13,8 +13,8 @@ use super::registry_io::{deserialize_instance, serialize_instance, InstancePaylo
 use crate::brush::registry;
 use crate::brush::stabilizer::StabilizerRegistry;
 use crate::brush::wire::BrushWireType;
+use crate::document::filter;
 use crate::document::layer_kind;
-use crate::document::modifier;
 use crate::gpu::blend_mode;
 use crate::gpu::context::GpuContext;
 use crate::gpu::params::{ParamDef, ParamValue};
@@ -216,18 +216,18 @@ fn round_trip_every_blend_mode() {
 }
 
 // ----------------------------------------------------------------------------
-// 5. Modifier kinds — round-trip the type_id string AND the body envelope
-//    for every registered modifier kind (mask, selection, future
+// 5. Filter kinds — round-trip the type_id string AND the body envelope
+//    for every registered filter kind (mask, selection, future
 //    filter/transform/...).
 // ----------------------------------------------------------------------------
 
 #[test]
 fn round_trip_every_modifier_kind() {
-    let registry = modifier::registry();
+    let registry = filter::registry();
     let all = registry.all();
     assert!(
         !all.is_empty(),
-        "modifier registry must contain at least one kind"
+        "filter registry must contain at least one kind"
     );
 
     for reg in all {
@@ -237,14 +237,14 @@ fn round_trip_every_modifier_kind() {
         assert_eq!(back, id);
         assert!(
             registry.get(&back).is_some(),
-            "round-tripped modifier kind '{id}' must resolve back through registry"
+            "round-tripped filter kind '{id}' must resolve back through registry"
         );
     }
 }
 
 // ----------------------------------------------------------------------------
 // 6. Layer kinds — round-trip the type_id string for every registered
-//    layer kind (raster, group, future text/adjustment/...).
+//    layer kind (raster, group, future text/filter/...).
 // ----------------------------------------------------------------------------
 
 #[test]
@@ -360,7 +360,7 @@ use crate::layer::LayerId;
 /// Populate the engine with at least one of every closed-set variant
 /// the save format needs to cover:
 ///   - every layer kind (`raster`, `group`) — at least one each.
-///   - every modifier kind (`mask`, `selection`) — at least one each.
+///   - every filter kind (`mask`, `selection`) — at least one each.
 ///   - every blend mode in `BlendModeRegistry::all()` — at least one
 ///     layer with each.
 ///   - one of every registered veil.
@@ -371,7 +371,7 @@ use crate::layer::LayerId;
 /// non-empty.
 ///
 /// When a new closed-set variant is added (new blend mode, new layer
-/// kind, new modifier kind), `kitchen_sink_covers_every_closed_set_variant`
+/// kind, new filter kind), `kitchen_sink_covers_every_closed_set_variant`
 /// fires immediately — this function must be extended to instantiate
 /// the new variant.
 fn populate_kitchen_sink(engine: &mut DarklyEngine) {
@@ -402,14 +402,14 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
         );
     }
 
-    // Mask modifier on one of the rasters — exercises mask kind +
+    // Mask filter on one of the rasters — exercises mask kind +
     // its parent-host wiring.
     if let Some(target) = raster_ids.get(1).copied() {
         engine.add_mask(target);
     }
 
     // Selection mask — `select_all` flips selection.active and
-    // populates the R8 texture; the modifier itself was allocated
+    // populates the R8 texture; the filter itself was allocated
     // eagerly at engine init.
     engine.select_all();
 
@@ -462,7 +462,7 @@ fn drive_save_to_completion(engine: &mut DarklyEngine) -> SaveBundle {
 }
 
 /// Coarse structural comparison: same canvas size, same number of
-/// raster layers, same number of groups, same number of modifiers,
+/// raster layers, same number of groups, same number of filters,
 /// same document name, same veil count, same selection presence.
 /// Strict per-id mapping is intentionally NOT checked — slotmap keys
 /// are document-local and won't match across documents.
@@ -472,7 +472,7 @@ fn assert_documents_equivalent(a: &Document, b: &Document) {
     assert_eq!(a.name, b.name);
     assert_eq!(a.all_raster_layers().len(), b.all_raster_layers().len());
     assert_eq!(a.all_groups().len(), b.all_groups().len());
-    assert_eq!(a.all_modifiers().len(), b.all_modifiers().len());
+    assert_eq!(a.all_filters().len(), b.all_filters().len());
     assert_eq!(a.selection_id().is_some(), b.selection_id().is_some());
     // Blend-mode coverage matches across the two trees.
     let modes_a: std::collections::BTreeSet<&'static str> = a
@@ -728,7 +728,7 @@ fn dirty_flag_cleared_by_open() {
 
 /// Runtime guard that the kitchen sink actually instantiates every
 /// closed-set variant in every registry. Adding a new blend mode /
-/// layer kind / modifier kind without extending `populate_kitchen_sink`
+/// layer kind / filter kind without extending `populate_kitchen_sink`
 /// fails here loudly with the missing `type_id`s named.
 #[test]
 fn kitchen_sink_covers_every_closed_set_variant() {
@@ -767,17 +767,17 @@ fn kitchen_sink_covers_every_closed_set_variant() {
         );
     }
 
-    // Modifier kinds — every registered kind must appear at least once.
+    // Filter kinds — every registered kind must appear at least once.
     let mut used_modifier_kinds = std::collections::HashSet::new();
     for entity in engine.doc.entities.values() {
-        if let crate::document::Entity::Modifier(m) = entity {
+        if let crate::document::Entity::Filter(m) = entity {
             used_modifier_kinds.insert(m.type_id());
         }
     }
-    for reg in modifier::registry().all() {
+    for reg in filter::registry().all() {
         assert!(
             used_modifier_kinds.contains(reg.type_id),
-            "kitchen-sink missing modifier/{} — extend populate_kitchen_sink",
+            "kitchen-sink missing filter/{} — extend populate_kitchen_sink",
             reg.type_id
         );
     }
@@ -1006,8 +1006,8 @@ fn refuse_unknown_modifier_kind() {
     match err {
         LoadError::UnsupportedFeatures { missing } => {
             assert!(
-                missing.iter().any(|m| m == "modifier/clip"),
-                "diagnostic should name modifier/clip, got {missing:?}"
+                missing.iter().any(|m| m == "filter/clip"),
+                "diagnostic should name filter/clip, got {missing:?}"
             );
         }
         other => panic!("expected UnsupportedFeatures, got {other:?}"),

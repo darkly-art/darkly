@@ -1,16 +1,16 @@
-//! Destructive color-adjustment registry.
+//! Destructive color-filter registry.
 //!
-//! An "adjustment" applies a `MaskedFilterPipeline` to a node's pixels in
+//! An "filter" applies a `MaskedFilterPipeline` to a node's pixels in
 //! place (`1 - color` for invert, more to come), respecting an active
 //! selection and working on both raster layers (RGBA8) and masks (R8). It is
 //! the destructive cousin of a veil: a veil is ephemeral viewport post-process
-//! state, an adjustment bakes into the document and is undoable.
+//! state, an filter bakes into the document and is undoable.
 //!
 //! Mirrors [`VeilRegistry`](super::veil::VeilRegistry)'s *registry shape* —
-//! auto-discovered from `gpu/adjustments/*.rs` (each exports `pub fn register()
-//! -> AdjustmentRegistration`), with lazy per-type pipeline caching — but the
+//! auto-discovered from `gpu/filters/*.rs` (each exports `pub fn register()
+//! -> FilterPipelineRegistration`), with lazy per-type pipeline caching — but the
 //! cached GPU object is the shared [`MaskedFilterPipeline`](super::effect::MaskedFilterPipeline),
-//! not a bespoke pass. New adjustments slot in by dropping a file in the
+//! not a bespoke pass. New filters slot in by dropping a file in the
 //! directory; nothing here is edited.
 
 use std::collections::HashMap;
@@ -18,17 +18,17 @@ use std::sync::Arc;
 
 use super::effect::MaskedFilterPipeline;
 
-/// What each adjustment module returns from its `register()` function. Unlike
-/// a veil, an adjustment has no parameters and its pipeline holds every target
+/// What each filter module returns from its `register()` function. Unlike
+/// a veil, an filter has no parameters and its pipeline holds every target
 /// format, so `create_pipeline` needs only the device.
-pub struct AdjustmentRegistration {
+pub struct FilterPipelineRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
     pub create_pipeline: fn(&wgpu::Device) -> MaskedFilterPipeline,
 }
 
-/// Auto-discovered adjustment registry with lazy pipeline caching.
-pub struct AdjustmentRegistry {
+/// Auto-discovered filter registry with lazy pipeline caching.
+pub struct FilterPipelineRegistry {
     entries: HashMap<&'static str, RegistryEntry>,
 }
 
@@ -38,16 +38,16 @@ struct RegistryEntry {
     cached_pipeline: Option<Arc<MaskedFilterPipeline>>,
 }
 
-impl Default for AdjustmentRegistry {
+impl Default for FilterPipelineRegistry {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl AdjustmentRegistry {
+impl FilterPipelineRegistry {
     pub fn new() -> Self {
         let mut entries = HashMap::new();
-        for reg in super::adjustments::registrations() {
+        for reg in super::filters::registrations() {
             entries.insert(
                 reg.type_id,
                 RegistryEntry {
@@ -57,10 +57,10 @@ impl AdjustmentRegistry {
                 },
             );
         }
-        AdjustmentRegistry { entries }
+        FilterPipelineRegistry { entries }
     }
 
-    /// All registered adjustment type IDs with their display names, sorted by
+    /// All registered filter type IDs with their display names, sorted by
     /// id for a stable menu order.
     pub fn types(&self) -> Vec<(&'static str, &'static str)> {
         let mut types: Vec<_> = self
@@ -77,7 +77,7 @@ impl AdjustmentRegistry {
         self.entries.contains_key(type_id)
     }
 
-    /// Human-friendly display name for an adjustment type, falling back to the
+    /// Human-friendly display name for an filter type, falling back to the
     /// empty string when the type is unknown.
     pub fn display_name(&self, type_id: &str) -> &'static str {
         self.entries
@@ -86,7 +86,7 @@ impl AdjustmentRegistry {
             .unwrap_or("")
     }
 
-    /// Get or create the shared pipeline for an adjustment type. Returns `None`
+    /// Get or create the shared pipeline for an filter type. Returns `None`
     /// for an unknown type rather than panicking — the caller (a protocol
     /// request carrying an arbitrary string) decides how to fail.
     pub fn pipeline(

@@ -16,7 +16,7 @@ use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
 impl DarklyEngine {
-    /// Flip the given node (raster layer or mask modifier) horizontally or
+    /// Flip the given node (raster layer or mask filter) horizontally or
     /// vertically. Returns `false` if the node isn't editable, has no texture,
     /// or the flip was deferred waiting on the selection cache.
     pub fn flip_node(&mut self, node_id: LayerId, xform: OrthoXform) -> bool {
@@ -25,7 +25,7 @@ impl DarklyEngine {
             return false;
         }
         self.auto_commit_floating();
-        if self.doc.layer(node_id).is_none() && self.doc.find_modifier(node_id).is_none() {
+        if self.doc.layer(node_id).is_none() && self.doc.find_filter(node_id).is_none() {
             return false;
         }
         let (node_extent, format) = match self.compositor.node_texture(node_id) {

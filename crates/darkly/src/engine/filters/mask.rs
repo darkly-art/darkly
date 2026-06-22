@@ -1,7 +1,7 @@
-//! Engine-level operations on mask modifiers.
+//! Engine-level operations on mask filters.
 //!
 //! Replaces the old `engine/masks.rs`. Add/remove/apply now go through the
-//! generic `Document::add_mask_modifier` / `Document::remove_modifier` helpers
+//! generic `Document::add_mask_filter` / `Document::remove_filter` helpers
 //! and the unified compositor node-texture pool. The "active node = paint
 //! target" rule means there's no `editing_mask_layer` redirect — the active
 //! node id directly identifies where strokes are routed.
@@ -10,11 +10,11 @@ use super::super::rendering::commit_undo_region;
 use super::super::DarklyEngine;
 use crate::layer::LayerId;
 use crate::undo::{
-    CompoundAction, GpuRegionAction, ModifierAddAction, ModifierRemoveAction, UndoAction,
+    CompoundAction, FilterAddAction, FilterRemoveAction, GpuRegionAction, UndoAction,
 };
 
 impl DarklyEngine {
-    /// Attach a mask modifier to a host layer or group, allocating its GPU
+    /// Attach a mask filter to a host layer or group, allocating its GPU
     /// texture in the unified node-texture pool. If a selection is active,
     /// the mask is seeded from the selection (one-click "selection → mask").
     pub fn add_mask(&mut self, host_id: LayerId) {
@@ -22,7 +22,7 @@ impl DarklyEngine {
             return;
         }
         // UI invariant: at most one mask per host. The model supports N; we
-        // refuse here so that `add_mask_modifier` doesn't silently create a
+        // refuse here so that `add_mask_filter` doesn't silently create a
         // second one.
         // host unknown → bail (true keeps the existing semantics).
         if self.doc.find_node(host_id).is_none() {
@@ -32,12 +32,12 @@ impl DarklyEngine {
             return;
         }
 
-        let mod_id = match self.doc.add_mask_modifier(host_id) {
+        let mod_id = match self.doc.add_mask_filter(host_id) {
             Some(id) => id,
             None => return,
         };
 
-        let bounds = match self.doc.find_modifier(mod_id).and_then(|m| m.pixels()) {
+        let bounds = match self.doc.find_filter(mod_id).and_then(|m| m.pixels()) {
             Some(buf) => buf.bounds,
             None => return,
         };
@@ -62,25 +62,25 @@ impl DarklyEngine {
         // default to a sub-canvas host's bounds, smaller than the selection).
         if self.has_selection() {
             if let Some(src_id) = self.selection_modifier_id() {
-                self.grow_modifier(mod_id, self.selection_seed_bounds());
-                self.clone_modifier_pixels(src_id, mod_id);
+                self.grow_filter(mod_id, self.selection_seed_bounds());
+                self.clone_filter_pixels(src_id, mod_id);
             }
         }
 
-        // ensure_node_texture (fresh allocation) and clone_modifier_pixels
-        // (selection-seeded copy, when present) already mark the modifier
+        // ensure_node_texture (fresh allocation) and clone_filter_pixels
+        // (selection-seeded copy, when present) already mark the filter
         // dirty per the write-site invariant.
         self.compositor.mark_dirty();
 
-        self.push_undo(Box::new(ModifierAddAction::new(mod_id, host_id)));
+        self.push_undo(Box::new(FilterAddAction::new(mod_id, host_id)));
     }
 
-    /// Remove the mask modifier on a host layer or group.
+    /// Remove the mask filter on a host layer or group.
     pub fn remove_mask(&mut self, host_id: LayerId) {
         if !self.doc.is_node_editable(host_id) {
             return;
         }
-        let mask_id = match self.doc.mask_modifier_id(host_id) {
+        let mask_id = match self.doc.mask_filter_id(host_id) {
             Some(id) => id,
             None => return,
         };
@@ -110,7 +110,7 @@ impl DarklyEngine {
             None
         };
 
-        let detached = self.doc.detach_modifier_for_undo(mask_id).is_some();
+        let detached = self.doc.detach_filter_for_undo(mask_id).is_some();
         // If the removed mask was the isolated/active node, clear the session flag.
         if self.isolated_node == Some(mask_id) {
             self.isolated_node = None;
@@ -125,7 +125,7 @@ impl DarklyEngine {
             actions.push(Box::new(GpuRegionAction::new(entry)));
         }
         if detached {
-            actions.push(Box::new(ModifierRemoveAction::new(mask_id, host_id)));
+            actions.push(Box::new(FilterRemoveAction::new(mask_id, host_id)));
         }
         if actions.len() == 1 {
             self.push_undo(actions.pop().unwrap());
@@ -135,7 +135,7 @@ impl DarklyEngine {
     }
 
     /// Bake the mask alpha into the host layer's RGBA, then remove the mask.
-    /// Mask-specific — not generalized to "bake any modifier" because that has
+    /// Mask-specific — not generalized to "bake any filter" because that has
     /// no kind-uniform meaning.
     pub fn apply_mask(&mut self, host_id: LayerId) {
         if !self.doc.is_node_editable(host_id) {
@@ -151,7 +151,7 @@ impl DarklyEngine {
         if !host_is_raster {
             return;
         }
-        let mask_id = match self.doc.mask_modifier_id(host_id) {
+        let mask_id = match self.doc.mask_filter_id(host_id) {
             Some(id) => id,
             None => return,
         };
@@ -173,13 +173,13 @@ impl DarklyEngine {
             None
         };
 
-        // Save the mask's R8 pixels too. The modifier is removed at the end
-        // of apply_mask; without this save, undo gets back the modifier shell
+        // Save the mask's R8 pixels too. The filter is removed at the end
+        // of apply_mask; without this save, undo gets back the filter shell
         // with a fresh (all-white) mask texture and the user's painting on
         // the mask is lost forever. The actual GpuRegionAction is committed
         // and pushed AFTER `commit_region` for the host below — together
-        // with the ModifierRemoveAction — so undo replays them in the right
-        // order: re-attach modifier → restore mask pixels → restore host alpha.
+        // with the FilterRemoveAction — so undo replays them in the right
+        // order: re-attach filter → restore mask pixels → restore host alpha.
         let mask_frame = self
             .compositor
             .node_texture(mask_id)
@@ -287,16 +287,16 @@ impl DarklyEngine {
         // Apply baked the mask into the layer's alpha — layer pixels changed.
         self.compositor.mark_node_pixels_dirty(host_id);
 
-        // Remove the modifier from the document and its GPU texture. The
-        // ModifierRemoveAction is pushed last so undo pops it first — the
+        // Remove the filter from the document and its GPU texture. The
+        // FilterRemoveAction is pushed last so undo pops it first — the
         // re-attach happens before sync_compositor_layers re-allocates the
         // R8 texture, after which the pending mask-region restore can land.
-        let detached = self.doc.detach_modifier_for_undo(mask_id).is_some();
+        let detached = self.doc.detach_filter_for_undo(mask_id).is_some();
         self.compositor.dispose_node_texture(mask_id);
         self.compositor.dispose_passthrough_mask_state(host_id);
         self.compositor.dispose_projection_state(host_id);
         if detached {
-            self.push_undo(Box::new(ModifierRemoveAction::new(mask_id, host_id)));
+            self.push_undo(Box::new(FilterRemoveAction::new(mask_id, host_id)));
         }
     }
 
@@ -318,24 +318,24 @@ impl DarklyEngine {
         }
 
         // Mask already exists — clone selection pixels into it.
-        let mask_id = match self.doc.mask_modifier_id(host_id) {
+        let mask_id = match self.doc.mask_filter_id(host_id) {
             Some(id) => id,
             None => return,
         };
         if let Some(src_id) = self.selection_modifier_id() {
-            self.grow_modifier(mask_id, self.selection_seed_bounds());
-            self.clone_modifier_pixels(src_id, mask_id);
+            self.grow_filter(mask_id, self.selection_seed_bounds());
+            self.clone_filter_pixels(src_id, mask_id);
         }
         self.compositor.mark_node_pixels_dirty(mask_id);
         self.compositor.mark_dirty();
     }
 
-    /// Read a mask modifier's pixels into the global selection. A straight
-    /// GPU-to-GPU copy via [`Self::clone_modifier_pixels`]; the CPU cache for
+    /// Read a mask filter's pixels into the global selection. A straight
+    /// GPU-to-GPU copy via [`Self::clone_filter_pixels`]; the CPU cache for
     /// the new selection contents is repopulated by the async
     /// `SelectionReadback` kicked at the end.
-    pub fn mask_to_selection(&mut self, modifier_id: LayerId) {
-        if self.compositor.node_texture(modifier_id).is_none() {
+    pub fn mask_to_selection(&mut self, filter_id: LayerId) {
+        if self.compositor.node_texture(filter_id).is_none() {
             return;
         }
         let dst = match self.selection_modifier_id() {
@@ -347,7 +347,7 @@ impl DarklyEngine {
         let rect = self.selection_full_canvas_rect();
         self.save_selection_for_undo(rect);
 
-        self.clone_modifier_pixels(modifier_id, dst);
+        self.clone_filter_pixels(filter_id, dst);
         self.set_selection_active(true);
         self.set_selection_pixel_bounds(None);
         self.invalidate_selection_cpu_cache();
@@ -356,11 +356,11 @@ impl DarklyEngine {
         self.kick_selection_readback();
     }
 
-    /// Resolve the modifier id of the mask attached to a host, if any.
+    /// Resolve the filter id of the mask attached to a host, if any.
     /// Helper for callers (and tests) that hold a host id and want to operate
-    /// on its mask without manually walking `doc.find_node(...).modifiers()`.
+    /// on its mask without manually walking `doc.find_node(...).filters()`.
     pub fn host_mask_id(&self, host_id: LayerId) -> Option<LayerId> {
-        self.doc.mask_modifier_id(host_id)
+        self.doc.mask_filter_id(host_id)
     }
 
     /// Plane-space bounds to seed a mask from: the selection's tight pixel
@@ -373,9 +373,9 @@ impl DarklyEngine {
         }
     }
 
-    /// GPU-to-GPU copy of one modifier's R8 pixel buffer into another's.
+    /// GPU-to-GPU copy of one filter's R8 pixel buffer into another's.
     /// Resolves source and destination via [`Self::modifier_frame`], so it
-    /// works uniformly for any pair of pixel-bearing modifier ids — selection
+    /// works uniformly for any pair of pixel-bearing filter ids — selection
     /// or mask, in either direction. This is the §4a unification: the kind-
     /// specific bridge ops (`selection_to_mask`, `mask_to_selection`) now
     /// delegate to one function instead of duplicating the encode dance.
@@ -390,10 +390,10 @@ impl DarklyEngine {
     /// grow `dst` to the union first (see `selection_to_mask` / `add_mask`).
     ///
     /// Marks `dst_id` thumbnail-dirty before returning per the write-site
-    /// invariant — callers don't need to. For the selection modifier (which
+    /// invariant — callers don't need to. For the selection filter (which
     /// doesn't surface in the layer panel), the mark is a no-op: the drain
     /// only readbacks ids present in `compositor.node_textures`.
-    pub(crate) fn clone_modifier_pixels(&mut self, src_id: LayerId, dst_id: LayerId) {
+    pub(crate) fn clone_filter_pixels(&mut self, src_id: LayerId, dst_id: LayerId) {
         let (src_frame, _) = match self.modifier_frame(src_id) {
             Some(v) => v,
             None => return,
@@ -403,10 +403,10 @@ impl DarklyEngine {
             None => return,
         };
         let overlap = src_frame.canvas_extent.intersect(dst_frame.canvas_extent);
-        self.gpu.encode("clone-modifier-pixels", |encoder| {
+        self.gpu.encode("clone-filter-pixels", |encoder| {
             // Clear the destination to 0 over its whole extent first.
             encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("clone-modifier-clear"),
+                label: Some("clone-filter-clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: dst_view,
                     resolve_target: None,
@@ -459,10 +459,10 @@ impl DarklyEngine {
         self.compositor.mark_node_pixels_dirty(dst_id);
     }
 
-    /// Resolve a pixel-bearing modifier id to a plane-space [`CanvasFrame`] plus
+    /// Resolve a pixel-bearing filter id to a plane-space [`CanvasFrame`] plus
     /// its render view. The selection lives in `compositor.selection_state` and
     /// is window-local, so its extent is lifted to plane space via
-    /// `canvas_origin`; per-host modifiers (mask, future filter/transform) live
+    /// `canvas_origin`; per-host filters (mask, future filter/transform) live
     /// in the shared node-texture pool and are already plane-anchored.
     pub(crate) fn modifier_frame(
         &self,

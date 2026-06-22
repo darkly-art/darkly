@@ -116,7 +116,7 @@ fn create_ortho_scratch(
 /// Copy a node's `region` into a scratch texture, run a caller-supplied pass
 /// into a second scratch, and copy the result back in place — the shared
 /// copy-out → pass → copy-back plumbing behind both the layer/selection flip
-/// ([`Compositor::flip_node_region`]) and destructive adjustments
+/// ([`Compositor::flip_node_region`]) and destructive filters
 /// ([`Compositor::filter_node_region`]). `run_pass` is handed `(device, queue,
 /// encoder, src_view, mask_view, out_view, w, h, format)` and writes the
 /// transformed region into `out_view`; `mask_view` is forwarded untouched so a
@@ -468,7 +468,7 @@ struct PassthroughMaskState {
 }
 
 /// Lean per-host projection for a leaf layer (raster / void) that carries a
-/// visible mask modifier. The host's content composites into this isolated
+/// visible mask filter. The host's content composites into this isolated
 /// window-sized buffer; the mask modulates it (`apply_mask`); the finished
 /// projection blends down onto the parent — so the mask never samples the host
 /// layer's texture or geometry. This is the de-fused replacement for the fused
@@ -507,17 +507,17 @@ pub struct Compositor {
     root_id: LayerId,
 
     /// One pool of per-node GPU textures, keyed by node id. Holds raster
-    /// layer textures (Rgba8Unorm), mask modifier textures (R8Unorm), and
-    /// any future pixel-bearing modifier kinds — `LayerTexture.format`
+    /// layer textures (Rgba8Unorm), mask filter textures (R8Unorm), and
+    /// any future pixel-bearing filter kinds — `LayerTexture.format`
     /// distinguishes them. One lookup per access, no fan-out.
     pub(super) node_textures: HashMap<LayerId, LayerTexture>,
 
     /// Default mask bind group using the 1×1 white texture (pass-through
-    /// fallback for hosts without a visible mask modifier).
+    /// fallback for hosts without a visible mask filter).
     default_mask_bind_group: wgpu::BindGroup,
 
-    /// Cached "use my texture as a mask" bind group, keyed by mask modifier
-    /// id. Built when a mask modifier is allocated; consumed by the blend
+    /// Cached "use my texture as a mask" bind group, keyed by mask filter
+    /// id. Built when a mask filter is allocated; consumed by the blend
     /// pipeline at composite time. Visibility gating happens in the render
     /// loop (which falls back to `default_mask_bind_group` for hidden masks).
     mask_bind_groups: HashMap<LayerId, wgpu::BindGroup>,
@@ -582,7 +582,7 @@ pub struct Compositor {
     /// — anything in here had its layer texture written, so the panel's
     /// thumbnail is stale until a fresh readback lands.
     /// Node ids whose textures were modified since the last drain. Single
-    /// pool keyed by node id; raster layers and mask modifiers go in the
+    /// pool keyed by node id; raster layers and mask filters go in the
     /// same set, and the engine's drain pumps thumbnail readbacks for both
     /// uniformly.
     dirty_node_pixels: HashSet<LayerId>,
@@ -628,11 +628,11 @@ pub struct Compositor {
     isolated_node: Option<LayerId>,
 
     // --- Selection (global) ---
-    /// GPU realisation of the document's selection modifier — ping-pong R8
+    /// GPU realisation of the document's selection filter — ping-pong R8
     /// textures + brush/paint bind groups. `None` until the engine allocates
-    /// the selection modifier; once allocated, lives for the document's
+    /// the selection filter; once allocated, lives for the document's
     /// lifetime. Pixel metadata (active toggle, tight bounds, CPU cache)
-    /// lives on `Document.selection.kind` (`SelectionModifier`).
+    /// lives on `Document.selection.kind` (`SelectionFilter`).
     selection_state: Option<crate::gpu::selection::SelectionState>,
 
     // --- Tool Overlay ---
@@ -1202,14 +1202,14 @@ impl Compositor {
         self.mark_node_pixels_dirty(layer_id);
     }
 
-    /// Resize a node's GPU texture (raster layer or mask modifier) to a new
+    /// Resize a node's GPU texture (raster layer or mask filter) to a new
     /// canvas extent, copying old contents into the new texture at the offset
     /// that preserves their canvas-space anchor. Thin wrapper over
     /// [`realloc_node_texture`](Self::realloc_node_texture) with `copy_old =
     /// true`.
     ///
-    /// **Lockstep growth across host + modifiers is the engine's job** — it
-    /// owns the document and walks `host.modifiers` to call this helper for
+    /// **Lockstep growth across host + filters is the engine's job** — it
+    /// owns the document and walks `host.filters` to call this helper for
     /// each non-locked sibling. The compositor is single-node here.
     pub fn resize_node_texture(
         &mut self,
@@ -1222,7 +1222,7 @@ impl Compositor {
         self.realloc_node_texture(device, queue, encoder, node_id, new_extent, true);
     }
 
-    /// Reallocate a node's GPU texture (raster layer or mask modifier) to a new
+    /// Reallocate a node's GPU texture (raster layer or mask filter) to a new
     /// canvas extent.
     ///
     /// **Pure realization.** A faithful reflection of the requested extent — it
@@ -1469,7 +1469,7 @@ impl Compositor {
     }
 
     /// Run a `MaskedFilterPipeline` over a node's `region` in place — the
-    /// destructive-adjustment counterpart of
+    /// destructive-filter counterpart of
     /// [`flip_node_region`](Self::flip_node_region), riding the same copy-out →
     /// pass → copy-back plumbing (`run_filter_region`). Where `mask_view` (a
     /// region-sized R8) is selected the texel takes the filtered value,
@@ -1655,10 +1655,10 @@ impl Compositor {
     /// current isolation target. When no target is set, every id qualifies.
     /// Otherwise the path is `ancestors(target) ∪ {target} ∪ descendants(target)` —
     /// ancestors so the walk reaches the target, descendants so an isolated
-    /// group renders its contents. Modifiers naturally fall in via their
-    /// host (which is the modifier's `parent_of`); they have no children, so
-    /// isolating a modifier limits the visible canvas to the host plus the
-    /// modifier itself, which the host's blend pass then renders as
+    /// group renders its contents. Filters naturally fall in via their
+    /// host (which is the filter's `parent_of`); they have no children, so
+    /// isolating a filter limits the visible canvas to the host plus the
+    /// filter itself, which the host's blend pass then renders as
     /// grayscale via `sync_compositor_layers` setting `isolated=true`.
     fn is_in_isolation_path(&self, doc: &Document, id: LayerId) -> bool {
         let Some(target) = self.isolated_node else {
@@ -1713,7 +1713,7 @@ impl Compositor {
     /// Concretely this applies to:
     /// `ensure_raster_layer`, `ensure_node_texture`, `resize_node_texture`,
     /// `upload_node_pixels`, `bake_subtree_to_layer`, and the engine-level
-    /// helpers `clone_node_pixels` / `clone_modifier_pixels`. Higher-level
+    /// helpers `clone_node_pixels` / `clone_filter_pixels`. Higher-level
     /// engine ops (paint stroke end, fill, paste, …) that drive these
     /// through raw `wgpu::CommandEncoder` writes still need an explicit
     /// mark inside the public-facing function that takes the id — the
@@ -1725,7 +1725,7 @@ impl Compositor {
 
     /// Drain and return the set of node ids whose pixels were dirtied since
     /// the last call. Engine calls this each `render()` to auto-queue
-    /// thumbnail readbacks; resolves layer-vs-modifier through the document.
+    /// thumbnail readbacks; resolves layer-vs-filter through the document.
     pub fn drain_dirty_pixels(&mut self) -> Vec<LayerId> {
         self.dirty_node_pixels.drain().collect()
     }
@@ -1790,14 +1790,14 @@ impl Compositor {
     // --- Paint Target Accessors ---
 
     /// Look up a node's GPU texture by id. Works uniformly for raster layers
-    /// and mask modifiers — format and extent come from the texture's own
+    /// and mask filters — format and extent come from the texture's own
     /// metadata. Returns `None` for groups (no pixels) and unknown ids.
     pub fn node_texture(&self, node_id: LayerId) -> Option<&LayerTexture> {
         self.node_textures.get(&node_id)
     }
 
     /// Return the GPU texture backing any entity's pixels — works uniformly
-    /// for raster layers, mask modifiers, AND the selection modifier.
+    /// for raster layers, mask filters, AND the selection filter.
     ///
     /// The selection's R8 texture lives in
     /// [`crate::gpu::selection::SelectionState`] (ping-pong pair + dedicated
@@ -1836,7 +1836,7 @@ impl Compositor {
             });
         }
         if let Some(sel) = self.selection_state.as_ref() {
-            if sel.modifier_id == node_id {
+            if sel.filter_id == node_id {
                 let frame = sel.canvas_frame();
                 return Some(PixelDataRef {
                     texture: frame.texture,
@@ -1970,7 +1970,7 @@ impl Compositor {
                 // [`Self::ensure_passthrough_mask_state`] which the engine
                 // calls when attaching a mask to a host. Keep the allocation
                 // out of the texture-creation path so the keying is by host,
-                // not by mask modifier id.
+                // not by mask filter id.
             }
             wgpu::TextureFormat::Rgba8Unorm => {
                 // ensure_raster_layer marks dirty itself.
@@ -1983,9 +1983,9 @@ impl Compositor {
     /// Allocate the snapshot+uniform pair the passthrough-group mask path
     /// needs, keyed by **host** id (the group whose composited output gets
     /// snapshot-then-lerped against its mask). Idempotent. The mask texture
-    /// itself lives in the shared node-texture pool keyed by mask modifier
-    /// id; this resource is a per-host concern, not per-modifier — there's
-    /// one snapshot buffer per group regardless of how many modifiers attach.
+    /// itself lives in the shared node-texture pool keyed by mask filter
+    /// id; this resource is a per-host concern, not per-filter — there's
+    /// one snapshot buffer per group regardless of how many filters attach.
     pub fn ensure_passthrough_mask_state(&mut self, device: &wgpu::Device, host_id: LayerId) {
         if self.passthrough_mask_state.contains_key(&host_id) {
             return;
@@ -2020,14 +2020,14 @@ impl Compositor {
 
     // --- Selection (global) ---
 
-    /// Allocate the GPU realisation of the document's selection modifier.
+    /// Allocate the GPU realisation of the document's selection filter.
     /// Idempotent — returns immediately if already allocated. The selection
-    /// modifier id is stashed on the [`SelectionState`] so undo / region-store
-    /// keying can resolve back to the document modifier.
+    /// filter id is stashed on the [`SelectionState`] so undo / region-store
+    /// keying can resolve back to the document filter.
     pub fn ensure_selection_state(
         &mut self,
         device: &wgpu::Device,
-        modifier_id: LayerId,
+        filter_id: LayerId,
         bgl: &wgpu::BindGroupLayout,
     ) {
         if self.selection_state.is_some() {
@@ -2035,7 +2035,7 @@ impl Compositor {
         }
         self.selection_state = Some(crate::gpu::selection::SelectionState::new(
             device,
-            modifier_id,
+            filter_id,
             self.canvas_width,
             self.canvas_height,
             bgl,
@@ -2092,7 +2092,7 @@ impl Compositor {
     /// Drop all GPU state associated with a node id (texture, bind groups,
     /// dirty bits, layer cache including any procedural-content sidecar).
     /// Use when a node is permanently removed — e.g. layer delete or
-    /// modifier removal. Per-host passthrough state is owned by its host
+    /// filter removal. Per-host passthrough state is owned by its host
     /// id, so it's not touched here.
     pub fn dispose_node_texture(&mut self, node_id: LayerId) {
         self.node_textures.remove(&node_id);
@@ -2115,7 +2115,7 @@ impl Compositor {
     /// (`Engine::remove_layer`) or when an auto-created paste-target is
     /// canceled (`cancel_floating`). Alias of [`Self::dispose_node_texture`]
     /// kept as a separate entry point because the engine's layer-removal
-    /// path conceptually distinguishes "tree node gone" from "modifier
+    /// path conceptually distinguishes "tree node gone" from "filter
     /// detached".
     pub fn dispose_layer(&mut self, layer_id: LayerId) {
         self.dispose_node_texture(layer_id);
@@ -2378,7 +2378,7 @@ impl Compositor {
         self.dirty_procedural_scratch.clear();
     }
 
-    /// Total number of node textures (raster layers + mask modifiers)
+    /// Total number of node textures (raster layers + mask filters)
     /// currently allocated. Test-only — used by leak-cycle regression tests
     /// to confirm `dispose_node_texture` reclaims state.
     pub fn test_node_texture_count(&self) -> usize {
@@ -2629,7 +2629,7 @@ impl Compositor {
 
     /// Effective mask bind group for a host raster/group during compositing
     /// — substitutes the preview-mask bind group when one of the host's
-    /// modifiers is the floating target. Fall-through resolves the live
+    /// filters is the floating target. Fall-through resolves the live
     /// mask through the existing `mask_bind_group` lookup.
     pub(crate) fn effective_mask_bind_group(
         &self,
@@ -2657,7 +2657,7 @@ impl Compositor {
         host_id: LayerId,
     ) -> &'a wgpu::BindGroup {
         let live_or_default = doc
-            .mask_modifier(host_id)
+            .mask_filter(host_id)
             .filter(|m| m.common.visible)
             .and_then(|m| mask_bind_groups.get(&m.id))
             .unwrap_or(default_mask_bind_group);
@@ -3177,12 +3177,12 @@ impl Compositor {
 
     /// The mask id a leaf host should route through the de-fused projection
     /// path, or `None` to keep the fast (fused) path. A host qualifies whenever
-    /// it carries a *visible* mask modifier — including while a transform
+    /// it carries a *visible* mask filter — including while a transform
     /// preview is active on the host or its mask, in which case the projection
     /// swaps in the preview content/mask (see
     /// [`Self::compose_layer_through_projection`]).
     fn host_active_mask_for_projection(&self, doc: &Document, host_id: LayerId) -> Option<LayerId> {
-        doc.mask_modifier(host_id)
+        doc.mask_filter(host_id)
             .filter(|m| m.common.visible)
             .map(|m| m.id)
     }
@@ -3379,7 +3379,7 @@ impl Compositor {
             .filter(|g| g.passthrough)
             .map(|g| g.id)
             .filter(|gid| {
-                doc.mask_modifier(*gid)
+                doc.mask_filter(*gid)
                     .map(|m| m.common.visible)
                     .unwrap_or(false)
             })
@@ -3395,7 +3395,7 @@ impl Compositor {
         let canvas_origin = [self.canvas_origin.x as f32, self.canvas_origin.y as f32];
         let group_ids: Vec<LayerId> = self.passthrough_mask_state.keys().copied().collect();
         for group_id in group_ids {
-            let mask_id = match doc.mask_modifier(group_id).filter(|m| m.common.visible) {
+            let mask_id = match doc.mask_filter(group_id).filter(|m| m.common.visible) {
                 Some(m) => m.id,
                 None => continue,
             };
@@ -3766,10 +3766,10 @@ impl Compositor {
 
         if group.passthrough {
             // Structural detection: a passthrough group with a visible mask
-            // modifier triggers Photoshop-style snapshot+lerp; otherwise
+            // filter triggers Photoshop-style snapshot+lerp; otherwise
             // it's pure passthrough.
             let has_active_mask = doc
-                .mask_modifier(group_id)
+                .mask_filter(group_id)
                 .map(|m| m.common.visible)
                 .unwrap_or(false);
 
@@ -3807,7 +3807,7 @@ impl Compositor {
         // live in distinct fields from `blend_bind_groups`, so we can hold
         // the mutable borrow of the cache and the immutable borrows of the
         // views together. Groups never become floating targets themselves,
-        // so the cache always applies here (a modifier-as-floating-target
+        // so the cache always applies here (a filter-as-floating-target
         // only swaps mask_bg via `effective_mask_bind_group`).
         let bg_view = &self.group_state[&parent_group].accum.views[src];
         let gs_child = &self.group_state[&group_id];
@@ -3954,7 +3954,7 @@ impl Compositor {
         {
             let gs = &self.group_state[&parent_group];
             // Effective mask: live by default, preview-mask when the
-            // floating target is this passthrough group's mask modifier.
+            // floating target is this passthrough group's mask filter.
             let group_mask_bg = self.effective_mask_bind_group(doc, group_id);
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("mask-lerp"),
