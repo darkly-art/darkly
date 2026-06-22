@@ -2,6 +2,7 @@
 // Regenerate: DARKLY_REGEN_TS=1 cargo test -p darkly --test protocol --features testing
 
 export type RequestKind =
+    | 'add_filter_layer'
     | 'add_group'
     | 'add_mask'
     | 'add_raster'
@@ -165,6 +166,7 @@ export type RequestKind =
     ;
 
 export const REQUEST_KINDS: readonly RequestKind[] = [
+    'add_filter_layer',
     'add_group',
     'add_mask',
     'add_raster',

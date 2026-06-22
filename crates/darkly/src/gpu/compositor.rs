@@ -9,7 +9,7 @@ use crate::gpu::params::ParamValue;
 use crate::gpu::veil_chain::VeilChain;
 use crate::gpu::view::{ViewTransform, DEFAULT_WORKSPACE_BG};
 use crate::gpu::void::{Void, VoidRegistry};
-use crate::layer::{Layer, LayerId, RasterLayer, VoidLayer};
+use crate::layer::{FilterLayer, Layer, LayerId, RasterLayer, VoidLayer};
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 
@@ -327,6 +327,19 @@ impl<'a> CompositionContext<'a> {
     /// [`Compositor`] (where they touch its private fields), and the
     /// dispatch is owned by the variant via [`LayerNode::compose_into`].
     pub(crate) fn compose_layer(&mut self, layer: &Layer) {
+        // A filter layer transforms the running group accumulator in place
+        // (everything composited below it) rather than blending a texture in,
+        // so it takes a separate arm from the raster/void blend path.
+        if let Layer::Filter(f) = layer {
+            self.compositor.compose_filter_arm(
+                self.encoder,
+                self.device,
+                self.parent_group,
+                f,
+                self.scissor,
+            );
+            return;
+        }
         self.compositor.compose_layer_arm(
             self.encoder,
             self.device,
@@ -365,6 +378,11 @@ impl LayerKindGpu for Layer {
         match self {
             Layer::Raster(r) => r.realize_in(compositor, device, queue),
             Layer::Void(v) => v.realize_in(compositor, device, queue),
+            // Filter layers have no per-instance GPU resource — the shared
+            // filter pipeline is resolved lazily in `compose_filter_arm`. They
+            // are excluded from the content walk (`Layer::is_blend_content`),
+            // so this is never reached, but the arm keeps the match total.
+            Layer::Filter(_) => {}
         }
     }
 }
@@ -606,6 +624,14 @@ pub struct Compositor {
     /// binary. Engine queries this for `void_types()` and `add_void_layer`
     /// goes through it to build the per-instance trait object.
     void_registry: VoidRegistry,
+
+    /// Lazily-pipeline-cached registry of every filter type built into the
+    /// binary (invert, …). Shared by both consumers of a filter pipeline: the
+    /// destructive `apply_filter` path (one-shot document edit) and filter
+    /// *layers* (per-frame accumulator transform in `compose_filter_arm`).
+    /// Compositor-owned because the cached `MaskedFilterPipeline` is a GPU
+    /// resource, exactly like `void_registry`'s pipelines.
+    filter_pipeline_registry: crate::gpu::filter::FilterPipelineRegistry,
 
     // --- Floating Content Transform ---
     pub(super) transform_pass: crate::gpu::transform::TransformPass,
@@ -1101,6 +1127,7 @@ impl Compositor {
             padded_height: padded_h,
             veil_chain,
             void_registry: VoidRegistry::new(),
+            filter_pipeline_registry: crate::gpu::filter::FilterPipelineRegistry::new(),
             transform_pass,
             rescale_pass,
             ortho_pass,
@@ -2133,6 +2160,21 @@ impl Compositor {
     /// pipeline, so creation needs `&mut`).
     pub fn void_registry_mut(&mut self) -> &mut VoidRegistry {
         &mut self.void_registry
+    }
+
+    /// Read-only access to the filter pipeline registry — lets the engine
+    /// answer `filter_types()` without exposing a mutable handle.
+    pub fn filter_pipeline_registry(&self) -> &crate::gpu::filter::FilterPipelineRegistry {
+        &self.filter_pipeline_registry
+    }
+
+    /// Mutable access to the filter pipeline registry. The destructive
+    /// `apply_filter` path goes through this to resolve (and lazily cache) the
+    /// shared `MaskedFilterPipeline` for a filter type.
+    pub fn filter_pipeline_registry_mut(
+        &mut self,
+    ) -> &mut crate::gpu::filter::FilterPipelineRegistry {
+        &mut self.filter_pipeline_registry
     }
 
     /// Canvas-content texture format used by every content layer (raster +
@@ -3745,6 +3787,57 @@ impl Compositor {
         rpass.set_bind_group(1, mask_bg, &[]);
         rpass.set_bind_group(2, &self.canvas_bind_group, &[]);
         rpass.draw(0..3, 0..1);
+    }
+
+    /// Compose a filter layer: transform the running group accumulator in
+    /// place rather than blending a layer in. Because the child walk composites
+    /// bottom-to-top, `gs.current_accum` already holds the composite of
+    /// everything below this filter (lower siblings + everything beneath the
+    /// group, since a passthrough group inlines into its non-passthrough
+    /// ancestor's accumulator). Using the ping-pong: read the current accum,
+    /// write the filtered result to the other half, advance `current_accum`.
+    /// No third texture — the filter pipeline samples 1:1 and overwrites every
+    /// texel of the destination.
+    fn compose_filter_arm(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        parent_group: LayerId,
+        filter: &FilterLayer,
+        _scissor: (u32, u32, u32, u32),
+    ) {
+        // Resolve the shared, lazily-cached pipeline. An unknown pipeline id
+        // (e.g. a save referencing a filter this binary doesn't ship) composes
+        // as a no-op rather than erroring mid-frame.
+        let pipeline = match self
+            .filter_pipeline_registry
+            .pipeline(&filter.pipeline, device)
+        {
+            Some(p) => p,
+            None => return,
+        };
+
+        // Ping-pong advance: src = last-written accum, dst = the other half.
+        let (src, dst) = {
+            let gs = match self.group_state.get_mut(&parent_group) {
+                Some(g) => g,
+                None => return,
+            };
+            let src = gs.current_accum;
+            let dst = 1 - src;
+            gs.current_accum = dst;
+            (src, dst)
+        };
+
+        let gs = &self.group_state[&parent_group];
+        pipeline.render(
+            device,
+            encoder,
+            &gs.accum.views[src],
+            None,
+            &gs.accum.views[dst],
+            wgpu::TextureFormat::Rgba8Unorm,
+        );
     }
 
     /// Composite a child group into its parent's ping-pong accumulators.

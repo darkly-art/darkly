@@ -473,7 +473,10 @@ impl Document {
         };
         for &child_id in &g.children {
             match self.find_node(child_id) {
-                Some(LayerNode::Layer(l)) => out.push(l),
+                // Filter layers transform the group accumulator rather than
+                // contributing a texture — they are realized by the
+                // compositor's filter arm, not the standard blend walk.
+                Some(LayerNode::Layer(l)) if l.is_blend_content() => out.push(l),
                 Some(LayerNode::Group(_)) => self.collect_content_layers(child_id, out),
                 _ => {}
             }
@@ -629,6 +632,35 @@ impl Document {
             Entity::Node(LayerNode::Layer(Layer::Void(VoidLayer::new(
                 key, name, void_type, params,
             ))))
+        });
+        let target = self.resolve_anchor_target(anchor);
+        self.attach_at_target(id, target);
+        id
+    }
+
+    /// Add a new filter layer — a non-destructive procedural transform that
+    /// filters the composite of everything below it. Carries no pixel buffer;
+    /// the compositor runs the shared filter pipeline named by `pipeline` over
+    /// the running group accumulator each frame.
+    ///
+    /// `display_label` is the registry's display name for the filter type
+    /// (e.g. `"Invert Colors"`) — used as the default layer name. The caller
+    /// (engine wrapper) is responsible for validating `pipeline` against the
+    /// [`FilterPipelineRegistry`](crate::gpu::filter::FilterPipelineRegistry);
+    /// that registry is GPU-coupled and lives on the compositor, so it can't be
+    /// dereferenced here.
+    pub fn add_filter_layer(
+        &mut self,
+        pipeline: String,
+        display_label: &str,
+        params: Vec<crate::gpu::params::ParamValue>,
+        anchor: Option<LayerId>,
+    ) -> LayerId {
+        let name = self.next_name(display_label);
+        let id = self.entities.insert_with_key(|key| {
+            Entity::Node(LayerNode::Layer(Layer::Filter(
+                crate::layer::FilterLayer::new(key, name, pipeline, params),
+            )))
         });
         let target = self.resolve_anchor_target(anchor);
         self.attach_at_target(id, target);

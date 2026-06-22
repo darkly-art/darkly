@@ -124,18 +124,17 @@ For a feature to count, it must be:
 - [x] Canvas resize
 - [x] Image rescale
 - [x] Select All / Deselect / Invert as menu+hotkey actions
-- [x] Invert selection (boolean op exists)
 - [x] Command palette (Ctrl+Shift+P)
 - [x] Application menu (File/Edit/Select/… , pinnable to top bar)
 - [x] Autosave + crash recovery
-- [ ] Brightness / Contrast
-- [ ] Hue / Saturation / Lightness
-- [ ] Levels
-- [ ] Curves
-- [x] Invert colors
-- [ ] Desaturate
+- [x] Filter layers (non-destructive; isolate to one layer via a group)
+-     [ ] Brightness / Contrast
+-     [ ] Hue / Saturation / Lightness
+-     [ ] Levels
+-     [ ] Curves
+-     [x] Invert colors
+-     [ ] Desaturate
 - [ ] Clipping mask
-- [ ] Adjustment layers
 - [x] Feather + antialias
 - [x] Grow / Shrink / Border / Smooth as discrete commands
 - [x] Flip canvas H / V

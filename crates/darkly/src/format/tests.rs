@@ -443,6 +443,20 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
         let defaults = defaults_of(schema);
         engine.add_void_layer(type_id, defaults, None);
     }
+
+    // One of every filter type — adds a filter layer at root for each
+    // registered filter pipeline (filters carry no params today), so
+    // `layer_kind/filter` participates in the save round-trip test.
+    let filter_types: Vec<String> = engine
+        .compositor
+        .filter_pipeline_registry()
+        .types()
+        .into_iter()
+        .map(|(id, _name)| id.to_string())
+        .collect();
+    for pipeline in filter_types {
+        engine.add_filter_layer(&pipeline, Vec::new(), None);
+    }
 }
 
 /// Pump the engine until a save completes. Caps iterations so a stuck

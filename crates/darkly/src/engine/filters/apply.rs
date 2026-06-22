@@ -22,7 +22,8 @@ impl DarklyEngine {
     /// the list is empty there. Drives the frontend's dynamic Colors-menu
     /// action registration.
     pub fn filter_types(&self) -> Vec<VeilTypeInfo> {
-        self.filter_pipeline_registry
+        self.compositor
+            .filter_pipeline_registry()
             .types()
             .into_iter()
             .map(|(type_id, display_name)| VeilTypeInfo {
@@ -41,7 +42,7 @@ impl DarklyEngine {
         if !self.doc.is_node_editable(node_id) {
             return false;
         }
-        if !self.filter_pipeline_registry.has(filter_type) {
+        if !self.compositor.filter_pipeline_registry().has(filter_type) {
             return false;
         }
         self.auto_commit_floating();
@@ -103,7 +104,8 @@ impl DarklyEngine {
         // Resolve the (lazily-built, shared) pipeline before touching undo so a
         // missing type fails before we snapshot. `has()` above guarantees Some.
         let pipeline = match self
-            .filter_pipeline_registry
+            .compositor
+            .filter_pipeline_registry_mut()
             .pipeline(filter_type, &self.gpu.device)
         {
             Some(p) => p,

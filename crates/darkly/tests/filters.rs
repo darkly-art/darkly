@@ -395,3 +395,186 @@ fn invert_mask_with_selection_after_crop() {
         "undo restores the mask"
     );
 }
+
+// ---- Filter layers ---------------------------------------------------------
+//
+// A *filter layer* is a non-destructive node in the layer tree that transforms
+// the composite of everything below it (the running group accumulator) via the
+// same `gpu/filters/*` pipeline the destructive path uses — pixels below are
+// never modified. These tests pin the feature's promises: it inverts what's
+// below it, it leaves what's above untouched, an isolated group scopes it, and
+// — the core guarantee — it is non-destructive (toggle / delete restores the
+// original composite byte-for-byte).
+
+/// Flood-fill a layer with straight opaque `(r, g, b, 255)`. Opaque so the
+/// composite reads back as the layer color (no premultiply / checker ambiguity)
+/// and `invert` is unambiguous: `(r,g,b)` → `(255-r, 255-g, 255-b)`.
+fn fill_layer(engine: &mut DarklyEngine, layer_id: LayerId, r: u8, g: u8, b: u8) {
+    engine.begin_stroke(layer_id);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r,
+        g,
+        b,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    engine.render(0.0);
+}
+
+/// A filter layer above a raster at the root inverts everything below it:
+/// red `(255,0,0)` → cyan `(0,255,255)`. This is the core scope plus
+/// "filter layer at root affects all below."
+#[test]
+fn filter_layer_at_root_inverts_everything_below() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let red = engine.add_raster_layer(None);
+    fill_layer(&mut engine, red, 255, 0, 0);
+    let _filter = engine
+        .add_filter_layer("invert", vec![], None)
+        .expect("invert is a registered filter type");
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let canvas = engine.test_readback_canvas();
+    let p = px(&canvas, cw, cw / 2, ch / 2);
+    assert_eq!(
+        p,
+        [0, 255, 255, 255],
+        "invert filter layer must turn the red layer below it cyan; got {p:?}"
+    );
+}
+
+/// A filter layer transforms only what is *below* it — a layer stacked above
+/// the filter is composited after the filter runs, so it is untouched. Blue
+/// `(0,0,255)` on top stays blue (a leak would make it yellow `(255,255,0)`).
+#[test]
+fn filter_layer_does_not_affect_layers_above_it() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let red = engine.add_raster_layer(None);
+    fill_layer(&mut engine, red, 255, 0, 0);
+    let _filter = engine.add_filter_layer("invert", vec![], None).unwrap();
+    let blue = engine.add_raster_layer(None);
+    fill_layer(&mut engine, blue, 0, 0, 255);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let canvas = engine.test_readback_canvas();
+    let p = px(&canvas, cw, cw / 2, ch / 2);
+    assert_eq!(
+        p,
+        [0, 0, 255, 255],
+        "the opaque blue layer above the filter must be unaffected; got {p:?}"
+    );
+}
+
+/// A filter layer inside a non-passthrough (isolated) group is scoped to that
+/// group: it inverts the group's lower siblings, and does NOT leak onto layers
+/// below the group. Positive control (group has content → cyan) and negative
+/// (group content hidden → the outside layer stays red, no leak) in one setup.
+#[test]
+fn filter_layer_in_isolated_group_is_scoped() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    // Outside the group, at the root bottom: red. The group stacks above it.
+    let outside = engine.add_raster_layer(None);
+    fill_layer(&mut engine, outside, 255, 0, 0);
+
+    let group = engine.add_group(None);
+    engine.set_group_passthrough(group, false); // isolated → owns a GroupState
+
+    // Group content (bottom child) + filter (top child, above the content).
+    let inside = engine.add_raster_layer(Some(group));
+    fill_layer(&mut engine, inside, 255, 0, 0);
+    let _filter = engine
+        .add_filter_layer("invert", vec![], Some(group))
+        .unwrap();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    // Positive: the group composites inside→invert→cyan and (opaque) covers the
+    // outside red.
+    let with_content = engine.test_readback_canvas();
+    let p = px(&with_content, cw, cw / 2, ch / 2);
+    assert_eq!(
+        p,
+        [0, 255, 255, 255],
+        "filter must invert its isolated group's lower sibling; got {p:?}"
+    );
+
+    // Negative: hide the group's content. The group accumulator is now empty,
+    // so the filter inverts nothing and the group contributes nothing. The
+    // outside red layer shows through unchanged — proving the filter did NOT
+    // leak out of the isolated group onto the layer below it (a leak would
+    // invert outside red → cyan).
+    engine.set_layer_visible(inside, false);
+    engine.render(0.0);
+    let leak_check = engine.test_readback_canvas();
+    let p = px(&leak_check, cw, cw / 2, ch / 2);
+    assert_eq!(
+        p,
+        [255, 0, 0, 255],
+        "an isolated group's filter must not affect layers below the group; got {p:?}"
+    );
+}
+
+/// The core promise: a filter layer is **non-destructive**. Toggling its
+/// visibility returns the composite to the original red (the layer below was
+/// never modified), and deleting it likewise restores the original — a
+/// destructive filter would have baked cyan into the raster's pixels.
+#[test]
+fn filter_layer_is_non_destructive() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let red = engine.add_raster_layer(None);
+    fill_layer(&mut engine, red, 255, 0, 0);
+
+    // Baseline composite with no filter: red.
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+    let original = engine.test_readback_canvas();
+    assert_eq!(px(&original, cw, cw / 2, ch / 2), [255, 0, 0, 255]);
+
+    let filter = engine.add_filter_layer("invert", vec![], None).unwrap();
+    engine.render(0.0);
+    assert_eq!(
+        px(&engine.test_readback_canvas(), cw, cw / 2, ch / 2),
+        [0, 255, 255, 255],
+        "filter visible → cyan"
+    );
+
+    // Hide the filter → original red returns byte-for-byte (pixels untouched).
+    engine.set_layer_visible(filter, false);
+    engine.render(0.0);
+    assert_eq!(
+        engine.test_readback_canvas(),
+        original,
+        "hiding the filter must restore the original composite exactly"
+    );
+
+    // Show again → cyan.
+    engine.set_layer_visible(filter, true);
+    engine.render(0.0);
+    assert_eq!(
+        px(&engine.test_readback_canvas(), cw, cw / 2, ch / 2),
+        [0, 255, 255, 255],
+        "re-showing the filter inverts again"
+    );
+
+    // Delete the filter → the composite returns to the original red.
+    engine.remove_layer(filter).expect("filter layer removable");
+    engine.render(0.0);
+    assert_eq!(
+        engine.test_readback_canvas(),
+        original,
+        "deleting the filter must restore the original composite exactly"
+    );
+}

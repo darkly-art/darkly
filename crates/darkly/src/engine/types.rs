@@ -85,6 +85,22 @@ pub enum LayerInfo {
         /// `ParamDef` slice declares them. Same shape the veil panel uses.
         params: Vec<ParamInfo>,
     },
+    /// Filter (non-destructive procedural-transform) layer. Carries no pixel
+    /// buffer — it transforms the composite of everything below it each frame.
+    #[serde(rename_all = "camelCase")]
+    Filter {
+        id: f64,
+        name: String,
+        visible: bool,
+        locked: bool,
+        editable: bool,
+        opacity: f32,
+        blend_mode: &'static str,
+        modifiers: Vec<ModifierInfo>,
+        /// Stable filter `type_id` (e.g. `"invert"`) — UI resolves to a
+        /// display label via `filter_types()`.
+        pipeline: String,
+    },
     #[serde(rename_all = "camelCase")]
     Group {
         id: f64,
@@ -423,6 +439,21 @@ pub(crate) fn node_to_layer_info(
                     params,
                 }
             }
+            Layer::Filter(f) => LayerInfo::Filter {
+                id: f.id.to_ffi() as f64,
+                name: f.common.name.clone(),
+                visible: f.common.visible,
+                locked: f.common.locked,
+                editable,
+                opacity: f.blend.opacity,
+                blend_mode: f.blend.blend_mode.type_id,
+                modifiers: f
+                    .filters
+                    .iter()
+                    .filter_map(|mid| doc.find_filter(*mid).map(|m| modifier_to_info(doc, m)))
+                    .collect(),
+                pipeline: f.pipeline.clone(),
+            },
         },
         LayerNode::Group(g) => LayerInfo::Group {
             id: g.id.to_ffi() as f64,

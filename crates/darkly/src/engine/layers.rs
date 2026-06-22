@@ -194,6 +194,40 @@ impl DarklyEngine {
         Some(id)
     }
 
+    /// Add a new filter layer — a non-destructive transform of the composite
+    /// below it. `pipeline` names a registered filter type (e.g. `"invert"`);
+    /// `params` is matched against that type's schema by index (empty for
+    /// parameter-free filters).
+    ///
+    /// Returns `None` if `pipeline` is not a registered filter type — surfaced
+    /// rather than silently falling back, the same as [`Self::add_void_layer`].
+    /// Unlike a void layer there is no per-instance GPU resource to build: the
+    /// filter pipeline is shared and resolved lazily in `compose_filter_arm`.
+    pub fn add_filter_layer(
+        &mut self,
+        pipeline: &str,
+        params: Vec<crate::gpu::params::ParamValue>,
+        anchor: Option<LayerId>,
+    ) -> Option<LayerId> {
+        if !self.compositor.filter_pipeline_registry().has(pipeline) {
+            return None;
+        }
+        let display_label = self
+            .compositor
+            .filter_pipeline_registry()
+            .display_name(pipeline);
+        let id = self
+            .doc
+            .add_filter_layer(pipeline.to_string(), display_label, params, anchor);
+        self.compositor.mark_dirty();
+
+        let parent = self.doc.parent_of(id);
+        let pos = self.doc.position_in_parent(id).unwrap_or(0);
+        self.push_undo(Box::new(LayerAddAction::new(id, parent, pos)));
+
+        Some(id)
+    }
+
     /// Replace a void layer's parameter values. Coalesces with prior
     /// `VoidParams` edits on the same layer so a slider drag is one undo
     /// step, mirroring how `set_opacity` already behaves.
@@ -378,9 +412,10 @@ impl DarklyEngine {
     pub fn layer_bounds(&self, layer_id: LayerId) -> Option<crate::coord::CanvasRect> {
         match self.doc.layer(layer_id)? {
             Layer::Raster(r) => Some(r.pixels.bounds),
-            // Voids store no pixels — their "bounds" concept is the canvas
-            // itself, which callers can ask for directly via `canvas_dimensions`.
-            Layer::Void(_) => None,
+            // Voids and filter layers store no pixels — their "bounds" concept
+            // is the canvas itself, which callers can ask for directly via
+            // `canvas_dimensions`.
+            Layer::Void(_) | Layer::Filter(_) => None,
         }
     }
 

@@ -3118,6 +3118,7 @@ fn layer_node_tree_admits_only_layer_and_group_variants() {
         match node {
             LayerNode::Layer(Layer::Raster(_)) => {}
             LayerNode::Layer(Layer::Void(_)) => {}
+            LayerNode::Layer(Layer::Filter(_)) => {}
             LayerNode::Group(_) => {}
         }
     }
@@ -4749,6 +4750,7 @@ fn multi_move_preserves_relative_order() {
         .map(|c| match c {
             LayerInfo::Raster { id, .. } => *id,
             LayerInfo::Void { id, .. } => *id,
+            LayerInfo::Filter { id, .. } => *id,
             LayerInfo::Group { id, .. } => *id,
         })
         .collect();
@@ -4817,6 +4819,7 @@ fn group_layers_wraps_selection_at_topmost_slot() {
         .map(|c| match c {
             LayerInfo::Raster { id, .. } => *id,
             LayerInfo::Void { id, .. } => *id,
+            LayerInfo::Filter { id, .. } => *id,
             LayerInfo::Group { id, .. } => *id,
         })
         .collect();
@@ -4859,6 +4862,7 @@ fn group_layers_cross_parent() {
         .map(|c| match c {
             LayerInfo::Raster { id, .. } => *id,
             LayerInfo::Void { id, .. } => *id,
+            LayerInfo::Filter { id, .. } => *id,
             LayerInfo::Group { id, .. } => *id,
         })
         .collect();
@@ -5027,6 +5031,7 @@ fn multi_duplicate_each_lands_above_its_source() {
         .map(|n| match n {
             LayerInfo::Raster { id, .. } => *id,
             LayerInfo::Void { id, .. } => *id,
+            LayerInfo::Filter { id, .. } => *id,
             LayerInfo::Group { id, .. } => *id,
         })
         .collect();

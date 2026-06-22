@@ -237,6 +237,40 @@ impl DarklyEngine {
 
                 Some(new_id)
             }
+            LayerNode::Layer(Layer::Filter(f)) => {
+                let pipeline = f.pipeline.clone();
+                let params = f.params.clone();
+                let display_label = self
+                    .compositor
+                    .filter_pipeline_registry()
+                    .display_name(&pipeline)
+                    .to_string();
+                let new_id = self
+                    .doc
+                    .add_filter_layer(pipeline, &display_label, params, anchor);
+
+                let new_name = if is_root {
+                    format!("{common_name} copy")
+                } else {
+                    common_name
+                };
+                if let Some(LayerNode::Layer(Layer::Filter(nf))) = self.doc.find_node_mut(new_id) {
+                    nf.common.name = new_name;
+                    nf.common.visible = common_visible;
+                    nf.common.locked = common_locked;
+                    nf.blend.opacity = blend_opacity;
+                    nf.blend.blend_mode = blend_mode_reg;
+                }
+                // No GPU resource to allocate — the filter pipeline is shared
+                // and resolved lazily in `compose_filter_arm`. The
+                // `refresh_blend_uniforms` call no-ops (a filter layer has no
+                // `layer_cache` entry), so it's skipped.
+
+                // Filter layers can carry mask filters like any other host.
+                self.clone_modifiers(source_id, new_id);
+
+                Some(new_id)
+            }
         }
     }
 

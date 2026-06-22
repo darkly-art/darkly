@@ -181,6 +181,48 @@ impl VoidLayer {
     }
 }
 
+/// A filter layer — a non-destructive procedural *transform* in the layer
+/// tree. Where a [`VoidLayer`] is a procedural *source* (it generates pixels),
+/// a filter layer transforms the composite of everything below it in place
+/// (the group accumulator), leaving the lower layers' own pixels untouched.
+/// This is Krita's *adjustment layer*. Scope it to one layer by placing it in a
+/// non-passthrough (isolated) group.
+///
+/// State is exactly: a `pipeline` id naming which
+/// [`crate::gpu::filter::FilterPipelineRegistry`] transform to run (e.g.
+/// `"invert"`), plus that transform's parameter values. There is no pixel
+/// buffer — the compositor runs the shared filter pipeline over the running
+/// accumulator each frame.
+pub struct FilterLayer {
+    pub id: LayerId,
+    pub common: NodeCommon,
+    pub blend: BlendProps,
+    /// Stable `type_id` from [`crate::gpu::filter::FilterPipelineRegistry`]
+    /// (e.g. `"invert"`). Named `pipeline` rather than `filter_type` because
+    /// `filters` (below) already means the attached mask/selection list — two
+    /// "filter" fields on one struct would be a footgun.
+    pub pipeline: String,
+    /// Parameter values matching the filter pipeline's schema, in order. Empty
+    /// for parameter-free filters like invert.
+    pub params: Vec<ParamValue>,
+    /// Attached mask / selection filters (same polymorphic list every layer
+    /// kind carries).
+    pub filters: Vec<LayerId>,
+}
+
+impl FilterLayer {
+    pub fn new(id: LayerId, name: String, pipeline: String, params: Vec<ParamValue>) -> Self {
+        FilterLayer {
+            id,
+            common: NodeCommon::new(name),
+            blend: BlendProps::new(),
+            pipeline,
+            params,
+            filters: Vec::new(),
+        }
+    }
+}
+
 pub struct LayerGroup {
     pub id: LayerId,
     pub common: NodeCommon,
@@ -275,16 +317,14 @@ impl LayerNode {
 
     pub fn pixels(&self) -> Option<&PixelBuffer> {
         match self {
-            LayerNode::Layer(Layer::Raster(r)) => Some(&r.pixels),
-            LayerNode::Layer(Layer::Void(_)) => None,
+            LayerNode::Layer(l) => l.pixels(),
             LayerNode::Group(_) => None,
         }
     }
 
     pub fn pixels_mut(&mut self) -> Option<&mut PixelBuffer> {
         match self {
-            LayerNode::Layer(Layer::Raster(r)) => Some(&mut r.pixels),
-            LayerNode::Layer(Layer::Void(_)) => None,
+            LayerNode::Layer(l) => l.pixels_mut(),
             LayerNode::Group(_) => None,
         }
     }
@@ -304,10 +344,11 @@ impl LayerNode {
     /// keep in sync with the registration files.
     pub fn kind(&self) -> &'static crate::document::LayerKindRegistration {
         use crate::document::layer_kind::registry;
-        use crate::document::layer_kinds::{group, raster, void};
+        use crate::document::layer_kinds::{filter, group, raster, void};
         match self {
             LayerNode::Layer(Layer::Raster(_)) => registry().get(raster::TYPE_ID).unwrap(),
             LayerNode::Layer(Layer::Void(_)) => registry().get(void::TYPE_ID).unwrap(),
+            LayerNode::Layer(Layer::Filter(_)) => registry().get(filter::TYPE_ID).unwrap(),
             LayerNode::Group(_) => registry().get(group::TYPE_ID).unwrap(),
         }
     }
@@ -350,6 +391,7 @@ pub enum TransformCapability {
 pub enum Layer {
     Raster(RasterLayer),
     Void(VoidLayer),
+    Filter(FilterLayer),
 }
 
 impl Layer {
@@ -371,13 +413,26 @@ impl Layer {
                     TransformCapability::None
                 }
             }
+            // A full-frame filter has no meaningful transform — there are no
+            // pixels of its own to move.
+            Layer::Filter(_) => TransformCapability::None,
         }
+    }
+
+    /// Whether this layer participates in the standard blend pipeline — i.e.
+    /// it has a node texture + blend uniforms in the compositor's
+    /// `layer_cache`. Raster and void layers do; a filter layer transforms the
+    /// running group accumulator instead of contributing a texture of its own,
+    /// so it is realized by `compose_filter_arm`, not the content walk.
+    pub fn is_blend_content(&self) -> bool {
+        !matches!(self, Layer::Filter(_))
     }
 
     pub fn id(&self) -> LayerId {
         match self {
             Layer::Raster(r) => r.id,
             Layer::Void(v) => v.id,
+            Layer::Filter(f) => f.id,
         }
     }
 
@@ -385,6 +440,7 @@ impl Layer {
         match self {
             Layer::Raster(r) => &r.common,
             Layer::Void(v) => &v.common,
+            Layer::Filter(f) => &f.common,
         }
     }
 
@@ -392,6 +448,7 @@ impl Layer {
         match self {
             Layer::Raster(r) => &mut r.common,
             Layer::Void(v) => &mut v.common,
+            Layer::Filter(f) => &mut f.common,
         }
     }
 
@@ -399,6 +456,7 @@ impl Layer {
         match self {
             Layer::Raster(r) => &r.blend,
             Layer::Void(v) => &v.blend,
+            Layer::Filter(f) => &f.blend,
         }
     }
 
@@ -406,6 +464,7 @@ impl Layer {
         match self {
             Layer::Raster(r) => &mut r.blend,
             Layer::Void(v) => &mut v.blend,
+            Layer::Filter(f) => &mut f.blend,
         }
     }
 
@@ -413,6 +472,7 @@ impl Layer {
         match self {
             Layer::Raster(r) => &r.filters,
             Layer::Void(v) => &v.filters,
+            Layer::Filter(f) => &f.filters,
         }
     }
 
@@ -420,22 +480,24 @@ impl Layer {
         match self {
             Layer::Raster(r) => &mut r.filters,
             Layer::Void(v) => &mut v.filters,
+            Layer::Filter(f) => &mut f.filters,
         }
     }
 
-    /// Pixel buffer for this layer, if any. Void layers have no pixels —
-    /// their content is regenerated from `params` each frame.
+    /// Pixel buffer for this layer, if any. Void and filter layers have no
+    /// pixels — a void regenerates from `params`, a filter transforms the
+    /// accumulator below it.
     pub fn pixels(&self) -> Option<&PixelBuffer> {
         match self {
             Layer::Raster(r) => Some(&r.pixels),
-            Layer::Void(_) => None,
+            Layer::Void(_) | Layer::Filter(_) => None,
         }
     }
 
     pub fn pixels_mut(&mut self) -> Option<&mut PixelBuffer> {
         match self {
             Layer::Raster(r) => Some(&mut r.pixels),
-            Layer::Void(_) => None,
+            Layer::Void(_) | Layer::Filter(_) => None,
         }
     }
 
@@ -455,7 +517,7 @@ impl Layer {
     pub fn void_state(&self) -> Option<(&[ParamValue], &crate::transform::Transform)> {
         match self {
             Layer::Void(v) => Some((&v.params, &v.transform)),
-            Layer::Raster(_) => None,
+            Layer::Raster(_) | Layer::Filter(_) => None,
         }
     }
 }

@@ -463,11 +463,6 @@ pub struct DarklyEngine {
     // --- Stabilizer ---
     pub(crate) stabilizer_registry: StabilizerRegistry,
 
-    /// Destructive color-filter registry (invert, …). Lazily caches the
-    /// shared `MaskedFilterPipeline` per type; engine-owned because filters
-    /// are one-shot document edits, not compositor-driven render state.
-    pub(crate) filter_pipeline_registry: crate::gpu::filter::FilterPipelineRegistry,
-
     /// Composite blend mode for the current stroke: 0 = paint, 1 = erase.
     pub(crate) brush_blend_mode: u32,
 
@@ -638,7 +633,6 @@ impl DarklyEngine {
             stroke_buffer: None,
             checkpoint_ring: CheckpointRing::new(),
             stabilizer_registry: StabilizerRegistry::new(),
-            filter_pipeline_registry: crate::gpu::filter::FilterPipelineRegistry::new(),
             brush_blend_mode: 0,
             diff_rect,
             pending_undo_commit: None,

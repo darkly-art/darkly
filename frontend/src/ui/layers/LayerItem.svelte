@@ -371,6 +371,14 @@
         >
             <Icon name={layer.icon ?? 'tabler:galaxy'} />
         </span>
+    {:else if layer.type === 'filter'}
+        <span
+            class="thumb void-thumb"
+            class:thumb-active={isActive && !isEditingMask}
+            title="Filter layer"
+        >
+            <Icon name="fa6-solid:circle-half-stroke" />
+        </span>
     {/if}
 
     {#if hasMask && maskThumb}

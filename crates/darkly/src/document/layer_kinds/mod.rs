@@ -2,6 +2,7 @@
 // To add a new module, create a .rs file in this directory
 // that exports `pub fn register() -> crate::document::layer_kind::LayerKindRegistration`.
 
+pub mod filter;
 pub mod group;
 pub mod raster;
 pub mod void;
@@ -11,6 +12,7 @@ use crate::document::layer_kind::LayerKindRegistration;
 #[rustfmt::skip]
 pub fn registrations() -> Vec<LayerKindRegistration> {
     vec![
+        filter::register(),
         group::register(),
         raster::register(),
         void::register(),
