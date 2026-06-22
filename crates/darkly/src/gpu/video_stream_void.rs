@@ -448,8 +448,9 @@ impl Void for VideoStreamVoid {
 
     fn wants_external_input(&self) -> bool {
         // While frozen, refuse new frames so the displayed image is whatever
-        // was in the aux texture at the moment freeze was toggled on. The
-        // visibility half of the gate (don't upload to a hidden layer) is
+        // was in the aux texture at the moment freeze was toggled on — the
+        // stream stays open on the JS side, so unfreezing resumes immediately.
+        // The visibility half of the gate (don't upload to a hidden layer) is
         // the engine's job at the `upload_void_external_image` boundary.
         !self.freeze
     }

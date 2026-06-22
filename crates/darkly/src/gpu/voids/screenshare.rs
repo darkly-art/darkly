@@ -14,8 +14,9 @@ pub const TYPE_ID: &str = "screenshare";
 // Identical schema to the camera — the shared machinery looks these up by name,
 // so the two stay decoupled even though they happen to match today.
 const PARAMS: &[ParamDef] = &[
-    // Freeze on the last received frame; stops uploads and tears down the
-    // JS-side stream so the OS "sharing" indicator turns off.
+    // Freeze on the last received frame; suppresses uploads (GPU holds the
+    // last frame) while keeping the share open — stopping a getDisplayMedia
+    // track would end the share permanently, so freeze must not close it.
     ParamDef::Bool {
         name: "freeze",
         default: false,

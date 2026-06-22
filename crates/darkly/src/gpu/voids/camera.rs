@@ -19,8 +19,9 @@ pub const TYPE_ID: &str = "camera";
 const PARAMS: &[ParamDef] = &[
     // Freeze the layer on its last received frame. When on, the void stops
     // accepting external image uploads (`wants_external_input` returns false)
-    // and the JS-side `MediaStreamSource` is torn down so the OS camera
-    // indicator turns off. Toggle back off to resume the live feed.
+    // so the GPU holds the last frame, and the JS-side `MediaStreamSource`
+    // suppresses uploads — but keeps the stream open so toggling back off
+    // resumes the live feed instantly (no re-prompt).
     ParamDef::Bool {
         name: "freeze",
         default: false,

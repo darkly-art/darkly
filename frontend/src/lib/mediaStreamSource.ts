@@ -78,6 +78,16 @@ export class MediaStreamSource {
      *  call) and Rust is the canonical correctness guard. */
     private visible = true;
 
+    /** Whether the void's `freeze` param is on. Pushed in by the reconciler.
+     *  When frozen, `tick()` stops uploading so the GPU holds the last received
+     *  frame — but the `MediaStream` stays **open**, so unfreezing resumes
+     *  instantly without re-prompting. This matters most for screenshare:
+     *  stopping a `getDisplayMedia` track ends the share permanently (there's
+     *  no silent re-acquire), so freeze must suppress, not tear down. The Rust
+     *  side independently drops frames via `wants_external_input` while frozen;
+     *  this is the JS-local skip of the wasted blit + bridge call. */
+    private frozen = false;
+
     /** 2D-context-backed canvas we blit the video frame into each tick.
      *  Required because Firefox's WebGPU rejects `HTMLVideoElement` as a
      *  `copyExternalImageToTexture` source, and some Chromium configs silently
@@ -210,7 +220,7 @@ export class MediaStreamSource {
      *  other divisor-throttled system in the engine: a source with `divisor=4`
      *  fires on the same rAF as a veil with `divisor=4`, not one rAF off. */
     tick(frameCount: number): void {
-        if (!this.visible) return;
+        if (!this.visible || this.frozen) return;
         if (frameCount % this.frameDivisor !== 0) return;
         if (!this.video || !this.canvas || !this.ctx || this.stopped || !this.hasFrame) return;
         const vw = this.video.videoWidth;
@@ -237,6 +247,13 @@ export class MediaStreamSource {
      *  changes its eye state. */
     setVisible(visible: boolean): void {
         this.visible = visible;
+    }
+
+    /** Update the freeze (pause-uploads) flag. Called by the layer-tree
+     *  reconciler when the user toggles the void's `freeze` param. Keeps the
+     *  stream open — see the `frozen` field. */
+    setFrozen(frozen: boolean): void {
+        this.frozen = frozen;
     }
 
     /** Stop the MediaStream, free the video element, and mark this source

@@ -53,3 +53,52 @@ describe('MediaStreamSource external stop (track ended)', () => {
         expect(src.ended).toBe(true);
     });
 });
+
+describe('MediaStreamSource freeze suppresses uploads without closing', () => {
+    // Regression: freezing a screenshare used to tear down the source (the
+    // reconciler called stop()), which ends a getDisplayMedia track for good —
+    // unfreeze then showed nothing until the user re-picked. Freeze must only
+    // gate `tick()`; the stream stays open so unfreeze resumes instantly.
+    //
+    // The DOM-heavy `start()` isn't runnable in node vitest, so we inject the
+    // fields `tick()` reads and assert it uploads only when not frozen.
+    function primedSource() {
+        const uploads: number[] = [];
+        const engine = {
+            uploadVoidExternalImage: (layerId: number) => uploads.push(layerId),
+        } as unknown as Engine;
+        const src = new MediaStreamSource(5, engine, 'display');
+        // Stand in for the wiring `start()` would have done.
+        const fields = src as unknown as {
+            video: unknown;
+            canvas: unknown;
+            ctx: unknown;
+            hasFrame: boolean;
+        };
+        fields.video = { videoWidth: 4, videoHeight: 4 };
+        fields.canvas = { width: 4, height: 4 };
+        fields.ctx = { drawImage: () => {} };
+        fields.hasFrame = true;
+        return { src, uploads };
+    }
+
+    it('uploads when live, skips when frozen, resumes when unfrozen', () => {
+        const { src, uploads } = primedSource();
+
+        // frameCount divisible by the default divisor (4) so the throttle gate
+        // passes and the only thing under test is the freeze gate.
+        src.tick(4);
+        expect(uploads).toEqual([5]);
+
+        src.setFrozen(true);
+        src.tick(8);
+        expect(uploads).toEqual([5]); // suppressed — no new upload
+
+        // Still alive (not torn down): unfreeze resumes uploads without any
+        // re-acquire.
+        expect(src.ended).toBe(false);
+        src.setFrozen(false);
+        src.tick(12);
+        expect(uploads).toEqual([5, 5]);
+    });
+});

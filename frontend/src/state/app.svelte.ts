@@ -615,13 +615,16 @@ export class DarklyInstance {
     }
 
     /** Reconcile the live `mediaStreamSources` map against the latest layer
-     *  tree. Responsibilities: tear down sources whose void was frozen /
-     *  deleted / undone, push the latest `frame_divisor` + effective-visibility
+     *  tree. Responsibilities: tear down sources whose void was deleted /
+     *  undone, push the latest `freeze` + `frame_divisor` + effective-visibility
      *  into each live source, and prune the session-opt-in set. It does NOT
      *  start sources — that's a gesture-only concern (see `startMediaStreamVoid`)
-     *  so activation never expires. Called from `refreshLayerTree` after every
-     *  layer mutation so dead streams are reaped and the OS capture indicator
-     *  turns off exactly when the user expects.
+     *  so activation never expires — and it does NOT stop a source merely
+     *  because the void is frozen: freeze suppresses uploads while keeping the
+     *  stream open (stopping a `getDisplayMedia` track would end the share for
+     *  good). Called from `refreshLayerTree` after every layer mutation so dead
+     *  streams are reaped and the OS capture indicator turns off when the layer
+     *  actually goes away.
      *
      *  Takes the tree as a parameter (rather than reading `this.layerTree`) so
      *  the caller — `refreshLayerTree` — doesn't accidentally read the same
@@ -670,20 +673,23 @@ export class DarklyInstance {
         };
         walk(tree, true);
 
-        // Stop sources for layers that disappeared or that are now frozen.
+        // Tear down sources only for layers that actually disappeared (deleted
+        // / undone). Freezing is handled by `setFrozen` below — it must keep
+        // the stream open.
         for (const id of [...this.mediaStreamSources.keys()]) {
-            const entry = desired.get(id);
-            if (entry === undefined || entry.frozen) {
+            if (!desired.has(id)) {
                 this.stopMediaStreamVoid(id);
             }
         }
 
-        // Push the latest `frame_divisor` and effective-visibility into every
-        // live source. Slider / eye-toggle / parent-hide changes take effect on
-        // the next rAF without restarting the MediaStream.
-        for (const [id, { frameDivisor, visible }] of desired) {
+        // Push the latest `freeze`, `frame_divisor`, and effective-visibility
+        // into every live source. Freeze suppresses uploads (holding the last
+        // GPU frame) without closing the stream; slider / eye-toggle /
+        // parent-hide changes take effect on the next rAF.
+        for (const [id, { frozen, frameDivisor, visible }] of desired) {
             const src = this.mediaStreamSources.get(id);
             if (!src) continue;
+            src.setFrozen(frozen);
             src.setFrameDivisor(frameDivisor);
             src.setVisible(visible);
         }
