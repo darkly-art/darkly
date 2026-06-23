@@ -6,6 +6,7 @@
 //!
 //! Run with: `cargo test -p darkly --test layer_clipboard -- --test-threads=1`
 
+use darkly::engine::host::EngineHost;
 use darkly::engine::types::{LayerInfo, StrokeOp};
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
@@ -38,12 +39,16 @@ fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32) {
     engine.render(0.0);
 }
 
-/// Drive the rich-copy readback to completion and return its `LayerClipboard`
-/// JSON, folded into the copy response's `rich` field. Direct test calls use
-/// the default request id 0.
-fn drain_rich_copy(engine: &mut DarklyEngine) -> String {
-    let resp = engine
-        .test_drive_completed(0)
+/// Drive a rich copy to completion through an [`EngineHost`] and return its
+/// `LayerClipboard` JSON, folded into the copy response's `rich` field. Rich
+/// copy spawns a task, so it's driven via the host's frame loop. Consumes the
+/// engine; direct test calls use the default request id 0.
+fn drain_rich_copy(engine: DarklyEngine, do_copy: impl FnOnce(&mut DarklyEngine)) -> String {
+    let host = EngineHost::adopt(engine);
+    host.with(do_copy);
+    host.pump_until_idle();
+    let resp = host
+        .with(|e| e.test_take_completed(0))
         .expect("rich copy never produced a result");
     resp.value
         .get("rich")
@@ -89,8 +94,7 @@ fn rich_copy_paste_preserves_blend_mode_opacity_and_pixels() {
     source.set_blend_mode(layer, "multiply");
     source.set_layer_name(layer, "Source layer");
 
-    source.copy_layer_rich(layer);
-    let json = drain_rich_copy(&mut source);
+    let json = drain_rich_copy(source, |e| e.copy_layer_rich(layer));
 
     // Sanity-check the JSON envelope.
     assert!(json.contains("\"blend_mode\":\"multiply\""));
@@ -134,8 +138,7 @@ fn rich_paste_records_mask_presence_v1() {
     paint_dot(&mut source, layer, 16.0, 16.0);
     source.add_mask(layer);
 
-    source.copy_layer_rich(layer);
-    let json = drain_rich_copy(&mut source);
+    let json = drain_rich_copy(source, |e| e.copy_layer_rich(layer));
     assert!(
         json.contains("\"mask\":{"),
         "mask metadata should be in JSON"

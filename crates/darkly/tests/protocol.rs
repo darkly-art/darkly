@@ -1,9 +1,9 @@
-//! Request/response protocol dispatch tests (Plan step 2 + step 7 verification).
+//! Request/response protocol dispatch tests.
 //!
 //! These run native (headless `GpuContext`) and prove the registry routes,
 //! handlers decode/encode, and the binary side-channel round-trips. They
 //! cannot reproduce the *browser* event-pump re-entrancy panic — that is the
-//! manual browser repro's job (see plan Verification).
+//! manual browser repro's job.
 //!
 //! Run with: `cargo test -p darkly --test protocol --features testing`
 
@@ -146,11 +146,12 @@ fn binary_side_channel_round_trips() {
 
 /// Regression: a one-shot readback op (`copy`) defers — the request that kicked
 /// the readback is the request that resolves with the result, on a *later*
-/// drain, with no separate `poll_*` round-trip. Under the old poll model the
-/// kicking dispatch resolved immediately with `null`; this test pins the
-/// deferred-resolution contract Phase A introduced.
+/// drain, with no separate `poll_*` round-trip. `copy` spawns a task on the
+/// engine host's executor; the dispatch emits no outcome (`Response::deferred`),
+/// and the task resolves the originating request once the host drives it.
 #[test]
 fn deferred_copy_resolves_originating_request_on_a_later_drain() {
+    use darkly::engine::host::EngineHost;
     use darkly::engine::protocol::Transport;
     use darkly::engine::ClipboardExport;
 
@@ -160,23 +161,24 @@ fn deferred_copy_resolves_originating_request_on_a_later_drain() {
     let rgba = vec![128u8; (32 * 32 * 4) as usize];
     let layer = engine.paste_image(32, 32, &rgba, 0, 0, None);
 
+    let host = EngineHost::adopt(engine);
     let transport = Transport::new();
     const REQ: u64 = 4242;
     transport.enqueue(REQ, "copy", json!({ "id": layer.to_ffi() }), Vec::new());
 
-    // First drain dispatches `copy`, which kicks the readback and defers: no
-    // outcome for REQ yet (the poll model would have resolved it now, with
-    // null).
-    let first = transport.drain_with(&mut engine);
+    // Dispatch `copy` (without driving its task): the deferred handler spawns
+    // the task and emits no outcome for REQ — the poll model would have resolved
+    // it now, with null.
+    let first = host.with(|e| transport.drain_with(e));
     assert!(
         !first.iter().any(|o| o.id == REQ),
         "copy must defer — no outcome on the drain that kicked the readback"
     );
 
-    // Drive the readback, then drain again: the originating request resolves
-    // with the ClipboardExport — no `poll_copy_result` hop.
-    engine.test_flush_readbacks();
-    let second = transport.drain_with(&mut engine);
+    // Drive the task to completion, then drain again: the originating request
+    // resolves with the ClipboardExport — no `poll_copy_result` hop.
+    host.pump_until_idle();
+    let second = host.with(|e| transport.drain_with(e));
     let outcome = second
         .iter()
         .find(|o| o.id == REQ)

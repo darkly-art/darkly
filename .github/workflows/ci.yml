@@ -47,6 +47,33 @@ jobs:
           targets: wasm32-unknown-unknown
       - run: cargo clippy -p darkly-wasm --target wasm32-unknown-unknown --all-targets -- -D warnings
 
+  engine-borrow-gate:
+    name: engine borrow gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: No raw RefCell<DarklyEngine> borrow outside EngineCell
+        run: |
+          # The engine reentrancy invariant: `EngineCell::with`
+          # (engine/host/cell.rs) is the *sole* sanctioned borrow of the engine
+          # — a try-acquire that yields instead of panicking. Any other
+          # `RefCell<DarklyEngine>` in production source is a raw borrow site
+          # that can poison the cell under the browser event-pump re-entrancy
+          # (commit 219a879). `engine/protocol/transport.rs`'s `try_drain` is
+          # allowed: it also try-borrows (yields instead of panicking) and is the
+          # one transport-side engine accessor. Doc-comment mentions are ignored.
+          violations=$(grep -rn --include='*.rs' 'RefCell<DarklyEngine>' \
+              crates/darkly/src frontend/wasm/src \
+            | grep -v 'engine/host/cell.rs' \
+            | grep -v 'engine/protocol/transport.rs' \
+            | grep -vE ':[0-9]+://' || true)
+          if [ -n "$violations" ]; then
+            echo "::error::Raw RefCell<DarklyEngine> borrow outside EngineCell (engine/host/cell.rs):"
+            echo "$violations"
+            exit 1
+          fi
+          echo "ok: EngineCell::with is the only engine borrow"
+
   test:
     name: cargo test + coverage
     runs-on: ubuntu-latest

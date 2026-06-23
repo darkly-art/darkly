@@ -13,17 +13,20 @@
 //! Chromium pumps the browser event queue *inside* `queue.submit()` /
 //! `device.poll()`. The old bridge held `engine.borrow_mut()` across a method
 //! and a re-entrant pointer/rAF callback took a competing borrow → permanent
-//! `RefCell` poison. Now there are **exactly two** engine borrow sites:
+//! `RefCell` poison. Now every engine access goes through the core
+//! [`EngineHost`], whose sole sanctioned borrow is `EngineCell::with` —
+//! `try_borrow_mut` that yields instead of panicking. The bridge holds no engine
+//! `RefCell` of its own:
 //!
-//! - [`render`] — `try_borrow_mut`; drains the FIFO then composites, all in one
-//!   borrow. Returns `false`-equivalent (`busy: true`) and reschedules if it
-//!   can't get the borrow.
-//! - [`drain`] — `Transport::try_drain`, which `try_borrow_mut`s and yields
-//!   `busy` instead of panicking when render holds the borrow.
+//! - [`render`] — `host.tick`, which orchestrates drain → drive tasks →
+//!   composite as scoped bursts and yields `busy: true` if a re-entrant frame
+//!   can't acquire the engine.
+//! - [`drain`] — `host.pump`, the macrotask path; same try-acquire-or-yield.
 //!
 //! [`enqueue`] borrows nothing (it only appends to the FIFO), so a re-entrant
 //! request fired inside `submit()` is safe by construction. A CI grep gate
-//! enforces that no third `engine.borrow*()` site appears.
+//! enforces that `EngineCell::with` is the only engine borrow — no raw
+//! `borrow*()` on a `RefCell<DarklyEngine>` outside `engine/host/cell.rs`.
 //!
 //! `frame_count` / `thumbnail_version` are no longer separate borrowing reads —
 //! [`render`] returns them as a downhill projection of its single borrow.
@@ -31,7 +34,8 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use darkly::engine::protocol::{DrainOutcome, RequestOutcome, Transport};
+use darkly::engine::host::EngineHost;
+use darkly::engine::protocol::{RequestOutcome, Transport};
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::{GpuContext, GpuDevice};
 use darkly::layer::LayerId;
@@ -191,9 +195,13 @@ struct PendingExternalImage {
 
 #[wasm_bindgen]
 pub struct DarklyHandle {
-    engine: RefCell<DarklyEngine>,
+    /// The core orchestration host — owns the engine cell and the frame-driven
+    /// executor. The bridge holds no engine `RefCell` of its own; all access is
+    /// through the host's scoped bursts.
+    host: EngineHost,
     /// The deferred request transport (FIFO + dispatch registry). Enqueue-only
-    /// from JS; drained here.
+    /// from JS; lives bridge-side and is drained into the host via the injected
+    /// drain closure.
     transport: Transport,
     /// Side-FIFO for the OffscreenCanvas upload exception (see
     /// [`PendingExternalImage`]). Enqueue-only; applied at drain/render time.
@@ -203,7 +211,7 @@ pub struct DarklyHandle {
 impl DarklyHandle {
     fn from_engine(engine: DarklyEngine) -> Self {
         DarklyHandle {
-            engine: RefCell::new(engine),
+            host: EngineHost::adopt(engine),
             transport: Transport::new(),
             pending_images: RefCell::new(Vec::new()),
         }
@@ -266,22 +274,20 @@ impl DarklyHandle {
             .enqueue(id as u64, kind, value, bytes.unwrap_or_default());
     }
 
-    /// Non-blocking drain (the scheduler path). Returns `{ busy: true }` if the
-    /// engine is borrowed (render in flight — caller reschedules), else
-    /// `{ busy: false, results: [...] }` with one entry per dispatched request.
+    /// Non-blocking drain (the scheduler / macrotask path). Returns
+    /// `{ busy: true }` if the engine is borrowed (render in flight — caller
+    /// reschedules), else `{ busy: false, results: [...] }` with one entry per
+    /// dispatched request. Also drives in-flight deferred tasks so they can
+    /// progress between frames.
     pub fn drain(&self) -> JsValue {
-        // Apply deferred OffscreenCanvas uploads first, under the same borrow,
-        // without panicking if render holds it.
-        let outcome = {
-            let Ok(mut e) = self.engine.try_borrow_mut() else {
-                return busy_result();
-            };
-            self.apply_pending_images(&mut e);
-            DrainOutcome::Drained(self.transport.drain_with(&mut e))
-        };
-        match outcome {
-            DrainOutcome::Busy => busy_result(),
-            DrainOutcome::Drained(outcomes) => drained_result(outcomes),
+        let outcome = self.host.pump(
+            |e| self.apply_pending_images(e),
+            |e| self.transport.drain_with(e),
+        );
+        if outcome.busy {
+            busy_result()
+        } else {
+            drained_result(outcome.outcomes)
         }
     }
 
@@ -292,53 +298,48 @@ impl DarklyHandle {
     /// true when a re-entrant render couldn't get the borrow (caller must not
     /// reschedule another rAF — the outer render handles everything).
     pub fn render(&self, time_secs: f32) -> JsValue {
-        let Ok(mut e) = self.engine.try_borrow_mut() else {
-            return busy_result();
-        };
-
         let frame_start = web_time::Instant::now();
-        let drain_start = web_time::Instant::now();
-        self.apply_pending_images(&mut e);
-        let mut outcomes = self.transport.drain_with(&mut e);
-        let drain_us = drain_start.elapsed().as_micros() as u64;
 
-        let render_start = web_time::Instant::now();
-        let needs_more = e.render(time_secs);
-        let render_us = render_start.elapsed().as_micros() as u64;
-
-        // Deferred readbacks (copy / export / save) complete inside `render`'s
-        // poll — flush their terminal outcomes so they resolve this frame
-        // rather than waiting for the next drain.
-        outcomes.extend(e.take_completed_requests());
-
-        let frame_us = frame_start.elapsed().as_micros() as u64;
-        if frame_us > 25_000 {
-            let p = e.last_render_phases();
-            log::warn!(
-                "[frame-perf] slow frame={:.2}ms drain={:.2}ms render={:.2}ms \
-                 [render breakdown: poll={:.2}ms thumb={:.2}ms anim={:.2}ms composite={:.2}ms]",
-                frame_us as f32 / 1000.0,
-                drain_us as f32 / 1000.0,
-                render_us as f32 / 1000.0,
-                p.poll_us as f32 / 1000.0,
-                p.thumb_us as f32 / 1000.0,
-                p.anim_us as f32 / 1000.0,
-                p.compositor_us as f32 / 1000.0,
-            );
+        // The host orchestrates drain → drive tasks → composite as scoped
+        // bursts; a re-entrant frame that can't acquire the engine yields busy.
+        let outcome = self.host.tick(
+            time_secs,
+            |e| self.apply_pending_images(e),
+            |e| self.transport.drain_with(e),
+        );
+        if outcome.busy {
+            return busy_result();
         }
 
-        // The frontend's synchronously-readable engine-state mirror — one struct
-        // for every value the UI caches (frame/thumbnail counters + document
-        // bools), built from cheap CPU reads under the borrow render already
-        // holds (no extra query / per-frame poll). Grows as the UI needs more.
-        let state = serde_wasm_bindgen::to_value(&e.engine_state()).unwrap_or(JsValue::NULL);
-        drop(e);
+        let frame_us = frame_start.elapsed().as_micros() as u64;
+
+        // The frontend's synchronously-readable engine-state mirror plus the
+        // slow-frame perf log — both cheap CPU reads through a scoped burst.
+        let state = self
+            .host
+            .cell()
+            .with(|e| {
+                if frame_us > 25_000 {
+                    let p = e.last_render_phases();
+                    log::warn!(
+                        "[frame-perf] slow frame={:.2}ms \
+                         [render breakdown: poll={:.2}ms thumb={:.2}ms anim={:.2}ms composite={:.2}ms]",
+                        frame_us as f32 / 1000.0,
+                        p.poll_us as f32 / 1000.0,
+                        p.thumb_us as f32 / 1000.0,
+                        p.anim_us as f32 / 1000.0,
+                        p.compositor_us as f32 / 1000.0,
+                    );
+                }
+                serde_wasm_bindgen::to_value(&e.engine_state()).unwrap_or(JsValue::NULL)
+            })
+            .unwrap_or(JsValue::NULL);
 
         let obj = js_sys::Object::new();
         set(&obj, "busy", JsValue::FALSE);
-        set(&obj, "needsMore", JsValue::from_bool(needs_more));
+        set(&obj, "needsMore", JsValue::from_bool(outcome.needs_more));
         set(&obj, "state", state);
-        set(&obj, "results", outcomes_to_js(outcomes).into());
+        set(&obj, "results", outcomes_to_js(outcome.outcomes).into());
         obj.into()
     }
 

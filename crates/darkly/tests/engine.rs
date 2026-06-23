@@ -8,6 +8,7 @@
 use darkly::brush::nodes::pen_input;
 use darkly::brush::wire::BrushWireType;
 use darkly::document::SelectionMode;
+use darkly::engine::host::EngineHost;
 use darkly::engine::types::StrokeOp;
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
@@ -44,12 +45,21 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
     DarklyEngine::new(gpu, width, height)
 }
 
-/// Drive a directly-called deferred copy/cut/export op to completion and parse
-/// its `ClipboardExport` result. Direct test calls use the default request id 0.
-fn drive_copy_result(engine: &mut DarklyEngine) -> darkly::engine::ClipboardExport {
-    let resp = engine
-        .test_drive_completed(0)
-        .expect("deferred copy/cut should resolve after flushing readbacks");
+/// Drive a copy/cut to completion through an [`EngineHost`] and parse its
+/// `ClipboardExport`. Copy/cut spawn a task on the host's executor, so the
+/// driving (kick selection cache → kick copy readback → resolve) happens via the
+/// host's frame loop, not a bare `test_drive_completed`. Consumes the engine
+/// (the setup is done by the time we copy); direct test calls use request id 0.
+fn drive_copy_result(
+    engine: DarklyEngine,
+    do_copy: impl FnOnce(&mut DarklyEngine),
+) -> darkly::engine::ClipboardExport {
+    let host = EngineHost::adopt(engine);
+    host.with(do_copy);
+    host.pump_until_idle();
+    let resp = host
+        .with(|e| e.test_take_completed(0))
+        .expect("deferred copy/cut should resolve after the host drives it");
     serde_json::from_value(resp.value).expect("copy response deserializes as ClipboardExport")
 }
 
@@ -3428,8 +3438,7 @@ fn copy_selected_mask_region_populates_clipboard() {
     // exactly as the frontend `copy` action does via `copy_layer_rich`.
     engine.select_rect(10.0, 10.0, 24.0, 24.0, SelectionMode::Replace, false, 0.0);
     engine.test_flush_readbacks();
-    engine.copy_layer_rich(mask_id);
-    let result = drive_copy_result(&mut engine);
+    let result = drive_copy_result(engine, |e| e.copy_layer_rich(mask_id));
     assert!(
         result.width > 0 && result.height > 0 && !result.rgba.is_empty(),
         "mask copy must carry the selected region's pixels; got {}x{} ({} bytes)",
@@ -4556,10 +4565,9 @@ fn copy_with_aa_rect_selection_has_no_transparent_border() {
         0.0,
     );
 
-    engine.copy(layer_id);
-    // Drive the async readback to completion (selection-cache resume + copy
+    // Drive the async readback to completion (selection-cache warm + copy
     // readback) and read the resolved clipboard export.
-    let exported = drive_copy_result(&mut engine);
+    let exported = drive_copy_result(engine, |e| e.copy(layer_id));
 
     assert_eq!(
         exported.width, sel_w as u32,

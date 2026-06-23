@@ -314,20 +314,14 @@ impl DarklyEngine {
         self.drain_readbacks() || any_completed
     }
 
-    /// Poll the GPU readback scheduler once (non-blocking `device.poll`)
-    /// and dispatch every completed readback to its handler. Returns true
-    /// if any landed. Run once per frame from [`Self::poll_pending`]; this is
-    /// what drives deferred ops (copy / export / save) to completion and
-    /// resolves their requests.
+    /// Poll both readback schedulers once (non-blocking `device.poll`) and
+    /// dispatch / fill every completed readback. Returns true if any landed. Run
+    /// once per frame from [`Self::poll_pending`]; this is what drives deferred
+    /// ops (export / save, and the awaitable readbacks behind copy / cut tasks)
+    /// to completion and resolves their requests. Delegates to the engine's
+    /// unified [`poll_readbacks`](Self::poll_readbacks).
     pub(crate) fn drain_readbacks(&mut self) -> bool {
-        let completed = self.readbacks.poll(&self.gpu.device);
-        if completed.is_empty() {
-            return false;
-        }
-        for (ctx, pixels) in completed {
-            self.handle_completed_readback(ctx, pixels);
-        }
-        true
+        self.poll_readbacks()
     }
 
     /// Dispatch a completed readback to the appropriate handler. Shared
@@ -346,14 +340,6 @@ impl DarklyEngine {
                 if pixels.len() >= 4 {
                     self.last_picked_color = [pixels[0], pixels[1], pixels[2], pixels[3]];
                 }
-            }
-            ReadbackContext::Copy {
-                node_id,
-                region,
-                is_cut,
-                request,
-            } => {
-                self.complete_copy(node_id, region, is_cut, request, pixels);
             }
             ReadbackContext::MagicWand {
                 was_active,
@@ -389,11 +375,9 @@ impl DarklyEngine {
             }
             ReadbackContext::SelectionReadback => {
                 self.update_selection_overlay_from_readback(pixels);
-                // Resume deferred operations that were waiting for
-                // selection cpu_cache / pixel_bounds.
-                if let Some(pc) = self.pending_copy.take() {
-                    self.start_copy_readback(pc.layer_id, pc.is_cut, pc.request);
-                }
+                // Resume deferred operations waiting on selection cpu_cache /
+                // pixel_bounds. (Copy/cut tasks await the selection cache
+                // directly via their own combinator, not through this arm.)
                 if self.selection_pixel_bounds().is_some() {
                     if let Some(pt) = self.pending_transform.take() {
                         if self.floating.is_none() {
@@ -598,7 +582,7 @@ impl DarklyEngine {
                     anim_us: 0,
                     compositor_us: 0,
                 };
-                return self.readbacks.has_pending()
+                return self.has_pending_readbacks()
                     || self.compositor.has_pending_content_bounds()
                     || self.diff_rect.is_pending();
             }
@@ -614,7 +598,7 @@ impl DarklyEngine {
                 anim_us: 0,
                 compositor_us: 0,
             };
-            return self.readbacks.has_pending() || self.compositor.has_pending_content_bounds();
+            return self.has_pending_readbacks() || self.compositor.has_pending_content_bounds();
         }
 
         let t_anim = web_time::Instant::now();
@@ -639,9 +623,13 @@ impl DarklyEngine {
             compositor_us,
         };
 
-        // Keep requesting frames while async operations are in flight.
+        // Keep requesting frames while async operations are in flight. The
+        // executor's own in-flight tasks are OR'd in host-side (the host owns
+        // the executor); `has_pending_readbacks` covers the async-readback
+        // scheduler a copy/cut task awaits, so a copy kicked with nothing else
+        // animating still keeps frames coming until it lands.
         self.compositor.needs_animation(&self.doc)
-            || self.readbacks.has_pending()
+            || self.has_pending_readbacks()
             || self.compositor.has_pending_content_bounds()
             || self.diff_rect.is_pending()
     }

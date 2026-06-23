@@ -9,6 +9,7 @@ mod duplicate;
 mod export;
 mod flatten;
 mod floating;
+pub mod host;
 mod image_rescale;
 mod layer_flip;
 mod layers;
@@ -48,12 +49,14 @@ use crate::brush::stroke_engine::StrokeEngine;
 use crate::brush::wire::BrushWireType;
 use crate::clipboard::Clipboard;
 use crate::document::Document;
+use crate::engine::host::cell::EngineCell;
+use crate::engine::host::executor::Task;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::context::GpuContext;
 use crate::gpu::diff_rect::DiffRectPass;
 use crate::gpu::overlay::OverlayPrimitive;
 use crate::gpu::paint_target::PaintPipelines;
-use crate::gpu::readback::ReadbackScheduler;
+use crate::gpu::readback::{ReadbackScheduler, ReadbackSlot};
 use crate::gpu::region_store::{EntryPixels, RegionScratch};
 use crate::gpu::selection::SelectionPipelines;
 use crate::gpu::transform::FloatingContent;
@@ -62,7 +65,9 @@ use crate::gpu::view::{ViewParams, ViewTransform};
 use crate::gpu::void_preview::VoidPreviewRenderer;
 use crate::layer::LayerId;
 use crate::undo::UndoStack;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::{Rc, Weak};
 
 // ---------------------------------------------------------------------------
 // Internal helper types
@@ -88,15 +93,6 @@ pub(crate) struct PendingFlip {
 pub(crate) struct PendingAdjustment {
     pub node_id: LayerId,
     pub adjustment_type: String,
-}
-
-/// Deferred copy/cut — waiting for selection CPU cache to be populated.
-/// `request` is the originating protocol request id; it travels through the
-/// resume so the copy's promise resolves when the readback finally lands.
-pub(crate) struct PendingCopy {
-    pub layer_id: LayerId,
-    pub is_cut: bool,
-    pub request: u64,
 }
 
 /// Layer metadata snapshot captured at `copy_layer_rich` time. Combined with
@@ -146,15 +142,6 @@ pub(crate) enum ReadbackContext {
         extent: crate::gpu::flood_fill::LayerFloodFillExtent,
     },
     ColorPick,
-    Copy {
-        node_id: LayerId,
-        region: [u32; 4],
-        is_cut: bool,
-        /// Originating copy/cut request id — resolved with the
-        /// `ClipboardExport` (plus rich-layer JSON for `copy_layer_rich`) when
-        /// the masked staging readback lands.
-        request: u64,
-    },
     MagicWand {
         was_active: bool,
         node_id: LayerId,
@@ -497,11 +484,27 @@ pub struct DarklyEngine {
     pub(crate) pending_flip: Option<PendingFlip>,
     /// Pending destructive adjustment waiting for the selection CPU cache.
     pub(crate) pending_adjustment: Option<PendingAdjustment>,
-    /// Pending copy/cut waiting for selection CPU cache.
-    pub(crate) pending_copy: Option<PendingCopy>,
 
     // --- Async readback ---
     pub(crate) readbacks: ReadbackScheduler<ReadbackContext>,
+    /// Completion-slot scheduler for *awaitable* readbacks: a deferred op's task
+    /// `.await`s a [`ReadbackFuture`] whose slot this scheduler fills on harvest,
+    /// rather than routing the completion through the central
+    /// `handle_completed_readback` match the sink [`readbacks`](Self::readbacks)
+    /// scheduler uses. Both share the engine's one `device.poll`; see
+    /// [`poll_readbacks`](Self::poll_readbacks).
+    ///
+    /// [`ReadbackFuture`]: crate::gpu::readback::ReadbackFuture
+    pub(crate) async_readbacks: ReadbackScheduler<Rc<RefCell<ReadbackSlot>>>,
+    /// Weak back-reference to this engine's own [`EngineCell`], set once at
+    /// host construction. A deferring handler upgrades it to build a future that
+    /// re-acquires the engine between awaits. `Weak` so it doesn't form a cycle
+    /// with the cell that owns the engine.
+    pub(crate) self_cell: Weak<EngineCell>,
+    /// Tasks a handler spawned this dispatch, awaiting transfer into the host's
+    /// executor after the dispatch burst (the host can't push directly — it
+    /// doesn't hold the engine during dispatch).
+    pub(crate) pending_spawns: Vec<Task>,
     /// Metadata snapshot captured at `copy_layer_rich` time. When the async
     /// pixel readback completes, this snapshot is combined with the pixels
     /// to build a `LayerClipboard` folded into the copy promise's response.
@@ -660,8 +663,10 @@ impl DarklyEngine {
             pending_transform: None,
             pending_flip: None,
             pending_adjustment: None,
-            pending_copy: None,
             readbacks: ReadbackScheduler::new(),
+            async_readbacks: ReadbackScheduler::new(),
+            self_cell: Weak::new(),
+            pending_spawns: Vec::new(),
             pending_rich_metadata: None,
             last_picked_color: [0, 0, 0, 0],
             active_save_job: None,
@@ -750,6 +755,133 @@ impl DarklyEngine {
     /// `drain_with` and by the WASM `render` after compositing.
     pub fn take_completed_requests(&mut self) -> Vec<protocol::RequestOutcome> {
         std::mem::take(&mut self.completed_requests)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Host integration — self-cell back-reference, task spawning, awaitable
+// readbacks (engine/host/*).
+// ---------------------------------------------------------------------------
+//
+// A deferring handler builds a linear `async` block that re-acquires the engine
+// between readback `.await`s. To do that it needs a handle to its own
+// `EngineCell` (`self_cell`, wired once by the host at construction) and a way
+// to enqueue the block (`spawn`, drained by the host into its executor after the
+// dispatch burst). The awaited readbacks land in `async_readbacks`, a completion
+// slot the future polls — see `crate::gpu::readback::ReadbackFuture`.
+
+impl DarklyEngine {
+    /// Wire the back-reference to this engine's own cell. Called once by
+    /// `EngineHost::adopt`.
+    pub(crate) fn set_self_cell(&mut self, cell: Weak<EngineCell>) {
+        self.self_cell = cell;
+    }
+
+    /// An `Rc<EngineCell>` clone for a deferring handler to capture into the
+    /// task it builds. Panics if called before the host wired `self_cell` — a
+    /// deferring handler can only run under a host.
+    pub(crate) fn self_cell(&self) -> Rc<EngineCell> {
+        self.self_cell
+            .upgrade()
+            .expect("self_cell not wired — deferring op requires an EngineHost")
+    }
+
+    /// Enqueue a task that runs on the host's frame-driven executor. `request`
+    /// is the protocol id the task ultimately resolves (so teardown can reject
+    /// it). Pushed onto `pending_spawns`; the host moves it into the executor
+    /// after the dispatch burst returns.
+    pub(crate) fn spawn(
+        &mut self,
+        request: Option<u64>,
+        future: impl std::future::Future<Output = ()> + 'static,
+    ) {
+        self.pending_spawns.push(Task::new(request, future));
+    }
+
+    /// Take the tasks spawned this dispatch for transfer into the executor.
+    pub(crate) fn take_pending_spawns(&mut self) -> Vec<Task> {
+        std::mem::take(&mut self.pending_spawns)
+    }
+
+    /// Submit an awaitable readback. Returns a [`ReadbackFuture`] a task can
+    /// `.await`; the engine fills its slot when the readback lands in
+    /// [`poll_readbacks`](Self::poll_readbacks).
+    ///
+    /// [`ReadbackFuture`]: crate::gpu::readback::ReadbackFuture
+    pub(crate) fn await_readback(
+        &mut self,
+        request: crate::gpu::readback::ReadbackRequest,
+    ) -> crate::gpu::readback::ReadbackFuture {
+        let slot = Rc::new(RefCell::new(ReadbackSlot::Pending));
+        self.async_readbacks.submit(request, slot.clone());
+        crate::gpu::readback::ReadbackFuture::new(slot)
+    }
+
+    /// Drive **both** readback schedulers off one `device.poll`, then harvest
+    /// each: sink completions dispatch through `handle_completed_readback`, async
+    /// completions fill their awaiting task's slot. Returns `true` if anything
+    /// landed. The single per-frame readback poll for the whole engine — the
+    /// host calls this; `render` calls it too (direct callers / the composite
+    /// frame).
+    pub(crate) fn poll_readbacks(&mut self) -> bool {
+        self.drive_and_harvest_readbacks(false)
+    }
+
+    /// Shared body of [`poll_readbacks`](Self::poll_readbacks). `wait = true`
+    /// uses a blocking `device.poll(Wait)` (test driver only, native — see
+    /// CLAUDE.md "No Blocking GPU Readbacks"); production passes `false` (Poll).
+    fn drive_and_harvest_readbacks(&mut self, wait: bool) -> bool {
+        self.readbacks.begin_pending();
+        self.async_readbacks.begin_pending();
+
+        if self.readbacks.has_pending() || self.async_readbacks.has_pending() {
+            let poll_type = if wait {
+                wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                }
+            } else {
+                wgpu::PollType::Poll
+            };
+            let _ = self.gpu.device.poll(poll_type);
+        }
+
+        // Sink completions — dispatch through the shared handler.
+        let sink = self.readbacks.harvest();
+        let sink_landed = !sink.is_empty();
+        for (ctx, pixels) in sink {
+            self.handle_completed_readback(ctx, pixels);
+        }
+
+        // Async completions — fill the awaiting task's slot.
+        let async_done = self.async_readbacks.harvest();
+        let async_landed = !async_done.is_empty();
+        for (slot, pixels) in async_done {
+            *slot.borrow_mut() = ReadbackSlot::Ready(pixels);
+        }
+
+        sink_landed || async_landed
+    }
+
+    /// `true` if either readback scheduler has work in flight. Folds into the
+    /// host's `needsMore` keepalive alongside the executor's pending tasks.
+    pub(crate) fn has_pending_readbacks(&self) -> bool {
+        self.readbacks.has_pending() || self.async_readbacks.has_pending()
+    }
+
+    /// Cancel every in-flight awaitable readback, resolving each waiting task's
+    /// future to `None`. Called on host teardown so a task awaiting a disposed
+    /// handle unwinds instead of hanging.
+    pub(crate) fn cancel_async_readbacks(&mut self) {
+        for slot in self.async_readbacks.drain() {
+            *slot.borrow_mut() = ReadbackSlot::Cancelled;
+        }
+    }
+
+    /// Blocking unified readback flush for the test host's `pump_until_idle`.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_poll_readbacks_blocking(&mut self) -> bool {
+        self.drive_and_harvest_readbacks(true)
     }
 }
 

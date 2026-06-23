@@ -220,30 +220,27 @@ impl<C> ReadbackScheduler<C> {
         self.tasks.push((request, context));
     }
 
-    /// Poll all pending readbacks. Returns completed `(context, pixels)` pairs.
-    ///
-    /// Begins mapping for any newly submitted requests, then calls
-    /// `device.poll(Poll)` once to nudge native backends, then checks
-    /// every pending request. Completed tasks are removed; in-flight tasks remain.
-    pub fn poll(&mut self, device: &wgpu::Device) -> Vec<(C, Vec<u8>)> {
-        // Begin mapping for newly submitted requests (deferred from submit()).
+    /// Begin mapping for any newly submitted requests (deferred from `submit`).
+    /// Idempotent — a request whose mapping already started is skipped. Pairs
+    /// with [`harvest`](Self::harvest): a caller drives the device once for
+    /// every scheduler sharing the device, then harvests each.
+    pub fn begin_pending(&mut self) {
         for (req, _) in &mut self.tasks {
             if req.rx.is_none() {
                 req.begin_mapping();
             }
         }
+    }
 
-        // One poll call for all pending readbacks — the device processes all
-        // ready callbacks in a single pass.
-        if !self.tasks.is_empty() {
-            let _ = device.poll(wgpu::PollType::Poll);
-        }
-
+    /// Harvest completed readbacks — `try_recv` each pending request's map
+    /// callback, unmap and extract the pixels of any that fired, and return the
+    /// `(context, pixels)` pairs. **Does not** call `device.poll`; the caller
+    /// must have driven the device (one poll for every scheduler) since the last
+    /// harvest. Completed tasks are removed; in-flight tasks remain.
+    pub fn harvest(&mut self) -> Vec<(C, Vec<u8>)> {
         let mut completed = Vec::new();
         let mut i = 0;
         while i < self.tasks.len() {
-            // Skip the device.poll inside ReadbackRequest::poll — we already
-            // did it above. Just check the channel directly.
             let ready = self.tasks[i]
                 .0
                 .rx
@@ -271,6 +268,23 @@ impl<C> ReadbackScheduler<C> {
         completed
     }
 
+    /// Poll all pending readbacks. Returns completed `(context, pixels)` pairs.
+    ///
+    /// Begins mapping for any newly submitted requests, calls `device.poll(Poll)`
+    /// once to nudge native backends, then harvests. Convenience wrapper over
+    /// [`begin_pending`](Self::begin_pending) + [`harvest`](Self::harvest) for
+    /// callers driving a single scheduler; the engine's [`poll_readbacks`] drives
+    /// both schedulers off one shared `device.poll` instead.
+    ///
+    /// [`poll_readbacks`]: crate::engine::DarklyEngine::poll_readbacks
+    pub fn poll(&mut self, device: &wgpu::Device) -> Vec<(C, Vec<u8>)> {
+        self.begin_pending();
+        if !self.tasks.is_empty() {
+            let _ = device.poll(wgpu::PollType::Poll);
+        }
+        self.harvest()
+    }
+
     /// True if any readbacks are in flight.
     pub fn has_pending(&self) -> bool {
         !self.tasks.is_empty()
@@ -285,10 +299,66 @@ impl<C> ReadbackScheduler<C> {
     pub fn cancel<F: Fn(&C) -> bool>(&mut self, f: F) {
         self.tasks.retain(|(_, ctx)| !f(ctx));
     }
+
+    /// Cancel and remove every pending readback, returning their contexts. The
+    /// readback buffers are dropped (any in-flight mapping is abandoned). Used
+    /// by teardown to mark awaitable slots `Cancelled`.
+    pub fn drain(&mut self) -> Vec<C> {
+        self.tasks.drain(..).map(|(_, ctx)| ctx).collect()
+    }
 }
 
 impl<C> Default for ReadbackScheduler<C> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Awaitable readback — a shared completion slot polled by the frame-driven
+// executor (engine/host).
+// ---------------------------------------------------------------------------
+
+/// Completion state of an awaitable readback. The async-readback scheduler
+/// (`ReadbackScheduler<Rc<RefCell<ReadbackSlot>>>`) writes `Ready` on harvest;
+/// the [`ReadbackFuture`] polled by the executor reads it. `Cancelled` is set on
+/// teardown so a task awaiting a disposed handle resolves to `None` rather than
+/// hanging.
+pub enum ReadbackSlot {
+    Pending,
+    Ready(Vec<u8>),
+    Cancelled,
+}
+
+/// A future over a [`ReadbackSlot`]. Resolves to the readback pixels once the
+/// scheduler fills the slot, or `None` if the slot was cancelled (handle
+/// disposed). Dependency-free: the engine's executor re-polls every task each
+/// frame with a no-op waker, so the slot needs no wakeup channel.
+pub struct ReadbackFuture(std::rc::Rc<std::cell::RefCell<ReadbackSlot>>);
+
+impl ReadbackFuture {
+    /// Wrap a shared slot. The matching `Rc` clone is held by the
+    /// async-readback scheduler, which writes the result on harvest.
+    pub fn new(slot: std::rc::Rc<std::cell::RefCell<ReadbackSlot>>) -> Self {
+        ReadbackFuture(slot)
+    }
+}
+
+impl std::future::Future for ReadbackFuture {
+    type Output = Option<Vec<u8>>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        use std::task::Poll;
+        // Take the result out of the slot, leaving `Pending` behind so a second
+        // poll after Ready can't double-yield the bytes.
+        let mut slot = self.0.borrow_mut();
+        match std::mem::replace(&mut *slot, ReadbackSlot::Pending) {
+            ReadbackSlot::Ready(pixels) => Poll::Ready(Some(pixels)),
+            ReadbackSlot::Cancelled => Poll::Ready(None),
+            ReadbackSlot::Pending => Poll::Pending,
+        }
     }
 }

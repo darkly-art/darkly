@@ -8,6 +8,7 @@
 
 use darkly::coord::{CanvasPoint, CanvasRect};
 use darkly::document::SelectionMode;
+use darkly::engine::host::EngineHost;
 use darkly::engine::types::StrokeOp;
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
@@ -396,14 +397,15 @@ fn copy_selection_after_crop_extracts_plane_pixels_and_offset() {
     // Crop to a NON-ZERO origin window at plane (16, 12); the square is inside.
     engine.resize_canvas(CanvasRect::from_xywh(16, 12, 40, 40));
 
-    // Select the square in plane coords, then copy.
+    // Select the square in plane coords, then copy. Copy spawns a task on the
+    // host's executor, so drive it through an `EngineHost`; the request resolves
+    // with the clipboard export once the readback lands.
     engine.select_rect(30.0, 28.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
-    engine.copy(layer_id);
-
-    // Drive the async copy readback to completion; the request resolves with
-    // the clipboard export once the readback lands.
-    let resp = engine
-        .test_drive_completed(0)
+    let host = EngineHost::adopt(engine);
+    host.with(|e| e.copy(layer_id));
+    host.pump_until_idle();
+    let resp = host
+        .with(|e| e.test_take_completed(0))
         .expect("copy readback should complete");
     let export: darkly::engine::ClipboardExport =
         serde_json::from_value(resp.value).expect("copy response is a ClipboardExport");
