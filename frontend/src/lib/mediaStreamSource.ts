@@ -4,17 +4,21 @@
  * Owns one `<video>` element backed by a `MediaStream` the caller has already
  * acquired (`getUserMedia` for the camera, `getDisplayMedia` for screenshare —
  * see `app.acquireMediaStream`). Exposes a `tick()` method that hands the live
- * frame to the WASM bridge. Each tick blits the video into a backing
- * `OffscreenCanvas` via `drawImage`, then passes that canvas to
+ * frame to the WASM bridge. Each tick decodes the video's current frame into an
+ * `ImageBitmap` via `createImageBitmap`, then passes that bitmap to
  * `copy_external_image_to_texture`.
  *
- * Why the canvas hop? The WebGPU spec's `GPUCopyExternalImage.source` lists
- * `HTMLVideoElement`, but Firefox's WebGPU rejects it at runtime (only
- * canvas-family + ImageBitmap + HTMLImageElement sources are accepted), and
- * some Chromium configurations silently no-op the video-direct path (texture
- * stays zero). The canvas route is the cross-browser path used by the official
- * WebGPU samples; the `drawImage` stays GPU-side in modern Chromium (no CPU
- * readback).
+ * Why an `ImageBitmap` and not a 2D canvas? `copyExternalImageToTexture` from a
+ * 2D `OffscreenCanvas` forces a cross-context GPU fence — the canvas lives in
+ * the browser's compositor/GL context, the texture in the WebGPU device — which
+ * stalls the render loop ~one frame (~25ms) per upload, independent of
+ * resolution. A finalized `ImageBitmap` copies without that fence.
+ * `createImageBitmap` is async and decodes off the main thread, moving that work
+ * off the critical path entirely (at ~1 frame of latency, invisible for a live
+ * feed) and downscaling to the display cap in the same pass. It's also the most
+ * cross-browser-robust source: unlike a bare `HTMLVideoElement` (rejected by
+ * Firefox's WebGPU, silently no-op'd by some Chromium configs), `ImageBitmap` is
+ * universally accepted.
  *
  * Acquisition lives in the gesture (`app.acquireMediaStream`), NOT here:
  * `getDisplayMedia` requires transient user activation, which expires across the
@@ -74,19 +78,19 @@ export class MediaStreamSource {
      *  layer. Pushed in by the layer-tree reconciler. When false, `tick()`
      *  short-circuits — no canvas blit, no WASM call, no GPU work. The Rust
      *  side also gates `wants_external_input` on its own visibility flag, so
-     *  this is the JS-local optimization (skip the `drawImage` and the bridge
-     *  call) and Rust is the canonical correctness guard. */
+     *  this is the JS-local optimization (skip the decode and the bridge call)
+     *  and Rust is the canonical correctness guard. */
     private visible = true;
 
-    /** Longest edge (px) the blit canvas — and therefore the GPU upload — is
-     *  allowed to reach; the source is downscaled to fit, preserving aspect.
+    /** Longest edge (px) the decoded `ImageBitmap` — and therefore the GPU
+     *  upload — is allowed to reach; the source is downscaled to fit (via
+     *  `createImageBitmap`'s `resizeWidth`/`resizeHeight`), preserving aspect.
      *  Pushed in by the reconciler as the document-canvas long edge. The
      *  compositor renders this void cover-fit into a canvas-resolution target,
-     *  so source detail finer than the canvas can never be displayed — uploading
-     *  it just burns `copyExternalImageToTexture` CPU time every frame. This
-     *  matters for screenshare, where the source can be a full 4K monitor
-     *  (~33 MB/frame) feeding a far smaller document. `0` means "no cap" (the
-     *  safe fallback before a value is pushed). */
+     *  so source detail finer than the canvas can never be displayed — decoding
+     *  and uploading it is wasted bandwidth. This matters for screenshare, where
+     *  the source can be a full monitor feeding a smaller document. `0` means
+     *  "no cap" (the safe fallback before a value is pushed). */
     private maxSourceDimension = 0;
 
     /** Whether the void's `freeze` param is on. Pushed in by the reconciler.
@@ -99,13 +103,11 @@ export class MediaStreamSource {
      *  this is the JS-local skip of the wasted blit + bridge call. */
     private frozen = false;
 
-    /** 2D-context-backed canvas we blit the video frame into each tick.
-     *  Required because Firefox's WebGPU rejects `HTMLVideoElement` as a
-     *  `copyExternalImageToTexture` source, and some Chromium configs silently
-     *  no-op the video-direct path. The blit itself stays GPU-side in modern
-     *  Chromium. */
-    private canvas: OffscreenCanvas | null = null;
-    private ctx: OffscreenCanvasRenderingContext2D | null = null;
+    /** True while a `createImageBitmap` decode is in flight. `tick()` skips
+     *  starting another so a slow decode can't pile up a backlog of bitmaps
+     *  faster than the GPU drains them — the loop self-throttles to the decode
+     *  rate. */
+    private decoding = false;
 
     /** Human-readable error if start failed (permission denied, no device,
      *  etc.). Reactive Svelte readers in VoidProperties pull this directly. */
@@ -173,11 +175,6 @@ export class MediaStreamSource {
                 return;
             }
             this.video = video;
-            // Allocate the blit canvas at the video's current dimensions.
-            // We resize lazily in `tick()` if the video reports new dims
-            // later (rare but possible for some sources).
-            this.canvas = new OffscreenCanvas(video.videoWidth, video.videoHeight);
-            this.ctx = this.canvas.getContext('2d');
             // Gate uploads on a real presented frame, not just readyState.
             // `requestVideoFrameCallback` fires per presented frame; we just
             // need the first one to flip the flag and then leave it alone
@@ -233,22 +230,37 @@ export class MediaStreamSource {
     tick(frameCount: number): void {
         if (!this.visible || this.frozen) return;
         if (frameCount % this.frameDivisor !== 0) return;
-        if (!this.video || !this.canvas || !this.ctx || this.stopped || !this.hasFrame) return;
+        if (!this.video || this.stopped || !this.hasFrame || this.decoding) return;
         const vw = this.video.videoWidth;
         const vh = this.video.videoHeight;
         if (vw === 0 || vh === 0) return;
-        // Downscale to the display cap before the blit, so both `drawImage` and
-        // the GPU upload operate on canvas-resolution pixels rather than the
-        // source's native (potentially 4K) frame. `drawImage`'s dest-rect form
-        // does the scale GPU-side; the smaller canvas is what actually slashes
-        // the per-frame `copyExternalImageToTexture` cost.
+        // Decode the current frame off-thread into a finalized `ImageBitmap`,
+        // downscaling to the display cap in the same pass when the source
+        // overruns it. The bridge uploads (and closes) the bitmap at the next
+        // drain. The `decoding` guard keeps at most one decode outstanding.
         const [tw, th] = this.cappedDimensions(vw, vh);
-        if (this.canvas.width !== tw || this.canvas.height !== th) {
-            this.canvas.width = tw;
-            this.canvas.height = th;
-        }
-        this.ctx.drawImage(this.video, 0, 0, tw, th);
-        this.engine.uploadVoidExternalImage(this.layerId, this.canvas);
+        const opts: ImageBitmapOptions =
+            tw !== vw || th !== vh
+                ? { resizeWidth: tw, resizeHeight: th, resizeQuality: 'medium' }
+                : {};
+        this.decoding = true;
+        createImageBitmap(this.video, opts)
+            .then((bitmap) => {
+                // The source may have been torn down or frozen mid-decode; drop
+                // the now-orphaned bitmap rather than uploading a stale frame.
+                if (this.stopped || this.frozen) {
+                    bitmap.close();
+                    return;
+                }
+                this.engine.uploadVoidExternalImage(this.layerId, bitmap);
+            })
+            .catch(() => {
+                // Decode can fail if the frame became unavailable (track ended
+                // mid-flight); ignore and retry on the next eligible tick.
+            })
+            .finally(() => {
+                this.decoding = false;
+            });
     }
 
     /** Source dimensions clamped so the longest edge is at most
@@ -273,7 +285,7 @@ export class MediaStreamSource {
     }
 
     /** Update the upload resolution cap (document-canvas long edge). Called by
-     *  the layer-tree reconciler and at start; takes effect on the next blit. */
+     *  the layer-tree reconciler and at start; takes effect on the next decode. */
     setMaxSourceDimension(n: number): void {
         this.maxSourceDimension = Math.max(0, Math.floor(n));
     }
@@ -306,8 +318,7 @@ export class MediaStreamSource {
             this.video.remove();
             this.video = null;
         }
-        this.canvas = null;
-        this.ctx = null;
+        this.decoding = false;
         this.hasFrame = false;
     }
 }

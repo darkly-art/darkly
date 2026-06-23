@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { describeMediaError, MediaStreamSource } from '../mediaStreamSource';
 import type { Engine } from '../../engine/protocol';
 
@@ -54,108 +54,115 @@ describe('MediaStreamSource external stop (track ended)', () => {
     });
 });
 
+// `tick()` decodes the frame off-thread via the global `createImageBitmap`, then
+// uploads on the promise resolution. Node vitest has neither, so we stub
+// `createImageBitmap` (honoring the resize opts so the fake bitmap reports the
+// dimensions the upload will see) and flush microtasks between ticks.
+afterEach(() => vi.unstubAllGlobals());
+
+const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+function primedSource(videoWidth = 4, videoHeight = 4) {
+    const uploads: Array<{ width: number; height: number }> = [];
+    const optsSeen: ImageBitmapOptions[] = [];
+    let closes = 0;
+    vi.stubGlobal('createImageBitmap', (_src: unknown, opts?: ImageBitmapOptions) => {
+        optsSeen.push(opts ?? {});
+        return Promise.resolve({
+            width: opts?.resizeWidth ?? videoWidth,
+            height: opts?.resizeHeight ?? videoHeight,
+            close: () => {
+                closes++;
+            },
+        });
+    });
+    const engine = {
+        uploadVoidExternalImage: (_layerId: number, bmp: ImageBitmap) =>
+            uploads.push({ width: bmp.width, height: bmp.height }),
+    } as unknown as Engine;
+    const src = new MediaStreamSource(5, engine, 'display');
+    // Stand in for the wiring `start()` would have done. The video stub carries
+    // the no-op teardown methods `stop()` calls so tests can exercise it.
+    const fields = src as unknown as { video: unknown; hasFrame: boolean };
+    fields.video = {
+        videoWidth,
+        videoHeight,
+        srcObject: null,
+        pause: () => {},
+        remove: () => {},
+    };
+    fields.hasFrame = true;
+    return { src, uploads, optsSeen, closes: () => closes };
+}
+
 describe('MediaStreamSource freeze suppresses uploads without closing', () => {
     // Regression: freezing a screenshare used to tear down the source (the
     // reconciler called stop()), which ends a getDisplayMedia track for good —
     // unfreeze then showed nothing until the user re-picked. Freeze must only
     // gate `tick()`; the stream stays open so unfreeze resumes instantly.
-    //
-    // The DOM-heavy `start()` isn't runnable in node vitest, so we inject the
-    // fields `tick()` reads and assert it uploads only when not frozen.
-    function primedSource() {
-        const uploads: number[] = [];
-        const engine = {
-            uploadVoidExternalImage: (layerId: number) => uploads.push(layerId),
-        } as unknown as Engine;
-        const src = new MediaStreamSource(5, engine, 'display');
-        // Stand in for the wiring `start()` would have done.
-        const fields = src as unknown as {
-            video: unknown;
-            canvas: unknown;
-            ctx: unknown;
-            hasFrame: boolean;
-        };
-        fields.video = { videoWidth: 4, videoHeight: 4 };
-        fields.canvas = { width: 4, height: 4 };
-        fields.ctx = { drawImage: () => {} };
-        fields.hasFrame = true;
-        return { src, uploads };
-    }
-
-    it('uploads when live, skips when frozen, resumes when unfrozen', () => {
+    it('uploads when live, skips when frozen, resumes when unfrozen', async () => {
         const { src, uploads } = primedSource();
 
         // frameCount divisible by the default divisor (4) so the throttle gate
         // passes and the only thing under test is the freeze gate.
         src.tick(4);
-        expect(uploads).toEqual([5]);
+        await flush();
+        expect(uploads.length).toBe(1);
 
         src.setFrozen(true);
         src.tick(8);
-        expect(uploads).toEqual([5]); // suppressed — no new upload
+        await flush();
+        expect(uploads.length).toBe(1); // suppressed — no new upload
 
         // Still alive (not torn down): unfreeze resumes uploads without any
         // re-acquire.
         expect(src.ended).toBe(false);
         src.setFrozen(false);
         src.tick(12);
-        expect(uploads).toEqual([5, 5]);
+        await flush();
+        expect(uploads.length).toBe(2);
+    });
+
+    it('drops a bitmap that resolves after the source stopped', async () => {
+        const { src, uploads, closes } = primedSource();
+        src.tick(4);
+        src.stop(); // tear down before the decode resolves
+        await flush();
+        expect(uploads).toEqual([]); // never uploaded
+        expect(closes()).toBe(1); // the orphaned bitmap was released
     });
 });
 
 describe('MediaStreamSource caps upload resolution to the display target', () => {
-    // Regression: a 4K screenshare uploaded its native 3840×2160 frame every
-    // tick, and the synchronous `copyExternalImageToTexture` of ~33 MB stalled
-    // the render loop (~26 ms drains). The compositor only samples the void at
-    // canvas resolution, so the blit canvas must be downscaled to the cap
-    // before the upload — preserving aspect so cover-fit is unaffected.
-    function primedSource(videoWidth: number, videoHeight: number) {
-        // Record the blit-canvas dimensions at upload time (the upload happens
-        // after tick() has sized the canvas and drawn into it).
-        const uploads: Array<{ w: number; h: number }> = [];
-        const canvas = { width: 0, height: 0 };
-        const engine = {
-            uploadVoidExternalImage: () => uploads.push({ w: canvas.width, h: canvas.height }),
-        } as unknown as Engine;
-        const src = new MediaStreamSource(7, engine, 'display');
-        const draws: Array<{ w: number; h: number }> = [];
-        const fields = src as unknown as {
-            video: unknown;
-            canvas: unknown;
-            ctx: unknown;
-            hasFrame: boolean;
-        };
-        fields.video = { videoWidth, videoHeight };
-        fields.canvas = canvas;
-        fields.ctx = {
-            drawImage: (_img: unknown, _x: number, _y: number, w: number, h: number) =>
-                draws.push({ w, h }),
-        };
-        fields.hasFrame = true;
-        return { src, uploads, draws };
-    }
-
-    it('downscales an oversized source to the cap, preserving aspect', () => {
-        const { src, uploads, draws } = primedSource(3840, 2160);
+    // Regression: a screenshare uploaded its native frame, and the
+    // `copyExternalImageToTexture` cross-context fence stalled the render loop
+    // (~26ms drains). The compositor only samples the void at canvas resolution,
+    // so the frame is downscaled to the cap during the off-thread decode —
+    // preserving aspect so cover-fit is unaffected.
+    it('downscales an oversized source to the cap, preserving aspect', async () => {
+        const { src, uploads, optsSeen } = primedSource(3840, 2160);
         src.setMaxSourceDimension(1000);
         src.tick(4);
+        await flush();
         // Long edge clamped to 1000; 2160 * (1000/3840) ≈ 563.
-        expect(uploads).toEqual([{ w: 1000, h: 563 }]);
-        // The blit drew into the capped dest rect (GPU-side downscale).
-        expect(draws).toEqual([{ w: 1000, h: 563 }]);
+        expect(optsSeen[0]).toMatchObject({ resizeWidth: 1000, resizeHeight: 563 });
+        expect(uploads).toEqual([{ width: 1000, height: 563 }]);
     });
 
-    it('leaves a source already within the cap untouched', () => {
-        const { src, uploads } = primedSource(640, 480);
+    it('decodes at native size when already within the cap', async () => {
+        const { src, uploads, optsSeen } = primedSource(640, 480);
         src.setMaxSourceDimension(1000);
         src.tick(4);
-        expect(uploads).toEqual([{ w: 640, h: 480 }]);
+        await flush();
+        expect(optsSeen[0]).toEqual({}); // no resize requested
+        expect(uploads).toEqual([{ width: 640, height: 480 }]);
     });
 
-    it('treats a zero/unset cap as no cap', () => {
+    it('treats a zero/unset cap as native', async () => {
         const { src, uploads } = primedSource(3840, 2160);
-        // Never called setMaxSourceDimension — default 0 means upload native.
+        // Never called setMaxSourceDimension — default 0 means decode native.
         src.tick(4);
-        expect(uploads).toEqual([{ w: 3840, h: 2160 }]);
+        await flush();
+        expect(uploads).toEqual([{ width: 3840, height: 2160 }]);
     });
 });
