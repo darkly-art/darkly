@@ -112,11 +112,12 @@ export class Engine {
         return status;
     }
 
-    /** Queue an OffscreenCanvas frame upload for a camera-style void. The one
-     *  engine op that can't cross the serialized protocol (an OffscreenCanvas
-     *  isn't JSON) — still deferred, applied at the next drain/render. */
-    uploadVoidExternalImage(layerId: number, canvas: OffscreenCanvas): void {
-        this.handle.upload_void_external_image(layerId, canvas);
+    /** Queue an `ImageBitmap` frame upload for a camera-style void. The one
+     *  engine op that can't cross the serialized protocol (an `ImageBitmap`
+     *  isn't JSON) — still deferred, applied at the next drain/render. The
+     *  bridge closes the bitmap once the copy is recorded. */
+    uploadVoidExternalImage(layerId: number, bitmap: ImageBitmap): void {
+        this.handle.upload_void_external_image(layerId, bitmap);
     }
 
     /** Engine-side default thumbnail dimension (compile-time constant; no

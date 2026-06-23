@@ -187,6 +187,12 @@ impl Default for DarklySession {
 struct PendingExternalImage {
     layer_id: u64,
     source: darkly::gpu::void::ExternalImageSource,
+    /// The `ImageBitmap` backing `source`, retained so it can be `.close()`d the
+    /// instant the GPU copy is recorded. `copyExternalImageToTexture` snapshots
+    /// its source synchronously, so releasing the bitmap right after the copy is
+    /// safe — and necessary, or the decoded frame lingers until GC, stalling the
+    /// browser's video-decode buffer pool.
+    bitmap: web_sys::ImageBitmap,
 }
 
 #[wasm_bindgen]
@@ -217,6 +223,9 @@ impl DarklyHandle {
             self.pending_images.borrow_mut().drain(..).collect();
         for p in pending {
             engine.upload_void_external_image(LayerId::from_ffi(p.layer_id), p.source);
+            // The copy is recorded (and the source snapshotted) by the call
+            // above; release the bitmap so the decoder buffer is freed now.
+            p.bitmap.close();
         }
     }
 }
@@ -298,7 +307,10 @@ impl DarklyHandle {
 
         let frame_start = web_time::Instant::now();
         let drain_start = web_time::Instant::now();
+        let pending_count = self.pending_images.borrow().len();
         self.apply_pending_images(&mut e);
+        let pending_us = drain_start.elapsed().as_micros() as u64;
+        let fifo_count = self.transport.pending();
         let outcomes = self.transport.drain_with(&mut e);
         let drain_us = drain_start.elapsed().as_micros() as u64;
 
@@ -310,10 +322,14 @@ impl DarklyHandle {
         if frame_us > 25_000 {
             let p = e.last_render_phases();
             log::warn!(
-                "[frame-perf] slow frame={:.2}ms drain={:.2}ms render={:.2}ms \
+                "[frame-perf] slow frame={:.2}ms drain={:.2}ms (pending-img={:.2}ms x{} | fifo={:.2}ms x{}) render={:.2}ms \
                  [render breakdown: poll={:.2}ms thumb={:.2}ms anim={:.2}ms composite={:.2}ms]",
                 frame_us as f32 / 1000.0,
                 drain_us as f32 / 1000.0,
+                pending_us as f32 / 1000.0,
+                pending_count,
+                (drain_us.saturating_sub(pending_us)) as f32 / 1000.0,
+                fifo_count,
                 render_us as f32 / 1000.0,
                 p.poll_us as f32 / 1000.0,
                 p.thumb_us as f32 / 1000.0,
@@ -337,17 +353,25 @@ impl DarklyHandle {
         obj.into()
     }
 
-    /// Queue an OffscreenCanvas frame upload for a camera-style void. Borrows
+    /// Queue an `ImageBitmap` frame upload for a camera-style void. Borrows
     /// nothing; applied at the next drain/render. See [`PendingExternalImage`].
-    pub fn upload_void_external_image(&self, layer_id: f64, canvas: web_sys::OffscreenCanvas) {
+    ///
+    /// An `ImageBitmap` (decoded off-thread by the caller via `createImageBitmap`)
+    /// is used rather than a 2D canvas: `copyExternalImageToTexture` from a 2D
+    /// `OffscreenCanvas` forces a cross-context GPU fence (the canvas lives in
+    /// the compositor's GL context, the target in the WebGPU device), a
+    /// ~frame-quantized stall regardless of frame size. A finalized `ImageBitmap`
+    /// copies without that fence.
+    pub fn upload_void_external_image(&self, layer_id: f64, bitmap: web_sys::ImageBitmap) {
         let info = wgpu::CopyExternalImageSourceInfo {
-            source: wgpu::ExternalImageSource::OffscreenCanvas(canvas),
+            source: wgpu::ExternalImageSource::ImageBitmap(bitmap.clone()),
             origin: wgpu::Origin2d::ZERO,
             flip_y: false,
         };
         self.pending_images.borrow_mut().push(PendingExternalImage {
             layer_id: layer_id as u64,
             source: darkly::gpu::void::ExternalImageSource::Web(info),
+            bitmap,
         });
     }
 
