@@ -20,6 +20,9 @@
             // See LayerItem — `locked` is the node's own flag, `editable`
             // is the effective (ancestor-aware) form used to gate edits.
             editable?: boolean;
+            // Per-kind mask capability (see LayerKindRegistration) — gates the
+            // add-mask control without branching on the kind.
+            canHaveMask?: boolean;
             collapsed: boolean; passthrough: boolean; opacity: number;
             blendMode: string; children: any[];
             modifiers?: Modifier[];
@@ -82,7 +85,7 @@
         return siblingBelowExists(app.layerTree, group.id);
     });
 
-    let canAddMask = $derived(!hasMask && editable);
+    let canAddMask = $derived(Boolean(group.canHaveMask) && !hasMask && editable);
 
     // Chord dispatch is owned by `use:bindingSite` on each preview element
     // below — `bindingSite` intercepts modifier+click in capture phase

@@ -71,8 +71,8 @@ fn main() {
     generate_registry(&src.join("gpu/voids"), "crate::gpu::void::VoidRegistration");
 
     generate_registry(
-        &src.join("gpu/adjustments"),
-        "crate::gpu::adjustment::AdjustmentRegistration",
+        &src.join("gpu/filters"),
+        "crate::gpu::filter::FilterPipelineRegistration",
     );
 
     generate_registry(&src.join("tools"), "crate::tool::ToolRegistration");
@@ -93,8 +93,8 @@ fn main() {
     );
 
     generate_registry(
-        &src.join("document/modifiers"),
-        "crate::document::modifier::ModifierRegistration",
+        &src.join("document/filters"),
+        "crate::document::filter::FilterEntityRegistration",
     );
 
     generate_registry(
@@ -145,7 +145,7 @@ fn generate_registry(dir: &Path, registration_type: &str) {
     modules.sort();
 
     // Extract just the struct name from the full path for use in fn signature.
-    // e.g. "crate::gpu::filter::FilterRegistration" -> "FilterRegistration"
+    // e.g. "crate::gpu::filter::FilterPipelineRegistration" -> "FilterPipelineRegistration"
     let type_name = registration_type.rsplit("::").next().unwrap();
 
     let mut code = String::new();

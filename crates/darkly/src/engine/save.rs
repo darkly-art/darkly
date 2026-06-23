@@ -4,7 +4,7 @@
 //!
 //! The save snapshot is the [`Manifest`] itself: built synchronously at
 //! `start_save_document` from the live document, it captures the tree,
-//! modifiers, selection metadata, veil chain, and the `requires`
+//! filters, selection metadata, veil chain, and the `requires`
 //! inventory at submit time. Pixels are pinned via refcounted
 //! [`wgpu::Texture`] handles in the same synchronous prelude, so the
 //! user can keep painting / mutating the doc while readbacks complete
@@ -13,14 +13,14 @@
 //!
 //! The build is registry-driven: each entity's `serialize` returns its
 //! own opaque body plus a list of [`PixelBlobSpec`]s. Save never branches
-//! on layer kind or modifier kind — the same loop handles raster, mask,
+//! on layer kind or filter kind — the same loop handles raster, mask,
 //! selection, and any future kind that registers itself.
 
 use std::collections::{HashMap, HashSet};
 
 use super::{DarklyEngine, ReadbackContext};
+use crate::document::filter;
 use crate::document::layer_kind::{self, PixelBlobSpec};
-use crate::document::modifier;
 use crate::document::Entity;
 use crate::format::manifest::{
     Manifest, ManifestCanvas, ManifestEntry, ManifestRequires, ManifestVeil, ManifestWriter,
@@ -89,7 +89,7 @@ pub enum SaveReadbackKind {
 /// asynchronously into `pending_blobs` / `composite`).
 pub struct SaveJob {
     /// Manifest built synchronously at submit time. Captures the
-    /// document's tree / modifier / veil / requires state at the moment
+    /// document's tree / filter / veil / requires state at the moment
     /// `start_save_document` ran. Any subsequent doc mutation is
     /// invisible to this manifest.
     manifest: Manifest,
@@ -270,20 +270,20 @@ impl DarklyEngine {
     }
 }
 
-/// Walk the live document via the layer-kind / modifier registries and
+/// Walk the live document via the layer-kind / filter registries and
 /// produce a [`Manifest`] capturing every piece of state that survives
-/// save: tree, modifiers, selection, veils. Also returns the
+/// save: tree, filters, selection, veils. Also returns the
 /// per-entity pixel-blob declarations the save flow uses to queue
 /// readbacks. Synchronous — runs as part of `start_save_document`'s
 /// prelude.
 fn build_manifest(engine: &DarklyEngine) -> (Manifest, Vec<PixelBlobSpec>) {
     let doc = &engine.doc;
     let mut nodes: Vec<ManifestEntry> = Vec::new();
-    let mut modifiers: Vec<ManifestEntry> = Vec::new();
+    let mut filters: Vec<ManifestEntry> = Vec::new();
     let mut blobs: Vec<PixelBlobSpec> = Vec::new();
 
     let layer_kind_registry = layer_kind::registry();
-    let modifier_registry = modifier::registry();
+    let modifier_registry = filter::registry();
 
     for (_id, entity) in doc.entities.iter() {
         match entity {
@@ -299,12 +299,12 @@ fn build_manifest(engine: &DarklyEngine) -> (Manifest, Vec<PixelBlobSpec>) {
                 });
                 blobs.extend(serialized.pixel_blobs);
             }
-            Entity::Modifier(m) => {
+            Entity::Filter(m) => {
                 let reg = modifier_registry
                     .get(m.type_id())
-                    .expect("modifier registration missing for type_id from doc");
+                    .expect("filter registration missing for type_id from doc");
                 let serialized = (reg.serialize)(m);
-                modifiers.push(ManifestEntry {
+                filters.push(ManifestEntry {
                     id: m.id.to_ffi(),
                     type_id: reg.type_id.to_string(),
                     body: serialized.body,
@@ -316,7 +316,7 @@ fn build_manifest(engine: &DarklyEngine) -> (Manifest, Vec<PixelBlobSpec>) {
 
     // Stable order for diffability + reliable id remap during load.
     nodes.sort_by_key(|e| e.id);
-    modifiers.sort_by_key(|e| e.id);
+    filters.sort_by_key(|e| e.id);
 
     let veils = build_manifest_veils(engine);
     let requires = requires_from_doc(engine);
@@ -336,7 +336,7 @@ fn build_manifest(engine: &DarklyEngine) -> (Manifest, Vec<PixelBlobSpec>) {
         composite: "composite.png".to_string(),
         root: doc.root_id().to_ffi(),
         nodes,
-        modifiers,
+        modifiers: filters,
         selection_id: doc.selection_id().map(LayerId::to_ffi),
         veils,
     };
@@ -369,7 +369,7 @@ fn build_manifest_veils(engine: &DarklyEngine) -> Vec<ManifestVeil> {
 pub fn requires_from_doc(engine: &DarklyEngine) -> ManifestRequires {
     let mut layer_kinds = HashSet::new();
     let mut blend_modes = HashSet::new();
-    let mut modifier_kinds = HashSet::new();
+    let mut filter_kinds = HashSet::new();
     let mut veil_types = HashSet::new();
 
     for entity in engine.doc.entities.values() {
@@ -378,8 +378,8 @@ pub fn requires_from_doc(engine: &DarklyEngine) -> ManifestRequires {
                 layer_kinds.insert(node.type_id().to_string());
                 blend_modes.insert(node.blend().blend_mode.type_id.to_string());
             }
-            Entity::Modifier(m) => {
-                modifier_kinds.insert(m.type_id().to_string());
+            Entity::Filter(m) => {
+                filter_kinds.insert(m.type_id().to_string());
             }
         }
     }
@@ -393,18 +393,18 @@ pub fn requires_from_doc(engine: &DarklyEngine) -> ManifestRequires {
 
     let mut layer_kind: Vec<String> = layer_kinds.into_iter().collect();
     let mut blend_mode: Vec<String> = blend_modes.into_iter().collect();
-    let mut modifier: Vec<String> = modifier_kinds.into_iter().collect();
+    let mut filter: Vec<String> = filter_kinds.into_iter().collect();
     let mut veil: Vec<String> = veil_types.into_iter().collect();
     layer_kind.sort();
     blend_mode.sort();
-    modifier.sort();
+    filter.sort();
     veil.sort();
 
     ManifestRequires {
         veil,
         blend_mode,
         layer_kind,
-        modifier,
+        modifier: filter,
     }
 }
 

@@ -21,7 +21,7 @@ pub enum LoadError {
     /// The file's `requires` inventory names features the binary's
     /// registries don't know about. Each entry is `"<registry>/<type_id>"`
     /// — e.g. `"veil/lens_flare"`, `"blend_mode/divide"`,
-    /// `"layer_kind/text"`, `"modifier/clip"`.
+    /// `"layer_kind/text"`, `"filter/clip"`.
     UnsupportedFeatures { missing: Vec<String> },
 
     /// The `requires` inventory was absent, malformed, or disagreed with

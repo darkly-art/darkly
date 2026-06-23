@@ -92,8 +92,6 @@ pub fn blit_region(
     );
 }
 
-pub mod adjustment;
-pub mod adjustments;
 pub mod apply_mask;
 pub mod atlas;
 pub mod blend;
@@ -105,6 +103,8 @@ pub mod content_bounds;
 pub mod context;
 pub mod diff_rect;
 pub mod effect;
+pub mod filter;
+pub mod filters;
 pub mod floating_preview;
 pub mod flood_fill;
 pub mod ortho_transform;

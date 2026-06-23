@@ -689,7 +689,7 @@ fn selection_add_undo_does_not_restore_stale_pixels() {
     engine.select_all();
     engine.select_rect(0.0, 0.0, 32.0, h as f32, SelectionMode::Replace, false, 0.0);
 
-    // Add a disjoint right band (shift-modifier path).
+    // Add a disjoint right band (shift-filter path).
     engine.select_rect(96.0, 0.0, 32.0, h as f32, SelectionMode::Add, false, 0.0);
 
     // Undo the Add — selection must revert to just the left band.

@@ -1,5 +1,5 @@
-//! Destructive color-adjustment integration tests — the "Invert Colors"
-//! adjustment over the shared `filter_node_region` substrate.
+//! Destructive color-filter integration tests — the "Invert Colors"
+//! filter over the shared `filter_node_region` substrate.
 //!
 //! These are **regression** tests for the node-generic invert path: they pin
 //! `1 - c` exactly (per-pixel, RGBA8 layer *and* R8 mask — masks ride the same
@@ -7,7 +7,7 @@
 //! undo/redo, and selection clipping (rect on a layer, ellipse shape-clip, and
 //! a selection on a *mask* node). A no-op invert would fail the once-checks.
 //!
-//! Run with: `cargo test -p darkly --test adjustments --features testing -- --test-threads=1`
+//! Run with: `cargo test -p darkly --test filters --features testing -- --test-threads=1`
 
 use darkly::coord::{CanvasPoint, CanvasRect};
 use darkly::document::SelectionMode;
@@ -82,7 +82,7 @@ fn invert_layer_negates_every_channel() {
     let layer = e.paste_image(w, h, &distinct_rgba(w, h), 0, 0, None);
     let before = e.test_readback_layer(layer);
 
-    assert!(e.apply_adjustment(layer, "invert"));
+    assert!(e.apply_filter(layer, "invert"));
     let after = e.test_readback_layer(layer);
     for y in 0..h {
         for x in 0..w {
@@ -102,8 +102,8 @@ fn invert_layer_twice_is_identity() {
     let layer = e.paste_image(w, h, &distinct_rgba(w, h), 0, 0, None);
     let before = e.test_readback_layer(layer);
 
-    assert!(e.apply_adjustment(layer, "invert"));
-    assert!(e.apply_adjustment(layer, "invert"));
+    assert!(e.apply_filter(layer, "invert"));
+    assert!(e.apply_filter(layer, "invert"));
     assert_eq!(
         e.test_readback_layer(layer),
         before,
@@ -118,7 +118,7 @@ fn invert_layer_undo_redo_round_trips() {
     let layer = e.paste_image(w, h, &distinct_rgba(w, h), 0, 0, None);
     let before = e.test_readback_layer(layer);
 
-    assert!(e.apply_adjustment(layer, "invert"));
+    assert!(e.apply_filter(layer, "invert"));
     let inverted = e.test_readback_layer(layer);
 
     e.undo();
@@ -140,13 +140,13 @@ fn invert_unknown_type_is_a_noop() {
     let before = e.test_readback_layer(layer);
 
     assert!(
-        !e.apply_adjustment(layer, "no_such_adjustment"),
+        !e.apply_filter(layer, "no_such_adjustment"),
         "an unregistered type must return false"
     );
     assert_eq!(
         e.test_readback_layer(layer),
         before,
-        "an unknown adjustment must not touch pixels"
+        "an unknown filter must not touch pixels"
     );
 }
 
@@ -161,7 +161,7 @@ fn invert_layer_with_rect_selection_only_inverts_selection() {
 
     // Rect x,y ∈ [3,8).
     e.select_rect(3.0, 3.0, 5.0, 5.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_adjustment(layer, "invert"));
+    assert!(e.apply_filter(layer, "invert"));
     let after = e.test_readback_layer(layer);
 
     // Inside the selection: inverted.
@@ -188,7 +188,7 @@ fn invert_layer_with_ellipse_selection_clips_to_shape() {
 
     // Ellipse in bbox x,y ∈ [2,10): centre (6,6).
     e.select_ellipse(2.0, 2.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_adjustment(layer, "invert"));
+    assert!(e.apply_filter(layer, "invert"));
     let after = e.test_readback_layer(layer);
 
     // A bbox corner is outside the ellipse → untouched (shape-masked, not bbox).
@@ -223,13 +223,13 @@ fn invert_mask_negates_r8_and_round_trips() {
         "mask is R8 — one byte/pixel"
     );
 
-    assert!(e.apply_adjustment(mask, "invert"));
+    assert!(e.apply_filter(mask, "invert"));
     let after = e.test_readback_layer(mask);
     for i in 0..before.len() {
         assert_eq!(after[i], 255 - before[i], "mask byte {i} should be 1-r");
     }
 
-    assert!(e.apply_adjustment(mask, "invert"));
+    assert!(e.apply_filter(mask, "invert"));
     assert_eq!(
         e.test_readback_layer(mask),
         before,
@@ -248,7 +248,7 @@ fn invert_mask_with_selection_only_inverts_selected_region() {
 
     // Rect x,y ∈ [3,8) — only this region of the mask inverts.
     e.select_rect(3.0, 3.0, 5.0, 5.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_adjustment(mask, "invert"));
+    assert!(e.apply_filter(mask, "invert"));
     let after = e.test_readback_layer(mask);
 
     let at = |buf: &[u8], x: u32, y: u32| buf[(y * w + x) as usize];
@@ -270,7 +270,7 @@ fn invert_mask_with_selection_only_inverts_selected_region() {
 // ---- Selection × coordinate frames (crop / rescale) ------------------------
 //
 // The single most recurring bug class here is carrying a value into the wrong
-// coordinate frame (see docs/coordinate-systems.md). `apply_adjustment` takes
+// coordinate frame (see docs/coordinate-systems.md). `apply_filter` takes
 // the window-local selection bbox → plane (`to_canvas(canvas_origin)`) → node-
 // local, exactly as `flip_node` does; these intermix a selection with a crop
 // (non-zero `canvas_origin`) and a rescale (changed dims) to pin that it lands
@@ -289,10 +289,10 @@ fn invert_layer_with_selection_after_crop_uses_plane_coords() {
     e.resize_canvas(CanvasRect::new(CanvasPoint::new(8, 8), 16, 16));
 
     // Selection input is plane-space: plane rect [10,18)². `select_rect`
-    // shifts it to window-local [2,10)²; `apply_adjustment` must shift it back
+    // shifts it to window-local [2,10)²; `apply_filter` must shift it back
     // to plane [10,18)² via `canvas_origin` before touching pixels.
     e.select_rect(10.0, 10.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_adjustment(layer, "invert"));
+    assert!(e.apply_filter(layer, "invert"));
     let after = e.test_readback_layer(layer);
 
     // Inside the selected PLANE region — inverted.
@@ -333,7 +333,7 @@ fn invert_layer_with_selection_after_rescale() {
 
     // Select a plane rect in the rescaled (origin-(0,0)) doc: plane [8,24)².
     e.select_rect(8.0, 8.0, 16.0, 16.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_adjustment(layer, "invert"));
+    assert!(e.apply_filter(layer, "invert"));
     let after = e.test_readback_layer(layer);
 
     // Inside the selection — inverted; outside — untouched. Confirms the bbox
@@ -376,7 +376,7 @@ fn invert_mask_with_selection_after_crop() {
 
     // Plane selection [10,18)² — same plane region a layer would invert.
     e.select_rect(10.0, 10.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_adjustment(mask, "invert"));
+    assert!(e.apply_filter(mask, "invert"));
     let after = e.test_readback_layer(mask);
 
     let at = |buf: &[u8], x: u32, y: u32| buf[(y * w + x) as usize];
@@ -393,5 +393,303 @@ fn invert_mask_with_selection_after_crop() {
         e.test_readback_layer(mask),
         before,
         "undo restores the mask"
+    );
+}
+
+// ---- Filter layers ---------------------------------------------------------
+//
+// A *filter layer* is a non-destructive node in the layer tree that transforms
+// the composite of everything below it (the running group accumulator) via the
+// same `gpu/filters/*` pipeline the destructive path uses — pixels below are
+// never modified. These tests pin the feature's promises: it inverts what's
+// below it, it leaves what's above untouched, an isolated group scopes it, and
+// — the core guarantee — it is non-destructive (toggle / delete restores the
+// original composite byte-for-byte).
+
+/// Flood-fill a layer with straight opaque `(r, g, b, 255)`. Opaque so the
+/// composite reads back as the layer color (no premultiply / checker ambiguity)
+/// and `invert` is unambiguous: `(r,g,b)` → `(255-r, 255-g, 255-b)`.
+fn fill_layer(engine: &mut DarklyEngine, layer_id: LayerId, r: u8, g: u8, b: u8) {
+    engine.begin_stroke(layer_id);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r,
+        g,
+        b,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    engine.render(0.0);
+}
+
+/// A filter layer above a raster at the root inverts everything below it:
+/// red `(255,0,0)` → cyan `(0,255,255)`. This is the core scope plus
+/// "filter layer at root affects all below."
+#[test]
+fn filter_layer_at_root_inverts_everything_below() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let red = engine.add_raster_layer(None);
+    fill_layer(&mut engine, red, 255, 0, 0);
+    let _filter = engine
+        .add_filter_layer("invert", vec![], None)
+        .expect("invert is a registered filter type");
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let canvas = engine.test_readback_canvas();
+    let p = px(&canvas, cw, cw / 2, ch / 2);
+    assert_eq!(
+        p,
+        [0, 255, 255, 255],
+        "invert filter layer must turn the red layer below it cyan; got {p:?}"
+    );
+}
+
+/// A filter layer transforms only what is *below* it — a layer stacked above
+/// the filter is composited after the filter runs, so it is untouched. Blue
+/// `(0,0,255)` on top stays blue (a leak would make it yellow `(255,255,0)`).
+#[test]
+fn filter_layer_does_not_affect_layers_above_it() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let red = engine.add_raster_layer(None);
+    fill_layer(&mut engine, red, 255, 0, 0);
+    let _filter = engine.add_filter_layer("invert", vec![], None).unwrap();
+    let blue = engine.add_raster_layer(None);
+    fill_layer(&mut engine, blue, 0, 0, 255);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let canvas = engine.test_readback_canvas();
+    let p = px(&canvas, cw, cw / 2, ch / 2);
+    assert_eq!(
+        p,
+        [0, 0, 255, 255],
+        "the opaque blue layer above the filter must be unaffected; got {p:?}"
+    );
+}
+
+/// A filter layer inside a non-passthrough (isolated) group is scoped to that
+/// group: it inverts the group's lower siblings, and does NOT leak onto layers
+/// below the group. Positive control (group has content → cyan) and negative
+/// (group content hidden → the outside layer stays red, no leak) in one setup.
+#[test]
+fn filter_layer_in_isolated_group_is_scoped() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    // Outside the group, at the root bottom: red. The group stacks above it.
+    let outside = engine.add_raster_layer(None);
+    fill_layer(&mut engine, outside, 255, 0, 0);
+
+    let group = engine.add_group(None);
+    engine.set_group_passthrough(group, false); // isolated → owns a GroupState
+
+    // Group content (bottom child) + filter (top child, above the content).
+    let inside = engine.add_raster_layer(Some(group));
+    fill_layer(&mut engine, inside, 255, 0, 0);
+    let _filter = engine
+        .add_filter_layer("invert", vec![], Some(group))
+        .unwrap();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    // Positive: the group composites inside→invert→cyan and (opaque) covers the
+    // outside red.
+    let with_content = engine.test_readback_canvas();
+    let p = px(&with_content, cw, cw / 2, ch / 2);
+    assert_eq!(
+        p,
+        [0, 255, 255, 255],
+        "filter must invert its isolated group's lower sibling; got {p:?}"
+    );
+
+    // Negative: hide the group's content. The group accumulator is now empty,
+    // so the filter inverts nothing and the group contributes nothing. The
+    // outside red layer shows through unchanged — proving the filter did NOT
+    // leak out of the isolated group onto the layer below it (a leak would
+    // invert outside red → cyan).
+    engine.set_layer_visible(inside, false);
+    engine.render(0.0);
+    let leak_check = engine.test_readback_canvas();
+    let p = px(&leak_check, cw, cw / 2, ch / 2);
+    assert_eq!(
+        p,
+        [255, 0, 0, 255],
+        "an isolated group's filter must not affect layers below the group; got {p:?}"
+    );
+}
+
+/// A mask on a filter layer confines *where the filter applies*: inside the
+/// mask the inverted result shows; outside, the original pixels pass through;
+/// a mid-gray mask value lerps between the two (soft masking, not a hard
+/// threshold). This is the adjustment-layer-mask behavior. Fails before the
+/// `compose_filter_arm` mask branch — the filter would invert the whole canvas
+/// and the right half would read cyan instead of red.
+#[test]
+fn masked_filter_layer_confines_inversion() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    // Red base; an invert filter above it (cyan where it applies).
+    let red = engine.add_raster_layer(None);
+    fill_layer(&mut engine, red, 255, 0, 0);
+    let filter = engine.add_filter_layer("invert", vec![], None).unwrap();
+
+    // Seed the filter's mask from a left-half selection: left → reveal (1.0,
+    // filter applies), right → hide (0.0, original passes through). A selection
+    // gives flat, hard-edged regions — no brush feathering to reason about.
+    engine.select_rect(
+        0.0,
+        0.0,
+        (cw / 2) as f32,
+        ch as f32,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
+    engine.add_mask(filter);
+    let mask = engine.test_mask_id(filter).expect("mask present on filter");
+    engine.clear_selection();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let canvas = engine.test_readback_canvas();
+    // Left half (mask 1.0): filter applies → cyan.
+    assert_eq!(
+        px(&canvas, cw, cw / 4, ch / 2),
+        [0, 255, 255, 255],
+        "masked-in half must invert to cyan",
+    );
+    // Right half (mask 0.0): original red passes through (the bug shows cyan).
+    assert_eq!(
+        px(&canvas, cw, 3 * cw / 4, ch / 2),
+        [255, 0, 0, 255],
+        "masked-out half must keep the original red",
+    );
+
+    // Soft masking: paint a mid-gray dab in the (currently hidden) right half;
+    // the composite there must lerp between red and cyan, not snap to either.
+    paint_dab(&mut engine, mask, (3 * cw / 4) as f32, (ch / 2) as f32, 0.5);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+    let canvas = engine.test_readback_canvas();
+    let p = px(&canvas, cw, 3 * cw / 4, ch / 2);
+    assert!(
+        p[0] > 40 && p[0] < 215 && p[1] > 40 && p[1] < 215,
+        "a mid-gray mask value must lerp red↔cyan (got {p:?}), proving soft masking",
+    );
+}
+
+/// A masked filter layer *inside* a non-passthrough (isolated) group lerps
+/// against the **group's** accumulator, not the canvas: the mask confines the
+/// inversion to the group's own content. Left half (mask 1.0) → the group's red
+/// inverts to cyan; right half (mask 0.0) → the group's original red shows.
+#[test]
+fn masked_filter_layer_in_isolated_group_lerps_against_group_accum() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    // A distinct color outside the group, at the root bottom — the group is
+    // opaque and covers it, so seeing it anywhere would mean a leak.
+    let outside = engine.add_raster_layer(None);
+    fill_layer(&mut engine, outside, 0, 255, 0);
+
+    let group = engine.add_group(None);
+    engine.set_group_passthrough(group, false); // isolated → owns a GroupState
+
+    let inside = engine.add_raster_layer(Some(group));
+    fill_layer(&mut engine, inside, 255, 0, 0);
+    let filter = engine
+        .add_filter_layer("invert", vec![], Some(group))
+        .unwrap();
+
+    // Mask the filter to the left half (seeded from a selection).
+    engine.select_rect(
+        0.0,
+        0.0,
+        (cw / 2) as f32,
+        ch as f32,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
+    engine.add_mask(filter);
+    engine.clear_selection();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let canvas = engine.test_readback_canvas();
+    // Left half: the group's red inverts to cyan within the group.
+    assert_eq!(
+        px(&canvas, cw, cw / 4, ch / 2),
+        [0, 255, 255, 255],
+        "masked-in half inverts the group's own content to cyan",
+    );
+    // Right half: the filter is masked out → the group's original red shows
+    // (lerped against the group accumulator, never the green canvas below).
+    assert_eq!(
+        px(&canvas, cw, 3 * cw / 4, ch / 2),
+        [255, 0, 0, 255],
+        "masked-out half keeps the group's red, with no canvas leak",
+    );
+}
+
+/// The core promise: a filter layer is **non-destructive**. Toggling its
+/// visibility returns the composite to the original red (the layer below was
+/// never modified), and deleting it likewise restores the original — a
+/// destructive filter would have baked cyan into the raster's pixels.
+#[test]
+fn filter_layer_is_non_destructive() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let red = engine.add_raster_layer(None);
+    fill_layer(&mut engine, red, 255, 0, 0);
+
+    // Baseline composite with no filter: red.
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+    let original = engine.test_readback_canvas();
+    assert_eq!(px(&original, cw, cw / 2, ch / 2), [255, 0, 0, 255]);
+
+    let filter = engine.add_filter_layer("invert", vec![], None).unwrap();
+    engine.render(0.0);
+    assert_eq!(
+        px(&engine.test_readback_canvas(), cw, cw / 2, ch / 2),
+        [0, 255, 255, 255],
+        "filter visible → cyan"
+    );
+
+    // Hide the filter → original red returns byte-for-byte (pixels untouched).
+    engine.set_layer_visible(filter, false);
+    engine.render(0.0);
+    assert_eq!(
+        engine.test_readback_canvas(),
+        original,
+        "hiding the filter must restore the original composite exactly"
+    );
+
+    // Show again → cyan.
+    engine.set_layer_visible(filter, true);
+    engine.render(0.0);
+    assert_eq!(
+        px(&engine.test_readback_canvas(), cw, cw / 2, ch / 2),
+        [0, 255, 255, 255],
+        "re-showing the filter inverts again"
+    );
+
+    // Delete the filter → the composite returns to the original red.
+    engine.remove_layer(filter).expect("filter layer removable");
+    engine.render(0.0);
+    assert_eq!(
+        engine.test_readback_canvas(),
+        original,
+        "deleting the filter must restore the original composite exactly"
     );
 }

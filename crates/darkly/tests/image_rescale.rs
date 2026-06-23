@@ -186,7 +186,7 @@ fn rescale_undo_then_redo_pixels() {
     );
 }
 
-/// A layer mask is a pixel-bearing modifier — it must scale in lockstep with
+/// A layer mask is a pixel-bearing filter — it must scale in lockstep with
 /// its host layer.
 #[test]
 fn mask_scales_with_layer() {
@@ -194,7 +194,7 @@ fn mask_scales_with_layer() {
     let mut engine = test_engine(w, h);
     let layer = engine.add_raster_layer(None);
     engine.add_mask(layer);
-    let mask = engine.test_mask_id(layer).expect("mask modifier present");
+    let mask = engine.test_mask_id(layer).expect("mask filter present");
 
     assert_eq!(
         engine.test_node_pixel_bounds(mask),

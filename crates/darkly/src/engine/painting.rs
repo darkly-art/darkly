@@ -277,7 +277,7 @@ impl DarklyEngine {
 
     // --- Stroke lifecycle ---
     // The active node id directly identifies the paint target — for a mask
-    // modifier id, paint goes to the mask's R8 PixelBuffer; for a raster id,
+    // filter id, paint goes to the mask's R8 PixelBuffer; for a raster id,
     // paint goes to the RGBA layer texture. No sidecar redirect.
     //
     // All stroke ops go through GPU render passes.
@@ -303,7 +303,7 @@ impl DarklyEngine {
     }
 
     /// True when paint operations have somewhere to land. Raster layers and
-    /// mask modifiers carry a CPU-authoritative pixel buffer; groups and
+    /// mask filters carry a CPU-authoritative pixel buffer; groups and
     /// voids don't, so paint there would either be a no-op or — for voids —
     /// scribble onto a procedural texture that the compositor immediately
     /// regenerates from params on the next dirty tick. Funnel every stroke
@@ -588,33 +588,33 @@ impl DarklyEngine {
     /// each growing **itself** — no host coupling.
     ///
     /// - A raster layer grows its own bounds + texture ([`Self::grow_layer`]).
-    /// - A modifier (e.g. a mask) grows its own bounds + texture
-    ///   ([`Self::grow_modifier`]); the host is untouched.
+    /// - A filter (e.g. a mask) grows its own bounds + texture
+    ///   ([`Self::grow_filter`]); the host is untouched.
     ///
     /// Lets callers that hold a generic node id (stroke target, transform
     /// commit, paste commit) request growth without first disambiguating
-    /// between raster and modifier ids.
+    /// between raster and filter ids.
     pub(crate) fn grow_node_to_fit(
         &mut self,
         node_id: crate::layer::LayerId,
         needed: crate::coord::CanvasRect,
     ) -> Option<crate::coord::CanvasRect> {
-        if self.doc.is_modifier(node_id) {
-            self.grow_modifier(node_id, needed)
+        if self.doc.is_filter(node_id) {
+            self.grow_filter(node_id, needed)
         } else {
             self.grow_layer(node_id, needed)
         }
     }
 
-    /// Grow a modifier's own pixel buffer (doc `PixelBuffer.bounds` + GPU
+    /// Grow a filter's own pixel buffer (doc `PixelBuffer.bounds` + GPU
     /// texture) to cover `needed`, honoring `MAX_LAYER_DIM`. Document-led, the
-    /// modifier analogue of [`Self::grow_layer`] — the modifier grows itself,
+    /// filter analogue of [`Self::grow_layer`] — the filter grows itself,
     /// fully decoupled from its host. Returns `Some(new_extent)` when grown.
     ///
     /// Growth is document-led (doc bounds and GPU texture move together), so
     /// the stroke's region undo restores painted pixels with the same
     /// constant-extent path raster grow uses — no separate bounds-undo op.
-    pub(crate) fn grow_modifier(
+    pub(crate) fn grow_filter(
         &mut self,
         mod_id: LayerId,
         needed: crate::coord::CanvasRect,
@@ -623,7 +623,7 @@ impl DarklyEngine {
 
         let current = self
             .doc
-            .find_modifier(mod_id)
+            .find_filter(mod_id)
             .and_then(|m| m.pixels())
             .map(|b| b.bounds)?;
         if current.contains(needed) {
@@ -634,7 +634,7 @@ impl DarklyEngine {
             if !self.layer_growth_capped {
                 self.layer_growth_capped = true;
                 log::warn!(
-                    "Modifier {:?} growth refused: requested {}×{} exceeds MAX_LAYER_DIM ({})",
+                    "Filter {:?} growth refused: requested {}×{} exceeds MAX_LAYER_DIM ({})",
                     mod_id,
                     new_extent.width,
                     new_extent.height,
@@ -644,13 +644,13 @@ impl DarklyEngine {
             return None;
         }
 
-        // Doc first — the modifier's `PixelBuffer` is the source of truth.
+        // Doc first — the filter's `PixelBuffer` is the source of truth.
         self.doc
-            .find_modifier_mut(mod_id)
+            .find_filter_mut(mod_id)
             .and_then(|m| m.pixels_mut())?
             .bounds = new_extent;
 
-        self.gpu.encode("modifier-grow", |encoder| {
+        self.gpu.encode("filter-grow", |encoder| {
             self.compositor.resize_node_texture(
                 &self.gpu.device,
                 &self.gpu.queue,
@@ -713,7 +713,7 @@ impl DarklyEngine {
         // submitted before any subsequent dab dispatch can start a new
         // encoder against the new texture. `gpu.encode` already does
         // one-encoder-per-call. A mask is no longer grown in lockstep — it
-        // owns its bounds and grows itself (`grow_modifier`); the mask-apply
+        // owns its bounds and grows itself (`grow_filter`); the mask-apply
         // pass samples it in its own space, so a divergent mask renders
         // correctly without any shared-UV coupling.
         self.gpu.encode("layer-grow", |encoder| {
@@ -1291,7 +1291,7 @@ impl DarklyEngine {
     pub fn end_stroke(&mut self) {
         if let Some(layer_id) = self.active_stroke_layer.take() {
             // Per-stroke thumbnail refresh — the node texture (raster or mask
-            // modifier) now holds the cumulative pixels of every dab/op since
+            // filter) now holds the cumulative pixels of every dab/op since
             // begin_stroke. Live mid-stroke updates are intentionally skipped.
             self.compositor.mark_node_pixels_dirty(layer_id);
 

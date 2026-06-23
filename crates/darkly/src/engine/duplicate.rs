@@ -1,4 +1,4 @@
-//! Duplicate a layer or group, including all descendants and mask modifiers,
+//! Duplicate a layer or group, including all descendants and mask filters,
 //! with a fresh subtree of [`LayerId`]s. The duplicate is placed directly
 //! above its source, and the act is recorded as a single [`DuplicateAction`]
 //! that tombstones every duplicated texture so its GPU resources are released
@@ -146,7 +146,7 @@ impl DarklyEngine {
                 // Copy pixels from source → new.
                 self.clone_node_pixels(source_id, new_id);
 
-                // Duplicate every modifier on the source (currently masks).
+                // Duplicate every filter on the source (currently masks).
                 self.clone_modifiers(source_id, new_id);
 
                 Some(new_id)
@@ -192,7 +192,7 @@ impl DarklyEngine {
                     last_inside = Some(new_child);
                 }
 
-                // Clone modifiers on the group itself (e.g. group mask).
+                // Clone filters on the group itself (e.g. group mask).
                 self.clone_modifiers(source_id, new_id);
 
                 Some(new_id)
@@ -236,7 +236,41 @@ impl DarklyEngine {
                 // procedural output is identical from identical params.
                 self.refresh_blend_uniforms(new_id);
 
-                // Voids can carry mask modifiers like any other host.
+                // Voids can carry mask filters like any other host.
+                self.clone_modifiers(source_id, new_id);
+
+                Some(new_id)
+            }
+            LayerNode::Layer(Layer::Filter(f)) => {
+                let pipeline = f.pipeline.clone();
+                let params = f.params.clone();
+                let display_label = self
+                    .compositor
+                    .filter_pipeline_registry()
+                    .display_name(&pipeline)
+                    .to_string();
+                let new_id = self
+                    .doc
+                    .add_filter_layer(pipeline, &display_label, params, anchor);
+
+                let new_name = if is_root {
+                    format!("{common_name} copy")
+                } else {
+                    common_name
+                };
+                if let Some(LayerNode::Layer(Layer::Filter(nf))) = self.doc.find_node_mut(new_id) {
+                    nf.common.name = new_name;
+                    nf.common.visible = common_visible;
+                    nf.common.locked = common_locked;
+                    nf.blend.opacity = blend_opacity;
+                    nf.blend.blend_mode = blend_mode_reg;
+                }
+                // No GPU resource to allocate — the filter pipeline is shared
+                // and resolved lazily in `compose_filter_arm`. The
+                // `refresh_blend_uniforms` call no-ops (a filter layer has no
+                // `layer_cache` entry), so it's skipped.
+
+                // Filter layers can carry mask filters like any other host.
                 self.clone_modifiers(source_id, new_id);
 
                 Some(new_id)
@@ -275,24 +309,24 @@ impl DarklyEngine {
         Some(new_id)
     }
 
-    /// Duplicate every modifier hanging off `src_host` onto `dst_host`. v1
-    /// supports mask modifiers; the loop is generic so other future pixel-
-    /// bearing modifiers fall in by the same path.
+    /// Duplicate every filter hanging off `src_host` onto `dst_host`. v1
+    /// supports mask filters; the loop is generic so other future pixel-
+    /// bearing filters fall in by the same path.
     ///
-    /// Goes through `Document::add_mask_modifier` + compositor allocation
+    /// Goes through `Document::add_mask_filter` + compositor allocation
     /// directly instead of [`Self::add_mask`] so we don't push a spurious
-    /// `ModifierAddAction` that the parent [`DuplicateAction`] already
+    /// `FilterAddAction` that the parent [`DuplicateAction`] already
     /// covers (a single undo step should reverse the whole duplicate).
     fn clone_modifiers(&mut self, src_host: LayerId, dst_host: LayerId) {
-        let src_mod_ids = self.doc.modifiers_of(src_host).to_vec();
+        let src_mod_ids = self.doc.filters_of(src_host).to_vec();
         for src_mod_id in src_mod_ids {
-            if self.doc.mask_modifier_id(src_host) != Some(src_mod_id) {
-                continue; // Non-mask modifiers don't ship in v1.
+            if self.doc.mask_filter_id(src_host) != Some(src_mod_id) {
+                continue; // Non-mask filters don't ship in v1.
             }
-            let Some(new_mod_id) = self.doc.add_mask_modifier(dst_host) else {
+            let Some(new_mod_id) = self.doc.add_mask_filter(dst_host) else {
                 continue;
             };
-            let bounds = match self.doc.find_modifier(new_mod_id).and_then(|m| m.pixels()) {
+            let bounds = match self.doc.find_filter(new_mod_id).and_then(|m| m.pixels()) {
                 Some(p) => p.bounds,
                 None => continue,
             };
@@ -304,10 +338,10 @@ impl DarklyEngine {
                 bounds,
             );
             self.compositor
-                .ensure_passthrough_mask_state(&self.gpu.device, dst_host);
-            // clone_modifier_pixels marks `new_mod_id` dirty internally per
+                .ensure_mask_snapshot_state(&self.gpu.device, dst_host);
+            // clone_filter_pixels marks `new_mod_id` dirty internally per
             // the write-site invariant.
-            self.clone_modifier_pixels(src_mod_id, new_mod_id);
+            self.clone_filter_pixels(src_mod_id, new_mod_id);
         }
     }
 }

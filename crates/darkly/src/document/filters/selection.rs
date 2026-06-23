@@ -1,13 +1,13 @@
-//! Selection modifier — global single-channel mask for which pixels are
+//! Selection filter — global single-channel mask for which pixels are
 //! affected by edits (paint, fill, transform, clipboard).
 //!
 //! Per the Modularity Principle in [AGENTS.md], the entire selection kind
 //! lives in this file: data struct, CPU cache, construction, wire format,
 //! and the `register()` discovery hook.
 //!
-//! The selection is structurally a [`crate::document::Modifier`] but, unlike
-//! per-host modifiers (mask, future filter/transform), it's attached at the
-//! document root rather than on a host's `modifiers` list. That's the only
+//! The selection is structurally a [`crate::document::Filter`] but, unlike
+//! per-host filters (mask, future filter/transform), it's attached at the
+//! document root rather than on a host's `filters` list. That's the only
 //! thing special about it — pixel storage, growth, dirty tracking, async
 //! readback, and region-pixel undo all share the [`crate::layer::PixelBuffer`]
 //! infrastructure, and the boolean ops sit on the same R8 paint pipeline that
@@ -16,8 +16,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::coord::{CanvasRect, WindowRect};
+use crate::document::filter::{Filter, FilterEntityRegistration, FilterKind};
 use crate::document::layer_kind::{IdMap, PixelBlobSpec, SerializedEntity};
-use crate::document::modifier::{Modifier, ModifierKind, ModifierRegistration};
 use crate::format::error::LoadError;
 use crate::format::manifest::{texture_format_to_str, ManifestPixelRef};
 use crate::layer::{LayerId, NodeCommon, PixelBuffer};
@@ -57,7 +57,7 @@ impl Default for SelectionCpuCache {
 /// (the boolean ops need ping-pong scratch and dedicated bind groups against
 /// the brush+paint selection BGLs). [`PixelBuffer`] here holds the canvas-
 /// space metadata that the document model owns: bounds, format, growth policy.
-pub struct SelectionModifier {
+pub struct SelectionFilter {
     pub pixels: PixelBuffer,
     pub cpu_cache: SelectionCpuCache,
     /// Cached tight bounds of non-zero selection pixels in **window-local**
@@ -67,9 +67,9 @@ pub struct SelectionModifier {
     pub pixel_bounds: Option<WindowRect>,
 }
 
-impl SelectionModifier {
+impl SelectionFilter {
     pub fn new(bounds: CanvasRect) -> Self {
-        SelectionModifier {
+        SelectionFilter {
             pixels: PixelBuffer::new(bounds, wgpu::TextureFormat::R8Unorm),
             cpu_cache: SelectionCpuCache::new(),
             pixel_bounds: None,
@@ -87,8 +87,8 @@ struct SelectionBody {
     pixels: ManifestPixelRef,
 }
 
-pub fn register() -> ModifierRegistration {
-    ModifierRegistration {
+pub fn register() -> FilterEntityRegistration {
+    FilterEntityRegistration {
         type_id: TYPE_ID,
         display_name: "Selection",
         serialize,
@@ -97,10 +97,10 @@ pub fn register() -> ModifierRegistration {
     }
 }
 
-fn serialize(modifier: &Modifier) -> SerializedEntity {
-    let sel = match &modifier.kind {
-        ModifierKind::Selection(s) => s,
-        _ => panic!("selection::serialize received non-selection Modifier"),
+fn serialize(filter: &Filter) -> SerializedEntity {
+    let sel = match &filter.kind {
+        FilterKind::Selection(s) => s,
+        _ => panic!("selection::serialize received non-selection Filter"),
     };
     let blob_path = "selection.pixels".to_string();
     let pixels = ManifestPixelRef {
@@ -109,34 +109,34 @@ fn serialize(modifier: &Modifier) -> SerializedEntity {
         bounds: sel.pixels.bounds,
     };
     let body = SelectionBody {
-        name: modifier.common.name.clone(),
-        visible: modifier.common.visible,
-        locked: modifier.common.locked,
+        name: filter.common.name.clone(),
+        visible: filter.common.visible,
+        locked: filter.common.locked,
         pixels: pixels.clone(),
     };
     SerializedEntity {
         body: serde_json::to_value(&body).expect("derived serde for SelectionBody is infallible"),
         pixel_blobs: vec![PixelBlobSpec {
             blob_key: blob_path,
-            source_node_id: modifier.id,
+            source_node_id: filter.id,
             pixels,
         }],
     }
 }
 
-fn deserialize(body: &serde_json::Value, id: LayerId) -> Result<Modifier, LoadError> {
+fn deserialize(body: &serde_json::Value, id: LayerId) -> Result<Filter, LoadError> {
     let body: SelectionBody =
         serde_json::from_value(body.clone()).map_err(|e| LoadError::CorruptManifest {
             reason: format!("selection body: {e}"),
         })?;
-    Ok(Modifier {
+    Ok(Filter {
         id,
         common: NodeCommon {
             name: body.name,
             visible: body.visible,
             locked: body.locked,
         },
-        kind: ModifierKind::Selection(SelectionModifier {
+        kind: FilterKind::Selection(SelectionFilter {
             pixels: PixelBuffer::new(body.pixels.bounds, wgpu::TextureFormat::R8Unorm),
             cpu_cache: SelectionCpuCache::new(),
             pixel_bounds: None,
@@ -144,6 +144,6 @@ fn deserialize(body: &serde_json::Value, id: LayerId) -> Result<Modifier, LoadEr
     })
 }
 
-fn remap_ids(_modifier: &mut Modifier, _id_map: &IdMap) {
+fn remap_ids(_modifier: &mut Filter, _id_map: &IdMap) {
     // Selection has no cross-references inside its body.
 }

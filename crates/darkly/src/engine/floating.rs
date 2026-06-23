@@ -135,7 +135,7 @@ impl DarklyEngine {
         );
 
         // Position relative to the active node. `resolve_anchor_target` maps a
-        // modifier anchor (the active id while editing a mask) to its host, so
+        // filter anchor (the active id while editing a mask) to its host, so
         // the pasted layer lands as the host's sibling rather than nested under
         // it — the same anchor resolution the document's `add_*` helpers use.
         let target = self.doc.resolve_anchor_target(active_layer_id);
@@ -186,11 +186,11 @@ impl DarklyEngine {
         }
         self.auto_commit_floating();
 
-        // Active node may be either a raster layer or a mask modifier — both
+        // Active node may be either a raster layer or a mask filter — both
         // own a `PixelBuffer` and a node texture. The doc lookup just verifies
         // the id resolves to one of those two; the rest of the flow uses the
         // node id uniformly.
-        if self.doc.layer(layer_id).is_none() && self.doc.find_modifier(layer_id).is_none() {
+        if self.doc.layer(layer_id).is_none() && self.doc.find_filter(layer_id).is_none() {
             return false;
         }
 
@@ -465,7 +465,7 @@ impl DarklyEngine {
             return;
         }
         // Format comes from the unified node-texture pool. Both raster layer
-        // (RGBA8) and mask modifier (R8) targets resolve through the same call.
+        // (RGBA8) and mask filter (R8) targets resolve through the same call.
         let format = self
             .compositor
             .node_texture(layer_id)
@@ -488,11 +488,11 @@ impl DarklyEngine {
             (max_y.max(src_max_y) - min_y.min(soy)).max(0) as u32,
         );
 
-        // Grow the target (or its host, for mask modifiers) so the layer
+        // Grow the target (or its host, for mask filters) so the layer
         // texture can hold any portion of the affected rect that lies
         // outside its current bounds — including pixels past the canvas
         // edge. Best-effort: if growth is refused (cap, or target is
-        // neither raster nor modifier with a raster host), commit falls
+        // neither raster nor filter with a raster host), commit falls
         // back to the pre-grow extent and the texture-side clip below
         // still keeps the commit consistent.
         let _ = self.grow_node_to_fit(layer_id, affected_canvas);

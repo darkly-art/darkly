@@ -198,7 +198,7 @@ impl DarklyEngine {
     // --- Thumbnails ---
 
     /// Return the cached thumbnail for any node id (raster layer or mask
-    /// modifier). Pure read — readback queueing is owned by
+    /// filter). Pure read — readback queueing is owned by
     /// `drain_dirty_thumbnail_readbacks` (driven by `mark_node_pixels_dirty`
     /// at every pixel-write site). Auto-queueing from this getter would
     /// create a feedback loop with the JS-side `thumbnailEpoch` sync.
@@ -211,7 +211,7 @@ impl DarklyEngine {
 
     /// Kick off an async GPU readback for a thumbnail of any node by id,
     /// if one isn't already pending. Format is derived from the node's
-    /// GPU texture — callers don't dispatch on layer-vs-modifier.
+    /// GPU texture — callers don't dispatch on layer-vs-filter.
     ///
     /// Reads the texture's full extent, not a canvas-sized rect. Layer
     /// textures may be smaller than canvas (e.g. a small paste) or larger
@@ -401,8 +401,8 @@ impl DarklyEngine {
                     if let Some(pf) = self.pending_flip.take() {
                         self.flip_node(pf.node_id, pf.xform);
                     }
-                    if let Some(pa) = self.pending_adjustment.take() {
-                        self.apply_adjustment(pa.node_id, &pa.adjustment_type);
+                    if let Some(pa) = self.pending_filter.take() {
+                        self.apply_filter(pa.node_id, &pa.filter_type);
                     }
                 }
             }
@@ -850,10 +850,10 @@ impl DarklyEngine {
         // mask. When the target IS the host (raster/group itself), the host
         // renders normally — the isolation filter elsewhere already hides
         // its siblings. So this flag only fires when the target is a
-        // modifier whose host is this node.
+        // filter whose host is this node.
         let isolated_host = |node_id: LayerId| -> bool {
             match isolated {
-                Some(t) => self.doc.modifiers_of(node_id).contains(&t),
+                Some(t) => self.doc.filters_of(node_id).contains(&t),
                 None => false,
             }
         };
@@ -894,18 +894,18 @@ impl DarklyEngine {
             }
         }
 
-        // --- Mask modifiers: ensure the R8 GPU texture for any host with a mask ---
+        // --- Mask filters: ensure the R8 GPU texture for any host with a mask ---
         // Also ensures the per-host passthrough snapshot+lerp resource so the
         // group composite branch can engage on the next frame; both are
         // idempotent and keyed against existence in the compositor's pools.
         struct MaskInfo {
-            modifier_id: LayerId,
+            filter_id: LayerId,
             host_id: LayerId,
             bounds: crate::coord::CanvasRect,
         }
         let mask_infos: Vec<MaskInfo> = self
             .doc
-            .all_modifiers()
+            .all_filters()
             .into_iter()
             .filter_map(|m| {
                 let buf = m.pixels()?;
@@ -914,29 +914,29 @@ impl DarklyEngine {
                 }
                 let host_id = self.doc.parent_of(m.id)?;
                 Some(MaskInfo {
-                    modifier_id: m.id,
+                    filter_id: m.id,
                     host_id,
                     bounds: buf.bounds,
                 })
             })
             .collect();
         for info in mask_infos {
-            if self.compositor.node_texture(info.modifier_id).is_none() {
+            if self.compositor.node_texture(info.filter_id).is_none() {
                 self.compositor.ensure_node_texture(
                     &self.gpu.device,
                     &self.gpu.queue,
-                    info.modifier_id,
+                    info.filter_id,
                     wgpu::TextureFormat::R8Unorm,
                     info.bounds,
                 );
             }
             self.compositor
-                .ensure_passthrough_mask_state(&self.gpu.device, info.host_id);
+                .ensure_mask_snapshot_state(&self.gpu.device, info.host_id);
         }
 
         // --- Groups: ensure state + uniforms ---
         // Non-passthrough groups need the full group_state + blend uniforms.
-        // Passthrough groups may still own a `passthrough_mask_state` whose
+        // Passthrough groups may still own a `mask_snapshot_state` whose
         // `isolated` lerp uniform must track the engine's isolation target,
         // so we update them through the same path — `update_group_uniforms`
         // skips the group_state branch when none exists and writes only the

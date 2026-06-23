@@ -19,11 +19,20 @@
             // the icon); `editable` is the effective form (drives interaction
             // gates: rename, drag, mask/layer menu mutations).
             editable?: boolean;
+            // Per-kind capability flags from the layer's registration (see
+            // LayerKindRegistration). The panel reads these instead of
+            // branching on `type` — a new layer kind declares its own and the
+            // UI follows with no edit here.
+            canHaveMask?: boolean;
+            canRename?: boolean;
+            hasThumbnail?: boolean;
             opacity?: number; blendMode?: string;
             modifiers?: Modifier[];
-            // Iconify icon for void layers (declared by the void's registration);
-            // the layer panel renders it as the void's thumbnail.
+            // Iconify icon rendered as the panel thumbnail when the kind has no
+            // live thumbnail (void: per-subtype; filter/group: per-kind).
             icon?: string;
+            // Kind display name ("Void Layer", …) for the thumbnail tooltip.
+            kindName?: string;
         };
         depth?: number;
         onupdate: () => void;
@@ -58,7 +67,7 @@
     let editInput = $state<HTMLInputElement | null>(null);
     let dropPos = $state<'none' | 'above' | 'below'>('none');
 
-    let layerThumb = $derived(layer.type === 'raster' && app.engine ? getNodeThumbnail(layer.id) : '');
+    let layerThumb = $derived(layer.hasThumbnail && app.engine ? getNodeThumbnail(layer.id) : '');
     let maskThumb = $derived(maskModifier !== null && app.engine ? getNodeThumbnail(maskModifier.id) : '');
 
     let showMaskMenu = $state(false);
@@ -90,11 +99,7 @@
         return siblingBelowExists(app.layerTree, layer.id);
     });
 
-    let canAddMask = $derived(
-        (layer.type === 'raster' || layer.type === 'void')
-            && !hasMask
-            && editable,
-    );
+    let canAddMask = $derived(Boolean(layer.canHaveMask) && !hasMask && editable);
 
     // Chord dispatch is owned by `use:bindingSite` on each preview
     // element below — `bindingSite` intercepts modifier+click in capture
@@ -234,7 +239,7 @@
     }
 
     function startRename() {
-        if (layer.type !== 'raster') return;
+        if (!layer.canRename) return;
         if (!editable) return;
         editing = true;
         requestAnimationFrame(() => editInput?.focus());
@@ -350,7 +355,7 @@
         <Icon name={layer.visible ? 'fa6-solid:eye' : 'fa6-solid:eye-slash'} />
     </button>
 
-    {#if layer.type === 'raster' && layerThumb}
+    {#if layer.hasThumbnail && layerThumb}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <img
             class="thumb"
@@ -363,13 +368,13 @@
             use:bindingSite={{ name: 'layerThumb', ctx: () => ({ layerId: layer.id }) }}
             onclick={clickLayerThumb}
         />
-    {:else if layer.type === 'void'}
+    {:else if layer.icon}
         <span
             class="thumb void-thumb"
             class:thumb-active={isActive && !isEditingMask}
-            title="Void layer"
+            title={layer.kindName}
         >
-            <Icon name={layer.icon ?? 'tabler:galaxy'} />
+            <Icon name={layer.icon} />
         </span>
     {/if}
 

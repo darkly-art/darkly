@@ -3,7 +3,7 @@
     import Icon from '../../icons/Icon.svelte';
 
     let { onpick, onclose }: {
-        onpick: (kind: 'layer' | 'group' | 'veil' | 'void') => void;
+        onpick: (kind: 'layer' | 'group' | 'veil' | 'void' | 'filter') => void;
         onclose: () => void;
     } = $props();
 
@@ -35,6 +35,10 @@
     <button class="item" role="menuitem" onclick={() => onpick('void')}>
         <Icon name="tabler:galaxy" />
         <span>Void</span>
+    </button>
+    <button class="item" role="menuitem" onclick={() => onpick('filter')}>
+        <Icon name="fa6-solid:circle-half-stroke" />
+        <span>Filter Layer</span>
     </button>
 </div>
 

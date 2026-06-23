@@ -2,14 +2,14 @@
 // Regenerate: DARKLY_REGEN_TS=1 cargo test -p darkly --test protocol --features testing
 
 export type RequestKind =
+    | 'add_filter_layer'
     | 'add_group'
     | 'add_mask'
     | 'add_raster'
     | 'add_veil'
     | 'add_void'
-    | 'adjustment_types'
     | 'antialias_selection'
-    | 'apply_adjustment'
+    | 'apply_filter'
     | 'apply_mask'
     | 'begin_stroke'
     | 'begin_transform'
@@ -73,6 +73,7 @@ export type RequestKind =
     | 'feather_selection'
     | 'fill_background'
     | 'fill_background_color'
+    | 'filter_types'
     | 'flatten_image'
     | 'flatten_node'
     | 'flip_canvas'
@@ -165,14 +166,14 @@ export type RequestKind =
     ;
 
 export const REQUEST_KINDS: readonly RequestKind[] = [
+    'add_filter_layer',
     'add_group',
     'add_mask',
     'add_raster',
     'add_veil',
     'add_void',
-    'adjustment_types',
     'antialias_selection',
-    'apply_adjustment',
+    'apply_filter',
     'apply_mask',
     'begin_stroke',
     'begin_transform',
@@ -236,6 +237,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'feather_selection',
     'fill_background',
     'fill_background_color',
+    'filter_types',
     'flatten_image',
     'flatten_node',
     'flip_canvas',

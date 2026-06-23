@@ -1,9 +1,9 @@
 //! GPU-side state for the document's global selection: ping-pong R8 textures,
 //! the shared selection-mask bind group, and the boolean-op render pipelines.
 //!
-//! The selection itself is a typed [`crate::document::Modifier`] attached at
+//! The selection itself is a typed [`crate::document::Filter`] attached at
 //! the document root, with its pixel-level metadata (`active`, `pixel_bounds`,
-//! `cpu_cache`) on [`SelectionModifier`]. What lives here is purely the GPU
+//! `cpu_cache`) on [`SelectionFilter`]. What lives here is purely the GPU
 //! realisation: textures, bind group, and the shaders that mutate them.
 //!
 //! Both the brush and paint pipelines sample the mask through a single shared
@@ -876,7 +876,7 @@ pub fn selection_mask_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 }
 
 /// Ping-pong R8 textures + the selection mask bind group for the document's
-/// global selection. Allocated by the compositor when the selection modifier is
+/// global selection. Allocated by the compositor when the selection filter is
 /// first needed; lives until the document is dropped.
 pub struct SelectionState {
     pub textures: [wgpu::Texture; 2],
@@ -893,9 +893,9 @@ pub struct SelectionState {
     bgl: wgpu::BindGroupLayout,
     /// Constant across the state's lifetime; built once instead of per-rebuild.
     sampler: wgpu::Sampler,
-    /// Modifier id this state is paired with (for region-store and undo
-    /// keying — the document's selection modifier id).
-    pub modifier_id: LayerId,
+    /// Filter id this state is paired with (for region-store and undo
+    /// keying — the document's selection filter id).
+    pub filter_id: LayerId,
     pub width: u32,
     pub height: u32,
 }
@@ -903,7 +903,7 @@ pub struct SelectionState {
 impl SelectionState {
     pub fn new(
         device: &wgpu::Device,
-        modifier_id: LayerId,
+        filter_id: LayerId,
         width: u32,
         height: u32,
         bgl: &wgpu::BindGroupLayout,
@@ -932,7 +932,7 @@ impl SelectionState {
             bind_group,
             bgl: bgl.clone(),
             sampler,
-            modifier_id,
+            filter_id,
             width,
             height,
         }

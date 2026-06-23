@@ -41,7 +41,7 @@ impl UndoAction for LayerAddAction {
 /// Undo action for removing a layer/group.
 ///
 /// The node stays in the document's slotmap as an orphan between detach
-/// and reattach — the id (and all attached modifiers/descendants) survives
+/// and reattach — the id (and all attached filters/descendants) survives
 /// across undo/redo with no copy. The subtree's GPU textures are
 /// tombstoned so the pixels survive too; they're disposed only when this
 /// action is evicted from the undo stack while the deletion is still in

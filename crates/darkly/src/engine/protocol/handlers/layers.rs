@@ -74,6 +74,28 @@ pub fn registrations() -> Vec<RequestRegistration> {
             },
         },
         RequestRegistration {
+            kind: "add_filter_layer",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                struct Req {
+                    pipeline: String,
+                    #[serde(default)]
+                    params: serde_json::Value,
+                    anchor: i64,
+                }
+                let r: Req = decode(payload)?;
+                let anchor = (r.anchor >= 0).then(|| LayerId::from_ffi(r.anchor as u64));
+                // Filters carry no params today (invert is parameter-free), so
+                // the schema is empty; `params_from_json` yields an empty vec.
+                let pv = params_from_json(&r.params, &[]);
+                let value = match engine.add_filter_layer(&r.pipeline, pv, anchor) {
+                    Some(id) => json!({ "id": id.to_ffi() }),
+                    None => json!({ "id": -1 }),
+                };
+                Ok(Response::json(value))
+            },
+        },
+        RequestRegistration {
             kind: "update_void_params",
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]

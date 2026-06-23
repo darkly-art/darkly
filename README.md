@@ -104,8 +104,8 @@ For a feature to count, it must be:
 - [x] HSV picker, foreground/background swatches
 - [x] Color picker (Ctrl-held temporary pick)
 - [x] Raster layers + groups, drag‑reorder, visibility, lock, opacity, name, collapse, passthrough
-- [x] 16 blend modes (Normal → Luminosity, Krita‑compatible)
-- [x] Layer masks (one per host)
+- [x] 16 blend modes
+- [x] Layer masks
 - [x] Rect, ellipse, lasso, polygon, magic wand selection
 - [x] Selection Replace / Add / Subtract / Intersect modes
 - [x] Pan / zoom / rotate view
@@ -124,18 +124,17 @@ For a feature to count, it must be:
 - [x] Canvas resize
 - [x] Image rescale
 - [x] Select All / Deselect / Invert as menu+hotkey actions
-- [x] Invert selection (boolean op exists)
 - [x] Command palette (Ctrl+Shift+P)
 - [x] Application menu (File/Edit/Select/… , pinnable to top bar)
 - [x] Autosave + crash recovery
-- [ ] Brightness / Contrast
-- [ ] Hue / Saturation / Lightness
-- [ ] Levels
-- [ ] Curves
-- [x] Invert colors
-- [ ] Desaturate
+- [x] Filter layers (non-destructive; isolate to one layer via a group)
+-     [ ] Brightness / Contrast
+-     [ ] Hue / Saturation / Lightness
+-     [ ] Levels
+-     [ ] Curves
+-     [x] Invert colors
+-     [ ] Desaturate
 - [ ] Clipping mask
-- [ ] Adjustment layers
 - [x] Feather + antialias
 - [x] Grow / Shrink / Border / Smooth as discrete commands
 - [x] Flip canvas H / V

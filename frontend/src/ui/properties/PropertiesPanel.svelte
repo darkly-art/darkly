@@ -36,7 +36,13 @@
         {#if activeVeil}
             <VeilProperties veil={activeVeil} />
         {:else if activeLayer}
-            <LayerProperties node={activeLayer} />
+            <!-- Filter layers honor neither opacity nor blend mode yet (the
+                 first slice composites at full strength), so the blend/opacity
+                 controls are hidden rather than shown as inert. Re-enable when
+                 opacity/blend honoring lands. -->
+            {#if activeLayer.type !== 'filter'}
+                <LayerProperties node={activeLayer} />
+            {/if}
             {#if activeLayer.type === 'group'}
                 <GroupProperties group={activeLayer} />
             {:else if activeLayer.type === 'void'}

@@ -1,4 +1,4 @@
-//! Modifier (mask) operations.
+//! Filter (mask) operations.
 
 use crate::engine::protocol::{layer_id, RequestRegistration, Response};
 

@@ -1,13 +1,13 @@
 //! Engine-level selection ops (shape fills, booleans, active toggle, undo).
 //!
-//! The global selection is a typed [`crate::document::Modifier`] attached at
+//! The global selection is a typed [`crate::document::Filter`] attached at
 //! the document root. Selection state splits cleanly across:
 //!
-//! - **Document model**: `doc.selection: Option<Modifier>` carries name,
+//! - **Document model**: `doc.selection: Option<Filter>` carries name,
 //!   visibility (active toggle), lock, [`crate::layer::PixelBuffer`] bounds,
-//!   tight pixel bounds, and the CPU readback cache via [`SelectionModifier`].
+//!   tight pixel bounds, and the CPU readback cache via [`SelectionFilter`].
 //! - **Compositor**: `compositor.selection_state` carries the ping-pong R8
-//!   textures, the shared selection-mask bind group, and the modifier id used
+//!   textures, the shared selection-mask bind group, and the filter id used
 //!   for region-store / undo keying.
 //! - **Engine**: this file. The high-level ops the user invokes (select_rect,
 //!   apply_selection_mask, invert, clear, magic wand, …) plus the bridge
@@ -93,10 +93,10 @@ impl DarklyEngine {
     // ========================================================================
     // Bridge helpers — read/write the selection's split state through one
     // facade so consumers don't have to know whether a fact lives on the
-    // document modifier or the compositor's GPU state.
+    // document filter or the compositor's GPU state.
     // ========================================================================
 
-    /// True when the selection modifier is allocated AND its visibility flag
+    /// True when the selection filter is allocated AND its visibility flag
     /// is set. Equivalent to the old `gpu_selection.active`.
     pub fn has_selection(&self) -> bool {
         self.doc.selection_active()
@@ -109,7 +109,7 @@ impl DarklyEngine {
     pub fn selection_cpu_cache(&self) -> Option<&[u8]> {
         let id = self.doc.selection?;
         self.doc
-            .find_modifier(id)
+            .find_filter(id)
             .and_then(|m| m.as_selection())
             .and_then(|s| s.cpu_cache.data.as_deref())
     }
@@ -120,12 +120,12 @@ impl DarklyEngine {
     pub(crate) fn selection_pixel_bounds(&self) -> Option<WindowRect> {
         let id = self.doc.selection?;
         self.doc
-            .find_modifier(id)
+            .find_filter(id)
             .and_then(|m| m.as_selection())
             .and_then(|s| s.pixel_bounds)
     }
 
-    /// Selection modifier id, if allocated.
+    /// Selection filter id, if allocated.
     pub(crate) fn selection_modifier_id(&self) -> Option<LayerId> {
         self.doc.selection_id()
     }
@@ -139,7 +139,7 @@ impl DarklyEngine {
         };
         if let Some(s) = self
             .doc
-            .find_modifier_mut(id)
+            .find_filter_mut(id)
             .and_then(|m| m.as_selection_mut())
         {
             s.pixel_bounds = bounds;
@@ -154,7 +154,7 @@ impl DarklyEngine {
         };
         if let Some(s) = self
             .doc
-            .find_modifier_mut(id)
+            .find_filter_mut(id)
             .and_then(|m| m.as_selection_mut())
         {
             s.cpu_cache.set(data);
@@ -169,7 +169,7 @@ impl DarklyEngine {
         };
         if let Some(s) = self
             .doc
-            .find_modifier_mut(id)
+            .find_filter_mut(id)
             .and_then(|m| m.as_selection_mut())
         {
             s.cpu_cache.invalidate();
@@ -183,8 +183,8 @@ impl DarklyEngine {
             Some(id) => id,
             None => return,
         };
-        if let Some(modifier) = self.doc.find_modifier_mut(id) {
-            modifier.common.visible = active;
+        if let Some(filter) = self.doc.find_filter_mut(id) {
+            filter.common.visible = active;
         }
     }
 
@@ -733,7 +733,7 @@ impl DarklyEngine {
     /// Build the selection's GPU undo entry from the pending snapshot (paired
     /// with a prior [`save_selection_for_undo`](Self::save_selection_for_undo))
     /// without pushing an action. Returns `None` if the snapshot or selection
-    /// modifier is missing.
+    /// filter is missing.
     pub(crate) fn commit_selection_undo_entry(
         &mut self,
         rect: CanvasRect,
@@ -742,10 +742,10 @@ impl DarklyEngine {
             debug_assert!(false, "commit_selection_undo without a paired save");
             return None;
         };
-        let modifier_id = match self.selection_modifier_id() {
+        let filter_id = match self.selection_modifier_id() {
             Some(id) => id,
             None => {
-                debug_assert!(false, "commit_selection_undo without a selection modifier");
+                debug_assert!(false, "commit_selection_undo without a selection filter");
                 return None;
             }
         };
@@ -755,7 +755,7 @@ impl DarklyEngine {
             &self.region_scratch,
             &mut self.readbacks,
             "sel-undo-commit",
-            modifier_id,
+            filter_id,
             &frame,
             &snap,
             rect,

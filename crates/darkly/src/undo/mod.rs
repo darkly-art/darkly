@@ -1,9 +1,9 @@
 mod canvas_geometry;
 mod canvas_resize;
 mod compound;
+mod filter;
 mod gpu_region;
 mod layer;
-mod modifier;
 pub mod property;
 mod selection;
 mod tombstones;
@@ -11,12 +11,12 @@ mod tombstones;
 pub use canvas_geometry::CanvasGeometryAction;
 pub use canvas_resize::CanvasResizeAction;
 pub use compound::CompoundAction;
+pub use filter::{FilterAddAction, FilterRemoveAction, NodeLockedAction, NodeVisibleAction};
 pub use gpu_region::GpuRegionAction;
 pub use layer::{
     BakeLayersAction, BakeSourceSlot, DuplicateAction, LayerAddAction, LayerMoveAction,
     LayerRemoveAction,
 };
-pub use modifier::{ModifierAddAction, ModifierRemoveAction, NodeLockedAction, NodeVisibleAction};
 pub use property::PropertyAction;
 pub use selection::SelectionAction;
 
@@ -88,7 +88,7 @@ pub trait UndoAction {
     /// cap to evict oldest actions when the total exceeds the budget.
     ///
     /// Defaults to `0` — most actions (layer add/remove, property changes,
-    /// modifier add/remove) hold only structural metadata. GPU region actions
+    /// filter add/remove) hold only structural metadata. GPU region actions
     /// override this to return the pixel byte_size; compound actions sum
     /// children.
     fn byte_cost(&self) -> u64 {

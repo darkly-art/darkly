@@ -79,7 +79,7 @@ pub struct FloatingContent {
     pub source_height: u32,
     /// Current affine transform matrix.
     pub matrix: Affine2D,
-    /// Target node id. Resolves to either a raster layer or a mask modifier;
+    /// Target node id. Resolves to either a raster layer or a mask filter;
     /// the texture's own format (looked up via `compositor.node_texture(...)`)
     /// distinguishes the two — no sidecar boolean needed.
     pub target_layer: LayerId,
