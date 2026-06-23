@@ -18,25 +18,31 @@
 //!   Drains + drives tasks but skips composite, so simple requests resolve
 //!   sub-frame rather than ~16 ms later.
 //!
-//! ## Injected drain/image closures
+//! ## Host-owned transport + image FIFO
 //!
-//! The request transport and the `OffscreenCanvas` image side-FIFO live
-//! bridge-side, not in the host, so `tick`/`pump` take them as closures
-//! (`apply_images`, `drain`) rather than owning them. A backend that holds those
-//! in the core instead can pass thin closures over its own state; the
-//! orchestration (drain → drive tasks → composite) is identical regardless.
+//! The host owns the request [`Transport`] (the FIFO + dispatch registry) and
+//! the `OffscreenCanvas` image side-FIFO, so `tick`/`pump` orchestrate the whole
+//! pointer-to-pixel path — drain → drive tasks → composite — with no
+//! platform-supplied closures. A wasm bridge or a future Tauri backend supplies
+//! only device acquisition and an event-loop binding; it `enqueue`s requests and
+//! calls `tick`/`pump`, and the same core orchestration runs on every platform.
 
 pub mod cell;
+pub mod combinators;
 pub mod executor;
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use cell::EngineCell;
 use executor::Executor;
+use serde_json::Value;
 
-use crate::engine::protocol::RequestOutcome;
+use crate::engine::protocol::{RequestOutcome, Transport};
 use crate::engine::DarklyEngine;
 use crate::gpu::context::GpuContext;
+use crate::gpu::void::ExternalImageSource;
+use crate::layer::LayerId;
 
 /// Cap on the in-frame readback re-poll in [`drive_tasks`](EngineHost::drive_tasks).
 /// A chain of already-landed readbacks drains in one frame instead of one stage
@@ -74,12 +80,29 @@ pub struct PumpOutcome {
     pub outcomes: Vec<RequestOutcome>,
 }
 
-/// Wraps the engine cell and the frame-driven executor. `&self` throughout: the
-/// executor is interior-mutable and the cell is try-acquired, so the host needs
-/// no outer `RefCell` and a re-entrant call yields instead of panicking.
+/// A deferred upload of a live `OffscreenCanvas` frame into a camera-style
+/// void's GPU texture. This is the one engine operation that can't cross the
+/// serialized protocol boundary (an `OffscreenCanvas` isn't JSON), so it rides
+/// its own typed side-FIFO — still *deferred* (no synchronous borrow at enqueue
+/// time), applied under the next `tick`/`pump` burst.
+struct PendingImage {
+    layer_id: LayerId,
+    source: ExternalImageSource,
+}
+
+/// Wraps the engine cell, the frame-driven executor, the request transport, and
+/// the image side-FIFO. `&self` throughout: every piece is interior-mutable and
+/// the cell is try-acquired, so the host needs no outer `RefCell` and a
+/// re-entrant call yields instead of panicking.
 pub struct EngineHost {
     cell: Rc<EngineCell>,
     executor: Executor,
+    /// Deferred request FIFO + dispatch registry. Enqueue-only from the
+    /// platform edge; drained into the engine under `tick`/`pump`'s borrow.
+    transport: Transport,
+    /// Side-FIFO for the `OffscreenCanvas` upload exception. Enqueue-only;
+    /// applied at drain/render time before the protocol FIFO.
+    pending_images: RefCell<Vec<PendingImage>>,
 }
 
 impl EngineHost {
@@ -116,6 +139,39 @@ impl EngineHost {
         EngineHost {
             cell,
             executor: Executor::new(),
+            transport: Transport::new(),
+            pending_images: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Append a request to the FIFO. **Borrows no engine state** — safe to call
+    /// re-entrantly inside a `tick`'s `queue.submit` event pump (the request
+    /// just lands in the FIFO; no competing borrow, so no panic). `payload` is
+    /// the decoded JSON value; `bytes` is the optional binary side-channel.
+    pub fn enqueue(&self, id: u64, kind: &str, payload: Value, bytes: Vec<u8>) {
+        self.transport.enqueue(id, kind, payload, bytes);
+    }
+
+    /// Queue an `OffscreenCanvas` upload for a camera-style void. Borrows no
+    /// engine state; applied at the next `tick`/`pump`. See [`PendingImage`].
+    pub fn enqueue_image(&self, layer_id: LayerId, source: ExternalImageSource) {
+        self.pending_images
+            .borrow_mut()
+            .push(PendingImage { layer_id, source });
+    }
+
+    /// Read-only access to the transport's dispatch registry (kind enumeration).
+    pub fn registry(&self) -> &crate::engine::protocol::RequestRegistry {
+        self.transport.registry()
+    }
+
+    /// Apply any queued `OffscreenCanvas` uploads under an already-held engine
+    /// borrow. Run by both drain paths before the protocol FIFO so a frame's
+    /// camera upload lands the same frame.
+    fn apply_pending_images(&self, engine: &mut DarklyEngine) {
+        let pending: Vec<PendingImage> = self.pending_images.borrow_mut().drain(..).collect();
+        for p in pending {
+            engine.upload_void_external_image(p.layer_id, p.source);
         }
     }
 
@@ -156,17 +212,12 @@ impl EngineHost {
     /// The **frame** path (rAF). Drains the FIFO, drives tasks, composites, and
     /// collects terminal outcomes — each step a scoped burst released before the
     /// next; `.await`s happen only inside the executor's tasks, between bursts.
-    pub fn tick(
-        &self,
-        time_secs: f32,
-        apply_images: impl FnOnce(&mut DarklyEngine),
-        drain: impl FnOnce(&mut DarklyEngine) -> Vec<RequestOutcome>,
-    ) -> FrameOutcome {
+    pub fn tick(&self, time_secs: f32) -> FrameOutcome {
         // Apply pending image uploads, then drain the FIFO and dispatch handlers
         // (a deferring handler spawns a task) — one burst.
         let Some(mut outcomes) = self.cell.with(|e| {
-            apply_images(e);
-            drain(e)
+            self.apply_pending_images(e);
+            self.transport.drain_with(e)
         }) else {
             return FrameOutcome::busy();
         };
@@ -199,14 +250,10 @@ impl EngineHost {
     /// task can still progress between frames. Armed at pointer frequency, so it
     /// early-outs cheaply when idle (the readback poll only calls `device.poll`
     /// when a scheduler has work, and an empty-executor tick is O(0)).
-    pub fn pump(
-        &self,
-        apply_images: impl FnOnce(&mut DarklyEngine),
-        drain: impl FnOnce(&mut DarklyEngine) -> Vec<RequestOutcome>,
-    ) -> PumpOutcome {
+    pub fn pump(&self) -> PumpOutcome {
         let Some(mut outcomes) = self.cell.with(|e| {
-            apply_images(e);
-            drain(e)
+            self.apply_pending_images(e);
+            self.transport.drain_with(e)
         }) else {
             return PumpOutcome {
                 busy: true,
@@ -282,6 +329,11 @@ impl EngineHost {
         for _ in 0..256 {
             self.collect_spawns();
             let harvested = self.with(|e| e.test_poll_readbacks_blocking());
+            // A no-selection `begin_transform` task awaits the content-bounds
+            // compute, which rides its own pass (not the readback schedulers);
+            // force-flush it so the task can observe the result this iteration.
+            let bounds_done = self
+                .with(|e| e.has_pending_content_bounds() && e.test_flush_content_bounds_blocking());
             let progressed = self.executor.tick();
             self.collect_spawns();
             // The sink scheduler / diff-rect can also gate a task indirectly
@@ -290,9 +342,9 @@ impl EngineHost {
             self.with(|e| {
                 e.render(0.0);
             });
-            let idle =
-                !self.executor.has_pending_tasks() && self.with(|e| !e.has_pending_readbacks());
-            if idle && !harvested && !progressed {
+            let idle = !self.executor.has_pending_tasks()
+                && self.with(|e| !e.has_pending_readbacks() && !e.has_pending_content_bounds());
+            if idle && !harvested && !bounds_done && !progressed {
                 break;
             }
         }

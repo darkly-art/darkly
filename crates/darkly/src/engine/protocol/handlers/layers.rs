@@ -277,14 +277,16 @@ pub fn registrations() -> Vec<RequestRegistration> {
                     axis: Axis,
                 }
                 let r: Req = decode(payload)?;
-                let ok = engine.flip_node(
+                // Deferred: spawns a task that warms the selection cache (if
+                // cold), flips, and resolves this request with `{ ok }`.
+                engine.spawn_flip(
                     LayerId::from_ffi(r.node_id),
                     match r.axis {
                         Axis::H => crate::gpu::ortho_transform::OrthoXform::FlipH,
                         Axis::V => crate::gpu::ortho_transform::OrthoXform::FlipV,
                     },
                 );
-                Ok(Response::json(json!({ "ok": ok })))
+                Ok(Response::deferred())
             },
         },
         RequestRegistration {

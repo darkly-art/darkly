@@ -445,16 +445,20 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
     }
 }
 
-/// Pump the engine until a save completes, then reconstruct the [`SaveBundle`]
-/// from the packed protocol response (manifest ++ composite ++ blobs in the
-/// bytes channel — the same shape the JS save flow unpacks).
-fn drive_save_to_completion(engine: &mut DarklyEngine) -> SaveBundle {
+/// Drive a save to completion through a host, then reconstruct the
+/// [`SaveBundle`] from the packed protocol response (manifest ++ composite ++
+/// blobs in the bytes channel — the same shape the JS save flow unpacks). Save
+/// spawns a task on the host's executor, so it consumes the engine and returns
+/// it alongside the bundle for the caller to keep using.
+fn drive_save_to_completion(engine: DarklyEngine) -> (DarklyEngine, SaveBundle) {
+    use crate::engine::host::EngineHost;
     use crate::format::manifest::SaveBlob;
-    engine
-        .start_save_document(crate::engine::SavePurpose::File)
+    let host = EngineHost::adopt(engine);
+    host.with(|e| e.start_save_document(crate::engine::SavePurpose::File))
         .expect("start save");
-    let resp = engine
-        .test_drive_completed(0)
+    host.pump_until_idle();
+    let resp = host
+        .with(|e| e.test_take_completed(0))
         .expect("save did not complete");
     let v = &resp.value;
     let bytes = resp.bytes.expect("save resolves with packed bytes");
@@ -479,13 +483,14 @@ fn drive_save_to_completion(engine: &mut DarklyEngine) -> SaveBundle {
             }
         })
         .collect();
-    SaveBundle {
+    let bundle = SaveBundle {
         manifest_json,
         composite_width: v["compositeWidth"].as_u64().unwrap() as u32,
         composite_height: v["compositeHeight"].as_u64().unwrap() as u32,
         composite_rgba,
         blobs,
-    }
+    };
+    (host.into_engine(), bundle)
 }
 
 /// Coarse structural comparison: same canvas size, same number of
@@ -525,7 +530,7 @@ fn round_trip_kitchen_sink_document() {
     let mut original = kitchen_sink_engine(canvas_w, canvas_h);
     populate_kitchen_sink(&mut original);
 
-    let bundle = drive_save_to_completion(&mut original);
+    let (mut original, bundle) = drive_save_to_completion(original);
     let zip_bytes = assemble_zip(&bundle);
     let entries = extract_zip(&zip_bytes);
     assert!(
@@ -618,7 +623,7 @@ fn sub_canvas_mask_survives_save_load_round_trip() {
         "test setup: the mask must be sub-canvas; got {bounds_before:?}"
     );
 
-    let bundle = drive_save_to_completion(&mut original);
+    let (original, bundle) = drive_save_to_completion(original);
     let zip_bytes = assemble_zip(&bundle);
 
     let mut reloaded = kitchen_sink_engine(1, 1);
@@ -684,7 +689,7 @@ fn loaded_thumbnails_populate_without_a_first_edit() {
         .flat_map(|_| [255u8, 0, 0, 255])
         .collect();
     source.paste_image(canvas_w, canvas_h, &red, 0, 0, None);
-    let bundle = drive_save_to_completion(&mut source);
+    let (_source, bundle) = drive_save_to_completion(source);
     let zip_bytes = assemble_zip(&bundle);
 
     let mut reloaded = kitchen_sink_engine(canvas_w, canvas_h);
@@ -735,7 +740,7 @@ fn dirty_flag_cleared_by_open() {
 
     let mut original = kitchen_sink_engine(canvas_w, canvas_h);
     populate_kitchen_sink(&mut original);
-    let bundle = drive_save_to_completion(&mut original);
+    let (_original, bundle) = drive_save_to_completion(original);
     let zip_bytes = assemble_zip(&bundle);
 
     let mut reloaded = kitchen_sink_engine(canvas_w, canvas_h);
@@ -1172,7 +1177,7 @@ fn manifest_entry_bodies_are_opaque_to_central_code() {
     // doesn't require any central edit.
     let mut engine = kitchen_sink_engine(8, 8);
     let _layer = engine.add_raster_layer(None);
-    let bundle = drive_save_to_completion(&mut engine);
+    let (_engine, bundle) = drive_save_to_completion(engine);
     let manifest: Manifest = serde_json::from_slice(&bundle.manifest_json).unwrap();
 
     let raster_entry = manifest

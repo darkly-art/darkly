@@ -285,33 +285,11 @@ impl DarklyEngine {
             }
         }
 
-        // Poll content bounds compute readbacks.
-        let bounds_completed = self.compositor.poll_content_bounds(&self.gpu.device);
-        let mut any_completed = false;
+        // Drive content-bounds compute readbacks so a deferred `begin_transform`
+        // task waiting on them observes the result on its next tick.
+        self.compositor.poll_content_bounds(&self.gpu.device);
 
-        // Complete pending transform if content bounds just arrived.
-        if let Some(pt) = &self.pending_transform {
-            if bounds_completed.contains(&pt.node_id) {
-                let node_id = pt.node_id;
-                self.pending_transform = None;
-
-                if self.floating.is_none() {
-                    if let Some(bounds) = self.compositor.content_bounds(node_id) {
-                        // content_bounds are layer-local; translate to canvas.
-                        let [bx, by, bw, bh] = bounds;
-                        let canvas_origin = self
-                            .compositor
-                            .node_texture(node_id)
-                            .map(|t| t.layer_to_canvas(crate::coord::LayerPoint::new(bx, by)))
-                            .unwrap_or(crate::coord::CanvasPoint::new(bx as i32, by as i32));
-                        self.setup_transform(node_id, (canvas_origin.x, canvas_origin.y), bw, bh);
-                        any_completed = true;
-                    }
-                }
-            }
-        }
-
-        self.drain_readbacks() || any_completed
+        self.drain_readbacks()
     }
 
     /// Poll both readback schedulers once (non-blocking `device.poll`) and
@@ -359,38 +337,12 @@ impl DarklyEngine {
                     pixels,
                 );
             }
-            ReadbackContext::ExportImage {
-                width,
-                height,
-                request,
-            } => {
-                self.complete_export(width, height, request, pixels);
-            }
-            ReadbackContext::SaveDocument {
-                kind,
-                width,
-                height,
-            } => {
-                self.complete_save_readback(kind, width, height, pixels);
-            }
+            // Pure data sink: refresh the marching-ants overlay + CPU cache. The
+            // copy/cut/flip/adjustment/transform tasks await the selection cache
+            // directly (via `ensure_selection_cache_warm`), so there is nothing
+            // to resume here.
             ReadbackContext::SelectionReadback => {
                 self.update_selection_overlay_from_readback(pixels);
-                // Resume deferred operations waiting on selection cpu_cache /
-                // pixel_bounds. (Copy/cut tasks await the selection cache
-                // directly via their own combinator, not through this arm.)
-                if self.selection_pixel_bounds().is_some() {
-                    if let Some(pt) = self.pending_transform.take() {
-                        if self.floating.is_none() {
-                            self.begin_transform(pt.node_id);
-                        }
-                    }
-                    if let Some(pf) = self.pending_flip.take() {
-                        self.flip_node(pf.node_id, pf.xform);
-                    }
-                    if let Some(pa) = self.pending_adjustment.take() {
-                        self.apply_adjustment(pa.node_id, &pa.adjustment_type);
-                    }
-                }
             }
             ReadbackContext::Thumbnail {
                 node_id,

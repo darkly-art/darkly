@@ -28,6 +28,11 @@
 //! enforces that `EngineCell::with` is the only engine borrow — no raw
 //! `borrow*()` on a `RefCell<DarklyEngine>` outside `engine/host/cell.rs`.
 //!
+//! The request transport and the `OffscreenCanvas` image side-FIFO live in the
+//! core [`EngineHost`] (not bridge-side), so the bridge is a thin shell:
+//! `enqueue` appends to the host's FIFO, `render`/`drain` call `host.tick`/
+//! `host.pump`. A future Tauri backend reuses the same host orchestration.
+//!
 //! `frame_count` / `thumbnail_version` are no longer separate borrowing reads —
 //! [`render`] returns them as a downhill projection of its single borrow.
 
@@ -35,7 +40,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use darkly::engine::host::EngineHost;
-use darkly::engine::protocol::{RequestOutcome, Transport};
+use darkly::engine::protocol::RequestOutcome;
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::{GpuContext, GpuDevice};
 use darkly::layer::LayerId;
@@ -182,49 +187,18 @@ impl Default for DarklySession {
 // DarklyHandle
 // ---------------------------------------------------------------------------
 
-/// A deferred upload of a live `OffscreenCanvas` frame into a camera-style
-/// void's GPU texture. This is the one engine operation that can't cross the
-/// serialized protocol boundary (an `OffscreenCanvas` isn't JSON), so it rides
-/// its own typed side-FIFO — but it is still *deferred* (no synchronous borrow
-/// at call time) and applied under `render`/`drain`'s borrow, preserving the
-/// "exactly two borrow sites" invariant.
-struct PendingExternalImage {
-    layer_id: u64,
-    source: darkly::gpu::void::ExternalImageSource,
-}
-
 #[wasm_bindgen]
 pub struct DarklyHandle {
-    /// The core orchestration host — owns the engine cell and the frame-driven
-    /// executor. The bridge holds no engine `RefCell` of its own; all access is
-    /// through the host's scoped bursts.
+    /// The core orchestration host — owns the engine cell, the frame-driven
+    /// executor, the request transport, and the image side-FIFO. The bridge
+    /// holds no engine state of its own; all access is through the host.
     host: EngineHost,
-    /// The deferred request transport (FIFO + dispatch registry). Enqueue-only
-    /// from JS; lives bridge-side and is drained into the host via the injected
-    /// drain closure.
-    transport: Transport,
-    /// Side-FIFO for the OffscreenCanvas upload exception (see
-    /// [`PendingExternalImage`]). Enqueue-only; applied at drain/render time.
-    pending_images: RefCell<Vec<PendingExternalImage>>,
 }
 
 impl DarklyHandle {
     fn from_engine(engine: DarklyEngine) -> Self {
         DarklyHandle {
             host: EngineHost::adopt(engine),
-            transport: Transport::new(),
-            pending_images: RefCell::new(Vec::new()),
-        }
-    }
-
-    /// Apply any queued OffscreenCanvas uploads under an already-held engine
-    /// borrow. Called by both drain paths before the protocol FIFO so a frame's
-    /// camera upload lands the same frame.
-    fn apply_pending_images(&self, engine: &mut DarklyEngine) {
-        let pending: Vec<PendingExternalImage> =
-            self.pending_images.borrow_mut().drain(..).collect();
-        for p in pending {
-            engine.upload_void_external_image(LayerId::from_ffi(p.layer_id), p.source);
         }
     }
 }
@@ -264,13 +238,13 @@ impl DarklyHandle {
     // Transport surface — enqueue (no borrow), drain, render
     // =======================================================================
 
-    /// Append a request to the FIFO. **Borrows nothing** — safe to call
+    /// Append a request to the host's FIFO. **Borrows nothing** — safe to call
     /// re-entrantly inside render's event pump (invariant #1). `payload` is a JS
     /// object; `bytes` is an optional `Uint8Array` binary side-channel.
     pub fn enqueue(&self, id: f64, kind: &str, payload: JsValue, bytes: Option<Vec<u8>>) {
         let value: serde_json::Value =
             serde_wasm_bindgen::from_value(payload).unwrap_or(serde_json::Value::Null);
-        self.transport
+        self.host
             .enqueue(id as u64, kind, value, bytes.unwrap_or_default());
     }
 
@@ -280,10 +254,7 @@ impl DarklyHandle {
     /// dispatched request. Also drives in-flight deferred tasks so they can
     /// progress between frames.
     pub fn drain(&self) -> JsValue {
-        let outcome = self.host.pump(
-            |e| self.apply_pending_images(e),
-            |e| self.transport.drain_with(e),
-        );
+        let outcome = self.host.pump();
         if outcome.busy {
             busy_result()
         } else {
@@ -302,11 +273,7 @@ impl DarklyHandle {
 
         // The host orchestrates drain → drive tasks → composite as scoped
         // bursts; a re-entrant frame that can't acquire the engine yields busy.
-        let outcome = self.host.tick(
-            time_secs,
-            |e| self.apply_pending_images(e),
-            |e| self.transport.drain_with(e),
-        );
+        let outcome = self.host.tick(time_secs);
         if outcome.busy {
             return busy_result();
         }
@@ -344,17 +311,17 @@ impl DarklyHandle {
     }
 
     /// Queue an OffscreenCanvas frame upload for a camera-style void. Borrows
-    /// nothing; applied at the next drain/render. See [`PendingExternalImage`].
+    /// nothing; applied at the next drain/render. The host owns the side-FIFO.
     pub fn upload_void_external_image(&self, layer_id: f64, canvas: web_sys::OffscreenCanvas) {
         let info = wgpu::CopyExternalImageSourceInfo {
             source: wgpu::ExternalImageSource::OffscreenCanvas(canvas),
             origin: wgpu::Origin2d::ZERO,
             flip_y: false,
         };
-        self.pending_images.borrow_mut().push(PendingExternalImage {
-            layer_id: layer_id as u64,
-            source: darkly::gpu::void::ExternalImageSource::Web(info),
-        });
+        self.host.enqueue_image(
+            LayerId::from_ffi(layer_id as u64),
+            darkly::gpu::void::ExternalImageSource::Web(info),
+        );
     }
 
     /// Engine-side thumbnail dimension used by the auto-queue path. Returns a

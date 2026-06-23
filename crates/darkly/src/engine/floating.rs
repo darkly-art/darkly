@@ -1,13 +1,86 @@
 //! Floating content — paste-in-place and interactive transforms.
 
+use std::rc::Rc;
+
+use serde_json::json;
+
+use super::host::cell::EngineCell;
+use super::host::combinators::ensure_selection_cache_warm;
+use super::host::executor::yield_now;
+use super::protocol::Response;
 use super::rendering::commit_undo_region;
-use super::{DarklyEngine, PendingTransform};
+use super::DarklyEngine;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::transform::{Affine2D, ClearShape, FloatingContent, FloatingMode, IDENTITY};
 use crate::layer::{Layer, LayerId};
 use crate::undo::{GpuRegionAction, LayerAddAction};
 
+/// Whether a deferred `begin_transform` can proceed yet. Resolved each task
+/// tick by [`DarklyEngine::transform_preconditions`].
+enum TransformReady {
+    /// Preconditions met — call [`DarklyEngine::begin_transform`] now.
+    Go,
+    /// Still waiting on an async input (content-bounds compute). Yield + retry.
+    Wait,
+    /// The target can never set up (not editable, gone, or no texture). Resolve
+    /// the request with `{ ok: false }` and drop the task.
+    Abort,
+}
+
+/// Run an interactive transform setup as a deferred task: warm the selection
+/// cache if cold, await the content-bounds compute when there's no selection,
+/// then set up the floating session and resolve the request with `{ ok }`.
+async fn run_begin_transform(cell: Rc<EngineCell>, node_id: LayerId, request: u64) {
+    ensure_selection_cache_warm(&cell).await;
+    let ok = loop {
+        match cell
+            .with_async(|e| e.transform_preconditions(node_id))
+            .await
+        {
+            TransformReady::Go => break cell.with_async(|e| e.begin_transform(node_id)).await,
+            TransformReady::Abort => break false,
+            TransformReady::Wait => yield_now().await,
+        }
+    };
+    cell.with_async(|e| e.resolve_request(request, Response::json(json!({ "ok": ok }))))
+        .await;
+}
+
 impl DarklyEngine {
+    /// Spawn the transform-setup task — see [`run_begin_transform`]. The
+    /// originating request resolves with `{ ok }` once the floating session is
+    /// set up (immediately, or once the selection cache / content bounds land).
+    pub fn spawn_begin_transform(&mut self, node_id: LayerId) {
+        let request = self.current_request();
+        let cell = self.self_cell();
+        self.spawn(Some(request), run_begin_transform(cell, node_id, request));
+    }
+
+    /// Gate the deferred transform setup. Returns [`TransformReady::Go`] when
+    /// [`begin_transform`](Self::begin_transform) can set up synchronously, and
+    /// kicks the content-bounds compute (no-selection path) while waiting.
+    fn transform_preconditions(&mut self, node_id: LayerId) -> TransformReady {
+        if !self.doc.is_node_editable(node_id)
+            || (self.doc.layer(node_id).is_none() && self.doc.find_modifier(node_id).is_none())
+            || self.compositor.node_texture(node_id).is_none()
+        {
+            return TransformReady::Abort;
+        }
+        // Selection path: the task warmed the cache, so the bbox is derivable.
+        if self.has_selection() {
+            return TransformReady::Go;
+        }
+        // No-selection path: setup needs the compositor's content bounds cached.
+        if self.compositor.content_bounds(node_id).is_some() {
+            return TransformReady::Go;
+        }
+        if !self.compositor.is_content_bounds_pending(node_id) {
+            self.compositor
+                .request_content_bounds(&self.gpu.device, &self.gpu.queue, node_id);
+        }
+        TransformReady::Wait
+    }
+
     /// Auto-commit any active floating content before performing other edits.
     /// Call this before operations that would conflict with floating content
     /// (layer switch, paint, undo, etc.).
@@ -214,11 +287,9 @@ impl DarklyEngine {
                 };
                 match recomputed {
                     Some(bounds) => self.set_selection_pixel_bounds(bounds),
-                    None => {
-                        // Cache not ready — defer until SelectionReadback completes.
-                        self.pending_transform = Some(PendingTransform { node_id: layer_id });
-                        return false;
-                    }
+                    // Cache cold — the `run_begin_transform` task warms it
+                    // before calling, so this only short-circuits a direct caller.
+                    None => return false,
                 }
             }
             let bounds = match self.selection_pixel_bounds() {
@@ -259,10 +330,11 @@ impl DarklyEngine {
                 self.setup_transform(layer_id, (canvas_origin.x, canvas_origin.y), bw, bh);
                 true
             } else {
-                // Bounds not yet computed — request async GPU compute.
+                // Bounds not yet computed — request the async GPU compute. The
+                // `run_begin_transform` task awaits it and retries; a direct
+                // caller gets `false` and can re-poll once the compute lands.
                 self.compositor
                     .request_content_bounds(&self.gpu.device, &self.gpu.queue, layer_id);
-                self.pending_transform = Some(super::PendingTransform { node_id: layer_id });
                 false
             }
         }

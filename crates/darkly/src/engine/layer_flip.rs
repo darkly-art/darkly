@@ -8,17 +8,44 @@
 //! own extent centre. Horizontal/vertical only (no layer rotate), so the node
 //! extent never changes and undo is a single [`GpuRegionAction`].
 
+use std::rc::Rc;
+
+use serde_json::json;
+
+use super::host::cell::EngineCell;
+use super::host::combinators::ensure_selection_cache_warm;
+use super::protocol::Response;
 use super::rendering::commit_undo_region;
-use super::{DarklyEngine, PendingFlip};
+use super::DarklyEngine;
 use crate::coord::WindowRect;
 use crate::gpu::ortho_transform::OrthoXform;
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
+/// Run a flip as a deferred task: warm the selection cache if cold (the flip
+/// pivot is the selection bbox centre, read from that cache), then perform the
+/// flip and resolve the originating request with `{ ok }`.
+async fn run_flip(cell: Rc<EngineCell>, node_id: LayerId, xform: OrthoXform, request: u64) {
+    ensure_selection_cache_warm(&cell).await;
+    let ok = cell.with_async(|e| e.flip_node(node_id, xform)).await;
+    cell.with_async(|e| e.resolve_request(request, Response::json(json!({ "ok": ok }))))
+        .await;
+}
+
 impl DarklyEngine {
+    /// Spawn the flip task — see [`run_flip`]. The originating request resolves
+    /// with `{ ok }` once the flip lands (immediately, or the next frame if the
+    /// selection cache had to be warmed first).
+    pub fn spawn_flip(&mut self, node_id: LayerId, xform: OrthoXform) {
+        let request = self.current_request();
+        let cell = self.self_cell();
+        self.spawn(Some(request), run_flip(cell, node_id, xform, request));
+    }
+
     /// Flip the given node (raster layer or mask modifier) horizontally or
     /// vertically. Returns `false` if the node isn't editable, has no texture,
-    /// or the flip was deferred waiting on the selection cache.
+    /// or the selection cache is cold (the [`run_flip`] task warms it and
+    /// retries, so callers going through the task never see that last case).
     pub fn flip_node(&mut self, node_id: LayerId, xform: OrthoXform) -> bool {
         debug_assert!(matches!(xform, OrthoXform::FlipH | OrthoXform::FlipV));
         if !self.doc.is_node_editable(node_id) {
@@ -49,11 +76,9 @@ impl DarklyEngine {
                             self.set_selection_pixel_bounds(Some(b));
                             b
                         }
-                        None => {
-                            self.pending_flip = Some(PendingFlip { node_id, xform });
-                            self.kick_selection_readback();
-                            return false;
-                        }
+                        // Cache cold — the `run_flip` task warms it before
+                        // calling, so this only short-circuits a direct caller.
+                        None => return false,
                     }
                 }
             };

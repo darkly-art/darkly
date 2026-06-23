@@ -263,28 +263,12 @@ fn transform_on_off_canvas_layer_cancel_restores_pixels() {
 
     let before = engine.test_readback_layer(pasted_id);
 
-    // No selection — drives the async content_bounds compute path.
-    // First call dispatches; subsequent frames complete the readback.
-    let started = engine.begin_transform(pasted_id);
+    // No selection — drives the async content_bounds compute path. The
+    // `run_begin_transform` task awaits the compute; `test_begin_transform`
+    // mirrors it synchronously for this bare-engine test.
     assert!(
-        !started,
-        "no-selection path should defer for content_bounds"
-    );
-
-    // Drive readbacks to completion. `test_flush_readbacks` polls Wait,
-    // which also flushes content_bounds map_async callbacks.
-    let mut floating_ready = false;
-    for _ in 0..16 {
-        engine.test_flush_readbacks();
-        engine.render(0.0);
-        if engine.has_floating() {
-            floating_ready = true;
-            break;
-        }
-    }
-    assert!(
-        floating_ready,
-        "begin_transform did not resolve within 16 iterations"
+        engine.test_begin_transform(pasted_id),
+        "begin_transform did not resolve"
     );
 
     // The floating must report the layer's full extent in canvas-space.
@@ -1918,18 +1902,8 @@ fn transform_translate_no_selection_does_not_duplicate() {
     let layer_id = engine.paste_image(cw, ch, &rgba, 0, 0, None);
 
     // No selection — drives the async content_bounds compute path.
-    let started = engine.begin_transform(layer_id);
-    if !started {
-        for _ in 0..16 {
-            engine.test_flush_readbacks();
-            engine.render(0.0);
-            if engine.has_floating() {
-                break;
-            }
-        }
-    }
     assert!(
-        engine.has_floating(),
+        engine.test_begin_transform(layer_id),
         "begin_transform should have set up floating"
     );
 
@@ -2660,21 +2634,11 @@ fn floating_preview_respects_layer_mask() {
     );
 
     // Begin a transform with no active selection — content bounds are
-    // resolved asynchronously via the compositor's GPU compute, so spin
-    // a few frames until floating content is live.
-    engine.begin_transform(layer_id);
-    let mut floating_ready = false;
-    for _ in 0..16 {
-        engine.test_flush_readbacks();
-        engine.render(0.0);
-        if engine.has_floating() {
-            floating_ready = true;
-            break;
-        }
-    }
+    // resolved asynchronously via the compositor's GPU compute;
+    // `test_begin_transform` drives that to completion.
     assert!(
-        floating_ready,
-        "begin_transform did not produce floating content within 16 frames"
+        engine.test_begin_transform(layer_id),
+        "begin_transform did not produce floating content"
     );
     // Render once more so the floating preview pass runs on the current frame.
     engine.render(0.0);
@@ -4284,9 +4248,13 @@ fn export_readback_produces_rgba8_matching_composite() {
 
     // Start the export and drive the readback to completion; the originating
     // request resolves with `{ width, height }` + the RGBA8 bytes side-channel.
-    engine.start_export();
-    let resp = engine
-        .test_drive_completed(0)
+    // Export spawns a task on the host's executor, so it's driven via the host
+    // frame loop, not a bare `test_drive_completed`.
+    let host = EngineHost::adopt(engine);
+    host.with(|e| e.start_export());
+    host.pump_until_idle();
+    let resp = host
+        .with(|e| e.test_take_completed(0))
         .expect("export readback did not complete");
     let width = resp.value["width"].as_u64().unwrap() as u32;
     let height = resp.value["height"].as_u64().unwrap() as u32;
@@ -4313,10 +4281,12 @@ fn export_request_pends_until_readback_completes() {
     let mut engine = test_engine(8, 8);
     let _layer = engine.add_raster_layer(None);
 
-    engine.start_export();
-    // No flush yet — the readback is queued but the GPU work isn't drained.
+    let host = EngineHost::adopt(engine);
+    host.with(|e| e.start_export());
+    // The task is spawned but not driven — no readback has landed, so the
+    // deferred request must not have resolved.
     assert!(
-        engine.test_take_completed(0).is_none(),
+        host.with(|e| e.test_take_completed(0)).is_none(),
         "result must not be available before the readback completes"
     );
 }

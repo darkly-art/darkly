@@ -16,9 +16,11 @@
 //! on layer kind or modifier kind — the same loop handles raster, mask,
 //! selection, and any future kind that registers itself.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use std::rc::Rc;
 
-use super::{DarklyEngine, ReadbackContext};
+use super::host::cell::EngineCell;
+use super::DarklyEngine;
 use crate::document::layer_kind::{self, PixelBlobSpec};
 use crate::document::modifier;
 use crate::document::Entity;
@@ -27,7 +29,7 @@ use crate::format::manifest::{
     SaveBlob, SaveBundle, CONTAINER_VERSION, FORMAT_TAG,
 };
 use crate::format::registry_io::InstancePayload;
-use crate::gpu::readback;
+use crate::gpu::readback::{self, ReadbackFuture};
 use crate::layer::LayerId;
 
 /// Errors `start_save_document` can return synchronously.
@@ -68,197 +70,98 @@ pub enum SavePurpose {
     Snapshot,
 }
 
-/// Which kind of texture a pending [`ReadbackContext::SaveDocument`]
-/// readback is sourced from. Drives how the completed pixels are
-/// stitched into the [`SaveJob`]: per-blob bytes for pixel-bearing
-/// entities (raster/mask/selection all flow through the same arm), a
-/// `(width, height, rgba)` triple for the composite.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SaveReadbackKind {
-    /// One pixel-bearing entity's bytes — stored under `key` (the zip-relative
-    /// blob path matching the entity's [`crate::format::manifest::ManifestPixelRef::pixels`]).
-    BlobBytes { key: String },
-    /// The whole composited canvas — stored as the bundle's
-    /// `(composite_width, composite_height, composite_rgba)`.
-    Composite,
+/// One pixel-bearing readback the save task awaits: the zip-relative blob path
+/// the bytes land under, plus the awaitable future. Produced for every
+/// `PixelBlobSpec` that resolved to a live GPU texture.
+struct SaveBlobRead {
+    /// Zip-relative blob path matching the entity's
+    /// [`crate::format::manifest::ManifestPixelRef::pixels`].
+    key: String,
+    future: ReadbackFuture,
 }
 
-/// In-flight save state — created by [`DarklyEngine::start_save_document`]
-/// and finished by `complete_save_readback` once every readback lands. The
-/// fields capture everything the save needs that's *not* a pixel readback
-/// (those land asynchronously into `pending_blobs` / `composite`).
-pub struct SaveJob {
-    /// Manifest built synchronously at submit time. Captures the
-    /// document's tree / modifier / veil / requires state at the moment
-    /// `start_save_document` ran. Any subsequent doc mutation is
-    /// invisible to this manifest.
+/// Everything the [`run_save`] task needs after its synchronous prelude burst:
+/// the manifest snapshot, the awaitable readbacks (per-blob + composite), the
+/// pinned source textures, and the dirty-flag policy.
+struct SavePrelude {
+    /// Manifest built synchronously in the prelude. Captures the document's
+    /// tree / modifier / veil / requires state at submit time; any subsequent
+    /// doc mutation is invisible to it, so the user can keep editing while the
+    /// readbacks complete.
     manifest: Manifest,
-    /// Refcounted handles to every texture this save reads from. wgpu
-    /// `Texture` is internally `Arc`-shared, so cloning here keeps the
-    /// GPU resource alive even if the user deletes the source layer
-    /// mid-save and the compositor drops its handle.
-    #[allow(dead_code)] // held purely to keep textures alive across readbacks
-    pinned_textures: Vec<wgpu::Texture>,
-    /// Zip-relative blob path → completed bytes. `None` while the
-    /// readback is in flight; populated by `complete_save_readback` as
-    /// each pixel readback lands.
-    pending_blobs: HashMap<String, Option<Vec<u8>>>,
-    /// Composite readback result. `None` until the `Composite` arm
-    /// fires.
-    composite: Option<(u32, u32, Vec<u8>)>,
-    /// Why this save was started — gates whether finishing clears
-    /// `doc.dirty` (see [`SavePurpose`]).
+    /// Why this save was started — gates whether finishing clears `doc.dirty`.
     purpose: SavePurpose,
-    /// Originating `start_save_document` request id. When the last readback
-    /// lands, the assembled [`SaveBundle`] resolves this request's promise.
-    request: u64,
+    /// One awaitable readback per pixel-bearing entity (raster / mask /
+    /// selection all flow through the same path).
+    blob_reads: Vec<SaveBlobRead>,
+    /// The composite readback: `(width, height, future)`.
+    composite: (u32, u32, ReadbackFuture),
+    /// Refcounted handles to every source texture this save reads from. wgpu
+    /// `Texture` is internally `Arc`-shared, so holding these here keeps the
+    /// GPU resource alive even if the user deletes the source layer mid-save
+    /// and the compositor drops its handle. Held until the task drops.
+    #[allow(dead_code)]
+    pinned_textures: Vec<wgpu::Texture>,
 }
 
-impl SaveJob {
-    /// True when every pixel-bearing readback (`pending_blobs` + composite)
-    /// has landed.
-    fn is_complete(&self) -> bool {
-        self.composite.is_some() && self.pending_blobs.values().all(Option::is_some)
-    }
-}
+/// Run a `.darkly` save as a linear task: await each readback kicked by the
+/// synchronous [`kick_save_readbacks`](DarklyEngine::kick_save_readbacks)
+/// prelude, assemble the [`SaveBundle`], and resolve the originating request.
+/// The prelude already built the manifest snapshot and pinned the textures, so
+/// edits made while these readbacks land don't affect what's saved.
+async fn run_save(cell: Rc<EngineCell>, prelude: SavePrelude, request: u64) {
+    let SavePrelude {
+        manifest,
+        purpose,
+        blob_reads,
+        composite,
+        pinned_textures: _pinned,
+    } = prelude;
 
-impl DarklyEngine {
-    /// Kick off a save. Synchronously builds the [`Manifest`], pins
-    /// every source texture, and queues all readbacks. Defers: the
-    /// originating request resolves with the packed `SaveBundle` once
-    /// every readback completes (typically within a few frames).
-    ///
-    /// `purpose` decides whether the eventual drain clears `doc.dirty`:
-    /// [`SavePurpose::File`] does (the file matches disk), while an
-    /// autosave [`SavePurpose::Snapshot`] leaves it untouched.
-    pub fn start_save_document(&mut self, purpose: SavePurpose) -> Result<(), SaveError> {
-        if self.active_save_job.is_some() {
-            return Err(SaveError::InProgress);
-        }
-        let request = self.current_request();
-
-        let (manifest, pixel_blobs) = build_manifest(self);
-
-        // Force an offscreen composite so the composite texture is fresh,
-        // even when this engine is headless (no surface present has run
-        // since the last doc mutation).
-        self.compositor
-            .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc);
-
-        let canvas_w = self.compositor.canvas_width();
-        let canvas_h = self.compositor.canvas_height();
-
-        let mut pinned_textures = Vec::new();
-        let mut pending_blobs: HashMap<String, Option<Vec<u8>>> = HashMap::new();
-
-        // Walk the per-entity pixel-blob declarations the registry-driven
-        // serializers produced and queue one readback per blob. No
-        // kind discrimination: `pixel_data_for` returns the right texture
-        // for rasters, masks, AND the selection.
-        for spec in pixel_blobs {
-            queue_pixel_readback(self, &spec, &mut pinned_textures, &mut pending_blobs);
-        }
-
-        // Composite readback. We pin the composite texture so a later
-        // resize / surface change can't pull it out from under us before
-        // the readback completes.
-        let composite_tex = self.compositor.composited_texture().clone();
-        pinned_textures.push(composite_tex.clone());
-        self.gpu.encode("save-composite", |encoder| {
-            let request = readback::request_readback(
-                &self.gpu.device,
-                encoder,
-                &composite_tex,
-                wgpu::TextureFormat::Rgba8Unorm,
-                crate::coord::LayerRect::from_xywh(0, 0, canvas_w, canvas_h),
-            );
-            self.readbacks.submit(
-                request,
-                ReadbackContext::SaveDocument {
-                    kind: SaveReadbackKind::Composite,
-                    width: canvas_w,
-                    height: canvas_h,
-                },
-            );
-        });
-
-        self.active_save_job = Some(SaveJob {
-            manifest,
-            pinned_textures,
-            pending_blobs,
-            composite: None,
-            purpose,
-            request,
-        });
-
-        Ok(())
-    }
-
-    /// Dispatch from `handle_completed_readback` — populate the matching
-    /// blob slot or the composite triple, then finish the save once every
-    /// readback has landed. Unknown keys are silently dropped (the save was
-    /// cancelled or a stale readback completed after the job finished).
-    pub(crate) fn complete_save_readback(
-        &mut self,
-        kind: SaveReadbackKind,
-        width: u32,
-        height: u32,
-        mut pixels: Vec<u8>,
-    ) {
-        let Some(job) = self.active_save_job.as_mut() else {
+    // Await every pixel blob, then the composite. A `None` means the handle was
+    // disposed mid-save (slot cancelled) — abandon it; teardown already
+    // rejected the request. Clear the in-flight guard either way.
+    let mut blobs: Vec<SaveBlob> = Vec::with_capacity(blob_reads.len());
+    for SaveBlobRead { key, future } in blob_reads {
+        let Some(bytes) = future.await else {
+            cell.with_async(|e| e.save_in_flight = false).await;
             return;
         };
-        match kind {
-            SaveReadbackKind::Composite => {
-                pixels.truncate((width * height * 4) as usize);
-                job.composite = Some((width, height, pixels));
+        blobs.push(SaveBlob { path: key, bytes });
+    }
+
+    let (composite_width, composite_height, composite_future) = composite;
+    let Some(mut composite_rgba) = composite_future.await else {
+        cell.with_async(|e| e.save_in_flight = false).await;
+        return;
+    };
+    composite_rgba.truncate((composite_width * composite_height * 4) as usize);
+
+    // Stable blob ordering for tests + bit-stable output; serialize the
+    // manifest off the engine. The final burst only touches engine state.
+    blobs.sort_by(|a, b| a.path.cmp(&b.path));
+    let manifest_json = serde_json::to_vec_pretty(&manifest);
+
+    cell.with_async(move |e| {
+        e.save_in_flight = false;
+        let manifest_json = match manifest_json {
+            Ok(json) => json,
+            Err(_) => {
+                e.reject_request(
+                    request,
+                    crate::engine::protocol::ProtocolError::engine(
+                        "save manifest serialize failed",
+                    ),
+                );
+                return;
             }
-            SaveReadbackKind::BlobBytes { key } => {
-                if let Some(slot) = job.pending_blobs.get_mut(&key) {
-                    *slot = Some(pixels);
-                }
-            }
-        }
-        if job.is_complete() {
-            self.finish_save_job();
-        }
-    }
-
-    /// Assemble the [`SaveBundle`] from the completed job and resolve the
-    /// originating `start_save_document` request with the packed binary
-    /// response. A [`SavePurpose::File`] save also clears [`Document::dirty`]
-    /// — the bundle handoff is the moment the document's contents are no
-    /// longer "unsaved." Edits queued between `start_save_document` and here
-    /// are intentionally invisible to the dirty flag: the snapshot built at
-    /// submit time is what's leaving the engine. A [`SavePurpose::Snapshot`]
-    /// (autosave) save leaves `dirty` alone.
-    fn finish_save_job(&mut self) {
-        let Some(job) = self.active_save_job.take() else {
-            return;
         };
-        let request = job.request;
-        let Ok(manifest_json) = serde_json::to_vec_pretty(&job.manifest) else {
-            self.reject_request(
-                request,
-                crate::engine::protocol::ProtocolError::engine("save manifest serialize failed"),
-            );
-            return;
-        };
-        let (composite_width, composite_height, composite_rgba) = job.composite.unwrap();
-        let mut blobs: Vec<SaveBlob> = job
-            .pending_blobs
-            .into_iter()
-            .map(|(path, bytes)| SaveBlob {
-                path,
-                bytes: bytes.unwrap_or_default(),
-            })
-            .collect();
-        // Stable ordering for tests + bit-stable output.
-        blobs.sort_by(|a, b| a.path.cmp(&b.path));
         // Only a real file save means "disk matches" — an autosave snapshot
         // wrote to OPFS, not the user's file, so it must leave `dirty` set.
-        if job.purpose == SavePurpose::File {
-            self.doc.dirty = false;
+        // Edits between submit and here are intentionally invisible: the
+        // snapshot the bundle holds is what left the engine.
+        if purpose == SavePurpose::File {
+            e.doc.dirty = false;
         }
         let bundle = SaveBundle {
             manifest_json,
@@ -267,7 +170,84 @@ impl DarklyEngine {
             composite_rgba,
             blobs,
         };
-        self.resolve_request(request, pack_save_bundle(bundle));
+        e.resolve_request(request, pack_save_bundle(bundle));
+    })
+    .await;
+}
+
+impl DarklyEngine {
+    /// Kick off a save. Spawns a [`run_save`] task; the originating request
+    /// resolves with the packed `SaveBundle` once every readback completes
+    /// (typically within a few frames). Errors with [`SaveError::InProgress`]
+    /// if a save is already in flight on this engine.
+    ///
+    /// `purpose` decides whether finishing clears `doc.dirty`:
+    /// [`SavePurpose::File`] does (the file matches disk), while an autosave
+    /// [`SavePurpose::Snapshot`] leaves it untouched.
+    pub fn start_save_document(&mut self, purpose: SavePurpose) -> Result<(), SaveError> {
+        if self.save_in_flight {
+            return Err(SaveError::InProgress);
+        }
+        self.save_in_flight = true;
+        let request = self.current_request();
+        // Build the snapshot + kick the readbacks synchronously *now*, so the
+        // save reflects document state at submit time — edits between here and
+        // the task draining the readbacks are invisible to it.
+        let prelude = self.kick_save_readbacks(purpose);
+        let cell = self.self_cell();
+        self.spawn(Some(request), run_save(cell, prelude, request));
+        Ok(())
+    }
+
+    /// Synchronous save prelude: build the manifest, force a fresh offscreen
+    /// composite, pin every source texture, and kick the awaitable readbacks
+    /// (one per pixel blob + the composite). Returns the [`SavePrelude`] the
+    /// task awaits. Runs in one [`EngineCell::with_async`] burst.
+    fn kick_save_readbacks(&mut self, purpose: SavePurpose) -> SavePrelude {
+        let (manifest, pixel_blobs) = build_manifest(self);
+
+        // Force an offscreen composite so the composite texture is fresh, even
+        // when this engine is headless (no surface present has run since the
+        // last doc mutation).
+        self.compositor
+            .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc);
+
+        let canvas_w = self.compositor.canvas_width();
+        let canvas_h = self.compositor.canvas_height();
+
+        let mut pinned_textures = Vec::new();
+
+        // Walk the per-entity pixel-blob declarations the registry-driven
+        // serializers produced and kick one readback per blob. No kind
+        // discrimination: `pixel_data_for` returns the right texture for
+        // rasters, masks, AND the selection.
+        let blob_reads = pixel_blobs
+            .iter()
+            .filter_map(|spec| kick_pixel_readback(self, spec, &mut pinned_textures))
+            .collect();
+
+        // Composite readback. Pin the composite texture so a later resize /
+        // surface change can't pull it out before the readback executes.
+        let composite_tex = self.compositor.composited_texture().clone();
+        pinned_textures.push(composite_tex.clone());
+        let req = self.gpu.encode_ret("save-composite", |encoder| {
+            readback::request_readback(
+                &self.gpu.device,
+                encoder,
+                &composite_tex,
+                wgpu::TextureFormat::Rgba8Unorm,
+                crate::coord::LayerRect::from_xywh(0, 0, canvas_w, canvas_h),
+            )
+        });
+        let composite_future = self.await_readback(req);
+
+        SavePrelude {
+            manifest,
+            purpose,
+            blob_reads,
+            composite: (canvas_w, canvas_h, composite_future),
+            pinned_textures,
+        }
     }
 }
 
@@ -435,20 +415,16 @@ pub fn requires_from_doc(engine: &DarklyEngine) -> ManifestRequires {
     }
 }
 
-/// Queue one pixel readback and reserve its blob slot. Pins the source
-/// texture so the readback survives concurrent mutation. Returns
-/// without queueing (silent) when the entity has no GPU texture today
-/// — typically a freshly-added layer that hasn't been touched yet, which
-/// has nothing to save.
-fn queue_pixel_readback(
+/// Kick one awaitable pixel readback, pinning the source texture so it survives
+/// concurrent mutation until the readback executes. Returns `None` (silent)
+/// when the entity has no GPU texture today — typically a freshly-added layer
+/// that hasn't been touched yet, which has nothing to save.
+fn kick_pixel_readback(
     engine: &mut DarklyEngine,
     spec: &PixelBlobSpec,
     pinned: &mut Vec<wgpu::Texture>,
-    blobs: &mut HashMap<String, Option<Vec<u8>>>,
-) {
-    let Some(data) = engine.compositor.pixel_data_for(spec.source_node_id) else {
-        return;
-    };
+) -> Option<SaveBlobRead> {
+    let data = engine.compositor.pixel_data_for(spec.source_node_id)?;
 
     let texture = data.texture.clone();
     let format = data.format;
@@ -457,25 +433,18 @@ fn queue_pixel_readback(
     let key = spec.blob_key.clone();
 
     pinned.push(texture.clone());
-    blobs.insert(key.clone(), None);
 
-    engine.gpu.encode("save-pixel-readback", |encoder| {
-        let request = readback::request_readback(
+    let req = engine.gpu.encode_ret("save-pixel-readback", |encoder| {
+        readback::request_readback(
             &engine.gpu.device,
             encoder,
             &texture,
             format,
             crate::coord::LayerRect::from_xywh(0, 0, width, height),
-        );
-        engine.readbacks.submit(
-            request,
-            ReadbackContext::SaveDocument {
-                kind: SaveReadbackKind::BlobBytes { key },
-                width,
-                height,
-            },
-        );
+        )
     });
+    let future = engine.await_readback(req);
+    Some(SaveBlobRead { key, future })
 }
 
 #[cfg(test)]
@@ -483,6 +452,8 @@ mod tests {
     use super::*;
     use crate::gpu::context::GpuContext;
     use crate::gpu::test_utils::test_device;
+
+    use crate::engine::host::EngineHost;
 
     fn headless_engine(w: u32, h: u32) -> DarklyEngine {
         let (device, queue) = test_device();
@@ -498,11 +469,13 @@ mod tests {
     fn save_in_progress_returns_err() {
         let mut engine = headless_engine(32, 32);
         let _layer = engine.add_raster_layer(None);
-        engine
-            .start_save_document(SavePurpose::File)
+        // Under a host: the first save spawns its task and sets the in-flight
+        // guard; the second refuses while that task is undriven.
+        let host = EngineHost::adopt(engine);
+        host.with(|e| e.start_save_document(SavePurpose::File))
             .expect("first save kicks off");
-        let err = engine
-            .start_save_document(SavePurpose::File)
+        let err = host
+            .with(|e| e.start_save_document(SavePurpose::File))
             .expect_err("second save must refuse");
         assert!(matches!(err, SaveError::InProgress));
     }
@@ -568,16 +541,16 @@ mod tests {
         let _layer = engine.add_raster_layer(None);
         assert!(engine.is_dirty(), "add_raster_layer must flip dirty");
 
-        engine
-            .start_save_document(SavePurpose::File)
+        // Drive the save task to completion through the host; resolving the
+        // request clears dirty as part of finishing.
+        let host = EngineHost::adopt(engine);
+        host.with(|e| e.start_save_document(SavePurpose::File))
             .expect("save kicks off");
-        // Drive readbacks to completion; the save request resolves with the
-        // packed bundle and clears dirty as part of finishing the job.
-        engine
-            .test_drive_completed(0)
+        host.pump_until_idle();
+        host.with(|e| e.test_take_completed(0))
             .expect("save should complete");
         assert!(
-            !engine.is_dirty(),
+            !host.with(|e| e.is_dirty()),
             "successful save must clear dirty — bundle handoff matches disk"
         );
     }
@@ -592,34 +565,34 @@ mod tests {
         let _layer = engine.add_raster_layer(None);
         assert!(engine.is_dirty(), "add_raster_layer must flip dirty");
 
-        engine
-            .start_save_document(SavePurpose::Snapshot)
+        let host = EngineHost::adopt(engine);
+        host.with(|e| e.start_save_document(SavePurpose::Snapshot))
             .expect("snapshot save kicks off");
-        engine
-            .test_drive_completed(0)
+        host.pump_until_idle();
+        host.with(|e| e.test_take_completed(0))
             .expect("snapshot should complete");
         assert!(
-            engine.is_dirty(),
+            host.with(|e| e.is_dirty()),
             "autosave snapshot must NOT clear dirty — nothing reached the user's file"
         );
     }
 
-    /// A snapshot save must be drivable to completion by flushing readbacks
-    /// alone — no `render()`/present — because a backgrounded tab's render
-    /// loop isn't running. Completing the readbacks resolves the save request
-    /// with the packed bundle.
+    /// A snapshot save completes through the host's task/readback drive — no
+    /// composite/present — because a backgrounded tab's rAF loop isn't running.
+    /// The `run_save` task awaits its readbacks on the executor; harvesting them
+    /// resolves the save request with the packed bundle.
     #[test]
     fn snapshot_completes_without_render() {
         let mut engine = headless_engine(32, 32);
         let _layer = engine.add_raster_layer(None);
 
-        engine
-            .start_save_document(SavePurpose::Snapshot)
+        let host = EngineHost::adopt(engine);
+        host.with(|e| e.start_save_document(SavePurpose::Snapshot))
             .expect("snapshot save kicks off");
-        // `test_drive_completed` drives the readback scheduler (no render()).
-        let resp = engine
-            .test_drive_completed(0)
-            .expect("snapshot must complete via flush alone, without render()");
+        host.pump_until_idle();
+        let resp = host
+            .with(|e| e.test_take_completed(0))
+            .expect("snapshot must complete via the host's task drive");
         assert_eq!(
             resp.value["compositeWidth"].as_u64(),
             Some(32),
@@ -641,17 +614,20 @@ mod tests {
     fn save_concurrent_edit_does_not_corrupt() {
         let mut engine = headless_engine(32, 32);
         let _baseline = engine.add_raster_layer(None);
-        engine
-            .start_save_document(SavePurpose::File)
+
+        let host = EngineHost::adopt(engine);
+        host.with(|e| e.start_save_document(SavePurpose::File))
             .expect("save kicks off");
 
-        // Mutate the document mid-save.
-        let _added_mid_save = engine.add_raster_layer(None);
+        // Mutate the document mid-save (after the prelude burst pinned the
+        // snapshot, before the readbacks finish).
+        host.with(|e| e.add_raster_layer(None));
 
         // Drive readbacks to completion and recover the manifest from the
         // packed bundle (manifest ++ composite ++ blobs in the bytes channel).
-        let resp = engine
-            .test_drive_completed(0)
+        host.pump_until_idle();
+        let resp = host
+            .with(|e| e.test_take_completed(0))
             .expect("save should complete");
         let manifest_len = resp.value["manifestLen"].as_u64().unwrap() as usize;
         let bytes = resp.bytes.expect("save resolves with packed bytes");

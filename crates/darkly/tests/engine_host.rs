@@ -130,7 +130,7 @@ fn awaiting_task_does_not_block_the_frame_loop() {
     host.with(|e| e.copy(layer));
 
     // One frame with the task in flight: must return, not deadlock.
-    let outcome = host.tick(0.0, |_| {}, |_| Vec::new());
+    let outcome = host.tick(0.0);
     assert!(!outcome.busy, "a plain frame should not report busy");
 
     host.pump_until_idle();
@@ -153,7 +153,7 @@ fn keepalive_holds_frames_until_copy_completes() {
     host.with(|e| e.copy(layer));
 
     // With the task in flight and no animation, the frame must report needsMore.
-    let outcome = host.tick(0.0, |_| {}, |_| Vec::new());
+    let outcome = host.tick(0.0);
     assert!(
         outcome.needs_more,
         "a copy in flight must keep frames coming"
@@ -164,6 +164,98 @@ fn keepalive_holds_frames_until_copy_completes() {
     assert!(
         host.with(|e| e.test_take_completed(0)).is_some(),
         "the copy eventually resolves"
+    );
+}
+
+/// A destructive adjustment spawned with a **cold** selection cache resolves
+/// through the host: the `run_adjustment` task warms the cache before applying
+/// the filter, and only the selected region is inverted. Exercises the
+/// `ensure_selection_cache_warm` combinator shared with copy/cut.
+#[test]
+fn adjustment_with_cold_selection_cache_resolves() {
+    let (w, h) = (12u32, 12u32);
+    let mut engine = test_engine(w, h);
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
+        px[0] = (i % 200) as u8;
+        px[1] = 64;
+        px[2] = 128;
+        px[3] = 255;
+    }
+    let layer = engine.paste_image(w, h, &rgba, 0, 0, None);
+    let before = engine.test_readback_layer(layer);
+
+    // A boolean combine leaves the selection CPU cache cold (see the copy test).
+    engine.select_rect(3.0, 3.0, 5.0, 5.0, SelectionMode::Replace, false, 0.0);
+    engine.select_rect(4.0, 4.0, 3.0, 3.0, SelectionMode::Add, false, 0.0);
+    assert!(
+        engine.test_selection_cpu_cache().is_none(),
+        "precondition: the combine leaves the cache cold"
+    );
+
+    let host = EngineHost::adopt(engine);
+    host.with(|e| {
+        e.test_set_request_id(0);
+        e.spawn_adjustment(layer, "invert");
+    });
+    host.pump_until_idle();
+
+    let resp = host
+        .with(|e| e.test_take_completed(0))
+        .expect("adjustment must resolve once the host drives its task");
+    assert_eq!(resp.value["ok"], true, "adjustment reports ok");
+
+    let after = host.with(|e| e.test_readback_layer(layer));
+    let px = |buf: &[u8], x: u32, y: u32| {
+        let i = ((y * w + x) * 4) as usize;
+        [buf[i], buf[i + 1], buf[i + 2]]
+    };
+    // Inside the selection: inverted. Outside: untouched.
+    let inv = |c: [u8; 3]| [255 - c[0], 255 - c[1], 255 - c[2]];
+    assert_eq!(px(&after, 4, 4), inv(px(&before, 4, 4)));
+    assert_eq!(px(&after, 0, 0), px(&before, 0, 0));
+}
+
+/// Flip and transform spawned through the host resolve their requests with
+/// `{ ok: true }` — the deferred task path replacing the old `pending_flip` /
+/// `pending_transform` + resume `match`.
+#[test]
+fn flip_and_transform_resolve_through_host() {
+    let (w, h) = (32u32, 32u32);
+    let mut engine = test_engine(w, h);
+    let layer = engine.paste_image(w, h, &solid_red(w, h), 0, 0, None);
+
+    let host = EngineHost::adopt(engine);
+
+    host.with(|e| {
+        e.test_set_request_id(1);
+        e.spawn_flip(layer, darkly::gpu::ortho_transform::OrthoXform::FlipH);
+    });
+    host.pump_until_idle();
+    assert_eq!(
+        host.with(|e| e.test_take_completed(1))
+            .expect("flip resolves")
+            .value["ok"],
+        true,
+        "flip reports ok"
+    );
+
+    // No-selection transform drives the content-bounds compute inside the task.
+    host.with(|e| {
+        e.test_set_request_id(2);
+        e.spawn_begin_transform(layer);
+    });
+    host.pump_until_idle();
+    assert_eq!(
+        host.with(|e| e.test_take_completed(2))
+            .expect("transform resolves")
+            .value["ok"],
+        true,
+        "transform sets up floating"
+    );
+    assert!(
+        host.with(|e| e.has_floating()),
+        "floating session is live after the transform task resolves"
     );
 }
 

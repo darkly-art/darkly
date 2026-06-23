@@ -5,7 +5,7 @@ use std::rc::Rc;
 use serde_json::Value;
 
 use super::host::cell::EngineCell;
-use super::host::executor::yield_now;
+use super::host::combinators::ensure_selection_cache_warm;
 use super::rendering::commit_undo_region;
 use super::types::ClipboardExport;
 use super::{DarklyEngine, RichCopyMask, RichCopyMetadata};
@@ -34,21 +34,8 @@ struct CopyReadback {
 /// `.await` (a readback can only land while the engine is free to be polled).
 async fn run_copy(cell: Rc<EngineCell>, layer_id: LayerId, is_cut: bool, request: u64) {
     // 1. Warm the selection CPU cache if a selection is active but cold — the
-    //    copy region is derived from it. Kick the readback once, then await the
-    //    cache (filled by the sink scheduler's `SelectionReadback` handler when
-    //    a frame poll lands it).
-    let cold = cell
-        .with_async(|e| e.has_selection() && e.selection_cpu_cache().is_none())
-        .await;
-    if cold {
-        cell.with_async(|e| e.kick_selection_readback()).await;
-        loop {
-            if cell.with_async(|e| e.selection_cpu_cache().is_some()).await {
-                break;
-            }
-            yield_now().await;
-        }
-    }
+    //    copy region is derived from it.
+    ensure_selection_cache_warm(&cell).await;
 
     // 2. Kick the masked copy readback. `None` means there was nothing to copy
     //    (no texture, empty region) — the burst already resolved the request.

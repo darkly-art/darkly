@@ -43,8 +43,11 @@ pub fn registrations() -> Vec<RequestRegistration> {
         RequestRegistration {
             kind: "begin_transform",
             handle: |engine, payload, _b| {
-                let ok = engine.begin_transform(layer_id(payload)?);
-                Ok(Response::json(json!({ "ok": ok })))
+                // Deferred: spawns a task that warms the selection cache /
+                // awaits content bounds, then sets up the floating session and
+                // resolves this request with `{ ok }`.
+                engine.spawn_begin_transform(layer_id(payload)?);
+                Ok(Response::deferred())
             },
         },
         RequestRegistration {

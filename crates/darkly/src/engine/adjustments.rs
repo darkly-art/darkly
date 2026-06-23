@@ -9,14 +9,49 @@
 //! *shape* via the uploaded mask; with none, the whole node is filtered. The
 //! pixel extent never changes, so undo is a single [`GpuRegionAction`].
 
+use std::rc::Rc;
+
+use serde_json::json;
+
+use super::host::cell::EngineCell;
+use super::host::combinators::ensure_selection_cache_warm;
+use super::protocol::Response;
 use super::rendering::commit_undo_region;
-use super::{DarklyEngine, PendingAdjustment};
+use super::DarklyEngine;
 use crate::coord::WindowRect;
 use crate::engine::types::VeilTypeInfo;
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
+/// Run a destructive adjustment as a deferred task: warm the selection cache if
+/// cold (the adjustment region is the selection bbox), apply the filter, then
+/// resolve the originating request with `{ ok }`.
+async fn run_adjustment(
+    cell: Rc<EngineCell>,
+    node_id: LayerId,
+    adjustment_type: String,
+    request: u64,
+) {
+    ensure_selection_cache_warm(&cell).await;
+    let ok = cell
+        .with_async(|e| e.apply_adjustment(node_id, &adjustment_type))
+        .await;
+    cell.with_async(|e| e.resolve_request(request, Response::json(json!({ "ok": ok }))))
+        .await;
+}
+
 impl DarklyEngine {
+    /// Spawn the adjustment task — see [`run_adjustment`]. The originating
+    /// request resolves with `{ ok }` once the adjustment lands.
+    pub fn spawn_adjustment(&mut self, node_id: LayerId, adjustment_type: &str) {
+        let request = self.current_request();
+        let cell = self.self_cell();
+        self.spawn(
+            Some(request),
+            run_adjustment(cell, node_id, adjustment_type.to_string(), request),
+        );
+    }
+
     /// All registered adjustment types (id + display name), as the same
     /// `VeilTypeInfo` shape veils/voids use — adjustments carry no params, so
     /// the list is empty there. Drives the frontend's dynamic Colors-menu
@@ -36,7 +71,8 @@ impl DarklyEngine {
     /// Apply a destructive adjustment (by registered `adjustment_type` id) to
     /// the given node (raster layer or mask modifier). Returns `false` if the
     /// node isn't editable, has no texture, the type is unknown, or the
-    /// adjustment was deferred waiting on the selection cache.
+    /// selection cache is cold (the [`run_adjustment`] task warms it and
+    /// retries, so callers going through the task never see that last case).
     pub fn apply_adjustment(&mut self, node_id: LayerId, adjustment_type: &str) -> bool {
         if !self.doc.is_node_editable(node_id) {
             return false;
@@ -69,14 +105,9 @@ impl DarklyEngine {
                             self.set_selection_pixel_bounds(Some(b));
                             b
                         }
-                        None => {
-                            self.pending_adjustment = Some(PendingAdjustment {
-                                node_id,
-                                adjustment_type: adjustment_type.to_string(),
-                            });
-                            self.kick_selection_readback();
-                            return false;
-                        }
+                        // Cache cold — the `run_adjustment` task warms it before
+                        // calling, so this only short-circuits a direct caller.
+                        None => return false,
                     }
                 }
             };

@@ -28,7 +28,7 @@ mod voids;
 
 pub use load::LoadDocument;
 pub use rendering::{PickSource, DEFAULT_THUMB_SIZE};
-pub use save::{SaveError, SaveJob, SavePurpose, SaveReadbackKind};
+pub use save::{SaveError, SavePurpose};
 pub use types::{
     BlendModeTypeInfo, ClipboardExport, EngineState, LayerInfo, LayerKindTypeInfo, ModifierInfo,
     ModifierTypeInfo, ParamInfo, StrokeOp, ToolTypeInfo, VeilInfo, VeilTypeInfo, VoidTypeInfo,
@@ -72,28 +72,6 @@ use std::rc::{Rc, Weak};
 // ---------------------------------------------------------------------------
 // Internal helper types
 // ---------------------------------------------------------------------------
-
-/// Deferred transform setup — waiting for async content bounds from the compositor.
-/// `node_id` may refer to a raster layer or a mask modifier; the format is
-/// derived from the node's [`PixelBuffer`].
-pub(crate) struct PendingTransform {
-    pub node_id: LayerId,
-}
-
-/// Deferred layer/selection flip — waiting for the selection CPU cache (the
-/// flip pivot is the selection bbox centre, read from that cache).
-pub(crate) struct PendingFlip {
-    pub node_id: LayerId,
-    pub xform: crate::gpu::ortho_transform::OrthoXform,
-}
-
-/// Deferred destructive adjustment — waiting for the selection CPU cache (the
-/// adjustment region is the selection bbox, read from that cache). Mirrors
-/// [`PendingFlip`].
-pub(crate) struct PendingAdjustment {
-    pub node_id: LayerId,
-    pub adjustment_type: String,
-}
 
 /// Layer metadata snapshot captured at `copy_layer_rich` time. Combined with
 /// the async pixel readback to produce a `LayerClipboard`. CPU-side fields
@@ -153,26 +131,6 @@ pub(crate) enum ReadbackContext {
     },
     /// Async readback of the selection GPU texture for CPU cache update.
     SelectionReadback,
-    /// Async readback of the full composited canvas for image export
-    /// (PNG/JPEG/WebP). On completion resolves the originating `request` with
-    /// `{ width, height }` + the RGBA8 bytes side-channel.
-    ExportImage {
-        width: u32,
-        height: u32,
-        request: u64,
-    },
-    /// Async readback for `.darkly` save flow. One readback per pixel-bearing
-    /// entity (raster layer, mask, selection) plus one for the composite.
-    /// The destination (blob path or composite slot) is encoded in `kind`;
-    /// on completion, `complete_save_readback` routes the pixels accordingly.
-    /// When every blob lands, the save request resolves with the `SaveBundle`.
-    SaveDocument {
-        kind: save::SaveReadbackKind,
-        /// Source texture dimensions in pixels — readback rows come back
-        /// `width × bpp` wide.
-        width: u32,
-        height: u32,
-    },
     Thumbnail {
         node_id: LayerId,
         /// Dimensions of the readback buffer in pixels — the source layout
@@ -477,14 +435,6 @@ pub struct DarklyEngine {
     /// CPU readback cache live on `doc.selection.kind` (`SelectionModifier`).
     pub(crate) selection_pipelines: SelectionPipelines,
 
-    // --- Deferred operations ---
-    /// Pending transform waiting for content bounds computation.
-    pub(crate) pending_transform: Option<PendingTransform>,
-    /// Pending layer/selection flip waiting for the selection CPU cache.
-    pub(crate) pending_flip: Option<PendingFlip>,
-    /// Pending destructive adjustment waiting for the selection CPU cache.
-    pub(crate) pending_adjustment: Option<PendingAdjustment>,
-
     // --- Async readback ---
     pub(crate) readbacks: ReadbackScheduler<ReadbackContext>,
     /// Completion-slot scheduler for *awaitable* readbacks: a deferred op's task
@@ -511,12 +461,12 @@ pub struct DarklyEngine {
     pub(crate) pending_rich_metadata: Option<RichCopyMetadata>,
     /// Last picked color — returned immediately while async readback is in flight.
     pub(crate) last_picked_color: [u8; 4],
-    /// Active save job — populated by `start_save_document`, finished by
-    /// `complete_save_readback` once every pixel blob and the composite have
-    /// landed (which resolves the originating save request). Only one save can
-    /// be in flight per engine; a second `start_save_document` while this is
-    /// `Some` errors with [`SaveError::InProgress`].
-    pub(crate) active_save_job: Option<SaveJob>,
+    /// Guard against concurrent saves: set by `start_save_document` when it
+    /// spawns a `run_save` task, cleared when that task finishes (or aborts on
+    /// disposal). Only one save can be in flight per engine; a second
+    /// `start_save_document` while this is `true` errors with
+    /// [`SaveError::InProgress`].
+    pub(crate) save_in_flight: bool,
 
     // --- Deferred request resolution ---
     /// The protocol request id currently being dispatched. Set by
@@ -660,16 +610,13 @@ impl DarklyEngine {
             diff_rect,
             pending_undo_commit: None,
             selection_pipelines,
-            pending_transform: None,
-            pending_flip: None,
-            pending_adjustment: None,
             readbacks: ReadbackScheduler::new(),
             async_readbacks: ReadbackScheduler::new(),
             self_cell: Weak::new(),
             pending_spawns: Vec::new(),
             pending_rich_metadata: None,
             last_picked_color: [0, 0, 0, 0],
-            active_save_job: None,
+            save_in_flight: false,
             current_request_id: 0,
             completed_requests: Vec::new(),
             thumbnail_cache: ThumbnailCache::new(),
@@ -882,6 +829,28 @@ impl DarklyEngine {
     #[cfg(any(test, feature = "testing"))]
     pub fn test_poll_readbacks_blocking(&mut self) -> bool {
         self.drive_and_harvest_readbacks(true)
+    }
+
+    /// `true` if the compositor's content-bounds compute (the input a
+    /// no-selection `begin_transform` task awaits) has work in flight.
+    pub fn has_pending_content_bounds(&self) -> bool {
+        self.compositor.has_pending_content_bounds()
+    }
+
+    /// Blocking flush of the content-bounds compute for the test host's
+    /// `pump_until_idle`. The compute rides its own pass, not the readback
+    /// schedulers, so the readback driver's conditional `device.poll(Wait)`
+    /// skips it; this forces the wait + harvest. Returns `true` if any landed.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_flush_content_bounds_blocking(&mut self) -> bool {
+        let _ = self.gpu.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        !self
+            .compositor
+            .poll_content_bounds(&self.gpu.device)
+            .is_empty()
     }
 }
 
@@ -1361,6 +1330,28 @@ impl DarklyEngine {
             }
         }
         None
+    }
+
+    /// Drive [`begin_transform`](Self::begin_transform) to completion on a bare
+    /// engine (no host executor). Mirrors the `run_begin_transform` task: warm
+    /// the selection cache if cold, drive the content-bounds compute when
+    /// there's no selection, retrying until the floating session is set up.
+    /// Returns whether floating was established. Test-only — production goes
+    /// through `spawn_begin_transform`.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_begin_transform(&mut self, node_id: LayerId) -> bool {
+        for _ in 0..32 {
+            if self.begin_transform(node_id) || self.has_floating() {
+                return true;
+            }
+            // Not ready — warm whatever it's waiting on, then drive readbacks.
+            if self.has_selection() && self.selection_cpu_cache().is_none() {
+                self.kick_selection_readback();
+            }
+            self.test_flush_readbacks();
+            let _ = self.compositor.poll_content_bounds(&self.gpu.device);
+        }
+        false
     }
 
     /// Block until all pending async readbacks complete. For tests only.
