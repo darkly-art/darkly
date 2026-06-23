@@ -172,6 +172,7 @@ mod tests {
                 ParamValue::Float(0.5),
                 ParamValue::Float(0.1),
             ],
+            crate::transform::Transform::identity(),
             None,
         );
 
@@ -222,7 +223,13 @@ mod tests {
         use crate::format::manifest::ManifestPixelRef;
 
         let mut doc = Document::new(64, 64);
-        let id = doc.add_void_layer("camera".to_string(), "Camera", Vec::new(), None);
+        let id = doc.add_void_layer(
+            "camera".to_string(),
+            "Camera",
+            Vec::new(),
+            crate::transform::Transform::identity(),
+            None,
+        );
         let frame = ManifestPixelRef {
             format: "rgba8unorm".to_string(),
             pixels: format!("layers/{}.pixels", id.to_ffi()),
@@ -271,7 +278,13 @@ mod tests {
     #[test]
     fn void_transform_round_trips() {
         let mut doc = Document::new(64, 64);
-        let id = doc.add_void_layer("camera".to_string(), "Camera", Vec::new(), None);
+        let id = doc.add_void_layer(
+            "camera".to_string(),
+            "Camera",
+            Vec::new(),
+            crate::transform::Transform::identity(),
+            None,
+        );
         let t = crate::transform::Transform::from_affine([2.0, 0.5, 10.0, -0.25, 1.5, -20.0]);
         if let Some(LayerNode::Layer(Layer::Void(v))) = doc.find_node_mut(id) {
             v.transform = t;
@@ -321,7 +334,13 @@ mod tests {
     #[test]
     fn void_without_frame_emits_no_pixel_blob() {
         let mut doc = Document::new(64, 64);
-        let id = doc.add_void_layer("noise".to_string(), "Noise", Vec::new(), None);
+        let id = doc.add_void_layer(
+            "noise".to_string(),
+            "Noise",
+            Vec::new(),
+            crate::transform::Transform::identity(),
+            None,
+        );
         let reg = register();
         let node = doc.find_node(id).expect("void exists");
         let serialized = (reg.serialize)(node);

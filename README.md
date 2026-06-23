@@ -160,6 +160,7 @@ For a feature to count, it must be:
 - [x] Veil picker with live animated previews
 - [x] Void layers (domain‑warped FBM noise)
 - [x] Camera void (live webcam, positioned with the on-canvas transform gizmo)
+- [x] Screenshare void (live `getDisplayMedia` capture, positioned with the on-canvas transform gizmo)
 - [x] Group blend mode / opacity (isolated + passthrough compositing)
 - [ ] Brush save/load + editable nodes/wires (e.g. YAML)
 - [ ] Recent files

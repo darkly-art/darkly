@@ -617,18 +617,24 @@ impl Document {
     /// label is the doc's only knowledge of the registry; the registry
     /// itself lives on the compositor (GPU-coupled) so it can't be
     /// dereferenced here.
+    ///
+    /// `initial_transform` is the void kind's seeded gizmo affine (the camera's
+    /// selfie flip; identity for everything else), set atomically with creation
+    /// so it's part of the single add-undo step and round-trips through
+    /// save/load like any later gizmo edit.
     pub fn add_void_layer(
         &mut self,
         void_type: String,
         display_label: &str,
         params: Vec<crate::gpu::params::ParamValue>,
+        initial_transform: crate::transform::Transform,
         anchor: Option<LayerId>,
     ) -> LayerId {
         let name = self.next_name(display_label);
         let id = self.entities.insert_with_key(|key| {
-            Entity::Node(LayerNode::Layer(Layer::Void(VoidLayer::new(
-                key, name, void_type, params,
-            ))))
+            let mut layer = VoidLayer::new(key, name, void_type, params);
+            layer.transform = initial_transform;
+            Entity::Node(LayerNode::Layer(Layer::Void(layer)))
         });
         let target = self.resolve_anchor_target(anchor);
         self.attach_at_target(id, target);

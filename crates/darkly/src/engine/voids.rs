@@ -24,15 +24,18 @@ impl DarklyEngine {
             .void_registry()
             .types()
             .into_iter()
-            .map(
-                |(type_id, display_name, defs, icon, supports_preview)| VoidTypeInfo {
-                    type_id,
-                    display_name,
-                    params: defs.iter().map(|d| ParamInfo::from_def(d, None)).collect(),
-                    icon,
-                    supports_preview,
-                },
-            )
+            .map(|reg| VoidTypeInfo {
+                type_id: reg.type_id,
+                display_name: reg.display_name,
+                params: reg
+                    .params
+                    .iter()
+                    .map(|d| ParamInfo::from_def(d, None))
+                    .collect(),
+                icon: reg.icon,
+                supports_preview: reg.supports_preview,
+                capture_kind: reg.capture_kind,
+            })
             .collect()
     }
 

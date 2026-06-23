@@ -200,6 +200,10 @@ impl DarklyEngine {
             LayerNode::Layer(Layer::Void(v)) => {
                 let void_type = v.void_type.clone();
                 let params = v.params.clone();
+                // Carry the source's gizmo transform onto the copy so a
+                // duplicated camera keeps its flip / framing rather than
+                // resetting to the kind's default seed.
+                let transform = v.transform;
                 // The duplicated layer's name is overwritten with the
                 // source's `"… copy"` below; the display_label here only
                 // primes the per-type counter so a later fresh-add picks up
@@ -209,9 +213,9 @@ impl DarklyEngine {
                     .void_registry()
                     .display_name(&void_type)
                     .to_string();
-                let new_id = self
-                    .doc
-                    .add_void_layer(void_type, &display_label, params, anchor);
+                let new_id =
+                    self.doc
+                        .add_void_layer(void_type, &display_label, params, transform, anchor);
 
                 let new_name = if is_root {
                     format!("{common_name} copy")

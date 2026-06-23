@@ -547,13 +547,15 @@ fn void_transform_drag_coalesces_to_one_undo_step() {
             Transform::from_affine([1.0, 0.0, i as f32, 0.0, 1.0, 0.0]),
         );
     }
-    // One undo undoes the entire drag back to identity.
+    // One undo undoes the entire drag back to the camera's seeded initial
+    // transform — a horizontal flip about the canvas center (selfie view), not
+    // identity. For a 64-wide canvas that's `x' = 64 - x`.
     engine.undo();
     let (.., after) = engine.void_transform_info(cam).expect("info");
     assert_eq!(
         after,
-        Transform::identity(),
-        "the drag must be a single undo step"
+        Transform::from_affine([-1.0, 0.0, 64.0, 0.0, 1.0, 0.0]),
+        "the drag must be a single undo step back to the seeded selfie flip"
     );
 }
 

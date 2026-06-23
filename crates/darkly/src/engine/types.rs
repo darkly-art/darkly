@@ -141,6 +141,12 @@ pub struct VoidTypeInfo {
     pub params: Vec<ParamInfo>,
     pub icon: &'static str,
     pub supports_preview: bool,
+    /// How the browser captures this void's external frames (`"camera"` /
+    /// `"display"`), or absent for procedural voids. The frontend builds a
+    /// `voidType → CaptureKind` map from this to pick `getUserMedia` vs
+    /// `getDisplayMedia` and to drive the generic MediaStream lifecycle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture_kind: Option<crate::gpu::void::CaptureKind>,
 }
 
 /// Flat serialization-friendly view of a tool's registration metadata.

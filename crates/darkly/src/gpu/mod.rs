@@ -125,6 +125,7 @@ pub mod veil;
 pub mod veil_chain;
 pub mod veil_preview;
 pub mod veils;
+pub mod video_stream_void;
 pub mod view;
 pub mod void;
 pub mod void_preview;
