@@ -334,6 +334,7 @@ impl<'a> CompositionContext<'a> {
             self.compositor.compose_filter_arm(
                 self.encoder,
                 self.device,
+                self.doc,
                 self.parent_group,
                 f,
                 self.scissor,
@@ -474,11 +475,12 @@ struct LerpUniforms {
     _pad2: u32,
 }
 
-/// GPU state for a passthrough group that has a mask (Photoshop-style).
-/// Stores a snapshot texture for the parent accumulator and a uniform buffer
-/// for the lerp pass.
-struct PassthroughMaskState {
-    /// Snapshot of the parent accumulator before compositing this group's children.
+/// GPU state for an in-place host (passthrough group or filter layer) that has
+/// a visible mask (Photoshop-style adjustment-layer mask). Stores a snapshot
+/// texture for the parent accumulator and a uniform buffer for the lerp pass.
+struct MaskSnapshotState {
+    /// Snapshot of the parent accumulator before the host transforms it
+    /// (children inlined, or filter pipeline run) — the "before" of the lerp.
     snapshot: wgpu::Texture,
     snapshot_view: wgpu::TextureView,
     /// Uniform buffer for the mask lerp shader (isolated flag).
@@ -560,7 +562,7 @@ pub struct Compositor {
     // --- Passthrough Group Mask (Photoshop-style snapshot-lerp) ---
     mask_lerp_pipeline: wgpu::RenderPipeline,
     /// Per-group GPU state for passthrough groups with masks.
-    passthrough_mask_state: HashMap<LayerId, PassthroughMaskState>,
+    mask_snapshot_state: HashMap<LayerId, MaskSnapshotState>,
 
     // --- Leaf mask (de-fused projection + apply_mask) ---
     /// Pass that modulates a projection's alpha by a mask in the mask's own
@@ -1106,7 +1108,7 @@ impl Compositor {
             layer_cache: HashMap::new(),
             blend_pipelines,
             mask_lerp_pipeline,
-            passthrough_mask_state: HashMap::new(),
+            mask_snapshot_state: HashMap::new(),
             apply_mask_pipeline,
             projection_states: HashMap::new(),
             present_pipeline,
@@ -1605,7 +1607,7 @@ impl Compositor {
 
         // Passthrough-mask snapshots are parent-accumulator-sized and the
         // blend bind groups reference now-replaced accumulator views.
-        self.passthrough_mask_state.clear();
+        self.mask_snapshot_state.clear();
         // Per-host projections are canvas-window-sized; drop them so the next
         // frame reallocates at the new dimensions.
         self.projection_states.clear();
@@ -1991,10 +1993,10 @@ impl Compositor {
                 // thumbnail must materialize without callers having to
                 // remember a mark — see `mark_node_pixels_dirty` invariant.
                 self.mark_node_pixels_dirty(node_id);
-                // PassthroughMaskState is a per-host-group resource (the
+                // MaskSnapshotState is a per-host resource (the
                 // snapshot is sized to the parent accumulator). It's not
                 // owned by the mask texture itself, so creation lives behind
-                // [`Self::ensure_passthrough_mask_state`] which the engine
+                // [`Self::ensure_mask_snapshot_state`] which the engine
                 // calls when attaching a mask to a host. Keep the allocation
                 // out of the texture-creation path so the keying is by host,
                 // not by mask filter id.
@@ -2007,31 +2009,32 @@ impl Compositor {
         }
     }
 
-    /// Allocate the snapshot+uniform pair the passthrough-group mask path
-    /// needs, keyed by **host** id (the group whose composited output gets
-    /// snapshot-then-lerped against its mask). Idempotent. The mask texture
-    /// itself lives in the shared node-texture pool keyed by mask filter
-    /// id; this resource is a per-host concern, not per-filter — there's
-    /// one snapshot buffer per group regardless of how many filters attach.
-    pub fn ensure_passthrough_mask_state(&mut self, device: &wgpu::Device, host_id: LayerId) {
-        if self.passthrough_mask_state.contains_key(&host_id) {
+    /// Allocate the snapshot+uniform pair the in-place masked-host path needs,
+    /// keyed by **host** id (the passthrough group or filter layer whose
+    /// composited output gets snapshot-then-lerped against its mask).
+    /// Idempotent. The mask texture itself lives in the shared node-texture
+    /// pool keyed by mask filter id; this resource is a per-host concern, not
+    /// per-filter — there's one snapshot buffer per host regardless of how many
+    /// filters attach.
+    pub fn ensure_mask_snapshot_state(&mut self, device: &wgpu::Device, host_id: LayerId) {
+        if self.mask_snapshot_state.contains_key(&host_id) {
             return;
         }
         let (snapshot, snapshot_view) = Self::make_accum_texture(
             device,
             self.padded_width,
             self.padded_height,
-            &format!("pt-snapshot-{host_id:?}"),
+            &format!("mask-snapshot-{host_id:?}"),
         );
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(&format!("pt-lerp-uniforms-{host_id:?}")),
+            label: Some(&format!("mask-snapshot-lerp-uniforms-{host_id:?}")),
             size: std::mem::size_of::<LerpUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        self.passthrough_mask_state.insert(
+        self.mask_snapshot_state.insert(
             host_id,
-            PassthroughMaskState {
+            MaskSnapshotState {
                 snapshot,
                 snapshot_view,
                 uniform_buf,
@@ -2039,10 +2042,10 @@ impl Compositor {
         );
     }
 
-    /// Drop the passthrough-group mask snapshot for a host id. Mirrors
-    /// [`Self::ensure_passthrough_mask_state`].
-    pub fn dispose_passthrough_mask_state(&mut self, host_id: LayerId) {
-        self.passthrough_mask_state.remove(&host_id);
+    /// Drop the in-place masked-host snapshot for a host id. Mirrors
+    /// [`Self::ensure_mask_snapshot_state`].
+    pub fn dispose_mask_snapshot_state(&mut self, host_id: LayerId) {
+        self.mask_snapshot_state.remove(&host_id);
     }
 
     // --- Selection (global) ---
@@ -3410,34 +3413,23 @@ impl Compositor {
             queue.write_buffer(&ps.mask_uniform_buf, 0, bytemuck::bytes_of(&mu));
         }
 
-        // (Re-)ensure a passthrough-mask snapshot exists for every passthrough
-        // group with a visible mask. The snapshot is parent-accumulator-sized,
-        // so `set_canvas_rect` drops it on a crop/resize; without this re-ensure
-        // the group mask would silently disable after a crop (compose falls back
-        // to plain passthrough).
-        let masked_passthrough: Vec<LayerId> = doc
-            .all_groups()
-            .iter()
-            .filter(|g| g.passthrough)
-            .map(|g| g.id)
-            .filter(|gid| {
-                doc.mask_filter(*gid)
-                    .map(|m| m.common.visible)
-                    .unwrap_or(false)
-            })
-            .collect();
-        for gid in &masked_passthrough {
-            self.ensure_passthrough_mask_state(device, *gid);
+        // (Re-)ensure a mask snapshot exists for every in-place host (passthrough
+        // group or filter layer) with a visible mask. The snapshot is
+        // parent-accumulator-sized, so `set_canvas_rect` drops it on a
+        // crop/resize; without this re-ensure the mask would silently disable
+        // after a crop (compose falls back to the unmasked in-place path).
+        for host_id in doc.masked_in_place_hosts() {
+            self.ensure_mask_snapshot_state(device, host_id);
         }
 
-        // Refresh the passthrough-group mask lerp uniforms (canvas + mask
-        // geometry + isolated) so a group mask that grew independently of the
+        // Refresh the in-place-host mask lerp uniforms (canvas + mask
+        // geometry + isolated) so a mask that grew independently of the
         // canvas window samples in its own space — same `sample_mask_window`
         // path as the leaf projection.
         let canvas_origin = [self.canvas_origin.x as f32, self.canvas_origin.y as f32];
-        let group_ids: Vec<LayerId> = self.passthrough_mask_state.keys().copied().collect();
-        for group_id in group_ids {
-            let mask_id = match doc.mask_filter(group_id).filter(|m| m.common.visible) {
+        let host_ids: Vec<LayerId> = self.mask_snapshot_state.keys().copied().collect();
+        for host_id in host_ids {
+            let mask_id = match doc.mask_filter(host_id).filter(|m| m.common.visible) {
                 Some(m) => m.id,
                 None => continue,
             };
@@ -3469,7 +3461,7 @@ impl Compositor {
                 _pad1: 0,
                 _pad2: 0,
             };
-            let pms = &self.passthrough_mask_state[&group_id];
+            let pms = &self.mask_snapshot_state[&host_id];
             queue.write_buffer(&pms.uniform_buf, 0, bytemuck::bytes_of(&lu));
         }
     }
@@ -3798,13 +3790,21 @@ impl Compositor {
     /// write the filtered result to the other half, advance `current_accum`.
     /// No third texture — the filter pipeline samples 1:1 and overwrites every
     /// texel of the destination.
+    ///
+    /// A visible mask confines where the filter applies (a masked adjustment
+    /// layer): snapshot the accumulator (before), run the filter (after), then
+    /// lerp `mix(before, after, mask)` so the filtered result shows inside the
+    /// mask and the original passes through outside. Same snapshot+lerp
+    /// scaffolding a masked passthrough group uses
+    /// ([`Self::snapshot_parent_accum`] / [`Self::lerp_parent_accum_with_mask`]).
     fn compose_filter_arm(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         device: &wgpu::Device,
+        doc: &Document,
         parent_group: LayerId,
         filter: &FilterLayer,
-        _scissor: (u32, u32, u32, u32),
+        scissor: (u32, u32, u32, u32),
     ) {
         // Resolve the shared, lazily-cached pipeline. An unknown pipeline id
         // (e.g. a save referencing a filter this binary doesn't ship) composes
@@ -3816,6 +3816,19 @@ impl Compositor {
             Some(p) => p,
             None => return,
         };
+
+        // A visible mask confines where the filter applies. The snapshot state
+        // is ensure-driven per frame (see `masked_in_place_hosts`); if it's not
+        // yet present, fall back to the unmasked path this frame.
+        let masked = doc
+            .mask_filter(filter.id)
+            .map(|m| m.common.visible)
+            .unwrap_or(false)
+            && self.mask_snapshot_state.contains_key(&filter.id);
+
+        if masked {
+            self.snapshot_parent_accum(encoder, parent_group, filter.id, scissor);
+        }
 
         // Ping-pong advance: src = last-written accum, dst = the other half.
         let (src, dst) = {
@@ -3829,15 +3842,148 @@ impl Compositor {
             (src, dst)
         };
 
-        let gs = &self.group_state[&parent_group];
-        pipeline.render(
-            device,
-            encoder,
-            &gs.accum.views[src],
-            None,
-            &gs.accum.views[dst],
-            wgpu::TextureFormat::Rgba8Unorm,
+        {
+            let gs = &self.group_state[&parent_group];
+            pipeline.render(
+                device,
+                encoder,
+                &gs.accum.views[src],
+                None,
+                &gs.accum.views[dst],
+                wgpu::TextureFormat::Rgba8Unorm,
+            );
+        }
+
+        if masked {
+            self.lerp_parent_accum_with_mask(
+                encoder,
+                device,
+                doc,
+                parent_group,
+                filter.id,
+                scissor,
+            );
+        }
+    }
+
+    /// Snapshot the current parent accumulator into the host's mask-snapshot
+    /// texture (the "before" image of the lerp). Step 1 of every in-place
+    /// masked composite — shared by the masked passthrough group and the masked
+    /// filter layer. The snapshot state must already exist (ensure-driven per
+    /// frame); the caller checks before invoking.
+    fn snapshot_parent_accum(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        parent_group: LayerId,
+        host_id: LayerId,
+        scissor: (u32, u32, u32, u32),
+    ) {
+        let (scissor_x, scissor_y, scissor_w, scissor_h) = scissor;
+        let gs = self
+            .group_state
+            .get(&parent_group)
+            .expect("parent GroupState missing");
+        let before_idx = gs.current_accum;
+        let origin = wgpu::Origin3d {
+            x: scissor_x,
+            y: scissor_y,
+            z: 0,
+        };
+        let copy_size = wgpu::Extent3d {
+            width: scissor_w,
+            height: scissor_h,
+            depth_or_array_layers: 1,
+        };
+        let pms = &self.mask_snapshot_state[&host_id];
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &gs.accum.textures[before_idx],
+                mip_level: 0,
+                origin,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &pms.snapshot,
+                mip_level: 0,
+                origin,
+                aspect: wgpu::TextureAspect::All,
+            },
+            copy_size,
         );
+    }
+
+    /// Lerp the host's snapshot against the (now-transformed) parent
+    /// accumulator using the host's mask, writing `mix(before, after, mask)`
+    /// into the next ping-pong half. Step 3 of every in-place masked composite —
+    /// shared by the masked passthrough group and the masked filter layer. The
+    /// mask samples in its own plane space via `sample_mask_window`; the
+    /// effective mask honours an in-flight transform preview.
+    fn lerp_parent_accum_with_mask(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        doc: &Document,
+        parent_group: LayerId,
+        host_id: LayerId,
+        scissor: (u32, u32, u32, u32),
+    ) {
+        let (scissor_x, scissor_y, scissor_w, scissor_h) = scissor;
+
+        let gs = self.group_state.get_mut(&parent_group).unwrap();
+        let after_idx = gs.current_accum;
+        let dst = 1 - after_idx;
+        gs.current_accum = dst;
+
+        let pms = &self.mask_snapshot_state[&host_id];
+        // Lerp bind group (group 0): before=snapshot, after=current_accum,
+        // sampler, uniforms.
+        let lerp_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mask-lerp-bg"),
+            layout: &self.blend_pipelines.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&pms.snapshot_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(
+                        &self.group_state[&parent_group].accum.views[after_idx],
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: pms.uniform_buf.as_entire_binding(),
+                },
+            ],
+        });
+
+        let gs = &self.group_state[&parent_group];
+        // Effective mask: live by default, preview-mask when the floating
+        // target is this host's mask filter.
+        let mask_bg = self.effective_mask_bind_group(doc, host_id);
+        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("mask-lerp"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &gs.accum.views[dst],
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
+        rpass.set_pipeline(&self.mask_lerp_pipeline);
+        rpass.set_bind_group(0, &lerp_bind_group, &[]);
+        rpass.set_bind_group(1, mask_bg, &[]);
+        rpass.draw(0..3, 0..1);
     }
 
     /// Composite a child group into its parent's ping-pong accumulators.
@@ -3952,7 +4098,10 @@ impl Compositor {
     /// Composite a passthrough group whose mask is active.
     ///
     /// Snapshots the parent accumulator, composites children (passthrough),
-    /// then lerps between the snapshot and the result using the group mask.
+    /// then lerps between the snapshot and the result using the group mask —
+    /// the same snapshot+lerp scaffolding [`Self::compose_filter_arm`] uses for
+    /// a masked filter layer, with the children-inline transform sandwiched
+    /// between the two shared halves.
     fn compose_passthrough_masked(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -3962,112 +4111,20 @@ impl Compositor {
         group_id: LayerId,
         scissor: (u32, u32, u32, u32),
     ) {
-        let (scissor_x, scissor_y, scissor_w, scissor_h) = scissor;
-
-        // PassthroughMaskState must exist (created when the mask was added).
-        if !self.passthrough_mask_state.contains_key(&group_id) {
-            // Fallback: just inline children without mask.
+        // MaskSnapshotState must exist (ensure-driven per frame). If it isn't
+        // ready, inline children without the mask this frame.
+        if !self.mask_snapshot_state.contains_key(&group_id) {
             let inner: ChildIds = ChildIds::from_slice(doc.children_of(group_id));
             self.compose_children(encoder, device, doc, parent_group, &inner, scissor);
             return;
         }
 
-        // 1. Copy current parent accum (the "before" state) into the snapshot.
-        let gs = self
-            .group_state
-            .get(&parent_group)
-            .expect("parent GroupState missing");
-        let before_idx = gs.current_accum;
-        let origin = wgpu::Origin3d {
-            x: scissor_x,
-            y: scissor_y,
-            z: 0,
-        };
-        let copy_size = wgpu::Extent3d {
-            width: scissor_w,
-            height: scissor_h,
-            depth_or_array_layers: 1,
-        };
-        let pms = &self.passthrough_mask_state[&group_id];
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.group_state[&parent_group].accum.textures[before_idx],
-                mip_level: 0,
-                origin,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &pms.snapshot,
-                mip_level: 0,
-                origin,
-                aspect: wgpu::TextureAspect::All,
-            },
-            copy_size,
-        );
+        self.snapshot_parent_accum(encoder, parent_group, group_id, scissor);
 
-        // 2. Composite children into parent accumulators (passthrough).
         let inner: ChildIds = ChildIds::from_slice(doc.children_of(group_id));
         self.compose_children(encoder, device, doc, parent_group, &inner, scissor);
 
-        // 3. Lerp pass: mix(snapshot, current_accum, mask).
-        //    Write the lerp result into the ping-pong "other" accumulator.
-        let gs = self.group_state.get_mut(&parent_group).unwrap();
-        let after_idx = gs.current_accum;
-        let dst = 1 - after_idx;
-        gs.current_accum = dst;
-
-        let pms = &self.passthrough_mask_state[&group_id];
-
-        // Create lerp bind group (group 0): before=snapshot, after=current_accum, sampler, uniforms.
-        let lerp_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("mask-lerp-bg"),
-            layout: &self.blend_pipelines.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&pms.snapshot_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(
-                        &self.group_state[&parent_group].accum.views[after_idx],
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: pms.uniform_buf.as_entire_binding(),
-                },
-            ],
-        });
-
-        {
-            let gs = &self.group_state[&parent_group];
-            // Effective mask: live by default, preview-mask when the
-            // floating target is this passthrough group's mask filter.
-            let group_mask_bg = self.effective_mask_bind_group(doc, group_id);
-            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("mask-lerp"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &gs.accum.views[dst],
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-            rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
-            rpass.set_pipeline(&self.mask_lerp_pipeline);
-            rpass.set_bind_group(0, &lerp_bind_group, &[]);
-            rpass.set_bind_group(1, group_mask_bg, &[]);
-            rpass.draw(0..3, 0..1);
-        }
+        self.lerp_parent_accum_with_mask(encoder, device, doc, parent_group, group_id, scissor);
     }
 
     /// Whether any rendering work is pending (composite, present, veils).

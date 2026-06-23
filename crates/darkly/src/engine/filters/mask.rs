@@ -49,12 +49,12 @@ impl DarklyEngine {
             bounds,
         );
 
-        // Per-host snapshot+lerp resource for the passthrough-group-with-mask
-        // path. Idempotent across both raster and group hosts; only the
-        // group composite path consumes it, but the engine doesn't need to
-        // branch — the compositor reads it lazily.
+        // Per-host snapshot+lerp resource for the in-place masked-host path
+        // (passthrough group or filter layer). Idempotent across every host
+        // kind; only the in-place composite paths consume it, but the engine
+        // doesn't need to branch — the compositor reads it lazily.
         self.compositor
-            .ensure_passthrough_mask_state(&self.gpu.device, host_id);
+            .ensure_mask_snapshot_state(&self.gpu.device, host_id);
 
         // If a selection is active, seed the mask pixels from the selection.
         // Grow the mask to the union of its bounds and the selection's plane
@@ -116,7 +116,7 @@ impl DarklyEngine {
             self.isolated_node = None;
         }
         self.compositor.dispose_node_texture(mask_id);
-        self.compositor.dispose_passthrough_mask_state(host_id);
+        self.compositor.dispose_mask_snapshot_state(host_id);
         self.compositor.dispose_projection_state(host_id);
         self.compositor.mark_dirty();
 
@@ -293,7 +293,7 @@ impl DarklyEngine {
         // R8 texture, after which the pending mask-region restore can land.
         let detached = self.doc.detach_filter_for_undo(mask_id).is_some();
         self.compositor.dispose_node_texture(mask_id);
-        self.compositor.dispose_passthrough_mask_state(host_id);
+        self.compositor.dispose_mask_snapshot_state(host_id);
         self.compositor.dispose_projection_state(host_id);
         if detached {
             self.push_undo(Box::new(FilterRemoveAction::new(mask_id, host_id)));

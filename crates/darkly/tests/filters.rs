@@ -525,6 +525,121 @@ fn filter_layer_in_isolated_group_is_scoped() {
     );
 }
 
+/// A mask on a filter layer confines *where the filter applies*: inside the
+/// mask the inverted result shows; outside, the original pixels pass through;
+/// a mid-gray mask value lerps between the two (soft masking, not a hard
+/// threshold). This is the adjustment-layer-mask behavior. Fails before the
+/// `compose_filter_arm` mask branch — the filter would invert the whole canvas
+/// and the right half would read cyan instead of red.
+#[test]
+fn masked_filter_layer_confines_inversion() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    // Red base; an invert filter above it (cyan where it applies).
+    let red = engine.add_raster_layer(None);
+    fill_layer(&mut engine, red, 255, 0, 0);
+    let filter = engine.add_filter_layer("invert", vec![], None).unwrap();
+
+    // Seed the filter's mask from a left-half selection: left → reveal (1.0,
+    // filter applies), right → hide (0.0, original passes through). A selection
+    // gives flat, hard-edged regions — no brush feathering to reason about.
+    engine.select_rect(
+        0.0,
+        0.0,
+        (cw / 2) as f32,
+        ch as f32,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
+    engine.add_mask(filter);
+    let mask = engine.test_mask_id(filter).expect("mask present on filter");
+    engine.clear_selection();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let canvas = engine.test_readback_canvas();
+    // Left half (mask 1.0): filter applies → cyan.
+    assert_eq!(
+        px(&canvas, cw, cw / 4, ch / 2),
+        [0, 255, 255, 255],
+        "masked-in half must invert to cyan",
+    );
+    // Right half (mask 0.0): original red passes through (the bug shows cyan).
+    assert_eq!(
+        px(&canvas, cw, 3 * cw / 4, ch / 2),
+        [255, 0, 0, 255],
+        "masked-out half must keep the original red",
+    );
+
+    // Soft masking: paint a mid-gray dab in the (currently hidden) right half;
+    // the composite there must lerp between red and cyan, not snap to either.
+    paint_dab(&mut engine, mask, (3 * cw / 4) as f32, (ch / 2) as f32, 0.5);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+    let canvas = engine.test_readback_canvas();
+    let p = px(&canvas, cw, 3 * cw / 4, ch / 2);
+    assert!(
+        p[0] > 40 && p[0] < 215 && p[1] > 40 && p[1] < 215,
+        "a mid-gray mask value must lerp red↔cyan (got {p:?}), proving soft masking",
+    );
+}
+
+/// A masked filter layer *inside* a non-passthrough (isolated) group lerps
+/// against the **group's** accumulator, not the canvas: the mask confines the
+/// inversion to the group's own content. Left half (mask 1.0) → the group's red
+/// inverts to cyan; right half (mask 0.0) → the group's original red shows.
+#[test]
+fn masked_filter_layer_in_isolated_group_lerps_against_group_accum() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    // A distinct color outside the group, at the root bottom — the group is
+    // opaque and covers it, so seeing it anywhere would mean a leak.
+    let outside = engine.add_raster_layer(None);
+    fill_layer(&mut engine, outside, 0, 255, 0);
+
+    let group = engine.add_group(None);
+    engine.set_group_passthrough(group, false); // isolated → owns a GroupState
+
+    let inside = engine.add_raster_layer(Some(group));
+    fill_layer(&mut engine, inside, 255, 0, 0);
+    let filter = engine
+        .add_filter_layer("invert", vec![], Some(group))
+        .unwrap();
+
+    // Mask the filter to the left half (seeded from a selection).
+    engine.select_rect(
+        0.0,
+        0.0,
+        (cw / 2) as f32,
+        ch as f32,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
+    engine.add_mask(filter);
+    engine.clear_selection();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let canvas = engine.test_readback_canvas();
+    // Left half: the group's red inverts to cyan within the group.
+    assert_eq!(
+        px(&canvas, cw, cw / 4, ch / 2),
+        [0, 255, 255, 255],
+        "masked-in half inverts the group's own content to cyan",
+    );
+    // Right half: the filter is masked out → the group's original red shows
+    // (lerped against the group accumulator, never the green canvas below).
+    assert_eq!(
+        px(&canvas, cw, 3 * cw / 4, ch / 2),
+        [255, 0, 0, 255],
+        "masked-out half keeps the group's red, with no canvas leak",
+    );
+}
+
 /// The core promise: a filter layer is **non-destructive**. Toggling its
 /// visibility returns the composite to the original red (the layer below was
 /// never modified), and deleting it likewise restores the original — a

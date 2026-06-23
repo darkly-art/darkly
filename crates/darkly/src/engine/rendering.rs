@@ -931,12 +931,12 @@ impl DarklyEngine {
                 );
             }
             self.compositor
-                .ensure_passthrough_mask_state(&self.gpu.device, info.host_id);
+                .ensure_mask_snapshot_state(&self.gpu.device, info.host_id);
         }
 
         // --- Groups: ensure state + uniforms ---
         // Non-passthrough groups need the full group_state + blend uniforms.
-        // Passthrough groups may still own a `passthrough_mask_state` whose
+        // Passthrough groups may still own a `mask_snapshot_state` whose
         // `isolated` lerp uniform must track the engine's isolation target,
         // so we update them through the same path — `update_group_uniforms`
         // skips the group_state branch when none exists and writes only the

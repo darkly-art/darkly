@@ -501,6 +501,39 @@ impl Document {
         }
     }
 
+    /// Host ids of every node that composites in place (a passthrough group or
+    /// a filter layer) *and* carries a visible mask — the set the compositor
+    /// must keep a snapshot+lerp buffer for. Kind-agnostic: it asks each node
+    /// [`LayerNode::composites_in_place`] rather than enumerating which kinds
+    /// qualify, so a new in-place kind is picked up with no edit here.
+    pub fn masked_in_place_hosts(&self) -> Vec<LayerId> {
+        let mut out = Vec::new();
+        self.collect_masked_in_place(self.root, &mut out);
+        out
+    }
+
+    fn collect_masked_in_place(&self, group_id: LayerId, out: &mut Vec<LayerId>) {
+        let Some(LayerNode::Group(g)) = self.find_node(group_id) else {
+            return;
+        };
+        for &child_id in &g.children {
+            let Some(node) = self.find_node(child_id) else {
+                continue;
+            };
+            if node.composites_in_place()
+                && self
+                    .mask_filter(child_id)
+                    .map(|m| m.common.visible)
+                    .unwrap_or(false)
+            {
+                out.push(child_id);
+            }
+            if matches!(node, LayerNode::Group(_)) {
+                self.collect_masked_in_place(child_id, out);
+            }
+        }
+    }
+
     /// Every filter attached to any host in the tree. The global selection
     /// filter is *not* included (it has no host); use
     /// [`Document::selection_id`] for that.
@@ -1055,6 +1088,54 @@ mod tests {
             }
         }
         assert!(!doc.effective_visible(leaf), "leaf's own eye off → false");
+    }
+
+    #[test]
+    fn mask_on_filter_layer_resolves_without_colliding_with_the_effect() {
+        // A mask added to a filter layer must land in the filter's polymorphic
+        // `filters` list, resolve via `mask_filter`, and leave the procedural
+        // effect (`pipeline`/`params`) untouched — the no-collision property
+        // that makes filter layers carry masks like any other host. Pins it so
+        // a future change to the `filters` Vec can't silently break it.
+        let mut doc = Document::new(64, 64);
+        let filter = doc.add_filter_layer("invert".to_string(), "Invert", Vec::new(), None);
+
+        let mask_id = doc.add_mask_filter(filter).expect("filter is a valid host");
+
+        // Resolves through the generic host-mask path.
+        assert_eq!(
+            doc.mask_filter(filter).map(|m| m.id),
+            Some(mask_id),
+            "mask must resolve via the generic mask_filter() path",
+        );
+        // Landed in the filter's own `filters` list.
+        let node = doc.find_node(filter).expect("filter node present");
+        assert!(
+            node.filters().contains(&mask_id),
+            "mask id must be in the filter layer's filters list",
+        );
+        // The procedural effect is untouched — `compose_filter_arm` builds it
+        // from `pipeline`/`params`, never from `filters`.
+        match node {
+            LayerNode::Layer(Layer::Filter(f)) => {
+                assert_eq!(f.pipeline, "invert", "filter pipeline must be untouched");
+                assert!(f.params.is_empty(), "invert is parameter-free");
+                assert_eq!(f.filters, vec![mask_id], "only the mask is attached");
+            }
+            _ => unreachable!("filter node is a Filter layer"),
+        }
+
+        // A visible mask on the filter makes it an in-place masked host, so the
+        // compositor's ensure-trigger picks it up.
+        assert!(
+            node.composites_in_place(),
+            "filter layer composites in place"
+        );
+        assert_eq!(
+            doc.masked_in_place_hosts(),
+            vec![filter],
+            "the masked filter layer is collected as an in-place masked host",
+        );
     }
 
     #[test]

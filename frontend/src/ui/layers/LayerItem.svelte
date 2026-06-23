@@ -91,7 +91,7 @@
     });
 
     let canAddMask = $derived(
-        (layer.type === 'raster' || layer.type === 'void')
+        (layer.type === 'raster' || layer.type === 'void' || layer.type === 'filter')
             && !hasMask
             && editable,
     );

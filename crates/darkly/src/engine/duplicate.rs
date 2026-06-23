@@ -334,7 +334,7 @@ impl DarklyEngine {
                 bounds,
             );
             self.compositor
-                .ensure_passthrough_mask_state(&self.gpu.device, dst_host);
+                .ensure_mask_snapshot_state(&self.gpu.device, dst_host);
             // clone_filter_pixels marks `new_mod_id` dirty internally per
             // the write-site invariant.
             self.clone_filter_pixels(src_mod_id, new_mod_id);

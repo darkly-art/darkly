@@ -104,8 +104,8 @@ For a feature to count, it must be:
 - [x] HSV picker, foreground/background swatches
 - [x] Color picker (Ctrl-held temporary pick)
 - [x] Raster layers + groups, drag‑reorder, visibility, lock, opacity, name, collapse, passthrough
-- [x] 16 blend modes (Normal → Luminosity, Krita‑compatible)
-- [x] Layer masks (one per host)
+- [x] 16 blend modes
+- [x] Layer masks
 - [x] Rect, ellipse, lasso, polygon, magic wand selection
 - [x] Selection Replace / Add / Subtract / Intersect modes
 - [x] Pan / zoom / rotate view

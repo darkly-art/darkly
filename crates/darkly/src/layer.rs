@@ -371,6 +371,23 @@ impl LayerNode {
             LayerNode::Group(group) => ctx.compose_group(group),
         }
     }
+
+    /// Whether this node transforms the running parent accumulator *in place*
+    /// (the composite of everything below it) rather than blending its own
+    /// discrete texture in. A passthrough group inlines its children into the
+    /// parent; a filter layer runs its pipeline over the accumulator. Both want
+    /// a snapshot+lerp detour when they carry a visible mask, so the compositor
+    /// keys its mask-snapshot resource off this predicate instead of
+    /// enumerating which kinds qualify — a new in-place kind is purely additive.
+    /// Isolated groups, raster, and void layers blend a texture and answer
+    /// `false`.
+    pub fn composites_in_place(&self) -> bool {
+        match self {
+            LayerNode::Group(g) => g.passthrough,
+            LayerNode::Layer(Layer::Filter(_)) => true,
+            LayerNode::Layer(_) => false,
+        }
+    }
 }
 
 /// How a layer answers "can the user transform me, and how?" — consumed by the
