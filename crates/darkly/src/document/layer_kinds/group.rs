@@ -33,6 +33,10 @@ pub fn register() -> LayerKindRegistration {
     LayerKindRegistration {
         type_id: TYPE_ID,
         display_name: "Group",
+        can_have_mask: true,
+        can_rename: true,
+        has_thumbnail: false,
+        icon: "fa6-solid:folder",
         serialize,
         deserialize,
         remap_ids,

@@ -36,6 +36,12 @@ pub struct EngineState {
 /// Per-instance view of a tree node. `type` (variant tag) and `blendMode` are
 /// stable registry `type_id`s — display labels are looked up by the UI through
 /// the matching `*_types()` table, never carried alongside as a redundant copy.
+///
+/// `canHaveMask` / `canRename` / `hasThumbnail` / `icon` / `kindName` are
+/// per-kind capability flags sourced from the layer's
+/// [`crate::document::LayerKindRegistration`]. The frontend reads these instead
+/// of branching on `type` — a new layer kind declares its capabilities in its
+/// own registration and the UI follows with no consumer-side edit.
 #[derive(serde::Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum LayerInfo {
@@ -51,6 +57,11 @@ pub enum LayerInfo {
         /// inheritance rule lives in one place (the document predicate)
         /// rather than being recomputed by every Svelte component.
         editable: bool,
+        can_have_mask: bool,
+        can_rename: bool,
+        has_thumbnail: bool,
+        icon: &'static str,
+        kind_name: &'static str,
         opacity: f32,
         /// Stable `type_id` from the blend-mode registry (snake_case, e.g.
         /// `"normal"`, `"color_burn"`). Resolve to a display label via the
@@ -70,17 +81,20 @@ pub enum LayerInfo {
         visible: bool,
         locked: bool,
         editable: bool,
+        can_have_mask: bool,
+        can_rename: bool,
+        has_thumbnail: bool,
+        /// Iconify icon for this void kind (e.g. `"tabler:galaxy"`), resolved
+        /// per-subtype from the void's registration. The layer panel renders
+        /// it as the void layer's thumbnail.
+        icon: &'static str,
+        kind_name: &'static str,
         opacity: f32,
         blend_mode: &'static str,
         modifiers: Vec<ModifierInfo>,
         /// Stable `type_id` from the void registry — UI resolves to a
         /// display label via `void_types()`.
         void_type: String,
-        /// Iconify icon for this void kind (e.g. `"tabler:galaxy"`), declared on
-        /// the void's registration. The layer panel renders it as the void
-        /// layer's thumbnail; type-owned, so a new void kind brings its own
-        /// icon with no consumer-side change.
-        icon: &'static str,
         /// Param schema + current values, in the order the void's
         /// `ParamDef` slice declares them. Same shape the veil panel uses.
         params: Vec<ParamInfo>,
@@ -94,6 +108,11 @@ pub enum LayerInfo {
         visible: bool,
         locked: bool,
         editable: bool,
+        can_have_mask: bool,
+        can_rename: bool,
+        has_thumbnail: bool,
+        icon: &'static str,
+        kind_name: &'static str,
         opacity: f32,
         blend_mode: &'static str,
         modifiers: Vec<ModifierInfo>,
@@ -108,6 +127,11 @@ pub enum LayerInfo {
         visible: bool,
         locked: bool,
         editable: bool,
+        can_have_mask: bool,
+        can_rename: bool,
+        has_thumbnail: bool,
+        icon: &'static str,
+        kind_name: &'static str,
         collapsed: bool,
         passthrough: bool,
         opacity: f32,
@@ -397,6 +421,7 @@ pub(crate) fn node_to_layer_info(
     use crate::layer::{Layer, LayerNode};
     let node = doc.find_node(node_id)?;
     let editable = doc.is_node_editable(node_id);
+    let kind = node.kind();
     let info = match node {
         LayerNode::Layer(layer) => match layer {
             Layer::Raster(r) => LayerInfo::Raster {
@@ -405,6 +430,11 @@ pub(crate) fn node_to_layer_info(
                 visible: r.common.visible,
                 locked: r.common.locked,
                 editable,
+                can_have_mask: kind.can_have_mask,
+                can_rename: kind.can_rename,
+                has_thumbnail: kind.has_thumbnail,
+                icon: kind.icon,
+                kind_name: kind.display_name,
                 opacity: r.blend.opacity,
                 blend_mode: r.blend.blend_mode.type_id,
                 modifiers: r
@@ -421,12 +451,22 @@ pub(crate) fn node_to_layer_info(
                     .enumerate()
                     .map(|(j, def)| ParamInfo::from_def(def, v.params.get(j)))
                     .collect();
+                let subtype_icon = void_registry.icon(&v.void_type);
                 LayerInfo::Void {
                     id: v.id.to_ffi() as f64,
                     name: v.common.name.clone(),
                     visible: v.common.visible,
                     locked: v.common.locked,
                     editable,
+                    can_have_mask: kind.can_have_mask,
+                    can_rename: kind.can_rename,
+                    has_thumbnail: kind.has_thumbnail,
+                    icon: if subtype_icon.is_empty() {
+                        kind.icon
+                    } else {
+                        subtype_icon
+                    },
+                    kind_name: kind.display_name,
                     opacity: v.blend.opacity,
                     blend_mode: v.blend.blend_mode.type_id,
                     modifiers: v
@@ -435,7 +475,6 @@ pub(crate) fn node_to_layer_info(
                         .filter_map(|mid| doc.find_filter(*mid).map(|m| modifier_to_info(doc, m)))
                         .collect(),
                     void_type: v.void_type.clone(),
-                    icon: void_registry.icon(&v.void_type),
                     params,
                 }
             }
@@ -445,6 +484,11 @@ pub(crate) fn node_to_layer_info(
                 visible: f.common.visible,
                 locked: f.common.locked,
                 editable,
+                can_have_mask: kind.can_have_mask,
+                can_rename: kind.can_rename,
+                has_thumbnail: kind.has_thumbnail,
+                icon: kind.icon,
+                kind_name: kind.display_name,
                 opacity: f.blend.opacity,
                 blend_mode: f.blend.blend_mode.type_id,
                 modifiers: f
@@ -461,6 +505,11 @@ pub(crate) fn node_to_layer_info(
             visible: g.common.visible,
             locked: g.common.locked,
             editable,
+            can_have_mask: kind.can_have_mask,
+            can_rename: kind.can_rename,
+            has_thumbnail: kind.has_thumbnail,
+            icon: kind.icon,
+            kind_name: kind.display_name,
             collapsed: g.collapsed,
             passthrough: g.passthrough,
             opacity: g.blend.opacity,

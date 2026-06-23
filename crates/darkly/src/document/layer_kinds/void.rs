@@ -65,6 +65,12 @@ pub fn register() -> LayerKindRegistration {
     LayerKindRegistration {
         type_id: TYPE_ID,
         display_name: "Void Layer",
+        can_have_mask: true,
+        can_rename: true,
+        has_thumbnail: false,
+        // Per-subtype icon is supplied by `VoidRegistry::icon`; this is the
+        // fallback when a void declares none.
+        icon: "tabler:galaxy",
         serialize,
         deserialize,
         remap_ids,

@@ -68,7 +68,7 @@
     let canAddMask = $derived.by(() => {
         if (!app.engine || app.activeLayerId === null) return false;
         const layer = findNode(app.layerTree, app.activeLayerId);
-        return (layer?.type === 'raster' || layer?.type === 'group' || layer?.type === 'void')
+        return Boolean(layer?.canHaveMask)
             && !hostHasMask(layer)
             && layer.editable !== false;
     });

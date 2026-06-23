@@ -42,6 +42,10 @@ pub fn register() -> LayerKindRegistration {
     LayerKindRegistration {
         type_id: TYPE_ID,
         display_name: "Raster Layer",
+        can_have_mask: true,
+        can_rename: true,
+        has_thumbnail: true,
+        icon: "",
         serialize,
         deserialize,
         remap_ids,

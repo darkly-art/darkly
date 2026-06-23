@@ -55,6 +55,25 @@ pub struct LayerKindRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
 
+    /// May this kind host a mask modifier? Consumed by the layer panel to
+    /// gate "Add mask" without branching on `type_id` — a new kind opts in
+    /// (or out) here, in its own file, and the UI follows automatically.
+    pub can_have_mask: bool,
+
+    /// May the user rename instances of this kind? Drives the layer panel's
+    /// double-click-to-rename gate.
+    pub can_rename: bool,
+
+    /// Does the panel show a live pixel thumbnail for this kind (vs the
+    /// static [`Self::icon`])? `true` only for kinds with a GPU texture the
+    /// thumbnail renderer can sample (raster today).
+    pub has_thumbnail: bool,
+
+    /// Iconify icon the layer panel renders when there's no live thumbnail.
+    /// Empty for kinds that always have a thumbnail. Void layers override
+    /// this per-subtype via [`crate::gpu::void::VoidRegistry::icon`].
+    pub icon: &'static str,
+
     /// Produce the manifest body + any pixel-blob refs this entity wants
     /// saved. Infallible by construction — the kind's serialize goes
     /// through a typed body struct + derived `Serialize`, which can only
