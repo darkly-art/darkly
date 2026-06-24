@@ -10,13 +10,24 @@ profile = []
 # accessors. WebGPU/WASM deadlocks on these (see CLAUDE.md "No Blocking GPU
 # Readbacks"); the feature exists so `cargo test` and the bench bins can opt
 # in while production / WASM builds cannot reach the API at all.
-testing = []
+#
+# Implies `ts-export` so the protocol generator test (which emits the typed TS
+# client) and clippy both see the `#[derive(TS)]` impls under the standard
+# `--features darkly/testing` invocation, while release / WASM builds — which
+# never enable `testing` — carry zero ts-rs code.
+testing = ["ts-export"]
+# Compiles the `#[derive(ts_rs::TS)]` impls on the protocol request/response
+# types plus the registration type-identity metadata that drives codegen.
+# Test/codegen-only: gated exactly like `testing` so ts-rs is never linked into
+# the shipping wasm/native binary.
+ts-export = ["dep:ts-rs"]
 
 [dependencies]
 wgpu = { workspace = true }
 bytemuck = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+ts-rs = { version = "12", optional = true, features = ["serde-json-impl", "no-serde-warnings"] }
 serde_yaml_ng = { workspace = true }
 log = { workspace = true }
 web-time = { workspace = true }

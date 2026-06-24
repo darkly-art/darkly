@@ -1,43 +1,29 @@
 //! Modifier (mask) operations.
 
 use crate::engine::protocol::{layer_id, RequestRegistration, Response};
+use serde_json::Value;
 
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
-        RequestRegistration {
-            kind: "add_mask",
-            handle: |engine, payload, _b| {
-                engine.add_mask(layer_id(payload)?);
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "remove_mask",
-            handle: |engine, payload, _b| {
-                engine.remove_mask(layer_id(payload)?);
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "apply_mask",
-            handle: |engine, payload, _b| {
-                engine.apply_mask(layer_id(payload)?);
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "selection_to_mask",
-            handle: |engine, payload, _b| {
-                engine.selection_to_mask(layer_id(payload)?);
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "mask_to_selection",
-            handle: |engine, payload, _b| {
-                engine.mask_to_selection(layer_id(payload)?);
-                Ok(Response::empty())
-            },
-        },
+        RequestRegistration::new::<Value, Value>("add_mask", |engine, payload, _b| {
+            engine.add_mask(layer_id(payload)?);
+            Ok(Response::empty())
+        }),
+        RequestRegistration::new::<Value, Value>("remove_mask", |engine, payload, _b| {
+            engine.remove_mask(layer_id(payload)?);
+            Ok(Response::empty())
+        }),
+        RequestRegistration::new::<Value, Value>("apply_mask", |engine, payload, _b| {
+            engine.apply_mask(layer_id(payload)?);
+            Ok(Response::empty())
+        }),
+        RequestRegistration::new::<Value, Value>("selection_to_mask", |engine, payload, _b| {
+            engine.selection_to_mask(layer_id(payload)?);
+            Ok(Response::empty())
+        }),
+        RequestRegistration::new::<Value, Value>("mask_to_selection", |engine, payload, _b| {
+            engine.mask_to_selection(layer_id(payload)?);
+            Ok(Response::empty())
+        }),
     ]
 }

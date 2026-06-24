@@ -6,11 +6,12 @@ use serde::Deserialize;
 
 use crate::engine::protocol::{decode, RequestRegistration, Response};
 use crate::layer::LayerId;
+use serde_json::Value;
 
 pub fn registrations() -> Vec<RequestRegistration> {
-    vec![RequestRegistration {
-        kind: "apply_adjustment",
-        handle: |engine, payload, _b| {
+    vec![RequestRegistration::new::<Value, Value>(
+        "apply_adjustment",
+        |engine, payload, _b| {
             #[derive(Deserialize)]
             struct Req {
                 node_id: u64,
@@ -22,5 +23,5 @@ pub fn registrations() -> Vec<RequestRegistration> {
             engine.spawn_adjustment(LayerId::from_ffi(r.node_id), &r.adjustment_type);
             Ok(Response::deferred())
         },
-    }]
+    )]
 }

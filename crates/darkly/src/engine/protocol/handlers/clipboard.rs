@@ -2,6 +2,7 @@
 
 use serde::Deserialize;
 use serde_json::json;
+use serde_json::Value;
 
 use crate::engine::protocol::{decode, layer_id, RequestRegistration, Response};
 use crate::layer::LayerId;
@@ -16,61 +17,46 @@ pub fn registrations() -> Vec<RequestRegistration> {
         // Copy / cut / rich-copy defer: the request's promise resolves with the
         // `ClipboardExport` (plus a `rich` field for `copy_layer_rich`) once the
         // async GPU readback lands — no separate `poll_*` round-trip.
-        RequestRegistration {
-            kind: "copy",
-            handle: |engine, payload, _b| {
-                engine.copy(layer_id(payload)?);
-                Ok(Response::deferred())
-            },
-        },
-        RequestRegistration {
-            kind: "cut",
-            handle: |engine, payload, _b| {
-                engine.cut(layer_id(payload)?);
-                Ok(Response::deferred())
-            },
-        },
-        RequestRegistration {
-            kind: "copy_layer_rich",
-            handle: |engine, payload, _b| {
-                engine.copy_layer_rich(layer_id(payload)?);
-                Ok(Response::deferred())
-            },
-        },
-        RequestRegistration {
-            kind: "paste_layer_rich",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    json: String,
-                    active_layer_id: i64,
-                }
-                let r: Req = decode(payload)?;
-                let id = match engine.paste_layer_rich(&r.json, active(r.active_layer_id)) {
-                    Some(id) => id.to_ffi() as i64,
-                    None => -1,
-                };
-                Ok(Response::json(json!({ "id": id })))
-            },
-        },
-        RequestRegistration {
-            kind: "paste_image",
-            handle: |engine, payload, bytes| {
-                let r: PasteImage = decode(payload)?;
-                let id = engine.paste_image(
-                    r.width,
-                    r.height,
-                    bytes,
-                    r.offset_x,
-                    r.offset_y,
-                    active(r.active_layer_id),
-                );
-                Ok(Response::json(json!({ "id": id.to_ffi() })))
-            },
-        },
-        RequestRegistration {
-            kind: "paste_image_floating",
-            handle: |engine, payload, bytes| {
+        RequestRegistration::new::<Value, Value>("copy", |engine, payload, _b| {
+            engine.copy(layer_id(payload)?);
+            Ok(Response::deferred())
+        }),
+        RequestRegistration::new::<Value, Value>("cut", |engine, payload, _b| {
+            engine.cut(layer_id(payload)?);
+            Ok(Response::deferred())
+        }),
+        RequestRegistration::new::<Value, Value>("copy_layer_rich", |engine, payload, _b| {
+            engine.copy_layer_rich(layer_id(payload)?);
+            Ok(Response::deferred())
+        }),
+        RequestRegistration::new::<Value, Value>("paste_layer_rich", |engine, payload, _b| {
+            #[derive(Deserialize)]
+            struct Req {
+                json: String,
+                active_layer_id: i64,
+            }
+            let r: Req = decode(payload)?;
+            let id = match engine.paste_layer_rich(&r.json, active(r.active_layer_id)) {
+                Some(id) => id.to_ffi() as i64,
+                None => -1,
+            };
+            Ok(Response::json(json!({ "id": id })))
+        }),
+        RequestRegistration::new::<Value, Value>("paste_image", |engine, payload, bytes| {
+            let r: PasteImage = decode(payload)?;
+            let id = engine.paste_image(
+                r.width,
+                r.height,
+                bytes,
+                r.offset_x,
+                r.offset_y,
+                active(r.active_layer_id),
+            );
+            Ok(Response::json(json!({ "id": id.to_ffi() })))
+        }),
+        RequestRegistration::new::<Value, Value>(
+            "paste_image_floating",
+            |engine, payload, bytes| {
                 let r: PasteImage = decode(payload)?;
                 let id = engine.paste_image_floating(
                     r.width,
@@ -82,22 +68,19 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 );
                 Ok(Response::json(json!({ "id": id.to_ffi() })))
             },
-        },
-        RequestRegistration {
-            kind: "paste_in_place",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    active_layer_id: i64,
-                }
-                let r: Req = decode(payload)?;
-                let id = match engine.paste_in_place(active(r.active_layer_id)) {
-                    Some(id) => id.to_ffi() as i64,
-                    None => -1,
-                };
-                Ok(Response::json(json!({ "id": id })))
-            },
-        },
+        ),
+        RequestRegistration::new::<Value, Value>("paste_in_place", |engine, payload, _b| {
+            #[derive(Deserialize)]
+            struct Req {
+                active_layer_id: i64,
+            }
+            let r: Req = decode(payload)?;
+            let id = match engine.paste_in_place(active(r.active_layer_id)) {
+                Some(id) => id.to_ffi() as i64,
+                None => -1,
+            };
+            Ok(Response::json(json!({ "id": id })))
+        }),
     ]
 }
 
