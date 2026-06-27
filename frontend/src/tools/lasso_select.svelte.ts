@@ -19,19 +19,19 @@ let points: [number, number][] = [];
 const MIN_DIST_SQ = 4;
 
 function pushPreviewOverlay() {
-    if (!app.handle || points.length < 2) return;
+    if (!app.engine || points.length < 2) return;
     const prims = [];
     for (let i = 1; i < points.length; i++) {
         prims.push(prim(KIND_LINE, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR, points[i - 1], points[i], { thickness: 1 }));
     }
     // Closing line back to start
     prims.push(prim(KIND_LINE, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR, points[points.length - 1], points[0], { dashLen: 4, thickness: 1 }));
-    app.handle.set_overlay(prims);
+    app.engine.post('set_overlay', { primitives: prims });
 }
 
 function clearPreviewOverlay() {
     points = [];
-    app.handle?.clear_overlay();
+    app.engine?.post('clear_overlay');
 }
 
 export const lassoSelectTool: Tool = {
@@ -61,23 +61,23 @@ export const lassoSelectTool: Tool = {
         }
     },
 
-    onPointerUp(_ctx, e) {
-        if (points.length < 3 || !app.handle) {
-            if (points.length < 3 && selectionMode(e) === 'replace') {
-                app.handle?.clear_selection();
+    onPointerUp(ctx, e) {
+        if (points.length < 3) {
+            if (selectionMode(e) === 'replace') {
+                ctx.engine.post('clear_selection');
             }
             clearPreviewOverlay();
             return;
         }
 
         const mode = selectionMode(e);
-        app.handle.select_lasso(points, mode, true, 0);
+        ctx.engine.post('select_lasso', { verts: points, mode, antialias: true, feather: 0 });
         clearPreviewOverlay();
     },
 
     onKeyDown(e) {
         if (e.key === 'Escape') {
-            app.handle?.clear_selection();
+            app.engine?.post('clear_selection');
             return true;
         }
         return false;

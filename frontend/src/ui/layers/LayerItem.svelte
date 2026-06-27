@@ -1,6 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
-    import { getNodeThumbnail, THUMB_SIZE } from './thumbnails';
+    import { getNodeThumbnail, THUMB_SIZE } from './thumbnails.svelte';
     import { bindingSite } from '../../actions/binding_site';
     import { actions } from '../../actions/registry';
     import { tooltipForAction } from '../../config/store.svelte';
@@ -19,8 +19,20 @@
             // the icon); `editable` is the effective form (drives interaction
             // gates: rename, drag, mask/layer menu mutations).
             editable?: boolean;
+            // Per-kind capability flags from the layer's registration (see
+            // LayerKindRegistration). The panel reads these instead of
+            // branching on `type` — a new layer kind declares its own and the
+            // UI follows with no edit here.
+            canHaveMask?: boolean;
+            canRename?: boolean;
+            hasThumbnail?: boolean;
             opacity?: number; blendMode?: string;
             modifiers?: Modifier[];
+            // Iconify icon rendered as the panel thumbnail when the kind has no
+            // live thumbnail (void: per-subtype; filter/group: per-kind).
+            icon?: string;
+            // Kind display name ("Void Layer", …) for the thumbnail tooltip.
+            kindName?: string;
         };
         depth?: number;
         onupdate: () => void;
@@ -55,8 +67,8 @@
     let editInput = $state<HTMLInputElement | null>(null);
     let dropPos = $state<'none' | 'above' | 'below'>('none');
 
-    let layerThumb = $derived(layer.type === 'raster' && app.handle ? getNodeThumbnail(layer.id) : '');
-    let maskThumb = $derived(maskModifier !== null && app.handle ? getNodeThumbnail(maskModifier.id) : '');
+    let layerThumb = $derived(layer.hasThumbnail && app.engine ? getNodeThumbnail(layer.id) : '');
+    let maskThumb = $derived(maskModifier !== null && app.engine ? getNodeThumbnail(maskModifier.id) : '');
 
     let showMaskMenu = $state(false);
     let maskMenuX = $state(0);
@@ -87,11 +99,7 @@
         return siblingBelowExists(app.layerTree, layer.id);
     });
 
-    let canAddMask = $derived(
-        (layer.type === 'raster' || layer.type === 'void')
-            && !hasMask
-            && editable,
-    );
+    let canAddMask = $derived(Boolean(layer.canHaveMask) && !hasMask && editable);
 
     // Chord dispatch is owned by `use:bindingSite` on each preview
     // element below — `bindingSite` intercepts modifier+click in capture
@@ -201,37 +209,37 @@
     }
 
     function toggleMaskEnabled() {
-        if (app.handle && maskModifier !== null) {
-            app.handle.set_layer_visible(maskModifier.id, !maskEnabled);
+        if (app.engine && maskModifier !== null) {
+            app.engine.post('set_layer_visible', { id: maskModifier.id, visible: !maskEnabled });
             onupdate();
         }
     }
 
     function toggleShowMask() {
-        if (app.handle && maskModifier !== null) {
+        if (app.engine && maskModifier !== null) {
             const next = isMaskIsolated ? 0 : maskModifier.id;
-            app.handle.set_isolated_node(next);
+            app.engine.post('set_isolated_node', { id: next });
             app.isolatedNodeId = next === 0 ? null : next;
             onupdate();
         }
     }
 
     function applyMask() {
-        if (app.handle) {
-            app.handle.apply_mask(layer.id);
+        if (app.engine) {
+            app.engine.post('apply_mask', { id: layer.id });
             onupdate();
         }
     }
 
     function removeMask() {
-        if (app.handle) {
-            app.handle.remove_mask(layer.id);
+        if (app.engine) {
+            app.engine.post('remove_mask', { id: layer.id });
             onupdate();
         }
     }
 
     function startRename() {
-        if (layer.type !== 'raster') return;
+        if (!layer.canRename) return;
         if (!editable) return;
         editing = true;
         requestAnimationFrame(() => editInput?.focus());
@@ -239,8 +247,8 @@
 
     function finishRename() {
         editing = false;
-        if (app.handle && editInput) {
-            app.handle.set_layer_name(layer.id, editInput.value);
+        if (app.engine && editInput) {
+            app.engine.post('set_layer_name', { id: layer.id, name: editInput.value });
             onupdate();
         }
     }
@@ -282,12 +290,13 @@
         }
     }
 
-    function onDrop(e: DragEvent) {
+    async function onDrop(e: DragEvent) {
         e.preventDefault();
         e.stopPropagation();
         dropPos = 'none';
         const payload = e.dataTransfer?.getData('application/x-darkly-layers');
-        if (!payload || !app.handle) return;
+        const engine = app.engine;
+        if (!payload || !engine) return;
         let ids: number[];
         try { ids = JSON.parse(payload) as number[]; } catch { return; }
         if (!Array.isArray(ids) || ids.length === 0) return;
@@ -300,9 +309,9 @@
         const where = ratio < 0.5 ? 'after' : 'before';
 
         try {
-            const skipped = app.handle.move_layers(
-                Float64Array.from(ids), where, layer.id,
-            );
+            const { skipped } = await engine.send('move_layers', {
+                ids, target_type: where, target_id: layer.id,
+            });
             if (skipped > 0) {
                 toast.show('info', `${skipped} locked layer${skipped === 1 ? '' : 's'} skipped`);
             }
@@ -346,7 +355,7 @@
         <Icon name={layer.visible ? 'fa6-solid:eye' : 'fa6-solid:eye-slash'} />
     </button>
 
-    {#if layer.type === 'raster' && layerThumb}
+    {#if layer.hasThumbnail && layerThumb}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <img
             class="thumb"
@@ -359,13 +368,13 @@
             use:bindingSite={{ name: 'layerThumb', ctx: () => ({ layerId: layer.id }) }}
             onclick={clickLayerThumb}
         />
-    {:else if layer.type === 'void'}
+    {:else if layer.icon}
         <span
             class="thumb void-thumb"
             class:thumb-active={isActive && !isEditingMask}
-            title="Void layer"
+            title={layer.kindName}
         >
-            <Icon name="tabler:galaxy" />
+            <Icon name={layer.icon} />
         </span>
     {/if}
 

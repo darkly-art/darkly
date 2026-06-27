@@ -2,7 +2,6 @@
 
 use super::rendering::commit_undo_region;
 use super::{DarklyEngine, PendingTransform};
-use crate::document::MoveTarget;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::transform::{Affine2D, ClearShape, FloatingContent, FloatingMode, IDENTITY};
 use crate::layer::{Layer, LayerId};
@@ -135,9 +134,12 @@ impl DarklyEngine {
             layer_bounds,
         );
 
-        if let Some(active_id) = active_layer_id {
-            self.doc.move_layer(new_id, MoveTarget::After(active_id));
-        }
+        // Position relative to the active node. `resolve_anchor_target` maps a
+        // filter anchor (the active id while editing a mask) to its host, so
+        // the pasted layer lands as the host's sibling rather than nested under
+        // it — the same anchor resolution the document's `add_*` helpers use.
+        let target = self.doc.resolve_anchor_target(active_layer_id);
+        self.doc.move_layer(new_id, target);
 
         // Upload RGBA to floating source texture; the compositor renders it
         // as a preview overlay until commit.
@@ -184,11 +186,11 @@ impl DarklyEngine {
         }
         self.auto_commit_floating();
 
-        // Active node may be either a raster layer or a mask modifier — both
+        // Active node may be either a raster layer or a mask filter — both
         // own a `PixelBuffer` and a node texture. The doc lookup just verifies
         // the id resolves to one of those two; the rest of the flow uses the
         // node id uniformly.
-        if self.doc.layer(layer_id).is_none() && self.doc.find_modifier(layer_id).is_none() {
+        if self.doc.layer(layer_id).is_none() && self.doc.find_filter(layer_id).is_none() {
             return false;
         }
 
@@ -428,59 +430,9 @@ impl DarklyEngine {
     /// it remains valid after the selection clear zeroes the live selection
     /// at the end of `setup_transform`.
     fn snapshot_selection_for_clear(&self) -> wgpu::BindGroup {
-        let canvas_w = self.doc.width;
-        let canvas_h = self.doc.height;
-        let snap_tex = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("transform-clear-sel-snap"),
-            size: wgpu::Extent3d {
-                width: canvas_w,
-                height: canvas_h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let live_tex = self
-            .compositor
-            .selection_state()
+        let full = crate::coord::WindowRect::from_xywh(0, 0, self.doc.width, self.doc.height);
+        self.selection_region_bind_group(full, wgpu::FilterMode::Linear)
             .expect("snapshot_selection_for_clear: selection_state allocated")
-            .texture();
-        self.gpu.encode("transform-clear-sel-snap", |encoder| {
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: live_tex,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &snap_tex,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: canvas_w,
-                    height: canvas_h,
-                    depth_or_array_layers: 1,
-                },
-            );
-        });
-        let view = snap_tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = self.gpu.device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("transform-clear-sel-snap-sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            ..Default::default()
-        });
-        self.paint_pipelines
-            .create_selection_bind_group(&self.gpu.device, &view, &sampler)
     }
 
     /// Update the floating content's transform matrix and rebuild the
@@ -513,7 +465,7 @@ impl DarklyEngine {
             return;
         }
         // Format comes from the unified node-texture pool. Both raster layer
-        // (RGBA8) and mask modifier (R8) targets resolve through the same call.
+        // (RGBA8) and mask filter (R8) targets resolve through the same call.
         let format = self
             .compositor
             .node_texture(layer_id)
@@ -536,11 +488,11 @@ impl DarklyEngine {
             (max_y.max(src_max_y) - min_y.min(soy)).max(0) as u32,
         );
 
-        // Grow the target (or its host, for mask modifiers) so the layer
+        // Grow the target (or its host, for mask filters) so the layer
         // texture can hold any portion of the affected rect that lies
         // outside its current bounds — including pixels past the canvas
         // edge. Best-effort: if growth is refused (cap, or target is
-        // neither raster nor modifier with a raster host), commit falls
+        // neither raster nor filter with a raster host), commit falls
         // back to the pre-grow extent and the texture-side clip below
         // still keeps the commit consistent.
         let _ = self.grow_node_to_fit(layer_id, affected_canvas);

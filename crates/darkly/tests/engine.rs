@@ -2081,11 +2081,11 @@ fn pending_undo_commit_survives_two_grows() {
 /// Paint a single black brush dab at (x, y) on a mask. Brush color is
 /// grayscale (R=G=B=0); the R channel is what lands in the R8 mask.
 fn paint_mask_dab(engine: &mut DarklyEngine, host_id: LayerId, x: f32, y: f32, value: f32) {
-    // The new model paints on the mask modifier id directly, not via a
+    // The new model paints on the mask filter id directly, not via a
     // session redirect from the host. Resolve the mask id and stroke on it.
     let mask_id = engine
         .host_mask_id(host_id)
-        .expect("paint_mask_dab requires the host to have a mask modifier");
+        .expect("paint_mask_dab requires the host to have a mask filter");
     engine.begin_stroke(mask_id);
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
@@ -2289,7 +2289,7 @@ fn engine_add_mask_without_selection_is_all_white() {
     );
 }
 
-/// In the new modifier-node model, paint targets are addressed by node id.
+/// In the new filter-node model, paint targets are addressed by node id.
 /// Painting on a host id with no mask attached just paints on the host —
 /// there is no separate "edit mask" redirect that could go wrong. This
 /// regression test now verifies safety: `begin_stroke` on a host with no
@@ -2680,24 +2680,79 @@ fn floating_preview_respects_layer_mask() {
     );
 }
 
+/// A passthrough-group mask that is *sub-canvas* (smaller than the canvas
+/// window after a crop/enlarge) must lerp using the mask sampled in its OWN
+/// plane space — the same `sample_mask_window` path as the leaf projection.
+/// Pre-B6 the lerp sampled the mask at the raw window UV, so an independent-
+/// bounds group mask mislocated its hidden region once the window grew.
+#[test]
+fn passthrough_sub_canvas_group_mask_samples_own_space() {
+    use darkly::coord::CanvasRect;
+    use darkly::document::MoveTarget;
+
+    // 64×64 group + child filled red; group mask painted black at one spot.
+    let mut engine = test_engine(64, 64);
+    let group_id = engine.add_group(None);
+    engine.set_group_passthrough(group_id, true);
+    let child_id = engine.add_raster_layer(None);
+    engine.move_layer(child_id, MoveTarget::IntoGroupTop(group_id));
+    engine.begin_stroke(child_id);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r: 255,
+        g: 0,
+        b: 0,
+        a: 255,
+        tolerance: 255,
+    });
+    engine.end_stroke();
+    engine.render(0.0);
+
+    engine.add_mask(group_id);
+    // A black brush dab on the mask at plane (40, 40) — a localized hidden spot.
+    paint_mask_dab(&mut engine, group_id, 40.0, 40.0, 0.0);
+    engine.test_flush_readbacks();
+
+    // Enlarge + offset the canvas window → the 64×64 group mask is sub-canvas.
+    engine.resize_canvas(CanvasRect::from_xywh(20, 16, 128, 96));
+    engine.render(0.0);
+
+    let canvas = engine.test_readback_canvas();
+    // Plane (40,40) → window-local (20,24): the dab hides the child there.
+    let hidden = alpha_at(&canvas, 128, 20, 24);
+    // Plane (62,18) → window-local (42,2): inside child + mask, away from the
+    // dab → the child's red shows (mask white).
+    let shown = alpha_at(&canvas, 128, 42, 2);
+    assert!(
+        hidden < 128,
+        "sub-canvas group mask must hide the child at the dab's own-space \
+         location; got alpha={hidden}"
+    );
+    assert!(
+        shown > 200,
+        "away from the dab the child must show through the sub-canvas group \
+         mask; got alpha={shown}"
+    );
+}
+
 // ============================================================================
-// Mask → Modifier-Node regression tests
+// Mask → Filter-Node regression tests
 //
-// These tests defend the structural invariants of the modifier-node model:
+// These tests defend the structural invariants of the filter-node model:
 // the document model has no `has_mask` / `mask_enabled` / `show_mask`
-// booleans, masks are real nodes with their own `PixelBuffer`, lockstep
-// growth is a document-side operation, and the type system forbids ever
-// putting a `Modifier` into the regular tree.
+// booleans, masks are real nodes with their own `PixelBuffer`, a mask owns
+// and grows its bounds independently of its host (the mask-apply pass samples
+// it in its own space — no lockstep coupling), and the type system forbids
+// ever putting a `Filter` into the regular tree.
 // ============================================================================
 
-/// Painting past the host's bounds grows the host texture and — because the
-/// mask is unlocked — grows the mask in lockstep so `host.bounds == mask.bounds`
-/// after the stroke. Defends the per-buffer-bounds invariant from §3 of the
-/// plan: the blend shader samples each `PixelBuffer` by its own bounds, and
-/// lockstep growth keeps the mask UV-coincident with the host without a
-/// special "shared UV" case.
+/// A mask owns its bounds independently of its host: growing the host (paint
+/// past the host's own edge) leaves the mask's bounds untouched. The de-fused
+/// mask-apply pass samples the mask in its own space, so there is no lockstep
+/// coupling — the host grows alone.
 #[test]
-fn mask_grows_in_lockstep_with_host_when_unlocked() {
+fn growing_host_leaves_mask_bounds_unchanged() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
     let layer_id = engine.add_raster_layer(None);
@@ -2711,13 +2766,15 @@ fn mask_grows_in_lockstep_with_host_when_unlocked() {
         .expect("raster layer has bounds");
     let mask_before = engine
         .node_pixel_bounds(mask_id)
-        .expect("mask modifier has bounds");
+        .expect("mask filter has bounds");
+    // Fresh mask defaults to the full canvas — coincident with a fresh
+    // canvas-sized host, but by independent default, not by coupling.
     assert_eq!(
-        host_before, mask_before,
-        "fresh mask must inherit the host's bounds"
+        mask_before, host_before,
+        "fresh mask defaults to the canvas (== a fresh canvas-sized host)"
     );
 
-    // Paint past the right edge to force a chunk-aligned growth of the host.
+    // Paint the HOST past its right edge → the host grows on its own.
     paint_at(
         &mut engine,
         layer_id,
@@ -2740,91 +2797,95 @@ fn mask_grows_in_lockstep_with_host_when_unlocked() {
         host_after.width,
     );
     assert_eq!(
-        host_after, mask_after,
-        "unlocked mask must follow the host's growth in lockstep — the doc \
-         operation in `grow_layer_to_extent` walks `host.modifiers` and \
-         resizes each non-locked one. host={host_after:?} mask={mask_after:?}"
-    );
-
-    // The newly-grown mask region must be unmasked (255) — the GPU resize
-    // clears new pixels to white per `resize_node_texture`, so the host's
-    // newly-grown extent samples through cleanly.
-    let mask_pixels = engine.test_readback_mask(layer_id);
-    let mask_w = mask_after.width;
-    let mask_h = mask_after.height;
-    assert_eq!(
-        mask_pixels.len(),
-        (mask_w * mask_h) as usize,
-        "mask byte count must match its grown bounds"
-    );
-    // Sample a pixel in the newly-grown column (just past the original right
-    // edge of the canvas, well clear of the brush dab footprint near
-    // (cw + 50, ch / 2)). Convert canvas coord → mask-local via origin.
-    let probe_canvas_x = cw as i32 + 1;
-    let probe_canvas_y = 4i32;
-    let local_x = (probe_canvas_x - mask_after.origin.x) as u32;
-    let local_y = (probe_canvas_y - mask_after.origin.y) as u32;
-    let probe = mask_pixels[(local_y * mask_w + local_x) as usize];
-    assert_eq!(
-        probe, 255,
-        "newly-grown mask region must default to fully-revealed (255); got {probe}"
+        mask_after, mask_before,
+        "the mask must NOT follow the host's growth — it owns its own bounds. \
+         host={host_after:?} mask before/after={mask_after:?}"
     );
 }
 
-/// A locked mask must NOT follow the host's growth. After the host grows,
-/// the mask's `PixelBuffer.bounds` is unchanged — the blend shader samples
-/// each buffer by its own bounds, so a diverged mask renders at its frozen
-/// position without any special-case shader code (§4 of the plan).
+/// Painting a mask past its own bounds grows the MASK independently — the host
+/// is untouched. Undoing the stroke restores the mask's pixels (growth is
+/// document-led, so the stroke's region undo covers it the same way raster
+/// grow does — and the newly-grown region restores to white, not black).
 #[test]
-fn locked_mask_does_not_follow_host_growth() {
-    let (cw, ch) = (256u32, 256u32);
+fn painting_mask_past_bounds_grows_mask_independently() {
+    use darkly::coord::CanvasRect;
+
+    let (cw, ch) = (128u32, 128u32);
     let mut engine = test_engine(cw, ch);
+    // Crop first (non-zero canvas_origin) so the frame math is exercised.
+    let (ox, oy) = (15i32, 9i32);
+    engine.resize_canvas(CanvasRect::from_xywh(ox, oy, cw, ch));
+
     let layer_id = engine.add_raster_layer(None);
     engine.add_mask(layer_id);
     let mask_id = engine.host_mask_id(layer_id).expect("mask exists");
 
-    let mask_bounds_before = engine.node_pixel_bounds(mask_id).expect("mask has bounds");
+    let host_before = engine.layer_bounds(layer_id).expect("host bounds");
+    let mask_before = engine.node_pixel_bounds(mask_id).expect("mask bounds");
 
-    // Lock the mask before growing the host.
-    engine.set_node_locked(mask_id, true);
+    // One stroke on the MASK: a first dab inside the bounds (so the pre-stroke
+    // undo snapshot is captured at the OLD extent), then a dab past the right
+    // edge (so the mask grows mid-stroke). This is the corruption-prone path —
+    // the grown region must enter the snapshot as white (255), not zero.
+    let black = |x: f32, y: f32| StrokeOp::BrushStroke {
+        x,
+        y,
+        pressure: 1.0,
+        x_tilt: 0.0,
+        y_tilt: 0.0,
+        rotation: 0.0,
+        tangential_pressure: 0.0,
+        time_ms: 0.0,
+        cr: 0.0,
+        cg: 0.0,
+        cb: 0.0,
+        ca: 1.0,
+    };
+    engine.begin_stroke(mask_id);
+    engine.stroke_to(black((ox + 30) as f32, (oy + 30) as f32));
+    engine.stroke_to(black(
+        (ox + cw as i32) as f32 + 40.0,
+        (oy + ch as i32 / 2) as f32,
+    ));
+    engine.end_stroke();
+    engine.render(0.0);
 
-    // Force a host growth.
-    paint_at(
-        &mut engine,
-        layer_id,
-        cw as f32 + 50.0,
-        ch as f32 / 2.0,
-        1.0,
-        0.0,
-        0.0,
-    );
-
-    let host_after = engine.layer_bounds(layer_id).expect("layer still exists");
-    let mask_after = engine.node_pixel_bounds(mask_id).expect("mask still here");
-
+    let host_after = engine.layer_bounds(layer_id).expect("host still exists");
+    let mask_after = engine
+        .node_pixel_bounds(mask_id)
+        .expect("mask still exists");
     assert!(
-        host_after.width > cw,
-        "test setup precondition: host should have grown past canvas"
+        mask_after.width > mask_before.width,
+        "mask must grow itself when painted past its bounds; before {} after {}",
+        mask_before.width,
+        mask_after.width,
     );
     assert_eq!(
-        mask_after, mask_bounds_before,
-        "locked mask must keep its original bounds; host={host_after:?} \
-         mask before/after={mask_after:?}"
+        host_after, host_before,
+        "host must NOT grow when only the mask is painted; host={host_after:?}"
     );
-    // The mask's GPU texture must still match its (unchanged) bounds.
+
+    // Undo the mask stroke — every readable mask pixel returns to white (the
+    // pre-stroke all-white state). A black pixel here would be the B4
+    // corruption: the grown region's pre-stroke default restored as 0.
+    engine.undo();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
     let mask_pixels = engine.test_readback_mask(layer_id);
-    assert_eq!(
-        mask_pixels.len(),
-        (mask_after.width * mask_after.height) as usize,
-        "locked mask GPU texture must match the unchanged bounds"
+    let darkest = mask_pixels.iter().copied().min().unwrap_or(255);
+    assert!(
+        darkest > 250,
+        "undo must restore the all-white mask (incl. the grown region); \
+         darkest pixel was {darkest}"
     );
 }
 
 /// Add → paint → apply → undo round-trip. After `apply_mask` the host's
-/// alpha is multiplied by the mask values and the mask modifier is removed.
-/// Undo restores both the alpha and the mask modifier (with its pixels).
+/// alpha is multiplied by the mask values and the mask filter is removed.
+/// Undo restores both the alpha and the mask filter (with its pixels).
 /// This is the structural replacement for the deleted `MaskPropertyAction`
-/// — generic `ModifierAddAction` / `ModifierRemoveAction` plus the existing
+/// — generic `FilterAddAction` / `FilterRemoveAction` plus the existing
 /// region-pixel undo cover the round-trip.
 #[test]
 fn add_paint_apply_undo_round_trip_preserves_mask() {
@@ -2860,14 +2921,14 @@ fn add_paint_apply_undo_round_trip_preserves_mask() {
         "test setup: black dab should drive mask well below 255 at probe; got {masked_byte}"
     );
 
-    // Apply baked the mask alpha into the host RGBA, then removed the modifier.
+    // Apply baked the mask alpha into the host RGBA, then removed the filter.
     engine.apply_mask(layer_id);
     engine.test_flush_readbacks();
     engine.render(0.0);
 
     assert!(
         engine.host_mask_id(layer_id).is_none(),
-        "after apply_mask the modifier must be detached"
+        "after apply_mask the filter must be detached"
     );
     let host_after_apply = engine.test_readback_layer(layer_id);
     let baked_alpha = alpha_at(&host_after_apply, cw, probe_x, probe_y);
@@ -2882,8 +2943,8 @@ fn add_paint_apply_undo_round_trip_preserves_mask() {
     //   1. GpuRegionAction for the host's pre-multiply alpha
     //   2. GpuRegionAction for the mask's pixels (saved separately so undo
     //      restores them into the freshly re-created texture after step 3)
-    //   3. ModifierRemoveAction for the detach
-    // Undo runs in reverse: re-attach modifier → restore mask pixels →
+    //   3. FilterRemoveAction for the detach
+    // Undo runs in reverse: re-attach filter → restore mask pixels →
     // restore host alpha.
     for _ in 0..3 {
         engine.undo();
@@ -2892,10 +2953,10 @@ fn add_paint_apply_undo_round_trip_preserves_mask() {
 
     let restored_mask_id = engine
         .host_mask_id(layer_id)
-        .expect("undo must restore the mask modifier");
+        .expect("undo must restore the mask filter");
     assert_eq!(
         restored_mask_id, mask_id,
-        "restored mask must keep its original id (the same Modifier struct \
+        "restored mask must keep its original id (the same Filter struct \
          is re-attached)"
     );
     let host_after_undo = engine.test_readback_layer(layer_id);
@@ -2917,7 +2978,7 @@ fn add_paint_apply_undo_round_trip_preserves_mask() {
 /// Toggling the mask invisible turns the same group back into a plain
 /// passthrough — no snapshot+lerp, the children render unmasked. The
 /// structural detection lives in the compositor's `compose_children`
-/// passthrough branch (§6 of the plan): `g.modifiers.mask().filter(|m| m.common.visible)`.
+/// passthrough branch (§6 of the plan): `g.filters.mask().filter(|m| m.common.visible)`.
 #[test]
 fn passthrough_group_with_visible_mask_applies_via_snapshot_lerp() {
     use darkly::document::MoveTarget;
@@ -3036,9 +3097,9 @@ fn set_blend_mode_on_passthrough_group_disables_passthrough() {
 }
 
 /// Type-system check: the `LayerNode` enum must contain ONLY `Layer` and
-/// `Group`. Modifiers are not LayerNodes — they're reachable only through
-/// their host's `modifiers` field. An exhaustive match (without a wildcard
-/// arm) is the compile-time enforcement: adding `LayerNode::Modifier(...)`
+/// `Group`. Filters are not LayerNodes — they're reachable only through
+/// their host's `filters` field. An exhaustive match (without a wildcard
+/// arm) is the compile-time enforcement: adding `LayerNode::Filter(...)`
 /// to the enum would compile but `match` exhaustiveness here would still
 /// accept the new variant. To make the intent firm, we destructure the only
 /// two legal variants by reference and trigger a non-exhaustive-match error
@@ -3050,13 +3111,14 @@ fn layer_node_tree_admits_only_layer_and_group_variants() {
     use darkly::layer::{Layer, LayerGroup, LayerId, LayerNode, RasterLayer};
 
     fn must_destructure(node: &LayerNode) {
-        // Exhaustive match — adding any new `LayerNode::Modifier(...)` arm
+        // Exhaustive match — adding any new `LayerNode::Filter(...)` arm
         // (or any other variant) to the enum will cause this to stop
         // compiling. That's the type-system enforcement of the plan's
-        // §1 invariant: modifiers are NOT LayerNodes.
+        // §1 invariant: filters are NOT LayerNodes.
         match node {
             LayerNode::Layer(Layer::Raster(_)) => {}
             LayerNode::Layer(Layer::Void(_)) => {}
+            LayerNode::Layer(Layer::Filter(_)) => {}
             LayerNode::Group(_) => {}
         }
     }
@@ -3076,15 +3138,15 @@ fn layer_node_tree_admits_only_layer_and_group_variants() {
 // ============================================================================
 // Selection unification regression tests
 //
-// The selection is now a typed `Modifier` attached at `Document.selection`.
+// The selection is now a typed `Filter` attached at `Document.selection`.
 // The R8 GPU texture lives in the compositor's selection sub-system; the CPU
-// cache and tight bounds live on `SelectionModifier`. Bridge ops collapse to
-// `clone_modifier_pixels(src, dst)` which is kind-uniform.
+// cache and tight bounds live on `SelectionFilter`. Bridge ops collapse to
+// `clone_filter_pixels(src, dst)` which is kind-uniform.
 // ============================================================================
 
 /// `selection_to_mask` then `mask_to_selection` must round-trip the selection
 /// pixels byte-identically. This exercises the §4a unification: both sides
-/// of the bridge go through the single `clone_modifier_pixels` helper, so a
+/// of the bridge go through the single `clone_filter_pixels` helper, so a
 /// selection → mask → selection cycle should land identical bytes.
 #[test]
 fn selection_to_mask_round_trip_preserves_pixels() {
@@ -3108,8 +3170,8 @@ fn selection_to_mask_round_trip_preserves_pixels() {
         "test setup: selection should contain non-zero pixels"
     );
 
-    // Selection → mask. Adds a mask modifier to the layer and seeds it from
-    // the selection via `clone_modifier_pixels`.
+    // Selection → mask. Adds a mask filter to the layer and seeds it from
+    // the selection via `clone_filter_pixels`.
     engine.add_mask(layer_id);
     engine.selection_to_mask(layer_id);
     engine.render(0.0);
@@ -3122,7 +3184,7 @@ fn selection_to_mask_round_trip_preserves_pixels() {
     );
     assert_eq!(
         mask_pixels, original_cache,
-        "selection_to_mask must copy bytes through `clone_modifier_pixels` \
+        "selection_to_mask must copy bytes through `clone_filter_pixels` \
          without any transformation"
     );
 
@@ -3143,7 +3205,7 @@ fn selection_to_mask_round_trip_preserves_pixels() {
 
     assert!(
         engine.has_selection(),
-        "mask_to_selection must reactivate the selection modifier"
+        "mask_to_selection must reactivate the selection filter"
     );
     let restored = engine
         .test_selection_cpu_cache()
@@ -3151,31 +3213,277 @@ fn selection_to_mask_round_trip_preserves_pixels() {
         .to_vec();
     assert_eq!(
         restored, original_cache,
-        "round-trip must be byte-identical: clone_modifier_pixels copies one \
+        "round-trip must be byte-identical: clone_filter_pixels copies one \
          R8 texture into another with no algorithmic change in either direction"
     );
 }
 
-/// The document model must expose the selection as a typed [`Modifier`] —
+/// Regression: seeding a *sub-canvas* mask from a canvas-sized selection must
+/// not crash with a `copy range touches outside "mask-texture"` WebGPU
+/// validation error, and the grow-to-union must make the mask cover the
+/// **whole** selection (not just the pre-existing overlap). Cropped first
+/// (non-zero `canvas_origin`) so the plane↔texture frame math is exercised.
+#[test]
+fn selection_to_sub_canvas_mask_covers_whole_selection() {
+    use darkly::coord::CanvasRect;
+
+    // 64×64 layer + mask, then enlarge & offset the canvas window so the mask
+    // (still 64×64 @ origin 0,0 — host bounds) is strictly smaller than and
+    // offset from the canvas window.
+    let mut engine = test_engine(64, 64);
+    let layer_id = engine.add_raster_layer(None);
+    engine.add_mask(layer_id);
+    let mask_id = engine.host_mask_id(layer_id).expect("mask just added");
+
+    let canvas = CanvasRect::from_xywh(20, 16, 128, 96);
+    engine.resize_canvas(canvas);
+
+    // Canvas-sized selection (window 128×96) seeded into the smaller mask.
+    // Pre-fix this copy overflows the 64×64 mask texture → validation crash.
+    engine.select_all();
+    engine.render(0.0);
+    engine.selection_to_mask(layer_id);
+    engine.render(0.0);
+
+    // Grow-to-union: the mask now covers the whole selection (the canvas).
+    let bounds = engine
+        .node_pixel_bounds(mask_id)
+        .expect("mask still attached");
+    assert!(
+        bounds.contains(canvas),
+        "mask must have grown to cover the whole selection; mask={bounds:?} canvas={canvas:?}"
+    );
+
+    // A selected plane pixel that lay OUTSIDE the original 64×64 mask must now
+    // read as revealed (255) — proof the grow-to-union represented it, not just
+    // the old intersection. Plane (130, 100) is inside the canvas window but
+    // well past the original mask's right/bottom edge.
+    let mask_pixels = engine.test_readback_mask(layer_id);
+    let mw = bounds.width;
+    let lx = (130 - bounds.origin.x) as u32;
+    let ly = (100 - bounds.origin.y) as u32;
+    let v = mask_byte_at(&mask_pixels, mw, lx, ly);
+    assert!(
+        v > 200,
+        "selected pixel outside the original mask bounds must be revealed after \
+         grow-to-union; got {v}"
+    );
+}
+
+/// Regression: reading a *sub-canvas* mask back into the selection
+/// (`mask_to_selection`) must not crash with a `copy range touches outside`
+/// validation error either — the old copy read a canvas-sized rect out of the
+/// smaller mask texture. Cropped first.
+#[test]
+fn mask_to_selection_from_sub_canvas_mask_does_not_crash() {
+    use darkly::coord::CanvasRect;
+
+    let mut engine = test_engine(64, 64);
+    let layer_id = engine.add_raster_layer(None);
+    engine.add_mask(layer_id);
+    let mask_id = engine.host_mask_id(layer_id).expect("mask just added");
+
+    // Paint a dab on the mask so it carries real content.
+    paint_mask_dab(&mut engine, layer_id, 20.0, 20.0, 0.0);
+
+    // Enlarge & offset the canvas so the mask is sub-canvas.
+    engine.resize_canvas(CanvasRect::from_xywh(20, 16, 128, 96));
+
+    // Pre-fix: copying canvas_w×canvas_h out of the 64×64 mask overflows it.
+    engine.mask_to_selection(mask_id);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    assert!(
+        engine.has_selection(),
+        "mask_to_selection must activate the selection without crashing"
+    );
+}
+
+/// A masked leaf composites through the de-fused projection + `apply_mask`
+/// path: the host content drops into its own window-sized projection, the mask
+/// modulates that projection's alpha (sampled in the mask's own space), and the
+/// result blends down — never sampling the host's texture/geometry. Output must
+/// match the fused result: painted-black mask region hides the host; the rest
+/// reveals it. Cropped first (non-zero `canvas_origin`) so the window→plane→
+/// mask-local frame math is exercised.
+#[test]
+fn masked_leaf_composites_through_projection_cropped() {
+    use darkly::coord::CanvasRect;
+
+    let (cw, ch) = (64u32, 64u32);
+    let mut engine = test_engine(cw, ch);
+    let (ox, oy) = (20i32, 16i32);
+    engine.resize_canvas(CanvasRect::from_xywh(ox, oy, cw, ch));
+
+    let layer_id = engine.add_raster_layer(None);
+    // Flood the host opaque green (seed inside the cropped host bounds).
+    engine.begin_stroke(layer_id);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: (ox + 1) as f32,
+        y: (oy + 1) as f32,
+        r: 0,
+        g: 255,
+        b: 0,
+        a: 255,
+        tolerance: 255,
+    });
+    engine.end_stroke();
+    engine.render(0.0);
+
+    engine.add_mask(layer_id);
+    // Black dab on the mask near the window's top-left → hides the host there.
+    paint_mask_dab(
+        &mut engine,
+        layer_id,
+        (ox + 12) as f32,
+        (oy + 12) as f32,
+        0.0,
+    );
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let canvas = engine.test_readback_canvas();
+    // Window-local sampling: the dab center is hidden, a far corner reveals.
+    let hidden = rgba_at(&canvas, cw, 12, 12);
+    let shown = rgba_at(&canvas, cw, cw - 3, ch - 3);
+    assert!(
+        hidden[3] < 40,
+        "mask-painted region must hide the host (low alpha); got {hidden:?}"
+    );
+    assert!(
+        shown[1] > 200 && shown[3] > 200,
+        "unmasked region must show opaque green through the projection; got {shown:?}"
+    );
+}
+
+/// Transforming a masked *sub-canvas* layer (cropped canvas) must render its
+/// preview through the projection + `apply_mask` path with no WebGPU
+/// validation error — the originating crash scenario. The live mask keeps its
+/// own (sub-canvas) bounds while the layer content previews transformed.
+#[test]
+fn transform_masked_sub_canvas_layer_previews_without_crash() {
+    use darkly::coord::CanvasRect;
+    use darkly::gpu::transform::affine_translate;
+
+    // 64×64 host + mask, painted, then enlarge + offset the canvas → both are
+    // sub-canvas.
+    let mut engine = test_engine(64, 64);
+    let host = engine.add_raster_layer(None);
+    fill_layer(&mut engine, host, 0, 200, 0); // opaque green
+    engine.add_mask(host);
+    paint_mask_dab(&mut engine, host, 20.0, 20.0, 0.0); // black dab on the mask
+    engine.test_flush_readbacks();
+    engine.resize_canvas(CanvasRect::from_xywh(20, 16, 128, 96));
+    engine.render(0.0);
+
+    // Select a rect inside the window so the transform region resolves
+    // synchronously (no async content-bounds round-trip), then transform the
+    // LAYER and render the preview — must not hit a copy-range / validation
+    // crash, and must produce visible output.
+    engine.select_rect(25.0, 20.0, 40.0, 40.0, SelectionMode::Replace, false, 0.0);
+    engine.test_flush_readbacks();
+    assert!(engine.begin_transform(host), "begin_transform must start");
+    engine.update_floating_matrix(affine_translate(15.0, 10.0));
+    engine.render(0.0);
+
+    let preview = engine.test_readback_canvas();
+    assert!(
+        preview.iter().any(|&b| b > 0),
+        "masked-layer transform preview must render something through the projection"
+    );
+
+    // Commit + render cleanly too.
+    engine.commit_floating();
+    engine.render(0.0);
+}
+
+/// Copying a selected region while editing a mask must populate the clipboard.
+/// The active paint target when editing a mask is the *mask filter id* (no
+/// host redirect), so the copy entry points must accept a filter id — not
+/// bail because `doc.layer(id)` returns `None` for a non-layer entity. Pre-fix
+/// `copy`/`cut`/`copy_layer_rich` all guarded on `doc.layer(id)?`, so copying a
+/// mask region silently did nothing (no readback, no clipboard, no error).
+#[test]
+fn copy_selected_mask_region_populates_clipboard() {
+    let mut engine = test_engine(64, 64);
+    let host = engine.add_raster_layer(None);
+    fill_layer(&mut engine, host, 0, 200, 0);
+    engine.add_mask(host);
+    // White mask everywhere, black dab at (20,20).
+    paint_mask_dab(&mut engine, host, 20.0, 20.0, 0.0);
+    engine.test_flush_readbacks();
+
+    let mask_id = engine.host_mask_id(host).expect("host has a mask");
+
+    // Select a region around the dab and copy the MASK (active node = mask id),
+    // exactly as the frontend `copy` action does via `copy_layer_rich`.
+    engine.select_rect(10.0, 10.0, 24.0, 24.0, SelectionMode::Replace, false, 0.0);
+    engine.test_flush_readbacks();
+    engine.copy_layer_rich(mask_id);
+    engine.test_flush_readbacks();
+
+    let result = engine
+        .poll_copy_result()
+        .expect("copying a selected mask region must produce a clipboard result");
+    assert!(
+        result.width > 0 && result.height > 0 && !result.rgba.is_empty(),
+        "mask copy must carry the selected region's pixels; got {}x{} ({} bytes)",
+        result.width,
+        result.height,
+        result.rgba.len()
+    );
+}
+
+/// Pasting while a mask is the active edit target must place the new layer as
+/// the host's SIBLING, not nest it under the (raster) host. The active id is
+/// the mask *filter* id, and `parent_of(mask) == host`, so a naive
+/// `MoveTarget::After(mask_id)` linked the pasted layer as a child of the
+/// raster host — an invalid tree that left the paste off the published layer
+/// tree (raster layers publish no children) and invisible on canvas.
+#[test]
+fn paste_while_editing_mask_places_layer_at_top_level() {
+    use darkly::engine::types::LayerInfo;
+
+    let mut engine = test_engine(64, 64);
+    let host = engine.add_raster_layer(None);
+    engine.add_mask(host);
+    let mask_id = engine.host_mask_id(host).expect("host has a mask");
+
+    let rgba = vec![255u8; 8 * 8 * 4];
+    let pasted = engine.paste_image(8, 8, &rgba, 4, 4, Some(mask_id));
+
+    let in_tree = engine
+        .layer_tree()
+        .iter()
+        .any(|n| matches!(n, LayerInfo::Raster { id, .. } if *id == pasted.to_ffi() as f64));
+    assert!(
+        in_tree,
+        "pasted layer must be a top-level sibling of the host, not nested under \
+         the raster host (invalid tree → invisible paste)"
+    );
+}
+
+/// The document model must expose the selection as a typed [`Filter`] —
 /// not as a parallel `Option<AlphaMask>` slot. `Document.selection` is a
-/// Modifier with `kind = Selection(...)`, addressable through the same
-/// `Modifier::pixels()` interface as a mask.
+/// Filter with `kind = Selection(...)`, addressable through the same
+/// `Filter::pixels()` interface as a mask.
 #[test]
 fn document_selection_is_a_typed_modifier() {
-    use darkly::document::ModifierKind;
+    use darkly::document::FilterKind;
 
     let (cw, ch) = (32u32, 32u32);
     let engine = test_engine(cw, ch);
 
-    // `DarklyEngine::new` allocates the selection modifier eagerly (visible
+    // `DarklyEngine::new` allocates the selection filter eagerly (visible
     // = false initially, since no selection is logically active yet).
-    let modifier_id = engine
-        .selection_modifier_id_test()
-        .expect("DarklyEngine::new must eagerly allocate the selection modifier");
+    let filter_id = engine
+        .selection_filter_id_test()
+        .expect("DarklyEngine::new must eagerly allocate the selection filter");
     assert_ne!(
-        modifier_id.to_ffi(),
+        filter_id.to_ffi(),
         0,
-        "selection modifier id must be a real id allocated from the document"
+        "selection filter id must be a real id allocated from the document"
     );
 
     // Initially inactive (no selection painted yet).
@@ -3186,30 +3494,30 @@ fn document_selection_is_a_typed_modifier() {
 
     // The selection is reachable through the same kind-uniform paths a mask is.
     let kind_is_selection = engine
-        .test_selection_modifier_kind_is_selection()
-        .expect("selection modifier must be present");
+        .test_selection_filter_kind_is_selection()
+        .expect("selection filter must be present");
     assert!(
         kind_is_selection,
-        "Document.selection.kind must be ModifierKind::Selection — the \
-         type-system unification of selection and mask under Modifier"
+        "Document.selection.kind must be FilterKind::Selection — the \
+         type-system unification of selection and mask under Filter"
     );
 
     // Pixel-bearing: same `pixels()` accessor as masks. This proves the
-    // structural sharing — a future `clone_modifier_pixels(...)` between any
-    // two pixel-bearing modifiers (mask, selection, future filter cache)
+    // structural sharing — a future `clone_filter_pixels(...)` between any
+    // two pixel-bearing filters (mask, selection, future filter cache)
     // works through one interface.
     let bounds = engine
         .test_selection_pixel_buffer_bounds()
-        .expect("SelectionModifier must hold a PixelBuffer");
+        .expect("SelectionFilter must hold a PixelBuffer");
     assert_eq!(
         (bounds.width, bounds.height),
         (cw, ch),
         "selection PixelBuffer must cover the full canvas"
     );
 
-    // Suppress the unused warning about ModifierKind imports — the test
+    // Suppress the unused warning about FilterKind imports — the test
     // exercises it through the `_kind_is_selection` helper.
-    let _ = std::any::type_name::<ModifierKind>();
+    let _ = std::any::type_name::<FilterKind>();
 }
 
 // ============================================================================
@@ -3499,7 +3807,7 @@ fn repeated_identity_transforms_on_mask_are_idempotent() {
     }
 }
 
-/// Isolating a mask modifier renders the host's mask channel as grayscale
+/// Isolating a mask filter renders the host's mask channel as grayscale
 /// on the canvas, regardless of the host's color. This is the "show mask"
 /// workflow: the mask becomes the canvas. Skipping siblings is the same
 /// path the raster case uses; here we additionally verify the host's
@@ -3531,7 +3839,7 @@ fn isolating_mask_modifier_renders_grayscale() {
     engine.end_stroke();
     engine.test_flush_readbacks();
 
-    // Isolate the mask modifier itself — host renders as grayscale of its
+    // Isolate the mask filter itself — host renders as grayscale of its
     // mask channel, fully opaque. No red anywhere.
     engine.set_isolated_node(Some(mask_id));
     engine.render(0.0);
@@ -4442,6 +4750,7 @@ fn multi_move_preserves_relative_order() {
         .map(|c| match c {
             LayerInfo::Raster { id, .. } => *id,
             LayerInfo::Void { id, .. } => *id,
+            LayerInfo::Filter { id, .. } => *id,
             LayerInfo::Group { id, .. } => *id,
         })
         .collect();
@@ -4510,6 +4819,7 @@ fn group_layers_wraps_selection_at_topmost_slot() {
         .map(|c| match c {
             LayerInfo::Raster { id, .. } => *id,
             LayerInfo::Void { id, .. } => *id,
+            LayerInfo::Filter { id, .. } => *id,
             LayerInfo::Group { id, .. } => *id,
         })
         .collect();
@@ -4552,6 +4862,7 @@ fn group_layers_cross_parent() {
         .map(|c| match c {
             LayerInfo::Raster { id, .. } => *id,
             LayerInfo::Void { id, .. } => *id,
+            LayerInfo::Filter { id, .. } => *id,
             LayerInfo::Group { id, .. } => *id,
         })
         .collect();
@@ -4720,6 +5031,7 @@ fn multi_duplicate_each_lands_above_its_source() {
         .map(|n| match n {
             LayerInfo::Raster { id, .. } => *id,
             LayerInfo::Void { id, .. } => *id,
+            LayerInfo::Filter { id, .. } => *id,
             LayerInfo::Group { id, .. } => *id,
         })
         .collect();

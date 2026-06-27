@@ -46,6 +46,13 @@ hotkeys:
   # Selection.
   clearSelection: $mod+KeyD
   invertSelection: $mod+Shift+KeyI
+  # Photoshop binds Select > Modify > Feather to Shift+F6.
+  featherSelection: Shift+F6
+  # Colors. Photoshop binds Image > Adjustments > Invert to Ctrl+I (selection
+  # invert is the Shift variant above). Krita agrees (Ctrl+I → Invert filter);
+  # GIMP does NOT (its Ctrl+I is Invert Selection, Colors > Invert is unbound),
+  # so this is per-overlay, not a default.
+  adjustInvert: $mod+KeyI
 
 mouse_clicks:
   # Photoshop's eyedropper modifier is Alt+drag (not Ctrl+drag).

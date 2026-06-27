@@ -149,6 +149,34 @@ pub trait Void: std::fmt::Debug {
     /// would otherwise wipe the displayed image.
     fn update_params(&mut self, queue: &wgpu::Queue, cache: &EffectCache, params: &[ParamValue]);
 
+    /// Apply a user transform (pan / scale / rotate) in place — the void
+    /// *consuming* the generic transform helper's output. Like
+    /// [`Self::update_params`], this rewrites the uniform buffer in place and
+    /// must NOT rebuild via `from_params` (that drops the aux webcam texture).
+    /// Default is a genuine no-op: voids that don't set
+    /// [`VoidRegistration::supports_live_transform`] are never handed a
+    /// transform by the engine, so they ignore this entirely.
+    fn set_transform(
+        &mut self,
+        _queue: &wgpu::Queue,
+        _cache: &EffectCache,
+        _transform: &crate::transform::Transform,
+    ) {
+    }
+
+    /// The void's natural content rectangle at the identity transform, in
+    /// WINDOW-LOCAL coords (relative to the canvas-window top-left), as
+    /// `(origin_x, origin_y, w, h)`. The transform gizmo draws its bbox around
+    /// this rect (the engine lifts it to plane space by adding `canvas_origin`).
+    ///
+    /// Default is canvas-filling `(0, 0, canvas_w, canvas_h)` — correct for
+    /// procedural voids like noise whose field fills the canvas. The camera
+    /// overrides it with the cover-fit webcam rect, which extends *beyond* the
+    /// canvas on the cropped axis, so the gizmo wraps the real image bounds.
+    fn content_extent(&self, canvas_w: u32, canvas_h: u32) -> (f32, f32, f32, f32) {
+        (0.0, 0.0, canvas_w as f32, canvas_h as f32)
+    }
+
     /// Whether this void consumes per-frame external image input (webcam,
     /// screenshare, …). When true, the bridge plumbs frames through
     /// [`Self::upload_external_image`] each render. The default is false —
@@ -211,11 +239,48 @@ pub trait Void: std::fmt::Debug {
     }
 }
 
+/// How a void's per-frame external image is captured on the browser side.
+/// Carried on [`VoidRegistration`] and surfaced to the frontend (serialized as
+/// `"camera"` / `"display"`) so the app knows which `MediaDevices` API to call
+/// for each void kind — `getUserMedia` for [`Self::Camera`], `getDisplayMedia`
+/// for [`Self::Display`]. Purely procedural voids (noise) declare `None`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CaptureKind {
+    Camera,
+    Display,
+}
+
 /// What each void module returns from its `register()` function.
 pub struct VoidRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
     pub params: &'static [ParamDef],
+    /// Iconify icon name (e.g. `"tabler:galaxy"`). Always present — the layer
+    /// panel renders it for void layers of this kind, and the picker falls back
+    /// to it when the void declares no rendered preview.
+    pub icon: &'static str,
+    /// Whether this void can render a meaningful picker thumbnail. When true the
+    /// "Add Void" picker shows a live rendered preview; when false it shows
+    /// [`icon`](Self::icon) instead. (The camera void opts out — its aux texture
+    /// is a 1×1 placeholder until a webcam frame arrives, so there's nothing to
+    /// render at preview time.)
+    pub supports_preview: bool,
+    /// Whether this void exposes a live, user-editable transform (driven by the
+    /// generic gizmo, stored on [`crate::layer::VoidLayer::transform`]). Voids
+    /// that opt in implement [`Void::set_transform`]; the rest leave it false
+    /// and the engine never hands them a transform.
+    pub supports_live_transform: bool,
+    /// How this void's external frames are captured in the browser, or `None`
+    /// for procedural voids that consume no external input. The frontend reads
+    /// this to pick `getUserMedia` vs `getDisplayMedia`.
+    pub capture_kind: Option<CaptureKind>,
+    /// The void's initial gizmo transform, given the canvas dimensions at
+    /// creation time. Lets a kind seed a non-identity affine — the camera seeds
+    /// a horizontal flip about the canvas center (selfie view); everything else
+    /// returns identity. Stored on [`crate::layer::VoidLayer::transform`] at
+    /// creation so it round-trips through save/load and undo like any edit.
+    pub default_transform: fn(u32, u32) -> crate::transform::Transform,
     pub create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
     pub from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Void>,
 }
@@ -230,10 +295,10 @@ pub struct VoidRegistry {
 }
 
 struct RegistryEntry {
-    display_name: &'static str,
-    create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
-    params: &'static [ParamDef],
-    from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Void>,
+    /// The full registration this entry was built from. All metadata accessors
+    /// read straight off this, so a new `VoidRegistration` field is exposed
+    /// without widening any tuple or touching the registry.
+    reg: VoidRegistration,
     cached_pipeline: Option<Arc<EffectPipeline>>,
 }
 
@@ -250,10 +315,7 @@ impl VoidRegistry {
             entries.insert(
                 reg.type_id,
                 RegistryEntry {
-                    display_name: reg.display_name,
-                    create_pipeline: reg.create_pipeline,
-                    params: reg.params,
-                    from_params: reg.from_params,
+                    reg,
                     cached_pipeline: None,
                 },
             );
@@ -261,20 +323,58 @@ impl VoidRegistry {
         VoidRegistry { entries }
     }
 
-    /// Return all registered void types with display name and parameter
-    /// definitions. Sorted by `type_id` for deterministic UI ordering.
-    pub fn types(&self) -> Vec<(&'static str, &'static str, &'static [ParamDef])> {
-        let mut types: Vec<_> = self
-            .entries
-            .iter()
-            .map(|(&id, e)| (id, e.display_name, e.params))
-            .collect();
-        types.sort_by_key(|(id, _, _)| *id);
+    /// Return every registered void's full [`VoidRegistration`], sorted by
+    /// `type_id` for deterministic UI ordering. Callers read whatever fields
+    /// they need off the registration — a new field is free here.
+    pub fn types(&self) -> Vec<&VoidRegistration> {
+        let mut types: Vec<&VoidRegistration> = self.entries.values().map(|e| &e.reg).collect();
+        types.sort_by_key(|reg| reg.type_id);
         types
     }
 
     pub fn param_defs(&self, type_id: &str) -> &'static [ParamDef] {
-        self.entries.get(type_id).map(|e| e.params).unwrap_or(&[])
+        self.entries
+            .get(type_id)
+            .map(|e| e.reg.params)
+            .unwrap_or(&[])
+    }
+
+    /// The iconify icon name for a void kind (layer-panel icon + picker
+    /// fallback). Empty for unknown types.
+    pub fn icon(&self, type_id: &str) -> &'static str {
+        self.entries.get(type_id).map(|e| e.reg.icon).unwrap_or("")
+    }
+
+    /// The initial gizmo transform for a freshly-created void of this kind at
+    /// the given canvas size. Identity for unknown types.
+    pub fn default_transform(
+        &self,
+        type_id: &str,
+        canvas_w: u32,
+        canvas_h: u32,
+    ) -> crate::transform::Transform {
+        self.entries
+            .get(type_id)
+            .map(|e| (e.reg.default_transform)(canvas_w, canvas_h))
+            .unwrap_or_else(crate::transform::Transform::identity)
+    }
+
+    /// Resolve a runtime `&str` type id to the registry's `&'static str` key,
+    /// or `None` if the type is unknown. Callers keying long-lived state by
+    /// type id (the preview cache + its readback context) use this to obtain a
+    /// `'static` id without leaking. Mirrors `VeilRegistry::static_type_id`.
+    pub fn static_type_id(&self, type_id: &str) -> Option<&'static str> {
+        self.entries.get_key_value(type_id).map(|(k, _)| *k)
+    }
+
+    /// Whether the named void kind exposes a live, user-editable transform.
+    /// Consumed by [`crate::layer::Layer::transform_capability`]. Unknown
+    /// types return false.
+    pub fn supports_live_transform(&self, type_id: &str) -> bool {
+        self.entries
+            .get(type_id)
+            .map(|e| e.reg.supports_live_transform)
+            .unwrap_or(false)
     }
 
     pub fn has(&self, type_id: &str) -> bool {
@@ -284,7 +384,7 @@ impl VoidRegistry {
     pub fn display_name(&self, type_id: &str) -> &'static str {
         self.entries
             .get(type_id)
-            .map(|e| e.display_name)
+            .map(|e| e.reg.display_name)
             .unwrap_or("")
     }
 
@@ -304,7 +404,7 @@ impl VoidRegistry {
             .unwrap_or_else(|| panic!("Unknown void type: {type_id}"));
         entry
             .cached_pipeline
-            .get_or_insert_with(|| Arc::new((entry.create_pipeline)(device, format)))
+            .get_or_insert_with(|| Arc::new((entry.reg.create_pipeline)(device, format)))
             .clone()
     }
 
@@ -322,9 +422,9 @@ impl VoidRegistry {
             .unwrap_or_else(|| panic!("Unknown void type: {type_id}"));
         let pipeline = entry
             .cached_pipeline
-            .get_or_insert_with(|| Arc::new((entry.create_pipeline)(device, format)))
+            .get_or_insert_with(|| Arc::new((entry.reg.create_pipeline)(device, format)))
             .clone();
-        (entry.from_params)(params, pipeline)
+        (entry.reg.from_params)(params, pipeline)
     }
 }
 

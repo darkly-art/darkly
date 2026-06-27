@@ -198,7 +198,12 @@
         gap: 10px;
     }
     .picker-body {
-        flex: 1;
+        /* flex-basis stays `auto`, not the `flex: 1` shorthand's `0%`: the
+         * outer `.brush-picker` panel is height:auto (only max-height: 60vh), so
+         * a `flex: 1 1 0%` child has no free space to grow into and collapses to
+         * zero height in Safari, hiding the brush list. `auto` bases it on
+         * content; grow/shrink still let it scroll inside the max-height cap. */
+        flex: 1 1 auto;
         min-height: 0;
         overflow-y: auto;
         padding: 10px;

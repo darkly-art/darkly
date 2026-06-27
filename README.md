@@ -29,10 +29,6 @@ Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructi
 
 [![darkly](https://github.com/user-attachments/assets/647404d5-c2fe-4f9f-a1f9-7b532c3a3cd0)](https://demo.darkly.art)
 
-## Upcoming Kickstarter
-
-We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most. Help us make Darkly feature-complete, so we can rescue our friends and colleagues from the grip of corporate software!
-
 ## Features
 
 ### Node-Based Brush Engine
@@ -108,8 +104,8 @@ For a feature to count, it must be:
 - [x] HSV picker, foreground/background swatches
 - [x] Color picker (Ctrl-held temporary pick)
 - [x] Raster layers + groups, drag‑reorder, visibility, lock, opacity, name, collapse, passthrough
-- [x] 16 blend modes (Normal → Luminosity, Krita‑compatible)
-- [x] Layer masks (one per host)
+- [x] 16 blend modes
+- [x] Layer masks
 - [x] Rect, ellipse, lasso, polygon, magic wand selection
 - [x] Selection Replace / Add / Subtract / Intersect modes
 - [x] Pan / zoom / rotate view
@@ -121,31 +117,29 @@ For a feature to count, it must be:
 - [x] Clipboard copy / cut / paste (PNG via browser clipboard)
 
 ### Important — expected for serious work
-- [x] Affine transform tool (translate / scale / rotate via floating content)
+- [x] Generic transform tool (translate / scale / rotate gizmo — floating content + transformable voids)
 - [x] Merge down
 - [x] Duplicate layer / group
 - [x] Crop to selection
-- [ ] Interactive crop tool
-- [x] Canvas resize (dimensions + 9-point anchor)
-- [ ] Canvas resize with content scaling
+- [x] Canvas resize
+- [x] Image rescale
 - [x] Select All / Deselect / Invert as menu+hotkey actions
-- [x] Invert selection (boolean op exists)
 - [x] Command palette (Ctrl+Shift+P)
 - [x] Application menu (File/Edit/Select/… , pinnable to top bar)
-- [ ] Autosave + crash recovery
-- [ ] Brightness / Contrast
-- [ ] Hue / Saturation / Lightness
-- [ ] Levels
-- [ ] Curves
-- [ ] Invert colors
-- [ ] Desaturate
+- [x] Autosave + crash recovery
+- [x] Filter layers (non-destructive; isolate to one layer via a group)
+-     [ ] Brightness / Contrast
+-     [ ] Hue / Saturation / Lightness
+-     [ ] Levels
+-     [ ] Curves
+-     [x] Invert colors
+-     [ ] Desaturate
 - [ ] Clipping mask
-- [ ] Adjustment layers
-- [ ] Feather + antialias
-- [ ] Grow / Shrink / Border / Smooth as discrete commands
-- [ ] Flip canvas H / V
-- [ ] Rotate canvas 90° CW / CCW / 180°
-- [ ] Flip layer / selection H / V
+- [x] Feather + antialias
+- [x] Grow / Shrink / Border / Smooth as discrete commands
+- [x] Flip canvas H / V
+- [x] Rotate canvas 90° CW / CCW / 180°
+- [x] Flip layer / selection H / V
 - [ ] Text tool / text layers
 - [ ] Recent colors
 - [ ] Saved swatches / palettes
@@ -164,7 +158,8 @@ For a feature to count, it must be:
 - [x] Veils (stackable viewport post-process effects: frozen, grain, lens blur, monochrome, painting, pixelate, rainy glass, VHS, watercolor)
 - [x] Veil picker with live animated previews
 - [x] Void layers (domain‑warped FBM noise)
-- [x] Camera void (live webcam with scale / rotation / pan)
+- [x] Camera void (live webcam, positioned with the on-canvas transform gizmo)
+- [x] Screenshare void (live `getDisplayMedia` capture, positioned with the on-canvas transform gizmo)
 - [x] Group blend mode / opacity (isolated + passthrough compositing)
 - [ ] Brush save/load + editable nodes/wires (e.g. YAML)
 - [ ] Recent files
@@ -215,6 +210,21 @@ chromium --enable-features=Vulkan --enable-unsafe-webgpu
 
 You can verify the active backend at `chrome://gpu` - look for "Vulkan" under Graphics Feature Status. On macOS and Windows this is generally not needed (Metal and D3D12 are used by default).
 
+## Use it in your own project
+
+Darkly's core is a standalone, platform-agnostic Rust crate, [`darkly`](https://crates.io/crates/darkly). The document model, brush engine, GPU compositor, and undo system all live here with zero platform dependencies, and run anywhere [wgpu](https://wgpu.rs) does: native (Vulkan / Metal / DX12) or the browser (WebGPU). The app above is a Svelte frontend over this exact crate, through a thin WebAssembly bridge.
+
+If you're building a graphics tool in Rust -- a drawing app, annotation layer, whiteboard, texture editor, etc. -- you can embed the engine instead of writing all these features from scratch.
+
+[![crates.io](https://img.shields.io/crates/v/darkly?style=for-the-badge&logo=rust&label=crates.io&labelColor=black&color=9500ff)](https://crates.io/crates/darkly)
+[![docs.rs](https://img.shields.io/docsrs/darkly?style=for-the-badge&logo=docsdotrs&labelColor=black&color=4400ff)](https://docs.rs/darkly)
+
+```sh
+cargo add darkly
+```
+
+See the [crate README](crates/darkly/README.md) for a runnable example, and the [API docs](https://docs.rs/darkly) for full details.
+
 ## Use of AI
 
 It's acceptable to use AI for this codebase, but careless vibe coding is **strictly forbidden**.
@@ -240,6 +250,8 @@ Darkly stands on the shoulders of giants. Three programs in particular have infl
 **[Graphite](https://graphite.art/)** ([source](https://github.com/GraphiteEditor/Graphite)) - founded by **Keavon Chambers** (@Keavon), with the core team of **Dennis Kobert** (@TrueDoctor), **Timon Schelling** (@timon-schelling), and **Adam Gerhant** (@pendapia), plus heroic contributions from **Hypercube** (@0HyperCube), **James Lindsay**, and [hundreds more](https://github.com/GraphiteEditor/Graphite/graphs/contributors). Graphite is a pioneer in bringing serious 2D graphics tooling to **Rust + WebAssembly + WebGPU**.
 
 While Darkly's architecture is fundamentally different, it was really insightful to see how these tools tackled many of the same hard problems, and their unique and smart approaches that made them pillars of open source!
+
+A special thank you to **[Nick Cameron](https://github.com/nrc)** for graciously gifting us the `darkly` crate on crates.io. 💜
 
 ### Veils & Voids
 

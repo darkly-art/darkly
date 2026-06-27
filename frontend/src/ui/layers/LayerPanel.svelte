@@ -13,7 +13,7 @@
     }
 
     $effect(() => {
-        if (app.handle) refresh();
+        if (app.engine) refresh();
     });
 
     function onDragOver(e: DragEvent) {

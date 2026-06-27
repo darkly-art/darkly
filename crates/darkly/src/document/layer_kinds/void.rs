@@ -45,6 +45,10 @@ struct VoidBody {
     /// declares them. Variant identity (`Int` vs `Float`) round-trips via
     /// the regression-tested `#[serde(untagged)]` ordering in `ParamValue`.
     params: Vec<ParamValue>,
+    /// User transform (gizmo-edited pan / scale / rotate). `#[serde(default)]`
+    /// so procedural voids and pre-transform saves load as identity.
+    #[serde(default)]
+    transform: crate::transform::Transform,
     #[serde(default)]
     modifiers: Vec<u64>,
     /// Optional persistent frame for voids that consume external input
@@ -61,6 +65,12 @@ pub fn register() -> LayerKindRegistration {
     LayerKindRegistration {
         type_id: TYPE_ID,
         display_name: "Void Layer",
+        can_have_mask: true,
+        can_rename: true,
+        has_thumbnail: false,
+        // Per-subtype icon is supplied by `VoidRegistry::icon`; this is the
+        // fallback when a void declares none.
+        icon: "tabler:galaxy",
         serialize,
         deserialize,
         remap_ids,
@@ -80,7 +90,8 @@ fn serialize(node: &LayerNode) -> SerializedEntity {
         blend_mode: v.blend.blend_mode.type_id.to_string(),
         void_type: v.void_type.clone(),
         params: v.params.clone(),
-        modifiers: v.modifiers.iter().map(|m| m.to_ffi()).collect(),
+        transform: v.transform,
+        modifiers: v.filters.iter().map(|m| m.to_ffi()).collect(),
         pixels: v.frame.clone(),
     };
     let pixel_blobs = match &v.frame {
@@ -124,7 +135,8 @@ fn deserialize(body: &serde_json::Value, id: LayerId) -> Result<LayerNode, LoadE
         },
         void_type: body.void_type,
         params: body.params,
-        modifiers: body.modifiers.into_iter().map(LayerId::from_ffi).collect(),
+        transform: body.transform,
+        filters: body.modifiers.into_iter().map(LayerId::from_ffi).collect(),
         frame: body.pixels,
     })))
 }
@@ -133,7 +145,7 @@ fn remap_ids(node: &mut LayerNode, id_map: &IdMap) {
     let LayerNode::Layer(Layer::Void(v)) = node else {
         panic!("void::remap_ids received non-void LayerNode");
     };
-    for m in v.modifiers.iter_mut() {
+    for m in v.filters.iter_mut() {
         let old_ffi = m.to_ffi();
         if let Some(new_id) = id_map.get(&old_ffi) {
             *m = *new_id;
@@ -166,6 +178,7 @@ mod tests {
                 ParamValue::Float(0.5),
                 ParamValue::Float(0.1),
             ],
+            crate::transform::Transform::identity(),
             None,
         );
 
@@ -216,7 +229,13 @@ mod tests {
         use crate::format::manifest::ManifestPixelRef;
 
         let mut doc = Document::new(64, 64);
-        let id = doc.add_void_layer("camera".to_string(), "Camera", Vec::new(), None);
+        let id = doc.add_void_layer(
+            "camera".to_string(),
+            "Camera",
+            Vec::new(),
+            crate::transform::Transform::identity(),
+            None,
+        );
         let frame = ManifestPixelRef {
             format: "rgba8unorm".to_string(),
             pixels: format!("layers/{}.pixels", id.to_ffi()),
@@ -258,6 +277,62 @@ mod tests {
         assert_eq!(v_after.frame, Some(frame));
     }
 
+    /// A non-identity void transform (gizmo-edited camera) must survive the
+    /// wire format. Regression for the live-transform feature: without the
+    /// `transform` field on `VoidBody` the gizmo edit would silently reset to
+    /// identity on reload.
+    #[test]
+    fn void_transform_round_trips() {
+        let mut doc = Document::new(64, 64);
+        let id = doc.add_void_layer(
+            "camera".to_string(),
+            "Camera",
+            Vec::new(),
+            crate::transform::Transform::identity(),
+            None,
+        );
+        let t = crate::transform::Transform::from_affine([2.0, 0.5, 10.0, -0.25, 1.5, -20.0]);
+        if let Some(LayerNode::Layer(Layer::Void(v))) = doc.find_node_mut(id) {
+            v.transform = t;
+        }
+
+        let reg = register();
+        let serialized = (reg.serialize)(doc.find_node(id).expect("void exists"));
+        let restored = (reg.deserialize)(&serialized.body, id).expect("deserialize must succeed");
+        let v_after = match &restored {
+            LayerNode::Layer(Layer::Void(v)) => v,
+            _ => panic!("deserialize must yield a Void layer"),
+        };
+        assert_eq!(
+            v_after.transform, t,
+            "non-identity transform must round-trip"
+        );
+    }
+
+    /// Old saves (and procedural voids) with no `transform` field load as
+    /// identity rather than failing — `#[serde(default)]`.
+    #[test]
+    fn void_missing_transform_defaults_to_identity() {
+        let reg = register();
+        let body = serde_json::json!({
+            "name": "n",
+            "visible": true,
+            "locked": false,
+            "opacity": 1.0,
+            "blend_mode": blend_mode::registry().default().type_id,
+            "void_type": "noise",
+            "params": [],
+            "modifiers": []
+        });
+        let id = Document::new(8, 8).root_id();
+        let restored = (reg.deserialize)(&body, id).expect("deserialize must succeed");
+        let v = match &restored {
+            LayerNode::Layer(Layer::Void(v)) => v,
+            _ => panic!("expected void"),
+        };
+        assert_eq!(v.transform, crate::transform::Transform::identity());
+    }
+
     /// A void without a frame (the normal noise void, or a freshly-added
     /// camera void that hasn't received a frame yet) must NOT declare a
     /// pixel blob — otherwise the save flow tries to read back a texture
@@ -265,7 +340,13 @@ mod tests {
     #[test]
     fn void_without_frame_emits_no_pixel_blob() {
         let mut doc = Document::new(64, 64);
-        let id = doc.add_void_layer("noise".to_string(), "Noise", Vec::new(), None);
+        let id = doc.add_void_layer(
+            "noise".to_string(),
+            "Noise",
+            Vec::new(),
+            crate::transform::Transform::identity(),
+            None,
+        );
         let reg = register();
         let node = doc.find_node(id).expect("void exists");
         let serialized = (reg.serialize)(node);

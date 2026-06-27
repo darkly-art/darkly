@@ -438,7 +438,7 @@ fn create_watercolor_pipeline(
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("watercolor-shader"),
         source: wgpu::ShaderSource::Wgsl(
-            include_str!("../../../../../shaders/veils/watercolor.wgsl").into(),
+            include_str!("../../../shaders/veils/watercolor.wgsl").into(),
         ),
     });
 

@@ -15,7 +15,7 @@
 //! 3. **Container version** — newer than the binary understands →
 //!    [`LoadError::ContainerTooNew`].
 //! 4. **`requires` inventory** — diffed against the four registries
-//!    (veils, blend modes, layer kinds, modifiers); any miss →
+//!    (veils, blend modes, layer kinds, filters); any miss →
 //!    [`LoadError::UnsupportedFeatures`] naming every missing
 //!    `"<registry>/<type_id>"`.
 //! 5. **Full schema parse + staging-doc construction** — any
@@ -37,8 +37,8 @@
 use std::collections::HashMap;
 
 use super::DarklyEngine;
+use crate::document::filter;
 use crate::document::layer_kind::{self, IdMap};
-use crate::document::modifier;
 use crate::document::{Document, Entity};
 use crate::format::error::LoadError;
 use crate::format::manifest::{Manifest, ManifestPixelRef, ManifestRequires};
@@ -137,7 +137,7 @@ fn pre_check_requires_present(raw: &serde_json::Value) -> Result<(), LoadError> 
 
 /// Cross-reference the manifest's `requires` inventory against the
 /// binary's four registries (veils, blend modes, layer kinds,
-/// modifiers). Any miss collects a `"<registry>/<type_id>"` entry and
+/// filters). Any miss collects a `"<registry>/<type_id>"` entry and
 /// the load is refused with [`LoadError::UnsupportedFeatures`].
 fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Result<(), LoadError> {
     let mut missing = Vec::new();
@@ -156,10 +156,10 @@ fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Res
         }
     }
 
-    let modifier_registry = modifier::registry();
+    let modifier_registry = filter::registry();
     for id in &requires.modifier {
         if modifier_registry.get(id).is_none() {
-            missing.push(format!("modifier/{id}"));
+            missing.push(format!("filter/{id}"));
         }
     }
 
@@ -184,20 +184,20 @@ fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Res
 
 /// Build a fresh [`Document`] from a [`Manifest`], producing an
 /// `old_id → new_id` map so the loader can rewrite cross-references
-/// (children, modifiers, host) into the new slotmap.
+/// (children, filters, host) into the new slotmap.
 ///
 /// Three passes:
 ///
 /// 1. **Allocate every entity.** Each entity's manifest body is handed
 ///    to its registered `deserialize` to produce a fresh [`LayerNode`] /
-///    [`crate::document::Modifier`] with cross-refs still pointing at
+///    [`crate::document::Filter`] with cross-refs still pointing at
 ///    manifest-old ids.
 /// 2. **Remap cross-refs.** Each entity's registered `remap_ids` rewrites
 ///    its cross-references using the `id_map`. Each kind owns the
 ///    knowledge of which fields hold ids — a future kind that adds a
 ///    private id field is forced to implement this hook by signature.
 /// 3. **Rebuild parent map.** Walk every group's `children` and every
-///    host's `modifiers`; the body's child/modifier list is the single
+///    host's `filters`; the body's child/filter list is the single
 ///    source of truth, and the `parent` SecondaryMap is derived from it.
 fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), LoadError> {
     let mut doc = Document::new(manifest.canvas.width, manifest.canvas.height);
@@ -209,19 +209,19 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
 
     // The manifest's `root` maps to the new doc's auto-allocated root —
     // we don't re-create the root entity, we reuse the one Document::new
-    // built. Every other node + modifier is allocated fresh and
+    // built. Every other node + filter is allocated fresh and
     // recorded.
     let new_root = doc.root_id();
     id_map.insert(manifest.root, new_root);
 
     let layer_kind_registry = layer_kind::registry();
-    let modifier_registry = modifier::registry();
+    let modifier_registry = filter::registry();
 
     // Pass 1a: allocate every non-root node entity.
     for entry in &manifest.nodes {
         if entry.id == manifest.root {
             // Patch the auto-allocated root group with the body's
-            // fields (children/modifiers lists still carry manifest-old
+            // fields (children/filters lists still carry manifest-old
             // ids; pass 2 / 3 will rewrite them).
             let reg = layer_kind_registry.get(&entry.type_id).ok_or_else(|| {
                 LoadError::CorruptManifest {
@@ -279,14 +279,14 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
         );
     }
 
-    // Pass 1b: allocate modifiers.
+    // Pass 1b: allocate filters.
     for entry in &manifest.modifiers {
         let reg =
             modifier_registry
                 .get(&entry.type_id)
                 .ok_or_else(|| LoadError::CorruptManifest {
                     reason: format!(
-                        "modifier {} declares modifier/{} but registry is missing it \
+                        "filter {} declares filter/{} but registry is missing it \
                      — `requires` block lies",
                         entry.id, entry.type_id
                     ),
@@ -296,13 +296,13 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
         let new_id = doc.entities.insert_with_key(|key| {
             new_id_opt = Some(key);
             match (reg.deserialize)(&entry.body, key) {
-                Ok(m) => Entity::Modifier(m),
+                Ok(m) => Entity::Filter(m),
                 Err(e) => {
                     deserialize_err = Some(e);
-                    Entity::Modifier(crate::document::Modifier {
+                    Entity::Filter(crate::document::Filter {
                         id: key,
                         common: crate::layer::NodeCommon::new(String::new()),
-                        kind: crate::document::ModifierKind::mask_with_bounds(
+                        kind: crate::document::FilterKind::mask_with_bounds(
                             crate::coord::CanvasRect::from_xywh(0, 0, 0, 0),
                         ),
                     })
@@ -328,7 +328,7 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
         // alongside.
         let type_id = match doc.entities.get(eid) {
             Some(Entity::Node(n)) => Some(("node", n.type_id())),
-            Some(Entity::Modifier(m)) => Some(("modifier", m.type_id())),
+            Some(Entity::Filter(m)) => Some(("filter", m.type_id())),
             None => None,
         };
         match type_id {
@@ -340,11 +340,11 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
                     (reg.remap_ids)(n, &id_map);
                 }
             }
-            Some(("modifier", tid)) => {
+            Some(("filter", tid)) => {
                 let reg = modifier_registry
                     .get(tid)
-                    .expect("modifier type_id passed pass 1");
-                if let Some(Entity::Modifier(m)) = doc.entities.get_mut(eid) {
+                    .expect("filter type_id passed pass 1");
+                if let Some(Entity::Filter(m)) = doc.entities.get_mut(eid) {
                     (reg.remap_ids)(m, &id_map);
                 }
             }
@@ -353,7 +353,7 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
     }
 
     // Pass 3: rebuild the parent SecondaryMap from groups' children and
-    // hosts' modifiers. The body's lists are the single source of truth.
+    // hosts' filters. The body's lists are the single source of truth.
     rebuild_parent_map(&mut doc);
 
     // Selection sentinel — point `Document::selection` at the
@@ -367,7 +367,7 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
     Ok((doc, id_map))
 }
 
-/// Walk every group node's `children` and every host node's `modifiers`,
+/// Walk every group node's `children` and every host node's `filters`,
 /// populating [`Document::parent`]. Called after pass 2 has rewritten
 /// every cross-ref to its fresh slotmap id.
 fn rebuild_parent_map(doc: &mut Document) {
@@ -380,15 +380,15 @@ fn rebuild_parent_map(doc: &mut Document) {
         .filter_map(|(id, e)| matches!(e, Entity::Node(_)).then_some(id))
         .collect();
     for nid in node_ids {
-        let (children, modifiers) = match doc.entities.get(nid) {
-            Some(Entity::Node(LayerNode::Group(g))) => (g.children.clone(), g.modifiers.clone()),
-            Some(Entity::Node(n)) => (Vec::new(), n.modifiers().to_vec()),
+        let (children, filters) = match doc.entities.get(nid) {
+            Some(Entity::Node(LayerNode::Group(g))) => (g.children.clone(), g.filters.clone()),
+            Some(Entity::Node(n)) => (Vec::new(), n.filters().to_vec()),
             _ => continue,
         };
         for c in children {
             doc.parent.insert(c, nid);
         }
-        for m in modifiers {
+        for m in filters {
             doc.parent.insert(m, nid);
         }
     }
@@ -526,8 +526,8 @@ fn upload_loaded_pixels(
         }
     }
 
-    // Modifiers with bodies that include a `pixels` ref go through the
-    // unified `ensure_node_texture`. The selection modifier carries
+    // Filters with bodies that include a `pixels` ref go through the
+    // unified `ensure_node_texture`. The selection filter carries
     // a `pixels` body field too, but its R8 texture is allocated by
     // `ensure_selection_state` below; skip the unified allocator for
     // the selection id specifically.
@@ -629,10 +629,10 @@ fn restore_veils(engine: &mut DarklyEngine, manifest: &Manifest) {
     }
 }
 
-/// Allocate the selection-modifier GPU state — mirrors the engine
+/// Allocate the selection-filter GPU state — mirrors the engine
 /// constructor's eager allocation.
 fn ensure_selection_state(engine: &mut DarklyEngine) {
-    let id = engine.doc.ensure_selection_modifier();
+    let id = engine.doc.ensure_selection_filter();
     engine.compositor.ensure_selection_state(
         &engine.gpu.device,
         id,
@@ -648,14 +648,14 @@ mod tests {
     use serde_json::json;
 
     /// `rebuild_parent_map` derives [`Document::parent`] entirely from
-    /// nodes' `children` and `modifiers` lists. A handwritten staging doc
+    /// nodes' `children` and `filters` lists. A handwritten staging doc
     /// with empty parent map must end up consistent after the rebuild.
     #[test]
     fn rebuild_parent_map_derives_from_children_lists() {
         let mut doc = Document::new(8, 8);
         let g = doc.add_group(None);
         let l = doc.add_raster_layer(Some(g));
-        let m = doc.add_mask_modifier(l).expect("mask added");
+        let m = doc.add_mask_filter(l).expect("mask added");
 
         // Wipe parent map and force a rebuild — the derived state must
         // match the original.
@@ -668,7 +668,7 @@ mod tests {
     }
 
     /// `build_staging_document` builds a Document via the layer-kind /
-    /// modifier registries — no central match on type_id. A manifest with
+    /// filter registries — no central match on type_id. A manifest with
     /// one of every kind round-trips through `serialize` + `deserialize`
     /// and arrives with consistent tree + parent state.
     #[test]

@@ -40,7 +40,7 @@ pub fn create_blit_pipeline(
         device,
         format,
         label,
-        include_str!("../../../../shaders/blit.wgsl"),
+        include_str!("../../shaders/blit.wgsl"),
         "fs_blit",
     )
 }
@@ -59,7 +59,7 @@ pub fn create_downscale_pipeline(
         device,
         format,
         label,
-        include_str!("../../../../shaders/downscale.wgsl"),
+        include_str!("../../shaders/downscale.wgsl"),
         "fs_downscale",
     )
 }
@@ -138,6 +138,211 @@ fn create_filter_pipeline(
     EffectPipeline {
         pipeline,
         bind_group_layout,
+    }
+}
+
+/// A `textureLoad`-based filter that runs over a node region with an optional
+/// selection mask — the shared home for masked, parameter-free region filters
+/// (the destructive-filter substrate). One object holds the four pipelines
+/// a node filter needs: plain vs. masked × RGBA8 (layer) vs. R8 (mask), so a
+/// single registration serves layers and masks alike. The compositor drives it
+/// via `filter_node_region` (see `compositor.rs`).
+///
+/// Deliberately distinct from [`OrthoTransformPass`](super::ortho_transform::OrthoTransformPass)'s
+/// own four-pipeline builder: that pass carries a params uniform (xform code,
+/// src dims, `has_mask`); this builder is parameter-free. What the two share is
+/// the region *plumbing*, not the pass construction.
+pub struct MaskedFilterPipeline {
+    plain_rgba: wgpu::RenderPipeline,
+    plain_r8: wgpu::RenderPipeline,
+    masked_rgba: wgpu::RenderPipeline,
+    masked_r8: wgpu::RenderPipeline,
+    /// `[src texture]` — used by the plain entry point.
+    plain_bgl: wgpu::BindGroupLayout,
+    /// `[src texture, mask texture]` — used by the masked entry point.
+    masked_bgl: wgpu::BindGroupLayout,
+}
+
+impl std::fmt::Debug for MaskedFilterPipeline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MaskedFilterPipeline")
+            .finish_non_exhaustive()
+    }
+}
+
+/// A `textureLoad` source binding (no sampler / hardware filtering) — the
+/// inputs of a parameter-free region filter are read by integer texel index.
+fn load_tex_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+impl MaskedFilterPipeline {
+    /// Build the plain+masked × RGBA8+R8 pipelines from one shader source. The
+    /// plain entry point reads `[src]`; the masked entry point reads
+    /// `[src, mask]` and blends to the original where the mask is unselected.
+    pub fn new(
+        device: &wgpu::Device,
+        label: &str,
+        shader_source: &str,
+        plain_entry: &str,
+        masked_entry: &str,
+    ) -> MaskedFilterPipeline {
+        let plain_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some(&format!("{label}-plain-bgl")),
+            entries: &[load_tex_entry(0)],
+        });
+        let masked_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some(&format!("{label}-masked-bgl")),
+            entries: &[load_tex_entry(0), load_tex_entry(1)],
+        });
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(&format!("{label}-shader")),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+        });
+
+        let make =
+            |bgl: &wgpu::BindGroupLayout, entry: &str, format: wgpu::TextureFormat, lbl: &str| {
+                let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some(lbl),
+                    bind_group_layouts: &[Some(bgl)],
+                    immediate_size: 0,
+                });
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(lbl),
+                    layout: Some(&layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs_main"),
+                        buffers: &[],
+                        compilation_options: Default::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some(entry),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: Default::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        ..Default::default()
+                    },
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
+
+        let rgba = wgpu::TextureFormat::Rgba8Unorm;
+        let r8 = wgpu::TextureFormat::R8Unorm;
+        MaskedFilterPipeline {
+            plain_rgba: make(
+                &plain_bgl,
+                plain_entry,
+                rgba,
+                &format!("{label}-plain-rgba"),
+            ),
+            plain_r8: make(&plain_bgl, plain_entry, r8, &format!("{label}-plain-r8")),
+            masked_rgba: make(
+                &masked_bgl,
+                masked_entry,
+                rgba,
+                &format!("{label}-masked-rgba"),
+            ),
+            masked_r8: make(&masked_bgl, masked_entry, r8, &format!("{label}-masked-r8")),
+            plain_bgl,
+            masked_bgl,
+        }
+    }
+
+    /// Run the filter over a `src_view`, writing the result to `out_view` (same
+    /// dims). With `mask_view` present, only mask-selected texels take the
+    /// filtered value; elsewhere the original passes through. `format` selects
+    /// the RGBA8 (layer) or R8 (mask) pipeline.
+    pub fn render(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        src_view: &wgpu::TextureView,
+        mask_view: Option<&wgpu::TextureView>,
+        out_view: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+    ) {
+        let is_r8 = format == wgpu::TextureFormat::R8Unorm;
+        let (pipeline, bind_group) = match mask_view {
+            Some(mv) => {
+                let pipeline = if is_r8 {
+                    &self.masked_r8
+                } else {
+                    &self.masked_rgba
+                };
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("masked-filter-bg"),
+                    layout: &self.masked_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(src_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(mv),
+                        },
+                    ],
+                });
+                (pipeline, bind_group)
+            }
+            None => {
+                let pipeline = if is_r8 {
+                    &self.plain_r8
+                } else {
+                    &self.plain_rgba
+                };
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("plain-filter-bg"),
+                    layout: &self.plain_bgl,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(src_view),
+                    }],
+                });
+                (pipeline, bind_group)
+            }
+        };
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("masked-filter-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: out_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.draw(0..3, 0..1);
     }
 }
 

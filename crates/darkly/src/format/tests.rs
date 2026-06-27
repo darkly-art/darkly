@@ -1,7 +1,7 @@
 //! Auto-iterating round-trip tests for the wire format.
 //!
 //! These tests are the contract that protects modular extensions: adding a
-//! new veil / stabilizer / brush node / blend mode / layer kind / modifier
+//! new veil / stabilizer / brush node / blend mode / layer kind / filter
 //! kind lights up testing automatically here, with no edits. The shape
 //! check is the same in every test — `(type_id, params)` (or just
 //! `type_id` for closed-set kinds) must survive a JSON round-trip and
@@ -13,8 +13,8 @@ use super::registry_io::{deserialize_instance, serialize_instance, InstancePaylo
 use crate::brush::registry;
 use crate::brush::stabilizer::StabilizerRegistry;
 use crate::brush::wire::BrushWireType;
+use crate::document::filter;
 use crate::document::layer_kind;
-use crate::document::modifier;
 use crate::gpu::blend_mode;
 use crate::gpu::context::GpuContext;
 use crate::gpu::params::{ParamDef, ParamValue};
@@ -216,18 +216,18 @@ fn round_trip_every_blend_mode() {
 }
 
 // ----------------------------------------------------------------------------
-// 5. Modifier kinds — round-trip the type_id string AND the body envelope
-//    for every registered modifier kind (mask, selection, future
+// 5. Filter kinds — round-trip the type_id string AND the body envelope
+//    for every registered filter kind (mask, selection, future
 //    filter/transform/...).
 // ----------------------------------------------------------------------------
 
 #[test]
 fn round_trip_every_modifier_kind() {
-    let registry = modifier::registry();
+    let registry = filter::registry();
     let all = registry.all();
     assert!(
         !all.is_empty(),
-        "modifier registry must contain at least one kind"
+        "filter registry must contain at least one kind"
     );
 
     for reg in all {
@@ -237,14 +237,14 @@ fn round_trip_every_modifier_kind() {
         assert_eq!(back, id);
         assert!(
             registry.get(&back).is_some(),
-            "round-tripped modifier kind '{id}' must resolve back through registry"
+            "round-tripped filter kind '{id}' must resolve back through registry"
         );
     }
 }
 
 // ----------------------------------------------------------------------------
 // 6. Layer kinds — round-trip the type_id string for every registered
-//    layer kind (raster, group, future text/adjustment/...).
+//    layer kind (raster, group, future text/filter/...).
 // ----------------------------------------------------------------------------
 
 #[test]
@@ -360,7 +360,7 @@ use crate::layer::LayerId;
 /// Populate the engine with at least one of every closed-set variant
 /// the save format needs to cover:
 ///   - every layer kind (`raster`, `group`) — at least one each.
-///   - every modifier kind (`mask`, `selection`) — at least one each.
+///   - every filter kind (`mask`, `selection`) — at least one each.
 ///   - every blend mode in `BlendModeRegistry::all()` — at least one
 ///     layer with each.
 ///   - one of every registered veil.
@@ -371,7 +371,7 @@ use crate::layer::LayerId;
 /// non-empty.
 ///
 /// When a new closed-set variant is added (new blend mode, new layer
-/// kind, new modifier kind), `kitchen_sink_covers_every_closed_set_variant`
+/// kind, new filter kind), `kitchen_sink_covers_every_closed_set_variant`
 /// fires immediately — this function must be extended to instantiate
 /// the new variant.
 fn populate_kitchen_sink(engine: &mut DarklyEngine) {
@@ -402,14 +402,14 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
         );
     }
 
-    // Mask modifier on one of the rasters — exercises mask kind +
+    // Mask filter on one of the rasters — exercises mask kind +
     // its parent-host wiring.
     if let Some(target) = raster_ids.get(1).copied() {
         engine.add_mask(target);
     }
 
     // Selection mask — `select_all` flips selection.active and
-    // populates the R8 texture; the modifier itself was allocated
+    // populates the R8 texture; the filter itself was allocated
     // eagerly at engine init.
     engine.select_all();
 
@@ -437,18 +437,34 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
         .void_registry()
         .types()
         .into_iter()
-        .map(|(id, _name, params)| (id, params))
+        .map(|reg| (reg.type_id, reg.params))
         .collect();
     for (type_id, schema) in void_types {
         let defaults = defaults_of(schema);
         engine.add_void_layer(type_id, defaults, None);
+    }
+
+    // One of every filter type — adds a filter layer at root for each
+    // registered filter pipeline (filters carry no params today), so
+    // `layer_kind/filter` participates in the save round-trip test.
+    let filter_types: Vec<String> = engine
+        .compositor
+        .filter_pipeline_registry()
+        .types()
+        .into_iter()
+        .map(|(id, _name)| id.to_string())
+        .collect();
+    for pipeline in filter_types {
+        engine.add_filter_layer(&pipeline, Vec::new(), None);
     }
 }
 
 /// Pump the engine until a save completes. Caps iterations so a stuck
 /// readback fails the test rather than hanging.
 fn drive_save_to_completion(engine: &mut DarklyEngine) -> SaveBundle {
-    engine.start_save_document().expect("start save");
+    engine
+        .start_save_document(crate::engine::SavePurpose::File)
+        .expect("start save");
     for _ in 0..32 {
         engine.test_flush_readbacks();
         engine.render(0.0);
@@ -460,7 +476,7 @@ fn drive_save_to_completion(engine: &mut DarklyEngine) -> SaveBundle {
 }
 
 /// Coarse structural comparison: same canvas size, same number of
-/// raster layers, same number of groups, same number of modifiers,
+/// raster layers, same number of groups, same number of filters,
 /// same document name, same veil count, same selection presence.
 /// Strict per-id mapping is intentionally NOT checked — slotmap keys
 /// are document-local and won't match across documents.
@@ -470,7 +486,7 @@ fn assert_documents_equivalent(a: &Document, b: &Document) {
     assert_eq!(a.name, b.name);
     assert_eq!(a.all_raster_layers().len(), b.all_raster_layers().len());
     assert_eq!(a.all_groups().len(), b.all_groups().len());
-    assert_eq!(a.all_modifiers().len(), b.all_modifiers().len());
+    assert_eq!(a.all_filters().len(), b.all_filters().len());
     assert_eq!(a.selection_id().is_some(), b.selection_id().is_some());
     // Blend-mode coverage matches across the two trees.
     let modes_a: std::collections::BTreeSet<&'static str> = a
@@ -528,6 +544,106 @@ fn round_trip_kitchen_sink_document() {
     assert_eq!(
         composite_a, composite_b,
         "kitchen-sink composite bytes must match across save/reload"
+    );
+}
+
+/// A *sub-canvas* mask (bounds smaller than the canvas window) round-trips
+/// through save/load with its independent bounds + pixels intact. Mask bounds
+/// serialize independently of the host (Document Authority Principle); the
+/// de-fused mask-apply pass samples the mask in its own space, so a reloaded
+/// sub-canvas mask hides the same region it did before. Cropped first.
+#[test]
+fn sub_canvas_mask_survives_save_load_round_trip() {
+    use crate::coord::CanvasRect;
+    use crate::engine::types::StrokeOp;
+
+    // Small canvas so the mask is created at 32×32, then enlarge + offset the
+    // canvas window → the mask stays 32×32 (sub-canvas).
+    let mut original = kitchen_sink_engine(32, 32);
+    let host = original.add_raster_layer(None);
+    // Fill the host opaque so the mask's hiding is observable in the composite.
+    original.begin_stroke(host);
+    original.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r: 0,
+        g: 0,
+        b: 255,
+        a: 255,
+        tolerance: 255,
+    });
+    original.end_stroke();
+    original.render(0.0);
+
+    original.add_mask(host);
+    let mask_id = original.host_mask_id(host).expect("mask");
+    // Black dab on the mask → a distinct hidden region.
+    original.begin_stroke(mask_id);
+    original.stroke_to(StrokeOp::BrushStroke {
+        x: 10.0,
+        y: 10.0,
+        pressure: 1.0,
+        x_tilt: 0.0,
+        y_tilt: 0.0,
+        rotation: 0.0,
+        tangential_pressure: 0.0,
+        time_ms: 0.0,
+        cr: 0.0,
+        cg: 0.0,
+        cb: 0.0,
+        ca: 1.0,
+    });
+    original.end_stroke();
+    original.render(0.0);
+
+    // Enlarge + offset the canvas window so the 32×32 mask is sub-canvas.
+    original.resize_canvas(CanvasRect::from_xywh(12, 8, 64, 48));
+    original.render(0.0);
+    let bounds_before = original.node_pixel_bounds(mask_id).expect("mask bounds");
+    assert!(
+        bounds_before.width < 64 && bounds_before.height < 48,
+        "test setup: the mask must be sub-canvas; got {bounds_before:?}"
+    );
+
+    let bundle = drive_save_to_completion(&mut original);
+    let zip_bytes = assemble_zip(&bundle);
+
+    let mut reloaded = kitchen_sink_engine(1, 1);
+    reloaded
+        .open_document(&zip_bytes)
+        .expect("sub-canvas-mask reload happy path");
+
+    // Find the reloaded host (the raster carrying a mask) and its mask.
+    let r_host = reloaded
+        .doc
+        .all_raster_layers()
+        .iter()
+        .map(|r| r.id)
+        .find(|id| reloaded.doc.has_mask(*id))
+        .expect("reloaded doc must have a masked raster");
+    let r_mask = reloaded.host_mask_id(r_host).expect("reloaded mask");
+    let bounds_after = reloaded
+        .node_pixel_bounds(r_mask)
+        .expect("reloaded mask bounds");
+    assert_eq!(
+        bounds_after, bounds_before,
+        "sub-canvas mask bounds must round-trip independently of the host"
+    );
+
+    // The mask's R8 pixels round-trip byte-for-byte (its bulk-pixel authority
+    // serialized independently of the host) — the precise claim of this test.
+    let mask_a = original.test_readback_mask(host);
+    let mask_b = reloaded.test_readback_mask(r_host);
+    assert_eq!(
+        mask_a, mask_b,
+        "sub-canvas mask pixels must round-trip byte-for-byte across save/reload"
+    );
+    // And the host's own pixels survive too.
+    let host_a = original.test_readback_layer(host);
+    let host_b = reloaded.test_readback_layer(r_host);
+    assert_eq!(
+        host_a, host_b,
+        "masked host pixels must round-trip across save/reload"
     );
 }
 
@@ -626,7 +742,7 @@ fn dirty_flag_cleared_by_open() {
 
 /// Runtime guard that the kitchen sink actually instantiates every
 /// closed-set variant in every registry. Adding a new blend mode /
-/// layer kind / modifier kind without extending `populate_kitchen_sink`
+/// layer kind / filter kind without extending `populate_kitchen_sink`
 /// fails here loudly with the missing `type_id`s named.
 #[test]
 fn kitchen_sink_covers_every_closed_set_variant() {
@@ -665,17 +781,17 @@ fn kitchen_sink_covers_every_closed_set_variant() {
         );
     }
 
-    // Modifier kinds — every registered kind must appear at least once.
+    // Filter kinds — every registered kind must appear at least once.
     let mut used_modifier_kinds = std::collections::HashSet::new();
     for entity in engine.doc.entities.values() {
-        if let crate::document::Entity::Modifier(m) = entity {
+        if let crate::document::Entity::Filter(m) = entity {
             used_modifier_kinds.insert(m.type_id());
         }
     }
-    for reg in modifier::registry().all() {
+    for reg in filter::registry().all() {
         assert!(
             used_modifier_kinds.contains(reg.type_id),
-            "kitchen-sink missing modifier/{} — extend populate_kitchen_sink",
+            "kitchen-sink missing filter/{} — extend populate_kitchen_sink",
             reg.type_id
         );
     }
@@ -904,8 +1020,8 @@ fn refuse_unknown_modifier_kind() {
     match err {
         LoadError::UnsupportedFeatures { missing } => {
             assert!(
-                missing.iter().any(|m| m == "modifier/clip"),
-                "diagnostic should name modifier/clip, got {missing:?}"
+                missing.iter().any(|m| m == "filter/clip"),
+                "diagnostic should name filter/clip, got {missing:?}"
             );
         }
         other => panic!("expected UnsupportedFeatures, got {other:?}"),

@@ -4,6 +4,7 @@
 
 pub mod camera;
 pub mod noise;
+pub mod screenshare;
 
 use crate::gpu::void::VoidRegistration;
 
@@ -12,5 +13,6 @@ pub fn registrations() -> Vec<VoidRegistration> {
     vec![
         camera::register(),
         noise::register(),
+        screenshare::register(),
     ]
 }

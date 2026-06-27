@@ -99,14 +99,17 @@ class ThemeState {
     }
 
     /** Push the current theme's preview colors to WASM.
-     *  Safe to call before `app.handle` is ready — no-op in that case. */
+     *  Safe to call before `app.engine` is ready — no-op in that case. */
     pushToWasm() {
-        if (!app.handle) return;
+        if (!app.engine) return;
         const colors = PREVIEW_COLORS[this.current];
-        app.handle.set_preview_theme(colors.fg, colors.bg);
+        app.engine.post('set_preview_theme', {
+            fg: Array.from(colors.fg),
+            bg: Array.from(colors.bg),
+        });
         const viewportBg = readCanvasBg();
         if (viewportBg) {
-            app.handle.set_viewport_bg(viewportBg);
+            app.engine.post('set_viewport_bg', { bg: Array.from(viewportBg) });
             app.requestFrame();
         }
     }

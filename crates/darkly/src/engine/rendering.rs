@@ -198,7 +198,7 @@ impl DarklyEngine {
     // --- Thumbnails ---
 
     /// Return the cached thumbnail for any node id (raster layer or mask
-    /// modifier). Pure read — readback queueing is owned by
+    /// filter). Pure read — readback queueing is owned by
     /// `drain_dirty_thumbnail_readbacks` (driven by `mark_node_pixels_dirty`
     /// at every pixel-write site). Auto-queueing from this getter would
     /// create a feedback loop with the JS-side `thumbnailEpoch` sync.
@@ -211,7 +211,7 @@ impl DarklyEngine {
 
     /// Kick off an async GPU readback for a thumbnail of any node by id,
     /// if one isn't already pending. Format is derived from the node's
-    /// GPU texture — callers don't dispatch on layer-vs-modifier.
+    /// GPU texture — callers don't dispatch on layer-vs-filter.
     ///
     /// Reads the texture's full extent, not a canvas-sized rect. Layer
     /// textures may be smaller than canvas (e.g. a small paste) or larger
@@ -311,11 +311,22 @@ impl DarklyEngine {
             }
         }
 
+        self.drain_readbacks() || any_completed
+    }
+
+    /// Poll the GPU readback scheduler once (non-blocking `device.poll`)
+    /// and dispatch every completed readback to its handler. Returns true
+    /// if any landed.
+    ///
+    /// Factored out of [`Self::poll_pending`] so the save flow can drain
+    /// its own readbacks from [`Self::poll_save_result`] — letting a
+    /// backgrounded tab finish a recovery snapshot without running a full
+    /// `render()`/present (only the focused tab renders).
+    pub(crate) fn drain_readbacks(&mut self) -> bool {
         let completed = self.readbacks.poll(&self.gpu.device);
         if completed.is_empty() {
-            return any_completed;
+            return false;
         }
-
         for (ctx, pixels) in completed {
             self.handle_completed_readback(ctx, pixels);
         }
@@ -386,6 +397,12 @@ impl DarklyEngine {
                         if self.floating.is_none() {
                             self.begin_transform(pt.node_id);
                         }
+                    }
+                    if let Some(pf) = self.pending_flip.take() {
+                        self.flip_node(pf.node_id, pf.xform);
+                    }
+                    if let Some(pa) = self.pending_filter.take() {
+                        self.apply_filter(pa.node_id, &pa.filter_type);
                     }
                 }
             }
@@ -477,7 +494,8 @@ impl DarklyEngine {
                     self.compositor.mark_needs_present();
                 }
             }
-            ReadbackContext::VeilPreviewFrame {
+            ReadbackContext::PreviewFrame {
+                kind,
                 type_id,
                 frame_idx,
                 total,
@@ -486,7 +504,7 @@ impl DarklyEngine {
                 // putImageData. Guard against a stale generation (frame count
                 // mismatch) so a superseded request can't write into a freshly
                 // sized buffer.
-                if let Some(job) = self.veil_previews.get_mut(type_id) {
+                if let Some(job) = self.previews.get_mut(&(kind, type_id)) {
                     if job.frames.len() == total as usize {
                         if let Some(slot) = job.frames.get_mut(frame_idx as usize) {
                             *slot = Some(pixels);
@@ -687,31 +705,106 @@ impl DarklyEngine {
             self.apply_canvas_rect_to_compositor();
         }
 
-        // If this is a GPU region action, execute the texture restore.
-        // Node id resolves to the right texture via the unified node-texture
-        // pool — caller no longer dispatches by format.
-        if let Some(entry) = action.gpu_region_entry_mut() {
+        // Execute every GPU region restore this action owns. Most actions own
+        // one; image rescale owns one per pixel-bearing node (and the snapshot
+        // restores across a texture extent change — see below). Node id
+        // resolves to the right texture via the unified node-texture pool.
+        let label = match direction {
+            UndoDirection::Undo => "undo-restore",
+            UndoDirection::Redo => "redo-restore",
+        };
+        for entry in action.gpu_region_entries_mut() {
             let node_id = entry.layer_id;
-            let frame = self
-                .compositor
-                .node_texture(node_id)
-                .map(|t| t.canvas_frame());
-            if let Some(frame) = frame {
-                let label = match direction {
-                    UndoDirection::Undo => "undo-restore",
-                    UndoDirection::Redo => "redo-restore",
-                };
-                restore_gpu_region(
-                    &self.gpu,
-                    &self.region_scratch,
-                    &mut self.readbacks,
-                    entry,
-                    &frame,
-                    label,
-                );
-                // Restored pixels — refresh the panel thumbnail.
-                self.compositor.mark_node_pixels_dirty(node_id);
+            let cur_extent = match self.compositor.node_texture(node_id) {
+                Some(t) => t.canvas_extent(),
+                None => continue,
+            };
+            // A content-scaling rescale swaps the node's document `PixelBuffer.
+            // bounds` in undo/redo; when the GPU texture no longer matches, the
+            // texture must be realloc'd to the doc bounds before the snapshot is
+            // uploaded (the per-node analogue of the canvas-rect reconcile).
+            // Normal actions keep doc bounds == texture extent (growth is
+            // document-led), so `target_extent` is `None` and this is the plain
+            // path. `entry.canvas_rect` is a sub-rect for paint, so it can't be
+            // used to detect the extent change — the doc bounds are the signal.
+            let target_extent = self
+                .doc
+                .node_pixel_bounds(node_id)
+                .filter(|b| *b != cur_extent);
+
+            match target_extent {
+                None => {
+                    // Constant-extent restore (paint, transform, mask, and any
+                    // rescale node whose size didn't change): capture the
+                    // entry's rect and upload, in one encoder.
+                    let frame = self
+                        .compositor
+                        .node_texture(node_id)
+                        .expect("checked above")
+                        .canvas_frame();
+                    restore_gpu_region(
+                        &self.gpu,
+                        &self.region_scratch,
+                        &mut self.readbacks,
+                        entry,
+                        &frame,
+                        label,
+                    );
+                }
+                Some(target_extent) => {
+                    // Extent-changing restore (image rescale): capture the
+                    // *whole* current texture (the opposite-direction content)
+                    // for the forward entry, realloc the node texture to the doc
+                    // bounds (cleared), then upload the saved pixels into it. The
+                    // capture must be submitted before the realloc drops the old
+                    // texture.
+                    let (forward, request) = {
+                        let cur_frame = self
+                            .compositor
+                            .node_texture(node_id)
+                            .expect("checked above")
+                            .canvas_frame();
+                        self.gpu.encode_ret(label, |enc| {
+                            self.region_scratch.capture_region(
+                                enc,
+                                &self.gpu.device,
+                                entry.layer_id,
+                                entry.format,
+                                &cur_frame,
+                                cur_extent,
+                            )
+                        })
+                    };
+                    self.readbacks.submit(
+                        request,
+                        ReadbackContext::UndoRegionReady {
+                            cell: forward.pixels.clone(),
+                        },
+                    );
+                    self.gpu.encode("undo-rescale-realloc", |enc| {
+                        self.compositor.realloc_node_texture(
+                            &self.gpu.device,
+                            &self.gpu.queue,
+                            enc,
+                            node_id,
+                            target_extent,
+                            false,
+                        );
+                    });
+                    let new_frame = self
+                        .compositor
+                        .node_texture(node_id)
+                        .expect("realloc'd above")
+                        .canvas_frame();
+                    self.gpu.encode(label, |enc| {
+                        self.region_scratch
+                            .upload_region(enc, &self.gpu.device, entry, &new_frame);
+                    });
+                    *entry = forward;
+                }
             }
+            // Restored pixels — refresh the panel thumbnail.
+            self.compositor.mark_node_pixels_dirty(node_id);
         }
 
         // If this is a selection GPU action, restore the selection texture
@@ -757,10 +850,10 @@ impl DarklyEngine {
         // mask. When the target IS the host (raster/group itself), the host
         // renders normally — the isolation filter elsewhere already hides
         // its siblings. So this flag only fires when the target is a
-        // modifier whose host is this node.
+        // filter whose host is this node.
         let isolated_host = |node_id: LayerId| -> bool {
             match isolated {
-                Some(t) => self.doc.modifiers_of(node_id).contains(&t),
+                Some(t) => self.doc.filters_of(node_id).contains(&t),
                 None => false,
             }
         };
@@ -786,20 +879,33 @@ impl DarklyEngine {
                 blend.blend_mode.gpu_value,
                 isolated_host(layer.id()),
             );
+            // Push the doc's authoritative void state downhill. `ensure_layer`
+            // only *creates* missing void caches (it's idempotent), so without
+            // this an undo/redo of a void param or transform — or applying a
+            // freshly-loaded layer's stored transform — would leave the running
+            // void instance stale. Both calls no-op for raster layers and for
+            // voids that don't consume them.
+            if let Some((params, transform)) = layer.void_state() {
+                let id = layer.id();
+                self.compositor
+                    .update_void_layer_params(&self.gpu.queue, id, params);
+                self.compositor
+                    .update_void_layer_transform(&self.gpu.queue, id, transform);
+            }
         }
 
-        // --- Mask modifiers: ensure the R8 GPU texture for any host with a mask ---
+        // --- Mask filters: ensure the R8 GPU texture for any host with a mask ---
         // Also ensures the per-host passthrough snapshot+lerp resource so the
         // group composite branch can engage on the next frame; both are
         // idempotent and keyed against existence in the compositor's pools.
         struct MaskInfo {
-            modifier_id: LayerId,
+            filter_id: LayerId,
             host_id: LayerId,
             bounds: crate::coord::CanvasRect,
         }
         let mask_infos: Vec<MaskInfo> = self
             .doc
-            .all_modifiers()
+            .all_filters()
             .into_iter()
             .filter_map(|m| {
                 let buf = m.pixels()?;
@@ -808,29 +914,29 @@ impl DarklyEngine {
                 }
                 let host_id = self.doc.parent_of(m.id)?;
                 Some(MaskInfo {
-                    modifier_id: m.id,
+                    filter_id: m.id,
                     host_id,
                     bounds: buf.bounds,
                 })
             })
             .collect();
         for info in mask_infos {
-            if self.compositor.node_texture(info.modifier_id).is_none() {
+            if self.compositor.node_texture(info.filter_id).is_none() {
                 self.compositor.ensure_node_texture(
                     &self.gpu.device,
                     &self.gpu.queue,
-                    info.modifier_id,
+                    info.filter_id,
                     wgpu::TextureFormat::R8Unorm,
                     info.bounds,
                 );
             }
             self.compositor
-                .ensure_passthrough_mask_state(&self.gpu.device, info.host_id);
+                .ensure_mask_snapshot_state(&self.gpu.device, info.host_id);
         }
 
         // --- Groups: ensure state + uniforms ---
         // Non-passthrough groups need the full group_state + blend uniforms.
-        // Passthrough groups may still own a `passthrough_mask_state` whose
+        // Passthrough groups may still own a `mask_snapshot_state` whose
         // `isolated` lerp uniform must track the engine's isolation target,
         // so we update them through the same path — `update_group_uniforms`
         // skips the group_state branch when none exists and writes only the
@@ -886,11 +992,10 @@ fn restore_gpu_region(
     frame: &CanvasFrame<'_>,
     label: &str,
 ) {
-    let request = gpu.encode_ret(label, |encoder| {
-        let (swapped, request) = region_scratch.restore_region(encoder, &gpu.device, entry, frame);
-        *entry = swapped;
-        request
+    let (forward, request) = gpu.encode_ret(label, |encoder| {
+        region_scratch.restore_region(encoder, &gpu.device, entry, frame)
     });
+    *entry = forward;
     scheduler.submit(
         request,
         ReadbackContext::UndoRegionReady {

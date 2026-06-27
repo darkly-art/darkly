@@ -18,7 +18,25 @@ describe('menu action registrations', () => {
         // The command palette is surfaced as "Find", not as a submenu row.
         expect(actions.get('commandPalette')?.menuPath).toBeUndefined();
         expect(actions.get('openCheatsheet')?.menuPath).toEqual(['Help:10']);
-        expect(actions.get('aboutDarkly')?.menuPath).toEqual(['Help:20']);
+        expect(actions.get('aboutDarkly')?.menuPath).toEqual(['Help:50']);
+    });
+
+    it('puts docs, website, and github links under Help, before about', () => {
+        expect(actions.get('openDocs')?.menuPath).toEqual(['Help:20']);
+        expect(actions.get('openWebsite')?.menuPath).toEqual(['Help:30']);
+        expect(actions.get('openGithub')?.menuPath).toEqual(['Help:40']);
+
+        const help = buildTopMenus(actions.all()).find(m => m.title === 'Help');
+        const ids = help!.entries
+            .filter(e => e.kind === 'action')
+            .map(e => (e as { actionId: string }).actionId);
+        expect(ids).toEqual([
+            'openCheatsheet',
+            'openDocs',
+            'openWebsite',
+            'openGithub',
+            'aboutDarkly',
+        ]);
     });
 
     it('puts the selection commands under Select', () => {
@@ -35,6 +53,55 @@ describe('menu action registrations', () => {
     it('puts canvas resize + crop under the Image menu', () => {
         expect(actions.get('resizeCanvas')?.menuPath).toEqual(['Image:10']);
         expect(actions.get('cropToSelection')?.menuPath).toEqual(['Image:20']);
+    });
+
+    it('puts canvas flip + rotate under the Image menu, in order after crop', () => {
+        expect(actions.get('flipCanvasH')?.menuPath).toEqual(['Image:30']);
+        expect(actions.get('flipCanvasV')?.menuPath).toEqual(['Image:31']);
+        expect(actions.get('rotateCanvasCW')?.menuPath).toEqual(['Image:40']);
+        expect(actions.get('rotateCanvasCCW')?.menuPath).toEqual(['Image:41']);
+        expect(actions.get('rotateCanvas180')?.menuPath).toEqual(['Image:42']);
+
+        const image = buildTopMenus(actions.all()).find(m => m.title === 'Image');
+        const ids = image!.entries
+            .filter(e => e.kind === 'action')
+            .map(e => (e as { actionId: string }).actionId);
+        expect(ids).toEqual([
+            'resizeCanvas',
+            'rescaleImage',
+            'cropToSelection',
+            'flipCanvasH',
+            'flipCanvasV',
+            'rotateCanvasCW',
+            'rotateCanvasCCW',
+            'rotateCanvas180',
+        ]);
+    });
+
+    it('puts layer flips under the Layer menu, grouped after Duplicate (no order collision)', () => {
+        expect(actions.get('flipLayerH')?.menuPath).toEqual(['Layer:40']);
+        expect(actions.get('flipLayerV')?.menuPath).toEqual(['Layer:50']);
+
+        // Assert the whole Layer-menu order so a future duplicate suffix (the
+        // bug that put Add Mask between the two flips) can't slip back in.
+        const layer = buildTopMenus(actions.all()).find(m => m.title === 'Layer');
+        const ids = layer!.entries
+            .filter(e => e.kind === 'action')
+            .map(e => (e as { actionId: string }).actionId);
+        expect(ids).toEqual([
+            'newLayer',
+            'newGroup',
+            'duplicateLayer',
+            'flipLayerH',
+            'flipLayerV',
+            'deleteLayer',
+            'toggleVisibility',
+            'toggleLock',
+            'isolateLayer',
+            'addMask',
+            'mergeDown',
+            'flatten',
+        ]);
     });
 
     it('disables cropToSelection with a reason when no selection is active', () => {

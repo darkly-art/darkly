@@ -6,7 +6,7 @@
 //! see the module doc in `shaders/lib/canvas.wgsl`.
 
 /// Source of the shared canvas-window helper functions.
-pub const CANVAS_LIB: &str = include_str!("../../../../shaders/lib/canvas.wgsl");
+pub const CANVAS_LIB: &str = include_str!("../../shaders/lib/canvas.wgsl");
 
 /// Prepend the canvas helper library to a shader source so its functions
 /// (`plane_to_selection_uv`, `window_uv_to_plane`) are in scope.

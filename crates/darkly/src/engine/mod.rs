@@ -2,29 +2,35 @@ mod bake_common;
 mod brush_graph;
 mod brush_library;
 mod canvas_resize;
+mod canvas_transform;
 mod clipboard;
 mod duplicate;
 mod export;
+mod filters;
 mod flatten;
 mod floating;
+mod image_rescale;
+mod layer_flip;
 mod layers;
 mod load;
 mod merge;
-mod modifiers;
 mod painting;
+pub mod protocol;
 pub mod rendering;
 pub mod save;
+mod selection_support;
 pub mod types;
 mod undo_dispatch;
 mod veils;
+mod voids;
 
 pub use export::ExportImageResult;
 pub use load::LoadDocument;
 pub use rendering::{PickSource, DEFAULT_THUMB_SIZE};
-pub use save::{SaveError, SaveJob, SaveReadbackKind};
+pub use save::{SaveError, SaveJob, SavePurpose, SaveReadbackKind};
 pub use types::{
-    BlendModeTypeInfo, ClipboardExport, LayerInfo, LayerKindTypeInfo, ModifierInfo,
-    ModifierTypeInfo, ParamInfo, StrokeOp, ToolTypeInfo, VeilInfo, VeilTypeInfo,
+    BlendModeTypeInfo, ClipboardExport, EngineState, LayerInfo, LayerKindTypeInfo, ModifierInfo,
+    ModifierTypeInfo, ParamInfo, StrokeOp, ToolTypeInfo, VeilInfo, VeilTypeInfo, VoidTypeInfo,
 };
 
 pub use perf::{BrushPerfDelta, FrameRenderPhases};
@@ -53,6 +59,7 @@ use crate::gpu::selection::SelectionPipelines;
 use crate::gpu::transform::FloatingContent;
 use crate::gpu::veil_preview::VeilPreviewRenderer;
 use crate::gpu::view::{ViewParams, ViewTransform};
+use crate::gpu::void_preview::VoidPreviewRenderer;
 use crate::layer::LayerId;
 use crate::undo::UndoStack;
 use std::collections::HashMap;
@@ -62,10 +69,25 @@ use std::collections::HashMap;
 // ---------------------------------------------------------------------------
 
 /// Deferred transform setup — waiting for async content bounds from the compositor.
-/// `node_id` may refer to a raster layer or a mask modifier; the format is
+/// `node_id` may refer to a raster layer or a mask filter; the format is
 /// derived from the node's [`PixelBuffer`].
 pub(crate) struct PendingTransform {
     pub node_id: LayerId,
+}
+
+/// Deferred layer/selection flip — waiting for the selection CPU cache (the
+/// flip pivot is the selection bbox centre, read from that cache).
+pub(crate) struct PendingFlip {
+    pub node_id: LayerId,
+    pub xform: crate::gpu::ortho_transform::OrthoXform,
+}
+
+/// Deferred destructive filter — waiting for the selection CPU cache (the
+/// filter region is the selection bbox, read from that cache). Mirrors
+/// [`PendingFlip`].
+pub(crate) struct PendingFilter {
+    pub node_id: LayerId,
+    pub filter_type: String,
 }
 
 /// Deferred copy/cut — waiting for selection CPU cache to be populated.
@@ -83,7 +105,7 @@ pub(crate) struct RichCopyMetadata {
     pub locked: bool,
     pub opacity: f32,
     pub blend_mode: String,
-    /// Snapshot of any mask modifier on the source. Pixel data is NOT
+    /// Snapshot of any mask filter on the source. Pixel data is NOT
     /// captured in v1 — it requires a parallel readback that lands in v2.
     pub mask: Option<RichCopyMask>,
 }
@@ -104,7 +126,7 @@ pub(crate) struct PendingUndoCommit {
 /// is returned alongside the pixel data on completion.
 ///
 /// All variants carry a `node_id` (where applicable) that may refer to either
-/// a raster layer or a mask modifier; the format is derived from the node's
+/// a raster layer or a mask filter; the format is derived from the node's
 /// [`PixelBuffer`] when the readback completes.
 pub(crate) enum ReadbackContext {
     FloodFill {
@@ -239,30 +261,41 @@ pub(crate) enum ReadbackContext {
     UndoRegionReady {
         cell: std::rc::Rc<std::cell::RefCell<EntryPixels>>,
     },
-    /// Async readback of one veil preview frame, rendered offscreen over the
-    /// current canvas (`gpu::veil_preview`). Completion drops the raw RGBA bytes
-    /// into `veil_previews[type_id].frames[frame_idx]`; the frontend drains all
+    /// Async readback of one picker preview frame, rendered offscreen
+    /// (`gpu::veil_preview` for veils over the current canvas, `gpu::void_preview`
+    /// for voids from scratch). Completion drops the raw RGBA bytes into
+    /// `previews[(kind, type_id)].frames[frame_idx]`; the frontend drains all
     /// `total` frames once they land and plays them as a loop. Each frame is the
     /// job's aspect-fit `width × height` RGBA.
-    VeilPreviewFrame {
+    PreviewFrame {
+        kind: PreviewKind,
         type_id: &'static str,
         frame_idx: u32,
         total: u32,
     },
 }
 
-/// One veil picker preview generation: the chosen preview dimensions plus the
+/// Which kind of effect a picker preview is generating. Keys the shared
+/// `previews` map alongside the effect's `'static` type id, so a veil and a void
+/// that happen to share a type-id string never collide.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub enum PreviewKind {
+    Veil,
+    Void,
+}
+
+/// One picker preview generation: the chosen preview dimensions plus the
 /// per-frame RGBA slots, each filled when its async readback lands. `width` /
-/// `height` are carried so `poll_veil_preview` and the WASM bridge report the
-/// real (aspect-fit) thumbnail size, which varies with the document's shape.
-pub(crate) struct VeilPreviewJob {
+/// `height` are carried so `poll_preview` and the WASM bridge report the real
+/// (aspect-fit) thumbnail size, which varies with the document's shape.
+pub(crate) struct PreviewJob {
     pub width: u32,
     pub height: u32,
     pub frames: Vec<Option<Vec<u8>>>,
 }
 
 /// Cached thumbnail RGBA bytes per node id. Keyed uniformly across layers,
-/// groups, and modifiers — the node id is sufficient to disambiguate, so the
+/// groups, and filters — the node id is sufficient to disambiguate, so the
 /// previous separate `layer` and `mask` maps collapse into one.
 pub(crate) struct ThumbnailCache {
     bytes: HashMap<LayerId, Vec<u8>>,
@@ -297,7 +330,7 @@ pub struct DarklyEngine {
     /// Session-level "isolate this node" flag. When set, the renderer shows
     /// only this node's contribution (e.g. an R8 mask is rendered grayscale,
     /// a layer is rendered without siblings/parents). Universal across node
-    /// kinds — works for any future filter / adjustment modifier too.
+    /// kinds — works for any future filter / filter filter too.
     pub(crate) isolated_node: Option<LayerId>,
     pub(crate) view_transform: ViewTransform,
     /// Decomposed view inputs from which `view_transform` is derived. The
@@ -402,18 +435,21 @@ pub struct DarklyEngine {
     pub(crate) preview_theme_fg: [f32; 4],
     pub(crate) preview_theme_bg: [f32; 4],
 
-    // --- Veil picker preview ---
+    // --- Picker previews (veil + void) ---
     /// Offscreen renderer for the veil picker's looping thumbnail previews.
     /// Reused across veils; holds its own preview-sized scratch textures and
     /// is fully independent of the live veil chain and document.
     pub(crate) veil_preview_renderer: VeilPreviewRenderer,
-    /// In-flight + completed preview jobs per veil type. Frame slots fill in
-    /// asynchronously as `ReadbackContext::VeilPreviewFrame` readbacks land;
-    /// `poll_veil_preview` hands back the frames once every slot is `Some`.
-    /// Keyed by the registry's `&'static str` type id. Overwritten on each
-    /// `start_veil_preview` so the picker always reflects the current canvas
-    /// (no cross-open caching).
-    pub(crate) veil_previews: HashMap<&'static str, VeilPreviewJob>,
+    /// Offscreen renderer for the void picker's looping thumbnail previews.
+    /// Reused across voids; holds its own preview-sized output texture and is
+    /// fully independent of the live layer stack and document.
+    pub(crate) void_preview_renderer: VoidPreviewRenderer,
+    /// In-flight + completed preview jobs, keyed by `(kind, &'static str type
+    /// id)`. Frame slots fill in asynchronously as `ReadbackContext::PreviewFrame`
+    /// readbacks land; `poll_preview` hands back the frames once every slot is
+    /// `Some`. Overwritten on each `start_*_preview` so the picker always
+    /// reflects the current document (no cross-open caching).
+    pub(crate) previews: HashMap<(PreviewKind, &'static str), PreviewJob>,
 
     // --- Brush Library ---
     pub(crate) brush_library: BrushLibrary,
@@ -438,12 +474,16 @@ pub struct DarklyEngine {
     /// Reusable GPU pipelines for selection boolean / invert operations.
     /// The selection's R8 textures + bind groups live in
     /// `compositor.selection_state`; the active toggle, tight bounds, and
-    /// CPU readback cache live on `doc.selection.kind` (`SelectionModifier`).
+    /// CPU readback cache live on `doc.selection.kind` (`SelectionFilter`).
     pub(crate) selection_pipelines: SelectionPipelines,
 
     // --- Deferred operations ---
     /// Pending transform waiting for content bounds computation.
     pub(crate) pending_transform: Option<PendingTransform>,
+    /// Pending layer/selection flip waiting for the selection CPU cache.
+    pub(crate) pending_flip: Option<PendingFlip>,
+    /// Pending destructive filter waiting for the selection CPU cache.
+    pub(crate) pending_filter: Option<PendingFilter>,
     /// Pending copy/cut waiting for selection CPU cache.
     pub(crate) pending_copy: Option<PendingCopy>,
 
@@ -581,7 +621,8 @@ impl DarklyEngine {
             preview_theme_fg: [1.0, 1.0, 1.0, 1.0],
             preview_theme_bg: [0.0, 0.0, 0.0, 1.0],
             veil_preview_renderer: VeilPreviewRenderer::new(),
-            veil_previews: HashMap::new(),
+            void_preview_renderer: VoidPreviewRenderer::new(),
+            previews: HashMap::new(),
             brush_library: {
                 let mut lib = BrushLibrary::new();
                 for brush in crate::brush::builtin_brushes::all() {
@@ -597,6 +638,8 @@ impl DarklyEngine {
             pending_undo_commit: None,
             selection_pipelines,
             pending_transform: None,
+            pending_flip: None,
+            pending_filter: None,
             pending_copy: None,
             readbacks: ReadbackScheduler::new(),
             pending_copy_result: None,
@@ -623,12 +666,12 @@ impl DarklyEngine {
         // the user to trigger a `compile_active` via a param change.
         engine.regenerate_brush_cursor_preview();
 
-        // Eagerly allocate the document selection modifier + its GPU state.
-        // The selection is a typed Modifier on `doc.selection`; the R8 GPU
+        // Eagerly allocate the document selection filter + its GPU state.
+        // The selection is a typed Filter on `doc.selection`; the R8 GPU
         // textures + bind groups live in `compositor.selection_state`. Both
         // are zero-cost when no selection is active (visible=false), so
         // allocating up-front keeps the consumer code branch-free.
-        let selection_mod_id = engine.doc.ensure_selection_modifier();
+        let selection_mod_id = engine.doc.ensure_selection_filter();
         engine.compositor.ensure_selection_state(
             &engine.gpu.device,
             selection_mod_id,
@@ -636,6 +679,69 @@ impl DarklyEngine {
         );
 
         engine
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared picker-preview plumbing
+// ---------------------------------------------------------------------------
+
+impl DarklyEngine {
+    /// Encode one preview frame and submit its async readback. The effect-
+    /// specific render — a veil's ping-pong pass or a void's generate pass —
+    /// lives in the `encode` closure; everything else (the command encode, the
+    /// readback request keyed by `(kind, type_id, frame_idx, total)`, and the
+    /// scheduler submission) is shared between the veil and void preview paths.
+    ///
+    /// An associated function rather than a `&mut self` method so the caller can
+    /// hand it disjoint borrows: `gpu` / `readbacks` here, while `encode` and
+    /// `output` borrow the per-effect preview renderer.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn encode_preview_frame(
+        gpu: &GpuContext,
+        readbacks: &mut ReadbackScheduler<ReadbackContext>,
+        kind: PreviewKind,
+        type_id: &'static str,
+        frame_idx: u32,
+        total: u32,
+        output: &wgpu::Texture,
+        format: wgpu::TextureFormat,
+        rect: crate::coord::LayerRect,
+        encode: impl FnOnce(&mut wgpu::CommandEncoder),
+    ) {
+        gpu.encode("preview-frame", |encoder| {
+            encode(encoder);
+            let request =
+                crate::gpu::readback::request_readback(&gpu.device, encoder, output, format, rect);
+            readbacks.submit(
+                request,
+                ReadbackContext::PreviewFrame {
+                    kind,
+                    type_id,
+                    frame_idx,
+                    total,
+                },
+            );
+        });
+    }
+
+    /// Return the completed preview for `(kind, type_id)` as
+    /// `(width, height, frames)` once every frame has landed, else `None`. Each
+    /// frame is `width × height` tightly-packed RGBA8. Shared by both pickers.
+    pub fn poll_preview(
+        &self,
+        kind: PreviewKind,
+        type_id: &str,
+    ) -> Option<(u32, u32, Vec<Vec<u8>>)> {
+        let (_, job) = self
+            .previews
+            .iter()
+            .find(|((k, t), _)| *k == kind && *t == type_id)?;
+        if job.frames.is_empty() || job.frames.iter().any(Option::is_none) {
+            return None;
+        }
+        let frames = job.frames.iter().map(|f| f.clone().unwrap()).collect();
+        Some((job.width, job.height, frames))
     }
 }
 
@@ -686,8 +792,26 @@ impl DarklyEngine {
         self.selection_cpu_cache()
     }
 
-    /// Test-only public accessor for the selection modifier's id.
-    pub fn selection_modifier_id_test(&self) -> Option<LayerId> {
+    /// Blocking readback of the document selection's R8 mask texture (window-
+    /// sized, one byte per pixel — 255 selected, 0 unselected). Test-only;
+    /// lets selection-modify tests inspect mask values directly rather than
+    /// inferring them through paint. Returns `None` before the selection state
+    /// is allocated.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_readback_selection(&self) -> Option<Vec<u8>> {
+        let state = self.compositor.selection_state()?;
+        Some(crate::gpu::test_utils::readback_texture(
+            &self.gpu.device,
+            &self.gpu.queue,
+            state.texture(),
+            wgpu::TextureFormat::R8Unorm,
+            state.width,
+            state.height,
+        ))
+    }
+
+    /// Test-only public accessor for the selection filter's id.
+    pub fn selection_filter_id_test(&self) -> Option<LayerId> {
         self.doc.selection_id()
     }
 
@@ -701,26 +825,55 @@ impl DarklyEngine {
         &self.doc
     }
 
-    /// Test-only assertion that the document's selection slot holds a Modifier
+    /// Test-only assertion that the document's selection slot holds a Filter
     /// whose kind is `Selection`. Returns `None` if the slot is empty.
-    pub fn test_selection_modifier_kind_is_selection(&self) -> Option<bool> {
+    pub fn test_selection_filter_kind_is_selection(&self) -> Option<bool> {
         let id = self.doc.selection?;
-        self.doc
-            .find_modifier(id)
-            .map(|m| m.as_selection().is_some())
+        self.doc.find_filter(id).map(|m| m.as_selection().is_some())
     }
 
     /// Test-only access to the selection's `PixelBuffer.bounds`.
     pub fn test_selection_pixel_buffer_bounds(&self) -> Option<crate::coord::CanvasRect> {
         let id = self.doc.selection?;
         self.doc
-            .find_modifier(id)
+            .find_filter(id)
             .and_then(|m| m.pixels())
             .map(|p| p.bounds)
     }
 
+    /// Test-only: whether the undo / redo stacks have anything to apply.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_can_undo(&self) -> bool {
+        self.undo_stack.can_undo()
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_can_redo(&self) -> bool {
+        self.undo_stack.can_redo()
+    }
+
+    /// Test-only: a pixel-bearing node's document-side `PixelBuffer.bounds`
+    /// (raster layer or mask filter). Used to assert extents scale on rescale.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_node_pixel_bounds(&self, id: LayerId) -> Option<crate::coord::CanvasRect> {
+        self.doc.node_pixel_bounds(id)
+    }
+
+    /// Test-only: the mask filter id attached to `host_id`, if any (the first
+    /// non-selection pixel-bearing filter on the host).
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_mask_id(&self, host_id: LayerId) -> Option<LayerId> {
+        let node = self.doc.find_node(host_id)?;
+        node.filters().iter().copied().find(|&mid| {
+            self.doc
+                .find_filter(mid)
+                .map(|m| m.as_selection().is_none() && m.pixels().is_some())
+                .unwrap_or(false)
+        })
+    }
+
     /// Number of GPU textures the compositor currently holds across the
-    /// unified node-texture pool (raster layers and pixel-bearing modifiers
+    /// unified node-texture pool (raster layers and pixel-bearing filters
     /// like masks). Test-only metric for leak-cycle regression tests (P3).
     pub fn test_node_texture_count(&self) -> usize {
         self.compositor.test_node_texture_count()
@@ -735,9 +888,9 @@ impl DarklyEngine {
     }
 
     /// Blocking readback of a node's GPU texture (raster layer or mask
-    /// modifier). For test assertions only. Format and extent come from the
+    /// filter). For test assertions only. Format and extent come from the
     /// texture's own metadata — callers don't need to know whether the id
-    /// refers to a layer or a modifier.
+    /// refers to a layer or a filter.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_layer(&self, node_id: LayerId) -> Vec<u8> {
         let tex = self
@@ -753,6 +906,47 @@ impl DarklyEngine {
             ext.width,
             ext.height,
         )
+    }
+
+    /// Plant a persistent void frame (camera void's last webcam frame) into
+    /// the void's aux texture — the same entry point the load path uses via
+    /// `restore_void_pixels`. For test assertions only: on native there is no
+    /// webcam, so this is the only way to give a camera void a frame to read
+    /// back.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_plant_void_frame(
+        &mut self,
+        layer_id: LayerId,
+        width: u32,
+        height: u32,
+        bytes: &[u8],
+    ) {
+        self.compositor.restore_void_pixels(
+            &self.gpu.device,
+            &self.gpu.queue,
+            layer_id,
+            width,
+            height,
+            bytes,
+        );
+    }
+
+    /// Blocking readback of a void layer's persistent frame through the exact
+    /// `pixel_data_for` path the save flow uses (`queue_pixel_readback`). For
+    /// test assertions only. Returns `None` when the void declares no
+    /// persistent frame. This is the readback the camera void's aux texture
+    /// must support — it requires `COPY_SRC` on that texture.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_readback_void_frame(&self, layer_id: LayerId) -> Option<Vec<u8>> {
+        let data = self.compositor.pixel_data_for(layer_id)?;
+        Some(crate::gpu::test_utils::readback_texture(
+            &self.gpu.device,
+            &self.gpu.queue,
+            data.texture,
+            data.format,
+            data.width,
+            data.height,
+        ))
     }
 
     /// Blocking readback of the root composited canvas. For test assertions
@@ -814,15 +1008,15 @@ impl DarklyEngine {
             .update_animations(&self.gpu.queue, wall_time, &self.doc);
     }
 
-    /// Blocking readback of a mask modifier's R8 texture. For test assertions
-    /// only. Resolves the mask modifier on the host and reads its texture
+    /// Blocking readback of a mask filter's R8 texture. For test assertions
+    /// only. Resolves the mask filter on the host and reads its texture
     /// from the unified node-texture pool. Returns one byte per pixel.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_mask(&self, host_id: LayerId) -> Vec<u8> {
         let mask_id = self
             .doc
-            .mask_modifier_id(host_id)
-            .expect("host has no mask modifier");
+            .mask_filter_id(host_id)
+            .expect("host has no mask filter");
         let tex = self
             .compositor
             .node_texture(mask_id)
@@ -945,6 +1139,19 @@ impl DarklyEngine {
         for (ctx, pixels) in completed {
             self.handle_completed_readback(ctx, pixels);
         }
+    }
+
+    /// Block on the GPU device only — fire map callbacks — WITHOUT
+    /// polling or dispatching the readback scheduler. On native this
+    /// stands in for the browser event loop that resolves buffer
+    /// mappings on web. For tests that must verify another code path
+    /// (e.g. `poll_save_result`) does the scheduler drain itself.
+    #[cfg(test)]
+    pub fn test_wait_gpu(&mut self) {
+        let _ = self.gpu.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
     }
 }
 

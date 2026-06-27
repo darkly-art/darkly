@@ -35,7 +35,7 @@ fn load_preambles(files: &[PathBuf]) -> Vec<(PathBuf, String)> {
 
 #[test]
 fn all_wgsl_shaders_compile() {
-    let shader_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shaders");
+    let shader_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders");
     let shader_dir = shader_dir
         .canonicalize()
         .expect("shaders/ directory not found");

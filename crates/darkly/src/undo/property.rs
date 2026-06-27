@@ -23,6 +23,11 @@ pub enum Property {
     /// (multiple `VoidParams` edits in a row) into one undo step, matching
     /// how opacity behaves.
     VoidParams(Vec<ParamValue>),
+    /// A void layer's user transform (gizmo-edited pan / scale / rotate).
+    /// Coalesces on `same_kind` so a whole gizmo drag is one undo step,
+    /// exactly like `VoidParams`. The GPU re-sync happens in
+    /// `sync_compositor_layers` after the doc is restored.
+    Transform(crate::transform::Transform),
 }
 
 impl Property {
@@ -55,6 +60,11 @@ impl Property {
             Property::VoidParams(values) => {
                 if let LayerNode::Layer(Layer::Void(v)) = node {
                     v.params = values.clone();
+                }
+            }
+            Property::Transform(t) => {
+                if let LayerNode::Layer(Layer::Void(v)) = node {
+                    v.transform = *t;
                 }
             }
         }

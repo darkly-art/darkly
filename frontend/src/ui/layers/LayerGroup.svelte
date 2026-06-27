@@ -1,6 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
-    import { getNodeThumbnail, THUMB_SIZE } from './thumbnails';
+    import { getNodeThumbnail, THUMB_SIZE } from './thumbnails.svelte';
     import { actions } from '../../actions/registry';
     import { bindingSite } from '../../actions/binding_site';
     import { tooltipForAction } from '../../config/store.svelte';
@@ -20,6 +20,9 @@
             // See LayerItem — `locked` is the node's own flag, `editable`
             // is the effective (ancestor-aware) form used to gate edits.
             editable?: boolean;
+            // Per-kind mask capability (see LayerKindRegistration) — gates the
+            // add-mask control without branching on the kind.
+            canHaveMask?: boolean;
             collapsed: boolean; passthrough: boolean; opacity: number;
             blendMode: string; children: any[];
             modifiers?: Modifier[];
@@ -53,7 +56,7 @@
     let editInput = $state<HTMLInputElement | null>(null);
     let dropPos = $state<'none' | 'above' | 'below' | 'into'>('none');
 
-    let maskThumb = $derived(maskModifier !== null && app.handle ? getNodeThumbnail(maskModifier.id) : '');
+    let maskThumb = $derived(maskModifier !== null && app.engine ? getNodeThumbnail(maskModifier.id) : '');
     let showMaskMenu = $state(false);
     let maskMenuX = $state(0);
     let maskMenuY = $state(0);
@@ -82,7 +85,7 @@
         return siblingBelowExists(app.layerTree, group.id);
     });
 
-    let canAddMask = $derived(!hasMask && editable);
+    let canAddMask = $derived(Boolean(group.canHaveMask) && !hasMask && editable);
 
     // Chord dispatch is owned by `use:bindingSite` on each preview element
     // below — `bindingSite` intercepts modifier+click in capture phase
@@ -102,8 +105,8 @@
 
     function toggleCollapsed(e: MouseEvent) {
         e.stopPropagation();
-        if (app.handle) {
-            app.handle.set_group_collapsed(group.id, !group.collapsed);
+        if (app.engine) {
+            app.engine.post('set_group_collapsed', { id: group.id, collapsed: !group.collapsed });
             onupdate();
         }
     }
@@ -123,8 +126,8 @@
 
     function finishRename() {
         editing = false;
-        if (app.handle && editInput) {
-            app.handle.set_layer_name(group.id, editInput.value);
+        if (app.engine && editInput) {
+            app.engine.post('set_layer_name', { id: group.id, name: editInput.value });
             onupdate();
         }
     }
@@ -197,24 +200,24 @@
     }
 
     function toggleMaskEnabled() {
-        if (app.handle && maskModifier !== null) {
-            app.handle.set_layer_visible(maskModifier.id, !maskEnabled);
+        if (app.engine && maskModifier !== null) {
+            app.engine.post('set_layer_visible', { id: maskModifier.id, visible: !maskEnabled });
             onupdate();
         }
     }
 
     function toggleShowMask() {
-        if (app.handle && maskModifier !== null) {
+        if (app.engine && maskModifier !== null) {
             const next = isMaskIsolated ? 0 : maskModifier.id;
-            app.handle.set_isolated_node(next);
+            app.engine.post('set_isolated_node', { id: next });
             app.isolatedNodeId = next === 0 ? null : next;
             onupdate();
         }
     }
 
     function removeMask() {
-        if (app.handle) {
-            app.handle.remove_mask(group.id);
+        if (app.engine) {
+            app.engine.post('remove_mask', { id: group.id });
             onupdate();
         }
     }
@@ -257,13 +260,14 @@
         }
     }
 
-    function onDrop(e: DragEvent) {
+    async function onDrop(e: DragEvent) {
         e.preventDefault();
         e.stopPropagation();
         const pos = dropPos;
         dropPos = 'none';
         const payload = e.dataTransfer?.getData('application/x-darkly-layers');
-        if (!payload || !app.handle) return;
+        const engine = app.engine;
+        if (!payload || !engine) return;
         let ids: number[];
         try { ids = JSON.parse(payload) as number[]; } catch { return; }
         if (!Array.isArray(ids) || ids.length === 0) return;
@@ -274,9 +278,9 @@
             : 'into_top';
 
         try {
-            const skipped = app.handle.move_layers(
-                Float64Array.from(ids), where, group.id,
-            );
+            const { skipped } = await engine.send('move_layers', {
+                ids, target_type: where, target_id: group.id,
+            });
             if (skipped > 0) {
                 toast.show('info', `${skipped} locked layer${skipped === 1 ? '' : 's'} skipped`);
             }

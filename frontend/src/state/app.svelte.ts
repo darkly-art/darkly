@@ -1,13 +1,46 @@
-import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
+import type { Engine, EngineState } from '../engine/protocol';
+import type { SaveBundle } from '../storage/saveDocument';
 import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry } from '../tools/registry';
 import { pollPick } from '../tools/color_pick_sync';
 import { tickColorPickerCursor } from '../tools/colorpicker_cursor';
-import type { SaveBundle } from '../storage/saveDocument';
-import { CameraSource } from '../lib/cameraSource';
+import { MediaStreamSource, describeMediaError, type CaptureKind } from '../lib/mediaStreamSource';
 
 export interface Color {
     r: number; g: number; b: number; a: number;
+}
+
+/** Packed `poll_save_result` payload: every byte blob concatenated into one
+ *  `bytes` buffer, with the lengths needed to slice them back out. */
+interface PackedSaveResult {
+    manifestLen: number;
+    compositeWidth: number;
+    compositeHeight: number;
+    compositeLen: number;
+    blobs: Array<{ path: string; len: number }>;
+    bytes: Uint8Array;
+}
+
+/** Reconstruct the {@link SaveBundle} `saveDocument.ts` expects from the packed
+ *  protocol result (manifest ++ composite ++ blob0 ++ blob1 ++ … in `bytes`). */
+function unpackSaveBundle(p: PackedSaveResult): SaveBundle {
+    let off = 0;
+    const manifestJson = p.bytes.subarray(off, off + p.manifestLen);
+    off += p.manifestLen;
+    const compositeRgba = p.bytes.subarray(off, off + p.compositeLen);
+    off += p.compositeLen;
+    const blobs = p.blobs.map((b) => {
+        const bytes = p.bytes.subarray(off, off + b.len);
+        off += b.len;
+        return { path: b.path, bytes };
+    });
+    return {
+        manifestJson,
+        compositeWidth: p.compositeWidth,
+        compositeHeight: p.compositeHeight,
+        compositeRgba,
+        blobs,
+    };
 }
 
 /**
@@ -30,7 +63,16 @@ export class DarklyInstance {
             ? crypto.randomUUID()
             : `instance-${Math.random().toString(36).slice(2)}`;
 
-    handle = $state<DarklyHandle | null>(null);
+    engine = $state<Engine | null>(null);
+
+    /** Stable key for this tab's crash-recovery snapshot. Distinct from
+     *  `id` so it reads clearly at the recovery-store boundary; repeated
+     *  autosaves overwrite one snapshot file per tab. A tab restored from
+     *  a snapshot gets a fresh `recoveryId` (it's a new live tab). */
+    readonly recoveryId: string =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+            ? crypto.randomUUID()
+            : `recovery-${Math.random().toString(36).slice(2)}`;
 
     /** Initial document name to apply once the WASM handle finishes
      *  bootstrapping. The shell uses this to thread "Untitled N"
@@ -58,7 +100,17 @@ export class DarklyInstance {
     /** One-shot hook fired by `createInstance` once `handle` is set.
      *  Used by the Open Document flow to load a `.darkly` payload
      *  into a freshly-opened tab. Cleared after firing. */
-    onHandleReady: ((handle: DarklyHandle) => void) | null = null;
+    onHandleReady: ((engine: Engine) => void) | null = null;
+
+    /** Synchronously-readable mirror of engine state, refreshed from
+     *  `engine.render`'s returned snapshot each frame (no per-frame query — it's
+     *  a downhill projection of render's one borrow). The single home for every
+     *  value the UI caches: frame/thumbnail counters and document bools. UI
+     *  consumers that can't `await` — `$derived`, menu `enabled()` gates,
+     *  `beforeunload` — read this instead of querying the engine. `$state` so
+     *  they re-derive when it changes. Grows as the UI needs more (see Rust
+     *  `EngineState`). Null until the first frame renders. */
+    engineState = $state<EngineState | null>(null);
 
     // Colors
     foreground = $state<Color>({ r: 0, g: 0, b: 0, a: 255 });
@@ -81,9 +133,21 @@ export class DarklyInstance {
     toolDisplayNames = $state<Record<string, string>>({});
     veilDisplayNames = $state<Record<string, string>>({});
     voidDisplayNames = $state<Record<string, string>>({});
+    /** `voidType → CaptureKind` for voids backed by a browser MediaStream
+     *  (camera / screenshare). Built from `void_types` in `loadRegistries`;
+     *  procedural voids are absent. Drives which `MediaDevices` API to call and
+     *  is the single source of truth for "is this a stream-backed void?" across
+     *  the reconciler, picker, and properties panel. */
+    voidCaptureKind = $state<Map<string, CaptureKind>>(new Map());
     blendModeDisplayNames = $state<Record<string, string>>({});
     modifierDisplayNames = $state<Record<string, string>>({});
     layerKindDisplayNames = $state<Record<string, string>>({});
+
+    /** Registered destructive color-filter types (invert, …), fetched once
+     *  at startup. Drives the dynamic, auto-discovered Colors-menu actions in
+     *  `registerActions` — a new filter in the Rust core surfaces a menu
+     *  entry with zero frontend edits. */
+    filterTypes = $state<Array<{ type: string; displayName: string }>>([]);
 
     toolDisplayName(id: string): string {
         return this.toolDisplayNames[id] ?? id;
@@ -108,26 +172,39 @@ export class DarklyInstance {
      *  one pass. Called once during editor init, before action registration
      *  and before `this.handle` is set, so the maps are ready by the time any
      *  UI mounts. */
-    loadRegistries(handle: { tool_types(): string; veil_types(): string;
-        void_types(): string;
-        blend_mode_types(): string; modifier_types(): string;
-        layer_kind_types(): string }) {
-        const buildMap = (json: string): Record<string, string> => {
-            try {
-                const arr = JSON.parse(json) as Array<{ type: string; displayName: string }>;
-                const m: Record<string, string> = {};
-                for (const e of arr) m[e.type] = e.displayName;
-                return m;
-            } catch {
-                return {};
-            }
+    async loadRegistries(engine: Engine) {
+        const buildMap = (
+            arr: Array<{ type: string; displayName: string }>,
+        ): Record<string, string> => {
+            const m: Record<string, string> = {};
+            for (const e of arr ?? []) m[e.type] = e.displayName;
+            return m;
         };
-        this.toolDisplayNames = buildMap(handle.tool_types());
-        this.veilDisplayNames = buildMap(handle.veil_types());
-        this.voidDisplayNames = buildMap(handle.void_types());
-        this.blendModeDisplayNames = buildMap(handle.blend_mode_types());
-        this.modifierDisplayNames = buildMap(handle.modifier_types());
-        this.layerKindDisplayNames = buildMap(handle.layer_kind_types());
+        const [tools, veils, voids, blends, modifiers, layerKinds, filters] = await Promise.all([
+            engine.send('tool_types'),
+            engine.send('veil_types'),
+            engine.send('void_types'),
+            engine.send('blend_mode_types'),
+            engine.send('modifier_types'),
+            engine.send('layer_kind_types'),
+            engine.send('filter_types'),
+        ]);
+        this.toolDisplayNames = buildMap(tools);
+        this.veilDisplayNames = buildMap(veils);
+        this.voidDisplayNames = buildMap(voids);
+        // Map each void type to its browser capture API, if any. Voids with a
+        // `captureKind` (camera / screenshare) drive the generic MediaStream
+        // lifecycle; procedural voids (noise) omit the field and never appear
+        // here. Built once from the same `void_types` query.
+        const capKinds = new Map<string, CaptureKind>();
+        for (const v of (voids ?? []) as Array<{ type: string; captureKind?: CaptureKind }>) {
+            if (v.captureKind) capKinds.set(v.type, v.captureKind);
+        }
+        this.voidCaptureKind = capKinds;
+        this.blendModeDisplayNames = buildMap(blends);
+        this.modifierDisplayNames = buildMap(modifiers);
+        this.layerKindDisplayNames = buildMap(layerKinds);
+        this.filterTypes = filters ?? [];
     }
 
     /** Add a veil with a partial overrides record. Param names match the
@@ -135,18 +212,20 @@ export class DarklyInstance {
      *  Missing params fall back to registered defaults via the WASM
      *  bridge. Pass `visible: false` to hide the veil after add (the
      *  common starter-veil case). */
-    addVeil(type: string, options: Record<string, unknown> = {}): void {
-        if (!this.handle) return;
+    async addVeil(type: string, options: Record<string, unknown> = {}): Promise<void> {
+        const engine = this.engine;
+        if (!engine) return;
         const { visible, ...params } = options;
-        this.handle.add_veil(type, params);
+        engine.post('add_veil', { veil_type: type, params });
         if (visible === false) {
-            // `veil_list()` returns highest-index first, so the just-added
-            // veil sits at index 0 of the array.
-            const list = JSON.parse(this.handle.veil_list()) as Array<{ index: number }>;
+            // `veil_list` returns highest-index first, so the just-added veil
+            // sits at index 0 of the array. The list send is enqueued after the
+            // add above, so FIFO ordering guarantees it sees the new veil.
+            const list = (await engine.send('veil_list')) as Array<{ index: number }>;
             const added = list[0];
-            if (added) this.handle.set_veil_visible(added.index, false);
+            if (added) engine.post('set_veil_visible', { index: added.index, visible: false });
         }
-        this.refreshVeilList();
+        await this.refreshVeilList();
         this.requestFrame();
     }
 
@@ -172,12 +251,6 @@ export class DarklyInstance {
 
     // Layer tree (read from WASM, refreshed after mutations/undo/redo).
     layerTree = $state<any[]>([]);
-
-    // Mirrors the engine's `thumbnail_version` counter. Bumped from
-    // `requestFrame` after each render so any `$derived` that reads
-    // a thumbnail (via getNodeThumbnail) re-runs when an async readback
-    // lands and the wasm cache is updated.
-    thumbnailEpoch = $state(0);
 
     // Veil list (read from WASM, refreshed after mutations).
     veilList = $state<any[]>([]);
@@ -223,7 +296,7 @@ export class DarklyInstance {
      *  it can never go stale; pure (no engine borrow), so reading it inside a
      *  pointer event cannot alias the RefCell borrow held by `render()`. */
     viewMatrices: Float32Array = $derived.by(() => {
-        if (!this.handle) {
+        if (!this.engine) {
             // Identity (screen→plane, plane→screen) until the engine exists.
             return new Float32Array([1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0]);
         }
@@ -255,7 +328,7 @@ export class DarklyInstance {
         // nothing if the new layer is hidden by isolation). Selecting the
         // same isolated node is a no-op.
         if (this.isolatedNodeId !== null && id !== this.isolatedNodeId) {
-            this.handle?.set_isolated_node(0);
+            this.engine?.post('set_isolated_node', { id: 0 });
             this.isolatedNodeId = null;
             this.requestFrame();
         }
@@ -318,7 +391,7 @@ export class DarklyInstance {
             return;
         }
         if (this.isolatedNodeId !== null) {
-            this.handle?.set_isolated_node(0);
+            this.engine?.post('set_isolated_node', { id: 0 });
             this.isolatedNodeId = null;
             this.requestFrame();
         }
@@ -382,7 +455,7 @@ export class DarklyInstance {
      *  so this code path stays write-only on `layerTree` — reading it here
      *  would tie the LayerPanel's `$effect` to the very state the method
      *  just wrote, looping Svelte's update guard. Same pattern as
-     *  `reconcileCameraSources(next)`. */
+     *  `reconcileMediaStreamSources(next)`. */
     private pruneSelectionAgainstTree(tree: any[]) {
         const alive = new Set<number>();
         const visibleOrder: number[] = [];
@@ -432,102 +505,154 @@ export class DarklyInstance {
         this.activeVeilIndex = null;
     }
 
-    /** Active webcam (and future screenshare) MediaStream-backed inputs, keyed
-     *  by the void layer's id. Each entry holds a `<video>` element, a live
+    /** Active MediaStream-backed void inputs (camera + screenshare), keyed by
+     *  the void layer's id. Each entry holds a `<video>` element, a live
      *  `MediaStream`, and per-frame upload logic. `refreshLayerTree` reaps
      *  entries whose layer no longer exists (covers undo / explicit delete /
-     *  document close). Reactive `$state` so the properties panel
-     *  re-renders when an entry's `error` string changes. */
-    cameraSources = $state<Map<number, CameraSource>>(new Map());
+     *  document close). Reactive `$state` so the properties panel re-renders
+     *  when an entry's `error` string changes. */
+    mediaStreamSources = $state<Map<number, MediaStreamSource>>(new Map());
 
-    /** Set of camera-void layer IDs the user has explicitly authorized for
-     *  this session. The picker adds the id when a new layer is created;
-     *  the "Resume" button in VoidProperties adds it for layers loaded from
-     *  a `.darkly`. The reconciler only starts a MediaStream for layers in
-     *  this set, so reopening a document doesn't pop a permission prompt or
-     *  silently re-enable the camera — the saved last frame is displayed
-     *  until the user opts back in. Session-only: never persisted, cleared
-     *  on document open / page reload. */
-    cameraSessionStarted = $state<Set<number>>(new Set());
+    /** Set of stream-backed void layer IDs the user has explicitly authorized
+     *  for this session. The picker adds the id when a new layer is created;
+     *  the "Resume" button in VoidProperties adds it for layers loaded from a
+     *  `.darkly` (or after an external stop). Reopening a document does NOT add
+     *  to this set, so the saved last frame is shown until the user opts back
+     *  in — no surprise permission prompt or capture indicator. Session-only:
+     *  never persisted, cleared on document open / page reload. */
+    mediaStreamSessionStarted = $state<Set<number>>(new Set());
 
-    /** Mark a camera void as explicitly user-started for this session.
-     *  Idempotent. Triggers a layer-tree refresh so the reconciler picks
-     *  the new state up and spins up the MediaStream. */
-    markCameraVoidStarted(layerId: number) {
-        if (this.cameraSessionStarted.has(layerId)) return;
-        this.cameraSessionStarted = new Set(this.cameraSessionStarted).add(layerId);
+    /** Mark a stream-backed void as explicitly user-started for this session.
+     *  Idempotent. Triggers a layer-tree refresh so the reconciler picks the
+     *  new state up (drives `showResume` in VoidProperties). The actual stream
+     *  is started by the gesture via `startMediaStreamVoid`, not here. */
+    markMediaStreamVoidStarted(layerId: number) {
+        if (this.mediaStreamSessionStarted.has(layerId)) return;
+        this.mediaStreamSessionStarted = new Set(this.mediaStreamSessionStarted).add(layerId);
         this.refreshLayerTree();
     }
 
-    /** Start a MediaStream for a camera void. Called from the reconciler
-     *  once the layer is in the tree, the user has opted in (added to
-     *  `cameraSessionStarted`), and the void isn't frozen. Idempotent. */
-    startCameraVoid(layerId: number) {
-        if (!this.handle) return;
-        if (this.cameraSources.has(layerId)) return;
-        const src = new CameraSource(layerId, this.handle);
-        // Reassign the Map so Svelte sees a new identity (Map mutations
-        // don't trigger reactivity on their own in current Svelte 5).
-        this.cameraSources = new Map(this.cameraSources).set(layerId, src);
-        src.start().then(() => {
-            // Force a redraw — `error` may have just been set, and we want
-            // a frame so the void either starts presenting frames or the
-            // VoidProperties notice appears.
-            this.cameraSources = new Map(this.cameraSources);
-            this.requestFrame();
-        });
+    /** Acquire a `MediaStream` for the given capture kind. MUST be called
+     *  synchronously inside a user gesture (before any awaitable round-trip) —
+     *  `getDisplayMedia` requires transient activation, which expires if an
+     *  `await` runs first. Rejects with a `DOMException` the caller maps via
+     *  `describeMediaError`. */
+    acquireMediaStream(captureKind: CaptureKind): Promise<MediaStream> {
+        if (captureKind === 'display') {
+            return navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+        }
+        return navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     }
 
-    /** Stop and unregister a camera void's MediaStream. Called by the delete
-     *  action and by `refreshLayerTree` for orphaned entries. */
-    stopCameraVoid(layerId: number) {
-        const src = this.cameraSources.get(layerId);
+    /** Start (or adopt) a MediaStream for a stream-backed void. The reconciler
+     *  no longer starts sources — only gestures do (the picker and the Resume
+     *  button), which keeps every start inside a user activation regardless of
+     *  capture kind. The picker, which has already `await`ed `add_void`, passes
+     *  its in-gesture pre-acquired `stream` (or `acquireError` if the user
+     *  cancelled); Resume passes neither and acquires in-gesture here.
+     *  Idempotent. */
+    async startMediaStreamVoid(
+        layerId: number,
+        captureKind: CaptureKind,
+        stream?: MediaStream,
+        acquireError?: unknown,
+    ) {
+        if (!this.engine) return;
+        if (this.mediaStreamSources.has(layerId)) return;
+        const src = new MediaStreamSource(layerId, this.engine, captureKind, (id) =>
+            this.onMediaStreamEnded(id),
+        );
+        // Cap uploads to the document resolution up front so the very first
+        // frame is already downscaled (the reconciler keeps it current after
+        // a canvas resize).
+        src.setMaxSourceDimension(Math.max(this.docW, this.docH));
+        // Register immediately so the properties panel can surface error/Resume
+        // state even if acquisition failed. Reassign the Map so Svelte sees a
+        // new identity (in-place Map mutation isn't reactive in Svelte 5).
+        this.mediaStreamSources = new Map(this.mediaStreamSources).set(layerId, src);
+        if (acquireError !== undefined) {
+            src.error = describeMediaError(acquireError, captureKind);
+        } else {
+            try {
+                const s = stream ?? (await this.acquireMediaStream(captureKind));
+                await src.start(s);
+            } catch (err) {
+                src.error = describeMediaError(err, captureKind);
+            }
+        }
+        // Force a redraw — `error` may have just been set, and we want a frame
+        // so the void either starts presenting frames or the notice appears.
+        this.mediaStreamSources = new Map(this.mediaStreamSources);
+        this.requestFrame();
+    }
+
+    /** Stop and unregister a stream-backed void's MediaStream. Called by the
+     *  delete action and by `refreshLayerTree` for orphaned entries. */
+    stopMediaStreamVoid(layerId: number) {
+        const src = this.mediaStreamSources.get(layerId);
         if (!src) return;
         src.stop();
-        const next = new Map(this.cameraSources);
+        const next = new Map(this.mediaStreamSources);
         next.delete(layerId);
-        this.cameraSources = next;
+        this.mediaStreamSources = next;
     }
 
-    /** Surface a camera source's current state to the properties panel.
+    /** React to a stream ending *externally* (the browser's "Stop sharing" bar,
+     *  a webcam unplug). Tear the source down and drop the session opt-in so
+     *  VoidProperties shows "Resume" again. */
+    private onMediaStreamEnded(layerId: number) {
+        this.stopMediaStreamVoid(layerId);
+        if (this.mediaStreamSessionStarted.has(layerId)) {
+            const next = new Set(this.mediaStreamSessionStarted);
+            next.delete(layerId);
+            this.mediaStreamSessionStarted = next;
+        }
+        this.requestFrame();
+    }
+
+    /** Surface a stream source's current state to the properties panel.
      *  Returns null when there's no source registered for the id (i.e. the
-     *  layer isn't a camera void or the source hasn't been created yet). */
-    cameraSourceFor(layerId: number): CameraSource | null {
-        return this.cameraSources.get(layerId) ?? null;
+     *  layer isn't a stream-backed void or the source hasn't been created
+     *  yet). */
+    mediaStreamSourceFor(layerId: number): MediaStreamSource | null {
+        return this.mediaStreamSources.get(layerId) ?? null;
     }
 
-    /** Reconcile the live `cameraSources` map against the latest layer tree:
-     *  every unfrozen camera void should have a running source, every frozen
-     *  / deleted / undone camera void should not. Called from
-     *  `refreshLayerTree` after every layer mutation (add / remove / undo /
-     *  redo / freeze toggle / document open), so dead MediaStreams are reaped
-     *  and the OS camera indicator turns off exactly when the user expects.
+    /** Reconcile the live `mediaStreamSources` map against the latest layer
+     *  tree. Responsibilities: tear down sources whose void was deleted /
+     *  undone, push the latest `freeze` + `frame_divisor` + effective-visibility
+     *  into each live source, and prune the session-opt-in set. It does NOT
+     *  start sources — that's a gesture-only concern (see `startMediaStreamVoid`)
+     *  so activation never expires — and it does NOT stop a source merely
+     *  because the void is frozen: freeze suppresses uploads while keeping the
+     *  stream open (stopping a `getDisplayMedia` track would end the share for
+     *  good). Called from `refreshLayerTree` after every layer mutation so dead
+     *  streams are reaped and the OS capture indicator turns off when the layer
+     *  actually goes away.
      *
-     *  Takes the tree as a parameter (rather than reading `this.layerTree`)
-     *  so the caller — `refreshLayerTree` — doesn't accidentally read the
-     *  same reactive store it's about to write. Reading + writing the same
-     *  `$state` inside an effect-tracked code path causes Svelte to loop
-     *  the enclosing effect into the infinite-update guard. */
-    private reconcileCameraSources(tree: any[]) {
+     *  Takes the tree as a parameter (rather than reading `this.layerTree`) so
+     *  the caller — `refreshLayerTree` — doesn't accidentally read the same
+     *  reactive store it's about to write, which would loop Svelte's
+     *  infinite-update guard. */
+    private reconcileMediaStreamSources(tree: any[]) {
         const desired = new Map<
             number,
             { frozen: boolean; frameDivisor: number; visible: boolean }
         >();
-        // Thread `parentVisible` through the walk: a camera void is
-        // effectively visible only if every ancestor up to the root is
-        // visible, matching the compositor's nested-visibility semantics
-        // (see `Doc::effective_visible`). The eye on the camera's own row
-        // is necessary but not sufficient — hiding the parent group must
-        // also halt uploads.
+        // Thread `parentVisible` through the walk: a stream void is effectively
+        // visible only if every ancestor up to the root is visible, matching
+        // the compositor's nested-visibility semantics (see
+        // `Doc::effective_visible`). The eye on the void's own row is necessary
+        // but not sufficient — hiding the parent group must also halt uploads.
         const walk = (nodes: any[], parentVisible: boolean) => {
             for (const n of nodes) {
                 const selfVisible = n?.visible !== false; // default true
                 const effectiveVisible = parentVisible && selfVisible;
                 // `type` (not `kind`) is the serde variant tag on `LayerInfo`
-                // — set by `#[serde(tag = "type")]` in engine/types.rs. The
-                // word `kind` is also used on the inner `ParamInfo`, which
-                // is what we confused them for earlier.
-                if (n?.type === 'void' && n?.voidType === 'camera') {
+                // — set by `#[serde(tag = "type")]` in engine/types.rs. Any
+                // void whose kind declares a `captureKind` is stream-backed.
+                const cap = this.voidCaptureKind.get(n?.voidType);
+                if (n?.type === 'void' && cap) {
                     const params = (n.params ?? []) as Array<{
                         name: string;
                         value?: unknown;
@@ -552,53 +677,46 @@ export class DarklyInstance {
         };
         walk(tree, true);
 
-        // Stop sources for layers that disappeared or that are now frozen.
-        for (const id of [...this.cameraSources.keys()]) {
-            const entry = desired.get(id);
-            if (entry === undefined || entry.frozen) {
-                this.stopCameraVoid(id);
-            }
-        }
-        // Start sources for camera voids that should be running.
-        // Gate on `cameraSessionStarted` so loading a `.darkly` doesn't
-        // silently re-enable the camera — the user must explicitly opt in
-        // (via the picker for new layers, or the Resume button in
-        // VoidProperties for loaded layers).
-        for (const [id, { frozen }] of desired) {
-            if (!frozen && this.cameraSessionStarted.has(id) && !this.cameraSources.has(id)) {
-                this.startCameraVoid(id);
+        // Tear down sources only for layers that actually disappeared (deleted
+        // / undone). Freezing is handled by `setFrozen` below — it must keep
+        // the stream open.
+        for (const id of [...this.mediaStreamSources.keys()]) {
+            if (!desired.has(id)) {
+                this.stopMediaStreamVoid(id);
             }
         }
 
-        // Push the latest `frame_divisor` and effective-visibility into
-        // every live source. Slider / eye-toggle / parent-hide changes
-        // take effect on the next rAF without restarting the MediaStream.
-        // Done after start so a freshly-started source picks up the user's
-        // current values rather than the constructor defaults.
-        for (const [id, { frameDivisor, visible }] of desired) {
-            const src = this.cameraSources.get(id);
+        // Push the latest `freeze`, `frame_divisor`, effective-visibility, and
+        // upload resolution cap into every live source. Freeze suppresses
+        // uploads (holding the last GPU frame) without closing the stream;
+        // slider / eye-toggle / parent-hide / canvas-resize changes take effect
+        // on the next rAF.
+        const maxSourceDimension = Math.max(this.docW, this.docH);
+        for (const [id, { frozen, frameDivisor, visible }] of desired) {
+            const src = this.mediaStreamSources.get(id);
             if (!src) continue;
+            src.setFrozen(frozen);
             src.setFrameDivisor(frameDivisor);
             src.setVisible(visible);
+            src.setMaxSourceDimension(maxSourceDimension);
         }
 
-        // Drop session-started ids whose layer is gone so a future undo
-        // that re-adds a different layer at the same id doesn't auto-start
-        // by accident.
+        // Drop session-started ids whose layer is gone so a future undo that
+        // re-adds a different layer at the same id doesn't carry a stale opt-in.
         let pruned: Set<number> | null = null;
-        for (const id of this.cameraSessionStarted) {
+        for (const id of this.mediaStreamSessionStarted) {
             if (!desired.has(id)) {
-                pruned ??= new Set(this.cameraSessionStarted);
+                pruned ??= new Set(this.mediaStreamSessionStarted);
                 pruned.delete(id);
             }
         }
-        if (pruned) this.cameraSessionStarted = pruned;
+        if (pruned) this.mediaStreamSessionStarted = pruned;
     }
 
     /** Remove a veil and keep `activeVeilIndex` consistent with the new list. */
     removeVeil(index: number) {
-        if (!this.handle) return;
-        this.handle.remove_veil(index);
+        if (!this.engine) return;
+        this.engine.post('remove_veil', { index });
         if (this.activeVeilIndex === index) {
             this.activeVeilIndex = null;
         } else if (this.activeVeilIndex !== null && this.activeVeilIndex > index) {
@@ -610,8 +728,8 @@ export class DarklyInstance {
 
     /** Reorder a veil and adjust `activeVeilIndex` so the selection follows the move. */
     moveVeil(from: number, to: number) {
-        if (!this.handle || from === to) return;
-        this.handle.move_veil(from, to);
+        if (!this.engine || from === to) return;
+        this.engine.post('move_veil', { from, to });
         const a = this.activeVeilIndex;
         if (a !== null) {
             if (a === from) {
@@ -642,50 +760,47 @@ export class DarklyInstance {
      *  that moves or resizes the canvas window (load, resize, crop) so the
      *  coordinate transforms in `coordinates.ts` recenter around the real
      *  window. Returns the `[ox, oy, w, h]` rect for callers that need it. */
-    syncCanvasRect(): [number, number, number, number] | null {
-        if (!this.handle) return null;
-        const r = this.handle.canvas_rect();
-        this.canvasOriginX = r[0];
-        this.canvasOriginY = r[1];
-        this.docW = r[2];
-        this.docH = r[3];
-        return [r[0], r[1], r[2], r[3]];
+    async syncCanvasRect(): Promise<[number, number, number, number] | null> {
+        if (!this.engine) return null;
+        const r = (await this.engine.send('canvas_rect')) as {
+            origin_x: number;
+            origin_y: number;
+            width: number;
+            height: number;
+        };
+        this.canvasOriginX = r.origin_x;
+        this.canvasOriginY = r.origin_y;
+        this.docW = r.width;
+        this.docH = r.height;
+        return [r.origin_x, r.origin_y, r.width, r.height];
     }
 
-    refreshLayerTree() {
-        if (this.handle) {
-            let next: any[] = [];
-            try {
-                const parsed = JSON.parse(this.handle.layer_tree());
-                next = Array.isArray(parsed) ? parsed : [];
-            } catch { next = []; }
-            // Camera voids own a MediaStream + <video>; reconcile the live
-            // set against the new tree so freshly-added voids spin up,
-            // deleted / frozen / undone voids tear down (turning off the OS
-            // camera indicator). Done BEFORE assignment so this method only
-            // *writes* `layerTree` (never reads it), keeping it out of any
-            // enclosing effect's dependency set — otherwise the write loops
-            // back through the effect.
-            this.reconcileCameraSources(next);
-            this.pruneSelectionAgainstTree(next);
-            this.layerTree = next;
-            // Schedule a render frame: callers invoke this after layer
-            // mutations (undo/redo, add/remove, drag/drop, etc.), and
-            // the engine may have async work pending — dirty-pixel
-            // readbacks, content-bounds compute, animation. Without a
-            // frame, drain_dirty_thumbnail_readbacks never runs and the
-            // layer panel ends up showing pre-mutation thumbnails.
-            this.requestFrame();
-        }
+    async refreshLayerTree(): Promise<void> {
+        if (!this.engine) return;
+        const parsed = await this.engine.send('layer_tree');
+        const next: any[] = Array.isArray(parsed) ? parsed : [];
+        // Stream-backed voids (camera / screenshare) own a MediaStream +
+        // <video>; reconcile the live set against the new tree so deleted /
+        // frozen / undone voids tear down (turning off the OS capture
+        // indicator) and divisor/visibility changes propagate. Done BEFORE
+        // assignment so this method only *writes* `layerTree` (never reads it),
+        // keeping it out of any enclosing effect's dependency set — otherwise
+        // the write loops back through it.
+        this.reconcileMediaStreamSources(next);
+        this.pruneSelectionAgainstTree(next);
+        this.layerTree = next;
+        // Schedule a render frame: callers invoke this after layer mutations
+        // (undo/redo, add/remove, drag/drop, etc.), and the engine may have
+        // async work pending — dirty-pixel readbacks, content-bounds compute,
+        // animation. Without a frame, drain_dirty_thumbnail_readbacks never
+        // runs and the layer panel ends up showing pre-mutation thumbnails.
+        this.requestFrame();
     }
 
-    refreshVeilList() {
-        if (this.handle) {
-            try {
-                const list = JSON.parse(this.handle.veil_list());
-                this.veilList = Array.isArray(list) ? list : [];
-            } catch { this.veilList = []; }
-        }
+    async refreshVeilList(): Promise<void> {
+        if (!this.engine) return;
+        const list = await this.engine.send('veil_list');
+        this.veilList = Array.isArray(list) ? list : [];
     }
 
     // --- Async copy result callback ---
@@ -746,37 +861,58 @@ export class DarklyInstance {
         if (this._interactionCount === 0) this.requestFrame();
     }
 
+    /** True while a canvas pointer stroke/drag is in flight (any tool).
+     *  Set by CanvasView's pointer dispatch. Generic, not brush-specific —
+     *  it gates autosave so a snapshot never captures a half-committed
+     *  stroke or runs its offscreen composite mid-stroke. */
+    pointerActive = $state(false);
+
+    /** Safe to take an autosave snapshot right now? False while the user
+     *  is mid-stroke on the canvas or mid-drag in the brush builder. */
+    get idleForSnapshot(): boolean {
+        return !this.pointerActive && this._interactionCount === 0;
+    }
+
     /** Schedule a render frame if one isn't already pending. */
     requestFrame() {
         if (this._framePending) return;
         this._framePending = true;
         requestAnimationFrame((ts) => {
             this._framePending = false;
-            if (!this.handle) return;
+            const engine = this.engine;
+            if (!engine) return;
             // Push the latest webcam / screenshare frames into their void
-            // input textures BEFORE render — handle.render reads from those
-            // textures during composite, so a later upload would lag by a
-            // frame.
+            // input textures BEFORE render — render reads from those textures
+            // during composite, so a later upload would lag by a frame.
             //
             // The frame count we pass to `tick` is the value the compositor's
-            // master counter *will* hold once `handle.render` increments it
-            // (which it does inside `update_animations`). Anticipating the
-            // increment keeps JS-side divisor gates phase-locked with the
-            // Rust-side veil / overlay / void divisors that check the
-            // post-increment value — so a camera `divisor=N` fires on the
-            // same rAF as a veil `divisor=N`, not one off.
-            const nextFrameCount = this.handle.frame_count() + 1;
-            for (const src of this.cameraSources.values()) {
+            // master counter *will* hold once render increments it (inside
+            // `update_animations`): one past the count the *previous* render
+            // returned. Anticipating the increment keeps JS-side divisor gates
+            // phase-locked with the Rust-side veil / overlay / void divisors
+            // that check the post-increment value — so a camera `divisor=N`
+            // fires on the same rAF as a veil `divisor=N`, not one off. (We
+            // can't read `frame_count` directly anymore — it would be a third
+            // competing engine borrow; render returns it on the state mirror.)
+            const nextFrameCount = (this.engineState?.frameCount ?? 0) + 1;
+            for (const src of this.mediaStreamSources.values()) {
                 src.tick(nextFrameCount);
             }
-            const needsMore = this.handle.render(ts / 1000.0);
 
-            // Sync thumbnail-readback completions into a Svelte-reactive
-            // epoch so `$derived` consumers re-run. `!==` (not `>`) so a
-            // handle swap that resets the wasm counter to 0 still triggers
-            // a re-derivation against the new engine.
-            const v = this.handle.thumbnail_version();
-            if (v !== this.thumbnailEpoch) this.thumbnailEpoch = v;
+            // The ONE engine borrow per frame: drains the request FIFO (which
+            // resolves any pending `send`/`post` promises) then composites. A
+            // re-entrant render reached via the event pump returns `busy` — the
+            // outer render handles everything, so we bail without rescheduling.
+            const frame = engine.render(ts / 1000.0);
+            if (frame.busy) return;
+
+            // Refresh the synchronously-readable engine-state mirror from
+            // render's returned snapshot — no per-frame query; it's a downhill
+            // projection of the borrow render already held this frame. This one
+            // assignment updates everything the UI caches: frame/thumbnail
+            // counters (thumbnail `$derived`s re-run when `thumbnailVersion`
+            // changes) and document bools.
+            if (frame.state) this.engineState = frame.state;
 
             // Per-frame tool hook — async state sync (e.g. GPU readback completion).
             toolRegistry.get(this.activeToolId)?.onFrame?.();
@@ -792,32 +928,38 @@ export class DarklyInstance {
 
             // Check for completed async copy/cut readback.
             if (this._copyCallback) {
-                const result = this.handle.poll_copy_result();
-                if (result) {
-                    const cb = this._copyCallback;
-                    this._copyCallback = null;
-                    cb(result);
-                }
+                engine.send('poll_copy_result').then((result) => {
+                    if (result && this._copyCallback) {
+                        const cb = this._copyCallback;
+                        this._copyCallback = null;
+                        cb(result);
+                    }
+                });
             }
 
             // Check for completed async export readback.
             if (this._exportCallback) {
-                const result = this.handle.poll_export_result();
-                if (result) {
-                    const cb = this._exportCallback;
-                    this._exportCallback = null;
-                    cb(result);
-                }
+                engine
+                    .send<{ width: number; height: number; bytes: Uint8Array }>('poll_export_result')
+                    .then((result) => {
+                        if (result && this._exportCallback) {
+                            const cb = this._exportCallback;
+                            this._exportCallback = null;
+                            cb({ width: result.width, height: result.height, rgba: result.bytes });
+                        }
+                    });
             }
 
-            // Check for completed async `.darkly` save readbacks.
+            // Check for completed async `.darkly` save readbacks. The bundle's
+            // byte blobs arrive concatenated in `bytes`; slice them back out
+            // into the per-blob shape `saveDocument.ts` expects.
             if (this._saveCallback) {
-                const bundle = this.handle.poll_save_result();
-                if (bundle) {
+                engine.send<PackedSaveResult>('poll_save_result').then((packed) => {
+                    if (!packed || !this._saveCallback) return;
                     const cb = this._saveCallback;
                     this._saveCallback = null;
-                    cb(bundle);
-                }
+                    cb(unpackSaveBundle(packed));
+                });
             }
 
             // Continue animation loop only when no UI interaction is
@@ -825,7 +967,7 @@ export class DarklyInstance {
             // actions, resize, etc.) always go through — only the
             // self-scheduling continuous loop is suppressed.
             const shouldContinue =
-                needsMore ||
+                frame.needsMore ||
                 this._copyCallback ||
                 this._exportCallback ||
                 this._saveCallback;

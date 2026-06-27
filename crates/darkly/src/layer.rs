@@ -3,7 +3,7 @@ use crate::gpu::blend_mode::{self, BlendModeRegistration};
 use crate::gpu::params::ParamValue;
 
 slotmap::new_key_type! {
-    /// Unique identifier for any node, group, or modifier in a [`Document`].
+    /// Unique identifier for any node, group, or filter in a [`Document`].
     /// Backed by a slotmap key — generational, so stale ids return `None` from
     /// [`Document`] lookups instead of aliasing onto a recycled slot.
     ///
@@ -32,7 +32,7 @@ impl LayerId {
 }
 
 /// Properties shared by every node in the tree — raster layers, groups, and
-/// modifiers. Lock prevents any mutation; lives on every node by construction
+/// filters. Lock prevents any mutation; lives on every node by construction
 /// so the universal check is one line at every mutation entry point.
 pub struct NodeCommon {
     pub name: String,
@@ -51,7 +51,7 @@ impl NodeCommon {
 }
 
 /// Compositing properties for nodes that participate in normal blending
-/// (raster layers and groups). Modifiers don't have one — masks structurally
+/// (raster layers and groups). Filters don't have one — masks structurally
 /// have no opacity or blend mode.
 ///
 /// `blend_mode` is a registry reference, not an enum: `type_id` is the
@@ -80,7 +80,7 @@ impl Default for BlendProps {
 }
 
 /// Pixel-storage metadata for any node holding GPU pixels (raster layers, mask
-/// modifiers, future filter caches). Bulk pixel data is GPU-authoritative; this
+/// filters, future filter caches). Bulk pixel data is GPU-authoritative; this
 /// struct only carries canvas-space metadata: extent and texture format.
 ///
 /// Every `PixelBuffer` is sampled independently — the blend shader computes UV
@@ -104,11 +104,11 @@ pub struct RasterLayer {
     pub common: NodeCommon,
     pub blend: BlendProps,
     pub pixels: PixelBuffer,
-    /// Modifiers attached to this layer, in bottom-up order. Each entry is a
+    /// Filters attached to this layer, in bottom-up order. Each entry is a
     /// [`LayerId`] resolvable in the owning [`Document`]'s entity store.
     ///
     /// [`Document`]: crate::document::Document
-    pub modifiers: Vec<LayerId>,
+    pub filters: Vec<LayerId>,
 }
 
 impl RasterLayer {
@@ -123,7 +123,7 @@ impl RasterLayer {
             common: NodeCommon::new(name),
             blend: BlendProps::new(),
             pixels: PixelBuffer::new(bounds, wgpu::TextureFormat::Rgba8Unorm),
-            modifiers: Vec::new(),
+            filters: Vec::new(),
         }
     }
 }
@@ -148,7 +148,13 @@ pub struct VoidLayer {
     /// Parameter values matching the void type's
     /// [`crate::gpu::void::ParamDef`] schema, in order.
     pub params: Vec<ParamValue>,
-    pub modifiers: Vec<LayerId>,
+    /// User transform (pan / scale / rotate) applied to the void's output,
+    /// edited by the generic transform gizmo. Persistent / undoable /
+    /// serializable document state. Voids that don't opt into live transform
+    /// (see [`crate::gpu::void::VoidRegistration::supports_live_transform`])
+    /// simply leave this at identity. Default `Basic(IDENTITY)`.
+    pub transform: crate::transform::Transform,
+    pub filters: Vec<LayerId>,
     /// Optional persistent frame snapshot. Most voids leave this `None`
     /// (their output is purely procedural — replays from params). The
     /// camera void uses it to round-trip the last received webcam frame
@@ -168,8 +174,51 @@ impl VoidLayer {
             blend: BlendProps::new(),
             void_type,
             params,
-            modifiers: Vec::new(),
+            transform: crate::transform::Transform::identity(),
+            filters: Vec::new(),
             frame: None,
+        }
+    }
+}
+
+/// A filter layer — a non-destructive procedural *transform* in the layer
+/// tree. Where a [`VoidLayer`] is a procedural *source* (it generates pixels),
+/// a filter layer transforms the composite of everything below it in place
+/// (the group accumulator), leaving the lower layers' own pixels untouched.
+/// This is Krita's *adjustment layer*. Scope it to one layer by placing it in a
+/// non-passthrough (isolated) group.
+///
+/// State is exactly: a `pipeline` id naming which
+/// [`crate::gpu::filter::FilterPipelineRegistry`] transform to run (e.g.
+/// `"invert"`), plus that transform's parameter values. There is no pixel
+/// buffer — the compositor runs the shared filter pipeline over the running
+/// accumulator each frame.
+pub struct FilterLayer {
+    pub id: LayerId,
+    pub common: NodeCommon,
+    pub blend: BlendProps,
+    /// Stable `type_id` from [`crate::gpu::filter::FilterPipelineRegistry`]
+    /// (e.g. `"invert"`). Named `pipeline` rather than `filter_type` because
+    /// `filters` (below) already means the attached mask/selection list — two
+    /// "filter" fields on one struct would be a footgun.
+    pub pipeline: String,
+    /// Parameter values matching the filter pipeline's schema, in order. Empty
+    /// for parameter-free filters like invert.
+    pub params: Vec<ParamValue>,
+    /// Attached mask / selection filters (same polymorphic list every layer
+    /// kind carries).
+    pub filters: Vec<LayerId>,
+}
+
+impl FilterLayer {
+    pub fn new(id: LayerId, name: String, pipeline: String, params: Vec<ParamValue>) -> Self {
+        FilterLayer {
+            id,
+            common: NodeCommon::new(name),
+            blend: BlendProps::new(),
+            pipeline,
+            params,
+            filters: Vec::new(),
         }
     }
 }
@@ -183,7 +232,7 @@ pub struct LayerGroup {
     ///
     /// [`Document`]: crate::document::Document
     pub children: Vec<LayerId>,
-    pub modifiers: Vec<LayerId>,
+    pub filters: Vec<LayerId>,
     /// True = passthrough (default), false = normal isolated group.
     pub passthrough: bool,
     /// UI state: whether the group is visually collapsed in the layer panel.
@@ -199,7 +248,7 @@ impl LayerGroup {
             common: NodeCommon::new(name),
             blend: BlendProps::new(),
             children: Vec::new(),
-            modifiers: Vec::new(),
+            filters: Vec::new(),
             passthrough: true,
             collapsed: false,
         }
@@ -207,7 +256,7 @@ impl LayerGroup {
 }
 
 /// A node in the layer tree — either a leaf layer or a group containing children.
-/// Modifiers are NOT [`LayerNode`]s; they live on a host's `modifiers` list as
+/// Filters are NOT [`LayerNode`]s; they live on a host's `filters` list as
 /// [`LayerId`] references and are resolved through the owning [`Document`].
 ///
 /// [`Document`]: crate::document::Document
@@ -252,32 +301,30 @@ impl LayerNode {
         }
     }
 
-    pub fn modifiers(&self) -> &[LayerId] {
+    pub fn filters(&self) -> &[LayerId] {
         match self {
-            LayerNode::Layer(l) => l.modifiers(),
-            LayerNode::Group(g) => &g.modifiers,
+            LayerNode::Layer(l) => l.filters(),
+            LayerNode::Group(g) => &g.filters,
         }
     }
 
     pub fn modifiers_mut(&mut self) -> &mut Vec<LayerId> {
         match self {
             LayerNode::Layer(l) => l.modifiers_mut(),
-            LayerNode::Group(g) => &mut g.modifiers,
+            LayerNode::Group(g) => &mut g.filters,
         }
     }
 
     pub fn pixels(&self) -> Option<&PixelBuffer> {
         match self {
-            LayerNode::Layer(Layer::Raster(r)) => Some(&r.pixels),
-            LayerNode::Layer(Layer::Void(_)) => None,
+            LayerNode::Layer(l) => l.pixels(),
             LayerNode::Group(_) => None,
         }
     }
 
     pub fn pixels_mut(&mut self) -> Option<&mut PixelBuffer> {
         match self {
-            LayerNode::Layer(Layer::Raster(r)) => Some(&mut r.pixels),
-            LayerNode::Layer(Layer::Void(_)) => None,
+            LayerNode::Layer(l) => l.pixels_mut(),
             LayerNode::Group(_) => None,
         }
     }
@@ -297,10 +344,11 @@ impl LayerNode {
     /// keep in sync with the registration files.
     pub fn kind(&self) -> &'static crate::document::LayerKindRegistration {
         use crate::document::layer_kind::registry;
-        use crate::document::layer_kinds::{group, raster, void};
+        use crate::document::layer_kinds::{filter, group, raster, void};
         match self {
             LayerNode::Layer(Layer::Raster(_)) => registry().get(raster::TYPE_ID).unwrap(),
             LayerNode::Layer(Layer::Void(_)) => registry().get(void::TYPE_ID).unwrap(),
+            LayerNode::Layer(Layer::Filter(_)) => registry().get(filter::TYPE_ID).unwrap(),
             LayerNode::Group(_) => registry().get(group::TYPE_ID).unwrap(),
         }
     }
@@ -323,18 +371,85 @@ impl LayerNode {
             LayerNode::Group(group) => ctx.compose_group(group),
         }
     }
+
+    /// Whether this node transforms the running parent accumulator *in place*
+    /// (the composite of everything below it) rather than blending its own
+    /// discrete texture in. A passthrough group inlines its children into the
+    /// parent; a filter layer runs its pipeline over the accumulator. Both want
+    /// a snapshot+lerp detour when they carry a visible mask, so the compositor
+    /// keys its mask-snapshot resource off this predicate instead of
+    /// enumerating which kinds qualify — a new in-place kind is purely additive.
+    /// Isolated groups, raster, and void layers blend a texture and answer
+    /// `false`.
+    pub fn composites_in_place(&self) -> bool {
+        match self {
+            LayerNode::Group(g) => g.passthrough,
+            LayerNode::Layer(Layer::Filter(_)) => true,
+            LayerNode::Layer(_) => false,
+        }
+    }
+}
+
+/// How a layer answers "can the user transform me, and how?" — consumed by the
+/// Transform tool to pick which binding drives the generic gizmo. This is the
+/// layer describing *itself* (type-owned dispatch); the transform subsystem
+/// never branches on layer kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransformCapability {
+    /// Live, non-destructive, persistent transform property (e.g. a camera
+    /// void). The gizmo edits the stored [`crate::transform::Transform`].
+    Live,
+    /// Destructive extract-and-commit (raster layers — today's floating).
+    Destructive,
+    /// Not user-transformable (groups, non-transformable voids).
+    None,
 }
 
 pub enum Layer {
     Raster(RasterLayer),
     Void(VoidLayer),
+    Filter(FilterLayer),
 }
 
 impl Layer {
+    /// Whether and how the user can transform this layer. The void's opinion is
+    /// static, looked up from the registry by `void_type` — passed in because
+    /// [`VoidRegistry`] is owned by the compositor, not a global.
+    ///
+    /// [`VoidRegistry`]: crate::gpu::void::VoidRegistry
+    pub fn transform_capability(
+        &self,
+        reg: &crate::gpu::void::VoidRegistry,
+    ) -> TransformCapability {
+        match self {
+            Layer::Raster(_) => TransformCapability::Destructive,
+            Layer::Void(v) => {
+                if reg.supports_live_transform(&v.void_type) {
+                    TransformCapability::Live
+                } else {
+                    TransformCapability::None
+                }
+            }
+            // A full-frame filter has no meaningful transform — there are no
+            // pixels of its own to move.
+            Layer::Filter(_) => TransformCapability::None,
+        }
+    }
+
+    /// Whether this layer participates in the standard blend pipeline — i.e.
+    /// it has a node texture + blend uniforms in the compositor's
+    /// `layer_cache`. Raster and void layers do; a filter layer transforms the
+    /// running group accumulator instead of contributing a texture of its own,
+    /// so it is realized by `compose_filter_arm`, not the content walk.
+    pub fn is_blend_content(&self) -> bool {
+        !matches!(self, Layer::Filter(_))
+    }
+
     pub fn id(&self) -> LayerId {
         match self {
             Layer::Raster(r) => r.id,
             Layer::Void(v) => v.id,
+            Layer::Filter(f) => f.id,
         }
     }
 
@@ -342,6 +457,7 @@ impl Layer {
         match self {
             Layer::Raster(r) => &r.common,
             Layer::Void(v) => &v.common,
+            Layer::Filter(f) => &f.common,
         }
     }
 
@@ -349,6 +465,7 @@ impl Layer {
         match self {
             Layer::Raster(r) => &mut r.common,
             Layer::Void(v) => &mut v.common,
+            Layer::Filter(f) => &mut f.common,
         }
     }
 
@@ -356,6 +473,7 @@ impl Layer {
         match self {
             Layer::Raster(r) => &r.blend,
             Layer::Void(v) => &v.blend,
+            Layer::Filter(f) => &f.blend,
         }
     }
 
@@ -363,36 +481,40 @@ impl Layer {
         match self {
             Layer::Raster(r) => &mut r.blend,
             Layer::Void(v) => &mut v.blend,
+            Layer::Filter(f) => &mut f.blend,
         }
     }
 
-    pub fn modifiers(&self) -> &[LayerId] {
+    pub fn filters(&self) -> &[LayerId] {
         match self {
-            Layer::Raster(r) => &r.modifiers,
-            Layer::Void(v) => &v.modifiers,
+            Layer::Raster(r) => &r.filters,
+            Layer::Void(v) => &v.filters,
+            Layer::Filter(f) => &f.filters,
         }
     }
 
     pub fn modifiers_mut(&mut self) -> &mut Vec<LayerId> {
         match self {
-            Layer::Raster(r) => &mut r.modifiers,
-            Layer::Void(v) => &mut v.modifiers,
+            Layer::Raster(r) => &mut r.filters,
+            Layer::Void(v) => &mut v.filters,
+            Layer::Filter(f) => &mut f.filters,
         }
     }
 
-    /// Pixel buffer for this layer, if any. Void layers have no pixels —
-    /// their content is regenerated from `params` each frame.
+    /// Pixel buffer for this layer, if any. Void and filter layers have no
+    /// pixels — a void regenerates from `params`, a filter transforms the
+    /// accumulator below it.
     pub fn pixels(&self) -> Option<&PixelBuffer> {
         match self {
             Layer::Raster(r) => Some(&r.pixels),
-            Layer::Void(_) => None,
+            Layer::Void(_) | Layer::Filter(_) => None,
         }
     }
 
     pub fn pixels_mut(&mut self) -> Option<&mut PixelBuffer> {
         match self {
             Layer::Raster(r) => Some(&mut r.pixels),
-            Layer::Void(_) => None,
+            Layer::Void(_) | Layer::Filter(_) => None,
         }
     }
 
@@ -402,5 +524,17 @@ impl Layer {
 
     pub fn locked(&self) -> bool {
         self.common().locked
+    }
+
+    /// Regenerable procedural state — `(params, transform)` — for void layers,
+    /// `None` for raster. Used by `sync_compositor_layers` to push the doc's
+    /// authoritative void state downhill to the compositor after any doc
+    /// mutation (undo / redo / load), so the running void instance never drifts
+    /// from the document.
+    pub fn void_state(&self) -> Option<(&[ParamValue], &crate::transform::Transform)> {
+        match self {
+            Layer::Void(v) => Some((&v.params, &v.transform)),
+            Layer::Raster(_) | Layer::Filter(_) => None,
+        }
     }
 }

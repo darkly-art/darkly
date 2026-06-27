@@ -77,7 +77,7 @@ pub struct Manifest {
 /// it.
 ///
 /// Named `ManifestEntry` (not `ManifestEntity`) to avoid colliding
-/// with the document-side `Entity::{Node, Modifier}` enum — they're
+/// with the document-side `Entity::{Node, Filter}` enum — they're
 /// different abstractions: `Entity` is the in-doc storage
 /// discriminator; `ManifestEntry` is the wire envelope.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

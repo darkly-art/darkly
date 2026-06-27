@@ -13,6 +13,7 @@ use crate::gpu::effect::{
     create_blit_bind_group, create_blit_pipeline, EffectCache, EffectPipeline,
 };
 use crate::gpu::void::{DirtyFlag, ParamDef, ParamValue, Void, VoidRegistration};
+use std::cell::Cell;
 use std::sync::Arc;
 
 /// Procedural-render downscale factor. The FBM shader runs into an aux
@@ -99,6 +100,12 @@ pub fn register() -> VoidRegistration {
         type_id: TYPE_ID,
         display_name: "Noise",
         params: PARAMS,
+        icon: "tabler:galaxy",
+        supports_preview: true,
+        supports_live_transform: true,
+        // Purely procedural — no external capture, identity seed transform.
+        capture_kind: None,
+        default_transform: |_, _| crate::transform::Transform::identity(),
         create_pipeline,
         from_params: |params, shared| Box::new(Noise::from_params(params, shared)),
     }
@@ -107,26 +114,22 @@ pub fn register() -> VoidRegistration {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct NoiseUniforms {
-    // User-editable fields. `update_params` writes the leading
-    // `USER_PARAMS_BYTES` of the struct and stops there — keeps the
-    // engine-baked `canvas_scale` safe across slider drags.
     seed: u32,
     octaves: i32,
     frequency: f32,
     warp: f32,
     darkness: f32,
     time: f32,
-    // Engine-baked at create_cache. Layout note: must follow `time` so the
-    // partial write in `update_params` never touches it.
+    // Multiplier from render-target px → canvas px (the aux buffer may be
+    // smaller than the canvas). Baked at `create_cache` and cached on the
+    // struct, so every uniform write rebuilds the whole struct from state.
     canvas_scale: f32,
     _pad0: f32,
+    // Inverse of the user transform's affine — applied to the canvas-space
+    // sampling coordinate so the field pans / scales / rotates with the gizmo.
+    inv_row0: [f32; 4],
+    inv_row1: [f32; 4],
 }
-
-/// Byte length of the user-editable prefix of `NoiseUniforms` (fields
-/// `seed` through `time` inclusive). `update_params` writes exactly this
-/// many bytes so the per-cache `canvas_scale` baked at `create_cache`
-/// time is not clobbered when a slider moves.
-const USER_PARAMS_BYTES: usize = 24;
 
 #[derive(Debug)]
 pub struct Noise {
@@ -141,6 +144,13 @@ pub struct Noise {
     /// scrub control for exploring different cross-sections of the field
     /// without changing the seed.
     pub time: f32,
+    /// User transform (gizmo affine). The shader samples the field through its
+    /// inverse, so the noise pattern pans / scales / rotates under the gizmo.
+    transform: crate::transform::Transform,
+    /// Render-target→canvas px scale, baked at `create_cache`. `Cell` because
+    /// the trait hands `&self` there; cached so uniform writes need no extra
+    /// argument and never clobber it.
+    canvas_scale: Cell<f32>,
     shared: Arc<EffectPipeline>,
     dirty: DirtyFlag,
 }
@@ -157,6 +167,8 @@ impl Clone for Noise {
             warp: self.warp,
             darkness: self.darkness,
             time: self.time,
+            transform: self.transform,
+            canvas_scale: Cell::new(self.canvas_scale.get()),
             shared: self.shared.clone(),
             dirty: DirtyFlag::new_dirty(),
         }
@@ -196,12 +208,16 @@ impl Noise {
             warp,
             darkness,
             time,
+            transform: crate::transform::Transform::identity(),
+            canvas_scale: Cell::new(1.0),
             shared,
             dirty: DirtyFlag::new_dirty(),
         }
     }
 
-    fn uniforms(&self, canvas_scale: f32) -> NoiseUniforms {
+    fn uniforms(&self) -> NoiseUniforms {
+        let fwd = self.transform.to_affine();
+        let inv = crate::transform::affine_inverse(&fwd).unwrap_or(crate::transform::IDENTITY);
         NoiseUniforms {
             seed: self.seed as u32,
             octaves: self.octaves,
@@ -209,8 +225,10 @@ impl Noise {
             warp: self.warp,
             darkness: self.darkness,
             time: self.time,
-            canvas_scale,
+            canvas_scale: self.canvas_scale.get(),
             _pad0: 0.0,
+            inv_row0: [inv[0], inv[1], inv[2], 0.0],
+            inv_row1: [inv[3], inv[4], inv[5], 0.0],
         }
     }
 }
@@ -268,11 +286,23 @@ impl Void for Noise {
             Some(ParamValue::Float(v)) => *v,
             _ => self.time,
         };
-        // Partial write: skip `canvas_scale` (baked at create_cache time).
+        // Full write — `canvas_scale` is cached on the struct, so rebuilding
+        // the whole uniform can't clobber it.
         if let Some(buf) = cache.uniform_bufs.first() {
-            let scratch = self.uniforms(0.0);
-            let bytes = &bytemuck::bytes_of(&scratch)[..USER_PARAMS_BYTES];
-            queue.write_buffer(buf, 0, bytes);
+            queue.write_buffer(buf, 0, bytemuck::bytes_of(&self.uniforms()));
+        }
+        self.dirty.mark();
+    }
+
+    fn set_transform(
+        &mut self,
+        queue: &wgpu::Queue,
+        cache: &EffectCache,
+        transform: &crate::transform::Transform,
+    ) {
+        self.transform = *transform;
+        if let Some(buf) = cache.uniform_bufs.first() {
+            queue.write_buffer(buf, 0, bytemuck::bytes_of(&self.uniforms()));
         }
         self.dirty.mark();
     }
@@ -288,7 +318,7 @@ impl Void for Noise {
     ) -> EffectCache {
         let aux_w = (render_width / AUX_DOWNSCALE).max(AUX_MIN_DIM);
         let aux_h = (render_height / AUX_DOWNSCALE).max(AUX_MIN_DIM);
-        let canvas_scale = render_width as f32 / aux_w as f32;
+        self.canvas_scale.set(render_width as f32 / aux_w as f32);
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("void-noise-uniforms"),
@@ -296,11 +326,7 @@ impl Void for Noise {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(
-            &uniform_buf,
-            0,
-            bytemuck::bytes_of(&self.uniforms(canvas_scale)),
-        );
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&self.uniforms()));
 
         // 3D noise volume: filled with PCG-hashed bytes, sampled with
         // hardware trilinear filtering by `fbm_value_noise3`. One volume
@@ -512,8 +538,8 @@ fn create_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> Effec
 
     // WGSL has no native #include — concatenate the shared FBM helper ahead
     // of this void's shader. A future warp veil will assemble the same way.
-    let fbm_src = include_str!("../../../../../shaders/lib/fbm.wgsl");
-    let void_src = include_str!("../../../../../shaders/voids/noise.wgsl");
+    let fbm_src = include_str!("../../../shaders/lib/fbm.wgsl");
+    let void_src = include_str!("../../../shaders/voids/noise.wgsl");
     let full_src = format!("{fbm_src}\n{void_src}");
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {

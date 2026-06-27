@@ -46,6 +46,13 @@ impl UndoAction for CompoundAction {
             .find_map(|a| a.gpu_region_entry_mut())
     }
 
+    fn gpu_region_entries_mut(&mut self) -> Vec<&mut UndoRegionEntry> {
+        self.actions
+            .iter_mut()
+            .flat_map(|a| a.gpu_region_entries_mut())
+            .collect()
+    }
+
     fn on_evict(&mut self, compositor: &mut Compositor) {
         for action in self.actions.iter_mut() {
             action.on_evict(compositor);

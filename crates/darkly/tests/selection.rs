@@ -689,7 +689,7 @@ fn selection_add_undo_does_not_restore_stale_pixels() {
     engine.select_all();
     engine.select_rect(0.0, 0.0, 32.0, h as f32, SelectionMode::Replace, false, 0.0);
 
-    // Add a disjoint right band (shift-modifier path).
+    // Add a disjoint right band (shift-filter path).
     engine.select_rect(96.0, 0.0, 32.0, h as f32, SelectionMode::Add, false, 0.0);
 
     // Undo the Add — selection must revert to just the left band.
@@ -1030,4 +1030,207 @@ fn contour_segments_r8_matches_tile_version() {
             r8.0, r8.1
         );
     }
+}
+
+// ============================================================================
+// Selection-modify commands: grow / shrink / border / smooth / feather /
+// antialias. These inspect the R8 selection mask directly via
+// `test_readback_selection` (255 = selected, 0 = unselected).
+// ============================================================================
+
+/// Sample one byte from the R8 selection mask at `(x, y)`.
+fn sel_at(mask: &[u8], w: u32, x: u32, y: u32) -> u8 {
+    mask[(y * w + x) as usize]
+}
+
+/// Select a hard-edged interior box (no AA / feather) for morphology tests.
+fn select_box(engine: &mut DarklyEngine, x: f32, y: f32, w: f32, h: f32) {
+    engine.select_rect(x, y, w, h, SelectionMode::Replace, false, 0.0);
+}
+
+#[test]
+fn selection_grow_expands_edges() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let _layer = engine.add_raster_layer(None);
+
+    // Box spanning x,y ∈ [32, 96).
+    select_box(&mut engine, 32.0, 32.0, 64.0, 64.0);
+    let before = engine
+        .test_readback_selection()
+        .expect("selection allocated");
+    assert_eq!(
+        sel_at(&before, w, 28, 64),
+        0,
+        "4px left of edge starts clear"
+    );
+
+    engine.grow_selection(8);
+    let after = engine.test_readback_selection().unwrap();
+
+    assert!(
+        sel_at(&after, w, 28, 64) > 0,
+        "4px outside the original edge should be selected after grow(8)"
+    );
+    assert_eq!(sel_at(&after, w, 64, 64), 255, "interior stays selected");
+    assert_eq!(
+        sel_at(&after, w, 8, 64),
+        0,
+        "24px outside should remain unselected"
+    );
+}
+
+#[test]
+fn selection_shrink_erodes_edges() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let _layer = engine.add_raster_layer(None);
+
+    select_box(&mut engine, 32.0, 32.0, 64.0, 64.0);
+    engine.shrink_selection(8);
+    let after = engine.test_readback_selection().unwrap();
+
+    assert_eq!(
+        sel_at(&after, w, 36, 64),
+        0,
+        "4px inside the original edge should erode away with shrink(8)"
+    );
+    assert_eq!(sel_at(&after, w, 64, 64), 255, "interior stays selected");
+    assert_eq!(
+        sel_at(&after, w, 48, 64),
+        255,
+        "well inside should remain selected"
+    );
+}
+
+#[test]
+fn selection_border_hollows_interior() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let _layer = engine.add_raster_layer(None);
+
+    select_box(&mut engine, 32.0, 32.0, 64.0, 64.0);
+    engine.border_selection(8);
+    let after = engine.test_readback_selection().unwrap();
+
+    assert_eq!(
+        sel_at(&after, w, 64, 64),
+        0,
+        "interior should be hollowed out by border"
+    );
+    assert!(
+        sel_at(&after, w, 32, 64) > 0,
+        "the edge band should remain selected"
+    );
+}
+
+#[test]
+fn selection_feather_softens_edge() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let _layer = engine.add_raster_layer(None);
+
+    select_box(&mut engine, 32.0, 32.0, 64.0, 64.0);
+    // Hard edge before: boundary pixel is fully on, just-outside fully off.
+    let before = engine.test_readback_selection().unwrap();
+    assert_eq!(sel_at(&before, w, 28, 64), 0);
+
+    engine.feather_selection(6.0);
+    let after = engine.test_readback_selection().unwrap();
+
+    let edge = sel_at(&after, w, 28, 64);
+    assert!(
+        edge > 0 && edge < 255,
+        "feathered edge should have a partial value, got {edge}"
+    );
+    assert!(
+        sel_at(&after, w, 64, 64) > 200,
+        "interior should stay essentially fully selected"
+    );
+}
+
+#[test]
+fn selection_antialias_softens_staircase() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let _layer = engine.add_raster_layer(None);
+
+    select_box(&mut engine, 32.0, 32.0, 64.0, 64.0);
+    engine.antialias_selection();
+    let after = engine.test_readback_selection().unwrap();
+
+    // The boundary pixel picks up a partial (anti-aliased) value.
+    let edge = sel_at(&after, w, 32, 64);
+    assert!(
+        edge > 0 && edge < 255,
+        "antialiased boundary should be partial, got {edge}"
+    );
+    assert_eq!(sel_at(&after, w, 64, 64), 255, "interior stays fully on");
+}
+
+#[test]
+fn selection_smooth_removes_speck() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let _layer = engine.add_raster_layer(None);
+
+    // Main box plus a small detached speck.
+    select_box(&mut engine, 40.0, 40.0, 48.0, 48.0);
+    engine.select_rect(8.0, 8.0, 3.0, 3.0, SelectionMode::Add, false, 0.0);
+    assert_eq!(
+        sel_at(&engine.test_readback_selection().unwrap(), w, 9, 9),
+        255
+    );
+
+    engine.smooth_selection(2);
+    let after = engine.test_readback_selection().unwrap();
+
+    assert_eq!(
+        sel_at(&after, w, 9, 9),
+        0,
+        "the 3px speck should be removed by smooth(2)"
+    );
+    assert_eq!(
+        sel_at(&after, w, 64, 64),
+        255,
+        "the main selection should survive"
+    );
+}
+
+#[test]
+fn selection_grow_undo_restores_mask() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let _layer = engine.add_raster_layer(None);
+
+    select_box(&mut engine, 32.0, 32.0, 64.0, 64.0);
+    let before = engine.test_readback_selection().unwrap();
+
+    engine.grow_selection(8);
+    let grown = engine.test_readback_selection().unwrap();
+    assert_ne!(before, grown, "grow should change the mask");
+
+    engine.undo();
+    let restored = engine.test_readback_selection().unwrap();
+    assert_eq!(
+        before, restored,
+        "undo should restore the exact pre-grow selection mask"
+    );
+}
+
+#[test]
+fn selection_modify_no_ops_without_selection() {
+    let (w, h) = (64, 64);
+    let mut engine = test_engine(w, h);
+    let _layer = engine.add_raster_layer(None);
+
+    assert!(!engine.has_selection());
+    // None of these should panic or create a selection.
+    engine.grow_selection(4);
+    engine.shrink_selection(4);
+    engine.border_selection(4);
+    engine.smooth_selection(4);
+    engine.feather_selection(4.0);
+    engine.antialias_selection();
+    assert!(!engine.has_selection());
 }

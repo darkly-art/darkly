@@ -271,9 +271,7 @@ fn create_vhs_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> E
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("vhs-shader"),
-        source: wgpu::ShaderSource::Wgsl(
-            include_str!("../../../../../shaders/veils/vhs.wgsl").into(),
-        ),
+        source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/veils/vhs.wgsl").into()),
     });
 
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

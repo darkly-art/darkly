@@ -1,7 +1,9 @@
 import type { Tool } from './registry';
+import type { Engine } from '../engine/protocol';
 import { app } from '../state/app.svelte';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { srgbToLinear } from '../lib/color';
+import { effectivePressure } from '../lib/pressure';
 import { strokeRecorder, currentCanvasDimensions } from '../lib/strokeRecorder';
 import {
     KIND_MASKED_STAMP,
@@ -56,25 +58,13 @@ export interface PenPose {
     tangentialPressure: number;
 }
 
-/** Effective pressure for a PointerEvent. Stylus / touch report real
- *  per-event pressure; mouse-with-button-down reports the W3C spec
- *  default of 0.5 (a "split the difference" value designed for generic
- *  gesture surfaces). For paint tools that means a Flow=100% mouse
- *  click only deposits ~50% alpha, which is surprising — Krita,
- *  Photoshop, GIMP, and MyPaint all override mouse to full pressure
- *  for the same reason. Match that convention here. */
-export function effectivePressure(e: PointerEvent): number {
-    return e.pointerType === 'mouse' ? 1.0 : e.pressure;
-}
-
-/** Pose for the on-canvas cursor preview. Tracks the live PointerEvent
- *  pressure (with mouse overridden to full per [`effectivePressure`])
- *  so the cursor circle reflects what a dab at this pose would
- *  actually look like — pressure-driven dynamics included. The resize
+/** Pose for the on-canvas cursor preview. Pressure is pinned to full so the
+ *  circle shows the brush's reach — a hovering pen reports 0, and the preview
+ *  isn't a live dab. Tilt and twist still track the live event. The resize
  *  scrub uses the same pose, keeping cursor and stroke in lockstep. */
 export function cursorPose(e: PointerEvent): PenPose {
     return {
-        pressure: effectivePressure(e),
+        pressure: 1.0,
         tiltX: (e.tiltX ?? 0) / 90,
         tiltY: (e.tiltY ?? 0) / 90,
         twist: (e.twist ?? 0) / 360,
@@ -90,36 +80,51 @@ export function cursorPose(e: PointerEvent): PenPose {
  *  a hover preview is actually visible. */
 let lastHover: { cx: number; cy: number; pose: PenPose } | null = null;
 
+/** Monotonic hover generation, bumped every time the overlay is invalidated
+ *  (stroke start, pointer leave, tool deactivate). `pushHoverOverlay` is async
+ *  now — it awaits the preview refresh before drawing — so a hover in flight
+ *  when a stroke begins could otherwise land its `set_overlay` *after*
+ *  pointerdown's `clear_overlay`, freezing a ghost dab on-canvas for the whole
+ *  stroke. Capturing the generation before the await and re-checking after lets
+ *  an invalidated hover bail instead of overtaking the clear. */
+let hoverGen = 0;
+
 /** Refresh the on-canvas brush cursor preview at `(cx, cy)` using the
  *  given pose. Exported so non-brush callers (e.g. the shift+drag size
- *  scrub, which uses `FULL_PRESS_POSE` so the circle shows the brush's
- *  max extent) can keep the preview in sync after mutating the graph. */
-export function pushHoverOverlay(handle: any, pose: PenPose, cx: number, cy: number) {
-    const info = handle.refresh_brush_cursor_preview(
-        cx,
-        cy,
-        pose.pressure,
-        pose.tiltX,
-        pose.tiltY,
-        pose.twist,
-        pose.tangentialPressure,
-    ) as BrushCursorPreviewInfo | null;
+ *  scrub, which uses `cursorPose` so the circle shows the brush's full
+ *  extent) can keep the preview in sync after mutating the graph. */
+export async function pushHoverOverlay(engine: Engine, pose: PenPose, cx: number, cy: number) {
+    const gen = hoverGen;
+    const info = (await engine.send('refresh_brush_cursor_preview', {
+        x: cx,
+        y: cy,
+        pressure: pose.pressure,
+        tilt_x: pose.tiltX,
+        tilt_y: pose.tiltY,
+        rotation: pose.twist,
+        tangential_pressure: pose.tangentialPressure,
+    })) as BrushCursorPreviewInfo | null;
+    // A stroke / leave / deactivate fired during the await — that path already
+    // cleared the overlay, so drawing now would resurrect a frozen ghost dab.
+    if (gen !== hoverGen) return;
     if (!info) {
-        handle.clear_overlay();
+        engine.post('clear_overlay');
         app.toolCursor = null;
         lastHover = null;
         return;
     }
     app.toolCursor = 'none';
-    handle.set_overlay([
-        prim(
-            KIND_MASKED_STAMP,
-            FLAG_CANVAS_SPACE | FLAG_SOFT_CONTRAST,
-            [cx, cy],
-            info.halfExtent,
-            { modeParam: previewStrength(info.halfExtent) },
-        ),
-    ]);
+    engine.post('set_overlay', {
+        primitives: [
+            prim(
+                KIND_MASKED_STAMP,
+                FLAG_CANVAS_SPACE | FLAG_SOFT_CONTRAST,
+                [cx, cy],
+                info.halfExtent,
+                { modeParam: previewStrength(info.halfExtent) },
+            ),
+        ],
+    });
     lastHover = { cx, cy, pose };
 }
 
@@ -127,9 +132,9 @@ export function pushHoverOverlay(handle: any, pose: PenPose, cx: number, cy: num
  *  if the pointer isn't currently hovering the canvas (no cached
  *  pose). Used by hotkey-driven brush-param changes so the on-canvas
  *  preview reflects the new value without requiring pointer motion. */
-export function refreshHoverOverlay(handle: any) {
+export function refreshHoverOverlay(engine: Engine) {
     if (!lastHover) return;
-    pushHoverOverlay(handle, lastHover.pose, lastHover.cx, lastHover.cy);
+    void pushHoverOverlay(engine, lastHover.pose, lastHover.cx, lastHover.cy);
 }
 
 /** Drop the cached hover. Called whenever the overlay is cleared
@@ -137,6 +142,9 @@ export function refreshHoverOverlay(handle: any) {
  *  can't resurrect the preview. */
 function clearHover() {
     lastHover = null;
+    // Invalidate any hover preview still awaiting its async refresh so it can't
+    // land after this clear.
+    hoverGen++;
 }
 
 export const MIN_SIZE = 1;
@@ -182,18 +190,18 @@ export const brushTool: Tool = {
     optionsComponent: BrushOptions,
     panelComponent: BrushBuilderPanel,
 
-    onActivate(ctx) {
+    async onActivate(ctx) {
         // Initialize brush graph state from WASM on first activation.
-        if (!brushGraph.graph && app.handle) {
+        if (!brushGraph.graph && app.engine) {
             brushGraph.init();
         }
         // Sync session erase-mode flag to the engine. Other tools that
         // don't paint never read brush_blend_mode; brush tools that do
         // (color_output) will pick this up on the next stroke.
-        ctx.handle.set_brush_blend_mode(brushSession.eraseMode ? 1 : 0);
+        ctx.engine.post('set_brush_blend_mode', { mode: brushSession.eraseMode ? 1 : 0 });
         // Hide the native cursor only if a preview is available — otherwise
         // fall back to the default cursor so the user has *something* to see.
-        const info = ctx.handle.get_brush_cursor_preview_info();
+        const info = await ctx.engine.send('get_brush_cursor_preview_info');
         app.toolCursor = info ? 'none' : null;
     },
 
@@ -201,10 +209,10 @@ export const brushTool: Tool = {
         // Leaving the brush tool drops the builder's fullscreen mode so the
         // pinned bottom-area overlay can't outlive the panel that owns it.
         brushGraph.fullscreen = false;
-        ctx.handle.clear_overlay();
+        ctx.engine.post('clear_overlay');
         // Reset engine blend mode so a future paint-capable tool (or a
         // direct WASM call) doesn't inherit our erase state.
-        ctx.handle.set_brush_blend_mode(0);
+        ctx.engine.post('set_brush_blend_mode', { mode: 0 });
         app.toolCursor = null;
         clearHover();
     },
@@ -215,13 +223,13 @@ export const brushTool: Tool = {
 
         // Clear the hover overlay while painting — the stamp renders onto
         // the canvas directly; a ghost at the cursor would just clutter.
-        ctx.handle.clear_overlay();
-        ctx.handle.clear_brush_cursor_preview_pose();
+        ctx.engine.post('clear_overlay');
+        ctx.engine.post('clear_brush_cursor_preview_pose');
         clearHover();
         app.toolCursor = 'none';
         const params = brushStrokeParams(e, cx, cy);
-        ctx.handle.begin_stroke(layerId);
-        ctx.handle.stroke_to('brush_stroke', params);
+        ctx.engine.post('begin_stroke', { id: layerId });
+        ctx.engine.post('stroke_to', { op: 'brush_stroke', ...params });
         const dims = currentCanvasDimensions();
         if (dims) strokeRecorder.beginStroke(dims[0], dims[1], params);
     },
@@ -229,24 +237,24 @@ export const brushTool: Tool = {
     onPointerMove(ctx, e, cx, cy) {
         if (e.buttons & 1) {
             const params = brushStrokeParams(e, cx, cy);
-            ctx.handle.stroke_to('brush_stroke', params);
+            ctx.engine.post('stroke_to', { op: 'brush_stroke', ...params });
             strokeRecorder.addEvent(params);
             return;
         }
         // Hover: re-render the preview with live pen data + draw it.
-        pushHoverOverlay(ctx.handle, cursorPose(e), cx, cy);
+        void pushHoverOverlay(ctx.engine, cursorPose(e), cx, cy);
     },
 
     onPointerUp(ctx) {
-        ctx.handle.end_stroke();
+        ctx.engine.post('end_stroke');
         strokeRecorder.endStroke();
     },
 
     onPointerLeave(ctx) {
         // Pointer left the canvas: drop the hover ghost so it doesn't
         // linger at the last-seen edge position.
-        ctx.handle.clear_overlay();
-        ctx.handle.clear_brush_cursor_preview_pose();
+        ctx.engine.post('clear_overlay');
+        ctx.engine.post('clear_brush_cursor_preview_pose');
         clearHover();
     },
 
@@ -256,8 +264,8 @@ export const brushTool: Tool = {
         // PointerEvent, so synthesise a mouse-like pose: full pressure,
         // no tilt/twist. Real pen poses re-assert on the next genuine
         // pointermove.
-        pushHoverOverlay(
-            ctx.handle,
+        void pushHoverOverlay(
+            ctx.engine,
             { pressure: 1.0, tiltX: 0, tiltY: 0, twist: 0, tangentialPressure: 0 },
             cx, cy,
         );

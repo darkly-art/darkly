@@ -102,6 +102,9 @@ settings:
   canvas.width: 1920
   canvas.height: 1080
   canvas.backgroundColor: "#000000"
+  # Autosave / crash recovery. Darkly-original (no reference-editor analog).
+  autosave.enabled: true
+  autosave.intervalSeconds: 120
   # Animation tick divisors.
   animation.veil_divisor: 2
   animation.overlay_divisor: 4

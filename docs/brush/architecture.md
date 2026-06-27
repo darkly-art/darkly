@@ -39,7 +39,7 @@ Four pieces to keep in mind:
 | Pipelines, uniform rings, shared bind groups | [`brush/pipelines.rs`](../../crates/darkly/src/brush/pipelines.rs) |
 | Pre-allocated dab RTs + brush-tip textures | [`brush/dab_pool.rs`](../../crates/darkly/src/brush/dab_pool.rs) |
 | Node types (auto-discovered by `build.rs`) | [`brush/nodes/`](../../crates/darkly/src/brush/nodes/) |
-| WGSL shaders | [`shaders/brush/`](../../shaders/brush/) |
+| WGSL shaders | [`crates/darkly/shaders/brush/`](../../crates/darkly/shaders/brush/) |
 | Built-in presets | [`brush/builtin_presets.rs`](../../crates/darkly/src/brush/builtin_presets.rs) |
 
 ## Stroke lifecycle

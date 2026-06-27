@@ -1,20 +1,22 @@
+mod canvas_geometry;
 mod canvas_resize;
 mod compound;
+mod filter;
 mod gpu_region;
 mod layer;
-mod modifier;
 pub mod property;
 mod selection;
 mod tombstones;
 
+pub use canvas_geometry::CanvasGeometryAction;
 pub use canvas_resize::CanvasResizeAction;
 pub use compound::CompoundAction;
+pub use filter::{FilterAddAction, FilterRemoveAction, NodeLockedAction, NodeVisibleAction};
 pub use gpu_region::GpuRegionAction;
 pub use layer::{
     BakeLayersAction, BakeSourceSlot, DuplicateAction, LayerAddAction, LayerMoveAction,
     LayerRemoveAction,
 };
-pub use modifier::{ModifierAddAction, ModifierRemoveAction, NodeLockedAction, NodeVisibleAction};
 pub use property::PropertyAction;
 pub use selection::SelectionAction;
 
@@ -45,9 +47,20 @@ pub trait UndoAction {
 
     /// If this is a GPU region action, return a mutable reference to its entry.
     /// The engine uses this to execute GPU texture restores during undo/redo,
-    /// then swaps the entry with the forward/backward entry returned by `restore_region`.
+    /// then swaps the entry with the forward entry produced by the restore.
     fn gpu_region_entry_mut(&mut self) -> Option<&mut UndoRegionEntry> {
         None
+    }
+
+    /// Every GPU region entry this action owns. The engine restores each one
+    /// during undo/redo. Defaults to the single [`gpu_region_entry_mut`] entry;
+    /// actions that bundle per-node snapshots (image rescale) or aggregate
+    /// children (compound) override this to return all of them. The single-
+    /// entry default preserves the existing one-region-per-step behaviour.
+    ///
+    /// [`gpu_region_entry_mut`]: Self::gpu_region_entry_mut
+    fn gpu_region_entries_mut(&mut self) -> Vec<&mut UndoRegionEntry> {
+        self.gpu_region_entry_mut().into_iter().collect()
     }
 
     /// If this is a selection GPU action, return a mutable reference to its region entry.
@@ -75,7 +88,7 @@ pub trait UndoAction {
     /// cap to evict oldest actions when the total exceeds the budget.
     ///
     /// Defaults to `0` — most actions (layer add/remove, property changes,
-    /// modifier add/remove) hold only structural metadata. GPU region actions
+    /// filter add/remove) hold only structural metadata. GPU region actions
     /// override this to return the pixel byte_size; compound actions sum
     /// children.
     fn byte_cost(&self) -> u64 {

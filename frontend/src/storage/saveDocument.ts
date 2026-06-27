@@ -11,12 +11,20 @@
  */
 
 import { zip } from 'fflate';
-import { app } from '../state/app.svelte';
+import { app, getActiveInstance, type DarklyInstance } from '../state/app.svelte';
 import { toast } from '../state/toast.svelte';
 import { canSave, pickSaveFile, writeToHandle } from './fileHandle';
 import { sanitizeFilename } from './index';
+import { removeSnapshot } from './recovery';
+import { sessionId } from '../state/recoverySession';
 
-/** Wire shape returned by `DarklyHandle.poll_save_result()`. Mirrors
+/** Why a `.darkly` save is being produced — see the Rust `SavePurpose`.
+ *  A `'snapshot'` autosave leaves the document dirty; a `'file'` save
+ *  clears it. */
+export type SavePurpose = 'file' | 'snapshot';
+
+/** Wire shape reconstructed from the `poll_save_result` request (the engine
+ *  packs it; `app.svelte.ts::unpackSaveBundle` slices it back out). Mirrors
  *  `crates/darkly/src/format/manifest.rs::SaveBundle`. */
 export interface SaveBundle {
     manifestJson: Uint8Array;
@@ -42,7 +50,7 @@ const MANIFEST_PATH = 'manifest.json';
  * `forceAs` skips the cached handle and always prompts (Ctrl+Shift+S).
  */
 export async function saveDocument({ forceAs = false }: { forceAs?: boolean } = {}): Promise<void> {
-    if (!app.handle) return;
+    if (!app.engine) return;
     if (!canSave) {
         toast.show(
             'error',
@@ -54,57 +62,80 @@ export async function saveDocument({ forceAs = false }: { forceAs?: boolean } = 
     const handle = await acquireHandle(forceAs);
     if (!handle) return; // user cancelled
 
-    let bundle: SaveBundle;
-    try {
-        bundle = await runSaveBundle();
-    } catch (e: unknown) {
-        toast.show('error', `Save failed: ${errorMessage(e)}`);
-        return;
-    }
+    const instance = getActiveInstance();
+    if (!instance?.engine) return;
 
     try {
-        const zipBytes = await assembleZip(bundle);
+        const zipBytes = await produceDarklyBytes(instance, 'file');
         await writeToHandle(handle, zipBytes);
         app.fileHandle = handle;
+        // The document is now safely on disk — drop its recovery snapshot.
+        await removeSnapshot(sessionId, instance.recoveryId).catch(() => {});
         toast.show('success', 'Saved');
     } catch (e: unknown) {
         toast.show('error', `Save failed: ${errorMessage(e)}`);
     }
 }
 
+/**
+ * Drive a `.darkly` save for `instance` to completion and return the
+ * assembled zip bytes — the destination-agnostic core shared by file-save
+ * (above) and autosave snapshots. It kicks `start_save_document` over the
+ * async transport and awaits the `poll_save_result` callback, which the
+ * instance's render loop drives to completion (`onSaveResult` keeps that
+ * loop alive even for a backgrounded tab; the Rust `poll_save_result`
+ * drains the readback scheduler itself).
+ *
+ * Rejects if a save is already in flight on the engine
+ * (`SaveError::InProgress`) — autosave catches this and skips the tick so
+ * a manual Ctrl+S always wins the single save slot.
+ */
+export async function produceDarklyBytes(
+    instance: DarklyInstance,
+    purpose: SavePurpose,
+): Promise<Uint8Array> {
+    const bundle = await runSaveBundle(instance, purpose === 'snapshot');
+    return assembleZip(bundle);
+}
+
 /** Resolve the file handle for the active save. Re-uses the cached
  *  handle when one exists and `forceAs` is false; otherwise prompts via
  *  the picker and seeds `doc.name` from the chosen filename. */
 async function acquireHandle(forceAs: boolean): Promise<FileSystemFileHandle | null> {
-    if (!app.handle) return null;
+    const engine = app.engine;
+    if (!engine) return null;
     if (!forceAs && app.fileHandle) return app.fileHandle;
 
     const suggested =
-        sanitizeFilename(app.handle.document_name()) || 'darkly-document';
+        sanitizeFilename((await engine.send('document_name')).name) || 'darkly-document';
     const handle = await pickSaveFile(`${suggested}.darkly`);
     if (!handle) return null;
 
     // Reflect the chosen filename in the doc's display name so the tab
     // strip and a subsequent Ctrl+S both pick it up.
     const baseName = handle.name.replace(/\.darkly$/i, '');
-    if (baseName) app.handle.set_document_name(baseName);
+    if (baseName) engine.post('set_document_name', { name: baseName });
     return handle;
 }
 
-/** Kick `start_save_document` and await the `poll_save_result` callback. */
-function runSaveBundle(): Promise<SaveBundle> {
+/** Kick `start_save_document` on `instance` and await the
+ *  `poll_save_result` callback. `snapshot` marks an autosave save (which
+ *  must not clear the document's dirty flag — see the Rust `SavePurpose`).
+ *  The instance's render loop polls `poll_save_result` until the bundle
+ *  lands; `onSaveResult` keeps that loop alive even for a backgrounded tab. */
+function runSaveBundle(instance: DarklyInstance, snapshot: boolean): Promise<SaveBundle> {
     return new Promise((resolve, reject) => {
-        if (!app.handle) {
+        const engine = instance.engine;
+        if (!engine) {
             reject(new Error('no engine handle'));
             return;
         }
-        try {
-            app.handle.start_save_document();
-        } catch (e) {
-            reject(e instanceof Error ? e : new Error(String(e)));
-            return;
-        }
-        app.onSaveResult((bundle: SaveBundle) => resolve(bundle));
+        instance.onSaveResult((bundle: SaveBundle) => resolve(bundle));
+        // `start_save_document` rejects on error; surface that as the save
+        // failure rather than waiting forever for a callback that won't fire.
+        engine
+            .send('start_save_document', { snapshot })
+            .catch((e) => reject(e instanceof Error ? e : new Error(String(e))));
     });
 }
 

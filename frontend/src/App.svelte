@@ -9,7 +9,10 @@
     import ExportImageModal from './ui/ExportImageModal.svelte';
     import NewDocumentModal from './ui/NewDocumentModal.svelte';
     import ResizeCanvasModal from './ui/ResizeCanvasModal.svelte';
+    import ImageRescaleModal from './ui/ImageRescaleModal.svelte';
+    import SelectionModifyModal from './ui/SelectionModifyModal.svelte';
     import ConfirmDiscardModal from './ui/ConfirmDiscardModal.svelte';
+    import RecoveryModal from './ui/RecoveryModal.svelte';
     import AboutModal from './ui/AboutModal.svelte';
     import MenuBar from './ui/menu/MenuBar.svelte';
     import CommandPalette from './ui/menu/CommandPalette.svelte';
@@ -62,7 +65,10 @@
 <ExportImageModal />
 <NewDocumentModal />
 <ResizeCanvasModal />
+<ImageRescaleModal />
+<SelectionModifyModal />
 <ConfirmDiscardModal />
+<RecoveryModal />
 <AboutModal />
 <CommandPalette />
 
@@ -71,7 +77,13 @@
         display: flex;
         flex-direction: column;
         width: 100vw;
+        /* `dvh` tracks the *dynamic* viewport so the shell shrinks to the area
+         * left by iOS Safari's browser chrome. With plain `vh` (the large
+         * viewport) the bottom tool-options bar sits behind the toolbar and is
+         * clipped by `overflow: hidden`. `vh` first as the fallback for engines
+         * without `dvh`. */
         height: 100vh;
+        height: 100dvh;
         overflow: hidden;
     }
 

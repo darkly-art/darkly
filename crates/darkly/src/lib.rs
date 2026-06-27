@@ -13,6 +13,7 @@ pub mod sdf;
 pub mod tile;
 pub mod tool;
 pub mod tools;
+pub mod transform;
 pub mod undo;
 
 /// Darkly's version — the latest git tag plus the commit height since it

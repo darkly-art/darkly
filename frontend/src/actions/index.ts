@@ -4,16 +4,17 @@ import { config } from '../config/store.svelte';
 import { settings } from '../state/settings.svelte';
 import { newDocument } from '../state/newDocument.svelte';
 import { resizeCanvas } from '../state/resizeCanvas.svelte';
+import { imageRescale } from '../state/imageRescale.svelte';
+import { selectionModify } from '../state/selectionModify.svelte';
 import { exportImage } from '../state/exportImage.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
 import { toast } from '../state/toast.svelte';
 import { toolRegistry, type Tool } from '../tools/registry';
-import { copyToSystemClipboard, readImageFromClipboard, readLayerFromClipboard } from '../clipboard';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { brushSession } from '../tools/brush.svelte';
 import { registerBrushParamActions } from './brush_params';
 import { registerSampleColorAction } from './sample_color';
-import { screenToCanvas } from '../canvas/coordinates';
+import { registerClipboardActions } from './clipboard';
 import { pickOpenFile, type OpenedFile } from '../storage/fileHandle';
 import { detectKind, isImageKind, type FileKind } from '../storage/detectKind';
 import { saveDocument } from '../storage/saveDocument';
@@ -22,6 +23,7 @@ import { shell } from '../multi_tab/shell.svelte';
 import { about } from '../state/about.svelte';
 import { commandPalette } from '../state/commandPalette.svelte';
 import { openCheatsheet } from '../ui/cheatsheet';
+import { links, openExternal } from '../links';
 
 // Tooltip explaining why Save / Save As are disabled when the browser lacks
 // the File System Access API (Firefox). Returned from each save action's
@@ -103,22 +105,23 @@ export function openDarklyAsTab(picked: OpenedFile): void {
     // initial display before handle bootstrap finishes).
     const inst = shell.open(tabNameFromFile(picked.name));
     inst.fileHandle = picked.handle;
-    inst.onHandleReady = (handle) => {
+    inst.onHandleReady = async (engine) => {
         try {
-            handle.open_document(picked.bytes);
-            // Tab strip reads through `handle.document_name()` (which
-            // the loader populated from `manifest.name`), but the
-            // shell's `nameVersion` doesn't bump on its own — nudge
-            // it so the strip re-derives.
-            shell.setName(inst.id, handle.document_name());
+            await engine.send('open_document', {}, picked.bytes);
+            // Tab strip reads through the engine's `document_name`
+            // request (which the loader populated from `manifest.name`),
+            // but the shell's `nameVersion` doesn't bump on its own —
+            // nudge it so the strip re-derives.
+            const { name } = await engine.send('document_name');
+            shell.setName(inst.id, name);
             // The loaded manifest's dimensions override whatever the tab
             // was seeded with; refresh the JS mirror so coord transforms
             // recenter around the real canvas size.
             // Sync the full canvas window (dims + plane origin) — a loaded
             // `.darkly` may carry a non-zero `canvas_origin` from a crop.
-            inst.syncCanvasRect();
-            app.refreshLayerTree();
-            app.refreshVeilList();
+            await inst.syncCanvasRect();
+            await app.refreshLayerTree();
+            await app.refreshVeilList();
             app.requestFrame();
         } catch (e) {
             loadError.show(parseLoadErrorMessage(e));
@@ -156,13 +159,13 @@ async function openImageAsTab(picked: OpenedFile, kind: FileKind): Promise<void>
     const rgba = new Uint8Array(ctx.getImageData(0, 0, width, height).data.buffer);
 
     const inst = shell.open(tabNameFromFile(picked.name), { width, height });
-    inst.onHandleReady = (handle) => {
+    inst.onHandleReady = async (engine) => {
         // Pass anchor = -1 (no specific layer) — the new tab has no
         // bg seed (the `onHandleReady` presence suppresses it), so
         // paste lands at the bottom of root, which is the only sensible
         // position for the doc's first layer.
-        handle.paste_image(width, height, rgba, 0, 0, -1);
-        app.refreshLayerTree();
+        await engine.send('paste_image', { width, height, offset_x: 0, offset_y: 0, active_layer_id: -1 }, rgba);
+        await app.refreshLayerTree();
         app.requestFrame();
     };
 }
@@ -174,7 +177,8 @@ async function openImageAsTab(picked: OpenedFile, kind: FileKind): Promise<void>
  *
  *  Returns the new layer id, or `-1` on decode failure. */
 export async function pasteImageIntoCurrent(file: File): Promise<number> {
-    if (!app.handle) return -1;
+    const engine = app.engine;
+    if (!engine) return -1;
     try {
         const bitmap = await createImageBitmap(file);
         const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
@@ -184,16 +188,19 @@ export async function pasteImageIntoCurrent(file: File): Promise<number> {
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const rgba = new Uint8Array(imageData.data.buffer);
         const activeId = app.activeLayerId ?? -1;
-        const layerId = app.handle.paste_image(
-            canvas.width,
-            canvas.height,
+        const { id: layerId } = await engine.send(
+            'paste_image',
+            {
+                width: canvas.width,
+                height: canvas.height,
+                offset_x: 0,
+                offset_y: 0,
+                active_layer_id: activeId,
+            },
             rgba,
-            0,
-            0,
-            activeId,
         );
         app.selectLayer(layerId);
-        app.refreshLayerTree();
+        await app.refreshLayerTree();
         app.requestFrame();
         return layerId;
     } catch (e) {
@@ -226,26 +233,6 @@ export async function handleDroppedFile(file: File): Promise<void> {
     toast.show('error', `Unsupported file type: ${file.name}`);
 }
 
-function enterTransformTool() {
-    if (!app.handle || !app.canvasEl) return;
-    const wasTransform = app.activeToolId === 'transform';
-    app.activeToolId = 'transform';
-    // Tool changes are handled by the $effect in CanvasView, which calls
-    // onDeactivate/onActivate. When the tool was already transform that
-    // effect skips, so we must manually re-activate to sync state with
-    // the new floating — but never call onDeactivate, since that would
-    // commit the floating we just set up.
-    if (wasTransform) {
-        const canvasEl = app.canvasEl;
-        const ctx = {
-            handle: app.handle,
-            canvasEl,
-            screenToCanvas: (sx: number, sy: number) => screenToCanvas(sx, sy, canvasEl),
-        };
-        toolRegistry.get('transform')?.onActivate?.(ctx);
-    }
-}
-
 export function registerActions() {
     // -- Binding sites --
     sites.register({ name: 'keyboard',   provides: ['layerId'], displayName: 'Anywhere' });
@@ -263,7 +250,7 @@ export function registerActions() {
         description: 'Undo the last action.',
         icon: 'fa6-solid:rotate-left',
         menuPath: ['Edit:10'],
-        handler: () => { app.handle?.undo(); app.refreshLayerTree(); },
+        handler: async () => { app.engine?.post('undo'); await app.syncCanvasRect(); await app.refreshLayerTree(); },
     });
     actions.register({
         id: 'redo',
@@ -272,7 +259,7 @@ export function registerActions() {
         description: 'Redo the last undone action.',
         icon: 'fa6-solid:rotate-right',
         menuPath: ['Edit:20'],
-        handler: () => { app.handle?.redo(); app.refreshLayerTree(); },
+        handler: async () => { app.engine?.post('redo'); await app.syncCanvasRect(); await app.refreshLayerTree(); },
     });
 
     // -- Colors --
@@ -303,7 +290,7 @@ export function registerActions() {
         description: 'Select the entire canvas.',
         icon: 'fa6-solid:vector-square',
         menuPath: ['Select:10'],
-        handler: () => app.handle?.select_all(),
+        handler: () => app.engine?.post('select_all'),
     });
     actions.register({
         id: 'clearSelection',
@@ -312,7 +299,7 @@ export function registerActions() {
         description: 'Clear the active selection.',
         icon: 'fa6-solid:ban',
         menuPath: ['Select:20'],
-        handler: () => app.handle?.clear_selection(),
+        handler: () => app.engine?.post('clear_selection'),
     });
     actions.register({
         id: 'clearSelectionContents',
@@ -323,7 +310,7 @@ export function registerActions() {
         menuPath: ['Select:40'],
         handler: () => {
             if (app.activeLayerId != null) {
-                app.handle?.clear_selection_contents(app.activeLayerId);
+                app.engine?.post('clear_selection_contents', { id: app.activeLayerId });
             }
         },
     });
@@ -334,7 +321,67 @@ export function registerActions() {
         description: 'Invert the current selection.',
         icon: 'tabler:flip-horizontal',
         menuPath: ['Select:30'],
-        handler: () => app.handle?.invert_selection(),
+        handler: () => app.engine?.post('invert_selection'),
+    });
+    actions.register({
+        id: 'growSelection',
+        displayName: 'Grow Selection',
+        category: 'selection',
+        description: 'Expand the selection edge outward by a number of pixels.',
+        icon: 'fa6-solid:up-right-and-down-left-from-center',
+        menuPath: ['Select:50'],
+        enabled: () => app.engineState?.hasSelection || 'No active selection',
+        handler: () => selectionModify.show('grow'),
+    });
+    actions.register({
+        id: 'shrinkSelection',
+        displayName: 'Shrink Selection',
+        category: 'selection',
+        description: 'Contract the selection edge inward by a number of pixels.',
+        icon: 'fa6-solid:down-left-and-up-right-to-center',
+        menuPath: ['Select:60'],
+        enabled: () => app.engineState?.hasSelection || 'No active selection',
+        handler: () => selectionModify.show('shrink'),
+    });
+    actions.register({
+        id: 'borderSelection',
+        displayName: 'Border Selection',
+        category: 'selection',
+        description: 'Replace the selection with a band straddling its edge.',
+        icon: 'fa6-solid:border-all',
+        menuPath: ['Select:70'],
+        enabled: () => app.engineState?.hasSelection || 'No active selection',
+        handler: () => selectionModify.show('border'),
+    });
+    actions.register({
+        id: 'smoothSelection',
+        displayName: 'Smooth Selection',
+        category: 'selection',
+        description: 'Round off jagged edges and remove small specks.',
+        icon: 'fa6-solid:wand-magic-sparkles',
+        menuPath: ['Select:80'],
+        enabled: () => app.engineState?.hasSelection || 'No active selection',
+        handler: () => app.engine?.post('smooth_selection', { radius: 2 }),
+    });
+    actions.register({
+        id: 'featherSelection',
+        displayName: 'Feather Selection',
+        category: 'selection',
+        description: 'Soften the selection edge with a Gaussian blur.',
+        icon: 'fa6-solid:feather',
+        menuPath: ['Select:90'],
+        enabled: () => app.engineState?.hasSelection || 'No active selection',
+        handler: () => selectionModify.show('feather'),
+    });
+    actions.register({
+        id: 'antialiasSelection',
+        displayName: 'Antialias Selection',
+        category: 'selection',
+        description: 'Soften the staircase of a hard-edged selection.',
+        icon: 'fa6-solid:wand-magic',
+        menuPath: ['Select:100'],
+        enabled: () => app.engineState?.hasSelection || 'No active selection',
+        handler: () => app.engine?.post('antialias_selection'),
     });
 
     // -- Image (canvas) --
@@ -346,8 +393,20 @@ export function registerActions() {
         icon: 'fa6-solid:up-right-and-down-left-from-center',
         menuPath: ['Image:10'],
         handler: () => {
-            if (!app.handle) return;
+            if (!app.engine) return;
             resizeCanvas.open = true;
+        },
+    });
+    actions.register({
+        id: 'rescaleImage',
+        displayName: 'Scale Image to New Size',
+        category: 'edit',
+        description: 'Resize all layers to new document dimensions.',
+        icon: 'fa6-solid:expand',
+        menuPath: ['Image:11'],
+        handler: () => {
+            if (!app.engine) return;
+            imageRescale.open = true;
         },
     });
     actions.register({
@@ -357,173 +416,84 @@ export function registerActions() {
         description: 'Crop the canvas to the current selection bounds.',
         icon: 'fa6-solid:crop-simple',
         menuPath: ['Image:20'],
-        enabled: () => (app.handle?.has_selection() ?? false) || 'No active selection',
-        handler: () => {
-            app.handle?.crop_to_selection();
-            app.syncCanvasRect();
+        // `enabled` is synchronous and `has_selection` is async, so we gate on
+        // the `engineState` mirror (refreshed from render's snapshot) rather
+        // than a live query.
+        enabled: () => app.engineState?.hasSelection || 'No active selection',
+        handler: async () => {
+            app.engine?.post('crop_to_selection');
+            await app.syncCanvasRect();
+            app.requestFrame();
+        },
+    });
+    actions.register({
+        id: 'flipCanvasH',
+        displayName: 'Flip Canvas Horizontally',
+        category: 'edit',
+        description: 'Mirror the whole canvas left-to-right.',
+        icon: 'fa6-solid:arrows-left-right',
+        menuPath: ['Image:30'],
+        handler: async () => {
+            app.engine?.post('flip_canvas', { axis: 'h' });
+            await app.syncCanvasRect();
+            app.requestFrame();
+        },
+    });
+    actions.register({
+        id: 'flipCanvasV',
+        displayName: 'Flip Canvas Vertically',
+        category: 'edit',
+        description: 'Mirror the whole canvas top-to-bottom.',
+        icon: 'fa6-solid:arrows-up-down',
+        menuPath: ['Image:31'],
+        handler: async () => {
+            app.engine?.post('flip_canvas', { axis: 'v' });
+            await app.syncCanvasRect();
+            app.requestFrame();
+        },
+    });
+    actions.register({
+        id: 'rotateCanvasCW',
+        displayName: 'Rotate Canvas 90° CW',
+        category: 'edit',
+        description: 'Rotate the whole canvas a quarter turn clockwise.',
+        icon: 'fa6-solid:rotate-right',
+        menuPath: ['Image:40'],
+        handler: async () => {
+            app.engine?.post('rotate_canvas', { dir: 'cw' });
+            await app.syncCanvasRect();
+            app.requestFrame();
+        },
+    });
+    actions.register({
+        id: 'rotateCanvasCCW',
+        displayName: 'Rotate Canvas 90° CCW',
+        category: 'edit',
+        description: 'Rotate the whole canvas a quarter turn counter-clockwise.',
+        icon: 'fa6-solid:rotate-left',
+        menuPath: ['Image:41'],
+        handler: async () => {
+            app.engine?.post('rotate_canvas', { dir: 'ccw' });
+            await app.syncCanvasRect();
+            app.requestFrame();
+        },
+    });
+    actions.register({
+        id: 'rotateCanvas180',
+        displayName: 'Rotate Canvas 180°',
+        category: 'edit',
+        description: 'Rotate the whole canvas a half turn.',
+        icon: 'fa6-solid:rotate',
+        menuPath: ['Image:42'],
+        handler: async () => {
+            app.engine?.post('rotate_canvas', { dir: '180' });
+            await app.syncCanvasRect();
             app.requestFrame();
         },
     });
 
     // -- Clipboard --
-    actions.register({
-        id: 'copy',
-        displayName: 'Copy',
-        category: 'edit',
-        description: 'Copy the active layer to the clipboard.',
-        icon: 'fa6-solid:copy',
-        menuPath: ['Edit:40'],
-        handler: () => {
-            if (!app.handle || app.activeLayerId == null) return;
-            const handle = app.handle;
-            // `copy_layer_rich` snapshots metadata up front and then drives
-            // the same async pixel readback that `copy` does — it's a
-            // superset, so we don't need to call both.
-            handle.copy_layer_rich(app.activeLayerId);
-            app.onCopyResult((result) => {
-                if (!result?.rgba) return;
-                // The rich JSON lands one frame later, on the same readback
-                // completion path. Polling here is safe because we got the
-                // pixel result; the rich result is set before this callback.
-                const richJson = handle.poll_copy_rich_result() ?? undefined;
-                copyToSystemClipboard(result.rgba, result.width, result.height, richJson);
-            });
-        },
-    });
-    actions.register({
-        id: 'cut',
-        displayName: 'Cut',
-        category: 'edit',
-        description: 'Cut the active layer to the clipboard.',
-        icon: 'fa6-solid:scissors',
-        menuPath: ['Edit:30'],
-        handler: () => {
-            if (!app.handle || app.activeLayerId == null) return;
-            const handle = app.handle;
-            // No `cut_layer_rich` yet — fall back to the pixels-only path
-            // for cut. Cross-tab paste of a cut layer still works (PNG
-            // fallback restores the bitmap) but loses blend mode/opacity.
-            // Worth a follow-up.
-            handle.cut(app.activeLayerId);
-            app.onCopyResult((result) => {
-                if (result?.rgba) {
-                    copyToSystemClipboard(result.rgba, result.width, result.height);
-                }
-            });
-            app.requestFrame();
-        },
-    });
-    actions.register({
-        id: 'paste',
-        displayName: 'Paste',
-        category: 'edit',
-        description: 'Paste an image or layer from the clipboard.',
-        icon: 'fa6-solid:paste',
-        menuPath: ['Edit:50'],
-        handler: async () => {
-            if (!app.handle) return;
-
-            // Prefer the rich-layer payload if a Darkly tab put one on the
-            // clipboard. Cross-tab paste this way preserves blend mode and
-            // opacity, which the PNG fallback cannot. Brush-builder pastes
-            // always want the pixel path, so skip rich there.
-            if (!brushGraph.isOpen) {
-                const rich = await readLayerFromClipboard();
-                if (rich && app.handle) {
-                    const activeId = app.activeLayerId ?? -1;
-                    const layerId = app.handle.paste_layer_rich(rich, activeId);
-                    if (layerId >= 0) {
-                        app.selectLayer(layerId);
-                        const activateTransform =
-                            config.get('edit.activateTransformAfterPaste') !== false;
-                        if (activateTransform) enterTransformTool();
-                        app.refreshLayerTree();
-                        app.requestFrame();
-                        return;
-                    }
-                    // Rich paste failed (malformed JSON, bad pixel data) —
-                    // fall through to the PNG path below.
-                }
-            }
-
-            readImageFromClipboard().then(clip => {
-                if (!clip || !app.handle) return;
-
-                // If the brush builder is open, paste into the node editor
-                // instead of the main canvas.  Fill the selected Image node
-                // when there is one; otherwise spawn a new Image node.
-                if (brushGraph.isOpen) {
-                    let nodeId: number | null = null;
-                    if (brushGraph.selectedNode != null) {
-                        const node = brushGraph.graph?.nodes[String(brushGraph.selectedNode)];
-                        if (node?.type_id === 'image') nodeId = brushGraph.selectedNode;
-                    }
-                    if (nodeId == null) {
-                        const count = brushGraph.nodeList.length;
-                        const x = 100 + (count % 4) * 180;
-                        const y = 50 + Math.floor(count / 4) * 120;
-                        nodeId = brushGraph.addNode('image', x, y);
-                    }
-                    if (nodeId != null) {
-                        brushGraph.uploadImageToNode(
-                            nodeId,
-                            `image_${nodeId}`,
-                            clip.rgba,
-                            clip.width,
-                            clip.height,
-                        );
-                        brushGraph.selectedNode = nodeId;
-                        return;
-                    }
-                }
-
-                const ox = Math.round((app.docW - clip.width) / 2);
-                const oy = Math.round((app.docH - clip.height) / 2);
-                const activeId = app.activeLayerId ?? -1;
-                const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
-                if (activateTransform) {
-                    const layerId = app.handle.paste_image_floating(
-                        clip.width, clip.height, clip.rgba, ox, oy, activeId,
-                    );
-                    app.selectLayer(layerId);
-                    enterTransformTool();
-                } else {
-                    const layerId = app.handle.paste_image(
-                        clip.width, clip.height, clip.rgba, ox, oy, activeId,
-                    );
-                    app.selectLayer(layerId);
-                }
-                app.refreshLayerTree();
-                app.requestFrame();
-            });
-        },
-    });
-    actions.register({
-        id: 'pasteInPlace',
-        displayName: 'Paste in Place',
-        category: 'edit',
-        description: 'Paste from the clipboard at its original position.',
-        icon: 'fa6-solid:clipboard',
-        menuPath: ['Edit:60'],
-        handler: () => {
-            if (!app.handle || app.activeLayerId == null) return;
-            const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
-            if (activateTransform) {
-                const ok = app.handle.paste_in_place_floating(app.activeLayerId);
-                if (ok) {
-                    enterTransformTool();
-                    app.requestFrame();
-                }
-            } else {
-                const layerId = app.handle.paste_in_place(app.activeLayerId);
-                if (layerId >= 0) {
-                    app.selectLayer(layerId);
-                    app.refreshLayerTree();
-                    app.requestFrame();
-                }
-            }
-        },
-    });
+    registerClipboardActions();
 
     // -- File I/O --
     actions.register({
@@ -537,7 +507,7 @@ export function registerActions() {
         menuPath: ['File:30'],
         enabled: () => canSave || NO_SAVE_TOOLTIP,
         handler: () => {
-            if (!app.handle) return;
+            if (!app.engine) return;
             void saveDocument({ forceAs: false });
         },
     });
@@ -550,7 +520,7 @@ export function registerActions() {
         menuPath: ['File:40'],
         enabled: () => canSave || NO_SAVE_TOOLTIP,
         handler: () => {
-            if (!app.handle) return;
+            if (!app.engine) return;
             void saveDocument({ forceAs: true });
         },
     });
@@ -589,7 +559,7 @@ export function registerActions() {
         icon: 'fa6-solid:image',
         menuPath: ['File:50'],
         handler: () => {
-            if (!app.handle) return;
+            if (!app.engine) return;
             exportImage.open = true;
         },
     });
@@ -600,8 +570,8 @@ export function registerActions() {
         category: 'transform',
         icon: 'fa6-solid:check',
         handler: () => {
-            if (!app.handle) return;
-            app.handle.commit_floating();
+            if (!app.engine) return;
+            app.engine.post('commit_floating');
             app.requestFrame();
         },
     });
@@ -611,8 +581,8 @@ export function registerActions() {
         category: 'transform',
         icon: 'fa6-solid:xmark',
         handler: () => {
-            if (!app.handle) return;
-            app.handle.cancel_floating();
+            if (!app.engine) return;
+            app.engine.post('cancel_floating');
             app.requestFrame();
         },
     });
@@ -659,7 +629,7 @@ export function registerActions() {
                 return;
             }
             brushSession.eraseMode = !brushSession.eraseMode;
-            app.handle?.set_brush_blend_mode(brushSession.eraseMode ? 1 : 0);
+            app.engine?.post('set_brush_blend_mode', { mode: brushSession.eraseMode ? 1 : 0 });
         },
     });
 
@@ -671,11 +641,12 @@ export function registerActions() {
         description: 'Add a new layer above the active one.',
         icon: 'fa6-solid:square-plus',
         menuPath: ['Layer:10'],
-        handler: () => {
-            if (!app.handle) return;
-            const id = app.handle.add_raster_layer(app.activeLayerId ?? -1);
+        handler: async () => {
+            const engine = app.engine;
+            if (!engine) return;
+            const { id } = await engine.send('add_raster', { anchor: app.activeLayerId ?? -1 });
             app.selectLayer(id);
-            app.refreshLayerTree();
+            await app.refreshLayerTree();
         },
     });
 
@@ -686,22 +657,23 @@ export function registerActions() {
         description: 'Group the selected layers together, or add an empty group if nothing is selected.',
         icon: 'fa6-solid:folder-plus',
         menuPath: ['Layer:20'],
-        handler: () => {
-            if (!app.handle) return;
+        handler: async () => {
+            const engine = app.engine;
+            if (!engine) return;
             if (app.selectedLayerIds.size > 0) {
                 try {
-                    const groupId = app.handle.group_layers(
-                        Float64Array.from([...app.selectedLayerIds]),
-                    );
+                    const { id: groupId } = await engine.send('group_layers', {
+                        ids: [...app.selectedLayerIds],
+                    });
                     if (groupId) app.selectLayer(groupId);
                 } catch (e: any) {
                     toast.show('error', e.message ?? String(e));
                 }
             } else {
-                const id = app.handle.add_group(app.activeLayerId ?? -1);
+                const { id } = await engine.send('add_group', { anchor: app.activeLayerId ?? -1 });
                 app.selectLayer(id);
             }
-            app.refreshLayerTree();
+            await app.refreshLayerTree();
         },
     });
 
@@ -711,14 +683,14 @@ export function registerActions() {
         category: 'layers',
         description: 'Show or hide the active layer.',
         icon: 'fa6-solid:eye',
-        menuPath: ['Layer:50'],
+        menuPath: ['Layer:70'],
         accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
-            if (layerId == null || !app.handle) return;
+            if (layerId == null || !app.engine) return;
             const layer = findLayer(app.layerTree, layerId);
             if (layer) {
-                app.handle.set_layer_visible(layerId, !layer.visible);
+                app.engine.post('set_layer_visible', { id: layerId, visible: !layer.visible });
             }
         },
     });
@@ -729,14 +701,14 @@ export function registerActions() {
         category: 'layers',
         description: 'Lock or unlock the active layer.',
         icon: 'fa6-solid:lock',
-        menuPath: ['Layer:60'],
+        menuPath: ['Layer:80'],
         accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
-            if (layerId == null || !app.handle) return;
+            if (layerId == null || !app.engine) return;
             const layer = findLayer(app.layerTree, layerId);
             if (layer) {
-                app.handle.set_node_locked(layerId, !layer.locked);
+                app.engine.post('set_node_locked', { id: layerId, locked: !layer.locked });
             }
         },
     });
@@ -747,11 +719,11 @@ export function registerActions() {
         category: 'layers',
         description: 'Solo a layer so only it shows in the canvas. Press again to bring everything else back.',
         icon: 'fa6-solid:circle-dot',
-        menuPath: ['Layer:70'],
+        menuPath: ['Layer:90'],
         accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
-            if (layerId == null || !app.handle) return;
+            if (layerId == null || !app.engine) return;
             toggleIsolation(layerId);
         },
     });
@@ -760,11 +732,12 @@ export function registerActions() {
         id: 'deleteLayer',
         displayName: 'Delete Layer',
         category: 'layers',
-        description: 'Delete the selected layers (or remove the active veil).',
+        description: 'Delete the selected layers.',
         icon: 'fa6-solid:trash',
-        menuPath: ['Layer:40'],
-        handler: () => {
-            if (!app.handle) return;
+        menuPath: ['Layer:60'],
+        handler: async () => {
+            const engine = app.engine;
+            if (!engine) return;
             // Veil takes priority: the trash button on the layer panel
             // doubles as veil-remove when a veil is active, so the
             // keyboard shortcut should too.
@@ -784,21 +757,21 @@ export function registerActions() {
                 : app.activeLayerId !== null ? [app.activeLayerId] : [];
             if (targets.length === 0) return;
             try {
-                // Stop any associated camera MediaStreams before the
-                // layers go away. `refreshLayerTree` reaps as a safety
-                // net, but stopping eagerly turns off the OS camera
+                // Stop any associated MediaStreams (camera / screenshare)
+                // before the layers go away. `refreshLayerTree` reaps as a
+                // safety net, but stopping eagerly turns off the OS capture
                 // indicator immediately.
-                for (const id of targets) app.stopCameraVoid(id);
+                for (const id of targets) app.stopMediaStreamVoid(id);
                 if (targets.length === 1) {
-                    app.handle.remove_layer(targets[0]);
+                    await engine.send('remove_layer', { id: targets[0] });
                     app.clearSelection();
                 } else {
-                    const skipped = app.handle.remove_layers(Float64Array.from(targets));
+                    const { skipped } = await engine.send('remove_layers', { ids: targets });
                     if (skipped > 0) {
                         toast.show('info', `${skipped} locked layer${skipped === 1 ? '' : 's'} skipped`);
                     }
                 }
-                app.refreshLayerTree();
+                await app.refreshLayerTree();
             } catch (e: any) {
                 toast.show('error', e.message ?? String(e));
             }
@@ -812,25 +785,82 @@ export function registerActions() {
         description: 'Make a copy of each selected layer.',
         icon: 'fa6-solid:clone',
         menuPath: ['Layer:30'],
-        handler: () => {
-            if (!app.handle) return;
+        handler: async () => {
+            const engine = app.engine;
+            if (!engine) return;
             const targets = app.selectedLayerIds.size > 0
                 ? [...app.selectedLayerIds]
                 : app.activeLayerId !== null ? [app.activeLayerId] : [];
             if (targets.length === 0) return;
             if (targets.length === 1) {
-                const newId = app.handle.duplicate_node(targets[0]);
-                app.refreshLayerTree();
+                const { id: newId } = await engine.send('duplicate_node', { source_id: targets[0] });
+                await app.refreshLayerTree();
                 if (newId) app.selectLayer(newId);
             } else {
-                const newIds = Array.from(
-                    app.handle.duplicate_nodes(Float64Array.from(targets)),
-                );
-                app.refreshLayerTree();
-                if (newIds.length > 0) app.selectLayers(newIds);
+                const { ids: newIds } = await engine.send('duplicate_nodes', { ids: targets });
+                await app.refreshLayerTree();
+                if (newIds.length > 0) app.selectLayers(newIds as number[]);
             }
         },
     });
+
+    actions.register({
+        id: 'flipLayerH',
+        displayName: 'Flip Horizontally',
+        category: 'layers',
+        description: 'Mirror the active layer (or selection) left-to-right.',
+        icon: 'fa6-solid:arrows-left-right',
+        menuPath: ['Layer:40'],
+        enabled: () => app.activeLayerId !== null || 'No active layer',
+        handler: async () => {
+            const engine = app.engine;
+            if (!engine || app.activeLayerId === null) return;
+            await engine.send('flip_node', { node_id: app.activeLayerId, axis: 'h' });
+            app.requestFrame();
+        },
+    });
+    actions.register({
+        id: 'flipLayerV',
+        displayName: 'Flip Vertically',
+        category: 'layers',
+        description: 'Mirror the active layer (or selection) top-to-bottom.',
+        icon: 'fa6-solid:arrows-up-down',
+        menuPath: ['Layer:50'],
+        enabled: () => app.activeLayerId !== null || 'No active layer',
+        handler: async () => {
+            const engine = app.engine;
+            if (!engine || app.activeLayerId === null) return;
+            await engine.send('flip_node', { node_id: app.activeLayerId, axis: 'v' });
+            app.requestFrame();
+        },
+    });
+    // Destructive color filters (invert, …) are registered dynamically
+    // from the Rust filter-pipeline registry (fetched into `app.filterTypes`
+    // during `loadRegistries`), so a new filter in the core surfaces a
+    // Colors-menu entry with no frontend edit. The target is the active *node*
+    // (`activeLayerId` is the mask filter id when a mask is selected), which
+    // is what makes "invert the mask" reachable from the same entry.
+    for (const flt of app.filterTypes ?? []) {
+        const filterType = flt.type;
+        actions.register({
+            id: `filter${filterType.charAt(0).toUpperCase()}${filterType.slice(1)}`,
+            displayName: flt.displayName,
+            category: 'layers',
+            description: `Apply "${flt.displayName}" to the active layer or mask (respecting any selection).`,
+            icon: 'fa6-solid:circle-half-stroke',
+            menuPath: ['Colors:10'],
+            enabled: () => app.activeLayerId !== null || 'No active layer',
+            handler: async () => {
+                const engine = app.engine;
+                if (!engine || app.activeLayerId === null) return;
+                await engine.send('apply_filter', {
+                    node_id: app.activeLayerId,
+                    filter_type: filterType,
+                });
+                app.requestFrame();
+            },
+        });
+    }
 
     actions.register({
         id: 'mergeDown',
@@ -838,15 +868,16 @@ export function registerActions() {
         category: 'layers',
         description: 'Merge the active layer into the one below it, or combine multiple selected layers into a single layer.',
         icon: 'fa6-solid:arrows-down-to-line',
-        menuPath: ['Layer:90'],
-        handler: () => {
-            if (!app.handle) return;
+        menuPath: ['Layer:110'],
+        handler: async () => {
+            const engine = app.engine;
+            if (!engine) return;
             if (app.selectedLayerIds.size >= 2) {
                 try {
-                    const newId = app.handle.merge_layers(
-                        Float64Array.from([...app.selectedLayerIds]),
-                    );
-                    app.refreshLayerTree();
+                    const { id: newId } = await engine.send('merge_layers', {
+                        ids: [...app.selectedLayerIds],
+                    });
+                    await app.refreshLayerTree();
                     if (newId) app.selectLayer(newId);
                 } catch (e: any) {
                     toast.show('error', e.message ?? String(e));
@@ -856,8 +887,8 @@ export function registerActions() {
             const sourceId = app.activeLayerId;
             if (sourceId == null) return;
             try {
-                const newId = app.handle.merge_down(sourceId);
-                app.refreshLayerTree();
+                const { id: newId } = await engine.send('merge_down', { source_id: sourceId });
+                await app.refreshLayerTree();
                 if (newId) app.selectLayer(newId);
             } catch (e: any) {
                 toast.show('error', e.message ?? String(e));
@@ -872,15 +903,16 @@ export function registerActions() {
         description:
             'Bake modifiers into the layer (apply mask), or flatten a group into a single raster that inherits the group’s blend props.',
         icon: 'fa6-solid:layer-group',
-        menuPath: ['Layer:100'],
+        menuPath: ['Layer:120'],
         accepts: ['layerId'],
-        handler: (ctx) => {
-            if (!app.handle) return;
+        handler: async (ctx) => {
+            const engine = app.engine;
+            if (!engine) return;
             const id = ctx.layerId ?? app.activeLayerId;
             if (id == null) return;
             try {
-                const newId = app.handle.flatten_node(id);
-                app.refreshLayerTree();
+                const { id: newId } = await engine.send('flatten_node', { node_id: id });
+                await app.refreshLayerTree();
                 if (newId) app.selectLayer(newId);
             } catch (e: any) {
                 toast.show('error', e.message ?? String(e));
@@ -894,18 +926,19 @@ export function registerActions() {
         category: 'layers',
         description: 'Add a mask modifier to the active layer or group and activate it for painting.',
         icon: 'radix-icons:mask-on',
-        menuPath: ['Layer:80'],
+        menuPath: ['Layer:100'],
         accepts: ['layerId'],
-        handler: (ctx) => {
-            if (!app.handle) return;
+        handler: async (ctx) => {
+            const engine = app.engine;
+            if (!engine) return;
             const hostId = ctx.layerId ?? app.activeLayerId;
             if (hostId == null) return;
-            app.handle.add_mask(hostId);
+            engine.post('add_mask', { id: hostId });
             // `add_mask` doesn't return the new modifier id, and we want
             // the mask to be the active paint target after creation —
             // refresh the tree, then locate the freshly-added mask
             // modifier on the host and select it.
-            app.refreshLayerTree();
+            await app.refreshLayerTree();
             const layer = findNodeInTree(app.layerTree, hostId);
             const mask = layer?.modifiers?.find((m: any) => m.kind === 'mask');
             if (mask) app.selectLayer(mask.id);
@@ -960,12 +993,42 @@ export function registerActions() {
     });
 
     actions.register({
+        id: 'openDocs',
+        displayName: 'Documentation',
+        category: 'view',
+        description: 'Open the Darkly documentation in a new tab.',
+        icon: 'fa6-solid:book',
+        menuPath: ['Help:20'],
+        handler: () => openExternal(links.docs),
+    });
+
+    actions.register({
+        id: 'openWebsite',
+        displayName: 'Website',
+        category: 'view',
+        description: 'Open the Darkly website in a new tab.',
+        icon: 'fa6-solid:globe',
+        menuPath: ['Help:30'],
+        handler: () => openExternal(links.website),
+    });
+
+    actions.register({
+        id: 'openGithub',
+        displayName: 'GitHub Repository',
+        category: 'view',
+        description: 'Open the Darkly source repository on GitHub.',
+        icon: 'fa6-brands:github',
+        menuPath: ['Help:40'],
+        handler: () => openExternal(links.github),
+    });
+
+    actions.register({
         id: 'aboutDarkly',
         displayName: 'About Darkly',
         category: 'view',
         description: 'Show version and credits.',
         icon: 'fa6-solid:circle-info',
-        menuPath: ['Help:20'],
+        menuPath: ['Help:50'],
         handler: () => { about.open = true; },
     });
 
@@ -1000,10 +1063,10 @@ export function registerActions() {
 // while soloed and those changes persist after un-solo.
 
 function toggleIsolation(targetId: number) {
-    const handle = app.handle;
-    if (!handle) return;
+    const engine = app.engine;
+    if (!engine) return;
     const next = app.isolatedNodeId === targetId ? 0 : targetId;
-    handle.set_isolated_node(next);
+    engine.post('set_isolated_node', { id: next });
     app.isolatedNodeId = next === 0 ? null : next;
     app.requestFrame();
 }

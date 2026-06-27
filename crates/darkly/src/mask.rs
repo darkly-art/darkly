@@ -9,6 +9,7 @@
 //! tools provide an SDF closure to `rasterize()`, which evaluates it at each
 //! pixel center and writes coverage values into tiles.
 
+use crate::coord::WindowRect;
 use crate::tile::{AlphaF32, AlphaF32Data, AlphaMask, Tile, TILE_SIZE};
 
 // ---------------------------------------------------------------------------
@@ -336,12 +337,33 @@ pub fn rasterize_sdf_r8(
         0
     };
 
-    let x0 = (bx - margin).max(0) as u32;
-    let y0 = (by - margin).max(0) as u32;
-    let x1 = ((bx + bw + margin) as u32).min(canvas_width);
-    let y1 = ((by + bh + margin) as u32).min(canvas_height);
-    let rw = x1 - x0;
-    let rh = y1 - y0;
+    // Tight output region: the margin-expanded shape box clamped to the window.
+    // A shape entirely off-window — or a reversed-drag negative bw/bh — has no
+    // overlap, so `intersect` yields `None` and the mask is empty.
+    let window = WindowRect::from_xywh(0, 0, canvas_width, canvas_height);
+    let region = match WindowRect::from_corners(
+        bx - margin,
+        by - margin,
+        bx + bw + margin,
+        by + bh + margin,
+    )
+    .intersect(window)
+    {
+        Some(r) => r,
+        None => {
+            return RasterizedMask {
+                data: Vec::new(),
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            }
+        }
+    };
+
+    let (x0, y0) = (region.x0() as u32, region.y0() as u32);
+    let (rw, rh) = (region.width, region.height);
+    let (x1, y1) = (x0 + rw, y0 + rh);
 
     let mut pixels = vec![0u8; (rw * rh) as usize];
 
@@ -400,23 +422,31 @@ pub fn rasterize_polygon_r8(
         max_y = max_y.max(v[1]);
     }
 
-    let margin = if antialias { 1 } else { 0 };
-    let x0 = ((min_x.floor() as i32) - margin).max(0) as u32;
-    let y0 = ((min_y.floor() as i32) - margin).max(0) as u32;
-    let x1 = ((max_x.ceil() as i32) + margin + 1).min(canvas_width as i32) as u32;
-    let y1 = ((max_y.ceil() as i32) + margin + 1).min(canvas_height as i32) as u32;
-    let rw = x1 - x0;
-    let rh = y1 - y0;
-
-    if rw == 0 || rh == 0 {
-        return RasterizedMask {
-            data: Vec::new(),
-            x: x0,
-            y: y0,
-            width: 0,
-            height: 0,
-        };
-    }
+    // Tight output region: the margin-expanded vertex bbox clamped to the
+    // window. A polygon entirely off-window has no overlap, so `clamp_f32`
+    // yields `None` and the mask is empty.
+    let margin = if antialias { 1.0 } else { 0.0 };
+    let window = WindowRect::from_xywh(0, 0, canvas_width, canvas_height);
+    let region = match window.clamp_f32(
+        min_x - margin,
+        min_y - margin,
+        max_x + margin + 1.0,
+        max_y + margin + 1.0,
+    ) {
+        Some(r) => r,
+        None => {
+            return RasterizedMask {
+                data: Vec::new(),
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            }
+        }
+    };
+    let (x0, y0) = (region.x0() as u32, region.y0() as u32);
+    let (rw, rh) = (region.width, region.height);
+    let (x1, y1) = (x0 + rw, y0 + rh);
 
     let n = vertices.len();
     let sub_samples: &[f32] = if antialias {
@@ -465,8 +495,13 @@ pub fn rasterize_polygon_r8(
                 let xr = pair[1];
 
                 // Integer pixel range fully inside the span.
-                let px_start = (xl.ceil() as i32).max(x0 as i32) as u32;
-                let px_end = (xr.floor() as i32 + 1).min(x1 as i32) as u32;
+                // Clamp BOTH endpoints into `[x0, x1]` before the `as u32` cast.
+                // A span entirely off the left edge has a negative `xr`; without
+                // the lower clamp `(xr.floor() + 1) as u32` wraps to ~4 billion and
+                // the inner loop walks off `accum`. A fully-off span now yields a
+                // reversed (empty) range instead.
+                let px_start = (xl.ceil() as i32).clamp(x0 as i32, x1 as i32) as u32;
+                let px_end = (xr.floor() as i32 + 1).clamp(x0 as i32, x1 as i32) as u32;
 
                 for px in px_start..px_end {
                     accum[local_y * rw as usize + (px - x0) as usize] += 1;
@@ -556,10 +591,17 @@ fn contour_raw_segments_r8(
         None => return Vec::new(),
     };
 
-    let px_min = (bx as i32 - 1).max(0);
-    let py_min = (by as i32 - 1).max(0);
-    let px_max = ((bx + bw) as i32).min(width as i32 - 1);
-    let py_max = ((by + bh) as i32).min(height as i32 - 1);
+    // Range over the cells straddling the bounds, including the virtual
+    // "outside = 0" row/column at index -1 and at the buffer's far edge. A mask
+    // that fills to the canvas border (e.g. an inverted selection) has its
+    // boundary transition only against those out-of-range samples, so clamping
+    // the loop to [0, width-1] would drop the entire border contour. The
+    // `sample` closure returns 0 for out-of-range coords, so iterating past the
+    // edge is safe.
+    let px_min = bx as i32 - 1;
+    let py_min = by as i32 - 1;
+    let px_max = (bx + bw) as i32;
+    let py_max = (by + bh) as i32;
 
     let sample = |x: i32, y: i32| -> f32 {
         if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
@@ -628,14 +670,16 @@ fn contour_raw_segments_r8(
 /// Compute tight pixel bounding box from a flat R8 buffer.
 /// Returns `[x, y, w, h]` or None if all pixels are zero.
 pub fn pixel_bounds_r8(pixels: &[u8], width: u32, height: u32) -> Option<[u32; 4]> {
-    let mut min_x = width;
-    let mut min_y = height;
+    let mut min_x = u32::MAX;
+    let mut min_y = u32::MAX;
     let mut max_x = 0u32;
     let mut max_y = 0u32;
+    let mut found = false;
 
     for y in 0..height {
         for x in 0..width {
             if pixels[(y * width + x) as usize] > 0 {
+                found = true;
                 min_x = min_x.min(x);
                 min_y = min_y.min(y);
                 max_x = max_x.max(x);
@@ -644,10 +688,12 @@ pub fn pixel_bounds_r8(pixels: &[u8], width: u32, height: u32) -> Option<[u32; 4
         }
     }
 
-    if max_x < min_x {
-        None
-    } else {
+    // Only subtract once we know a set pixel exists — guarantees max >= min on
+    // both axes. A zero-dimension or all-zero buffer simply finds nothing.
+    if found {
         Some([min_x, min_y, max_x - min_x + 1, max_y - min_y + 1])
+    } else {
+        None
     }
 }
 
@@ -1450,6 +1496,92 @@ mod tests {
         assert_eq!(mask.sample(50, 55), 0.0);
     }
 
+    // --- off-canvas bounds (regression: subtract-with-overflow in mask.rs) ---
+
+    #[test]
+    fn rasterize_sdf_r8_fully_below_right_is_empty() {
+        // Shape entirely below-right of the canvas: y0 > y1 used to underflow.
+        let mask = crate::mask::rasterize_sdf_r8(
+            100,
+            100,
+            (5000, 5000, 50, 50),
+            |px, py| crate::sdf::sdf_rect(px, py, 5025.0, 5025.0, 25.0, 25.0),
+            true,
+            0.0,
+        );
+        assert_eq!(mask.width, 0);
+        assert_eq!(mask.height, 0);
+    }
+
+    #[test]
+    fn rasterize_sdf_r8_fully_above_left_is_empty() {
+        // Negative bounds: (bx + bw + margin) used to wrap to a huge u32 and
+        // produce a bogus full-canvas region. Must be empty instead.
+        let mask = crate::mask::rasterize_sdf_r8(
+            100,
+            100,
+            (-5000, -5000, 50, 50),
+            |px, py| crate::sdf::sdf_rect(px, py, -4975.0, -4975.0, 25.0, 25.0),
+            true,
+            0.0,
+        );
+        assert_eq!(mask.width, 0);
+        assert_eq!(mask.height, 0);
+    }
+
+    #[test]
+    fn rasterize_sdf_r8_partial_clamps_to_canvas() {
+        // Shape straddling the right/bottom edge: region is non-empty but
+        // clamped to the canvas so x+width / y+height never exceed it.
+        let mask = crate::mask::rasterize_sdf_r8(
+            100,
+            100,
+            (80, 80, 50, 50),
+            |px, py| crate::sdf::sdf_rect(px, py, 105.0, 105.0, 25.0, 25.0),
+            false,
+            0.0,
+        );
+        assert!(mask.width > 0 && mask.height > 0);
+        assert!(mask.x + mask.width <= 100);
+        assert!(mask.y + mask.height <= 100);
+    }
+
+    #[test]
+    fn pixel_bounds_r8_zero_dimension_is_none() {
+        // A zero-width (or zero-height) buffer has no pixels; the old guard
+        // only checked the x axis, so `max_y - min_y` underflowed. Must be None.
+        assert!(crate::mask::pixel_bounds_r8(&[], 0, 5).is_none());
+        assert!(crate::mask::pixel_bounds_r8(&[], 5, 0).is_none());
+        assert!(crate::mask::pixel_bounds_r8(&[], 0, 0).is_none());
+    }
+
+    #[test]
+    fn pixel_bounds_r8_all_zero_is_none() {
+        let data = vec![0u8; 4 * 4];
+        assert!(crate::mask::pixel_bounds_r8(&data, 4, 4).is_none());
+    }
+
+    #[test]
+    fn rasterize_polygon_r8_fully_off_canvas_is_empty() {
+        // All vertices off-canvas: rw = x1 - x0 used to underflow before the
+        // zero-guard could fire.
+        let verts = [[5000.0, 5000.0], [5050.0, 5000.0], [5025.0, 5050.0]];
+        let mask = crate::mask::rasterize_polygon_r8(100, 100, &verts, true);
+        assert_eq!(mask.width, 0);
+        assert_eq!(mask.height, 0);
+    }
+
+    #[test]
+    fn rasterize_polygon_r8_negative_span_does_not_panic() {
+        // A thin triangle leaning off the left edge: on lower scanlines the fill
+        // span is entirely negative (xr < 0). `(xr.floor() as i32 + 1) as u32` used
+        // to wrap to ~4 billion and run the scanline loop off the end of `accum`.
+        let verts = [[0.0_f32, 0.0], [10.0, 0.0], [-100.0, 100.0]];
+        let mask = crate::mask::rasterize_polygon_r8(100, 100, &verts, true);
+        assert!(mask.x + mask.width <= 100);
+        assert!(mask.y + mask.height <= 100);
+    }
+
     // --- feather ---
 
     #[test]
@@ -1598,6 +1730,57 @@ mod tests {
                 assert!(len_sq > 0.0, "degenerate segment in polyline at index {i}");
             }
         }
+    }
+
+    #[test]
+    fn polylines_full_canvas_traces_border() {
+        // Regression: a mask filled to the canvas edge (e.g. the result of
+        // inverting a selection) must produce a contour along the canvas border.
+        // The marching-squares pass has to evaluate the cells straddling the
+        // virtual "outside = 0" row/column at index -1 and width-1; clamping the
+        // loop to [0, width-1] dropped them and left the border ants missing.
+        let w = 12u32;
+        let h = 12u32;
+        let buf = vec![255u8; (w * h) as usize];
+        let polylines = crate::mask::contour_polylines_r8(&buf, w, h, 127);
+        assert_eq!(
+            polylines.len(),
+            1,
+            "a fully-filled mask should trace one border loop, got {}",
+            polylines.len()
+        );
+        let mut arc = 0.0_f32;
+        for win in polylines[0].windows(2) {
+            let dx = win[1][0] - win[0][0];
+            let dy = win[1][1] - win[0][1];
+            arc += (dx * dx + dy * dy).sqrt();
+        }
+        let expected = 2.0 * (w as f32 + h as f32);
+        assert!(
+            (arc - expected).abs() < 4.0,
+            "border perimeter ≈ {expected}, got {arc}"
+        );
+    }
+
+    #[test]
+    fn polylines_inverted_rect_has_border_and_hole() {
+        // The exact marching-ants invert case: a full-canvas mask with a
+        // rectangular hole punched out (selection inverted). Expect two loops —
+        // the canvas border and the inner hole — not just the hole.
+        let stride = 20u32;
+        let mut buf = vec![255u8; (stride * stride) as usize];
+        for y in 6..12 {
+            for x in 6..12 {
+                buf[(y * stride + x) as usize] = 0;
+            }
+        }
+        let polylines = crate::mask::contour_polylines_r8(&buf, stride, stride, 127);
+        assert_eq!(
+            polylines.len(),
+            2,
+            "inverted-rect mask should yield a border loop and a hole loop, got {}",
+            polylines.len()
+        );
     }
 
     #[test]

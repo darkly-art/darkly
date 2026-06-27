@@ -15,12 +15,15 @@
     interface BlendModeType { type: string; displayName: string; category: string; }
     let blendModeTypes = $state<BlendModeType[]>([]);
     $effect(() => {
-        if (!app.handle) return;
-        try {
-            blendModeTypes = JSON.parse(app.handle.blend_mode_types()) as BlendModeType[];
-        } catch {
-            blendModeTypes = [];
-        }
+        const engine = app.engine;
+        if (!engine) return;
+        (async () => {
+            try {
+                blendModeTypes = (await engine.send('blend_mode_types')) as BlendModeType[];
+            } catch {
+                blendModeTypes = [];
+            }
+        })();
     });
 
     interface BlendModeGroup { label: string; modes: BlendModeType[]; }
@@ -39,14 +42,14 @@
 
     function onOpacityInput(e: Event) {
         const value = parseFloat((e.target as HTMLInputElement).value);
-        app.handle?.set_opacity(node.id, value);
+        app.engine?.post('set_opacity', { id: node.id, opacity: value });
         app.refreshLayerTree();
         app.requestFrame();
     }
 
     function onBlendModeChange(e: Event) {
         const value = (e.target as HTMLSelectElement).value;
-        app.handle?.set_blend_mode(node.id, value);
+        app.engine?.post('set_blend_mode', { id: node.id, type_id: value });
         app.refreshLayerTree();
         app.requestFrame();
     }

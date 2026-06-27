@@ -675,7 +675,7 @@ impl PaintPipelines {
             label: Some("paint-circle"),
             source: wgpu::ShaderSource::Wgsl(
                 crate::gpu::canvas_lib::with_canvas_lib(include_str!(
-                    "../../../../shaders/paint_circle.wgsl"
+                    "../../shaders/paint_circle.wgsl"
                 ))
                 .into(),
             ),
@@ -685,7 +685,7 @@ impl PaintPipelines {
             label: Some("gradient"),
             source: wgpu::ShaderSource::Wgsl(
                 crate::gpu::canvas_lib::with_canvas_lib(include_str!(
-                    "../../../../shaders/gradient.wgsl"
+                    "../../shaders/gradient.wgsl"
                 ))
                 .into(),
             ),

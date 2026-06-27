@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { fakeApp, fakeConfig } = vi.hoisted(() => {
     const fakeApp = {
-        handle: null,
+        engine: null,
         activeLayerId: null as number | null,
         canvasEl: null as HTMLCanvasElement | null,
         foreground: { r: 0, g: 0, b: 0, a: 255 },
