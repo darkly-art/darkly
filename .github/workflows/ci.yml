@@ -14,6 +14,12 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  # Disable HTTP/2 multiplexing for crates.io downloads. curl's HTTP/2
+  # against the GitHub-hosted runner network intermittently fails with
+  # "[16] Error in the HTTP2 framing layer", aborting dependency fetches
+  # (e.g. moxcms via image). Forcing HTTP/1.1 makes registry fetches
+  # reliable at a negligible throughput cost.
+  CARGO_HTTP_MULTIPLEXING: "false"
 
 jobs:
   fmt:
