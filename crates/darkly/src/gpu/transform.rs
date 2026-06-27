@@ -261,9 +261,9 @@ impl TransformPass {
             label: Some("transform-commit-shader"),
             source: wgpu::ShaderSource::Wgsl(
                 concat!(
-                    include_str!("../../../../shaders/source_over.wgsl"),
+                    include_str!("../../shaders/source_over.wgsl"),
                     "\n",
-                    include_str!("../../../../shaders/transform_commit.wgsl"),
+                    include_str!("../../shaders/transform_commit.wgsl"),
                 )
                 .into(),
             ),
@@ -310,9 +310,7 @@ impl TransformPass {
         // --- Premultiply pipeline (straight→premultiplied alpha conversion) ---
         let premultiply_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("premultiply-shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/premultiply.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/premultiply.wgsl").into()),
         });
 
         let premultiply_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

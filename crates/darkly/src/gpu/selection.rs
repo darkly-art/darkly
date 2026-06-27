@@ -122,7 +122,7 @@ impl SelectionPipelines {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("selection-combine"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/selection_combine.wgsl").into(),
+                include_str!("../../shaders/selection_combine.wgsl").into(),
             ),
         });
 
@@ -261,7 +261,7 @@ impl SelectionPipelines {
         let morph_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("selection-morph"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/selection_morph.wgsl").into(),
+                include_str!("../../shaders/selection_morph.wgsl").into(),
             ),
         });
         let morph_pipeline =
@@ -270,7 +270,7 @@ impl SelectionPipelines {
         let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("selection-blur"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/selection_blur.wgsl").into(),
+                include_str!("../../shaders/selection_blur.wgsl").into(),
             ),
         });
         let blur_pipeline =

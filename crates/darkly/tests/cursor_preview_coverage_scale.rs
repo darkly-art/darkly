@@ -81,7 +81,7 @@ fn ink_pen_cursor_preview_scale_stays_near_unity() {
 /// shader source.
 #[test]
 fn overlay_shader_multiplies_coverage_by_preview_scale() {
-    let src = include_str!("../../../shaders/overlay.wgsl");
+    let src = include_str!("../shaders/overlay.wgsl");
     assert!(
         src.contains("preview_coverage_scale"),
         "overlay.wgsl must reference preview_coverage_scale — the \

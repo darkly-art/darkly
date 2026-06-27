@@ -210,6 +210,21 @@ chromium --enable-features=Vulkan --enable-unsafe-webgpu
 
 You can verify the active backend at `chrome://gpu` - look for "Vulkan" under Graphics Feature Status. On macOS and Windows this is generally not needed (Metal and D3D12 are used by default).
 
+## Use it in your own project
+
+Darkly's core is a standalone, platform-agnostic Rust crate, [`darkly`](https://crates.io/crates/darkly). The document model, brush engine, GPU compositor, and undo system all live here with zero platform dependencies, and run anywhere [wgpu](https://wgpu.rs) does: native (Vulkan / Metal / DX12) or the browser (WebGPU). The app above is a Svelte frontend over this exact crate, through a thin WebAssembly bridge.
+
+If you're building a graphics tool in Rust -- a drawing app, annotation layer, whiteboard, texture editor, etc. -- you can embed the engine instead of writing all these features from scratch.
+
+[![crates.io](https://img.shields.io/crates/v/darkly?style=for-the-badge&logo=rust&label=crates.io&labelColor=black&color=9500ff)](https://crates.io/crates/darkly)
+[![docs.rs](https://img.shields.io/docsrs/darkly?style=for-the-badge&logo=docsdotrs&labelColor=black&color=4400ff)](https://docs.rs/darkly)
+
+```sh
+cargo add darkly
+```
+
+See the [crate README](crates/darkly/README.md) for a runnable example, and the [API docs](https://docs.rs/darkly) for full details.
+
 ## Use of AI
 
 It's acceptable to use AI for this codebase, but careless vibe coding is **strictly forbidden**.
@@ -235,6 +250,8 @@ Darkly stands on the shoulders of giants. Three programs in particular have infl
 **[Graphite](https://graphite.art/)** ([source](https://github.com/GraphiteEditor/Graphite)) - founded by **Keavon Chambers** (@Keavon), with the core team of **Dennis Kobert** (@TrueDoctor), **Timon Schelling** (@timon-schelling), and **Adam Gerhant** (@pendapia), plus heroic contributions from **Hypercube** (@0HyperCube), **James Lindsay**, and [hundreds more](https://github.com/GraphiteEditor/Graphite/graphs/contributors). Graphite is a pioneer in bringing serious 2D graphics tooling to **Rust + WebAssembly + WebGPU**.
 
 While Darkly's architecture is fundamentally different, it was really insightful to see how these tools tackled many of the same hard problems, and their unique and smart approaches that made them pillars of open source!
+
+A special thank you to **[Nick Cameron](https://github.com/nrc)** for graciously gifting us the `darkly` crate on crates.io. 💜
 
 ### Veils & Voids
 

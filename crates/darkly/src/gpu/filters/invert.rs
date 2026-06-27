@@ -13,8 +13,8 @@ use crate::gpu::filter::FilterPipelineRegistration;
 /// `fs_invert_masked` can call `invert_color` — the same `include_str!`
 /// concatenation `voids/noise.rs` uses for `lib/fbm.wgsl`.
 fn shader_source() -> String {
-    let color = include_str!("../../../../../shaders/lib/color.wgsl");
-    let invert = include_str!("../../../../../shaders/filters/invert.wgsl");
+    let color = include_str!("../../../shaders/lib/color.wgsl");
+    let invert = include_str!("../../../shaders/filters/invert.wgsl");
     format!("{color}\n{invert}")
 }
 

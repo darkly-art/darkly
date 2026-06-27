@@ -40,7 +40,7 @@ pub fn create_blit_pipeline(
         device,
         format,
         label,
-        include_str!("../../../../shaders/blit.wgsl"),
+        include_str!("../../shaders/blit.wgsl"),
         "fs_blit",
     )
 }
@@ -59,7 +59,7 @@ pub fn create_downscale_pipeline(
         device,
         format,
         label,
-        include_str!("../../../../shaders/downscale.wgsl"),
+        include_str!("../../shaders/downscale.wgsl"),
         "fs_downscale",
     )
 }

@@ -235,7 +235,7 @@ fn create_painting_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat)
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("painting-shader"),
         source: wgpu::ShaderSource::Wgsl(
-            include_str!("../../../../../shaders/veils/painting.wgsl").into(),
+            include_str!("../../../shaders/veils/painting.wgsl").into(),
         ),
     });
 

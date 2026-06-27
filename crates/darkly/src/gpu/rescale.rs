@@ -80,9 +80,7 @@ impl RescalePass {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("rescale-shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/rescale.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/rescale.wgsl").into()),
         });
 
         let make = |entry: &str, format: wgpu::TextureFormat, label: &str| {

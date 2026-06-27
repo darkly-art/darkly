@@ -412,9 +412,7 @@ impl BrushPipelines {
         // Blit: stretch a UV sub-rect of the source across the target viewport.
         let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("brush-blit"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/brush/blit.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/brush/blit.wgsl").into()),
         });
         // `canvas_copy_bgl` is the canonical `texture_2d<f32> + sampler`
         // layout — same shape the old dab-pool BGL had, used here for
@@ -477,7 +475,7 @@ impl BrushPipelines {
         let mask_blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("brush-mask-blit"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/brush/mask_blit.wgsl").into(),
+                include_str!("../../shaders/brush/mask_blit.wgsl").into(),
             ),
         });
         let mask_blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
