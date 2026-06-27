@@ -644,7 +644,7 @@ export function registerActions() {
         handler: async () => {
             const engine = app.engine;
             if (!engine) return;
-            const { id } = await engine.send('add_raster', { anchor: app.activeLayerId ?? -1 });
+            const { id } = await engine.send('add_raster', { anchor: app.activeLayerId });
             app.selectLayer(id);
             await app.refreshLayerTree();
         },
@@ -670,7 +670,7 @@ export function registerActions() {
                     toast.show('error', e.message ?? String(e));
                 }
             } else {
-                const { id } = await engine.send('add_group', { anchor: app.activeLayerId ?? -1 });
+                const { id } = await engine.send('add_group', { anchor: app.activeLayerId });
                 app.selectLayer(id);
             }
             await app.refreshLayerTree();
@@ -815,7 +815,7 @@ export function registerActions() {
         handler: async () => {
             const engine = app.engine;
             if (!engine || app.activeLayerId === null) return;
-            await engine.send('flip_node', { node_id: app.activeLayerId, axis: 'h' });
+            await engine.send('flip_node', { node_id: app.activeLayerId, xform: 'flip_h' });
             app.requestFrame();
         },
     });
@@ -830,7 +830,7 @@ export function registerActions() {
         handler: async () => {
             const engine = app.engine;
             if (!engine || app.activeLayerId === null) return;
-            await engine.send('flip_node', { node_id: app.activeLayerId, axis: 'v' });
+            await engine.send('flip_node', { node_id: app.activeLayerId, xform: 'flip_v' });
             app.requestFrame();
         },
     });

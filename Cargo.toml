@@ -35,7 +35,11 @@ png = "0.18"
 quick-xml = "0.40"
 base64 = "0.22"
 thiserror = "2.0"
-slotmap = { version = "1.0", features = ["serde"] }
+# `serde` feature intentionally off: slotmap's derived key serde encodes the
+# generational key as a `{ idx, version }` struct, but `LayerId` crosses the
+# wire as a single packed `u64` (see its hand-written serde impl in `layer.rs`).
+# The two would conflict, and nothing serializes a `SlotMap` directly.
+slotmap = { version = "1.0" }
 smallvec = "1"
 
 # WASM

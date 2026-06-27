@@ -31,6 +31,24 @@ impl LayerId {
     }
 }
 
+// A `LayerId` crosses the wire as the same packed `u64` it uses at the WASM/JS
+// boundary. The slotmap key's internal repr is index+version, so this can't be
+// a derive — it serializes *through* `to_ffi`/`from_ffi`, transparent as a
+// single JSON number. This is the protocol's `LayerId` coercion (see the typed
+// engine bridge): with it, handlers carry `LayerId` directly instead of
+// shimming `u64` at every call site.
+impl serde::Serialize for LayerId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u64(self.to_ffi())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for LayerId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(LayerId::from_ffi(u64::deserialize(deserializer)?))
+    }
+}
+
 /// Properties shared by every node in the tree — raster layers, groups, and
 /// filters. Lock prevents any mutation; lives on every node by construction
 /// so the universal check is one line at every mutation entry point.

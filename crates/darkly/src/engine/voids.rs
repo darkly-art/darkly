@@ -44,6 +44,21 @@ impl DarklyEngine {
         self.compositor.void_registry().param_defs(type_id)
     }
 
+    /// Coerce a raw JSON params object into typed [`ParamValue`]s against a void
+    /// type's `ParamDef` schema. The single param-coercion seam every
+    /// void-param handler shares (add / update): it pairs the raw `params` with
+    /// the sibling `void_type` that names the schema, which is exactly the
+    /// pairing generic request routing can't do for itself.
+    ///
+    /// [`ParamValue`]: crate::gpu::params::ParamValue
+    pub fn coerce_void_params(
+        &self,
+        type_id: &str,
+        params: &serde_json::Value,
+    ) -> Vec<crate::gpu::params::ParamValue> {
+        crate::gpu::params::param_values_from_json(params, self.void_param_defs(type_id))
+    }
+
     /// Resolve a layer id to its void type, if the layer is a void.
     /// Helper for the WASM bridge so callers don't need to import the layer
     /// enum to query the active void's schema.

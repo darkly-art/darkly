@@ -111,7 +111,7 @@ export async function createInstance(
     // bg layer — eliminates the "refresh after mutation" race the
     // LayerPanel would otherwise hit.
     if (options.seedBackground) {
-        const { id: bg } = await engine.send('add_raster', { anchor: -1 });
+        const { id: bg } = await engine.send('add_raster', { anchor: null });
         engine.post('fill_background', { id: bg });
         instance.selectLayer(bg);
     }

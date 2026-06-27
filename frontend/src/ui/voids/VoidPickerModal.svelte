@@ -56,9 +56,9 @@
         const id = (await app.engine.send('add_void', {
             void_type: vt.type,
             params: defaults,
-            anchor: app.activeLayerId ?? -1,
+            anchor: app.activeLayerId,
         })).id;
-        if (id >= 0) {
+        if (id != null) {
             app.selectLayer(id);
             // Adding a stream-backed void via the picker is an explicit user
             // gesture — opt the new layer into this session's allow-list and

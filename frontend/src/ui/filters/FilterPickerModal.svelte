@@ -20,9 +20,9 @@
         const { id } = await app.engine.send('add_filter_layer', {
             pipeline: ft.type,
             params: {},
-            anchor: app.activeLayerId ?? -1,
+            anchor: app.activeLayerId,
         });
-        if (id >= 0) app.selectLayer(id);
+        if (id != null) app.selectLayer(id);
         app.requestFrame();
         open = false;
     }

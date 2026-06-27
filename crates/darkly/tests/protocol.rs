@@ -48,7 +48,7 @@ fn add_raster_dispatch_adds_a_layer_and_returns_id() {
 
     let before = engine.layer_tree().len();
     let resp = reg
-        .dispatch(&mut engine, "add_raster", json!({ "anchor": -1 }), &[])
+        .dispatch(&mut engine, "add_raster", json!({ "anchor": null }), &[])
         .expect("add_raster dispatch");
     let id = resp.value.get("id").and_then(|v| v.as_u64());
     assert!(id.is_some(), "add_raster returns an id");
@@ -57,18 +57,20 @@ fn add_raster_dispatch_adds_a_layer_and_returns_id() {
 }
 
 #[test]
-fn add_void_unknown_type_returns_minus_one() {
+fn add_void_unknown_type_returns_null_id() {
     let reg = RequestRegistry::new();
     let mut engine = test_engine(64, 64);
     let resp = reg
         .dispatch(
             &mut engine,
             "add_void",
-            json!({ "void_type": "not_a_void", "params": {}, "anchor": -1 }),
+            json!({ "void_type": "not_a_void", "params": {}, "anchor": null }),
             &[],
         )
         .expect("add_void dispatch is infallible at the protocol level");
-    assert_eq!(resp.value.get("id").and_then(|v| v.as_i64()), Some(-1));
+    // An unknown void type yields no layer: `Option<LayerId>` serializes the
+    // `None` as a JSON `null`, not the old `-1` sentinel.
+    assert!(resp.value.get("id").is_some_and(|v| v.is_null()));
 }
 
 #[test]
@@ -133,6 +135,103 @@ fn request_kind_ts_union_is_in_sync() {
         actual, ts,
         "protocol_gen.ts is stale — run DARKLY_REGEN_TS=1 cargo test -p darkly --test protocol --features testing"
     );
+}
+
+/// `LayerId` is wire-native: it serializes as a bare `u64` and round-trips
+/// losslessly, so handlers can carry it directly instead of `to_ffi`/`from_ffi`
+/// shimming. Regression guard for the typed-bridge coercion.
+#[test]
+fn layer_id_round_trips_through_json_as_a_number() {
+    use darkly::layer::LayerId;
+    let id = LayerId::from_ffi(0x0000_0002_0000_0007);
+    let v = serde_json::to_value(id).unwrap();
+    assert!(v.is_u64(), "LayerId serializes as a bare JSON number");
+    let back: LayerId = serde_json::from_value(v).unwrap();
+    assert_eq!(id, back, "LayerId round-trips losslessly");
+}
+
+/// `MoveTarget` deserializes straight from the `{ target_type, target_id }`
+/// wire shape (adjacently-tagged enum), retiring the hand-written `&str →
+/// variant` map. Includes the `#[serde(flatten)]` path the move handlers use.
+#[test]
+fn move_target_deserializes_from_wire_shape() {
+    use darkly::document::MoveTarget;
+    use darkly::layer::LayerId;
+    let id = LayerId::from_ffi(42);
+    let raw = id.to_ffi();
+
+    let before: MoveTarget =
+        serde_json::from_value(json!({ "target_type": "before", "target_id": raw })).unwrap();
+    assert!(matches!(before, MoveTarget::Before(_)));
+    let into_top: MoveTarget =
+        serde_json::from_value(json!({ "target_type": "into_top", "target_id": raw })).unwrap();
+    assert!(matches!(into_top, MoveTarget::IntoGroupTop(_)));
+    let into_bottom: MoveTarget =
+        serde_json::from_value(json!({ "target_type": "into_bottom", "target_id": raw })).unwrap();
+    assert!(matches!(into_bottom, MoveTarget::IntoGroupBottom(_)));
+
+    // Flattened into a sibling-bearing request, exactly as `move_layer` decodes.
+    #[derive(serde::Deserialize)]
+    struct MoveReq {
+        id: LayerId,
+        #[serde(flatten)]
+        target: MoveTarget,
+    }
+    let req: MoveReq =
+        serde_json::from_value(json!({ "id": raw, "target_type": "after", "target_id": raw }))
+            .unwrap();
+    assert_eq!(req.id, id);
+    assert!(matches!(req.target, MoveTarget::After(_)));
+}
+
+/// `OrthoXform` deserializes from its `snake_case` name, retiring the per-handler
+/// `axis`/`dir` → variant maps in the flip/rotate handlers.
+#[test]
+fn ortho_xform_deserializes_from_snake_case() {
+    use darkly::gpu::ortho_transform::OrthoXform;
+    let cases = [
+        ("flip_h", OrthoXform::FlipH),
+        ("flip_v", OrthoXform::FlipV),
+        ("rot180", OrthoXform::Rot180),
+        ("rot90_cw", OrthoXform::Rot90Cw),
+        ("rot90_ccw", OrthoXform::Rot90Ccw),
+    ];
+    for (wire, expect) in cases {
+        let x: OrthoXform = serde_json::from_value(json!(wire)).unwrap();
+        assert_eq!(x, expect, "{wire} deserializes to {expect:?}");
+    }
+}
+
+/// End-to-end through the registry: the `move_layer` handler decodes the
+/// `{ id, target_type, target_id }` payload (LayerId + flattened MoveTarget)
+/// and reorders without a protocol error.
+#[test]
+fn move_layer_dispatch_reorders_via_wire_shape() {
+    let reg = RequestRegistry::new();
+    let mut engine = test_engine(64, 64);
+
+    let a = reg
+        .dispatch(&mut engine, "add_raster", json!({ "anchor": null }), &[])
+        .unwrap()
+        .value
+        .get("id")
+        .and_then(|v| v.as_u64())
+        .expect("first raster id");
+    let b = reg
+        .dispatch(&mut engine, "add_raster", json!({ "anchor": null }), &[])
+        .unwrap()
+        .value
+        .get("id")
+        .and_then(|v| v.as_u64())
+        .expect("second raster id");
+
+    reg.dispatch(
+        &mut engine,
+        "move_layer",
+        json!({ "id": a, "target_type": "before", "target_id": b }),
+        &[],
+    )
+    .expect("move_layer dispatch decodes LayerId + flattened MoveTarget");
 }
 
 #[test]

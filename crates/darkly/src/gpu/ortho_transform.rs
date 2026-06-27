@@ -17,8 +17,13 @@ use crate::gpu::atlas::LayerTexture;
 
 /// One of the five orthogonal transforms. Discriminants match the `xform`
 /// codes the shader switches on; keep the two in step.
+///
+/// Wire-native via `snake_case` serde (`flip_h`, `flip_v`, `rot180`,
+/// `rot90_cw`, `rot90_ccw`), so flip/rotate handlers deserialize the variant
+/// directly instead of mapping a wire `axis`/`dir` string by hand.
 #[repr(u32)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OrthoXform {
     FlipH = 0,
     FlipV = 1,

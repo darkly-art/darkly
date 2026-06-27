@@ -1,26 +1,25 @@
 //! Layer / group / node structural mutations — add, remove, move, duplicate,
 //! group, merge, flatten, and void-layer param management.
+//!
+//! Every handler here is pure forwarding: decode a request whose fields name
+//! the engine method's parameters one-for-one, call the method, wrap the
+//! return. The decode does all the marshalling — `LayerId`, `MoveTarget`,
+//! `OrthoXform`, and `Transform` are serde-native, and `Option<LayerId>`
+//! carries the "no anchor" case as `null` — so there are no `*_from_ffi`
+//! shims, sentinel ints, or hand-written `&str → variant` maps left. The one
+//! thing decode can't do is pair a raw `params` object with the sibling field
+//! that names its schema; that single seam is [`DarklyEngine::coerce_void_params`].
 
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 
+use crate::document::MoveTarget;
 use crate::engine::protocol::{
-    decode, layer_id, params_from_json, ProtocolError, RequestRegistration, Response,
+    decode, params_from_json, ProtocolError, RawParams, RequestRegistration, Response,
 };
-use crate::gpu::params::ParamDef;
+use crate::gpu::ortho_transform::OrthoXform;
 use crate::layer::LayerId;
-
-/// Build a [`crate::document::MoveTarget`] from the wire `{ target_type, target_id }`.
-fn move_target(t: &str, id: LayerId) -> Result<crate::document::MoveTarget, ProtocolError> {
-    use crate::document::MoveTarget::*;
-    Ok(match t {
-        "before" => Before(id),
-        "after" => After(id),
-        "into_top" => IntoGroupTop(id),
-        "into_bottom" => IntoGroupBottom(id),
-        _ => return Err(ProtocolError::engine("unknown move target")),
-    })
-}
+use crate::transform::Transform;
 
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
@@ -29,12 +28,12 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    anchor: i64,
+                    #[serde(default)]
+                    anchor: Option<LayerId>,
                 }
                 let r: Req = decode(payload)?;
-                let anchor = (r.anchor >= 0).then(|| LayerId::from_ffi(r.anchor as u64));
                 Ok(Response::json(
-                    json!({ "id": engine.add_raster_layer(anchor).to_ffi() }),
+                    json!({ "id": engine.add_raster_layer(r.anchor) }),
                 ))
             },
         },
@@ -43,13 +42,11 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    anchor: i64,
+                    #[serde(default)]
+                    anchor: Option<LayerId>,
                 }
                 let r: Req = decode(payload)?;
-                let anchor = (r.anchor >= 0).then(|| LayerId::from_ffi(r.anchor as u64));
-                Ok(Response::json(
-                    json!({ "id": engine.add_group(anchor).to_ffi() }),
-                ))
+                Ok(Response::json(json!({ "id": engine.add_group(r.anchor) })))
             },
         },
         RequestRegistration {
@@ -59,18 +56,15 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 struct Req {
                     void_type: String,
                     #[serde(default)]
-                    params: serde_json::Value,
-                    anchor: i64,
+                    params: RawParams,
+                    #[serde(default)]
+                    anchor: Option<LayerId>,
                 }
                 let r: Req = decode(payload)?;
-                let anchor = (r.anchor >= 0).then(|| LayerId::from_ffi(r.anchor as u64));
-                let defs: &'static [ParamDef] = engine.void_param_defs(&r.void_type);
-                let pv = params_from_json(&r.params, defs);
-                let value = match engine.add_void_layer(&r.void_type, pv, anchor) {
-                    Some(id) => json!({ "id": id.to_ffi() }),
-                    None => json!({ "id": -1 }),
-                };
-                Ok(Response::json(value))
+                let pv = engine.coerce_void_params(&r.void_type, &r.params.0);
+                Ok(Response::json(
+                    json!({ "id": engine.add_void_layer(&r.void_type, pv, r.anchor) }),
+                ))
             },
         },
         RequestRegistration {
@@ -80,19 +74,17 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 struct Req {
                     pipeline: String,
                     #[serde(default)]
-                    params: serde_json::Value,
-                    anchor: i64,
+                    params: RawParams,
+                    #[serde(default)]
+                    anchor: Option<LayerId>,
                 }
                 let r: Req = decode(payload)?;
-                let anchor = (r.anchor >= 0).then(|| LayerId::from_ffi(r.anchor as u64));
                 // Filters carry no params today (invert is parameter-free), so
                 // the schema is empty; `params_from_json` yields an empty vec.
-                let pv = params_from_json(&r.params, &[]);
-                let value = match engine.add_filter_layer(&r.pipeline, pv, anchor) {
-                    Some(id) => json!({ "id": id.to_ffi() }),
-                    None => json!({ "id": -1 }),
-                };
-                Ok(Response::json(value))
+                let pv = params_from_json(&r.params.0, &[]);
+                Ok(Response::json(
+                    json!({ "id": engine.add_filter_layer(&r.pipeline, pv, r.anchor) }),
+                ))
             },
         },
         RequestRegistration {
@@ -100,18 +92,16 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    id: u64,
-                    params: serde_json::Value,
+                    id: LayerId,
+                    #[serde(default)]
+                    params: RawParams,
                 }
                 let r: Req = decode(payload)?;
-                let id = LayerId::from_ffi(r.id);
-                let type_id = match engine.void_layer_type(id) {
-                    Some(t) => t,
-                    None => return Ok(Response::empty()),
+                let Some(type_id) = engine.void_layer_type(r.id) else {
+                    return Ok(Response::empty());
                 };
-                let defs = engine.void_param_defs(&type_id);
-                let pv = params_from_json(&r.params, defs);
-                engine.update_void_params(id, pv);
+                let pv = engine.coerce_void_params(&type_id, &r.params.0);
+                engine.update_void_params(r.id, pv);
                 Ok(Response::empty())
             },
         },
@@ -120,39 +110,28 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    id: u64,
-                    #[serde(default)]
-                    mode_tag: u32,
-                    payload: Vec<f32>,
+                    id: LayerId,
+                    transform: Transform,
                 }
                 let r: Req = decode(payload)?;
-                let id = LayerId::from_ffi(r.id);
-                // Basic mode (tag 0) carries the 6 affine components. Unknown
-                // modes / short payloads are ignored (no-op).
-                if r.mode_tag == 0 && r.payload.len() >= 6 {
-                    let t = crate::transform::Transform::from_affine([
-                        r.payload[0],
-                        r.payload[1],
-                        r.payload[2],
-                        r.payload[3],
-                        r.payload[4],
-                        r.payload[5],
-                    ]);
-                    engine.update_void_transform(id, t);
-                }
+                engine.update_void_transform(r.id, r.transform);
                 Ok(Response::empty())
             },
         },
         RequestRegistration {
             kind: "void_transform_info",
             handle: |engine, payload, _b| {
-                let id = layer_id(payload)?;
-                let value = match engine.void_transform_info(id) {
+                #[derive(Deserialize)]
+                struct Req {
+                    id: LayerId,
+                }
+                let r: Req = decode(payload)?;
+                let value = match engine.void_transform_info(r.id) {
                     Some((ox, oy, w, h, t)) => json!({
                         "ox": ox, "oy": oy, "w": w, "h": h,
                         "mode": t.mode_tag(), "matrix": t.to_affine(),
                     }),
-                    None => serde_json::Value::Null,
+                    None => Value::Null,
                 };
                 Ok(Response::json(value))
             },
@@ -160,9 +139,13 @@ pub fn registrations() -> Vec<RequestRegistration> {
         RequestRegistration {
             kind: "layer_transform_capability",
             handle: |engine, payload, _b| {
-                let id = layer_id(payload)?;
+                #[derive(Deserialize)]
+                struct Req {
+                    id: LayerId,
+                }
+                let r: Req = decode(payload)?;
                 Ok(Response::json(
-                    json!({ "value": engine.layer_transform_capability(id) }),
+                    json!({ "value": engine.layer_transform_capability(r.id) }),
                 ))
             },
         },
@@ -171,12 +154,10 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    id: u64,
+                    id: LayerId,
                 }
                 let r: Req = decode(payload)?;
-                engine
-                    .remove_layer(LayerId::from_ffi(r.id))
-                    .map_err(ProtocolError::engine)?;
+                engine.remove_layer(r.id).map_err(ProtocolError::engine)?;
                 Ok(Response::empty())
             },
         },
@@ -185,13 +166,12 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    id: u64,
-                    target_type: String,
-                    target_id: u64,
+                    id: LayerId,
+                    #[serde(flatten)]
+                    target: MoveTarget,
                 }
                 let r: Req = decode(payload)?;
-                let target = move_target(&r.target_type, LayerId::from_ffi(r.target_id))?;
-                engine.move_layer(LayerId::from_ffi(r.id), target);
+                engine.move_layer(r.id, r.target);
                 Ok(Response::empty())
             },
         },
@@ -200,11 +180,10 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    ids: Vec<u64>,
+                    ids: Vec<LayerId>,
                 }
                 let r: Req = decode(payload)?;
-                let ids: Vec<LayerId> = r.ids.into_iter().map(LayerId::from_ffi).collect();
-                let n = engine.remove_layers(ids).map_err(ProtocolError::engine)?;
+                let n = engine.remove_layers(r.ids).map_err(ProtocolError::engine)?;
                 Ok(Response::json(json!({ "skipped": n })))
             },
         },
@@ -213,15 +192,13 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    ids: Vec<u64>,
-                    target_type: String,
-                    target_id: u64,
+                    ids: Vec<LayerId>,
+                    #[serde(flatten)]
+                    target: MoveTarget,
                 }
                 let r: Req = decode(payload)?;
-                let ids: Vec<LayerId> = r.ids.into_iter().map(LayerId::from_ffi).collect();
-                let target = move_target(&r.target_type, LayerId::from_ffi(r.target_id))?;
                 let n = engine
-                    .move_layers(ids, target)
+                    .move_layers(r.ids, r.target)
                     .map_err(ProtocolError::engine)?;
                 Ok(Response::json(json!({ "skipped": n })))
             },
@@ -231,16 +208,12 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    ids: Vec<u64>,
+                    ids: Vec<LayerId>,
                 }
                 let r: Req = decode(payload)?;
-                let ids: Vec<LayerId> = r.ids.into_iter().map(LayerId::from_ffi).collect();
-                let out: Vec<u64> = engine
-                    .duplicate_nodes(ids)
-                    .into_iter()
-                    .map(|id| id.to_ffi())
-                    .collect();
-                Ok(Response::json(json!({ "ids": out })))
+                Ok(Response::json(
+                    json!({ "ids": engine.duplicate_nodes(r.ids) }),
+                ))
             },
         },
         RequestRegistration {
@@ -248,12 +221,11 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    ids: Vec<u64>,
+                    ids: Vec<LayerId>,
                 }
                 let r: Req = decode(payload)?;
-                let ids: Vec<LayerId> = r.ids.into_iter().map(LayerId::from_ffi).collect();
-                let id = engine.group_layers(ids).map_err(ProtocolError::engine)?;
-                Ok(Response::json(json!({ "id": id.to_ffi() })))
+                let id = engine.group_layers(r.ids).map_err(ProtocolError::engine)?;
+                Ok(Response::json(json!({ "id": id })))
             },
         },
         RequestRegistration {
@@ -261,12 +233,11 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    ids: Vec<u64>,
+                    ids: Vec<LayerId>,
                 }
                 let r: Req = decode(payload)?;
-                let ids: Vec<LayerId> = r.ids.into_iter().map(LayerId::from_ffi).collect();
-                let id = engine.merge_layers(ids).map_err(ProtocolError::engine)?;
-                Ok(Response::json(json!({ "id": id.to_ffi() })))
+                let id = engine.merge_layers(r.ids).map_err(ProtocolError::engine)?;
+                Ok(Response::json(json!({ "id": id })))
             },
         },
         RequestRegistration {
@@ -274,39 +245,26 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    source_id: u64,
+                    source_id: LayerId,
                 }
                 let r: Req = decode(payload)?;
-                let out = engine
-                    .duplicate_node(LayerId::from_ffi(r.source_id))
-                    .map(|n| n.to_ffi())
-                    .unwrap_or(0);
-                Ok(Response::json(json!({ "id": out })))
+                Ok(Response::json(
+                    json!({ "id": engine.duplicate_node(r.source_id) }),
+                ))
             },
         },
         RequestRegistration {
             kind: "flip_node",
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
-                #[serde(rename_all = "lowercase")]
-                enum Axis {
-                    H,
-                    V,
-                }
-                #[derive(Deserialize)]
                 struct Req {
-                    node_id: u64,
-                    axis: Axis,
+                    node_id: LayerId,
+                    xform: OrthoXform,
                 }
                 let r: Req = decode(payload)?;
-                let ok = engine.flip_node(
-                    LayerId::from_ffi(r.node_id),
-                    match r.axis {
-                        Axis::H => crate::gpu::ortho_transform::OrthoXform::FlipH,
-                        Axis::V => crate::gpu::ortho_transform::OrthoXform::FlipV,
-                    },
-                );
-                Ok(Response::json(json!({ "ok": ok })))
+                Ok(Response::json(
+                    json!({ "ok": engine.flip_node(r.node_id, r.xform) }),
+                ))
             },
         },
         RequestRegistration {
@@ -314,20 +272,20 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    source_id: u64,
+                    source_id: LayerId,
                 }
                 let r: Req = decode(payload)?;
                 let id = engine
-                    .merge_down(LayerId::from_ffi(r.source_id))
+                    .merge_down(r.source_id)
                     .map_err(ProtocolError::engine)?;
-                Ok(Response::json(json!({ "id": id.to_ffi() })))
+                Ok(Response::json(json!({ "id": id })))
             },
         },
         RequestRegistration {
             kind: "flatten_image",
             handle: |engine, _payload, _b| {
                 let id = engine.flatten_image().map_err(ProtocolError::engine)?;
-                Ok(Response::json(json!({ "id": id.to_ffi() })))
+                Ok(Response::json(json!({ "id": id })))
             },
         },
         RequestRegistration {
@@ -335,13 +293,13 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    node_id: u64,
+                    node_id: LayerId,
                 }
                 let r: Req = decode(payload)?;
                 let id = engine
-                    .flatten_node(LayerId::from_ffi(r.node_id))
+                    .flatten_node(r.node_id)
                     .map_err(ProtocolError::engine)?;
-                Ok(Response::json(json!({ "id": id.to_ffi() })))
+                Ok(Response::json(json!({ "id": id })))
             },
         },
         RequestRegistration {
@@ -349,11 +307,12 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    node_id: u64,
+                    node_id: LayerId,
                 }
                 let r: Req = decode(payload)?;
-                let v = engine.can_flatten_node(LayerId::from_ffi(r.node_id));
-                Ok(Response::json(json!({ "value": v })))
+                Ok(Response::json(
+                    json!({ "value": engine.can_flatten_node(r.node_id) }),
+                ))
             },
         },
         RequestRegistration {
@@ -361,11 +320,12 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    source_id: u64,
+                    source_id: LayerId,
                 }
                 let r: Req = decode(payload)?;
-                let v = engine.can_merge_down(LayerId::from_ffi(r.source_id));
-                Ok(Response::json(json!({ "value": v })))
+                Ok(Response::json(
+                    json!({ "value": engine.can_merge_down(r.source_id) }),
+                ))
             },
         },
         RequestRegistration {

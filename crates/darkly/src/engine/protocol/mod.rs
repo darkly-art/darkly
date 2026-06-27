@@ -33,6 +33,16 @@ pub use transport::{DrainOutcome, QueuedRequest, RequestOutcome, Transport};
 /// handles via `from_value`.
 pub use crate::gpu::params::param_values_from_json as params_from_json;
 
+/// A request's raw, un-coerced parameter object. It crosses `Deserialize`
+/// untouched so a param-bearing handler can pair it with the sibling field that
+/// names its schema (a void/filter type id) and run the `ParamDef`-driven
+/// coercion ([`DarklyEngine::coerce_void_params`]) — the one coercion a generic
+/// macro can't perform, because it can't know which sibling field selects the
+/// schema. `JsonValue` in the generated TS client.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(transparent)]
+pub struct RawParams(pub Value);
+
 /// A handler's successful result: a JSON value plus an optional binary
 /// side-channel. `bytes` is `None` for non-binary requests and `Some` (possibly
 /// empty) for binary ones — the `Some`/`None` distinction matters: a binary

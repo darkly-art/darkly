@@ -15,6 +15,14 @@ import { app } from '../state/app.svelte';
 import type { Affine2D } from './transform_affine';
 import type { TransformBinding } from './transform_gizmo';
 
+/** The Rust `Transform` enum's wire form (adjacently tagged `{ mode, data }`).
+ *  Mirrors `Transform::mode_tag`: tag 0 is the only mode today (`Basic`, a raw
+ *  affine). A new interaction mode adds a case here and a variant there. */
+function transformWire(modeTag: number, affine: Affine2D) {
+    if (modeTag !== 0) throw new Error(`unknown transform mode tag: ${modeTag}`);
+    return { mode: 'Basic', data: Array.from(affine) };
+}
+
 /** Binding over the floating (paste / raster-extract) session. */
 export function floatingTransformBinding(): TransformBinding {
     return {
@@ -68,8 +76,7 @@ export function voidTransformBinding(layerId: number): TransformBinding {
         update(affine: Affine2D, modeTag: number) {
             app.engine?.post('update_void_transform', {
                 id: layerId,
-                mode_tag: modeTag,
-                payload: Array.from(affine),
+                transform: transformWire(modeTag, affine),
             });
         },
         commit() {
@@ -79,8 +86,7 @@ export function voidTransformBinding(layerId: number): TransformBinding {
             if (original) {
                 app.engine?.post('update_void_transform', {
                     id: layerId,
-                    mode_tag: 0,
-                    payload: Array.from(original),
+                    transform: transformWire(0, original),
                 });
             }
         },
