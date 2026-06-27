@@ -685,7 +685,7 @@ fn create_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> Effect
         immediate_size: 0,
     });
 
-    let src = include_str!("../../../../shaders/voids/video_stream.wgsl");
+    let src = include_str!("../../shaders/voids/video_stream.wgsl");
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("void-video-stream-shader"),
         source: wgpu::ShaderSource::Wgsl(src.into()),

@@ -64,9 +64,9 @@ impl CompositePipeline {
                 label: Some("brush-composite"),
                 source: wgpu::ShaderSource::Wgsl(
                     crate::gpu::canvas_lib::with_canvas_lib(concat!(
-                        include_str!("../../../../shaders/source_over.wgsl"),
+                        include_str!("../../shaders/source_over.wgsl"),
                         "\n",
-                        include_str!("../../../../shaders/brush/composite.wgsl"),
+                        include_str!("../../shaders/brush/composite.wgsl"),
                     ))
                     .into(),
                 ),

@@ -309,9 +309,7 @@ fn create_frozen_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("frozen-shader"),
-        source: wgpu::ShaderSource::Wgsl(
-            include_str!("../../../../../shaders/veils/frozen.wgsl").into(),
-        ),
+        source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/veils/frozen.wgsl").into()),
     });
 
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

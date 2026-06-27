@@ -787,11 +787,11 @@ fn assemble_shader(
     // `#include`, so prepend the lib ahead of the assembled brush shader.
     out.push_str(crate::gpu::canvas_lib::CANVAS_LIB);
     out.push('\n');
-    out.push_str(include_str!("../../../../../shaders/brush/_shape.wgsl"));
+    out.push_str(include_str!("../../../shaders/brush/_shape.wgsl"));
     out.push('\n');
-    out.push_str(include_str!("../../../../../shaders/brush/_noise.wgsl"));
+    out.push_str(include_str!("../../../shaders/brush/_noise.wgsl"));
     out.push('\n');
-    out.push_str(include_str!("../../../../../shaders/brush/_prelude.wgsl"));
+    out.push_str(include_str!("../../../shaders/brush/_prelude.wgsl"));
     out.push('\n');
 
     // Generated DabRecord struct.

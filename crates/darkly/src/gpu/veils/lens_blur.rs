@@ -208,7 +208,7 @@ fn create_lens_blur_pipeline(
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("lens-blur-shader"),
         source: wgpu::ShaderSource::Wgsl(
-            include_str!("../../../../../shaders/veils/lens_blur.wgsl").into(),
+            include_str!("../../../shaders/veils/lens_blur.wgsl").into(),
         ),
     });
 

@@ -889,7 +889,7 @@ impl Compositor {
                 label: Some("mask-lerp-shader"),
                 source: wgpu::ShaderSource::Wgsl(
                     crate::gpu::canvas_lib::with_canvas_lib(include_str!(
-                        "../../../../shaders/mask_lerp.wgsl"
+                        "../../shaders/mask_lerp.wgsl"
                     ))
                     .into(),
                 ),
@@ -984,9 +984,7 @@ impl Compositor {
 
         let present_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("present-shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/present.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/present.wgsl").into()),
         });
 
         let present_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

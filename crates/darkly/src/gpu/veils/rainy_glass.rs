@@ -291,7 +291,7 @@ fn create_rainy_glass_pipeline(
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("rainy-glass-shader"),
         source: wgpu::ShaderSource::Wgsl(
-            include_str!("../../../../../shaders/veils/rainy_glass.wgsl").into(),
+            include_str!("../../../shaders/veils/rainy_glass.wgsl").into(),
         ),
     });
 

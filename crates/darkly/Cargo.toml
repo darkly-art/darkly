@@ -3,6 +3,12 @@ name = "darkly"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
+description = "A GPU-native paint engine on wgpu: brushes, layers, blend modes, masks, selections, and undo."
+repository = "https://github.com/darkly-art/darkly"
+homepage = "https://github.com/darkly-art/darkly"
+readme = "README.md"
+keywords = ["paint", "gpu", "webgpu", "graphics", "wgpu"]
+categories = ["graphics", "rendering", "wasm"]
 
 [features]
 profile = []

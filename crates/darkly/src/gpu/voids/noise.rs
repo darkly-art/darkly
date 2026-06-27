@@ -538,8 +538,8 @@ fn create_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> Effec
 
     // WGSL has no native #include — concatenate the shared FBM helper ahead
     // of this void's shader. A future warp veil will assemble the same way.
-    let fbm_src = include_str!("../../../../../shaders/lib/fbm.wgsl");
-    let void_src = include_str!("../../../../../shaders/voids/noise.wgsl");
+    let fbm_src = include_str!("../../../shaders/lib/fbm.wgsl");
+    let void_src = include_str!("../../../shaders/voids/noise.wgsl");
     let full_src = format!("{fbm_src}\n{void_src}");
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {

@@ -3,7 +3,7 @@
 Darkly's brush system is a **node-graph brush engine** running on the GPU.
 This directory holds the reference material; code lives in
 [`crates/darkly/src/brush/`](../../crates/darkly/src/brush/) and
-[`shaders/brush/`](../../shaders/brush/).
+[`crates/darkly/shaders/brush/`](../../crates/darkly/shaders/brush/).
 
 Start here:
 
