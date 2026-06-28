@@ -430,6 +430,7 @@
             ctx: () => ({ x: 0, y: 0 }),
             mouse: false,
         }}
+        oncontextmenu={(e: MouseEvent) => e.preventDefault()}
         onpointerdown={onPointerDown}
         onpointermove={onPointerMove}
         onpointerup={onPointerUp}

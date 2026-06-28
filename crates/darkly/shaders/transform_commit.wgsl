@@ -1,5 +1,11 @@
-// Transform-commit: sample a source texture through an inverse affine matrix
+// Transform-commit: sample a source texture through an inverse 3×3 homography
 // and composite onto a layer/mask texture with shader-side Porter-Duff.
+//
+// The inverse matrix maps destination (canvas-local) coordinates back to
+// source pixels with a per-pixel perspective divide — the same dst→src inverse
+// mapping Krita (kis_perspectivetransform_worker) and GIMP (gimpdrawable-
+// transform) use. Affine is the special case `inv_row2 == [0, 0, 1]`, so the
+// one shader subsumes both basic and perspective transforms.
 //
 // The destination is copied to a temp texture before this pass runs. The shader
 // reads both the transformed source and the dest copy, computes correct
@@ -24,9 +30,11 @@ struct VertexOutput {
 @group(0) @binding(1) var t_sampler: sampler;
 
 struct Uniforms {
-    // Inverse affine matrix rows: [a, b, tx, _pad] and [c, d, ty, _pad]
+    // Inverse homography rows: [m00, m01, m02, _pad], [m10, m11, m12, _pad],
+    // [m20, m21, m22, _pad]. Affine is the special case inv_row2 = [0,0,1,_].
     inv_row0: vec4f,
     inv_row1: vec4f,
+    inv_row2: vec4f,
     // Source texture origin in canvas pixel coords
     source_origin: vec2f,
     // Source texture dimensions in pixels
@@ -47,28 +55,41 @@ struct Uniforms {
 // Destination copy (straight alpha) — for shader-side Porter-Duff.
 @group(1) @binding(0) var t_dest: texture_2d<f32>;
 
+// Sample the (premultiplied) source for a single destination-local position,
+// mapping back through the inverse homography with a perspective divide.
+// Returns transparent (0) outside the source bounds or behind the camera, so
+// edge sub-samples average toward zero coverage (anti-aliasing).
+fn sample_src(local: vec2f) -> vec4f {
+    let hx = u.inv_row0.x * local.x + u.inv_row0.y * local.y + u.inv_row0.z;
+    let hy = u.inv_row1.x * local.x + u.inv_row1.y * local.y + u.inv_row1.z;
+    let hw = u.inv_row2.x * local.x + u.inv_row2.y * local.y + u.inv_row2.z;
+    if (abs(hw) < 1e-8) {
+        return vec4f(0.0);
+    }
+    let src_uv = vec2f(hx, hy) / hw / u.source_size;
+    if (any(src_uv < vec2f(0.0)) || any(src_uv >= vec2f(1.0))) {
+        return vec4f(0.0);
+    }
+    return textureSampleLevel(t_source, t_sampler, src_uv, 0.0);
+}
+
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // Convert target UV to canvas pixel position via the target's canvas-space
     // origin and size. For paste-extent layers, target_offset != 0.
     let canvas_pos = u.target_offset + in.uv * u.target_size;
 
-    // Transform canvas position to source-local coordinates
+    // Destination position in the source's local frame.
     let local = canvas_pos - u.source_origin;
 
-    // Apply inverse affine to find source position
-    let src_x = u.inv_row0.x * local.x + u.inv_row0.y * local.y + u.inv_row0.z;
-    let src_y = u.inv_row1.x * local.x + u.inv_row1.y * local.y + u.inv_row1.z;
-
-    // Normalize to UV space
-    let src_uv = vec2f(src_x, src_y) / u.source_size;
-
-    // Outside source bounds — discard (let the target retain its pixels)
-    if (any(src_uv < vec2f(0.0)) || any(src_uv >= vec2f(1.0))) {
-        discard;
-    }
-
-    // Source texture is premultiplied for correct bilinear interpolation.
-    let fg_pm = textureSampleLevel(t_source, t_sampler, src_uv, 0.0);
+    // 2×2 rotated-grid supersample: a single bilinear tap aliases badly on the
+    // minified / far edge of a perspective warp (both Krita's worker and GIMP
+    // supersample). Averaging four premultiplied taps over a rotated grid
+    // anti-aliases the warped edge and also softens affine minification.
+    let fg_pm =
+        0.25 * (sample_src(local + vec2f(-0.375, -0.125))
+              + sample_src(local + vec2f( 0.125, -0.375))
+              + sample_src(local + vec2f( 0.375,  0.125))
+              + sample_src(local + vec2f(-0.125,  0.375)));
     let fg_a = fg_pm.a * u.opacity;
     let fg_pre = fg_pm.rgb * u.opacity;
 

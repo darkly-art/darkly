@@ -21,7 +21,7 @@ use crate::layer::LayerId;
 // home for the math, no duplication.
 pub use crate::transform::{
     affine_inverse, affine_multiply, affine_rotate, affine_scale, affine_transform,
-    affine_translate, Affine2D, IDENTITY,
+    affine_translate, mat3_apply, mat3_inverse, Affine2D, Mat3, Transform, IDENTITY, MAT3_IDENTITY,
 };
 
 // ---------------------------------------------------------------------------
@@ -77,8 +77,9 @@ pub struct FloatingContent {
     /// Source dimensions in pixels.
     pub source_width: u32,
     pub source_height: u32,
-    /// Current affine transform matrix.
-    pub matrix: Affine2D,
+    /// Current user transform — affine (`Basic`) or projective
+    /// (`Perspective`). The GPU consumes its [`Transform::to_projective`].
+    pub transform: Transform,
     /// Target node id. Resolves to either a raster layer or a mask filter;
     /// the texture's own format (looked up via `compositor.node_texture(...)`)
     /// distinguishes the two — no sidecar boolean needed.
@@ -94,13 +95,24 @@ impl FloatingContent {
         let (ox, oy) = self.source_origin;
         let w = self.source_width as f32;
         let h = self.source_height as f32;
+        let m = self.transform.to_projective();
 
-        // Transform the four corners of the source rectangle
+        // Transform the four corners of the source rectangle (perspective
+        // divide). A mid-drag homography can sweep a corner toward `w ≈ 0`,
+        // producing ±∞ / NaN; clamp each component so the preview bounds stay
+        // finite instead of poisoning the affected-rect math.
+        let clamp = |v: f32| {
+            if v.is_finite() {
+                v.clamp(-1.0e6, 1.0e6)
+            } else {
+                0.0
+            }
+        };
         let corners = [
-            affine_transform(&self.matrix, 0.0, 0.0),
-            affine_transform(&self.matrix, w, 0.0),
-            affine_transform(&self.matrix, 0.0, h),
-            affine_transform(&self.matrix, w, h),
+            mat3_apply(&m, 0.0, 0.0),
+            mat3_apply(&m, w, 0.0),
+            mat3_apply(&m, 0.0, h),
+            mat3_apply(&m, w, h),
         ];
 
         let mut min_x = f32::MAX;
@@ -108,10 +120,12 @@ impl FloatingContent {
         let mut max_x = f32::MIN;
         let mut max_y = f32::MIN;
         for (cx, cy) in &corners {
-            min_x = min_x.min(*cx);
-            min_y = min_y.min(*cy);
-            max_x = max_x.max(*cx);
-            max_y = max_y.max(*cy);
+            let cx = clamp(*cx);
+            let cy = clamp(*cy);
+            min_x = min_x.min(cx);
+            min_y = min_y.min(cy);
+            max_x = max_x.max(cx);
+            max_y = max_y.max(cy);
         }
 
         (
@@ -127,7 +141,7 @@ impl FloatingContent {
 // TransformPass — GPU pipeline and active state, owned by compositor
 // ---------------------------------------------------------------------------
 
-/// Uniforms for the transform-commit shader (80 bytes, std140-aligned).
+/// Uniforms for the transform-commit shader (96 bytes, std140-aligned).
 ///
 /// One uniform struct; one shader (commit). The preview is now a derived
 /// view of the target node's texture, rebuilt by running the same commit
@@ -135,10 +149,13 @@ impl FloatingContent {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct TransformBlendUniforms {
-    /// Inverse affine row 0: [a, b, tx, _pad]
+    /// Inverse homography row 0: `[m00, m01, m02, _pad]`.
     pub inv_row0: [f32; 4],
-    /// Inverse affine row 1: [c, d, ty, _pad]
+    /// Inverse homography row 1: `[m10, m11, m12, _pad]`.
     pub inv_row1: [f32; 4],
+    /// Inverse homography row 2: `[m20, m21, m22, _pad]`. Affine is the
+    /// special case `[0, 0, 1, _]` (perspective divide collapses to `w ≡ 1`).
+    pub inv_row2: [f32; 4],
     /// Source origin in canvas pixel coords.
     pub source_origin: [f32; 2],
     /// Source texture dimensions in pixels.
@@ -718,7 +735,7 @@ impl TransformPass {
     pub fn update_uniforms(
         &self,
         queue: &wgpu::Queue,
-        matrix: &Affine2D,
+        matrix: &Mat3,
         source_origin: (i32, i32),
         source_width: u32,
         source_height: u32,
@@ -731,7 +748,9 @@ impl TransformPass {
         let Some(state) = self.active.as_ref() else {
             return;
         };
-        let inv = affine_inverse(matrix).unwrap_or(IDENTITY);
+        // Near-singular homography (e.g. a corner dragged behind the camera
+        // mid-gesture) falls back to identity, matching the void path's guard.
+        let inv = mat3_inverse(matrix).unwrap_or(MAT3_IDENTITY);
         let is_r8 = if state.target_format == wgpu::TextureFormat::R8Unorm {
             1.0
         } else {
@@ -740,6 +759,7 @@ impl TransformPass {
         let uniforms = TransformBlendUniforms {
             inv_row0: [inv[0], inv[1], inv[2], 0.0],
             inv_row1: [inv[3], inv[4], inv[5], 0.0],
+            inv_row2: [inv[6], inv[7], inv[8], 0.0],
             source_origin: [source_origin.0 as f32, source_origin.1 as f32],
             source_size: [source_width as f32, source_height as f32],
             target_offset: [target_offset.0 as f32, target_offset.1 as f32],

@@ -3,7 +3,7 @@
 use super::rendering::commit_undo_region;
 use super::{DarklyEngine, PendingTransform};
 use crate::gpu::paint_target::GpuPaintTarget;
-use crate::gpu::transform::{Affine2D, ClearShape, FloatingContent, FloatingMode, IDENTITY};
+use crate::gpu::transform::{ClearShape, FloatingContent, FloatingMode, Transform};
 use crate::layer::{Layer, LayerId};
 use crate::undo::{GpuRegionAction, LayerAddAction};
 
@@ -23,16 +23,19 @@ impl DarklyEngine {
     }
 
     /// Return floating content info for the frontend overlay:
-    /// (source_origin_x, source_origin_y, source_width, source_height, matrix[6]).
+    /// (source_origin_x, source_origin_y, source_width, source_height,
+    /// transform). The transform carries its own mode tag, so the gizmo's
+    /// current mode is **derived from the document** (the stored `Transform`),
+    /// not session-local — a re-`adopt()` can't desync it.
     /// Returns None if no floating content is active.
-    pub fn floating_info(&self) -> Option<(f32, f32, f32, f32, Affine2D)> {
+    pub fn floating_info(&self) -> Option<(f32, f32, f32, f32, Transform)> {
         self.floating.as_ref().map(|fc| {
             (
                 fc.source_origin.0 as f32,
                 fc.source_origin.1 as f32,
                 fc.source_width as f32,
                 fc.source_height as f32,
-                fc.matrix,
+                fc.transform,
             )
         })
     }
@@ -81,7 +84,7 @@ impl DarklyEngine {
             source_origin,
             source_width,
             source_height,
-            matrix: IDENTITY,
+            transform: Transform::identity(),
             target_layer: layer_id,
             mode: FloatingMode::Paste {
                 created_layer_id: None,
@@ -157,7 +160,7 @@ impl DarklyEngine {
             source_origin: (offset_x, offset_y),
             source_width: width,
             source_height: height,
-            matrix: IDENTITY,
+            transform: Transform::identity(),
             target_layer: new_id,
             mode: FloatingMode::Paste {
                 created_layer_id: Some(new_id),
@@ -375,7 +378,7 @@ impl DarklyEngine {
             source_origin,
             source_width,
             source_height,
-            matrix: IDENTITY,
+            transform: Transform::identity(),
             target_layer: layer_id,
             mode: FloatingMode::Transform { clear_shape },
         });
@@ -416,7 +419,7 @@ impl DarklyEngine {
             &self.gpu.device,
             &self.gpu.queue,
             &self.paint_pipelines,
-            &fc.matrix,
+            &fc.transform.to_projective(),
             fc.source_origin,
             fc.source_width,
             fc.source_height,
@@ -435,11 +438,13 @@ impl DarklyEngine {
             .expect("snapshot_selection_for_clear: selection_state allocated")
     }
 
-    /// Update the floating content's transform matrix and rebuild the
-    /// per-frame preview texture so the host's blend reads the new shape.
-    pub fn update_floating_matrix(&mut self, matrix: Affine2D) {
+    /// Update the floating content's transform and rebuild the per-frame
+    /// preview texture so the host's blend reads the new shape. Accepts a full
+    /// [`Transform`] so a `Perspective` switch (right-click) and per-drag
+    /// homography updates flow through the same path as affine drags.
+    pub fn update_floating_matrix(&mut self, transform: Transform) {
         if let Some(fc) = self.floating.as_mut() {
-            fc.matrix = matrix;
+            fc.transform = transform;
         } else {
             return;
         }
@@ -509,7 +514,7 @@ impl DarklyEngine {
                     &self.gpu.device,
                     encoder,
                     &self.gpu.queue,
-                    &fc.matrix,
+                    &fc.transform.to_projective(),
                     fc.source_origin,
                     fc.source_width,
                     fc.source_height,
@@ -626,7 +631,7 @@ impl DarklyEngine {
                 &self.gpu.device,
                 encoder,
                 &self.gpu.queue,
-                &fc.matrix,
+                &fc.transform.to_projective(),
                 fc.source_origin,
                 fc.source_width,
                 fc.source_height,

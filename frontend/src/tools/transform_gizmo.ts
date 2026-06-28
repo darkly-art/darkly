@@ -14,14 +14,23 @@
  */
 import { app } from '../state/app.svelte';
 import { OverlayBuilder } from '../canvas/gpu_overlay';
-import { IDENTITY, type Affine2D } from './transform_affine';
+import {
+    homographyFromCorners,
+    mat3Apply,
+    MAT3_IDENTITY,
+    type Mat3,
+} from './transform_projective';
 import {
     modeForTag,
+    pointInPolygon,
     type BBoxPolygon,
     type DragSession,
     type GizmoGeometry,
     type TransformMode,
 } from './transform_modes';
+
+/** Wire mode tag for the perspective (homography) sub-mode. */
+const PERSPECTIVE_TAG = 1;
 
 /**
  * The seam between the gizmo and a consumer. The gizmo reads the current bbox +
@@ -35,10 +44,10 @@ export interface TransformBinding {
         w: number;
         h: number;
         mode: number;
-        affine: Affine2D;
+        matrix: Mat3;
     } | null>;
-    /** Live preview: push an updated affine for the given mode. */
-    update(affine: Affine2D, modeTag: number): void;
+    /** Live preview: push an updated 3×3 matrix for the given mode. */
+    update(matrix: Mat3, modeTag: number): void;
     /** Finalize. */
     commit(): void;
     /** Abandon (restore the pre-edit state). */
@@ -49,7 +58,7 @@ export class TransformGizmo {
     private canvasEl: HTMLCanvasElement;
     private binding: TransformBinding | null = null;
     private mode: TransformMode = modeForTag(0);
-    private geo: GizmoGeometry = { matrix: [...IDENTITY], origin: [0, 0], srcW: 0, srcH: 0 };
+    private geo: GizmoGeometry = { matrix: [...MAT3_IDENTITY], origin: [0, 0], srcW: 0, srcH: 0 };
     private drag: DragSession | null = null;
     private overlay: OverlayBuilder | null = null;
     private bbox: BBoxPolygon | null = null;
@@ -87,7 +96,7 @@ export class TransformGizmo {
         if (this.binding !== binding) return 'stale';
         if (!info) return 'gone';
         this.geo = {
-            matrix: [...info.affine],
+            matrix: [...info.matrix],
             origin: [...info.origin],
             srcW: info.w,
             srcH: info.h,
@@ -121,6 +130,45 @@ export class TransformGizmo {
         const { id } = this.mode.resolveHandle(this.geo, this.overlay, this.bbox, cx, cy);
         this.drag = this.mode.beginDrag(this.geo, id, cx, cy);
         return true;
+    }
+
+    /** Whether canvas point `(cx, cy)` is inside the current transform bbox. */
+    isInside(cx: number, cy: number): boolean {
+        return this.bbox ? pointInPolygon(cx, cy, this.bbox) : false;
+    }
+
+    /**
+     * Switch the gizmo into perspective (four-corner) mode. Seeds the corners
+     * from the current bbox and **pushes a `Perspective` transform through the
+     * binding** — mode is document-derived (the stored `Transform`), not a
+     * session-local flag, so the next `adopt()` reads `mode: 1` back and the
+     * gizmo stays in perspective rather than snapping to basic. One-way:
+     * Escape / Enter / re-entering transform returns to basic.
+     */
+    enterPerspective(): void {
+        if (!this.binding || this.mode.tag === PERSPECTIVE_TAG) return;
+        const { srcW, srcH } = this.geo;
+        // Dest corners that reproduce the current shape (TL, TR, BR, BL).
+        const corners = (
+            [
+                [0, 0],
+                [srcW, 0],
+                [srcW, srcH],
+                [0, srcH],
+            ] as [number, number][]
+        ).map((p) => mat3Apply(this.geo.matrix, p[0], p[1])) as [
+            [number, number],
+            [number, number],
+            [number, number],
+            [number, number],
+        ];
+        const h = homographyFromCorners(srcW, srcH, corners);
+        if (!h) return;
+        this.geo.matrix = h;
+        this.mode = modeForTag(PERSPECTIVE_TAG);
+        this.binding.update(h, PERSPECTIVE_TAG);
+        this.rebuildOverlay();
+        app.requestFrame();
     }
 
     pointerMove(cx: number, cy: number, shift: boolean): void {

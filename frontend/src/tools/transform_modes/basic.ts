@@ -16,6 +16,8 @@ import {
     affineTranslate,
     type Affine2D,
 } from '../transform_affine';
+import { affineToMat3, mat3Apply, mat3ToAffine, type Mat3 } from '../transform_projective';
+import { pointInPolygon } from './types';
 import type { BBoxPolygon, DragSession, GizmoGeometry, TransformMode } from './types';
 
 const enum Handle {
@@ -91,28 +93,16 @@ interface BasicDrag {
     startAngle: number;
 }
 
-/** Convert a source-local point to canvas space using the geometry. */
+/** Convert a source-local point to canvas space using the geometry. The
+ *  carried matrix is a `Mat3`; for basic mode its bottom row is [0,0,1] so the
+ *  perspective divide is a no-op. */
 function toCanvas(geo: GizmoGeometry, lx: number, ly: number): [number, number] {
-    const [cx, cy] = affineTransform(geo.matrix, lx, ly);
+    const [cx, cy] = mat3Apply(geo.matrix, lx, ly);
     return [cx + geo.origin[0], cy + geo.origin[1]];
 }
 
 function mid(a: [number, number], b: [number, number]): [number, number] {
     return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-}
-
-/** Ray-casting point-in-polygon test. */
-function pointInPolygon(px: number, py: number, poly: readonly [number, number][]): boolean {
-    let inside = false;
-    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-        const [xi, yi] = poly[i];
-        const [xj, yj] = poly[j];
-        if (((yi > py) !== (yj > py)) &&
-            (px < ((xj - xi) * (py - yi)) / (yj - yi) + xi)) {
-            inside = !inside;
-        }
-    }
-    return inside;
 }
 
 export const basicMode: TransformMode = {
@@ -159,7 +149,9 @@ export const basicMode: TransformMode = {
 
     beginDrag(geo, handleId, cx, cy): DragSession {
         const handle = handleId as Handle;
-        const initialMatrix: Affine2D = [...geo.matrix];
+        // Internal handle math stays affine; lower the carried Mat3 here and
+        // lift the result back to a Mat3 at the `updateDrag` boundary.
+        const initialMatrix: Affine2D = mat3ToAffine(geo.matrix);
         const startCanvas: [number, number] = [cx, cy];
 
         const anchorLocal = handleLocal(oppositeHandle(handle), geo.srcW, geo.srcH);
@@ -174,7 +166,7 @@ export const basicMode: TransformMode = {
         return drag;
     },
 
-    updateDrag(geo, dragSession, cx, cy, shift): Affine2D {
+    updateDrag(geo, dragSession, cx, cy, shift): Mat3 {
         const drag = dragSession as BasicDrag;
         const { handle, initialMatrix, startCanvas, anchorLocal, centerCanvas, startAngle } = drag;
         const { srcW, srcH, origin } = geo;
@@ -182,7 +174,7 @@ export const basicMode: TransformMode = {
         if (handle === Handle.Body) {
             const dx = cx - startCanvas[0];
             const dy = cy - startCanvas[1];
-            return affineMultiply(affineTranslate(dx, dy), initialMatrix);
+            return affineToMat3(affineMultiply(affineTranslate(dx, dy), initialMatrix));
         }
 
         if (handle === Handle.Rotate) {
@@ -199,11 +191,13 @@ export const basicMode: TransformMode = {
             }
             const cLocal: [number, number] = [srcW / 2, srcH / 2];
             const cOffset = affineTransform(initialMatrix, cLocal[0], cLocal[1]);
-            return affineMultiply(
-                affineTranslate(cOffset[0], cOffset[1]),
+            return affineToMat3(
                 affineMultiply(
-                    affineRotate(angle),
-                    affineMultiply(affineTranslate(-cOffset[0], -cOffset[1]), initialMatrix),
+                    affineTranslate(cOffset[0], cOffset[1]),
+                    affineMultiply(
+                        affineRotate(angle),
+                        affineMultiply(affineTranslate(-cOffset[0], -cOffset[1]), initialMatrix),
+                    ),
                 ),
             );
         }
@@ -212,7 +206,7 @@ export const basicMode: TransformMode = {
         const mouseOffset: [number, number] = [cx - origin[0], cy - origin[1]];
 
         const inv = affineInverse(initialMatrix);
-        if (!inv) return initialMatrix;
+        if (!inv) return affineToMat3(initialMatrix);
         const mouseLocal = affineTransform(inv, mouseOffset[0], mouseOffset[1]);
 
         const dLocalX = dragLocal[0] - anchorLocal[0];
@@ -232,11 +226,16 @@ export const basicMode: TransformMode = {
             sy = uniform * Math.sign(sy || 1);
         }
 
-        return affineMultiply(
-            initialMatrix,
+        return affineToMat3(
             affineMultiply(
-                affineTranslate(anchorLocal[0], anchorLocal[1]),
-                affineMultiply(affineScale(sx, sy), affineTranslate(-anchorLocal[0], -anchorLocal[1])),
+                initialMatrix,
+                affineMultiply(
+                    affineTranslate(anchorLocal[0], anchorLocal[1]),
+                    affineMultiply(
+                        affineScale(sx, sy),
+                        affineTranslate(-anchorLocal[0], -anchorLocal[1]),
+                    ),
+                ),
             ),
         );
     },

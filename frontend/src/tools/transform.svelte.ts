@@ -62,8 +62,17 @@ export const transformTool: Tool = {
         return gizmo?.active ?? false;
     },
 
-    async onPointerDown(_ctx, _e, cx, cy) {
+    async onPointerDown(_ctx, e, cx, cy) {
         if (!gizmo) return;
+        // Right-click inside the active object switches the gizmo from basic
+        // (affine) into perspective (four-corner) sub-mode. One-way per the
+        // design; Enter / Escape / re-entry returns to basic. Always swallow
+        // button 2 so it never starts a drag (the browser context menu is
+        // suppressed app-wide in CanvasView).
+        if (e.button === 2) {
+            if (gizmo.active && gizmo.isInside(cx, cy)) gizmo.enterPerspective();
+            return;
+        }
         // First click (or a click after Enter/Escape) re-engages the gizmo.
         if (!gizmo.active) await activate();
         if (gizmo.active) gizmo.pointerDown(cx, cy);

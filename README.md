@@ -118,6 +118,7 @@ For a feature to count, it must be:
 
 ### Important — expected for serious work
 - [x] Generic transform tool (translate / scale / rotate gizmo — floating content + transformable voids)
+- [x] Perspective transform (right-click in transform mode → drag the four corners for a vanishing-point warp; floating content)
 - [x] Merge down
 - [x] Duplicate layer / group
 - [x] Crop to selection

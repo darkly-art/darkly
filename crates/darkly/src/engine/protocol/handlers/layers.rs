@@ -127,17 +127,12 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 }
                 let r: Req = decode(payload)?;
                 let id = LayerId::from_ffi(r.id);
-                // Basic mode (tag 0) carries the 6 affine components. Unknown
-                // modes / short payloads are ignored (no-op).
-                if r.mode_tag == 0 && r.payload.len() >= 6 {
-                    let t = crate::transform::Transform::from_affine([
-                        r.payload[0],
-                        r.payload[1],
-                        r.payload[2],
-                        r.payload[3],
-                        r.payload[4],
-                        r.payload[5],
-                    ]);
+                // Shared decoder with the floating path. Voids only ever
+                // receive tag 0 (affine) today; perspective for voids is a
+                // documented follow-up. Unknown tags / short payloads no-op.
+                if let Some(t) =
+                    crate::transform::Transform::from_tag_payload(r.mode_tag, &r.payload)
+                {
                     engine.update_void_transform(id, t);
                 }
                 Ok(Response::empty())

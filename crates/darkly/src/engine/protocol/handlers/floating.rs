@@ -12,10 +12,18 @@ pub fn registrations() -> Vec<RequestRegistration> {
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
-                    matrix: [f32; 6],
+                    #[serde(default)]
+                    mode_tag: u32,
+                    payload: Vec<f32>,
                 }
                 let r: Req = decode(payload)?;
-                engine.update_floating_matrix(r.matrix);
+                // Shared decoder: tag 0 → 6-float affine, tag 1 → 9-float
+                // homography. Unknown tags / short payloads are ignored.
+                if let Some(t) =
+                    crate::transform::Transform::from_tag_payload(r.mode_tag, &r.payload)
+                {
+                    engine.update_floating_matrix(t);
+                }
                 Ok(Response::empty())
             },
         },
@@ -57,9 +65,10 @@ pub fn registrations() -> Vec<RequestRegistration> {
             kind: "floating_info",
             handle: |engine, _payload, _b| {
                 let value = match engine.floating_info() {
-                    Some((ox, oy, w, h, m)) => {
-                        json!({ "ox": ox, "oy": oy, "w": w, "h": h, "matrix": m })
-                    }
+                    Some((ox, oy, w, h, t)) => json!({
+                        "ox": ox, "oy": oy, "w": w, "h": h,
+                        "mode": t.mode_tag(), "matrix": t.wire_payload(),
+                    }),
                     None => serde_json::Value::Null,
                 };
                 Ok(Response::json(value))
