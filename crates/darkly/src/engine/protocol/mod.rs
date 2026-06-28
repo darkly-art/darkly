@@ -159,6 +159,80 @@ pub fn ok_or_error(r: Result<(), String>) -> Response {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Response conversion — natural engine return types → `Response`
+// ---------------------------------------------------------------------------
+//
+// The `#[handlers]` macro converts a method's return value with
+// `(&result).response_kind().into_response(result)`. Two tag types disambiguate
+// the otherwise-overlapping cases via autoref-based specialization (the trick
+// Tauri's command macro uses, `tauri/src/ipc/command.rs`): the *general* impl is
+// on `&T` and the *specialized* one on the value, so for a `Result` the value
+// impl wins (it matches with one fewer autoref) and everything else falls
+// through to the serialize path. `()` is `Serialize` → serializes to `null`,
+// i.e. an empty response, with no special case.
+//
+// This keeps the engine methods returning their natural types (`()`, `LayerId`,
+// `Result<LayerId, String>`, …) — clean for direct Rust callers — with no
+// wire-encoding newtypes in their signatures.
+
+/// Serialize path: any `T: Serialize`, including `()` → `null`. Reached via the
+/// `&T` blanket impl, so a `Result` (which has its own value-level impl) is one
+/// autoref closer and wins.
+pub struct JsonResponseTag;
+
+/// Reached for any `T: Serialize` through autoref. See [`JsonResponseTag`].
+pub trait JsonResponseKind {
+    #[inline(always)]
+    fn response_kind(&self) -> JsonResponseTag {
+        JsonResponseTag
+    }
+}
+impl<T: serde::Serialize> JsonResponseKind for &T {}
+
+impl JsonResponseTag {
+    #[inline(always)]
+    pub fn into_response<T: serde::Serialize>(self, value: T) -> Result<Response, ProtocolError> {
+        let value =
+            serde_json::to_value(value).map_err(|e| ProtocolError::Engine(e.to_string()))?;
+        Ok(Response::json(value))
+    }
+}
+
+/// Specialized path for `Result<T, String>`: `Ok` serializes; `Err` becomes a
+/// [`ProtocolError::Engine`] rejection (the old `map_err(ProtocolError::engine)?`
+/// convention). A handler that instead wants a recoverable `{ error }` *value*
+/// (brush compile/validate) returns that shape explicitly rather than a
+/// `Result`.
+pub struct ResultResponseTag;
+
+/// Reached only for `Result<T, String>` (value-level impl, wins the autoref
+/// race against the `&T` serialize impl).
+pub trait ResultResponseKind {
+    #[inline(always)]
+    fn response_kind(&self) -> ResultResponseTag {
+        ResultResponseTag
+    }
+}
+impl<T: serde::Serialize> ResultResponseKind for Result<T, String> {}
+
+impl ResultResponseTag {
+    #[inline(always)]
+    pub fn into_response<T: serde::Serialize>(
+        self,
+        value: Result<T, String>,
+    ) -> Result<Response, ProtocolError> {
+        match value {
+            Ok(v) => {
+                let v =
+                    serde_json::to_value(v).map_err(|e| ProtocolError::Engine(e.to_string()))?;
+                Ok(Response::json(v))
+            }
+            Err(e) => Err(ProtocolError::Engine(e)),
+        }
+    }
+}
+
 /// The per-file unit a handler module returns from `register()`.
 pub struct RequestRegistration {
     pub kind: &'static str,
@@ -178,10 +252,24 @@ impl Default for RequestRegistry {
     }
 }
 
+// `macro_registrations()` — every `#[handler]`-tagged engine method's
+// `RequestRegistration`, aggregated by `build.rs` (it scans `src/engine` for
+// the attribute and emits one `DarklyEngine::__darkly_handler_<name>()` call
+// per method). The `linkme` alternative doesn't compile on wasm32, so this
+// build-time scan is the registration mechanism; it mirrors the `register()`
+// file-scan the rest of the codebase uses.
+include!(concat!(env!("OUT_DIR"), "/handler_registry_gen.rs"));
+
 impl RequestRegistry {
     pub fn new() -> Self {
         let mut map: HashMap<&'static str, RequestRegistration> = HashMap::new();
-        for reg in handlers::registrations() {
+        // Hand-written domain files plus the macro-generated registrations
+        // coexist during the migration; the uniqueness assert below catches a
+        // kind defined in both.
+        for reg in handlers::registrations()
+            .into_iter()
+            .chain(macro_registrations())
+        {
             let kind = reg.kind;
             let prev = map.insert(kind, reg);
             assert!(prev.is_none(), "duplicate request kind: {kind}");

@@ -29,6 +29,9 @@ fn registry_routes_every_kind_and_rejects_unknown() {
     );
     assert!(kinds.contains(&"add_void"));
     assert!(kinds.contains(&"layer_tree"));
+    // `add_group` comes from a `#[handler]`-tagged engine method, aggregated by
+    // build.rs — proves the macro registration path is wired into the registry.
+    assert!(kinds.contains(&"add_group"));
 
     let mut engine = test_engine(64, 64);
     let err = reg
@@ -202,11 +205,13 @@ fn ortho_xform_deserializes_from_snake_case() {
     }
 }
 
-/// End-to-end through the registry: the `move_layer` handler decodes the
-/// `{ id, target_type, target_id }` payload (LayerId + flattened MoveTarget)
-/// and reorders without a protocol error.
+/// End-to-end through the registry for a `#[handler]`-generated handler: the
+/// `move_layer` registration (emitted by the macro, aggregated by build.rs)
+/// decodes `{ layer_id, target: { target_type, target_id } }` — `LayerId` plus
+/// a nested `MoveTarget` param — and reorders without a protocol error. The
+/// `()` return serializes to `null`.
 #[test]
-fn move_layer_dispatch_reorders_via_wire_shape() {
+fn macro_move_layer_dispatch_reorders_via_nested_target() {
     let reg = RequestRegistry::new();
     let mut engine = test_engine(64, 64);
 
@@ -225,13 +230,42 @@ fn move_layer_dispatch_reorders_via_wire_shape() {
         .and_then(|v| v.as_u64())
         .expect("second raster id");
 
-    reg.dispatch(
-        &mut engine,
-        "move_layer",
-        json!({ "id": a, "target_type": "before", "target_id": b }),
-        &[],
-    )
-    .expect("move_layer dispatch decodes LayerId + flattened MoveTarget");
+    let resp = reg
+        .dispatch(
+            &mut engine,
+            "move_layer",
+            json!({ "layer_id": a, "target": { "target_type": "before", "target_id": b } }),
+            &[],
+        )
+        .expect("macro-generated move_layer decodes LayerId + nested MoveTarget");
+    assert!(resp.value.is_null(), "a `()` return serializes to null");
+}
+
+/// The macro's autoref response conversion produces the engine's *natural*
+/// return shapes — no `{ id }`/`{ skipped }` envelope. `add_group` (`-> LayerId`)
+/// is a bare number; `group_layers`'s `Err` (`Result<_, String>`) rejects as a
+/// [`ProtocolError::Engine`], not a resolved `{ error }` value.
+#[test]
+fn macro_handlers_use_natural_return_shapes() {
+    let reg = RequestRegistry::new();
+    let mut engine = test_engine(64, 64);
+
+    let group = reg
+        .dispatch(&mut engine, "add_group", json!({ "anchor": null }), &[])
+        .expect("add_group dispatch");
+    assert!(
+        group.value.is_u64(),
+        "add_group returns a bare LayerId number, not a {{ id }} envelope"
+    );
+    assert!(group.bytes.is_none());
+
+    let err = reg
+        .dispatch(&mut engine, "group_layers", json!({ "ids": [] }), &[])
+        .unwrap_err();
+    assert!(
+        matches!(err, ProtocolError::Engine(_)),
+        "Result<_, String>::Err rejects as an engine error"
+    );
 }
 
 #[test]

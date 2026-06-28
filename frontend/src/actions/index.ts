@@ -662,7 +662,7 @@ export function registerActions() {
             if (!engine) return;
             if (app.selectedLayerIds.size > 0) {
                 try {
-                    const { id: groupId } = await engine.send('group_layers', {
+                    const groupId = await engine.send<number>('group_layers', {
                         ids: [...app.selectedLayerIds],
                     });
                     if (groupId) app.selectLayer(groupId);
@@ -670,7 +670,7 @@ export function registerActions() {
                     toast.show('error', e.message ?? String(e));
                 }
             } else {
-                const { id } = await engine.send('add_group', { anchor: app.activeLayerId });
+                const id = await engine.send<number>('add_group', { anchor: app.activeLayerId });
                 app.selectLayer(id);
             }
             await app.refreshLayerTree();
@@ -766,7 +766,7 @@ export function registerActions() {
                     await engine.send('remove_layer', { id: targets[0] });
                     app.clearSelection();
                 } else {
-                    const { skipped } = await engine.send('remove_layers', { ids: targets });
+                    const skipped = await engine.send<number>('remove_layers', { ids: targets });
                     if (skipped > 0) {
                         toast.show('info', `${skipped} locked layer${skipped === 1 ? '' : 's'} skipped`);
                     }

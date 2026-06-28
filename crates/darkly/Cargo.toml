@@ -28,7 +28,13 @@ base64 = { workspace = true }
 thiserror = { workspace = true }
 slotmap = { workspace = true }
 smallvec = { workspace = true }
+darkly-macros = { workspace = true }
 indexmap = { version = "2", features = ["serde"] }
+
+[build-dependencies]
+# build.rs parses `src/engine` to aggregate every `#[handler]`-tagged method
+# into `macro_registrations()` (the wasm-safe stand-in for `linkme`).
+syn = { workspace = true }
 
 [dev-dependencies]
 pollster = "0.4"

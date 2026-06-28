@@ -278,8 +278,8 @@
             : 'into_top';
 
         try {
-            const { skipped } = await engine.send('move_layers', {
-                ids, target_type: where, target_id: group.id,
+            const skipped = await engine.send<number>('move_layers', {
+                ids, target: { target_type: where, target_id: group.id },
             });
             if (skipped > 0) {
                 toast.show('info', `${skipped} locked layer${skipped === 1 ? '' : 's'} skipped`);

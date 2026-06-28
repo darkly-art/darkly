@@ -309,8 +309,8 @@
         const where = ratio < 0.5 ? 'after' : 'before';
 
         try {
-            const { skipped } = await engine.send('move_layers', {
-                ids, target_type: where, target_id: layer.id,
+            const skipped = await engine.send<number>('move_layers', {
+                ids, target: { target_type: where, target_id: layer.id },
             });
             if (skipped > 0) {
                 toast.show('info', `${skipped} locked layer${skipped === 1 ? '' : 's'} skipped`);

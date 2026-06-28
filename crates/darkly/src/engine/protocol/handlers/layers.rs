@@ -13,7 +13,6 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::document::MoveTarget;
 use crate::engine::protocol::{
     decode, params_from_json, ProtocolError, RawParams, RequestRegistration, Response,
 };
@@ -35,18 +34,6 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 Ok(Response::json(
                     json!({ "id": engine.add_raster_layer(r.anchor) }),
                 ))
-            },
-        },
-        RequestRegistration {
-            kind: "add_group",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    #[serde(default)]
-                    anchor: Option<LayerId>,
-                }
-                let r: Req = decode(payload)?;
-                Ok(Response::json(json!({ "id": engine.add_group(r.anchor) })))
             },
         },
         RequestRegistration {
@@ -162,48 +149,6 @@ pub fn registrations() -> Vec<RequestRegistration> {
             },
         },
         RequestRegistration {
-            kind: "move_layer",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    id: LayerId,
-                    #[serde(flatten)]
-                    target: MoveTarget,
-                }
-                let r: Req = decode(payload)?;
-                engine.move_layer(r.id, r.target);
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "remove_layers",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    ids: Vec<LayerId>,
-                }
-                let r: Req = decode(payload)?;
-                let n = engine.remove_layers(r.ids).map_err(ProtocolError::engine)?;
-                Ok(Response::json(json!({ "skipped": n })))
-            },
-        },
-        RequestRegistration {
-            kind: "move_layers",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    ids: Vec<LayerId>,
-                    #[serde(flatten)]
-                    target: MoveTarget,
-                }
-                let r: Req = decode(payload)?;
-                let n = engine
-                    .move_layers(r.ids, r.target)
-                    .map_err(ProtocolError::engine)?;
-                Ok(Response::json(json!({ "skipped": n })))
-            },
-        },
-        RequestRegistration {
             kind: "duplicate_nodes",
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
@@ -214,18 +159,6 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 Ok(Response::json(
                     json!({ "ids": engine.duplicate_nodes(r.ids) }),
                 ))
-            },
-        },
-        RequestRegistration {
-            kind: "group_layers",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    ids: Vec<LayerId>,
-                }
-                let r: Req = decode(payload)?;
-                let id = engine.group_layers(r.ids).map_err(ProtocolError::engine)?;
-                Ok(Response::json(json!({ "id": id })))
             },
         },
         RequestRegistration {

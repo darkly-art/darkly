@@ -1,5 +1,7 @@
 //! Layer CRUD and property operations.
 
+use darkly_macros::handlers;
+
 use super::DarklyEngine;
 use crate::document::MoveTarget;
 use crate::layer::{Layer, LayerId, LayerNode};
@@ -8,6 +10,7 @@ use crate::undo::{
     CompoundAction, LayerAddAction, LayerMoveAction, LayerRemoveAction, PropertyAction, UndoAction,
 };
 
+#[handlers]
 impl DarklyEngine {
     // --- Layer CRUD ---
 
@@ -28,6 +31,7 @@ impl DarklyEngine {
         id
     }
 
+    #[handler]
     pub fn add_group(&mut self, anchor: Option<LayerId>) -> LayerId {
         let id = self.doc.add_group(anchor);
 
@@ -48,6 +52,7 @@ impl DarklyEngine {
     /// skipped; the new group is created only if at least one editable
     /// source remains. The whole op is one [`CompoundAction`], so a
     /// single undo restores the original tree.
+    #[handler]
     pub fn group_layers(&mut self, ids: Vec<LayerId>) -> Result<LayerId, String> {
         if ids.is_empty() {
             return Err("Need at least one layer to group".into());
@@ -485,6 +490,7 @@ impl DarklyEngine {
     /// return value is the count of locked layers that were ignored so the
     /// UI can surface a "N locked layers skipped" toast. Errors only when
     /// removing the editable set would leave zero layers in the document.
+    #[handler]
     pub fn remove_layers(&mut self, ids: Vec<LayerId>) -> Result<usize, String> {
         let mut editable = Vec::with_capacity(ids.len());
         let mut skipped_locked = 0usize;
@@ -519,6 +525,7 @@ impl DarklyEngine {
         Ok(skipped_locked)
     }
 
+    #[handler]
     pub fn move_layer(&mut self, layer_id: LayerId, target: MoveTarget) {
         if let Some(action) = self.move_layer_inner(layer_id, target) {
             self.push_undo(action);
@@ -554,6 +561,7 @@ impl DarklyEngine {
     /// of locked-layer skips so the UI can toast. Errors when `target`
     /// references an id in `ids` or a descendant of one (the drop is
     /// self-referential).
+    #[handler]
     pub fn move_layers(&mut self, ids: Vec<LayerId>, target: MoveTarget) -> Result<usize, String> {
         let target_id = match target {
             MoveTarget::Before(t)

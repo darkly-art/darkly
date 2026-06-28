@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/darkly",
+    "crates/darkly-macros",
     "frontend/wasm",
 ]
 default-members = [
@@ -14,6 +15,12 @@ license = "AGPL-3.0-or-later"
 [workspace.dependencies]
 # Local crates
 darkly = { path = "crates/darkly" }
+darkly-macros = { path = "crates/darkly-macros" }
+
+# Proc-macro toolchain (the `#[handlers]` engine-bridge macro + build.rs scan)
+syn = { version = "2", features = ["full", "visit"] }
+quote = "1"
+proc-macro2 = "1"
 
 # GPU
 wgpu = { version = "29.0", features = ["webgpu"] }

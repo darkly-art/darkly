@@ -176,6 +176,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "bytemuck",
+ "darkly-macros",
  "image",
  "indexmap",
  "log",
@@ -193,6 +194,15 @@ dependencies = [
  "web-time",
  "wgpu",
  "zip",
+]
+
+[[package]]
+name = "darkly-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
