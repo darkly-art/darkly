@@ -457,6 +457,16 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
     for pipeline in filter_types {
         engine.add_filter_layer(&pipeline, Vec::new(), None);
     }
+
+    // A vector (text) layer so `layer_kind/vector` participates in the save
+    // round-trip — its objects round-trip through the manifest body (no pixels).
+    engine.add_text_layer(
+        crate::layer::TextProps::new("kitchen sink".to_string()),
+        4.0,
+        4.0,
+        [0, 0, 0, 255],
+        None,
+    );
 }
 
 /// Pump the engine until a save completes. Caps iterations so a stuck

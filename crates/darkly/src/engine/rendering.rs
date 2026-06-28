@@ -968,6 +968,16 @@ impl DarklyEngine {
                 isolated_flag,
             );
         }
+
+        // Push each vector layer's authoritative objects downhill: rebuild its
+        // `vello::Scene` and re-realize. Like the void re-sync above, this keeps
+        // the GPU realization current after an undo/redo or load. Runs after the
+        // `isolated_host` closure's last use so the `&mut self` calls don't
+        // clash with its `self.doc` borrow.
+        let vector_ids: Vec<LayerId> = self.doc.all_vector_layers().iter().map(|v| v.id).collect();
+        for id in vector_ids {
+            self.sync_vector_layer(id);
+        }
     }
 }
 

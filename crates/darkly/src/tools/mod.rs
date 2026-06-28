@@ -11,6 +11,7 @@ pub mod lasso_select;
 pub mod magic_wand;
 pub mod polygon_select;
 pub mod rect_select;
+pub mod text;
 pub mod transform;
 pub mod transform_perspective;
 
@@ -28,6 +29,7 @@ pub fn registrations() -> Vec<ToolRegistration> {
         magic_wand::register(),
         polygon_select::register(),
         rect_select::register(),
+        text::register(),
         transform::register(),
         transform_perspective::register(),
     ]

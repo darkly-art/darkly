@@ -8,6 +8,14 @@ use crate::undo::{
     CompoundAction, LayerAddAction, LayerMoveAction, LayerRemoveAction, PropertyAction, UndoAction,
 };
 
+/// Convert Darkly's row-major `[a, b, tx, c, d, ty]` affine (point map
+/// `x' = a·x + b·y + tx`, `y' = c·x + d·y + ty`) into kurbo's column-major
+/// `[a, b, c, d, e, f]` (`x' = a·x + c·y + e`, `y' = b·x + d·y + f`).
+fn transform_to_kurbo(t: &crate::transform::Transform) -> kurbo::Affine {
+    let [a, b, tx, c, d, ty] = t.to_affine();
+    kurbo::Affine::new([a as f64, c as f64, b as f64, d as f64, tx as f64, ty as f64])
+}
+
 impl DarklyEngine {
     // --- Layer CRUD ---
 
@@ -26,6 +34,162 @@ impl DarklyEngine {
         self.push_undo(Box::new(LayerAddAction::new(id, parent, pos)));
 
         id
+    }
+
+    // --- Vector / text layers ---
+
+    /// Family names available to the font picker. Bundled fonts today.
+    pub fn list_fonts(&self) -> Vec<String> {
+        self.fonts.list_fonts().to_vec()
+    }
+
+    /// Shaped bounding box `(width, height)` in canvas pixels of the layer's
+    /// first text object — used to size/place the editing overlay. `None` if
+    /// the id isn't a vector layer with text.
+    pub fn text_layer_bounds(&mut self, id: LayerId) -> Option<(f32, f32)> {
+        let Some(Layer::Vector(v)) = self.doc.layer(id) else {
+            return None;
+        };
+        let text = v.objects.iter().find_map(|o| match &o.source {
+            crate::layer::ObjectSource::Text(t) => Some(t.clone()),
+            crate::layer::ObjectSource::Path(_) => None,
+        })?;
+        let layout = self.fonts.shape(&text);
+        Some((layout.width(), layout.height()))
+    }
+
+    /// Add a vector layer seeded with one text object, placed so the text's
+    /// top-left baseline origin sits at canvas `(x, y)`, filled with `color`
+    /// (RGBA, 0–255). Returns the new layer id. One undo step.
+    pub fn add_text_layer(
+        &mut self,
+        text: crate::layer::TextProps,
+        x: f64,
+        y: f64,
+        color: [u8; 4],
+        anchor: Option<LayerId>,
+    ) -> LayerId {
+        let id = self.doc.add_vector_layer(anchor);
+        let fill = peniko::Brush::Solid(peniko::Color::from_rgba8(
+            color[0], color[1], color[2], color[3],
+        ));
+        let obj = crate::layer::VectorObject::text(text, kurbo::Affine::translate((x, y)), fill);
+        if let Some(LayerNode::Layer(Layer::Vector(v))) = self.doc.find_node_mut(id) {
+            v.objects.push(obj);
+        }
+        self.sync_vector_layer(id);
+        self.compositor.mark_dirty();
+
+        let parent = self.doc.parent_of(id);
+        let pos = self.doc.position_in_parent(id).unwrap_or(0);
+        self.push_undo(Box::new(LayerAddAction::new(id, parent, pos)));
+        id
+    }
+
+    /// Ensure the compositor's GPU state for a vector layer exists and rebuild
+    /// its `vello::Scene` from the document's authoritative objects. Idempotent
+    /// — safe after any object/style/transform change, on load, and on
+    /// undo/redo (`sync_compositor_layers` calls it for every vector layer).
+    pub(crate) fn sync_vector_layer(&mut self, id: LayerId) {
+        self.compositor
+            .ensure_vector_layer(&self.gpu.device, &self.gpu.queue, id);
+        let Some(Layer::Vector(v)) = self.doc.layer(id) else {
+            return;
+        };
+        let objects = v.objects.clone();
+        let layer_affine = transform_to_kurbo(&v.transform);
+        let scene = self.fonts.build_scene(&objects, layer_affine);
+        self.compositor.set_vector_scene(id, scene);
+    }
+
+    /// Replace the content string of the layer's first text object.
+    pub fn set_text_content(&mut self, id: LayerId, content: String) {
+        self.edit_first_text(id, |t| t.content = content);
+    }
+
+    /// Update one or more style fields of the layer's first text object.
+    /// `None` arguments leave that field unchanged.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_text_style(
+        &mut self,
+        id: LayerId,
+        font_family: Option<String>,
+        size: Option<f32>,
+        weight: Option<f32>,
+        italic: Option<bool>,
+        align: Option<crate::layer::TextAlign>,
+        color: Option<[u8; 4]>,
+    ) {
+        self.edit_first_text_object(id, |obj| {
+            if let crate::layer::ObjectSource::Text(t) = &mut obj.source {
+                if let Some(f) = font_family {
+                    t.font_family = f;
+                }
+                if let Some(s) = size {
+                    t.size = s;
+                }
+                if let Some(w) = weight {
+                    t.weight = w;
+                }
+                if let Some(i) = italic {
+                    t.style = if i {
+                        crate::layer::TextStyle::Italic
+                    } else {
+                        crate::layer::TextStyle::Normal
+                    };
+                }
+                if let Some(a) = align {
+                    t.align = a;
+                }
+            }
+            if let Some(c) = color {
+                obj.fill = Some(peniko::Brush::Solid(peniko::Color::from_rgba8(
+                    c[0], c[1], c[2], c[3],
+                )));
+            }
+        });
+    }
+
+    /// Mutate the [`crate::layer::TextProps`] of the layer's first text object,
+    /// recording one coalescing undo step and re-realizing.
+    fn edit_first_text<F: FnOnce(&mut crate::layer::TextProps)>(&mut self, id: LayerId, f: F) {
+        self.edit_first_text_object(id, |obj| {
+            if let crate::layer::ObjectSource::Text(t) = &mut obj.source {
+                f(t);
+            }
+        });
+    }
+
+    /// Mutate the first text-bearing [`crate::layer::VectorObject`] in place,
+    /// recording the whole object-list swap as one coalescing undo step and
+    /// re-realizing the layer.
+    fn edit_first_text_object<F: FnOnce(&mut crate::layer::VectorObject)>(
+        &mut self,
+        id: LayerId,
+        f: F,
+    ) {
+        let Some(Layer::Vector(v)) = self.doc.layer(id) else {
+            return;
+        };
+        let old = v.objects.clone();
+        let mut new = old.clone();
+        let Some(obj) = new
+            .iter_mut()
+            .find(|o| matches!(o.source, crate::layer::ObjectSource::Text(_)))
+        else {
+            return;
+        };
+        f(obj);
+        if let Some(LayerNode::Layer(Layer::Vector(vm))) = self.doc.find_node_mut(id) {
+            vm.objects = new.clone();
+        }
+        self.coalesce_property_undo(PropertyAction::new(
+            id,
+            Property::VectorObjects(old),
+            Property::VectorObjects(new),
+        ));
+        self.sync_vector_layer(id);
+        self.compositor.mark_dirty();
     }
 
     pub fn add_group(&mut self, anchor: Option<LayerId>) -> LayerId {
@@ -425,10 +589,10 @@ impl DarklyEngine {
     pub fn layer_bounds(&self, layer_id: LayerId) -> Option<crate::coord::CanvasRect> {
         match self.doc.layer(layer_id)? {
             Layer::Raster(r) => Some(r.pixels.bounds),
-            // Voids and filter layers store no pixels — their "bounds" concept
-            // is the canvas itself, which callers can ask for directly via
-            // `canvas_dimensions`.
-            Layer::Void(_) | Layer::Filter(_) => None,
+            // Voids, filter, and vector layers store no pixels — their "bounds"
+            // concept is the canvas itself, which callers can ask for directly
+            // via `canvas_dimensions`.
+            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) => None,
         }
     }
 

@@ -75,11 +75,12 @@ export default defineConfig({
                 ],
             },
             workbox: {
-                // The 6.2 MB WASM blob is the whole app — precache it (and the
-                // shell, fonts, icons) so the editor boots fully offline.
+                // The ~12 MB WASM blob is the whole app (now including Vello +
+                // parley + a bundled font for the text tool) — precache it (and
+                // the shell, fonts, icons) so the editor boots fully offline.
                 globPatterns: ['**/*.{js,css,html,wasm,woff2,png,svg}'],
                 // Default cap is ~2 MB, which would silently skip the WASM.
-                maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+                maximumFileSizeToCacheInBytes: 16 * 1024 * 1024,
                 // SPA: serve the precached index.html for navigations. The
                 // relative `base: './'` emits the entry as `index.html`.
                 navigateFallback: 'index.html',

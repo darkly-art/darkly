@@ -3206,6 +3206,7 @@ fn layer_node_tree_admits_only_layer_and_group_variants() {
             LayerNode::Layer(Layer::Raster(_)) => {}
             LayerNode::Layer(Layer::Void(_)) => {}
             LayerNode::Layer(Layer::Filter(_)) => {}
+            LayerNode::Layer(Layer::Vector(_)) => {}
             LayerNode::Group(_) => {}
         }
     }
@@ -4849,6 +4850,7 @@ fn multi_move_preserves_relative_order() {
             LayerInfo::Raster { id, .. } => *id,
             LayerInfo::Void { id, .. } => *id,
             LayerInfo::Filter { id, .. } => *id,
+            LayerInfo::Vector { id, .. } => *id,
             LayerInfo::Group { id, .. } => *id,
         })
         .collect();
@@ -4918,6 +4920,7 @@ fn group_layers_wraps_selection_at_topmost_slot() {
             LayerInfo::Raster { id, .. } => *id,
             LayerInfo::Void { id, .. } => *id,
             LayerInfo::Filter { id, .. } => *id,
+            LayerInfo::Vector { id, .. } => *id,
             LayerInfo::Group { id, .. } => *id,
         })
         .collect();
@@ -4961,6 +4964,7 @@ fn group_layers_cross_parent() {
             LayerInfo::Raster { id, .. } => *id,
             LayerInfo::Void { id, .. } => *id,
             LayerInfo::Filter { id, .. } => *id,
+            LayerInfo::Vector { id, .. } => *id,
             LayerInfo::Group { id, .. } => *id,
         })
         .collect();
@@ -5130,6 +5134,7 @@ fn multi_duplicate_each_lands_above_its_source() {
             LayerInfo::Raster { id, .. } => *id,
             LayerInfo::Void { id, .. } => *id,
             LayerInfo::Filter { id, .. } => *id,
+            LayerInfo::Vector { id, .. } => *id,
             LayerInfo::Group { id, .. } => *id,
         })
         .collect();

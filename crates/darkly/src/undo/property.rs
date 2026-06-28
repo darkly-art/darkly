@@ -28,6 +28,13 @@ pub enum Property {
     /// exactly like `VoidParams`. The GPU re-sync happens in
     /// `sync_compositor_layers` after the doc is restored.
     Transform(crate::transform::Transform),
+    /// Full object list of a vector layer. Replaced in bulk (like `VoidParams`)
+    /// because a text edit / style change rewrites the bespoke object that owns
+    /// the change, and the realization rebuilds from the whole list anyway.
+    /// Coalesces so a run of edits (e.g. typing) collapses into one undo step;
+    /// the compositor re-realizes via `sync_vector_layer` after the doc is
+    /// restored.
+    VectorObjects(Vec<crate::layer::VectorObject>),
 }
 
 impl Property {
@@ -65,6 +72,11 @@ impl Property {
             Property::Transform(t) => {
                 if let LayerNode::Layer(Layer::Void(v)) = node {
                     v.transform = *t;
+                }
+            }
+            Property::VectorObjects(objects) => {
+                if let LayerNode::Layer(Layer::Vector(v)) = node {
+                    v.objects = objects.clone();
                 }
             }
         }

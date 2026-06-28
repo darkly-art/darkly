@@ -18,6 +18,15 @@ darkly = { path = "crates/darkly" }
 # GPU
 wgpu = { version = "29.0", features = ["webgpu"] }
 
+# Vector / text — the Vello family shares one geometry/style vocabulary
+# (kurbo/peniko), so the renderer is a swappable backend behind one data model.
+# vello 0.9 pins wgpu 29.0.3, matching the workspace resolution above; keep the
+# two bumped together (vello's pipelines and our compositor share one device).
+vello = "0.9"
+kurbo = { version = "0.13", features = ["serde"] }
+peniko = { version = "0.6", features = ["serde"] }
+parley = "0.7"
+
 # Data
 bytemuck = { version = "1.13", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }

@@ -6,6 +6,7 @@ export type RequestKind =
     | 'add_group'
     | 'add_mask'
     | 'add_raster'
+    | 'add_text'
     | 'add_veil'
     | 'add_void'
     | 'antialias_selection'
@@ -92,6 +93,7 @@ export type RequestKind =
     | 'layer_kind_types'
     | 'layer_transform_capability'
     | 'layer_tree'
+    | 'list_fonts'
     | 'mark_dirty'
     | 'mask_to_selection'
     | 'merge_down'
@@ -144,6 +146,8 @@ export type RequestKind =
     | 'set_overlay_mask'
     | 'set_pixel_filter'
     | 'set_preview_theme'
+    | 'set_text_content'
+    | 'set_text_style'
     | 'set_veil_visible'
     | 'set_view_transform'
     | 'set_viewport_bg'
@@ -170,6 +174,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'add_group',
     'add_mask',
     'add_raster',
+    'add_text',
     'add_veil',
     'add_void',
     'antialias_selection',
@@ -256,6 +261,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'layer_kind_types',
     'layer_transform_capability',
     'layer_tree',
+    'list_fonts',
     'mark_dirty',
     'mask_to_selection',
     'merge_down',
@@ -308,6 +314,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_overlay_mask',
     'set_pixel_filter',
     'set_preview_theme',
+    'set_text_content',
+    'set_text_style',
     'set_veil_visible',
     'set_view_transform',
     'set_viewport_bg',

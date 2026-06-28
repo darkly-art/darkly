@@ -5,6 +5,7 @@
 pub mod filter;
 pub mod group;
 pub mod raster;
+pub mod vector;
 pub mod void;
 
 use crate::document::layer_kind::LayerKindRegistration;
@@ -15,6 +16,7 @@ pub fn registrations() -> Vec<LayerKindRegistration> {
         filter::register(),
         group::register(),
         raster::register(),
+        vector::register(),
         void::register(),
     ]
 }

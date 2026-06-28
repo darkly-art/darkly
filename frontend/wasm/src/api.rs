@@ -149,7 +149,9 @@ impl DarklySession {
                 let ctx = GpuContext::new(
                     self.instance.clone(),
                     surface,
-                    wgpu::Limits::downlevel_webgl2_defaults(),
+                    darkly::gpu::vector_renderer::required_limits(
+                        wgpu::Limits::downlevel_webgl2_defaults(),
+                    ),
                     initial_width,
                     initial_height,
                 )
@@ -249,14 +251,17 @@ impl DarklyHandle {
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
             .expect("Failed to create surface");
-        let gpu = GpuContext::new(
-            instance,
-            surface,
-            wgpu::Limits::downlevel_webgl2_defaults(),
-            initial_width,
-            initial_height,
-        )
-        .await;
+        let gpu =
+            GpuContext::new(
+                instance,
+                surface,
+                darkly::gpu::vector_renderer::required_limits(
+                    wgpu::Limits::downlevel_webgl2_defaults(),
+                ),
+                initial_width,
+                initial_height,
+            )
+            .await;
 
         DarklyHandle::from_engine(DarklyEngine::new(gpu, doc_width, doc_height))
     }

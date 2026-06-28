@@ -1,3 +1,7 @@
+use kurbo::{Affine, BezPath, Stroke};
+use peniko::Brush;
+use serde::{Deserialize, Serialize};
+
 use crate::coord::CanvasRect;
 use crate::gpu::blend_mode::{self, BlendModeRegistration};
 use crate::gpu::params::ParamValue;
@@ -223,6 +227,128 @@ impl FilterLayer {
     }
 }
 
+/// Horizontal text alignment within a [`TextProps`] block. Maps onto parley's
+/// `Alignment` at shape time and is the only alignment authority — the renderer
+/// never re-derives it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TextAlign {
+    Start,
+    Center,
+    End,
+    Justified,
+}
+
+/// Optional slant for a [`TextProps`] block. Kept as a small enum (rather than
+/// parley's `FontStyle`, which carries an oblique angle we don't expose yet) so
+/// the document model owns a stable, serializable vocabulary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TextStyle {
+    Normal,
+    Italic,
+}
+
+/// Editable text — the one bespoke vector source Darkly adds. Its persistent
+/// state is a string plus a font selection, **not** glyph outlines: the layer
+/// re-shapes (parley) and re-rasterizes (vello) whenever any field changes.
+/// Everything else about a vector object is generic kurbo/peniko geometry.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TextProps {
+    pub content: String,
+    /// Family name resolved against the engine's font collection at shape time
+    /// (e.g. `"Inter"`). A family the binary doesn't ship falls back to the
+    /// collection default — see the font-portability open risk in the plan.
+    pub font_family: String,
+    pub style: TextStyle,
+    /// CSS-style weight (100–900, 400 = regular).
+    pub weight: f32,
+    /// Font size in canvas pixels (raster-first: this is the rasterization
+    /// size, not a resolution-independent point size).
+    pub size: f32,
+    /// Multiplier on the font's natural line height (1.0 = natural).
+    pub line_height: f32,
+    pub align: TextAlign,
+}
+
+impl TextProps {
+    pub fn new(content: String) -> Self {
+        TextProps {
+            content,
+            font_family: "sans-serif".to_string(),
+            style: TextStyle::Normal,
+            weight: 400.0,
+            size: 48.0,
+            line_height: 1.2,
+            align: TextAlign::Start,
+        }
+    }
+}
+
+/// What a [`VectorObject`] draws. Two variants and no growth axis: shapes are
+/// plain [`BezPath`]s (rectangles/ellipses convert into one), and the only
+/// editable, non-path source is [`TextProps`]. No trait, no registry — a third
+/// kind would only ever be another bespoke editable source, added here.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ObjectSource {
+    Path(BezPath),
+    Text(TextProps),
+}
+
+/// One drawable object on a [`VectorLayer`]: geometry/text plus its local
+/// transform and fill/stroke style. Geometry and style speak the standard
+/// kurbo/peniko vocabulary every renderer in this space consumes, so objects
+/// persist through their derived `serde` impls almost for free.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VectorObject {
+    /// Object-local affine, applied on top of the layer transform. For text
+    /// this carries the placement (the caret position the tool clicked).
+    pub transform: Affine,
+    pub fill: Option<Brush>,
+    pub stroke: Option<(Stroke, Brush)>,
+    pub source: ObjectSource,
+}
+
+impl VectorObject {
+    /// A text object filled with a solid color, placed by `transform`.
+    pub fn text(text: TextProps, transform: Affine, fill: Brush) -> Self {
+        VectorObject {
+            transform,
+            fill: Some(fill),
+            stroke: None,
+            source: ObjectSource::Text(text),
+        }
+    }
+}
+
+/// A vector-object layer — a layer owning an ordered list of [`VectorObject`]s
+/// (text today; paths/shapes later, reusing this layer and renderer). The
+/// objects are the authoritative, editable, serializable description; the GPU
+/// texture is a rebuildable realization. Darkly is raster-first: the texture
+/// regenerates only when objects/style/transform change, never on view zoom.
+pub struct VectorLayer {
+    pub id: LayerId,
+    pub common: NodeCommon,
+    pub blend: BlendProps,
+    pub objects: Vec<VectorObject>,
+    /// Layer-level user transform (gizmo-edited). Baked into the realized
+    /// texture at rasterization — a change is an object change and re-rasters
+    /// on commit, never a shader-time affine on a stale texture.
+    pub transform: crate::transform::Transform,
+    pub filters: Vec<LayerId>,
+}
+
+impl VectorLayer {
+    pub fn new(id: LayerId, name: String) -> Self {
+        VectorLayer {
+            id,
+            common: NodeCommon::new(name),
+            blend: BlendProps::new(),
+            objects: Vec::new(),
+            transform: crate::transform::Transform::identity(),
+            filters: Vec::new(),
+        }
+    }
+}
+
 pub struct LayerGroup {
     pub id: LayerId,
     pub common: NodeCommon,
@@ -344,11 +470,12 @@ impl LayerNode {
     /// keep in sync with the registration files.
     pub fn kind(&self) -> &'static crate::document::LayerKindRegistration {
         use crate::document::layer_kind::registry;
-        use crate::document::layer_kinds::{filter, group, raster, void};
+        use crate::document::layer_kinds::{filter, group, raster, vector, void};
         match self {
             LayerNode::Layer(Layer::Raster(_)) => registry().get(raster::TYPE_ID).unwrap(),
             LayerNode::Layer(Layer::Void(_)) => registry().get(void::TYPE_ID).unwrap(),
             LayerNode::Layer(Layer::Filter(_)) => registry().get(filter::TYPE_ID).unwrap(),
+            LayerNode::Layer(Layer::Vector(_)) => registry().get(vector::TYPE_ID).unwrap(),
             LayerNode::Group(_) => registry().get(group::TYPE_ID).unwrap(),
         }
     }
@@ -409,6 +536,7 @@ pub enum Layer {
     Raster(RasterLayer),
     Void(VoidLayer),
     Filter(FilterLayer),
+    Vector(VectorLayer),
 }
 
 impl Layer {
@@ -433,6 +561,11 @@ impl Layer {
             // A full-frame filter has no meaningful transform — there are no
             // pixels of its own to move.
             Layer::Filter(_) => TransformCapability::None,
+            // A vector layer's transform re-rasterizes on commit (raster-first;
+            // not `Live`'s shader-time affine on a stale texture). The gizmo
+            // wiring for that commit path is future work — text-first ships
+            // placement via per-object affines — so it is not user-draggable yet.
+            Layer::Vector(_) => TransformCapability::None,
         }
     }
 
@@ -450,6 +583,7 @@ impl Layer {
             Layer::Raster(r) => r.id,
             Layer::Void(v) => v.id,
             Layer::Filter(f) => f.id,
+            Layer::Vector(v) => v.id,
         }
     }
 
@@ -458,6 +592,7 @@ impl Layer {
             Layer::Raster(r) => &r.common,
             Layer::Void(v) => &v.common,
             Layer::Filter(f) => &f.common,
+            Layer::Vector(v) => &v.common,
         }
     }
 
@@ -466,6 +601,7 @@ impl Layer {
             Layer::Raster(r) => &mut r.common,
             Layer::Void(v) => &mut v.common,
             Layer::Filter(f) => &mut f.common,
+            Layer::Vector(v) => &mut v.common,
         }
     }
 
@@ -474,6 +610,7 @@ impl Layer {
             Layer::Raster(r) => &r.blend,
             Layer::Void(v) => &v.blend,
             Layer::Filter(f) => &f.blend,
+            Layer::Vector(v) => &v.blend,
         }
     }
 
@@ -482,6 +619,7 @@ impl Layer {
             Layer::Raster(r) => &mut r.blend,
             Layer::Void(v) => &mut v.blend,
             Layer::Filter(f) => &mut f.blend,
+            Layer::Vector(v) => &mut v.blend,
         }
     }
 
@@ -490,6 +628,7 @@ impl Layer {
             Layer::Raster(r) => &r.filters,
             Layer::Void(v) => &v.filters,
             Layer::Filter(f) => &f.filters,
+            Layer::Vector(v) => &v.filters,
         }
     }
 
@@ -498,23 +637,25 @@ impl Layer {
             Layer::Raster(r) => &mut r.filters,
             Layer::Void(v) => &mut v.filters,
             Layer::Filter(f) => &mut f.filters,
+            Layer::Vector(v) => &mut v.filters,
         }
     }
 
-    /// Pixel buffer for this layer, if any. Void and filter layers have no
-    /// pixels — a void regenerates from `params`, a filter transforms the
-    /// accumulator below it.
+    /// Pixel buffer for this layer, if any. Void, filter, and vector layers
+    /// have no authoritative pixels — a void regenerates from `params`, a
+    /// filter transforms the accumulator below it, and a vector layer's texture
+    /// is a realization of its `objects`.
     pub fn pixels(&self) -> Option<&PixelBuffer> {
         match self {
             Layer::Raster(r) => Some(&r.pixels),
-            Layer::Void(_) | Layer::Filter(_) => None,
+            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) => None,
         }
     }
 
     pub fn pixels_mut(&mut self) -> Option<&mut PixelBuffer> {
         match self {
             Layer::Raster(r) => Some(&mut r.pixels),
-            Layer::Void(_) | Layer::Filter(_) => None,
+            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) => None,
         }
     }
 
@@ -534,7 +675,7 @@ impl Layer {
     pub fn void_state(&self) -> Option<(&[ParamValue], &crate::transform::Transform)> {
         match self {
             Layer::Void(v) => Some((&v.params, &v.transform)),
-            Layer::Raster(_) | Layer::Filter(_) => None,
+            Layer::Raster(_) | Layer::Filter(_) | Layer::Vector(_) => None,
         }
     }
 }

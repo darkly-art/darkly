@@ -99,6 +99,7 @@ For a feature to count, it must be:
     - [ ] Calligraphy
     - [ ] Oil / Impasto
 - [x] Brush tool, eraser, fill (flood), gradient (linear), color picker
+- [x] Text tool (vector-object layer, Vello-rendered, bundled fonts; raster-first)
 - [x] Pressure / tilt / spacing / distance / angle inputs
 - [x] Laplacian stabilizer
 - [x] HSV picker, foreground/background swatches
