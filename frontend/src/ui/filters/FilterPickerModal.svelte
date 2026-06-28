@@ -17,7 +17,7 @@
     // so a new filter in the Rust core surfaces here with no frontend edit.
     async function pick(ft: { type: string; displayName: string }) {
         if (!app.engine) return;
-        const { id } = await app.engine.send('add_filter_layer', {
+        const id = await app.engine.send<number | null>('add_filter', {
             pipeline: ft.type,
             params: {},
             anchor: app.activeLayerId,

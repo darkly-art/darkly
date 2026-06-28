@@ -644,7 +644,7 @@ export function registerActions() {
         handler: async () => {
             const engine = app.engine;
             if (!engine) return;
-            const { id } = await engine.send('add_raster', { anchor: app.activeLayerId });
+            const id = await engine.send<number>('add_raster', { anchor: app.activeLayerId });
             app.selectLayer(id);
             await app.refreshLayerTree();
         },
@@ -793,13 +793,13 @@ export function registerActions() {
                 : app.activeLayerId !== null ? [app.activeLayerId] : [];
             if (targets.length === 0) return;
             if (targets.length === 1) {
-                const { id: newId } = await engine.send('duplicate_node', { source_id: targets[0] });
+                const newId = await engine.send<number | null>('duplicate_node', { source_id: targets[0] });
                 await app.refreshLayerTree();
                 if (newId) app.selectLayer(newId);
             } else {
-                const { ids: newIds } = await engine.send('duplicate_nodes', { ids: targets });
+                const newIds = await engine.send<number[]>('duplicate_nodes', { ids: targets });
                 await app.refreshLayerTree();
-                if (newIds.length > 0) app.selectLayers(newIds as number[]);
+                if (newIds.length > 0) app.selectLayers(newIds);
             }
         },
     });
@@ -874,7 +874,7 @@ export function registerActions() {
             if (!engine) return;
             if (app.selectedLayerIds.size >= 2) {
                 try {
-                    const { id: newId } = await engine.send('merge_layers', {
+                    const newId = await engine.send<number>('merge_layers', {
                         ids: [...app.selectedLayerIds],
                     });
                     await app.refreshLayerTree();
@@ -887,7 +887,7 @@ export function registerActions() {
             const sourceId = app.activeLayerId;
             if (sourceId == null) return;
             try {
-                const { id: newId } = await engine.send('merge_down', { source_id: sourceId });
+                const newId = await engine.send<number>('merge_down', { source_id: sourceId });
                 await app.refreshLayerTree();
                 if (newId) app.selectLayer(newId);
             } catch (e: any) {
@@ -911,7 +911,7 @@ export function registerActions() {
             const id = ctx.layerId ?? app.activeLayerId;
             if (id == null) return;
             try {
-                const { id: newId } = await engine.send('flatten_node', { node_id: id });
+                const newId = await engine.send<number>('flatten_node', { node_id: id });
                 await app.refreshLayerTree();
                 if (newId) app.selectLayer(newId);
             } catch (e: any) {

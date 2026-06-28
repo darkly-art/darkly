@@ -2,7 +2,7 @@
 // Regenerate: DARKLY_REGEN_TS=1 cargo test -p darkly --test protocol --features testing
 
 export type RequestKind =
-    | 'add_filter_layer'
+    | 'add_filter'
     | 'add_group'
     | 'add_mask'
     | 'add_raster'
@@ -147,6 +147,7 @@ export type RequestKind =
     | 'set_veil_visible'
     | 'set_view_transform'
     | 'set_viewport_bg'
+    | 'set_void_params'
     | 'shrink_selection'
     | 'smooth_selection'
     | 'start_export'
@@ -157,7 +158,6 @@ export type RequestKind =
     | 'undo'
     | 'update_floating_matrix'
     | 'update_veil'
-    | 'update_void_params'
     | 'update_void_transform'
     | 'veil_list'
     | 'veil_types'
@@ -166,7 +166,7 @@ export type RequestKind =
     ;
 
 export const REQUEST_KINDS: readonly RequestKind[] = [
-    'add_filter_layer',
+    'add_filter',
     'add_group',
     'add_mask',
     'add_raster',
@@ -311,6 +311,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_veil_visible',
     'set_view_transform',
     'set_viewport_bg',
+    'set_void_params',
     'shrink_selection',
     'smooth_selection',
     'start_export',
@@ -321,7 +322,6 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'undo',
     'update_floating_matrix',
     'update_veil',
-    'update_void_params',
     'update_void_transform',
     'veil_list',
     'veil_types',

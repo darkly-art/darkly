@@ -8,6 +8,8 @@
 //! own extent centre. Horizontal/vertical only (no layer rotate), so the node
 //! extent never changes and undo is a single [`GpuRegionAction`].
 
+use darkly_macros::handlers;
+
 use super::rendering::commit_undo_region;
 use super::{DarklyEngine, PendingFlip};
 use crate::coord::WindowRect;
@@ -15,10 +17,12 @@ use crate::gpu::ortho_transform::OrthoXform;
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
+#[handlers]
 impl DarklyEngine {
     /// Flip the given node (raster layer or mask filter) horizontally or
     /// vertically. Returns `false` if the node isn't editable, has no texture,
     /// or the flip was deferred waiting on the selection cache.
+    #[handler]
     pub fn flip_node(&mut self, node_id: LayerId, xform: OrthoXform) -> bool {
         debug_assert!(matches!(xform, OrthoXform::FlipH | OrthoXform::FlipV));
         if !self.doc.is_node_editable(node_id) {

@@ -4,6 +4,7 @@ use darkly_macros::handlers;
 
 use super::DarklyEngine;
 use crate::document::MoveTarget;
+use crate::engine::protocol::{params_from_json, RawParams};
 use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::property::Property;
 use crate::undo::{
@@ -29,6 +30,59 @@ impl DarklyEngine {
         self.push_undo(Box::new(LayerAddAction::new(id, parent, pos)));
 
         id
+    }
+
+    // --- Wire entry points ---
+    //
+    // These are the protocol verbs the frontend calls: they take wire-friendly
+    // arguments (`RawParams`, `Option<LayerId>`) and forward to the typed
+    // primitives above/below. The param-bearing ones own the single coercion
+    // seam (`coerce_void_params`), pairing a raw params object with the sibling
+    // field that names its schema — the one thing generic request routing can't
+    // do for itself. Direct Rust callers (and tests) use the typed primitives.
+
+    /// Wire entry for `add_raster` — see [`Self::add_raster_layer`].
+    #[handler]
+    pub fn add_raster(&mut self, anchor: Option<LayerId>) -> LayerId {
+        self.add_raster_layer(anchor)
+    }
+
+    /// Wire entry for `add_void` — coerces `params` against the void type's
+    /// schema, then [`Self::add_void_layer`].
+    #[handler]
+    pub fn add_void(
+        &mut self,
+        void_type: String,
+        params: RawParams,
+        anchor: Option<LayerId>,
+    ) -> Option<LayerId> {
+        let pv = self.coerce_void_params(&void_type, &params.0);
+        self.add_void_layer(&void_type, pv, anchor)
+    }
+
+    /// Wire entry for `add_filter` — filters carry no params today (the schema
+    /// is empty), then [`Self::add_filter_layer`].
+    #[handler]
+    pub fn add_filter(
+        &mut self,
+        pipeline: String,
+        params: RawParams,
+        anchor: Option<LayerId>,
+    ) -> Option<LayerId> {
+        let pv = params_from_json(&params.0, &[]);
+        self.add_filter_layer(&pipeline, pv, anchor)
+    }
+
+    /// Wire entry for `set_void_params` — resolves the layer's void type,
+    /// coerces `params` against its schema, then [`Self::update_void_params`].
+    /// A non-void (or stale) id is a silent no-op.
+    #[handler]
+    pub fn set_void_params(&mut self, id: LayerId, params: RawParams) {
+        let Some(type_id) = self.void_layer_type(id) else {
+            return;
+        };
+        let pv = self.coerce_void_params(&type_id, &params.0);
+        self.update_void_params(id, pv);
     }
 
     #[handler]
@@ -280,29 +334,26 @@ impl DarklyEngine {
     /// reads the layer's CURRENT transform as the undo `old_value` before
     /// writing, so a whole gizmo drag coalesces into one undo step that
     /// restores the true pre-drag state — never identity.
-    pub fn update_void_transform(
-        &mut self,
-        layer_id: LayerId,
-        new_transform: crate::transform::Transform,
-    ) {
-        if !self.doc.is_node_editable(layer_id) {
+    #[handler]
+    pub fn update_void_transform(&mut self, id: LayerId, transform: crate::transform::Transform) {
+        if !self.doc.is_node_editable(id) {
             return;
         }
-        let old_transform = match self.doc.find_node(layer_id) {
+        let old_transform = match self.doc.find_node(id) {
             Some(LayerNode::Layer(Layer::Void(v))) => v.transform,
             _ => return,
         };
-        if let Some(LayerNode::Layer(Layer::Void(v))) = self.doc.find_node_mut(layer_id) {
-            v.transform = new_transform;
+        if let Some(LayerNode::Layer(Layer::Void(v))) = self.doc.find_node_mut(id) {
+            v.transform = transform;
         }
         self.compositor
-            .update_void_layer_transform(&self.gpu.queue, layer_id, &new_transform);
+            .update_void_layer_transform(&self.gpu.queue, id, &transform);
         self.compositor.mark_dirty();
 
         self.coalesce_property_undo(PropertyAction::new(
-            layer_id,
+            id,
             Property::Transform(old_transform),
-            Property::Transform(new_transform),
+            Property::Transform(transform),
         ));
     }
 
@@ -341,9 +392,10 @@ impl DarklyEngine {
     /// How the user may transform a layer — `live` / `destructive` / `none`.
     /// Resolves the void's static capability through the compositor-owned
     /// registry. Returned as a stable string for the WASM boundary.
-    pub fn layer_transform_capability(&self, layer_id: LayerId) -> &'static str {
+    #[handler]
+    pub fn layer_transform_capability(&self, id: LayerId) -> &'static str {
         use crate::layer::TransformCapability;
-        let cap = match self.doc.find_node(layer_id) {
+        let cap = match self.doc.find_node(id) {
             Some(LayerNode::Layer(l)) => l.transform_capability(self.compositor.void_registry()),
             _ => TransformCapability::None,
         };
@@ -452,15 +504,16 @@ impl DarklyEngine {
             .map(|p| p.bounds)
     }
 
-    pub fn remove_layer(&mut self, layer_id: LayerId) -> Result<(), String> {
-        if !self.doc.is_node_editable(layer_id) {
+    #[handler]
+    pub fn remove_layer(&mut self, id: LayerId) -> Result<(), String> {
+        if !self.doc.is_node_editable(id) {
             return Err("Layer is locked".into());
         }
         if self.doc.node_count() <= 1 {
             return Err("Cannot delete the last layer".into());
         }
 
-        if let Some(action) = self.detach_layer_for_remove(layer_id) {
+        if let Some(action) = self.detach_layer_for_remove(id) {
             self.push_undo(action);
         }
         self.compositor.mark_dirty();
@@ -526,8 +579,8 @@ impl DarklyEngine {
     }
 
     #[handler]
-    pub fn move_layer(&mut self, layer_id: LayerId, target: MoveTarget) {
-        if let Some(action) = self.move_layer_inner(layer_id, target) {
+    pub fn move_layer(&mut self, id: LayerId, target: MoveTarget) {
+        if let Some(action) = self.move_layer_inner(id, target) {
             self.push_undo(action);
         }
         self.compositor.mark_dirty();

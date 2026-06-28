@@ -23,10 +23,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 fn registry_routes_every_kind_and_rejects_unknown() {
     let reg = RequestRegistry::new();
     let kinds = reg.all_kinds();
-    assert!(
-        kinds.contains(&"add_raster"),
-        "spike handler must be registered"
-    );
+    assert!(kinds.contains(&"add_raster"));
     assert!(kinds.contains(&"add_void"));
     assert!(kinds.contains(&"layer_tree"));
     // `add_group` comes from a `#[handler]`-tagged engine method, aggregated by
@@ -53,8 +50,12 @@ fn add_raster_dispatch_adds_a_layer_and_returns_id() {
     let resp = reg
         .dispatch(&mut engine, "add_raster", json!({ "anchor": null }), &[])
         .expect("add_raster dispatch");
-    let id = resp.value.get("id").and_then(|v| v.as_u64());
-    assert!(id.is_some(), "add_raster returns an id");
+    // `#[handler]`-derived: the natural `LayerId` return is a bare JSON number,
+    // not a `{ id }` envelope.
+    assert!(
+        resp.value.as_u64().is_some(),
+        "add_raster returns a bare id"
+    );
     assert!(resp.bytes.is_none(), "non-binary response carries no bytes");
     assert_eq!(engine.layer_tree().len(), before + 1, "a layer was added");
 }
@@ -71,9 +72,9 @@ fn add_void_unknown_type_returns_null_id() {
             &[],
         )
         .expect("add_void dispatch is infallible at the protocol level");
-    // An unknown void type yields no layer: `Option<LayerId>` serializes the
-    // `None` as a JSON `null`, not the old `-1` sentinel.
-    assert!(resp.value.get("id").is_some_and(|v| v.is_null()));
+    // An unknown void type yields no layer: the natural `Option<LayerId>` return
+    // serializes `None` as a bare JSON `null` (no `{ id }` envelope, no `-1`).
+    assert!(resp.value.is_null());
 }
 
 #[test]
@@ -207,9 +208,9 @@ fn ortho_xform_deserializes_from_snake_case() {
 
 /// End-to-end through the registry for a `#[handler]`-generated handler: the
 /// `move_layer` registration (emitted by the macro, aggregated by build.rs)
-/// decodes `{ layer_id, target: { target_type, target_id } }` — `LayerId` plus
-/// a nested `MoveTarget` param — and reorders without a protocol error. The
-/// `()` return serializes to `null`.
+/// decodes `{ id, target: { target_type, target_id } }` — `LayerId` plus a
+/// nested `MoveTarget` param — and reorders without a protocol error. The `()`
+/// return serializes to `null`.
 #[test]
 fn macro_move_layer_dispatch_reorders_via_nested_target() {
     let reg = RequestRegistry::new();
@@ -219,22 +220,20 @@ fn macro_move_layer_dispatch_reorders_via_nested_target() {
         .dispatch(&mut engine, "add_raster", json!({ "anchor": null }), &[])
         .unwrap()
         .value
-        .get("id")
-        .and_then(|v| v.as_u64())
+        .as_u64()
         .expect("first raster id");
     let b = reg
         .dispatch(&mut engine, "add_raster", json!({ "anchor": null }), &[])
         .unwrap()
         .value
-        .get("id")
-        .and_then(|v| v.as_u64())
+        .as_u64()
         .expect("second raster id");
 
     let resp = reg
         .dispatch(
             &mut engine,
             "move_layer",
-            json!({ "layer_id": a, "target": { "target_type": "before", "target_id": b } }),
+            json!({ "id": a, "target": { "target_type": "before", "target_id": b } }),
             &[],
         )
         .expect("macro-generated move_layer decodes LayerId + nested MoveTarget");

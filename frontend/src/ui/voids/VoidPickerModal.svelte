@@ -53,11 +53,11 @@
         for (const p of vt.params) {
             defaults[p.name] = p.default;
         }
-        const id = (await app.engine.send('add_void', {
+        const id = await app.engine.send<number | null>('add_void', {
             void_type: vt.type,
             params: defaults,
             anchor: app.activeLayerId,
-        })).id;
+        });
         if (id != null) {
             app.selectLayer(id);
             // Adding a stream-backed void via the picker is an explicit user

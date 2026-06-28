@@ -21,7 +21,7 @@ let gizmo: TransformGizmo | null = null;
 /** Resolve the selected layer's capability and attach the matching binding. */
 async function activate(): Promise<void> {
     if (!gizmo || !app.engine || app.activeLayerId == null) return;
-    const { value: cap } = await app.engine.send<{ value: string }>('layer_transform_capability', {
+    const cap = await app.engine.send<string>('layer_transform_capability', {
         id: app.activeLayerId,
     });
     if (cap === 'live') {
