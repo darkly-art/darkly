@@ -12,6 +12,7 @@ pub mod magic_wand;
 pub mod polygon_select;
 pub mod rect_select;
 pub mod transform;
+pub mod transform_perspective;
 
 use crate::tool::ToolRegistration;
 
@@ -28,5 +29,6 @@ pub fn registrations() -> Vec<ToolRegistration> {
         polygon_select::register(),
         rect_select::register(),
         transform::register(),
+        transform_perspective::register(),
     ]
 }

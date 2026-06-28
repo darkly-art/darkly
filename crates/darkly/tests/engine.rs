@@ -339,7 +339,9 @@ fn commit_floating_translate_past_canvas_preserves_pixels() {
 
     // Translate the floating by +20 in X — transformed bounds (70, 30, 8, 8)
     // sit entirely past the canvas right edge (canvas width = 64).
-    engine.update_floating_matrix(affine_translate(20.0, 0.0));
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        20.0, 0.0,
+    )));
     engine.commit_floating();
 
     // Layer must have grown to contain the translated rect.
@@ -611,7 +613,9 @@ fn floating_preview_visible_when_translation_extends_past_source_bbox() {
 
     // Translate by +20 in X → transformed bounds (30, 10, 8, 8), well
     // outside the source bbox at (10, 10, 8, 8) but still inside canvas.
-    engine.update_floating_matrix(affine_translate(20.0, 0.0));
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        20.0, 0.0,
+    )));
 
     let canvas = engine.test_readback_canvas();
     let pixel_at = |x: u32, y: u32| {
@@ -660,11 +664,15 @@ fn floating_preview_does_not_leave_ghost_pixels_when_dragged() {
     let _pasted = engine.paste_image_floating(bw, bh, &rgba, 10, 10, None);
 
     // First drag: move to (+15, 0) → (25, 10, 8, 8).
-    engine.update_floating_matrix(affine_translate(15.0, 0.0));
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        15.0, 0.0,
+    )));
     let _ = engine.test_readback_canvas();
 
     // Second drag: move further to (+30, 0) → (40, 10, 8, 8).
-    engine.update_floating_matrix(affine_translate(30.0, 0.0));
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        30.0, 0.0,
+    )));
     let canvas = engine.test_readback_canvas();
 
     let pixel_at = |x: u32, y: u32| {
@@ -1654,7 +1662,7 @@ fn floating_transform_undo_with_rotation() {
         &affine_translate(8.0, 8.0),
         &affine_multiply(&affine_rotate(theta), &affine_translate(-8.0, -8.0)),
     );
-    engine.update_floating_matrix(matrix);
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(matrix));
 
     engine.commit_floating();
     engine.render(0.0);
@@ -1672,6 +1680,81 @@ fn floating_transform_undo_with_rotation() {
     assert_eq!(
         before, after_undo,
         "undo of rotation transform must restore byte-identical pixels"
+    );
+}
+
+/// Feature: a `Perspective` (homography) floating transform warps content with
+/// a true vanishing-point keystone — the projective path the GPU commit
+/// pipeline gained alongside affine. Maps the source rect to a trapezoid
+/// (right edge centered, top/bottom edges non-parallel → genuinely projective,
+/// not an affine parallelogram) and asserts content lands inside the quad and
+/// is cleared outside it.
+#[test]
+fn floating_perspective_commit_keystone() {
+    use darkly::transform::{homography_from_corners, Transform};
+
+    let (cw, ch) = (64u32, 64u32);
+    let mut engine = test_engine(cw, ch);
+
+    // Fully-opaque red layer so "cleared outside the warped quad" is
+    // detectable as a drop to alpha 0.
+    let mut rgba = vec![0u8; (cw * ch * 4) as usize];
+    for px in rgba.chunks_exact_mut(4) {
+        px[0] = 255;
+        px[3] = 255;
+    }
+    let layer_id = engine.paste_image(cw, ch, &rgba, 0, 0, None);
+
+    // Full-canvas selection → synchronous setup, source rect = whole layer at
+    // origin (0,0), so canvas == layer coordinates below.
+    engine.select_rect(
+        0.0,
+        0.0,
+        cw as f32,
+        ch as f32,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
+    assert!(
+        engine.begin_transform(layer_id),
+        "begin_transform should start"
+    );
+
+    let (ox, oy, fw, fh, _) = engine.floating_info().expect("floating active");
+    assert_eq!(
+        (ox as i32, oy as i32),
+        (0, 0),
+        "full-canvas source at origin"
+    );
+
+    // Keystone: pull the right edge inward to a centered span [fh/4, 3fh/4].
+    let h = homography_from_corners(
+        fw,
+        fh,
+        [(0.0, 0.0), (fw, fh / 4.0), (fw, 3.0 * fh / 4.0), (0.0, fh)],
+    )
+    .expect("non-degenerate keystone");
+    engine.update_floating_matrix(Transform::Perspective(h));
+    engine.commit_floating();
+    engine.render(0.0);
+
+    let after = engine.test_readback_layer(layer_id);
+    let alpha = |x: u32, y: u32| after[((y * cw + x) * 4 + 3) as usize];
+
+    // Near the right edge, the trapezoid only covers the middle band: a point
+    // above it is cleared, a point inside it stays opaque.
+    assert_eq!(alpha(60, 4), 0, "above the keystone's right edge → cleared");
+    assert!(
+        alpha(60, 32) > 200,
+        "inside the keystone → opaque, A={}",
+        alpha(60, 32)
+    );
+    // Near the left edge the quad is full-height; the interior stays opaque.
+    assert!(
+        alpha(4, 32) > 200,
+        "left interior stays opaque, A={}",
+        alpha(4, 32)
     );
 }
 
@@ -1915,7 +1998,9 @@ fn transform_translate_no_selection_does_not_duplicate() {
     );
 
     // Translate by (50, 50): source content at canvas (10, 10) → (60, 60).
-    engine.update_floating_matrix(affine_translate(50.0, 50.0));
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        50.0, 50.0,
+    )));
     engine.commit_floating();
     engine.render(0.0);
 
@@ -1988,7 +2073,9 @@ fn transform_translate_with_selection_does_not_duplicate() {
         "begin_transform should set up floating synchronously with an active selection"
     );
 
-    engine.update_floating_matrix(affine_translate(50.0, 50.0));
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        50.0, 50.0,
+    )));
     engine.commit_floating();
     engine.render(0.0);
 
@@ -3384,7 +3471,9 @@ fn transform_masked_sub_canvas_layer_previews_without_crash() {
     engine.select_rect(25.0, 20.0, 40.0, 40.0, SelectionMode::Replace, false, 0.0);
     engine.test_flush_readbacks();
     assert!(engine.begin_transform(host), "begin_transform must start");
-    engine.update_floating_matrix(affine_translate(15.0, 10.0));
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        15.0, 10.0,
+    )));
     engine.render(0.0);
 
     let preview = engine.test_readback_canvas();
@@ -3909,7 +3998,9 @@ fn transform_translate_on_mask_moves_pixels() {
     );
     let started = engine.begin_transform(mask_id);
     assert!(started, "begin_transform on mask must succeed");
-    engine.update_floating_matrix(affine_translate(12.0, 0.0));
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        12.0, 0.0,
+    )));
     engine.commit_floating();
 
     let post = engine.test_readback_mask(host);
@@ -4034,7 +4125,10 @@ fn mask_visible_during_transform_drag() {
     engine.select_all();
     let started = engine.begin_transform(mask_id);
     assert!(started, "begin_transform on mask must succeed");
-    engine.update_floating_matrix(affine_translate((cw / 2) as f32, 0.0));
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        (cw / 2) as f32,
+        0.0,
+    )));
     engine.render(0.0);
 
     let dragging = engine.test_readback_canvas();
@@ -4088,7 +4182,9 @@ fn cancel_transform_on_mask_leaves_texture_pristine() {
     engine.select_all();
     let started = engine.begin_transform(mask_id);
     assert!(started);
-    engine.update_floating_matrix(affine_translate(7.0, 3.0));
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        7.0, 3.0,
+    )));
     engine.cancel_floating();
 
     let after = engine.test_readback_mask(host);
@@ -4138,7 +4234,9 @@ fn transform_mask_under_isolation_previews_grayscale() {
     engine.select_rect(4.0, 4.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
     let started = engine.begin_transform(mask_id);
     assert!(started);
-    engine.update_floating_matrix(affine_translate(16.0, 0.0));
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        16.0, 0.0,
+    )));
     engine.render(0.0);
 
     let canvas = engine.test_readback_canvas();

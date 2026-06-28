@@ -114,14 +114,18 @@ fn read_frame_divisor(config: &VideoStreamConfig, params: &[ParamValue]) -> u32 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct VideoStreamUniforms {
-    /// Inverse of the user transform's affine, row 0: `[a, b, tx, _pad]`.
+    /// Inverse of the user transform's homography, row 0: `[m00, m01, m02, _]`.
     /// The shader maps a window-local fragment (relative to the content rect)
-    /// through this inverse to find the pre-transform position, then normalizes
-    /// to a source UV. Mirrors the `inv_row0/inv_row1` layout of
-    /// [`crate::gpu::transform::TransformBlendUniforms`].
+    /// through this inverse (with the perspective divide via the shared
+    /// `proj_local`) to find the pre-transform position, then normalizes to a
+    /// source UV. Same packing as
+    /// [`crate::gpu::transform::TransformBlendUniforms`] (via `pack_inv_rows`).
     inv_row0: [f32; 4],
-    /// Inverse affine row 1: `[c, d, ty, _pad]`.
+    /// Inverse homography row 1: `[m10, m11, m12, _]`.
     inv_row1: [f32; 4],
+    /// Inverse homography row 2: `[m20, m21, m22, _]`. Affine is the special
+    /// case `[0, 0, 1, _]` (perspective divide collapses to `w ≡ 1`).
+    inv_row2: [f32; 4],
     /// Window-local origin of the cover-fit content rect (see
     /// [`Void::content_extent`]). Negative on the overhanging axis. Cover-fit
     /// is baked into this rect, so the shader needs no separate canvas dims.
@@ -208,14 +212,17 @@ impl VideoStreamVoid {
     }
 
     fn uniforms(&self) -> VideoStreamUniforms {
-        // Sample through the inverse of the user transform. A singular matrix
-        // (degenerate scale) falls back to identity rather than NaN-ing the UV.
-        let fwd = self.transform.to_affine();
-        let inv = crate::transform::affine_inverse(&fwd).unwrap_or(crate::transform::IDENTITY);
+        // Sample through the inverse of the user transform's homography (shared
+        // packing; singular matrices fall back to identity rather than NaN-ing
+        // the UV). Affine transforms carry a `[0,0,1]` bottom row, so the
+        // shader's perspective divide is a no-op for them.
+        let [inv_row0, inv_row1, inv_row2] =
+            crate::gpu::transform::pack_inv_rows(&self.transform.to_projective());
         let (ox, oy, cw, ch) = self.content_rect(self.canvas_w.get(), self.canvas_h.get());
         VideoStreamUniforms {
-            inv_row0: [inv[0], inv[1], inv[2], 0.0],
-            inv_row1: [inv[3], inv[4], inv[5], 0.0],
+            inv_row0,
+            inv_row1,
+            inv_row2,
             content_origin: [ox, oy],
             content_size: [cw, ch],
         }
@@ -253,12 +260,14 @@ impl VideoStreamVoid {
     /// vice-versa); the tests pin them together.
     #[cfg(test)]
     fn src_uv(u: &VideoStreamUniforms, frag: (f32, f32)) -> (f32, f32) {
-        // Window-local fragment → content-local → inverse affine → normalize.
+        // Window-local fragment → content-local → inverse homography (with the
+        // perspective divide, mirroring `proj_local`) → normalize.
         let cl = (frag.0 - u.content_origin[0], frag.1 - u.content_origin[1]);
-        let lx = u.inv_row0[0] * cl.0 + u.inv_row0[1] * cl.1 + u.inv_row0[2];
-        let ly = u.inv_row1[0] * cl.0 + u.inv_row1[1] * cl.1 + u.inv_row1[2];
-        let ux = lx / u.content_size[0];
-        let uy = ly / u.content_size[1];
+        let hx = u.inv_row0[0] * cl.0 + u.inv_row0[1] * cl.1 + u.inv_row0[2];
+        let hy = u.inv_row1[0] * cl.0 + u.inv_row1[1] * cl.1 + u.inv_row1[2];
+        let hw = u.inv_row2[0] * cl.0 + u.inv_row2[1] * cl.1 + u.inv_row2[2];
+        let ux = (hx / hw) / u.content_size[0];
+        let uy = (hy / hw) / u.content_size[1];
         (ux, uy)
     }
 
@@ -685,7 +694,14 @@ fn create_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> Effect
         immediate_size: 0,
     });
 
-    let src = include_str!("../../shaders/voids/video_stream.wgsl");
+    // Prepend the shared inverse-homography sampler (lib/projective.wgsl) —
+    // the same `proj_local` the floating commit path uses, so voids get the
+    // full perspective divide without a divergent affine-only copy.
+    let src = concat!(
+        include_str!("../../shaders/lib/projective.wgsl"),
+        "\n",
+        include_str!("../../shaders/voids/video_stream.wgsl"),
+    );
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("void-video-stream-shader"),
         source: wgpu::ShaderSource::Wgsl(src.into()),
@@ -905,10 +921,10 @@ mod tests {
     #[test]
     fn uniforms_layout_matches_wgsl() {
         // The WGSL `Params` struct in video_stream.wgsl is inv_row0[4] +
-        // inv_row1[4] + content_origin[2] + content_size[2] = 12 f32s = 48
-        // bytes. 48 is a clean multiple of 16 so no extra std140 padding.
-        // Catches layout drift.
-        assert_eq!(std::mem::size_of::<VideoStreamUniforms>(), 48);
+        // inv_row1[4] + inv_row2[4] + content_origin[2] + content_size[2] = 16
+        // f32s = 64 bytes. 64 is a clean multiple of 16 so no extra std140
+        // padding. Catches layout drift.
+        assert_eq!(std::mem::size_of::<VideoStreamUniforms>(), 64);
         assert_eq!(std::mem::size_of::<VideoStreamUniforms>() % 16, 0);
         assert_eq!(std::mem::align_of::<VideoStreamUniforms>(), 4);
     }

@@ -313,6 +313,12 @@ export class DarklyInstance {
     // Tool cursor — when non-null, overrides nav cursor on the canvas element.
     toolCursor = $state<string | null>(null);
 
+    // Transform-mode context menu: viewport coords where the user right-clicked
+    // inside the active transform gizmo, or null when closed. The transform
+    // tool sets it; `TransformModeMenu` renders against it (mirrors how
+    // `toolCursor` flows tool → reactive UI).
+    transformModeMenu = $state<{ x: number; y: number } | null>(null);
+
     // Canvas element reference, set by CanvasView on mount. Tools that
     // are activated outside the canvas's pointer event flow (e.g. paste
     // actions that auto-enter transform mode) read this to build a

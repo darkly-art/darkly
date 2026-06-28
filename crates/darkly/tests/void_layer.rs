@@ -500,6 +500,41 @@ fn update_void_transform_stores_and_renders() {
     assert_eq!(stored, t, "the stored transform reflects the update");
 }
 
+/// Perspective (homography) transforms reach voids now — not just affine. Set a
+/// `Perspective` transform via the same `update_void_transform` path, render
+/// (the shared `proj_local` sampler runs in the void shader), and read the mode
+/// back as 1. Regression for the void path being pinned to affine.
+#[test]
+fn update_void_transform_supports_perspective() {
+    use darkly::transform::{homography_from_corners, Transform};
+    let mut engine = test_engine(64, 64);
+    let id = engine
+        .add_void_layer("noise", noise_defaults(&engine), None)
+        .expect("noise void should be addable");
+
+    // A trapezoid (narrowed top edge) over the 64×64 field — a genuine
+    // vanishing-point warp, not an affine parallelogram.
+    let corners = [(16.0, 0.0), (48.0, 0.0), (64.0, 64.0), (0.0, 64.0)];
+    let m = homography_from_corners(64.0, 64.0, corners).expect("non-degenerate");
+    let t = Transform::Perspective(m);
+
+    let frame_identity = engine.test_readback_canvas();
+    engine.update_void_transform(id, t);
+    let frame_persp = engine.test_readback_canvas();
+
+    let (.., stored) = engine.void_transform_info(id).expect("info");
+    assert_eq!(
+        stored.mode_tag(),
+        1,
+        "the void stores a Perspective transform"
+    );
+    assert_eq!(stored, t, "the stored homography round-trips");
+    assert_ne!(
+        frame_identity, frame_persp,
+        "a perspective warp must change the void's rendered output",
+    );
+}
+
 /// Undo restores the layer's PRE-EDIT transform, not identity. A non-coalescing
 /// boundary (a param edit, different `Property` kind) sits between two transform
 /// edits so the second is its own undo step whose `old_value` must be the first
