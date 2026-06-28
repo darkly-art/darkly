@@ -7,39 +7,6 @@ use crate::engine::protocol::{decode, RequestRegistration, Response};
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
         RequestRegistration {
-            kind: "set_view_transform",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    pan_x: f32,
-                    pan_y: f32,
-                    zoom: f32,
-                    rotation: f32,
-                    mirror_h: bool,
-                    screen_w: f32,
-                    screen_h: f32,
-                }
-                let r: Req = decode(payload)?;
-                engine.set_view_transform(
-                    r.pan_x, r.pan_y, r.zoom, r.rotation, r.mirror_h, r.screen_w, r.screen_h,
-                );
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "resize",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    width: u32,
-                    height: u32,
-                }
-                let r: Req = decode(payload)?;
-                engine.resize(r.width, r.height);
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
             kind: "resize_canvas_rect",
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
@@ -56,26 +23,6 @@ pub fn registrations() -> Vec<RequestRegistration> {
                     r.h,
                 );
                 engine.resize_canvas(rect);
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "crop_to_selection",
-            handle: |engine, _payload, _b| {
-                engine.crop_to_selection();
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "rescale_image",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    w: u32,
-                    h: u32,
-                }
-                let r: Req = decode(payload)?;
-                engine.rescale_image(r.w, r.h);
                 Ok(Response::empty())
             },
         },

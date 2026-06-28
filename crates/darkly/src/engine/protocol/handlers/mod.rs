@@ -9,7 +9,6 @@ pub mod clipboard;
 pub mod color_pick;
 pub mod floating;
 pub mod image_io;
-pub mod layer_props;
 pub mod layers;
 pub mod mask;
 pub mod overlay;
@@ -30,7 +29,6 @@ pub fn registrations() -> Vec<RequestRegistration> {
     all.extend(color_pick::registrations());
     all.extend(floating::registrations());
     all.extend(image_io::registrations());
-    all.extend(layer_props::registrations());
     all.extend(layers::registrations());
     all.extend(mask::registrations());
     all.extend(overlay::registrations());

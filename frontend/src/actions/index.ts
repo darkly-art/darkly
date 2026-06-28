@@ -1065,9 +1065,9 @@ export function registerActions() {
 function toggleIsolation(targetId: number) {
     const engine = app.engine;
     if (!engine) return;
-    const next = app.isolatedNodeId === targetId ? 0 : targetId;
+    const next = app.isolatedNodeId === targetId ? null : targetId;
     engine.post('set_isolated_node', { id: next });
-    app.isolatedNodeId = next === 0 ? null : next;
+    app.isolatedNodeId = next;
     app.requestFrame();
 }
 

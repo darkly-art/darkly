@@ -83,7 +83,7 @@
     function apply() {
         const w = clampDim(pxW);
         const h = clampDim(pxH);
-        app.engine?.post('rescale_image', { w, h });
+        app.engine?.post('rescale_image', { new_width: w, new_height: h });
         // New dims are known synchronously this JS turn — recenter the
         // coordinate transforms before any pointer event reads them.
         app.syncCanvasRect();

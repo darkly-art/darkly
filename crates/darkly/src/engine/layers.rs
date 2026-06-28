@@ -678,32 +678,34 @@ impl DarklyEngine {
 
     // --- Layer properties ---
 
-    pub fn set_opacity(&mut self, layer_id: LayerId, opacity: f32) {
-        if !self.doc.is_node_editable(layer_id) {
+    #[handler]
+    pub fn set_opacity(&mut self, id: LayerId, opacity: f32) {
+        if !self.doc.is_node_editable(id) {
             return;
         }
-        let old_opacity = match self.doc.find_node(layer_id) {
+        let old_opacity = match self.doc.find_node(id) {
             Some(n) => n.blend().opacity,
             None => return,
         };
-        if let Some(node) = self.doc.find_node_mut(layer_id) {
+        if let Some(node) = self.doc.find_node_mut(id) {
             node.blend_mut().opacity = opacity;
         } else {
             return;
         }
 
-        self.refresh_blend_uniforms(layer_id);
+        self.refresh_blend_uniforms(id);
         self.compositor.mark_dirty();
 
         self.coalesce_property_undo(PropertyAction::new(
-            layer_id,
+            id,
             Property::Opacity(old_opacity),
             Property::Opacity(opacity),
         ));
     }
 
-    pub fn set_blend_mode(&mut self, layer_id: LayerId, type_id: &str) {
-        if !self.doc.is_node_editable(layer_id) {
+    #[handler]
+    pub fn set_blend_mode(&mut self, id: LayerId, type_id: &str) {
+        if !self.doc.is_node_editable(id) {
             return;
         }
         // Unknown blend-mode strings keep the existing mode rather than
@@ -713,7 +715,7 @@ impl DarklyEngine {
             Some(reg) => reg,
             None => return,
         };
-        let old_mode = match self.doc.find_node(layer_id) {
+        let old_mode = match self.doc.find_node(id) {
             Some(n) => n.blend().blend_mode,
             None => return,
         };
@@ -721,10 +723,10 @@ impl DarklyEngine {
         // to isolated — passthrough ignores the group's blend mode, so the
         // user's choice would have no visible effect otherwise.
         let was_passthrough = matches!(
-            self.doc.find_node(layer_id),
+            self.doc.find_node(id),
             Some(LayerNode::Group(g)) if g.passthrough,
         );
-        if let Some(node) = self.doc.find_node_mut(layer_id) {
+        if let Some(node) = self.doc.find_node_mut(id) {
             node.blend_mut().blend_mode = blend_mode;
             if was_passthrough {
                 if let LayerNode::Group(g) = node {
@@ -737,19 +739,19 @@ impl DarklyEngine {
 
         if was_passthrough {
             self.compositor
-                .ensure_group_state(&self.gpu.device, &self.gpu.queue, layer_id);
+                .ensure_group_state(&self.gpu.device, &self.gpu.queue, id);
         }
-        self.refresh_blend_uniforms(layer_id);
+        self.refresh_blend_uniforms(id);
         self.compositor.mark_dirty();
 
         let blend_action: Box<dyn UndoAction> = Box::new(PropertyAction::new(
-            layer_id,
+            id,
             Property::BlendMode(old_mode),
             Property::BlendMode(blend_mode),
         ));
         if was_passthrough {
             let passthrough_action: Box<dyn UndoAction> = Box::new(PropertyAction::new(
-                layer_id,
+                id,
                 Property::Passthrough(true),
                 Property::Passthrough(false),
             ));
@@ -764,13 +766,14 @@ impl DarklyEngine {
 
     /// Set the `visible` flag on any node — layer, group, or filter.
     /// Works uniformly across kinds because they all carry [`NodeCommon`].
-    pub fn set_layer_visible(&mut self, node_id: LayerId, visible: bool) {
+    #[handler]
+    pub fn set_layer_visible(&mut self, id: LayerId, visible: bool) {
         // Try layers/groups first; fall through to filters.
-        let old_visible = if let Some(node) = self.doc.find_node_mut(node_id) {
+        let old_visible = if let Some(node) = self.doc.find_node_mut(id) {
             let old = node.common().visible;
             node.common_mut().visible = visible;
             Some(old)
-        } else if let Some(filter) = self.doc.find_filter_mut(node_id) {
+        } else if let Some(filter) = self.doc.find_filter_mut(id) {
             let old = filter.common.visible;
             filter.common.visible = visible;
             Some(old)
@@ -779,17 +782,18 @@ impl DarklyEngine {
         };
         if let Some(old) = old_visible {
             self.compositor.mark_dirty();
-            self.push_undo(Box::new(crate::undo::NodeVisibleAction::new(node_id, old)));
+            self.push_undo(Box::new(crate::undo::NodeVisibleAction::new(id, old)));
         }
     }
 
     /// Set the `locked` flag on any node — layer, group, or filter.
-    pub fn set_node_locked(&mut self, node_id: LayerId, locked: bool) {
-        let old_locked = if let Some(node) = self.doc.find_node_mut(node_id) {
+    #[handler]
+    pub fn set_node_locked(&mut self, id: LayerId, locked: bool) {
+        let old_locked = if let Some(node) = self.doc.find_node_mut(id) {
             let old = node.common().locked;
             node.common_mut().locked = locked;
             Some(old)
-        } else if let Some(filter) = self.doc.find_filter_mut(node_id) {
+        } else if let Some(filter) = self.doc.find_filter_mut(id) {
             let old = filter.common.locked;
             filter.common.locked = locked;
             Some(old)
@@ -797,7 +801,7 @@ impl DarklyEngine {
             None
         };
         if let Some(old) = old_locked {
-            self.push_undo(Box::new(crate::undo::NodeLockedAction::new(node_id, old)));
+            self.push_undo(Box::new(crate::undo::NodeLockedAction::new(id, old)));
         }
     }
 
@@ -812,6 +816,7 @@ impl DarklyEngine {
     /// every layer is independent: toggling visibility while isolated
     /// modifies that layer's `visible` field, and clearing isolation
     /// preserves whatever the user set.
+    #[handler]
     pub fn set_isolated_node(&mut self, id: Option<LayerId>) {
         if self.isolated_node == id {
             return;
@@ -899,22 +904,23 @@ impl DarklyEngine {
         self.doc.name = name;
     }
 
-    pub fn set_layer_name(&mut self, layer_id: LayerId, name: &str) {
-        if !self.doc.is_node_editable(layer_id) {
+    #[handler]
+    pub fn set_layer_name(&mut self, id: LayerId, name: &str) {
+        if !self.doc.is_node_editable(id) {
             return;
         }
-        let old_name = match self.doc.find_node(layer_id) {
+        let old_name = match self.doc.find_node(id) {
             Some(n) => n.common().name.clone(),
             None => return,
         };
-        if let Some(node) = self.doc.find_node_mut(layer_id) {
+        if let Some(node) = self.doc.find_node_mut(id) {
             node.common_mut().name = name.to_string();
         } else {
             return;
         }
 
         self.push_undo(Box::new(PropertyAction::new(
-            layer_id,
+            id,
             Property::Name(old_name),
             Property::Name(name.to_string()),
         )));
@@ -954,31 +960,33 @@ impl DarklyEngine {
         }
     }
 
-    pub fn set_group_collapsed(&mut self, group_id: LayerId, collapsed: bool) {
-        if let Some(LayerNode::Group(g)) = self.doc.find_node_mut(group_id) {
+    #[handler]
+    pub fn set_group_collapsed(&mut self, id: LayerId, collapsed: bool) {
+        if let Some(LayerNode::Group(g)) = self.doc.find_node_mut(id) {
             g.collapsed = collapsed;
         }
     }
 
-    pub fn set_group_passthrough(&mut self, group_id: LayerId, passthrough: bool) {
-        if !self.doc.is_node_editable(group_id) {
+    #[handler]
+    pub fn set_group_passthrough(&mut self, id: LayerId, passthrough: bool) {
+        if !self.doc.is_node_editable(id) {
             return;
         }
-        let old = match self.doc.find_node(group_id) {
+        let old = match self.doc.find_node(id) {
             Some(LayerNode::Group(g)) => g.passthrough,
             _ => return,
         };
-        if let Some(LayerNode::Group(g)) = self.doc.find_node_mut(group_id) {
+        if let Some(LayerNode::Group(g)) = self.doc.find_node_mut(id) {
             g.passthrough = passthrough;
         }
         if !passthrough {
             self.compositor
-                .ensure_group_state(&self.gpu.device, &self.gpu.queue, group_id);
-            let isolated = self.host_renders_isolated(group_id);
-            if let Some(LayerNode::Group(g)) = self.doc.find_node(group_id) {
+                .ensure_group_state(&self.gpu.device, &self.gpu.queue, id);
+            let isolated = self.host_renders_isolated(id);
+            if let Some(LayerNode::Group(g)) = self.doc.find_node(id) {
                 self.compositor.update_group_uniforms(
                     &self.gpu.queue,
-                    group_id,
+                    id,
                     g.blend.opacity,
                     g.blend.blend_mode.gpu_value,
                     isolated,
@@ -987,7 +995,7 @@ impl DarklyEngine {
         }
         self.compositor.mark_dirty();
         self.push_undo(Box::new(PropertyAction::new(
-            group_id,
+            id,
             Property::Passthrough(old),
             Property::Passthrough(passthrough),
         )));

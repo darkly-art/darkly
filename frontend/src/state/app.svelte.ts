@@ -328,7 +328,7 @@ export class DarklyInstance {
         // nothing if the new layer is hidden by isolation). Selecting the
         // same isolated node is a no-op.
         if (this.isolatedNodeId !== null && id !== this.isolatedNodeId) {
-            this.engine?.post('set_isolated_node', { id: 0 });
+            this.engine?.post('set_isolated_node', { id: null });
             this.isolatedNodeId = null;
             this.requestFrame();
         }
@@ -391,7 +391,7 @@ export class DarklyInstance {
             return;
         }
         if (this.isolatedNodeId !== null) {
-            this.engine?.post('set_isolated_node', { id: 0 });
+            this.engine?.post('set_isolated_node', { id: null });
             this.isolatedNodeId = null;
             this.requestFrame();
         }

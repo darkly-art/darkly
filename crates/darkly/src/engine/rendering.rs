@@ -73,6 +73,7 @@ pub const DEFAULT_THUMB_SIZE: u32 = 36;
 impl DarklyEngine {
     // --- View transform ---
 
+    #[handler]
     pub fn set_view_transform(
         &mut self,
         pan_x: f32,
@@ -649,6 +650,7 @@ impl DarklyEngine {
             || self.diff_rect.is_pending()
     }
 
+    #[handler]
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 || self.gpu.is_headless() {
             return;
