@@ -107,7 +107,7 @@ async function acquireHandle(forceAs: boolean): Promise<FileSystemFileHandle | n
     if (!forceAs && app.fileHandle) return app.fileHandle;
 
     const suggested =
-        sanitizeFilename((await engine.send('document_name')).name) || 'darkly-document';
+        sanitizeFilename(await engine.send('document_name')) || 'darkly-document';
     const handle = await pickSaveFile(`${suggested}.darkly`);
     if (!handle) return null;
 

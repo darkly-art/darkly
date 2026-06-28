@@ -42,7 +42,7 @@ class RecoveryState {
         inst.onHandleReady = async (engine) => {
             try {
                 await engine.send('open_document', {}, bytes);
-                const { name } = await engine.send('document_name');
+                const name = await engine.send('document_name');
                 shell.setName(inst.id, name);
                 // Recovered work has no backing file — keep it dirty so
                 // closing the tab still prompts and autosave re-snapshots it.

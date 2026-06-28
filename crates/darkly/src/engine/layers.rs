@@ -845,6 +845,7 @@ impl DarklyEngine {
 
     /// User-visible document name. Backs the tab title and the Save As
     /// picker's `suggestedName`. Persisted on disk as `manifest.name`.
+    #[handler]
     pub fn document_name(&self) -> &str {
         &self.doc.name
     }
@@ -862,6 +863,7 @@ impl DarklyEngine {
     /// successful save (`poll_save_result`) or load (`open_document`
     /// installs a fresh `dirty = false` doc). UI close-tab and
     /// `beforeunload` flows consult this to decide whether to prompt.
+    #[handler]
     pub fn is_dirty(&self) -> bool {
         self.doc.dirty
     }
@@ -883,6 +885,7 @@ impl DarklyEngine {
     /// crash-recovery snapshot: the restored document is unsaved work
     /// with no backing file handle, so it must read as dirty (otherwise
     /// closing the tab would silently discard the recovered work).
+    #[handler]
     pub fn mark_dirty(&mut self) {
         self.doc.dirty = true;
     }
@@ -891,6 +894,7 @@ impl DarklyEngine {
     /// users expect to be free-standing, matching every other editor's
     /// "title bar rename" affordance. The save flow picks the new name
     /// up from `doc.name` the next time `start_save_document` runs.
+    #[handler]
     pub fn set_document_name(&mut self, name: String) {
         self.doc.name = name;
     }

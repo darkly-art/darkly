@@ -1,5 +1,7 @@
 //! Rendering, view transform, thumbnails, undo/redo, and async readback polling.
 
+use darkly_macros::handlers;
+
 use super::{DarklyEngine, ReadbackContext};
 use crate::coord::{CanvasPoint, CanvasRect, LayerRect};
 use crate::gpu::atlas::CanvasFrame;
@@ -67,6 +69,7 @@ impl PickSource {
 /// the panel renders. Don't drift the literal in `thumbnails.ts`.
 pub const DEFAULT_THUMB_SIZE: u32 = 36;
 
+#[handlers]
 impl DarklyEngine {
     // --- View transform ---
 
@@ -141,6 +144,7 @@ impl DarklyEngine {
     /// Push the workspace background color (the area shown outside the
     /// canvas rectangle by the present shader). Frontend calls this on
     /// theme change with the resolved `--canvas-bg` CSS value.
+    #[handler]
     pub fn set_viewport_bg(&mut self, bg: [f32; 4]) {
         self.compositor.set_viewport_bg(&self.gpu.queue, bg);
     }
@@ -148,6 +152,7 @@ impl DarklyEngine {
     /// Set the canvas-to-screen pixel filter mode: `"linear"`, `"nearest"`,
     /// or `"auto"`. Frontend calls this when `display.pixelFilter` changes
     /// so the new mode takes effect without waiting for a zoom/pan.
+    #[handler]
     pub fn set_pixel_filter(&mut self, mode: &str) {
         self.compositor.set_pixel_filter(&self.gpu.queue, mode);
     }
@@ -657,11 +662,13 @@ impl DarklyEngine {
 
     // --- Undo / Redo ---
 
+    #[handler]
     pub fn undo(&mut self) {
         self.auto_commit_floating();
         self.apply_undo(UndoDirection::Undo);
     }
 
+    #[handler]
     pub fn redo(&mut self) {
         self.auto_commit_floating();
         self.apply_undo(UndoDirection::Redo);

@@ -3,6 +3,8 @@
 //! Provides the API surface for the WASM bridge to query node types,
 //! get/set the active brush graph, and compile graphs.
 
+use darkly_macros::handlers;
+
 use super::{DarklyEngine, ReadbackContext};
 use crate::brush::state::BrushState;
 use crate::brush::wire::BrushWireType;
@@ -49,6 +51,7 @@ enum ChangeKind {
     PreviewIrrelevantScrub,
 }
 
+#[handlers]
 impl DarklyEngine {
     /// Return metadata for all registered brush node types.
     ///
@@ -466,6 +469,7 @@ impl DarklyEngine {
     /// Invalidates the cached stroke preview, the active-dab preview,
     /// and every per-brush PNG thumbnail in the library so the next
     /// picker refresh re-bakes against the new palette.
+    #[handler]
     pub fn set_preview_theme(&mut self, fg: [f32; 4], bg: [f32; 4]) {
         if self.preview_theme_fg == fg && self.preview_theme_bg == bg {
             return;

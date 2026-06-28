@@ -23,10 +23,12 @@ export const fillTool: Tool = {
 
         ctx.engine.post('begin_stroke', { id: layerId });
         ctx.engine.post('stroke_to', {
-            op: 'flood_fill',
-            x: cx, y: cy,
-            r: c.r, g: c.g, b: c.b, a: c.a,
-            tolerance: fillSession.tolerance,
+            op: {
+                op: 'flood_fill',
+                x: cx, y: cy,
+                r: c.r, g: c.g, b: c.b, a: c.a,
+                tolerance: fillSession.tolerance,
+            },
         });
         ctx.engine.post('end_stroke');
     },

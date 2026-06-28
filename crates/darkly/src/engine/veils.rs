@@ -1,5 +1,7 @@
 //! Veil (post-processing filter) management and query methods.
 
+use darkly_macros::handlers;
+
 use super::types::{
     node_to_layer_info, BlendModeTypeInfo, LayerInfo, LayerKindTypeInfo, ModifierTypeInfo,
     ParamInfo, ToolTypeInfo, VeilInfo, VeilTypeInfo,
@@ -13,6 +15,7 @@ use crate::gpu::params::{ParamDef, ParamValue};
 use crate::gpu::preview::ANIMATED_FRAMES;
 use crate::gpu::veil::Veil;
 
+#[handlers]
 impl DarklyEngine {
     // --- Veils ---
 
@@ -199,6 +202,7 @@ impl DarklyEngine {
 
     // --- Queries ---
 
+    #[handler]
     pub fn layer_tree(&self) -> Vec<LayerInfo> {
         self.doc
             .children_of(self.doc.root_id())
@@ -208,6 +212,7 @@ impl DarklyEngine {
             .collect()
     }
 
+    #[handler]
     pub fn veil_list(&self) -> Vec<VeilInfo> {
         let chain = self.compositor.veil_chain();
         let count = chain.count();
@@ -233,6 +238,7 @@ impl DarklyEngine {
     }
 
     /// Return all registered veil types with their parameter definitions.
+    #[handler]
     pub fn veil_types(&self) -> Vec<VeilTypeInfo> {
         self.compositor
             .veil_chain()
@@ -254,6 +260,7 @@ impl DarklyEngine {
 
     /// Return all registered tool types with display name and parameter definitions.
     /// Backs the WASM bridge so the UI can render tool names without hardcoding them.
+    #[handler]
     pub fn tool_types(&self) -> Vec<ToolTypeInfo> {
         crate::tool::registry()
             .types()
@@ -269,6 +276,7 @@ impl DarklyEngine {
     /// Return all registered blend modes in GPU-value order, with display name
     /// and category. Backs the WASM bridge so the UI populates the blend-mode
     /// dropdown from the registry instead of a hardcoded table.
+    #[handler]
     pub fn blend_mode_types(&self) -> Vec<BlendModeTypeInfo> {
         crate::gpu::blend_mode::registry()
             .all()
@@ -284,6 +292,7 @@ impl DarklyEngine {
     /// Return all registered filter kinds. UI uses this to resolve
     /// `ModifierInfo.kind` to a display label and to populate the
     /// "Add filter" menu.
+    #[handler]
     pub fn modifier_types(&self) -> Vec<ModifierTypeInfo> {
         crate::document::filter::registry()
             .all()
@@ -297,6 +306,7 @@ impl DarklyEngine {
 
     /// Return all registered layer kinds. UI uses this to resolve a layer's
     /// `type` discriminator to a display label (e.g. "Raster Layer", "Group").
+    #[handler]
     pub fn layer_kind_types(&self) -> Vec<LayerKindTypeInfo> {
         crate::document::layer_kind::registry()
             .all()

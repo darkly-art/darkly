@@ -1,5 +1,7 @@
 //! Stroke lifecycle, flood fill, erase helpers, and paint infrastructure.
 
+use darkly_macros::handlers;
+
 use super::rendering::commit_undo_region;
 use super::types::StrokeOp;
 use super::{DarklyEngine, PendingUndoCommit, ReadbackContext};
@@ -16,6 +18,7 @@ use crate::gpu::region_store::UndoRegionEntry;
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
+#[handlers]
 impl DarklyEngine {
     /// Read the stabilize strength from the pen_input node's "stabilize" port
     /// default in the active brush graph.  Returns 0.0 if not found.
@@ -167,8 +170,9 @@ impl DarklyEngine {
 
     /// Fill the layer with the default background image, centered and clipped
     /// to the canvas. The image is baked into the binary at build time.
-    pub fn fill_background(&mut self, layer_id: LayerId) {
-        if !self.is_node_paintable(layer_id) {
+    #[handler]
+    pub fn fill_background(&mut self, id: LayerId) {
+        if !self.is_node_paintable(id) {
             return;
         }
         const IMAGE_BYTES: &[u8] = include_bytes!("../../resources/backgrounds/quiet-night.jpg");
@@ -178,7 +182,7 @@ impl DarklyEngine {
         let rect = self.doc.canvas_rect();
         let format = wgpu::TextureFormat::Rgba8Unorm;
 
-        let layer_tex = match self.compositor.node_texture(layer_id) {
+        let layer_tex = match self.compositor.node_texture(id) {
             Some(t) => t,
             None => return,
         };
@@ -194,7 +198,7 @@ impl DarklyEngine {
             &self.region_scratch,
             &mut self.readbacks,
             "fill-background-commit",
-            layer_id,
+            id,
             &layer_frame,
             &snap,
             rect,
@@ -217,7 +221,7 @@ impl DarklyEngine {
         let copy_h = (img_h - src_y).min(canvas_h - dst_y);
 
         if copy_w > 0 && copy_h > 0 {
-            let layer_tex = self.compositor.node_texture(layer_id).unwrap();
+            let layer_tex = self.compositor.node_texture(id).unwrap();
             let row_bytes = copy_w as usize * 4;
             let mut buf = vec![0u8; row_bytes * copy_h as usize];
             let full = decoded.as_raw();
@@ -252,25 +256,26 @@ impl DarklyEngine {
             );
         }
 
-        self.compositor.mark_node_pixels_dirty(layer_id);
+        self.compositor.mark_node_pixels_dirty(id);
     }
 
     /// Fill the layer with a solid RGBA color, clipped to the canvas. Used by
     /// the "New Document" flow to seed a fresh raster layer with the user's
     /// chosen background color. Pushes a `GpuRegionAction` for undo, matching
     /// `fill_background`'s pattern.
-    pub fn fill_background_color(&mut self, layer_id: LayerId, color: [u8; 4]) {
-        if !self.is_node_paintable(layer_id) {
+    #[handler]
+    pub fn fill_background_color(&mut self, id: LayerId, rgba: [u8; 4]) {
+        if !self.is_node_paintable(id) {
             return;
         }
         let rect = self.doc.canvas_rect();
         self.region_undo_inplace(
-            layer_id,
+            id,
             rect,
             "fill-background-color",
             "fill-background-color-commit",
             |encoder, target, pipelines, queue| {
-                target.fill_rect(encoder, pipelines, queue, rect, color);
+                target.fill_rect(encoder, pipelines, queue, rect, rgba);
             },
         );
     }
@@ -282,8 +287,9 @@ impl DarklyEngine {
     //
     // All stroke ops go through GPU render passes.
 
-    pub fn begin_stroke(&mut self, layer_id: LayerId) {
-        if !self.doc.is_node_editable(layer_id) || !self.is_node_paintable(layer_id) {
+    #[handler]
+    pub fn begin_stroke(&mut self, id: LayerId) {
+        if !self.doc.is_node_editable(id) || !self.is_node_paintable(id) {
             // Leave `active_stroke_layer` cleared so every queued stroke_to
             // for this gesture no-ops uniformly — matches the "node missing"
             // path and avoids partial-stroke state.
@@ -291,7 +297,7 @@ impl DarklyEngine {
             return;
         }
         self.auto_commit_floating();
-        self.active_stroke_layer = Some(layer_id);
+        self.active_stroke_layer = Some(id);
         // Reset the per-stroke counter accumulator. The bench-side
         // per-event delta snapshot resets in lockstep so the first
         // post-`begin_stroke` drain subtracts against zero rather than
@@ -318,6 +324,7 @@ impl DarklyEngine {
         self.last_frame_phases
     }
 
+    #[handler]
     pub fn stroke_to(&mut self, op: StrokeOp) {
         let layer_id = match self.active_stroke_layer {
             Some(id) => id,
@@ -1288,6 +1295,7 @@ impl DarklyEngine {
         self.compositor.mark_node_pixels_dirty(layer_id);
     }
 
+    #[handler]
     pub fn end_stroke(&mut self) {
         if let Some(layer_id) = self.active_stroke_layer.take() {
             // Per-stroke thumbnail refresh — the node texture (raster or mask

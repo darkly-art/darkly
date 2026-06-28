@@ -229,7 +229,7 @@ export const brushTool: Tool = {
         app.toolCursor = 'none';
         const params = brushStrokeParams(e, cx, cy);
         ctx.engine.post('begin_stroke', { id: layerId });
-        ctx.engine.post('stroke_to', { op: 'brush_stroke', ...params });
+        ctx.engine.post('stroke_to', { op: { op: 'brush_stroke', ...params } });
         const dims = currentCanvasDimensions();
         if (dims) strokeRecorder.beginStroke(dims[0], dims[1], params);
     },
@@ -237,7 +237,7 @@ export const brushTool: Tool = {
     onPointerMove(ctx, e, cx, cy) {
         if (e.buttons & 1) {
             const params = brushStrokeParams(e, cx, cy);
-            ctx.engine.post('stroke_to', { op: 'brush_stroke', ...params });
+            ctx.engine.post('stroke_to', { op: { op: 'brush_stroke', ...params } });
             strokeRecorder.addEvent(params);
             return;
         }

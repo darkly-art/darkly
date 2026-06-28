@@ -1,5 +1,7 @@
 //! Void (procedural-content layer) queries and picker previews.
 
+use darkly_macros::handlers;
+
 use super::types::{ParamInfo, VoidTypeInfo};
 use super::DarklyEngine;
 use super::PreviewJob;
@@ -14,11 +16,13 @@ use crate::gpu::void::Void;
 /// atlas format), which is also the format the per-frame readback expects.
 const VOID_PREVIEW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+#[handlers]
 impl DarklyEngine {
     // --- Queries ---
 
     /// Return all registered void types with their parameter definitions, icon,
     /// and whether each supports a rendered picker preview.
+    #[handler]
     pub fn void_types(&self) -> Vec<VoidTypeInfo> {
         self.compositor
             .void_registry()

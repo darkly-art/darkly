@@ -112,7 +112,7 @@ export function openDarklyAsTab(picked: OpenedFile): void {
             // request (which the loader populated from `manifest.name`),
             // but the shell's `nameVersion` doesn't bump on its own —
             // nudge it so the strip re-derives.
-            const { name } = await engine.send('document_name');
+            const name = await engine.send('document_name');
             shell.setName(inst.id, name);
             // The loaded manifest's dimensions override whatever the tab
             // was seeded with; refresh the JS mirror so coord transforms
