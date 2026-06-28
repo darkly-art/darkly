@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 // Stand-ins for the Svelte state proxy + GPU overlay builder so the gizmo's
 // lifecycle runs without the Svelte/GPU/DOM runtime. The transform-mode
 // registry and projective math are NOT mocked — this exercises the real
-// perspective entry path.
+// mode-switching path.
 const { fakeApp } = vi.hoisted(() => {
     const engine = { post: vi.fn(), send: vi.fn(() => Promise.resolve({})) };
     return { fakeApp: { engine, requestFrame: vi.fn(), toolCursor: null as string | null } };
@@ -23,8 +23,9 @@ import { mat3Apply, type Mat3 } from '../transform_projective';
 
 const IDENTITY_MAT3: Mat3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
 
-function makeBinding() {
+function makeBinding(live = false) {
     return {
+        live,
         read: vi.fn(() =>
             Promise.resolve({
                 origin: [0, 0] as [number, number],
@@ -40,17 +41,22 @@ function makeBinding() {
     };
 }
 
-describe('right-click → perspective entry', () => {
-    it('pushes a mode-1 homography through the binding that reproduces the bbox', async () => {
+describe('mode switching via setMode', () => {
+    it('a fresh attach reports mode 0 (free transform), not perspective', async () => {
+        const gizmo = new TransformGizmo({} as never);
+        await gizmo.attach(makeBinding() as never);
+        expect(gizmo.active).toBe(true);
+        // The bug was right-click force-entering perspective; default must be free.
+        expect(gizmo.modeTag).toBe(0);
+    });
+
+    it('setMode(1) pushes a mode-1 homography reproducing the bbox', async () => {
         const gizmo = new TransformGizmo({} as never);
         const binding = makeBinding();
         await gizmo.attach(binding as never);
-        expect(gizmo.active).toBe(true);
 
-        gizmo.enterPerspective();
+        gizmo.setMode(1);
 
-        // The binding received a perspective update (modeTag 1) with a full
-        // 9-float homography reproducing the current (identity) shape.
         expect(binding.update).toHaveBeenCalledTimes(1);
         const [matrix, modeTag] = binding.update.mock.calls[0];
         expect(modeTag).toBe(1);
@@ -62,6 +68,53 @@ describe('right-click → perspective entry', () => {
         near(mat3Apply(matrix as Mat3, 0, 0), 0, 0);
         near(mat3Apply(matrix as Mat3, 100, 0), 100, 0);
         near(mat3Apply(matrix as Mat3, 100, 80), 100, 80);
+        expect(gizmo.modeTag).toBe(1);
+    });
+
+    it('is two-way: setMode(1) then setMode(0) returns to free transform', async () => {
+        const gizmo = new TransformGizmo({} as never);
+        const binding = makeBinding();
+        await gizmo.attach(binding as never);
+
+        gizmo.setMode(1);
+        gizmo.setMode(0);
+
+        expect(binding.update).toHaveBeenCalledTimes(2);
+        const [matrix0, modeTag0] = binding.update.mock.calls[1];
+        expect(modeTag0).toBe(0);
+        // The basic seedMatrix is a least-squares affine fit; for an unrotated
+        // identity quad it reproduces the rect exactly.
+        const near = (p: [number, number], x: number, y: number) => {
+            expect(p[0]).toBeCloseTo(x, 2);
+            expect(p[1]).toBeCloseTo(y, 2);
+        };
+        near(mat3Apply(matrix0 as Mat3, 100, 80), 100, 80);
+        expect(gizmo.modeTag).toBe(0);
+    });
+
+    it('setMode is a no-op when already in the target mode', async () => {
+        const gizmo = new TransformGizmo({} as never);
+        const binding = makeBinding();
+        await gizmo.attach(binding as never);
+        gizmo.setMode(1);
+        gizmo.setMode(1);
+        expect(binding.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('availableModes respects binding.live + liveCapable', async () => {
+        // Both basic and perspective are liveCapable today, so a live binding
+        // offers the same set as a one-shot binding.
+        const live = new TransformGizmo({} as never);
+        await live.attach(makeBinding(true) as never);
+        expect(live.availableModes().map((m) => m.tag)).toEqual([0, 1]);
+        expect(live.availableModes().map((m) => m.label)).toEqual([
+            'Free transform',
+            'Perspective',
+        ]);
+
+        const oneShot = new TransformGizmo({} as never);
+        await oneShot.attach(makeBinding(false) as never);
+        expect(oneShot.availableModes().map((m) => m.tag)).toEqual([0, 1]);
     });
 
     it('isInside reflects the current bbox', async () => {
@@ -69,15 +122,5 @@ describe('right-click → perspective entry', () => {
         await gizmo.attach(makeBinding() as never);
         expect(gizmo.isInside(50, 40)).toBe(true);
         expect(gizmo.isInside(1000, 1000)).toBe(false);
-    });
-
-    it('is one-way: a second call while already perspective is a no-op', async () => {
-        const gizmo = new TransformGizmo({} as never);
-        const binding = makeBinding();
-        await gizmo.attach(binding as never);
-        gizmo.enterPerspective();
-        // The mode is now perspective locally; re-entering must not re-push.
-        gizmo.enterPerspective();
-        expect(binding.update).toHaveBeenCalledTimes(1);
     });
 });

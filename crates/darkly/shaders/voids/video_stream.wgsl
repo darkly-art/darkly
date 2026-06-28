@@ -7,19 +7,22 @@
 //   2: Sampler (linear clamp-to-edge)
 //
 // MUST stay in lockstep with the CPU mirror `VideoStreamVoid::src_uv` in
-// video_stream_void.rs — the tests pin them together. Coordinate flow per
-// fragment (all window-local pixels; the gizmo edits the affine in the content
-// rect's local frame, so `canvas_origin` cancels and never appears here):
+// video_stream_void.rs — the tests pin them together. The inverse-homography
+// sample is the shared `proj_local` (lib/projective.wgsl), concatenated ahead
+// of this file at pipeline build. Coordinate flow per fragment (all
+// window-local pixels; the gizmo edits the transform in the content rect's
+// local frame, so `canvas_origin` cancels and never appears here):
 //   FragCoord.xy → subtract content_origin → content-local pixel
-//                → inverse user affine → pre-transform content-local pixel
+//                → inverse user homography (perspective divide) → pre-transform
+//                  content-local pixel
 //                → normalize by content_size → src_uv ∈ [0, 1]
-//   src_uv outside [0, 1] → transparent.
+//   src_uv outside [0, 1] (or a degenerate, behind-camera sample) → transparent.
 //
 // Cover-fit is baked into the content rect (origin + size), computed CPU-side
 // in `VideoStreamVoid::content_rect`; at the identity transform the source
 // exactly fills that rect, which overhangs the canvas on the cropped axis.
 // Mirroring is no longer a shader concern — it's expressed as a negative scale
-// in the gizmo affine, which the inverse above samples through for free.
+// in the gizmo transform, which the inverse above samples through for free.
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
@@ -33,9 +36,11 @@ struct VertexOutput {
 }
 
 struct Params {
-    // Inverse of the user transform's affine, row-major rows [a, b, tx, _].
+    // Inverse of the user transform's homography, packed rows [m, _] (see
+    // gpu::transform::pack_inv_rows). Affine carries inv_row2 = [0,0,1,_].
     inv_row0: vec4f,
     inv_row1: vec4f,
+    inv_row2: vec4f,
     // Cover-fit content rect in window-local coords (origin overhangs the
     // canvas on the cropped axis). Cover-fit is baked in CPU-side.
     content_origin: vec2f,
@@ -47,20 +52,19 @@ struct Params {
 @group(0) @binding(2) var src_sampler: sampler;
 
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    // Window-local fragment → content-local → inverse user affine.
+    // Window-local fragment → content-local → inverse user homography (shared
+    // proj_local; .z flags a degenerate / behind-camera sample).
     let cl = in.position.xy - params.content_origin;
-    let pre = vec2f(
-        params.inv_row0.x * cl.x + params.inv_row0.y * cl.y + params.inv_row0.z,
-        params.inv_row1.x * cl.x + params.inv_row1.y * cl.y + params.inv_row1.z,
-    );
+    let pre = proj_local(params.inv_row0, params.inv_row1, params.inv_row2, cl);
 
     // Normalize to the source UV.
-    let src_uv = pre / params.content_size;
+    let src_uv = pre.xy / params.content_size;
 
     // textureSample must be called from uniform control flow — sample
     // unconditionally and mask out-of-frame after the fact.
     let sample = textureSample(src_tex, src_sampler, src_uv);
     let in_range =
+        pre.z > 0.5 &&
         src_uv.x >= 0.0 && src_uv.x <= 1.0 &&
         src_uv.y >= 0.0 && src_uv.y <= 1.0;
     return select(vec4f(0.0), sample, in_range);

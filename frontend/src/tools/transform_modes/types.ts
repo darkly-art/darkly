@@ -43,6 +43,21 @@ export interface TransformMode {
     /** Stable tag matching the Rust `Transform::mode_tag` wire value. */
     readonly tag: number;
 
+    /** Human-readable name for the mode-switch menu (e.g. `"Free transform"`,
+     *  `"Perspective"`). */
+    readonly label: string;
+
+    /** Whether this mode renders correctly for a **live** (per-frame
+     *  composited) consumer such as a void. The type-owned capability seam:
+     *  consumers ask the mode, they never branch on its identity. `basic` and
+     *  `perspective` are both live-capable; a future warp mode may not be. */
+    readonly liveCapable: boolean;
+
+    /** Produce this mode's matrix from the current geometry when switching
+     *  INTO it — i.e. the matrix that best reproduces the geometry's current
+     *  destination quad under this mode's representation. */
+    seedMatrix(geo: GizmoGeometry): Mat3;
+
     /**
      * Push the overlay primitives (bbox lines + handles) for the current
      * geometry and return the bbox polygon used for inside/outside hit tests.

@@ -55,18 +55,18 @@ struct Uniforms {
 // Destination copy (straight alpha) — for shader-side Porter-Duff.
 @group(1) @binding(0) var t_dest: texture_2d<f32>;
 
-// Sample the (premultiplied) source for a single destination-local position,
-// mapping back through the inverse homography with a perspective divide.
-// Returns transparent (0) outside the source bounds or behind the camera, so
-// edge sub-samples average toward zero coverage (anti-aliasing).
+// Sample the (premultiplied) source for a single destination-local position.
+// The shared `proj_local` (lib/projective.wgsl) maps it back through the
+// inverse homography with the perspective divide; this owns the normalization
+// to a source UV and the bounds check. Returns transparent (0) outside the
+// source bounds or behind the camera, so edge sub-samples average toward zero
+// coverage (anti-aliasing).
 fn sample_src(local: vec2f) -> vec4f {
-    let hx = u.inv_row0.x * local.x + u.inv_row0.y * local.y + u.inv_row0.z;
-    let hy = u.inv_row1.x * local.x + u.inv_row1.y * local.y + u.inv_row1.z;
-    let hw = u.inv_row2.x * local.x + u.inv_row2.y * local.y + u.inv_row2.z;
-    if (abs(hw) < 1e-8) {
+    let pre = proj_local(u.inv_row0, u.inv_row1, u.inv_row2, local);
+    if (pre.z < 0.5) {
         return vec4f(0.0);
     }
-    let src_uv = vec2f(hx, hy) / hw / u.source_size;
+    let src_uv = pre.xy / u.source_size;
     if (any(src_uv < vec2f(0.0)) || any(src_uv >= vec2f(1.0))) {
         return vec4f(0.0);
     }

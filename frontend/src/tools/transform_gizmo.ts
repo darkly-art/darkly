@@ -14,13 +14,9 @@
  */
 import { app } from '../state/app.svelte';
 import { OverlayBuilder } from '../canvas/gpu_overlay';
+import { MAT3_IDENTITY, type Mat3 } from './transform_projective';
 import {
-    homographyFromCorners,
-    mat3Apply,
-    MAT3_IDENTITY,
-    type Mat3,
-} from './transform_projective';
-import {
+    allModes,
     modeForTag,
     pointInPolygon,
     type BBoxPolygon,
@@ -29,15 +25,16 @@ import {
     type TransformMode,
 } from './transform_modes';
 
-/** Wire mode tag for the perspective (homography) sub-mode. */
-const PERSPECTIVE_TAG = 1;
-
 /**
  * The seam between the gizmo and a consumer. The gizmo reads the current bbox +
  * transform, emits live updates while dragging, and commits/cancels on exit.
  * Implementations live next to their consumers (see `transform_bindings.ts`).
  */
 export interface TransformBinding {
+    /** Whether the consumer composites this transform live, every frame (a
+     *  void), versus committing it once (floating raster). A live binding
+     *  offers only `liveCapable` modes in the mode-switch menu. */
+    readonly live: boolean;
     /** Current bbox + transform, or `null` if the target is no longer valid. */
     read(): Promise<{
         origin: [number, number];
@@ -137,36 +134,36 @@ export class TransformGizmo {
         return this.bbox ? pointInPolygon(cx, cy, this.bbox) : false;
     }
 
+    /** Wire tag of the gizmo's current mode (matches the document's stored
+     *  `Transform::mode_tag`). */
+    get modeTag(): number {
+        return this.mode.tag;
+    }
+
+    /** Modes offered for the current binding: all registered modes, minus any
+     *  the binding can't render live. Empty when inactive. */
+    availableModes(): { tag: number; label: string }[] {
+        if (!this.binding) return [];
+        const live = this.binding.live;
+        return allModes()
+            .filter((m) => !live || m.liveCapable)
+            .map((m) => ({ tag: m.tag, label: m.label }));
+    }
+
     /**
-     * Switch the gizmo into perspective (four-corner) mode. Seeds the corners
-     * from the current bbox and **pushes a `Perspective` transform through the
-     * binding** — mode is document-derived (the stored `Transform`), not a
-     * session-local flag, so the next `adopt()` reads `mode: 1` back and the
-     * gizmo stays in perspective rather than snapping to basic. One-way:
-     * Escape / Enter / re-entering transform returns to basic.
+     * Switch the gizmo to `tag`, seeding the new mode's matrix from the current
+     * geometry and **pushing it through the binding** — mode is
+     * document-derived (the stored `Transform`), not a session-local flag, so
+     * the next `adopt()` reads the same mode back and the gizmo stays put. A
+     * no-op when inactive or already in `tag`.
      */
-    enterPerspective(): void {
-        if (!this.binding || this.mode.tag === PERSPECTIVE_TAG) return;
-        const { srcW, srcH } = this.geo;
-        // Dest corners that reproduce the current shape (TL, TR, BR, BL).
-        const corners = (
-            [
-                [0, 0],
-                [srcW, 0],
-                [srcW, srcH],
-                [0, srcH],
-            ] as [number, number][]
-        ).map((p) => mat3Apply(this.geo.matrix, p[0], p[1])) as [
-            [number, number],
-            [number, number],
-            [number, number],
-            [number, number],
-        ];
-        const h = homographyFromCorners(srcW, srcH, corners);
-        if (!h) return;
-        this.geo.matrix = h;
-        this.mode = modeForTag(PERSPECTIVE_TAG);
-        this.binding.update(h, PERSPECTIVE_TAG);
+    setMode(tag: number): void {
+        if (!this.binding || this.mode.tag === tag) return;
+        const target = modeForTag(tag);
+        const m = target.seedMatrix(this.geo);
+        this.geo.matrix = m;
+        this.mode = target;
+        this.binding.update(m, tag);
         this.rebuildOverlay();
         app.requestFrame();
     }

@@ -127,9 +127,9 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 }
                 let r: Req = decode(payload)?;
                 let id = LayerId::from_ffi(r.id);
-                // Shared decoder with the floating path. Voids only ever
-                // receive tag 0 (affine) today; perspective for voids is a
-                // documented follow-up. Unknown tags / short payloads no-op.
+                // Shared decoder with the floating path — tag 0 (affine) or
+                // tag 1 (perspective homography). Unknown tags / short payloads
+                // no-op.
                 if let Some(t) =
                     crate::transform::Transform::from_tag_payload(r.mode_tag, &r.payload)
                 {
@@ -145,7 +145,10 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 let value = match engine.void_transform_info(id) {
                     Some((ox, oy, w, h, t)) => json!({
                         "ox": ox, "oy": oy, "w": w, "h": h,
-                        "mode": t.mode_tag(), "matrix": t.to_affine(),
+                        // Wire payload by mode: 6 affine floats (tag 0) or 9
+                        // homography floats (tag 1). The frontend's `liftMatrix`
+                        // picks the variant by `mode`, matching the floating path.
+                        "mode": t.mode_tag(), "matrix": t.wire_payload(),
                     }),
                     None => serde_json::Value::Null,
                 };

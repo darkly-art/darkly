@@ -71,6 +71,21 @@ function matrixFromCorners(geo: GizmoGeometry, corners: [number, number][], fall
 
 export const perspectiveMode: TransformMode = {
     tag: 1,
+    label: 'Perspective',
+    liveCapable: true,
+
+    seedMatrix(geo: GizmoGeometry): Mat3 {
+        // The current quad's dest-local corners → the homography that
+        // reproduces them. Identity geometry yields a plain (perspective-less)
+        // homography over the same rect.
+        const corners = destLocalCorners(geo) as [
+            [number, number],
+            [number, number],
+            [number, number],
+            [number, number],
+        ];
+        return homographyFromCorners(geo.srcW, geo.srcH, corners) ?? geo.matrix;
+    },
 
     buildOverlay(geo: GizmoGeometry, o: OverlayBuilder): BBoxPolygon {
         const local = destLocalCorners(geo);

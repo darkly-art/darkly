@@ -15,6 +15,7 @@
     import { handleDroppedFile } from '../actions';
     import { THUMB_SIZE } from '../ui/layers/thumbnails.svelte';
     import { isColorPickerModifierActive } from '../tools/colorpicker_cursor';
+    import TransformModeMenu from '../ui/TransformModeMenu.svelte';
 
     /** Optional pre-built instance. When provided, CanvasView skips the
      *  single-instance bootstrap (`initEditor`) and just wires the canvas
@@ -440,6 +441,10 @@
         ondrop={onCanvasDrop}
         onwheel={(e: WheelEvent) => { nav.onWheel(e, canvas); inst.requestFrame(); }}
     ></canvas>
+
+    <!-- Right-click mode-switch menu for the transform tool. The tool sets
+         `app.transformModeMenu`; this renders against it. -->
+    <TransformModeMenu />
 </div>
 
 <style>

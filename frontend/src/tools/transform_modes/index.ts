@@ -19,3 +19,9 @@ const MODES: Record<number, TransformMode> = {
 export function modeForTag(tag: number): TransformMode {
     return MODES[tag] ?? basicMode;
 }
+
+/** All registered modes, in tag order. The mode-switch menu enumerates these
+ *  (filtered by consumer liveness); adding a mode here surfaces it everywhere. */
+export function allModes(): TransformMode[] {
+    return Object.values(MODES).sort((a, b) => a.tag - b.tag);
+}

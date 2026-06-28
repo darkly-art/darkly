@@ -29,9 +29,12 @@ function liftMatrix(mode: number, matrix: number[]): Mat3 {
     return mode === 1 ? (matrix as Mat3) : affineToMat3(matrix as [number, number, number, number, number, number]);
 }
 
-/** Binding over the floating (paste / raster-extract) session. */
+/** Binding over the floating (paste / raster-extract) session. The transform
+ *  is committed once (baked into the target raster), not composited live, so
+ *  every mode is on the table. */
 export function floatingTransformBinding(): TransformBinding {
     return {
+        live: false,
         async read() {
             const raw = await app.engine?.send<
                 { ox: number; oy: number; w: number; h: number; mode: number; matrix: number[] } | null
@@ -60,21 +63,24 @@ export function floatingTransformBinding(): TransformBinding {
     };
 }
 
-/** Binding over a void layer's live transform property. Voids stay affine
- *  (always `mode_tag: 0`); perspective for voids is a documented follow-up. */
+/** Binding over a void layer's live transform property. The void composites
+ *  its transform every frame (`live: true`), and the homography is shared with
+ *  the floating path, so voids support perspective like everything else. */
 export function voidTransformBinding(layerId: number): TransformBinding {
     // Captured on first read so Escape (cancel) reverts to the transform as it
-    // was when the gizmo attached. Commit is a no-op: the edits are already
-    // live on the document and coalesced into the undo stack.
-    let original: Mat3 | null = null;
+    // was when the gizmo attached — including its *mode*, so cancelling a void
+    // that was already perspective restores perspective, not a downgraded
+    // affine. Commit is a no-op: edits are already live and coalesced into undo.
+    let original: { matrix: Mat3; mode: number } | null = null;
     return {
+        live: true,
         async read() {
             const raw = await app.engine?.send<
                 { ox: number; oy: number; w: number; h: number; mode: number; matrix: number[] } | null
             >('void_transform_info', { id: layerId });
             if (!raw) return null;
             const matrix = liftMatrix(raw.mode, raw.matrix);
-            if (original === null) original = [...matrix] as Mat3;
+            if (original === null) original = { matrix: [...matrix] as Mat3, mode: raw.mode };
             return {
                 origin: [raw.ox, raw.oy] as [number, number],
                 w: raw.w,
@@ -97,8 +103,8 @@ export function voidTransformBinding(layerId: number): TransformBinding {
             if (original) {
                 app.engine?.post('update_void_transform', {
                     id: layerId,
-                    mode_tag: 0,
-                    payload: wirePayload(original, 0),
+                    mode_tag: original.mode,
+                    payload: wirePayload(original.matrix, original.mode),
                 });
             }
         },

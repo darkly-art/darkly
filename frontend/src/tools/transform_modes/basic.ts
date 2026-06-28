@@ -16,7 +16,13 @@ import {
     affineTranslate,
     type Affine2D,
 } from '../transform_affine';
-import { affineToMat3, mat3Apply, mat3ToAffine, type Mat3 } from '../transform_projective';
+import {
+    affineToMat3,
+    mat3Apply,
+    mat3Inverse,
+    mat3ToAffine,
+    type Mat3,
+} from '../transform_projective';
 import { pointInPolygon } from './types';
 import type { BBoxPolygon, DragSession, GizmoGeometry, TransformMode } from './types';
 
@@ -105,8 +111,64 @@ function mid(a: [number, number], b: [number, number]): [number, number] {
     return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 }
 
+/** The four source-rect corners in TL, TR, BR, BL order. */
+function srcCorners(w: number, ht: number): [number, number][] {
+    return [
+        [0, 0],
+        [w, 0],
+        [w, ht],
+        [0, ht],
+    ];
+}
+
+/**
+ * Least-squares affine fit of `src` corners → `dst` corners — the affine that
+ * minimizes the squared error over the four correspondences (solving the
+ * 3-unknown normal equations for `[a, b, tx]` and `[c, d, ty]` independently).
+ *
+ * This is an honest fit, NOT a "drop the projective bottom row" truncation:
+ * truncation ignores the per-pixel perspective divide and yields a visibly
+ * wrong parallelogram when switching out of a strongly-warped perspective quad.
+ * For an affine (parallelogram) input the fit is exact.
+ */
+function leastSquaresAffine(src: [number, number][], dst: [number, number][]): Affine2D {
+    // Normal-equation accumulators: A = MᵀM (3×3 symmetric, rows of M are
+    // [sx, sy, 1]); bx = Mᵀ·dstX, by = Mᵀ·dstY.
+    let s00 = 0, s01 = 0, s02 = 0, s11 = 0, s12 = 0, s22 = 0;
+    let bx0 = 0, bx1 = 0, bx2 = 0, by0 = 0, by1 = 0, by2 = 0;
+    for (let i = 0; i < src.length; i++) {
+        const [sx, sy] = src[i];
+        const [dx, dy] = dst[i];
+        s00 += sx * sx; s01 += sx * sy; s02 += sx;
+        s11 += sy * sy; s12 += sy; s22 += 1;
+        bx0 += sx * dx; bx1 += sy * dx; bx2 += dx;
+        by0 += sx * dy; by1 += sy * dy; by2 += dy;
+    }
+    const normal: Mat3 = [s00, s01, s02, s01, s11, s12, s02, s12, s22];
+    const inv = mat3Inverse(normal);
+    // Degenerate source (zero extent) — nothing to fit; keep identity.
+    if (!inv) return [1, 0, 0, 0, 1, 0];
+    const solve = (b0: number, b1: number, b2: number) =>
+        [
+            inv[0] * b0 + inv[1] * b1 + inv[2] * b2,
+            inv[3] * b0 + inv[4] * b1 + inv[5] * b2,
+            inv[6] * b0 + inv[7] * b1 + inv[8] * b2,
+        ] as [number, number, number];
+    const [a, b, tx] = solve(bx0, bx1, bx2);
+    const [c, d, ty] = solve(by0, by1, by2);
+    return [a, b, tx, c, d, ty];
+}
+
 export const basicMode: TransformMode = {
     tag: 0,
+    label: 'Free transform',
+    liveCapable: true,
+
+    seedMatrix(geo: GizmoGeometry): Mat3 {
+        const src = srcCorners(geo.srcW, geo.srcH);
+        const dst = src.map(([x, y]) => mat3Apply(geo.matrix, x, y)) as [number, number][];
+        return affineToMat3(leastSquaresAffine(src, dst));
+    },
 
     buildOverlay(geo: GizmoGeometry, o: OverlayBuilder): BBoxPolygon {
         const { srcW, srcH } = geo;

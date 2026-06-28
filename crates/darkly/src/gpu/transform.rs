@@ -24,6 +24,23 @@ pub use crate::transform::{
     affine_translate, mat3_apply, mat3_inverse, Affine2D, Mat3, Transform, IDENTITY, MAT3_IDENTITY,
 };
 
+/// Pack the inverse of a projective matrix into three std140-padded rows
+/// (`[m00, m01, m02, _]`, `[m10, m11, m12, _]`, `[m20, m21, m22, _]`) for the
+/// transform-sampling shaders. A singular matrix (e.g. a corner dragged behind
+/// the camera mid-gesture) falls back to identity so the sample stays finite.
+///
+/// The one home for this packing — shared by the floating commit uniforms
+/// ([`TransformBlendUniforms`]) and the void uniform builders. Pass a void's
+/// `transform.to_projective()`, or the floating path's already-baked [`Mat3`].
+pub fn pack_inv_rows(m: &Mat3) -> [[f32; 4]; 3] {
+    let inv = mat3_inverse(m).unwrap_or(MAT3_IDENTITY);
+    [
+        [inv[0], inv[1], inv[2], 0.0],
+        [inv[3], inv[4], inv[5], 0.0],
+        [inv[6], inv[7], inv[8], 0.0],
+    ]
+}
+
 // ---------------------------------------------------------------------------
 // FloatingContent — CPU-side data owned by the engine
 // ---------------------------------------------------------------------------
@@ -279,6 +296,8 @@ impl TransformPass {
             source: wgpu::ShaderSource::Wgsl(
                 concat!(
                     include_str!("../../shaders/source_over.wgsl"),
+                    "\n",
+                    include_str!("../../shaders/lib/projective.wgsl"),
                     "\n",
                     include_str!("../../shaders/transform_commit.wgsl"),
                 )
@@ -748,18 +767,16 @@ impl TransformPass {
         let Some(state) = self.active.as_ref() else {
             return;
         };
-        // Near-singular homography (e.g. a corner dragged behind the camera
-        // mid-gesture) falls back to identity, matching the void path's guard.
-        let inv = mat3_inverse(matrix).unwrap_or(MAT3_IDENTITY);
+        let [inv_row0, inv_row1, inv_row2] = pack_inv_rows(matrix);
         let is_r8 = if state.target_format == wgpu::TextureFormat::R8Unorm {
             1.0
         } else {
             0.0
         };
         let uniforms = TransformBlendUniforms {
-            inv_row0: [inv[0], inv[1], inv[2], 0.0],
-            inv_row1: [inv[3], inv[4], inv[5], 0.0],
-            inv_row2: [inv[6], inv[7], inv[8], 0.0],
+            inv_row0,
+            inv_row1,
+            inv_row2,
             source_origin: [source_origin.0 as f32, source_origin.1 as f32],
             source_size: [source_width as f32, source_height as f32],
             target_offset: [target_offset.0 as f32, target_offset.1 as f32],
@@ -834,5 +851,41 @@ impl TransformPass {
         self.active
             .as_ref()
             .is_some_and(|s| s.target_layer == layer_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transform::homography_from_corners;
+
+    /// A near-degenerate matrix (a corner driving the homogeneous `w → 0`,
+    /// folding behind the camera) has no usable inverse; `pack_inv_rows` must
+    /// fall back to identity rows rather than emit NaN/∞ — the CPU half of the
+    /// shader's degenerate guard. The matching shader-side clamp is
+    /// `proj_local`'s `abs(hw) < 1e-8 → ok = 0` (transparent).
+    #[test]
+    fn pack_inv_rows_clamps_degenerate_to_identity() {
+        // Singular: bottom-right ≈ 0 collapses the determinant.
+        let singular: Mat3 = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1e-13];
+        let rows = pack_inv_rows(&singular);
+        assert_eq!(rows[0], [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(rows[1], [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(rows[2], [0.0, 0.0, 1.0, 0.0]);
+    }
+
+    /// A real perspective homography packs to finite inverse rows with the
+    /// std140 padding word zeroed.
+    #[test]
+    fn pack_inv_rows_packs_finite_perspective() {
+        let corners = [(16.0, 0.0), (48.0, 0.0), (64.0, 64.0), (0.0, 64.0)];
+        let m = homography_from_corners(64.0, 64.0, corners).expect("non-degenerate");
+        let rows = pack_inv_rows(&m);
+        for row in rows {
+            for v in row {
+                assert!(v.is_finite(), "inverse row component must be finite");
+            }
+            assert_eq!(row[3], 0.0, "padding word stays zero");
+        }
     }
 }

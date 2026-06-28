@@ -18,6 +18,22 @@ import { floatingTransformBinding, voidTransformBinding } from './transform_bind
 
 let gizmo: TransformGizmo | null = null;
 
+/** Modes the active gizmo offers (for the right-click menu). Empty when no
+ *  gizmo is up. */
+export function transformModes(): { tag: number; label: string }[] {
+    return gizmo?.availableModes() ?? [];
+}
+
+/** Wire tag of the gizmo's current mode, or `null` when inactive. */
+export function transformActiveMode(): number | null {
+    return gizmo?.active ? gizmo.modeTag : null;
+}
+
+/** Switch the active gizmo to `tag` (menu selection). */
+export function setTransformMode(tag: number): void {
+    gizmo?.setMode(tag);
+}
+
 /** Resolve the selected layer's capability and attach the matching binding. */
 async function activate(): Promise<void> {
     if (!gizmo || !app.engine || app.activeLayerId == null) return;
@@ -53,6 +69,7 @@ export const transformTool: Tool = {
         // Finalize whatever's in flight (floating bakes; a live void is a no-op).
         gizmo?.commit();
         gizmo = null;
+        app.transformModeMenu = null;
     },
 
     claimsPointer() {
@@ -64,13 +81,14 @@ export const transformTool: Tool = {
 
     async onPointerDown(_ctx, e, cx, cy) {
         if (!gizmo) return;
-        // Right-click inside the active object switches the gizmo from basic
-        // (affine) into perspective (four-corner) sub-mode. One-way per the
-        // design; Enter / Escape / re-entry returns to basic. Always swallow
-        // button 2 so it never starts a drag (the browser context menu is
-        // suppressed app-wide in CanvasView).
+        // Right-click inside the active object opens the mode-switch menu
+        // (Free transform / Perspective / …). Always swallow button 2 so it
+        // never starts a drag (the browser context menu is suppressed app-wide
+        // in CanvasView).
         if (e.button === 2) {
-            if (gizmo.active && gizmo.isInside(cx, cy)) gizmo.enterPerspective();
+            if (gizmo.active && gizmo.isInside(cx, cy)) {
+                app.transformModeMenu = { x: e.clientX, y: e.clientY };
+            }
             return;
         }
         // First click (or a click after Enter/Escape) re-engages the gizmo.
