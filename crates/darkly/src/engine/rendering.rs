@@ -208,11 +208,12 @@ impl DarklyEngine {
     /// `drain_dirty_thumbnail_readbacks` (driven by `mark_node_pixels_dirty`
     /// at every pixel-write site). Auto-queueing from this getter would
     /// create a feedback loop with the JS-side `thumbnailEpoch` sync.
-    pub fn node_thumbnail(&self, node_id: LayerId, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
+    #[handler(returns = bytes)]
+    pub fn node_thumbnail(&self, node_id: LayerId, width: u32, height: u32) -> Vec<u8> {
         self.thumbnail_cache
             .get(node_id)
             .cloned()
-            .unwrap_or_else(|| vec![0u8; (thumb_w * thumb_h * 4) as usize])
+            .unwrap_or_else(|| vec![0u8; (width * height * 4) as usize])
     }
 
     /// Kick off an async GPU readback for a thumbnail of any node by id,
@@ -542,11 +543,13 @@ impl DarklyEngine {
     }
 
     /// Get the most recently picked color (updated asynchronously).
+    #[handler(returns = bytes)]
     pub fn last_picked_color(&self) -> [u8; 4] {
         self.last_picked_color
     }
 
     /// True if a color pick readback is still in flight.
+    #[handler]
     pub fn has_pending_color_pick(&self) -> bool {
         self.readbacks
             .any(|c| matches!(c, ReadbackContext::ColorPick))

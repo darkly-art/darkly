@@ -159,6 +159,13 @@ pub fn ok_or_error(r: Result<(), String>) -> Response {
     }
 }
 
+/// Encode raw bytes onto the binary side-channel (JSON value `null`) — the
+/// `#[handler(returns = bytes)]` target for engine methods that return
+/// `Vec<u8>` or `[u8; N]` (thumbnails, previews, picked colors).
+pub fn bytes_result<T: Into<Vec<u8>>>(bytes: T) -> Result<Response, ProtocolError> {
+    Ok(Response::binary(Value::Null, bytes.into()))
+}
+
 // ---------------------------------------------------------------------------
 // Response conversion — natural engine return types → `Response`
 // ---------------------------------------------------------------------------

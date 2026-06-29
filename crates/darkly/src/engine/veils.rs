@@ -11,6 +11,7 @@ use super::PreviewJob;
 use super::PreviewKind;
 use super::ReadbackContext;
 use crate::coord::LayerRect;
+use crate::engine::protocol::{params_from_json, RawParams};
 use crate::gpu::params::{ParamDef, ParamValue};
 use crate::gpu::preview::ANIMATED_FRAMES;
 use crate::gpu::veil::Veil;
@@ -19,7 +20,27 @@ use crate::gpu::veil::Veil;
 impl DarklyEngine {
     // --- Veils ---
 
-    pub fn add_veil(&mut self, veil_type: &str, params: &[ParamValue]) {
+    /// Wire entry for `add_veil` — coerces JSON `params` against the veil
+    /// type's schema, then [`Self::add_veil_layer`].
+    #[handler]
+    pub fn add_veil(&mut self, veil_type: String, params: RawParams) {
+        let pv = params_from_json(&params.0, self.veil_param_defs(&veil_type));
+        self.add_veil_layer(&veil_type, &pv);
+    }
+
+    /// Wire entry for `update_veil` — resolves the slot's veil type, coerces
+    /// `params` against its schema, then [`Self::update_veil_layer`]. A stale
+    /// index is a silent no-op.
+    #[handler]
+    pub fn update_veil(&mut self, index: usize, params: RawParams) {
+        let Some(type_id) = self.compositor.veil_chain().type_id(index) else {
+            return;
+        };
+        let pv = params_from_json(&params.0, self.veil_param_defs(type_id));
+        self.update_veil_layer(index, &pv);
+    }
+
+    pub fn add_veil_layer(&mut self, veil_type: &str, params: &[ParamValue]) {
         let chain = self.compositor.veil_chain_mut();
         let format = chain.accum_format();
         let veil = chain
@@ -28,25 +49,29 @@ impl DarklyEngine {
         chain.add_veil(&self.gpu.device, &self.gpu.queue, veil);
     }
 
+    #[handler]
     pub fn remove_veil(&mut self, index: usize) {
         self.compositor.veil_chain_mut().remove_veil(index);
     }
 
+    #[handler]
     pub fn clear_veils(&mut self) {
         self.compositor.veil_chain_mut().clear_veils();
     }
 
+    #[handler]
     pub fn set_veil_visible(&mut self, index: usize, visible: bool) {
         self.compositor
             .veil_chain_mut()
             .set_veil_visible(index, visible);
     }
 
+    #[handler]
     pub fn move_veil(&mut self, from: usize, to: usize) {
         self.compositor.veil_chain_mut().move_veil(from, to);
     }
 
-    pub fn update_veil(&mut self, index: usize, params: &[ParamValue]) {
+    pub fn update_veil_layer(&mut self, index: usize, params: &[ParamValue]) {
         let type_id: &'static str = match self.compositor.veil_chain().type_id(index) {
             Some(t) => t,
             None => return,

@@ -1,11 +1,12 @@
-//! Brush / node preview rendering — node thumbnails, stroke / dab previews, and
-//! the live cursor-preview pose. All image responses are PNG bytes on the binary
-//! side-channel; the cursor-preview info is a small JSON envelope.
+//! Live cursor-preview pose. The thumbnail / stroke / dab byte responses and
+//! the pose-clear verb are `#[handler]`-generated (`returns = bytes` on the
+//! engine methods); these two stay hand-written because their JSON response is
+//! a derived `{ halfExtent }` envelope shaped from `BrushCursorPreviewInfo`, and
+//! `refresh` marshals a flat pen pose into a `PaintInformation` before rendering.
 
 use serde::Deserialize;
 
 use crate::engine::protocol::{decode, RequestRegistration, Response};
-use crate::layer::LayerId;
 
 /// Encode the active cursor-preview info (or `null` when absent).
 fn preview_info(engine: &crate::engine::DarklyEngine) -> serde_json::Value {
@@ -17,87 +18,6 @@ fn preview_info(engine: &crate::engine::DarklyEngine) -> serde_json::Value {
 
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
-        RequestRegistration {
-            kind: "node_thumbnail",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    node_id: u64,
-                    width: u32,
-                    height: u32,
-                }
-                let r: Req = decode(payload)?;
-                let bytes = engine.node_thumbnail(LayerId::from_ffi(r.node_id), r.width, r.height);
-                Ok(Response::binary(serde_json::Value::Null, bytes))
-            },
-        },
-        RequestRegistration {
-            kind: "brush_stroke_preview",
-            handle: |engine, _payload, _b| {
-                Ok(Response::binary(
-                    serde_json::Value::Null,
-                    engine.brush_stroke_preview(),
-                ))
-            },
-        },
-        RequestRegistration {
-            kind: "brush_active_dab_preview",
-            handle: |engine, _payload, _b| {
-                Ok(Response::binary(
-                    serde_json::Value::Null,
-                    engine.brush_active_dab_preview(),
-                ))
-            },
-        },
-        RequestRegistration {
-            kind: "brush_node_preview",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    node_id: u64,
-                }
-                let r: Req = decode(payload)?;
-                Ok(Response::binary(
-                    serde_json::Value::Null,
-                    engine.brush_node_preview(r.node_id),
-                ))
-            },
-        },
-        RequestRegistration {
-            kind: "brush_thumbnail",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    name: String,
-                }
-                let r: Req = decode(payload)?;
-                Ok(Response::binary(
-                    serde_json::Value::Null,
-                    engine.brush_thumbnail(&r.name),
-                ))
-            },
-        },
-        RequestRegistration {
-            kind: "brush_dab_thumbnail",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    name: String,
-                }
-                let r: Req = decode(payload)?;
-                Ok(Response::binary(
-                    serde_json::Value::Null,
-                    engine.brush_dab_thumbnail(&r.name),
-                ))
-            },
-        },
-        RequestRegistration {
-            kind: "clear_brush_cursor_preview_pose",
-            handle: |engine, _payload, _b| {
-                engine.clear_brush_cursor_preview_pose();
-                Ok(Response::empty())
-            },
-        },
         RequestRegistration {
             kind: "get_brush_cursor_preview_info",
             handle: |engine, _payload, _b| Ok(Response::json(preview_info(engine))),

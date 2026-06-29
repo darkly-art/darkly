@@ -11,7 +11,7 @@ const { engine, fakeApp, fakeConfig } = vi.hoisted(() => {
         _pending: false,
         _picked: new Uint8Array([0, 0, 0, 0]),
         send: vi.fn((kind: string) => {
-            if (kind === 'has_pending_color_pick') return Promise.resolve({ value: engine._pending });
+            if (kind === 'has_pending_color_pick') return Promise.resolve(engine._pending);
             if (kind === 'last_picked_color') return Promise.resolve({ bytes: engine._picked });
             return Promise.resolve({});
         }),

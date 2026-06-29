@@ -35,8 +35,7 @@ export const magicWandTool: Tool = {
         const mode = selectionMode(e);
         ctx.engine.post('select_magic_wand', {
             id: app.activeLayerId,
-            seed_x: Math.round(cx),
-            seed_y: Math.round(cy),
+            seed_canvas: { x: Math.round(cx), y: Math.round(cy) },
             tolerance: magicWandSession.tolerance,
             mode,
         });

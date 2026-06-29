@@ -13,13 +13,6 @@ use crate::engine::SavePurpose;
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
         RequestRegistration {
-            kind: "start_export",
-            handle: |engine, _payload, _b| {
-                engine.start_export();
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
             kind: "poll_export_result",
             handle: |engine, _payload, _b| {
                 let Some(result) = engine.poll_export_result() else {

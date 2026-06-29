@@ -15,6 +15,8 @@ use slotmap::{SecondaryMap, SlotMap};
 use crate::coord::{CanvasPoint, CanvasRect};
 use crate::layer::*;
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SelectionMode {
     Replace,
     Add,

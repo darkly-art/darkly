@@ -424,7 +424,7 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
         .collect();
     for (type_id, schema) in veil_types {
         let defaults = defaults_of(schema);
-        engine.add_veil(type_id, &defaults);
+        engine.add_veil_layer(type_id, &defaults);
     }
 
     // One of every void type — adds a void layer at root for each

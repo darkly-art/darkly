@@ -37,9 +37,9 @@ export function pollPick(): void {
     if (!engine) return;
     pollInFlight = true;
     engine
-        .send<{ value: boolean }>('has_pending_color_pick')
+        .send<boolean>('has_pending_color_pick')
         .then((pending) => {
-            if (pending.value) {
+            if (pending) {
                 pollInFlight = false;
                 return; // still in flight; retry next frame
             }

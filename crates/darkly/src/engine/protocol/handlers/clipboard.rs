@@ -1,9 +1,13 @@
-//! Copy / cut / paste, including rich (metadata-bearing) layer clipboard.
+//! Paste (rich layer / image / in-place). The copy/cut side and the poll
+//! queries are `#[handler]`-generated on `engine/clipboard.rs`; the pastes stay
+//! hand-written because they share the `active_layer_id` f64-sentinel
+//! (`-1`→none) → `Option<LayerId>` coercion and re-encode their `Option<LayerId>`
+//! result as `{ id: -1 }`, neither of which the macro derives.
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 
-use crate::engine::protocol::{bad_payload, decode, layer_id, RequestRegistration, Response};
+use crate::engine::protocol::{decode, RequestRegistration, Response};
 use crate::layer::LayerId;
 
 /// `active_layer_id` follows the f64 negative-means-none FFI convention.
@@ -11,55 +15,8 @@ fn active(id: i64) -> Option<LayerId> {
     (id >= 0).then(|| LayerId::from_ffi(id as u64))
 }
 
-fn export_value(
-    export: Option<crate::engine::ClipboardExport>,
-) -> Result<Value, crate::engine::protocol::ProtocolError> {
-    match export {
-        Some(e) => serde_json::to_value(&e).map_err(bad_payload),
-        None => Ok(Value::Null),
-    }
-}
-
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
-        RequestRegistration {
-            kind: "copy",
-            handle: |engine, payload, _b| {
-                let export = engine.copy(layer_id(payload)?);
-                Ok(Response::json(export_value(export)?))
-            },
-        },
-        RequestRegistration {
-            kind: "cut",
-            handle: |engine, payload, _b| {
-                let export = engine.cut(layer_id(payload)?);
-                Ok(Response::json(export_value(export)?))
-            },
-        },
-        RequestRegistration {
-            kind: "poll_copy_result",
-            handle: |engine, _payload, _b| {
-                let export = engine.poll_copy_result();
-                Ok(Response::json(export_value(export)?))
-            },
-        },
-        RequestRegistration {
-            kind: "copy_layer_rich",
-            handle: |engine, payload, _b| {
-                engine.copy_layer_rich(layer_id(payload)?);
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "poll_copy_rich_result",
-            handle: |engine, _payload, _b| {
-                let value = match engine.poll_copy_rich_result() {
-                    Some(s) => Value::String(s),
-                    None => Value::Null,
-                };
-                Ok(Response::json(value))
-            },
-        },
         RequestRegistration {
             kind: "paste_layer_rich",
             handle: |engine, payload, _b| {

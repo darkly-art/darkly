@@ -58,6 +58,7 @@ impl DarklyEngine {
     /// Returns the bare nodegraph registration (ports, params, display
     /// info) — the wrapper's pipeline metadata is engine-internal and the
     /// frontend doesn't see it.
+    #[handler]
     pub fn brush_node_types(&self) -> Vec<crate::nodegraph::NodeRegistration<BrushWireType>> {
         let registry = crate::brush::registry();
         registry.types().map(|r| r.node.clone()).collect()
@@ -212,6 +213,7 @@ impl DarklyEngine {
     /// `regenerate_brush_cursor_preview_with_pen` starts a fresh hover with no
     /// derived direction/motion/distance/speed. Call this on pointer-leave
     /// and at the start of a stroke.
+    #[handler]
     pub fn clear_brush_cursor_preview_pose(&mut self) {
         self.last_cursor_preview_pose = None;
     }
@@ -492,6 +494,7 @@ impl DarklyEngine {
     /// Uses the theme colors stored via `set_preview_theme`, not the user's
     /// active paint color — keeps the editor preview visually consistent
     /// with the brush picker's brush thumbnails.
+    #[handler(returns = bytes)]
     pub fn brush_stroke_preview(&mut self) -> Vec<u8> {
         // Guard against painting while a real stroke is in flight — the
         // preview shares `dab_pool` and `brush_pipelines` with the engine,
@@ -593,6 +596,7 @@ impl DarklyEngine {
     /// byte-identical to a `brush_dab_thumbnail(active_name)` call.
     /// The frontend scales the resulting PNG via CSS to whatever
     /// display size it needs.
+    #[handler(returns = bytes)]
     pub fn brush_active_dab_preview(&mut self) -> Vec<u8> {
         // Guard against painting while a real stroke is in flight — the
         // preview shares `dab_pool` and `brush_pipelines` with the engine,
@@ -658,6 +662,7 @@ impl DarklyEngine {
     /// "no preview" and shows the placeholder. Adding a new node type's
     /// preview means a new arm in the type-id match below; nodes
     /// without a preview implementation return empty.
+    #[handler(returns = bytes)]
     pub fn brush_node_preview(&mut self, node_id: u64) -> Vec<u8> {
         let tool = self.tool_session.read();
         let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
@@ -758,6 +763,7 @@ impl DarklyEngine {
 
     /// Add a node to the active graph and compile.
     /// Returns the updated graph JSON on success.
+    #[handler(returns = graph)]
     pub fn brush_graph_add_node(&mut self, type_id: &str) -> Result<String, String> {
         let registry = crate::brush::registry();
         let reg = registry
@@ -777,6 +783,7 @@ impl DarklyEngine {
     }
 
     /// Remove a node from the active graph and compile.
+    #[handler(returns = graph)]
     pub fn brush_graph_remove_node(&mut self, node_id: u64) -> Result<String, String> {
         self.try_mutate(ChangeKind::Topology, |g| {
             g.remove_node(NodeId(node_id)).map_err(|e| format!("{e}"))
@@ -784,6 +791,7 @@ impl DarklyEngine {
     }
 
     /// Connect two ports in the active graph and compile.
+    #[handler(returns = graph)]
     pub fn brush_graph_connect(
         &mut self,
         from_node: u64,
@@ -807,6 +815,7 @@ impl DarklyEngine {
     }
 
     /// Disconnect a specific wire in the active graph and compile.
+    #[handler(returns = graph)]
     pub fn brush_graph_disconnect(
         &mut self,
         from_node: u64,
@@ -842,6 +851,7 @@ impl DarklyEngine {
     }
 
     /// Update a port's default value and compile.
+    #[handler(returns = graph)]
     pub fn brush_graph_set_port_default(
         &mut self,
         node_id: u64,
@@ -890,6 +900,7 @@ impl DarklyEngine {
     }
 
     /// Set the composite blend mode: 0 = source-over (paint), 1 = destination-out (erase).
+    #[handler]
     pub fn set_brush_blend_mode(&mut self, mode: u32) {
         self.brush_blend_mode = mode;
     }
@@ -901,6 +912,7 @@ impl DarklyEngine {
     /// Entries that reference a node/port no longer present, or whose
     /// target port has an incoming connection (the user can't scrub a
     /// wire-driven value), are skipped silently.
+    #[handler]
     pub fn brush_exposed_ports(&self) -> Vec<ExposedPortInfo> {
         let registry = crate::brush::registry();
         let tool = self.tool_session.read();
@@ -1008,6 +1020,7 @@ impl DarklyEngine {
 
     /// Set an exposed port's value from display-space, converting to
     /// port-space via the port's UnitType.  Compiles afterward.
+    #[handler(returns = graph)]
     pub fn brush_set_exposed_port(
         &mut self,
         node_id: u64,
@@ -1060,6 +1073,7 @@ impl DarklyEngine {
     /// Add a brush-bar entry. Idempotent. Bumps the topology version so
     /// the frontend treats the change as structural and clears the active
     /// preset name. No recompile — exposure doesn't affect render output.
+    #[handler(returns = graph)]
     pub fn brush_graph_expose_port(
         &mut self,
         node_id: u64,
@@ -1079,6 +1093,7 @@ impl DarklyEngine {
     /// Remove a brush-bar entry. Idempotent (missing entries aren't an
     /// error). Bumps the topology version so the frontend clears the
     /// active preset name.
+    #[handler(returns = graph)]
     pub fn brush_graph_unexpose_port(
         &mut self,
         node_id: u64,
@@ -1097,6 +1112,7 @@ impl DarklyEngine {
     /// Overwrite the meta (label / description / icon) on a brush-bar
     /// entry — single batched call so the brush-bar modal hits the engine
     /// once. Icon validation lives in `Graph::set_exposed_port_meta`.
+    #[handler(returns = graph)]
     pub fn brush_graph_set_exposed_port_meta(
         &mut self,
         key: &str,
@@ -1117,6 +1133,7 @@ impl DarklyEngine {
 
     /// Move a brush-bar entry to a target index. Backs the drag-reorder
     /// UX in the brush-bar node.
+    #[handler(returns = graph)]
     pub fn brush_graph_reorder_exposed_port(
         &mut self,
         key: &str,

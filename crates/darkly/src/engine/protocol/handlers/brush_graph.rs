@@ -1,7 +1,17 @@
-//! Brush node-graph: config, structural mutations, params, exposed ports, and
-//! graph/topology queries. Structural mutations return the recompiled graph via
-//! [`graph_result`] (`{ graph } | { error }`); compile/validate/import use
-//! [`ok_or_error`] (`null | { error }`).
+//! Brush node-graph handlers the `#[handler]` macro can't derive. The
+//! structural mutations (add/remove node, connect, expose, …), the type-list
+//! queries, and `set_brush_blend_mode` are now generated on
+//! `engine/brush_graph.rs`. What stays here:
+//!
+//! - **kind ≠ engine-method name** — the wire verb and the engine method differ
+//!   (`brush_graph_compile` → `set_brush_graph`, `brush_graph_active` →
+//!   `active_brush_graph`, …); the macro keys the kind off the method name.
+//! - **value-shaping** — `{ yaml }` / `{ value }` envelopes, and the
+//!   `null | { error }` compile/validate result (`returns = ok_error` would fit,
+//!   but the kind/method mismatch keeps these hand-written anyway).
+//! - **param marshalling** — `brush_graph_set_param` (kind/value → `ParamValue`)
+//!   and `brush_graph_auto_layout` (`HashMap<u64,…>` ↔ `NodeId` keys).
+//! - **`brush_upload_image`** — an always-`Err` stub with unused params.
 
 use serde::Deserialize;
 use serde_json::json;
@@ -13,18 +23,6 @@ use crate::gpu::params::ParamValue;
 
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
-        RequestRegistration {
-            kind: "set_brush_blend_mode",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    mode: u32,
-                }
-                let r: Req = decode(payload)?;
-                engine.set_brush_blend_mode(r.mode);
-                Ok(Response::empty())
-            },
-        },
         RequestRegistration {
             kind: "brush_graph_reset",
             handle: |engine, _payload, _b| {
@@ -62,52 +60,6 @@ pub fn registrations() -> Vec<RequestRegistration> {
             },
         },
         RequestRegistration {
-            kind: "brush_graph_add_node",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    type_id: String,
-                }
-                let r: Req = decode(payload)?;
-                graph_result(engine.brush_graph_add_node(&r.type_id))
-            },
-        },
-        RequestRegistration {
-            kind: "brush_graph_remove_node",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    node_id: u64,
-                }
-                let r: Req = decode(payload)?;
-                graph_result(engine.brush_graph_remove_node(r.node_id))
-            },
-        },
-        RequestRegistration {
-            kind: "brush_graph_connect",
-            handle: |engine, payload, _b| {
-                let r: Conn = decode(payload)?;
-                graph_result(engine.brush_graph_connect(
-                    r.from_node,
-                    &r.from_port,
-                    r.to_node,
-                    &r.to_port,
-                ))
-            },
-        },
-        RequestRegistration {
-            kind: "brush_graph_disconnect",
-            handle: |engine, payload, _b| {
-                let r: Conn = decode(payload)?;
-                graph_result(engine.brush_graph_disconnect(
-                    r.from_node,
-                    &r.from_port,
-                    r.to_node,
-                    &r.to_port,
-                ))
-            },
-        },
-        RequestRegistration {
             kind: "brush_graph_set_param",
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
@@ -142,19 +94,6 @@ pub fn registrations() -> Vec<RequestRegistration> {
             },
         },
         RequestRegistration {
-            kind: "brush_graph_set_port_default",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    node_id: u64,
-                    port_name: String,
-                    value: f32,
-                }
-                let r: Req = decode(payload)?;
-                graph_result(engine.brush_graph_set_port_default(r.node_id, &r.port_name, r.value))
-            },
-        },
-        RequestRegistration {
             kind: "brush_graph_auto_layout",
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
@@ -178,68 +117,6 @@ pub fn registrations() -> Vec<RequestRegistration> {
             },
         },
         RequestRegistration {
-            kind: "brush_set_exposed_port",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    node_id: u64,
-                    port_name: String,
-                    display_value: f32,
-                }
-                let r: Req = decode(payload)?;
-                graph_result(engine.brush_set_exposed_port(
-                    r.node_id,
-                    &r.port_name,
-                    r.display_value,
-                ))
-            },
-        },
-        RequestRegistration {
-            kind: "brush_graph_expose_port",
-            handle: |engine, payload, _b| {
-                let r: PortRef = decode(payload)?;
-                graph_result(engine.brush_graph_expose_port(r.node_id, &r.port_name))
-            },
-        },
-        RequestRegistration {
-            kind: "brush_graph_unexpose_port",
-            handle: |engine, payload, _b| {
-                let r: PortRef = decode(payload)?;
-                graph_result(engine.brush_graph_unexpose_port(r.node_id, &r.port_name))
-            },
-        },
-        RequestRegistration {
-            kind: "brush_graph_set_exposed_port_meta",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    key: String,
-                    label: String,
-                    description: String,
-                    icon: String,
-                }
-                let r: Req = decode(payload)?;
-                graph_result(engine.brush_graph_set_exposed_port_meta(
-                    &r.key,
-                    r.label,
-                    r.description,
-                    r.icon,
-                ))
-            },
-        },
-        RequestRegistration {
-            kind: "brush_graph_reorder_exposed_port",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    key: String,
-                    new_index: u32,
-                }
-                let r: Req = decode(payload)?;
-                graph_result(engine.brush_graph_reorder_exposed_port(&r.key, r.new_index))
-            },
-        },
-        RequestRegistration {
             kind: "brush_upload_image",
             handle: |engine, payload, bytes| {
                 #[derive(Deserialize)]
@@ -253,15 +130,6 @@ pub fn registrations() -> Vec<RequestRegistration> {
                     Ok(()) => Ok(Response::empty()),
                     Err(e) => Err(ProtocolError::engine(e)),
                 }
-            },
-        },
-        // --- queries ---
-        RequestRegistration {
-            kind: "brush_node_types",
-            handle: |engine, _payload, _b| {
-                Ok(Response::json(
-                    serde_json::to_value(engine.brush_node_types()).map_err(bad_payload)?,
-                ))
             },
         },
         RequestRegistration {
@@ -307,27 +175,5 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 Ok(ok_or_error(engine.validate_brush_graph(&r.json)))
             },
         },
-        RequestRegistration {
-            kind: "brush_exposed_ports",
-            handle: |engine, _payload, _b| {
-                Ok(Response::json(
-                    serde_json::to_value(engine.brush_exposed_ports()).map_err(bad_payload)?,
-                ))
-            },
-        },
     ]
-}
-
-#[derive(Deserialize)]
-struct Conn {
-    from_node: u64,
-    from_port: String,
-    to_node: u64,
-    to_port: String,
-}
-
-#[derive(Deserialize)]
-struct PortRef {
-    node_id: u64,
-    port_name: String,
 }

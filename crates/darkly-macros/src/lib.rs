@@ -52,11 +52,11 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             continue;
         };
         let attr = method.attrs.remove(attr_idx);
-        let returns_graph = match parse_returns_graph(&attr) {
+        let returns = match parse_returns(&attr) {
             Ok(v) => v,
             Err(e) => return e.to_compile_error().into(),
         };
-        match build_handler(method, returns_graph) {
+        match build_handler(method, returns) {
             Ok(Built { req_struct, reg_fn }) => {
                 if let Some(req) = req_struct {
                     req_structs.push(req);
@@ -86,28 +86,48 @@ struct Built {
     reg_fn: TokenStream2,
 }
 
-/// Parse the optional `(returns = graph)` body of a `#[handler]` attribute.
-/// Bare `#[handler]` → `false`; `#[handler(returns = graph)]` → `true`.
-fn parse_returns_graph(attr: &syn::Attribute) -> syn::Result<bool> {
+/// How a handler's return value is shaped onto the wire. The default covers
+/// the autoref-specialized `()` / `T: Serialize` / `Result<T, String>` cases;
+/// the others are one-token `#[handler(returns = …)]` opt-ins for the response
+/// shapes the engine's natural return type can't disambiguate on its own.
+#[derive(Clone, Copy, PartialEq)]
+enum ReturnMode {
+    /// `()` → `null`, `T: Serialize` → JSON, `Result<T, String>::Err` → reject.
+    Default,
+    /// `Result<String, String>` recompiled-graph JSON → `{ graph } | { error }`.
+    Graph,
+    /// `Vec<u8>` / `[u8; N]` → the binary side-channel (JSON value is `null`).
+    Bytes,
+    /// `Result<(), String>` → `null | { error }` as a *value* (not a reject).
+    OkError,
+}
+
+/// Parse the optional `(returns = graph | bytes | ok_error)` body of a
+/// `#[handler]` attribute. Bare `#[handler]` → [`ReturnMode::Default`].
+fn parse_returns(attr: &syn::Attribute) -> syn::Result<ReturnMode> {
     match &attr.meta {
-        syn::Meta::Path(_) => Ok(false),
+        syn::Meta::Path(_) => Ok(ReturnMode::Default),
         syn::Meta::List(_) => {
-            let mut graph = false;
+            let mut mode = ReturnMode::Default;
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("returns") {
                     let value = meta.value()?;
                     let ident: Ident = value.parse()?;
-                    if ident == "graph" {
-                        graph = true;
-                        Ok(())
-                    } else {
-                        Err(meta.error("unknown `returns` mode (expected `graph`)"))
-                    }
+                    mode =
+                        match ident.to_string().as_str() {
+                            "graph" => ReturnMode::Graph,
+                            "bytes" => ReturnMode::Bytes,
+                            "ok_error" => ReturnMode::OkError,
+                            _ => return Err(meta.error(
+                                "unknown `returns` mode (expected `graph`, `bytes`, or `ok_error`)",
+                            )),
+                        };
+                    Ok(())
                 } else {
                     Err(meta.error("unknown `#[handler]` option"))
                 }
             })?;
-            Ok(graph)
+            Ok(mode)
         }
         syn::Meta::NameValue(_) => Err(Error::new(
             attr.span(),
@@ -126,7 +146,7 @@ struct Param {
     field: Option<(Ident, TokenStream2)>,
 }
 
-fn build_handler(method: &syn::ImplItemFn, returns_graph: bool) -> syn::Result<Built> {
+fn build_handler(method: &syn::ImplItemFn, returns: ReturnMode) -> syn::Result<Built> {
     let name = &method.sig.ident;
     let kind = name.to_string();
 
@@ -185,14 +205,15 @@ fn build_handler(method: &syn::ImplItemFn, returns_graph: bool) -> syn::Result<B
     let call_args = params.iter().map(|p| &p.call_expr);
     let call = quote!(let __result = engine.#name(#(#call_args),*););
 
-    let convert = if returns_graph {
-        quote!(crate::engine::protocol::graph_result(__result))
-    } else {
-        quote! {{
+    let convert = match returns {
+        ReturnMode::Graph => quote!(crate::engine::protocol::graph_result(__result)),
+        ReturnMode::Bytes => quote!(crate::engine::protocol::bytes_result(__result)),
+        ReturnMode::OkError => quote!(Ok(crate::engine::protocol::ok_or_error(__result))),
+        ReturnMode::Default => quote! {{
             use crate::engine::protocol::{JsonResponseKind as _, ResultResponseKind as _};
             let __tag = (&__result).response_kind();
             __tag.into_response(__result)
-        }}
+        }},
     };
 
     let reg_fn_ident = format_ident!("__darkly_handler_{}", name);
