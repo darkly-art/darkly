@@ -1,7 +1,10 @@
-//! Overlay primitives + the masked-stamp overlay texture.
+//! Tool-overlay primitive upload. The wire carries a camelCase `PrimIn`
+//! that maps onto the `#[repr(C)]` GPU [`OverlayPrimitive`] (which is not
+//! itself `Deserialize`), so this conversion can't be macro-derived and the
+//! handler stays hand-written. The mask-texture and hit-test ops are
+//! `#[handler]`-generated on `engine/filters/selection.rs`.
 
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::engine::protocol::{decode, RequestRegistration, Response};
 use crate::gpu::overlay::OverlayPrimitive;
@@ -58,68 +61,21 @@ impl From<PrimIn> for OverlayPrimitive {
 }
 
 pub fn registrations() -> Vec<RequestRegistration> {
-    vec![
-        RequestRegistration {
-            kind: "set_overlay",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    primitives: Vec<PrimIn>,
-                }
-                let r: Req = decode(payload)?;
-                let prims = r
-                    .primitives
-                    .into_iter()
-                    .map(OverlayPrimitive::from)
-                    .collect();
-                engine.set_overlay_primitives(prims);
-                Ok(Response::empty())
-            },
+    vec![RequestRegistration {
+        kind: "set_overlay",
+        handle: |engine, payload, _b| {
+            #[derive(Deserialize)]
+            struct Req {
+                primitives: Vec<PrimIn>,
+            }
+            let r: Req = decode(payload)?;
+            let prims = r
+                .primitives
+                .into_iter()
+                .map(OverlayPrimitive::from)
+                .collect();
+            engine.set_overlay_primitives(prims);
+            Ok(Response::empty())
         },
-        RequestRegistration {
-            kind: "clear_overlay",
-            handle: |engine, _payload, _b| {
-                engine.clear_overlay();
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "set_overlay_mask",
-            handle: |engine, payload, bytes| {
-                // RGBA8 mask uploaded via the binary side-channel; the red
-                // channel is used as grayscale coverage.
-                #[derive(Deserialize)]
-                struct Req {
-                    width: u32,
-                    height: u32,
-                }
-                let r: Req = decode(payload)?;
-                engine.set_overlay_mask(r.width, r.height, bytes);
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "clear_overlay_mask",
-            handle: |engine, _payload, _b| {
-                engine.clear_overlay_mask();
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "overlay_hit_test",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    screen_x: f32,
-                    screen_y: f32,
-                }
-                let r: Req = decode(payload)?;
-                let v = engine
-                    .overlay_hit_test(r.screen_x, r.screen_y)
-                    .map(|i| i as i64)
-                    .unwrap_or(-1);
-                Ok(Response::json(json!({ "value": v })))
-            },
-        },
-    ]
+    }]
 }

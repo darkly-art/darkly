@@ -14,6 +14,8 @@
 //!   helpers consumers reach for (`selection_active`, `selection_cpu_cache`,
 //!   `selection_pixel_bounds`, …).
 
+use darkly_macros::handlers;
+
 use super::super::rendering::commit_undo_region;
 use super::super::{DarklyEngine, ReadbackContext};
 use crate::coord::{CanvasRect, WindowRect};
@@ -89,6 +91,7 @@ fn selection_undo_frame_rect(b: WindowRect) -> CanvasRect {
     CanvasRect::from_xywh(b.x0(), b.y0(), b.width, b.height)
 }
 
+#[handlers]
 impl DarklyEngine {
     // ========================================================================
     // Bridge helpers — read/write the selection's split state through one
@@ -867,16 +870,19 @@ impl DarklyEngine {
         self.push_merged_overlay();
     }
 
+    #[handler]
     pub fn clear_overlay(&mut self) {
         self.tool_overlay.clear();
         self.push_merged_overlay();
     }
 
+    #[handler]
     pub fn overlay_hit_test(&self, screen_x: f32, screen_y: f32) -> Option<usize> {
         self.compositor.tool_overlay().hit_test(screen_x, screen_y)
     }
 
     /// Upload the mask texture sampled by KIND_MASKED_STAMP overlay primitives.
+    #[handler]
     pub fn set_overlay_mask(&mut self, width: u32, height: u32, rgba: &[u8]) {
         self.compositor.tool_overlay_mut().set_mask_texture(
             &self.gpu.device,
@@ -888,6 +894,7 @@ impl DarklyEngine {
         self.compositor.mark_needs_present();
     }
 
+    #[handler]
     pub fn clear_overlay_mask(&mut self) {
         self.compositor.tool_overlay_mut().clear_mask_texture();
         self.compositor.mark_needs_present();

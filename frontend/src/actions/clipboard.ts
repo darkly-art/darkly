@@ -178,7 +178,7 @@ export function registerClipboardActions(): void {
             if (!engine || app.activeLayerId == null) return;
             const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
             if (activateTransform) {
-                const { ok } = await engine.send('paste_in_place_floating', { id: app.activeLayerId });
+                const ok = await engine.send<boolean>('paste_in_place_floating', { id: app.activeLayerId });
                 if (ok) {
                     enterTransformTool();
                     app.requestFrame();

@@ -5,10 +5,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { engine, fakeApp, gizmo, TransformGizmoMock } = vi.hoisted(() => {
     const engine = {
         send: vi.fn((kind: string) => {
-            if (kind === 'has_floating') return Promise.resolve({ value: true });
+            if (kind === 'has_floating') return Promise.resolve(true);
             // A target layer that does NOT match activeLayerId, so dismissOverlay
             // falls through to the commit at the end (the crash site).
-            if (kind === 'floating_target_layer') return Promise.resolve({ id: 999 });
+            if (kind === 'floating_target_layer') return Promise.resolve(999);
             return Promise.resolve({});
         }),
     };

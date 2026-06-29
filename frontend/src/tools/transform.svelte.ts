@@ -29,7 +29,7 @@ async function activate(): Promise<void> {
     } else if (cap === 'destructive') {
         // Floating extract may resolve asynchronously (content-bounds readback);
         // if it isn't ready this frame, `onFrame` picks it up once it is.
-        if (!(await app.engine.send<{ value: boolean }>('has_floating')).value) {
+        if (!(await app.engine.send<boolean>('has_floating'))) {
             await app.engine.send('begin_transform', { id: app.activeLayerId });
         }
         await gizmo.attach(floatingTransformBinding());
@@ -97,7 +97,7 @@ export const transformTool: Tool = {
         // — those attach explicitly via activate(), so Enter/Escape can end
         // the session without it immediately reappearing.
         if (!gizmo.active && app.engine) {
-            if ((await app.engine.send<{ value: boolean }>('has_floating')).value) {
+            if (await app.engine.send<boolean>('has_floating')) {
                 await gizmo.attach(floatingTransformBinding());
             }
         }
@@ -106,12 +106,12 @@ export const transformTool: Tool = {
 
     async dismissOverlay() {
         if (!gizmo) return;
-        if (app.engine && (await app.engine.send<{ value: boolean }>('has_floating')).value) {
+        if (app.engine && await app.engine.send<boolean>('has_floating')) {
             // Activating the floating's own target layer (e.g. paste-as-floating
             // creates a new layer and selects it) is part of the floating
             // workflow, not a user-switched-away signal.
-            const { id } = await app.engine.send<{ id: number }>('floating_target_layer');
-            if (id >= 0 && id === app.activeLayerId) {
+            const id = await app.engine.send<number | null>('floating_target_layer');
+            if (id !== null && id === app.activeLayerId) {
                 return;
             }
         }

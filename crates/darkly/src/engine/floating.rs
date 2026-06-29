@@ -1,5 +1,7 @@
 //! Floating content — paste-in-place and interactive transforms.
 
+use darkly_macros::handlers;
+
 use super::rendering::commit_undo_region;
 use super::{DarklyEngine, PendingTransform};
 use crate::gpu::paint_target::GpuPaintTarget;
@@ -7,6 +9,7 @@ use crate::gpu::transform::{Affine2D, ClearShape, FloatingContent, FloatingMode,
 use crate::layer::{Layer, LayerId};
 use crate::undo::{GpuRegionAction, LayerAddAction};
 
+#[handlers]
 impl DarklyEngine {
     /// Auto-commit any active floating content before performing other edits.
     /// Call this before operations that would conflict with floating content
@@ -18,6 +21,7 @@ impl DarklyEngine {
     }
 
     /// Check if there is active floating content.
+    #[handler]
     pub fn has_floating(&self) -> bool {
         self.floating.is_some()
     }
@@ -42,14 +46,16 @@ impl DarklyEngine {
     /// floating's layer" (dismiss) from "user activated the floating's
     /// own target layer" (keep — paste-as-floating sets active to its
     /// auto-created target).
+    #[handler]
     pub fn floating_target_layer(&self) -> Option<LayerId> {
         self.floating.as_ref().map(|fc| fc.target_layer)
     }
 
     /// Paste from the internal clipboard as floating content on the current
     /// layer/mask. Returns true if floating content was created.
-    pub fn paste_in_place_floating(&mut self, layer_id: LayerId) -> bool {
-        if !self.doc.is_node_editable(layer_id) {
+    #[handler]
+    pub fn paste_in_place_floating(&mut self, id: LayerId) -> bool {
+        if !self.doc.is_node_editable(id) {
             return false;
         }
         // Auto-commit any existing floating content first.
@@ -65,7 +71,7 @@ impl DarklyEngine {
         let source_height = clip.height;
 
         // Upload flat RGBA data to GPU for preview. The target node's format
-        // is read off `compositor.node_texture(layer_id).format` inside the
+        // is read off `compositor.node_texture(id).format` inside the
         // compositor — the engine never speaks the word "mask" here.
         self.compositor.set_floating_content(
             &self.gpu.device,
@@ -74,7 +80,7 @@ impl DarklyEngine {
             source_origin,
             source_width,
             source_height,
-            layer_id,
+            id,
         );
 
         self.floating = Some(FloatingContent {
@@ -82,7 +88,7 @@ impl DarklyEngine {
             source_width,
             source_height,
             matrix: IDENTITY,
-            target_layer: layer_id,
+            target_layer: id,
             mode: FloatingMode::Paste {
                 created_layer_id: None,
             },
@@ -180,8 +186,9 @@ impl DarklyEngine {
     /// compositor's GPU compute system. If cached, setup is synchronous.
     /// Otherwise, an async compute is dispatched and the transform completes
     /// on the next frame via `poll_pending`.
-    pub fn begin_transform(&mut self, layer_id: LayerId) -> bool {
-        if !self.doc.is_node_editable(layer_id) {
+    #[handler]
+    pub fn begin_transform(&mut self, id: LayerId) -> bool {
+        if !self.doc.is_node_editable(id) {
             return false;
         }
         self.auto_commit_floating();
@@ -190,7 +197,7 @@ impl DarklyEngine {
         // own a `PixelBuffer` and a node texture. The doc lookup just verifies
         // the id resolves to one of those two; the rest of the flow uses the
         // node id uniformly.
-        if self.doc.layer(layer_id).is_none() && self.doc.find_filter(layer_id).is_none() {
+        if self.doc.layer(id).is_none() && self.doc.find_filter(id).is_none() {
             return false;
         }
 
@@ -216,7 +223,7 @@ impl DarklyEngine {
                     Some(bounds) => self.set_selection_pixel_bounds(bounds),
                     None => {
                         // Cache not ready — defer until SelectionReadback completes.
-                        self.pending_transform = Some(PendingTransform { node_id: layer_id });
+                        self.pending_transform = Some(PendingTransform { node_id: id });
                         return false;
                     }
                 }
@@ -239,11 +246,11 @@ impl DarklyEngine {
             }
 
             let origin = crate::coord::WindowPoint::new(x, y).to_canvas(self.doc.canvas_origin);
-            self.setup_transform(layer_id, (origin.x, origin.y), w, h);
+            self.setup_transform(id, (origin.x, origin.y), w, h);
             true
         } else {
             // No selection — use compositor content bounds.
-            if let Some(bounds) = self.compositor.content_bounds(layer_id) {
+            if let Some(bounds) = self.compositor.content_bounds(id) {
                 // content_bounds are in layer-local coords; translate to
                 // canvas-space via the layer texture so callers (and floating
                 // preview/uniforms) see canvas coords.
@@ -253,16 +260,16 @@ impl DarklyEngine {
                 }
                 let canvas_origin = self
                     .compositor
-                    .node_texture(layer_id)
+                    .node_texture(id)
                     .map(|t| t.layer_to_canvas(crate::coord::LayerPoint::new(bx, by)))
                     .unwrap_or(crate::coord::CanvasPoint::new(bx as i32, by as i32));
-                self.setup_transform(layer_id, (canvas_origin.x, canvas_origin.y), bw, bh);
+                self.setup_transform(id, (canvas_origin.x, canvas_origin.y), bw, bh);
                 true
             } else {
                 // Bounds not yet computed — request async GPU compute.
                 self.compositor
-                    .request_content_bounds(&self.gpu.device, &self.gpu.queue, layer_id);
-                self.pending_transform = Some(super::PendingTransform { node_id: layer_id });
+                    .request_content_bounds(&self.gpu.device, &self.gpu.queue, id);
+                self.pending_transform = Some(super::PendingTransform { node_id: id });
                 false
             }
         }
@@ -437,6 +444,7 @@ impl DarklyEngine {
 
     /// Update the floating content's transform matrix and rebuild the
     /// per-frame preview texture so the host's blend reads the new shape.
+    #[handler]
     pub fn update_floating_matrix(&mut self, matrix: Affine2D) {
         if let Some(fc) = self.floating.as_mut() {
             fc.matrix = matrix;
@@ -449,6 +457,7 @@ impl DarklyEngine {
 
     /// Commit floating content: render transformed pixels into the target
     /// layer/mask texture via a GPU render pass.
+    #[handler]
     pub fn commit_floating(&mut self) {
         let fc = match self.floating.take() {
             Some(fc) => fc,
@@ -642,6 +651,7 @@ impl DarklyEngine {
     /// Cancel floating content: drop the floating session. The live target
     /// texture was never mutated during a transform (preview lives on a
     /// separate texture), so cancel is a pure session-state reset.
+    #[handler]
     pub fn cancel_floating(&mut self) {
         let fc = match self.floating.take() {
             Some(fc) => fc,
