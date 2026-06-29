@@ -16,6 +16,68 @@ fn transform_to_kurbo(t: &crate::transform::Transform) -> kurbo::Affine {
     kurbo::Affine::new([a as f64, c as f64, b as f64, d as f64, tx as f64, ty as f64])
 }
 
+/// Inverse of [`transform_to_kurbo`]: kurbo column-major `[a, b, c, d, e, f]`
+/// → Darkly row-major `[a, c, e, b, d, f]`. The one place this reordering
+/// lives, so consumers never reshuffle affine components inline.
+fn kurbo_to_affine(a: kurbo::Affine) -> crate::transform::Affine2D {
+    let [k0, k1, k2, k3, k4, k5] = a.as_coeffs();
+    [
+        k0 as f32, k2 as f32, k4 as f32, k1 as f32, k3 as f32, k5 as f32,
+    ]
+}
+
+/// The logical operations that route through one `Property::VectorObjects`
+/// undo kind. Each gets its own coalesce lane so a typing run, a style-slider
+/// drag, and a gizmo drag don't merge into a single undo step.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VectorOpKind {
+    Content,
+    Style,
+    Transform,
+}
+
+/// Coalesce discriminator for one object's edits: distinct per `(object, op)`,
+/// so adjacent same-object same-op edits merge but a different object or op
+/// starts a fresh undo step. (Coalescing only inspects the stack top, so
+/// non-adjacent same-tag ops never merge across an intervening different one.)
+fn vector_coalesce_tag(object: crate::layer::ObjectId, op: VectorOpKind) -> u64 {
+    let op = match op {
+        VectorOpKind::Content => 0,
+        VectorOpKind::Style => 1,
+        VectorOpKind::Transform => 2,
+    };
+    (object.0 << 2) | op
+}
+
+/// Extract an RGBA byte tuple from an optional solid fill, defaulting to opaque
+/// black for a missing or non-solid brush (mirrors the render-time fallback).
+fn brush_rgba(fill: &Option<peniko::Brush>) -> [u8; 4] {
+    match fill {
+        Some(peniko::Brush::Solid(c)) => {
+            let rgba8 = c.to_rgba8();
+            [rgba8.r, rgba8.g, rgba8.b, rgba8.a]
+        }
+        _ => [0, 0, 0, 255],
+    }
+}
+
+/// What [`DarklyEngine::text_object_info`] reports for re-opening a text object
+/// in the editor — content, style, fill color, plane-space placement, and
+/// shaped bounds.
+pub struct TextObjectInfo {
+    pub content: String,
+    pub font_family: String,
+    pub size: f32,
+    pub weight: f32,
+    pub italic: bool,
+    pub align: crate::layer::TextAlign,
+    pub color: [u8; 4],
+    pub ox: f32,
+    pub oy: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 impl DarklyEngine {
     // --- Layer CRUD ---
 
@@ -43,24 +105,85 @@ impl DarklyEngine {
         self.fonts.list_fonts().to_vec()
     }
 
-    /// Shaped bounding box `(width, height)` in canvas pixels of the layer's
-    /// first text object — used to size/place the editing overlay. `None` if
-    /// the id isn't a vector layer with text.
-    pub fn text_layer_bounds(&mut self, id: LayerId) -> Option<(f32, f32)> {
-        let Some(Layer::Vector(v)) = self.doc.layer(id) else {
+    /// Local-space bounding box of one object on a vector layer, in the
+    /// object's own coordinate frame (before its `transform`). Text shapes via
+    /// parley from `(0, 0)` at the top-left of the line box; a path uses its
+    /// kurbo bounding box. `None` if the id pair doesn't resolve. The single
+    /// shaping-to-bounds convention — hit-testing, overlay sizing, and the
+    /// gizmo bbox all read it.
+    pub fn vector_object_local_bbox(
+        &mut self,
+        layer_id: LayerId,
+        object: crate::layer::ObjectId,
+    ) -> Option<kurbo::Rect> {
+        let obj = match self.doc.layer(layer_id) {
+            Some(Layer::Vector(v)) => v.object(object).cloned(),
+            _ => None,
+        }?;
+        self.object_bbox(&obj)
+    }
+
+    /// Local bbox of an owned object. Takes the object by reference so callers
+    /// iterating a cloned object list can shape each without re-borrowing the
+    /// document while `&mut self.fonts` is live.
+    fn object_bbox(&mut self, obj: &crate::layer::VectorObject) -> Option<kurbo::Rect> {
+        use kurbo::Shape;
+        match &obj.source {
+            crate::layer::ObjectSource::Text(t) => {
+                let layout = self.fonts.shape(t);
+                Some(kurbo::Rect::new(
+                    0.0,
+                    0.0,
+                    layout.width() as f64,
+                    layout.height() as f64,
+                ))
+            }
+            crate::layer::ObjectSource::Path(p) => Some(p.bounding_box()),
+        }
+    }
+
+    /// Hit-test a plane-space point against the objects of a vector layer,
+    /// returning the topmost object covering it (objects draw bottom-to-top, so
+    /// the iteration is reversed). The query point is mapped into each object's
+    /// local frame by the inverse of `layer_transform * obj.transform` — the
+    /// same composition `build_scene` draws through — so the test is tight even
+    /// for rotated/scaled text. `None` for a miss, a locked/hidden layer, or a
+    /// non-vector id. `(x, y)` are PLANE coordinates (see
+    /// `docs/coordinate-systems.md`).
+    pub fn hit_test_vector_object(
+        &mut self,
+        layer_id: LayerId,
+        x: f64,
+        y: f64,
+    ) -> Option<crate::layer::ObjectId> {
+        if !self.doc.is_node_editable(layer_id) || !self.doc.effective_visible(layer_id) {
             return None;
+        }
+        let (objects, layer_affine) = match self.doc.layer(layer_id) {
+            Some(Layer::Vector(v)) => (v.objects.clone(), transform_to_kurbo(&v.transform)),
+            _ => return None,
         };
-        let text = v.objects.iter().find_map(|o| match &o.source {
-            crate::layer::ObjectSource::Text(t) => Some(t.clone()),
-            crate::layer::ObjectSource::Path(_) => None,
-        })?;
-        let layout = self.fonts.shape(&text);
-        Some((layout.width(), layout.height()))
+        let query = kurbo::Point::new(x, y);
+        for obj in objects.iter().rev() {
+            let Some(bbox) = self.object_bbox(obj) else {
+                continue;
+            };
+            let composed = layer_affine * obj.transform;
+            if composed.determinant().abs() < 1e-12 {
+                continue;
+            }
+            let local = composed.inverse() * query;
+            if bbox.contains(local) {
+                return Some(obj.id);
+            }
+        }
+        None
     }
 
     /// Add a vector layer seeded with one text object, placed so the text's
     /// top-left baseline origin sits at canvas `(x, y)`, filled with `color`
-    /// (RGBA, 0–255). Returns the new layer id. One undo step.
+    /// (RGBA, 0–255). Returns the new layer id and the stamped object id. One
+    /// undo step.
     pub fn add_text_layer(
         &mut self,
         text: crate::layer::TextProps,
@@ -68,22 +191,23 @@ impl DarklyEngine {
         y: f64,
         color: [u8; 4],
         anchor: Option<LayerId>,
-    ) -> LayerId {
+    ) -> (LayerId, crate::layer::ObjectId) {
         let id = self.doc.add_vector_layer(anchor);
         let fill = peniko::Brush::Solid(peniko::Color::from_rgba8(
             color[0], color[1], color[2], color[3],
         ));
         let obj = crate::layer::VectorObject::text(text, kurbo::Affine::translate((x, y)), fill);
-        if let Some(LayerNode::Layer(Layer::Vector(v))) = self.doc.find_node_mut(id) {
-            v.objects.push(obj);
-        }
+        let object_id = match self.doc.find_node_mut(id) {
+            Some(LayerNode::Layer(Layer::Vector(v))) => v.push_object(obj),
+            _ => crate::layer::ObjectId::UNASSIGNED,
+        };
         self.sync_vector_layer(id);
         self.compositor.mark_dirty();
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
         self.push_undo(Box::new(LayerAddAction::new(id, parent, pos)));
-        id
+        (id, object_id)
     }
 
     /// Ensure the compositor's GPU state for a vector layer exists and rebuild
@@ -102,17 +226,27 @@ impl DarklyEngine {
         self.compositor.set_vector_scene(id, scene);
     }
 
-    /// Replace the content string of the layer's first text object.
-    pub fn set_text_content(&mut self, id: LayerId, content: String) {
-        self.edit_first_text(id, |t| t.content = content);
+    /// Replace the content string of one text object on a vector layer.
+    pub fn set_text_content(
+        &mut self,
+        id: LayerId,
+        object: crate::layer::ObjectId,
+        content: String,
+    ) {
+        self.edit_vector_object(id, object, VectorOpKind::Content, |obj| {
+            if let crate::layer::ObjectSource::Text(t) = &mut obj.source {
+                t.content = content;
+            }
+        });
     }
 
-    /// Update one or more style fields of the layer's first text object.
-    /// `None` arguments leave that field unchanged.
+    /// Update one or more style fields (and/or fill color) of one text object
+    /// on a vector layer. `None` arguments leave that field unchanged.
     #[allow(clippy::too_many_arguments)]
     pub fn set_text_style(
         &mut self,
         id: LayerId,
+        object: crate::layer::ObjectId,
         font_family: Option<String>,
         size: Option<f32>,
         weight: Option<f32>,
@@ -120,7 +254,7 @@ impl DarklyEngine {
         align: Option<crate::layer::TextAlign>,
         color: Option<[u8; 4]>,
     ) {
-        self.edit_first_text_object(id, |obj| {
+        self.edit_vector_object(id, object, VectorOpKind::Style, |obj| {
             if let crate::layer::ObjectSource::Text(t) = &mut obj.source {
                 if let Some(f) = font_family {
                     t.font_family = f;
@@ -150,22 +284,18 @@ impl DarklyEngine {
         });
     }
 
-    /// Mutate the [`crate::layer::TextProps`] of the layer's first text object,
-    /// recording one coalescing undo step and re-realizing.
-    fn edit_first_text<F: FnOnce(&mut crate::layer::TextProps)>(&mut self, id: LayerId, f: F) {
-        self.edit_first_text_object(id, |obj| {
-            if let crate::layer::ObjectSource::Text(t) = &mut obj.source {
-                f(t);
-            }
-        });
-    }
-
-    /// Mutate the first text-bearing [`crate::layer::VectorObject`] in place,
-    /// recording the whole object-list swap as one coalescing undo step and
-    /// re-realizing the layer.
-    fn edit_first_text_object<F: FnOnce(&mut crate::layer::VectorObject)>(
+    /// The single chokepoint for editing one object on a vector layer in place.
+    /// Clones the object list, mutates the object matched by `object`, swaps the
+    /// list back, and records the whole swap as one undo step — coalesced on
+    /// `(object, op)` so a typing run, a style-slider drag, or a gizmo drag each
+    /// collapse to one step, but switching object or op kind starts a new one
+    /// (see [`crate::undo::PropertyAction::new_coalescing`]). Re-realizes the
+    /// layer's vello scene. No-op if the id pair doesn't resolve.
+    pub(crate) fn edit_vector_object<F: FnOnce(&mut crate::layer::VectorObject)>(
         &mut self,
         id: LayerId,
+        object: crate::layer::ObjectId,
+        op: VectorOpKind,
         f: F,
     ) {
         let Some(Layer::Vector(v)) = self.doc.layer(id) else {
@@ -173,23 +303,113 @@ impl DarklyEngine {
         };
         let old = v.objects.clone();
         let mut new = old.clone();
-        let Some(obj) = new
-            .iter_mut()
-            .find(|o| matches!(o.source, crate::layer::ObjectSource::Text(_)))
-        else {
+        let Some(obj) = new.iter_mut().find(|o| o.id == object) else {
             return;
         };
         f(obj);
         if let Some(LayerNode::Layer(Layer::Vector(vm))) = self.doc.find_node_mut(id) {
             vm.objects = new.clone();
         }
-        self.coalesce_property_undo(PropertyAction::new(
+        self.coalesce_property_undo(PropertyAction::new_coalescing(
             id,
             Property::VectorObjects(old),
             Property::VectorObjects(new),
+            vector_coalesce_tag(object, op),
         ));
         self.sync_vector_layer(id);
         self.compositor.mark_dirty();
+    }
+
+    /// Read everything the text tool needs to re-open one text object for
+    /// editing: its content, style, fill color (RGBA 0–255), the placement
+    /// origin in PLANE space (the translation of `layer_transform *
+    /// obj.transform`), and the shaped bounds. `None` if the id pair doesn't
+    /// resolve to a text object.
+    pub fn text_object_info(
+        &mut self,
+        id: LayerId,
+        object: crate::layer::ObjectId,
+    ) -> Option<TextObjectInfo> {
+        let (obj, layer_affine) = match self.doc.layer(id) {
+            Some(Layer::Vector(v)) => {
+                (v.object(object).cloned()?, transform_to_kurbo(&v.transform))
+            }
+            _ => return None,
+        };
+        let crate::layer::ObjectSource::Text(text) = &obj.source else {
+            return None;
+        };
+        let text = text.clone();
+        let bbox = self.object_bbox(&obj)?;
+        let origin = (layer_affine * obj.transform) * kurbo::Point::ORIGIN;
+        Some(TextObjectInfo {
+            content: text.content,
+            font_family: text.font_family,
+            size: text.size,
+            weight: text.weight,
+            italic: matches!(text.style, crate::layer::TextStyle::Italic),
+            align: text.align,
+            color: brush_rgba(&obj.fill),
+            ox: origin.x as f32,
+            oy: origin.y as f32,
+            width: bbox.width() as f32,
+            height: bbox.height() as f32,
+        })
+    }
+
+    /// Read one object's gizmo geometry: its local bbox size plus the full
+    /// canvas affine `G = layer_transform * obj.transform`, reordered into the
+    /// frontend's row-major `Affine2D`. The gizmo's origin is `(0, 0)` — the
+    /// placement is folded into `G`, so `toCanvas(local) = G·local` draws the
+    /// box tight around the object. `None` if the id pair doesn't resolve.
+    pub fn vector_object_info(
+        &mut self,
+        id: LayerId,
+        object: crate::layer::ObjectId,
+    ) -> Option<(f32, f32, f32, f32, crate::transform::Affine2D)> {
+        let (obj, layer_affine) = match self.doc.layer(id) {
+            Some(Layer::Vector(v)) => {
+                (v.object(object).cloned()?, transform_to_kurbo(&v.transform))
+            }
+            _ => return None,
+        };
+        let bbox = self.object_bbox(&obj)?;
+        let g = layer_affine * obj.transform;
+        Some((
+            0.0,
+            0.0,
+            bbox.width() as f32,
+            bbox.height() as f32,
+            kurbo_to_affine(g),
+        ))
+    }
+
+    /// Set one object's transform from the gizmo's output. `gizmo_canvas` is the
+    /// full canvas affine `G` the gizmo produced, in Darkly's row-major
+    /// [`crate::transform::Transform`]; the layer transform is stripped
+    /// (`obj.transform = layer_transform⁻¹ · G`) so per-object transform stays
+    /// correct once a layer-level vector transform ships. Reads the object's
+    /// current transform as the undo `old`, coalesced under
+    /// [`VectorOpKind::Transform`] so a whole gizmo drag is one undo step.
+    /// Re-realizes the vello scene each call (raster-first; the same per-frame
+    /// rebuild `update_void_transform` does).
+    pub fn set_vector_object_transform(
+        &mut self,
+        id: LayerId,
+        object: crate::layer::ObjectId,
+        gizmo_canvas: crate::transform::Transform,
+    ) {
+        let layer_affine = match self.doc.layer(id) {
+            Some(Layer::Vector(v)) => transform_to_kurbo(&v.transform),
+            _ => return,
+        };
+        if layer_affine.determinant().abs() < 1e-12 {
+            return;
+        }
+        let new_transform = layer_affine.inverse() * transform_to_kurbo(&gizmo_canvas);
+        self.edit_vector_object(id, object, VectorOpKind::Transform, |obj| {
+            obj.transform = new_transform;
+        });
     }
 
     pub fn add_group(&mut self, anchor: Option<LayerId>) -> LayerId {
@@ -1090,5 +1310,113 @@ impl DarklyEngine {
             Property::Passthrough(old),
             Property::Passthrough(passthrough),
         )));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::coord::CanvasPoint;
+    use crate::gpu::context::GpuContext;
+    use crate::gpu::test_utils::test_device;
+    use crate::layer::{TextProps, VectorObject};
+
+    fn test_engine() -> DarklyEngine {
+        let (device, queue) = test_device();
+        let gpu = GpuContext::new_headless(device, queue);
+        DarklyEngine::new(gpu, 512, 256)
+    }
+
+    /// Push a second/third text object onto an existing vector layer (the
+    /// public API mints one layer per text; multi-object layers exercise the
+    /// topmost-wins iteration). Returns the stamped id.
+    fn push_text(
+        engine: &mut DarklyEngine,
+        layer: LayerId,
+        s: &str,
+        x: f64,
+        y: f64,
+    ) -> crate::layer::ObjectId {
+        let mut text = TextProps::new(s.to_string());
+        text.size = 40.0;
+        let fill = peniko::Brush::Solid(peniko::Color::from_rgba8(255, 255, 255, 255));
+        let obj = VectorObject::text(text, kurbo::Affine::translate((x, y)), fill);
+        let id = match engine.doc.find_node_mut(layer) {
+            Some(LayerNode::Layer(Layer::Vector(v))) => v.push_object(obj),
+            _ => panic!("not a vector layer"),
+        };
+        engine.sync_vector_layer(layer);
+        id
+    }
+
+    #[test]
+    fn hit_test_finds_topmost_object() {
+        let mut engine = test_engine();
+        // A non-zero canvas origin must not shift hit-testing: the query and the
+        // object placement are both PLANE coords, so a crop can't break it.
+        engine.doc.canvas_origin = CanvasPoint::new(40, 25);
+
+        let mut text = TextProps::new("Ag".to_string());
+        text.size = 40.0;
+        let (layer, a) = engine.add_text_layer(text, 10.0, 10.0, [255, 255, 255, 255], None);
+        // A second object, far to the right, that doesn't overlap `a`.
+        let b = push_text(&mut engine, layer, "Ag", 200.0, 10.0);
+
+        // A point a few px into each glyph box hits that object…
+        assert_eq!(engine.hit_test_vector_object(layer, 14.0, 22.0), Some(a));
+        assert_eq!(engine.hit_test_vector_object(layer, 204.0, 22.0), Some(b));
+        // …empty space hits nothing.
+        assert_eq!(engine.hit_test_vector_object(layer, 480.0, 240.0), None);
+
+        // A third object stacked directly over `a` — drawn last, so it wins the
+        // overlap (topmost-first via reverse iteration).
+        let c = push_text(&mut engine, layer, "Ag", 10.0, 10.0);
+        assert_eq!(engine.hit_test_vector_object(layer, 14.0, 22.0), Some(c));
+    }
+
+    #[test]
+    fn locked_or_hidden_layer_is_not_hit() {
+        let mut engine = test_engine();
+        let mut text = TextProps::new("Ag".to_string());
+        text.size = 40.0;
+        let (layer, _a) = engine.add_text_layer(text, 10.0, 10.0, [255, 255, 255, 255], None);
+        assert!(engine.hit_test_vector_object(layer, 14.0, 22.0).is_some());
+
+        engine.set_node_locked(layer, true);
+        assert_eq!(engine.hit_test_vector_object(layer, 14.0, 22.0), None);
+        engine.set_node_locked(layer, false);
+        engine.set_layer_visible(layer, false);
+        assert_eq!(engine.hit_test_vector_object(layer, 14.0, 22.0), None);
+    }
+
+    #[test]
+    fn vector_object_info_matrix_round_trips_through_set() {
+        let mut engine = test_engine();
+        let mut text = TextProps::new("Ag".to_string());
+        text.size = 40.0;
+        let (layer, obj) = engine.add_text_layer(text, 30.0, 20.0, [255, 255, 255, 255], None);
+
+        // The reported gizmo matrix, fed straight back as the gizmo's output,
+        // reproduces the same object transform (origin is folded into `G`).
+        let (ox, oy, w, h, matrix) = engine.vector_object_info(layer, obj).expect("info");
+        assert_eq!((ox, oy), (0.0, 0.0));
+        assert!(w > 0.0 && h > 0.0);
+
+        let before = match engine.doc.layer(layer) {
+            Some(Layer::Vector(v)) => v.object(obj).unwrap().transform,
+            _ => unreachable!(),
+        };
+        engine.set_vector_object_transform(
+            layer,
+            obj,
+            crate::transform::Transform::from_affine(matrix),
+        );
+        let after = match engine.doc.layer(layer) {
+            Some(Layer::Vector(v)) => v.object(obj).unwrap().transform,
+            _ => unreachable!(),
+        };
+        for (b, a) in before.as_coeffs().iter().zip(after.as_coeffs().iter()) {
+            assert!((b - a).abs() < 1e-4, "round-trip drift: {b} vs {a}");
+        }
     }
 }

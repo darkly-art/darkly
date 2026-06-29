@@ -293,12 +293,30 @@ pub enum ObjectSource {
     Text(TextProps),
 }
 
+/// Stable identity of a [`VectorObject`] within its owning [`VectorLayer`].
+/// Scoped per layer (not globally) and minted monotonically by
+/// [`VectorLayer::push_object`] — never reused, so a delete-then-add can't
+/// alias a stale reference. Object addressing uses this rather than a list
+/// index, which would shift under reorder/insert/delete.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ObjectId(pub u64);
+
+impl ObjectId {
+    /// The id stamped on an object that hasn't been pushed onto a layer yet
+    /// (constructors leave this placeholder; [`VectorLayer::push_object`]
+    /// overwrites it with the layer's next monotonic id).
+    pub const UNASSIGNED: ObjectId = ObjectId(0);
+}
+
 /// One drawable object on a [`VectorLayer`]: geometry/text plus its local
 /// transform and fill/stroke style. Geometry and style speak the standard
 /// kurbo/peniko vocabulary every renderer in this space consumes, so objects
 /// persist through their derived `serde` impls almost for free.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VectorObject {
+    /// Stable per-layer identity. Stamped by [`VectorLayer::push_object`];
+    /// constructors leave [`ObjectId::UNASSIGNED`] until then.
+    pub id: ObjectId,
     /// Object-local affine, applied on top of the layer transform. For text
     /// this carries the placement (the caret position the tool clicked).
     pub transform: Affine,
@@ -308,9 +326,11 @@ pub struct VectorObject {
 }
 
 impl VectorObject {
-    /// A text object filled with a solid color, placed by `transform`.
+    /// A text object filled with a solid color, placed by `transform`. The id
+    /// is left [`ObjectId::UNASSIGNED`] — the owning layer stamps it on push.
     pub fn text(text: TextProps, transform: Affine, fill: Brush) -> Self {
         VectorObject {
+            id: ObjectId::UNASSIGNED,
             transform,
             fill: Some(fill),
             stroke: None,
@@ -329,6 +349,9 @@ pub struct VectorLayer {
     pub common: NodeCommon,
     pub blend: BlendProps,
     pub objects: Vec<VectorObject>,
+    /// Next [`ObjectId`] to mint. Monotonic, never reused — survives
+    /// serialization so reload can't re-issue a live id.
+    pub next_object_id: u64,
     /// Layer-level user transform (gizmo-edited). Baked into the realized
     /// texture at rasterization — a change is an object change and re-rasters
     /// on commit, never a shader-time affine on a stale texture.
@@ -343,9 +366,36 @@ impl VectorLayer {
             common: NodeCommon::new(name),
             blend: BlendProps::new(),
             objects: Vec::new(),
+            next_object_id: 0,
             transform: crate::transform::Transform::identity(),
             filters: Vec::new(),
         }
+    }
+
+    /// Append `obj`, stamping it with a fresh monotonic [`ObjectId`] and
+    /// returning that id. The single entry point for adding objects — direct
+    /// `objects.push` would leave the id unassigned.
+    pub fn push_object(&mut self, mut obj: VectorObject) -> ObjectId {
+        let id = ObjectId(self.next_object_id);
+        self.next_object_id += 1;
+        obj.id = id;
+        self.objects.push(obj);
+        id
+    }
+
+    /// Borrow the object with `id`, if present.
+    pub fn object(&self, id: ObjectId) -> Option<&VectorObject> {
+        self.objects.iter().find(|o| o.id == id)
+    }
+
+    /// Mutably borrow the object with `id`, if present.
+    pub fn object_mut(&mut self, id: ObjectId) -> Option<&mut VectorObject> {
+        self.objects.iter_mut().find(|o| o.id == id)
+    }
+
+    /// Index of the object with `id` in the draw-order list, if present.
+    pub fn index_of(&self, id: ObjectId) -> Option<usize> {
+        self.objects.iter().position(|o| o.id == id)
     }
 }
 
@@ -561,10 +611,11 @@ impl Layer {
             // A full-frame filter has no meaningful transform — there are no
             // pixels of its own to move.
             Layer::Filter(_) => TransformCapability::None,
-            // A vector layer's transform re-rasterizes on commit (raster-first;
-            // not `Live`'s shader-time affine on a stale texture). The gizmo
-            // wiring for that commit path is future work — text-first ships
-            // placement via per-object affines — so it is not user-draggable yet.
+            // Whole-layer vector transform is `None`: the transform gizmo drives
+            // individual objects, not the layer as a unit. Per-object transform
+            // is a different axis, routed by the object transform binding (see
+            // `frontend/src/tools/transform.svelte.ts`) rather than this
+            // layer-level capability — so a vector layer reports `None` here.
             Layer::Vector(_) => TransformCapability::None,
         }
     }

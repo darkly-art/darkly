@@ -1,8 +1,24 @@
 import { app } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
+import { canvasToScreen } from '../canvas/coordinates';
 import TextOptions from '../ui/TextOptions.svelte';
 import type { Tool, ToolContext } from './registry';
-import { buildCommit, type CommitRequest, type EditState } from './text_commit';
+import { buildCommit, type CommitRequest, type EditState, type Rgba } from './text_commit';
+
+/** What `text_object_info` reports for re-opening an existing text object. */
+interface TextObjectInfo {
+    content: string;
+    font_family: string;
+    size: number;
+    weight: number;
+    italic: boolean;
+    align: string;
+    color: [number, number, number, number];
+    ox: number;
+    oy: number;
+    width: number;
+    height: number;
+}
 
 /** Persisted-ish session options for the text tool, surfaced in TextOptions. */
 class TextSession {
@@ -15,9 +31,29 @@ class TextSession {
     italic = $state(false);
     /** CSS weight, 100–900. */
     weight = $state(400);
+    /** The object currently open for editing, or null when placing new. When
+     *  set, TextOptions style changes also dispatch a live `set_text_style`. */
+    activeEdit = $state<{ layerId: number; objectId: number } | null>(null);
 }
 
 export const textSession = new TextSession();
+
+/** Push a live style change to the object currently being edited, if any.
+ *  When `activeEdit` is null (placing a new block) this is a no-op — the style
+ *  is baked into `add_text` at commit instead. */
+export async function pushStyleEdit(fields: {
+    font_family?: string;
+    size?: number;
+    weight?: number;
+    italic?: boolean;
+    align?: string;
+}): Promise<void> {
+    const edit = textSession.activeEdit;
+    if (!edit || !app.engine) return;
+    await app.engine.send('set_text_style', { id: edit.layerId, object: edit.objectId, ...fields });
+    restyleActiveOverlay();
+    app.requestFrame();
+}
 
 // --- DOM overlay management ----------------------------------------------
 //
@@ -41,7 +77,14 @@ function colorCss(c: { r: number; g: number; b: number; a: number }): string {
     return `rgba(${c.r}, ${c.g}, ${c.b}, ${c.a / 255})`;
 }
 
-function beginEdit(ctx: ToolContext, state: EditState, screenX: number, screenY: number, initial: string) {
+function beginEdit(
+    ctx: ToolContext,
+    state: EditState,
+    screenX: number,
+    screenY: number,
+    initial: string,
+    color: Rgba,
+) {
     cancelEdit(); // tear down any prior overlay without committing
 
     const container = ctx.canvasEl.parentElement;
@@ -53,7 +96,6 @@ function beginEdit(ctx: ToolContext, state: EditState, screenX: number, screenY:
     el.textContent = initial;
     el.setAttribute('data-darkly-text-overlay', '');
 
-    const px = textSession.size * app.zoom;
     Object.assign(el.style, {
         position: 'absolute',
         left: `${screenX}px`,
@@ -63,16 +105,15 @@ function beginEdit(ctx: ToolContext, state: EditState, screenX: number, screenY:
         border: 'none',
         outline: '1px dashed var(--accent, #6cf)',
         background: 'transparent',
-        color: colorCss(app.foreground),
-        font: `${textSession.italic ? 'italic ' : ''}${textSession.weight} ${px}px "${textSession.fontFamily}", sans-serif`,
+        color: colorCss(color),
         lineHeight: '1.2',
         whiteSpace: 'pre',
-        textAlign: textSession.align === 'justified' ? 'justify' : textSession.align,
         transformOrigin: 'top left',
         zIndex: '50',
         minWidth: '1ch',
-        caretColor: colorCss(app.foreground),
+        caretColor: colorCss(color),
     } as Partial<CSSStyleDeclaration>);
+    applyOverlayFont(el);
 
     const onKeyDown = (e: KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -91,6 +132,10 @@ function beginEdit(ctx: ToolContext, state: EditState, screenX: number, screenY:
     el.addEventListener('blur', onBlur);
     container.appendChild(el);
     active = { el, state, onBlur, onKeyDown };
+    textSession.activeEdit =
+        state.layerId !== null && state.objectId !== null
+            ? { layerId: state.layerId, objectId: state.objectId }
+            : null;
 
     // Focus + place caret at the end on the next tick (after attach).
     queueMicrotask(() => {
@@ -113,7 +158,22 @@ function teardown(): EditState | null {
     el.removeEventListener('blur', onBlur);
     el.remove();
     active = null;
+    textSession.activeEdit = null;
     return state;
+}
+
+/** Apply the current session font (family/weight/italic/size·zoom) + alignment
+ *  to an overlay element. Shared by initial styling and live restyle. */
+function applyOverlayFont(el: HTMLElement): void {
+    const px = textSession.size * app.zoom;
+    el.style.font = `${textSession.italic ? 'italic ' : ''}${textSession.weight} ${px}px "${textSession.fontFamily}", sans-serif`;
+    el.style.textAlign = textSession.align === 'justified' ? 'justify' : textSession.align;
+}
+
+/** Restyle the live overlay (if any) so a panel style change is reflected in
+ *  the contenteditable, not just the re-rasterized object underneath. */
+function restyleActiveOverlay(): void {
+    if (active) applyOverlayFont(active.el);
 }
 
 function commitEdit() {
@@ -179,19 +239,62 @@ export const textTool: Tool = {
         return active !== null;
     },
 
-    onPointerDown(ctx, e, cx, cy) {
+    async onPointerDown(ctx, e, cx, cy) {
         // A click while editing commits the current block first.
         if (active) {
             commitEdit();
             return;
         }
+        const engine = app.engine;
+        const layerId = app.activeLayerId ?? null;
+
+        // If the active layer is a vector layer, a click on an existing text
+        // object re-opens it for editing rather than placing a new block.
+        if (engine && layerId !== null) {
+            const hit = await engine.send<{ object: number }>('hit_test_vector_object', {
+                id: layerId,
+                x: cx,
+                y: cy,
+            });
+            if (hit && hit.object >= 0) {
+                const info = await engine.send<TextObjectInfo | null>('text_object_info', {
+                    id: layerId,
+                    object: hit.object,
+                });
+                if (info) {
+                    // Adopt the object's style into the panel — but NOT its color
+                    // (foreground is never mutated; the overlay renders in the
+                    // object's own color).
+                    textSession.size = info.size;
+                    textSession.fontFamily = info.font_family;
+                    textSession.align = info.align;
+                    textSession.italic = info.italic;
+                    textSession.weight = info.weight;
+
+                    const screen = canvasToScreen(info.ox, info.oy, ctx.canvasEl);
+                    const state: EditState = {
+                        layerId,
+                        objectId: hit.object,
+                        cx: info.ox,
+                        cy: info.oy,
+                        anchorLayerId: layerId,
+                    };
+                    const [r, g, b, a] = info.color;
+                    beginEdit(ctx, state, screen.x, screen.y, info.content, { r, g, b, a });
+                    return;
+                }
+            }
+        }
+
+        // Miss (or no vector layer) → place a brand-new text block at the click.
         const state: EditState = {
             layerId: null,
+            objectId: null,
             cx,
             cy,
-            anchorLayerId: app.activeLayerId ?? null,
+            anchorLayerId: layerId,
         };
-        beginEdit(ctx, state, e.offsetX, e.offsetY, '');
+        beginEdit(ctx, state, e.offsetX, e.offsetY, '', app.foreground);
     },
 
     onPointerMove() {},

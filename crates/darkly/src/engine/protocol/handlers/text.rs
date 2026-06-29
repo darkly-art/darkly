@@ -1,11 +1,12 @@
-//! Text / vector-layer protocol handlers — create a text layer, edit its
-//! content/style, and list available fonts. Auto-discovered by `build.rs`.
+//! Text / vector-layer protocol handlers — create a text layer, hit-test and
+//! edit its objects (content / style / transform), and list available fonts.
+//! Auto-discovered by `build.rs`.
 
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::engine::protocol::{decode, RequestRegistration, Response};
-use crate::layer::{LayerId, TextAlign, TextProps, TextStyle};
+use crate::layer::{LayerId, ObjectId, TextAlign, TextProps, TextStyle};
 
 fn parse_align(s: &str) -> TextAlign {
     match s {
@@ -13,6 +14,15 @@ fn parse_align(s: &str) -> TextAlign {
         "end" => TextAlign::End,
         "justified" => TextAlign::Justified,
         _ => TextAlign::Start,
+    }
+}
+
+fn align_str(a: TextAlign) -> &'static str {
+    match a {
+        TextAlign::Start => "start",
+        TextAlign::Center => "center",
+        TextAlign::End => "end",
+        TextAlign::Justified => "justified",
     }
 }
 
@@ -24,10 +34,17 @@ fn parse_style(italic: bool) -> TextStyle {
     }
 }
 
-/// `{ width, height }` shaped-bounds envelope returned by the create/edit
+/// `{ id, width, height }` shaped-bounds envelope returned by the create/edit
 /// handlers so the frontend can position its editing overlay.
-fn bounds_json(engine: &mut crate::engine::DarklyEngine, id: LayerId) -> serde_json::Value {
-    let (w, h) = engine.text_layer_bounds(id).unwrap_or((0.0, 0.0));
+fn bounds_json(
+    engine: &mut crate::engine::DarklyEngine,
+    id: LayerId,
+    object: ObjectId,
+) -> serde_json::Value {
+    let (w, h) = engine
+        .vector_object_local_bbox(id, object)
+        .map(|r| (r.width() as f32, r.height() as f32))
+        .unwrap_or((0.0, 0.0));
     json!({ "id": id.to_ffi(), "width": w, "height": h })
 }
 
@@ -73,8 +90,8 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 }
                 let anchor = (r.anchor >= 0).then(|| LayerId::from_ffi(r.anchor as u64));
                 let color = r.color.unwrap_or([0, 0, 0, 255]);
-                let id = engine.add_text_layer(text, r.x, r.y, color, anchor);
-                Ok(Response::json(bounds_json(engine, id)))
+                let (id, object) = engine.add_text_layer(text, r.x, r.y, color, anchor);
+                Ok(Response::json(bounds_json(engine, id, object)))
             },
         },
         RequestRegistration {
@@ -83,12 +100,14 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 #[derive(Deserialize)]
                 struct Req {
                     id: u64,
+                    object: u64,
                     content: String,
                 }
                 let r: Req = decode(payload)?;
                 let id = LayerId::from_ffi(r.id);
-                engine.set_text_content(id, r.content);
-                Ok(Response::json(bounds_json(engine, id)))
+                let object = ObjectId(r.object);
+                engine.set_text_content(id, object, r.content);
+                Ok(Response::json(bounds_json(engine, id, object)))
             },
         },
         RequestRegistration {
@@ -97,6 +116,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 #[derive(Deserialize)]
                 struct Req {
                     id: u64,
+                    object: u64,
                     #[serde(default)]
                     font_family: Option<String>,
                     #[serde(default)]
@@ -112,8 +132,10 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 }
                 let r: Req = decode(payload)?;
                 let id = LayerId::from_ffi(r.id);
+                let object = ObjectId(r.object);
                 engine.set_text_style(
                     id,
+                    object,
                     r.font_family,
                     r.size,
                     r.weight,
@@ -121,7 +143,102 @@ pub fn registrations() -> Vec<RequestRegistration> {
                     r.align.as_deref().map(parse_align),
                     r.color,
                 );
-                Ok(Response::json(bounds_json(engine, id)))
+                Ok(Response::json(bounds_json(engine, id, object)))
+            },
+        },
+        RequestRegistration {
+            kind: "hit_test_vector_object",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                struct Req {
+                    id: u64,
+                    x: f64,
+                    y: f64,
+                }
+                let r: Req = decode(payload)?;
+                let id = LayerId::from_ffi(r.id);
+                // `-1` sentinel for a miss, mirroring the `anchor: i64` convention.
+                let object = engine
+                    .hit_test_vector_object(id, r.x, r.y)
+                    .map(|o| o.0 as i64)
+                    .unwrap_or(-1);
+                Ok(Response::json(json!({ "object": object })))
+            },
+        },
+        RequestRegistration {
+            kind: "text_object_info",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                struct Req {
+                    id: u64,
+                    object: u64,
+                }
+                let r: Req = decode(payload)?;
+                let id = LayerId::from_ffi(r.id);
+                let value = match engine.text_object_info(id, ObjectId(r.object)) {
+                    Some(info) => json!({
+                        "content": info.content,
+                        "font_family": info.font_family,
+                        "size": info.size,
+                        "weight": info.weight,
+                        "italic": info.italic,
+                        "align": align_str(info.align),
+                        "color": info.color,
+                        "ox": info.ox,
+                        "oy": info.oy,
+                        "width": info.width,
+                        "height": info.height,
+                    }),
+                    None => serde_json::Value::Null,
+                };
+                Ok(Response::json(value))
+            },
+        },
+        RequestRegistration {
+            kind: "vector_object_info",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                struct Req {
+                    id: u64,
+                    object: u64,
+                }
+                let r: Req = decode(payload)?;
+                let id = LayerId::from_ffi(r.id);
+                let value = match engine.vector_object_info(id, ObjectId(r.object)) {
+                    Some((ox, oy, w, h, matrix)) => json!({
+                        "ox": ox, "oy": oy, "w": w, "h": h,
+                        "mode": 0, "matrix": matrix,
+                    }),
+                    None => serde_json::Value::Null,
+                };
+                Ok(Response::json(value))
+            },
+        },
+        RequestRegistration {
+            kind: "update_vector_object_transform",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                struct Req {
+                    id: u64,
+                    object: u64,
+                    payload: Vec<f32>,
+                }
+                let r: Req = decode(payload)?;
+                if r.payload.len() >= 6 {
+                    // The gizmo ships the full canvas affine row-major; the
+                    // engine reorders to kurbo and strips the layer transform.
+                    let g = crate::transform::Transform::from_affine([
+                        r.payload[0],
+                        r.payload[1],
+                        r.payload[2],
+                        r.payload[3],
+                        r.payload[4],
+                        r.payload[5],
+                    ]);
+                    let id = LayerId::from_ffi(r.id);
+                    engine.set_vector_object_transform(id, ObjectId(r.object), g);
+                }
+                Ok(Response::empty())
             },
         },
         RequestRegistration {

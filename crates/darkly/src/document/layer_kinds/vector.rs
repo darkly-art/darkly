@@ -25,9 +25,13 @@ struct VectorBody {
     opacity: f32,
     blend_mode: String,
     /// The authoritative object list. Each object's geometry (`kurbo::BezPath`
-    /// / `Affine`), style (`peniko` brushes/stroke), and the bespoke
-    /// `TextProps` round-trip through their derived `serde` impls.
+    /// / `Affine`), its stable [`crate::layer::ObjectId`], style (`peniko`
+    /// brushes/stroke), and the bespoke `TextProps` round-trip through their
+    /// derived `serde` impls.
     objects: Vec<VectorObject>,
+    /// Next monotonic object id. Persisted so a reload never re-issues a live
+    /// id (object identity is per-layer, never reused).
+    next_object_id: u64,
     /// Layer-level gizmo transform. `#[serde(default)]` so a pre-transform save
     /// loads as identity.
     #[serde(default)]
@@ -62,6 +66,7 @@ fn serialize(node: &LayerNode) -> SerializedEntity {
         opacity: v.blend.opacity,
         blend_mode: v.blend.blend_mode.type_id.to_string(),
         objects: v.objects.clone(),
+        next_object_id: v.next_object_id,
         transform: v.transform,
         modifiers: v.filters.iter().map(|m| m.to_ffi()).collect(),
     };
@@ -97,6 +102,7 @@ fn deserialize(body: &serde_json::Value, id: LayerId) -> Result<LayerNode, LoadE
             blend_mode: blend_reg,
         },
         objects: body.objects,
+        next_object_id: body.next_object_id,
         transform: body.transform,
         filters: body.modifiers.into_iter().map(LayerId::from_ffi).collect(),
     })))
@@ -140,7 +146,7 @@ mod tests {
             Brush::Solid(Color::from_rgba8(10, 20, 30, 255)),
         );
         let mut layer = VectorLayer::new(id, "Text 1".to_string());
-        layer.objects.push(obj);
+        layer.push_object(obj);
         (LayerNode::Layer(Layer::Vector(layer)), id)
     }
 
@@ -167,6 +173,9 @@ mod tests {
             panic!("restored node is not a vector layer");
         };
         assert_eq!(v.objects.len(), 1);
+        // Object identity + the monotonic counter survive the round-trip.
+        assert_eq!(v.objects[0].id, crate::layer::ObjectId(0));
+        assert_eq!(v.next_object_id, 1);
         match &v.objects[0].source {
             crate::layer::ObjectSource::Text(t) => {
                 assert_eq!(t.content, "Hello\nDarkly");

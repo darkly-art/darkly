@@ -99,7 +99,7 @@ For a feature to count, it must be:
     - [ ] Calligraphy
     - [ ] Oil / Impasto
 - [x] Brush tool, eraser, fill (flood), gradient (linear), color picker
-- [x] Text tool (vector-object layer, Vello-rendered, bundled fonts; raster-first)
+- [x] Text tool (vector-object layer, Vello-rendered, bundled fonts; raster-first; click-to-edit + per-object transform)
 - [x] Pressure / tilt / spacing / distance / angle inputs
 - [x] Laplacian stabilizer
 - [x] HSV picker, foreground/background swatches
@@ -118,7 +118,7 @@ For a feature to count, it must be:
 - [x] Clipboard copy / cut / paste (PNG via browser clipboard)
 
 ### Important — expected for serious work
-- [x] Generic transform tool (translate / scale / rotate gizmo — floating content + transformable voids)
+- [x] Generic transform tool (translate / scale / rotate gizmo — floating content, transformable voids, and per-object vector text)
 - [x] Perspective transform (transform-tool popout or right-click in transform mode → Perspective, drag the four corners for a vanishing-point warp; floating content and voids)
 - [x] Merge down
 - [x] Duplicate layer / group

@@ -3,12 +3,15 @@
 
 export type CommitRequest =
     | { kind: 'add_text'; payload: Record<string, unknown> }
-    | { kind: 'set_text_content'; payload: { id: number; content: string } }
+    | { kind: 'set_text_content'; payload: { id: number; object: number; content: string } }
     | { kind: 'cancel'; layerId: number | null };
 
 export interface EditState {
     /** Layer being edited, or null when placing a brand-new text block. */
     layerId: number | null;
+    /** Object being edited within `layerId`, or null when placing new. Always
+     *  non-null whenever `layerId` is non-null. */
+    objectId: number | null;
     /** Canvas-space caret origin (top-left of the text block). */
     cx: number;
     cy: number;
@@ -44,7 +47,10 @@ export function buildCommit(
         return { kind: 'cancel', layerId: state.layerId };
     }
     if (state.layerId !== null) {
-        return { kind: 'set_text_content', payload: { id: state.layerId, content } };
+        return {
+            kind: 'set_text_content',
+            payload: { id: state.layerId, object: state.objectId ?? 0, content },
+        };
     }
     return {
         kind: 'add_text',

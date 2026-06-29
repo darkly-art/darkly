@@ -4,8 +4,8 @@ import { buildCommit, type EditState } from '../text_commit';
 const STYLE = { size: 48, fontFamily: 'Noto Sans', align: 'start', italic: false, weight: 400 };
 const COLOR = { r: 10, g: 20, b: 30, a: 255 };
 
-const placing: EditState = { layerId: null, cx: 100, cy: 60, anchorLayerId: 7 };
-const editing: EditState = { layerId: 42, cx: 0, cy: 0, anchorLayerId: null };
+const placing: EditState = { layerId: null, objectId: null, cx: 100, cy: 60, anchorLayerId: 7 };
+const editing: EditState = { layerId: 42, objectId: 3, cx: 0, cy: 0, anchorLayerId: null };
 
 describe('text tool commit FSM', () => {
     it('cancels on empty content (no empty layer is created)', () => {
@@ -37,8 +37,17 @@ describe('text tool commit FSM', () => {
         expect(req.payload.anchor).toBe(-1);
     });
 
-    it('editing an existing layer emits set_text_content for that id', () => {
+    it('editing an existing object emits set_text_content for that id + object', () => {
         const req = buildCommit(editing, 'Updated', STYLE, COLOR);
-        expect(req).toEqual({ kind: 'set_text_content', payload: { id: 42, content: 'Updated' } });
+        expect(req).toEqual({
+            kind: 'set_text_content',
+            payload: { id: 42, object: 3, content: 'Updated' },
+        });
+    });
+
+    it('placing a new block carries objectId: null through to add_text', () => {
+        const req = buildCommit(placing, 'New', STYLE, COLOR);
+        expect(req.kind).toBe('add_text');
+        expect(placing.objectId).toBeNull();
     });
 });

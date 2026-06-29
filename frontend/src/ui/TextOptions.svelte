@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { app } from '../state/app.svelte';
-    import { textSession } from '../tools/text.svelte';
+    import { textSession, pushStyleEdit } from '../tools/text.svelte';
     import EnumDropdown from './settings/widgets/EnumDropdown.svelte';
     import Scrub from './Scrub.svelte';
     import ToolBarLayout from './ToolBarLayout.svelte';
@@ -34,7 +34,10 @@
             <EnumDropdown
                 value={textSession.fontFamily}
                 options={fontOptions}
-                onchange={(v) => (textSession.fontFamily = v)}
+                onchange={(v) => {
+                    textSession.fontFamily = v;
+                    void pushStyleEdit({ font_family: v });
+                }}
             />
         </label>
         <Scrub
@@ -45,7 +48,11 @@
             max={512}
             default={48}
             formatValue={(v) => String(Math.round(v))}
-            onChange={(v) => (textSession.size = Math.round(v))}
+            onChange={(v) => {
+                const s = Math.round(v);
+                textSession.size = s;
+                void pushStyleEdit({ size: s });
+            }}
             title="Font size in canvas pixels."
         />
         <label class="row" title="Horizontal alignment">
@@ -53,14 +60,21 @@
             <EnumDropdown
                 value={textSession.align}
                 options={ALIGN_OPTIONS}
-                onchange={(v) => (textSession.align = v)}
+                onchange={(v) => {
+                    textSession.align = v;
+                    void pushStyleEdit({ align: v });
+                }}
             />
         </label>
         <label class="row" title="Italic">
             <input
                 type="checkbox"
                 checked={textSession.italic}
-                onchange={(e) => (textSession.italic = (e.currentTarget as HTMLInputElement).checked)}
+                onchange={(e) => {
+                    const it = (e.currentTarget as HTMLInputElement).checked;
+                    textSession.italic = it;
+                    void pushStyleEdit({ italic: it });
+                }}
             />
             <span>Italic</span>
         </label>

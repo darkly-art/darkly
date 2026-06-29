@@ -10,9 +10,15 @@
  *   move). The floating session must already be begun (`begin_transform`)
  *   before `read()` returns non-null.
  * - `voidTransformBinding` — a void's live, persistent transform property.
+ * - `vectorObjectTransformBinding` — a single vector object's live transform.
+ *
+ * The last two are the same shape — a live, persistent, coalesced transform
+ * property read by one kind and updated by another — so both are thin wrappers
+ * over `liveTransformBinding`.
  */
 import { app } from '../state/app.svelte';
 import { affineToMat3, mat3ToAffine, type Mat3 } from './transform_projective';
+import type { RequestKind } from '../engine/protocol';
 import type { TransformBinding } from './transform_gizmo';
 
 /** Shape the wire payload for a `(matrix, modeTag)` update: basic mode (tag 0)
@@ -63,21 +69,33 @@ export function floatingTransformBinding(): TransformBinding {
     };
 }
 
-/** Binding over a void layer's live transform property. The void composites
- *  its transform every frame (`live: true`), and the homography is shared with
- *  the floating path, so voids support perspective like everything else. */
-export function voidTransformBinding(layerId: number): TransformBinding {
-    // Captured on first read so Escape (cancel) reverts to the transform as it
-    // was when the gizmo attached — including its *mode*, so cancelling a void
-    // that was already perspective restores perspective, not a downgraded
-    // affine. Commit is a no-op: edits are already live and coalesced into undo.
+/**
+ * Binding over any "live, persistent, coalesced transform property" consumer:
+ * read its bbox + matrix via `readKind`, push live updates and the cancel-time
+ * revert via `updateKind`. `params` (e.g. `{ id }`, `{ id, object }`) is the
+ * consumer's addressing, spread into every request.
+ *
+ * The transform composites every frame (`live: true`), and the homography is
+ * shared with the floating path, so consumers that opt in support perspective
+ * like everything else.
+ *
+ * Commit is a no-op — edits are already live on the document and coalesced into
+ * the undo stack. Cancel re-posts the transform captured on first read,
+ * including its *mode*, so cancelling a consumer that was already perspective
+ * restores perspective rather than a downgraded affine.
+ */
+export function liveTransformBinding(
+    readKind: RequestKind,
+    updateKind: RequestKind,
+    params: Record<string, unknown>,
+): TransformBinding {
     let original: { matrix: Mat3; mode: number } | null = null;
     return {
         live: true,
         async read() {
             const raw = await app.engine?.send<
                 { ox: number; oy: number; w: number; h: number; mode: number; matrix: number[] } | null
-            >('void_transform_info', { id: layerId });
+            >(readKind, params);
             if (!raw) return null;
             const matrix = liftMatrix(raw.mode, raw.matrix);
             if (original === null) original = { matrix: [...matrix] as Mat3, mode: raw.mode };
@@ -90,8 +108,8 @@ export function voidTransformBinding(layerId: number): TransformBinding {
             };
         },
         update(matrix: Mat3, modeTag: number) {
-            app.engine?.post('update_void_transform', {
-                id: layerId,
+            app.engine?.post(updateKind, {
+                ...params,
                 mode_tag: modeTag,
                 payload: wirePayload(matrix, modeTag),
             });
@@ -101,12 +119,25 @@ export function voidTransformBinding(layerId: number): TransformBinding {
         },
         cancel() {
             if (original) {
-                app.engine?.post('update_void_transform', {
-                    id: layerId,
+                app.engine?.post(updateKind, {
+                    ...params,
                     mode_tag: original.mode,
                     payload: wirePayload(original.matrix, original.mode),
                 });
             }
         },
     };
+}
+
+/** Binding over a void layer's live transform property. */
+export function voidTransformBinding(layerId: number): TransformBinding {
+    return liveTransformBinding('void_transform_info', 'update_void_transform', { id: layerId });
+}
+
+/** Binding over a single vector object's live transform. */
+export function vectorObjectTransformBinding(layerId: number, objectId: number): TransformBinding {
+    return liveTransformBinding('vector_object_info', 'update_vector_object_transform', {
+        id: layerId,
+        object: objectId,
+    });
 }

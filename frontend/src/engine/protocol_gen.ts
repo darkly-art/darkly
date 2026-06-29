@@ -87,6 +87,7 @@ export type RequestKind =
     | 'has_floating'
     | 'has_pending_color_pick'
     | 'has_selection'
+    | 'hit_test_vector_object'
     | 'invert_selection'
     | 'is_dirty'
     | 'last_picked_color'
@@ -157,12 +158,15 @@ export type RequestKind =
     | 'start_preview'
     | 'start_save_document'
     | 'stroke_to'
+    | 'text_object_info'
     | 'tool_types'
     | 'undo'
     | 'update_floating_matrix'
+    | 'update_vector_object_transform'
     | 'update_veil'
     | 'update_void_params'
     | 'update_void_transform'
+    | 'vector_object_info'
     | 'veil_list'
     | 'veil_types'
     | 'void_transform_info'
@@ -255,6 +259,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'has_floating',
     'has_pending_color_pick',
     'has_selection',
+    'hit_test_vector_object',
     'invert_selection',
     'is_dirty',
     'last_picked_color',
@@ -325,12 +330,15 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'start_preview',
     'start_save_document',
     'stroke_to',
+    'text_object_info',
     'tool_types',
     'undo',
     'update_floating_matrix',
+    'update_vector_object_transform',
     'update_veil',
     'update_void_params',
     'update_void_transform',
+    'vector_object_info',
     'veil_list',
     'veil_types',
     'void_transform_info',
