@@ -17,7 +17,7 @@ nodes:
       # ~6:1 here (1/0.4²). `rotation` is exposed to tilt the nib to taste
       # (e.g. the classic ~45° angle).
       aspect: 0.4
-      rotation: 0.0
+      rotation: 0.7853982
   8:
     type: stamp
   9:
