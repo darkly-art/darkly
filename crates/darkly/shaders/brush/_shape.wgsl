@@ -58,6 +58,11 @@ struct ShapeParams {
     n1: f32,
     n2: f32,
     n3: f32,
+    /// Anisotropy: squash the tip into an ellipse. `1.0` = round; `< 1.0`
+    /// narrows the silhouette along its local x-axis and (area-preservingly)
+    /// lengthens it along y. Applied after rotation so the ellipse co-rotates
+    /// with the shape — the basis of the calligraphy nib.
+    aspect: f32,
 }
 
 const SHAPE_TAU: f32 = 6.28318530717958647692;
@@ -134,9 +139,17 @@ fn shape_r_superformula(p: ShapeParams, theta: f32) -> f32 {
 /// `shape.rs::r_theta`.
 fn shape_r_theta(p: ShapeParams, theta: f32) -> f32 {
     let phased = theta - p.rotation;
+    var r_base: f32;
     switch p.algorithm {
-        case 1u: { return shape_r_perlin(p, phased); }
-        case 2u: { return shape_r_superformula(p, phased); }
-        default: { return shape_r_sine(p, phased); }
+        case 1u: { r_base = shape_r_perlin(p, phased); }
+        case 2u: { r_base = shape_r_superformula(p, phased); }
+        default: { r_base = shape_r_sine(p, phased); }
     }
+    // Area-preserving elliptical squash about the (rotated) local axes.
+    // Semi-axes a = aspect (x), b = 1/aspect (y); the polar boundary of that
+    // ellipse is `1 / sqrt((cos/a)^2 + (sin/b)^2)`. `aspect = 1` ⇒ factor 1.
+    let c = cos(phased);
+    let s = sin(phased);
+    let inv = sqrt((c / p.aspect) * (c / p.aspect) + (s * p.aspect) * (s * p.aspect));
+    return r_base / inv;
 }

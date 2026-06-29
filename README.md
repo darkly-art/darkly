@@ -96,7 +96,7 @@ For a feature to count, it must be:
     - [ ] Clone
     - [x] Blur
     - [ ] Dodge/burn
-    - [ ] Calligraphy
+    - [x] Calligraphy
     - [ ] Oil / Impasto
 - [x] Brush tool, eraser, fill (flood), gradient (linear), color picker
 - [x] Pressure / tilt / spacing / distance / angle inputs
