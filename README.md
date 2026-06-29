@@ -94,7 +94,7 @@ For a feature to count, it must be:
     - [x] Watercolor
     - [x] Liquify
     - [ ] Clone
-    - [ ] Blur
+    - [x] Blur
     - [ ] Dodge/burn
     - [ ] Calligraphy
     - [ ] Oil / Impasto

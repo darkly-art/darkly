@@ -22,8 +22,8 @@
 //! Look-up is by `(id, type)`:
 //!
 //! ```ignore
-//! let liq = pipelines.get::<LiquifyPipeline>("liquify");
-//! pass.set_pipeline(liq.pipeline());
+//! let paint = pipelines.get::<PaintPipeline>("paint");
+//! pass.set_pipeline(paint.pipeline());
 //! ```
 
 use std::any::Any;
