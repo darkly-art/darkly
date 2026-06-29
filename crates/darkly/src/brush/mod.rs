@@ -17,6 +17,7 @@ pub mod paint_target_ext;
 pub mod pipeline;
 pub mod portable;
 pub mod preview_renderer;
+pub mod read_mirror_terminal;
 pub mod save_points;
 pub mod scratch;
 pub mod spacing;
