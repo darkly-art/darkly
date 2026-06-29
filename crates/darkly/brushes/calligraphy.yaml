@@ -11,10 +11,11 @@ nodes:
   7:
     type: shape
     port_defaults:
-      softness: 0.05
+      softness: 0.15
       # Plain disc (sine, amplitude 0 ⇒ r ≡ 1) squashed by `aspect` into the
       # elliptical broad-nib tip. `aspect` is area-preserving, so the nib is
-      # ~6:1 here (1/0.4²); `rotation` tilts it to the classic ~45° nib angle.
+      # ~6:1 here (1/0.4²). `rotation` is exposed to tilt the nib to taste
+      # (e.g. the classic ~45° angle).
       aspect: 0.4
       rotation: 0.0
   8:
