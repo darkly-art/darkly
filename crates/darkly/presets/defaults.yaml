@@ -118,6 +118,10 @@ settings:
   hotkeys.nav.trigger: Space
   hotkeys.nav.rotate: Shift
   hotkeys.nav.zoom: Ctrl
+  # Krita: Discrete Rotate = Alt (DISCRETE_ANGLE_STEP 15°); cardinal detent
+  # (45° within ±2°) is Krita's hardwired free-rotation snap, toggleable here.
+  hotkeys.nav.rotateSnap: Alt
+  nav.rotateDetent: true
   # UI.
   ui.theme: dark
   ui.brushBuilder.previewVisible: true

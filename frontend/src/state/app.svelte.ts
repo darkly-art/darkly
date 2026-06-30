@@ -879,6 +879,20 @@ export class DarklyInstance {
         return !this.pointerActive && this._interactionCount === 0;
     }
 
+    /** Zoom that fits the canvas in the viewport, never upscaling. */
+    fitZoom(): number { return Math.min(this.viewportW / this.docW, this.viewportH / this.docH, 1); }
+
+    /** Reset rotation/mirror/pan and zoom-to-fit (Krita "Reset Display"). pan=0
+     *  restores the document's default on-open framing. */
+    resetView() {
+        this.panX = 0;
+        this.panY = 0;
+        this.rotation = 0;
+        this.mirrorH = false;
+        this.zoom = this.fitZoom();
+        this.requestFrame();
+    }
+
     /** Schedule a render frame if one isn't already pending. */
     requestFrame() {
         if (this._framePending) return;

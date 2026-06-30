@@ -972,6 +972,16 @@ export function registerActions() {
     });
 
     actions.register({
+        id: 'resetView',
+        displayName: 'Reset View',
+        category: 'view',
+        description: 'Reset rotation, mirror, pan, and zoom-to-fit. View-only — the document is unchanged.',
+        icon: 'fa6-solid:expand',
+        menuPath: ['View:11'],
+        handler: () => { app.resetView(); },
+    });
+
+    actions.register({
         id: 'commandPalette',
         displayName: 'Command Palette',
         category: 'view',

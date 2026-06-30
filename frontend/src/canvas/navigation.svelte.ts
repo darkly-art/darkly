@@ -1,5 +1,11 @@
 import { app } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
+import {
+    snapAngleToGrid,
+    detentAngle,
+    CARDINAL_ANGLE_RAD,
+    CARDINAL_TOL_RAD,
+} from '../lib/angle';
 
 type NavMode = 'none' | 'pan' | 'rotate' | 'zoom';
 
@@ -28,6 +34,15 @@ class NavigationState {
 
     /** Track whether the navigation trigger key is held */
     spaceHeld = $state(false);
+
+    /** Map a raw (unsnapped) absolute rotation to the displayed rotation.
+     *  discrete (Alt) → hard 15° grid; else cardinal detent when enabled; else raw. */
+    private snapCanvasRotation(raw: number, discrete: boolean): number {
+        if (discrete) return snapAngleToGrid(raw);
+        if (config.get('nav.rotateDetent') as boolean)
+            return detentAngle(raw, CARDINAL_ANGLE_RAD, CARDINAL_TOL_RAD);
+        return raw;
+    }
 
     get isNavigating(): boolean {
         return this.mode !== 'none';
@@ -109,7 +124,11 @@ class NavigationState {
                     e.clientY - this.centerY,
                     e.clientX - this.centerX,
                 );
-                app.rotation = this.startRotation - (curAngle - this.startAngle);
+                const raw = this.startRotation - (curAngle - this.startAngle);
+                app.rotation = this.snapCanvasRotation(
+                    raw,
+                    hasModifier(e, config.get('hotkeys.nav.rotateSnap') as string),
+                );
             }
                 break;
             case 'zoom': {
@@ -137,6 +156,16 @@ class NavigationState {
     /** Set when 2+ fingers are detected; stays true until all fingers lift. */
     private touchGestureOccurred = false;
 
+    /** Unsnapped absolute rotation accumulated over a two-finger gesture.
+     *  Driving `app.rotation` from this raw truth (not the snapped previous
+     *  value) is what stops small in-zone deltas being swallowed by the
+     *  cardinal dead-zone. Touch-only — the pointer path never touches it. */
+    private rawRotation = 0;
+
+    /** Latched while two fingers have been seen this gesture; survives a
+     *  transient drop to one finger so `rawRotation` keeps accumulating. */
+    private twoFingerActive = false;
+
     /** Whether a multi-finger touch gesture is in progress. */
     get isTouchGesture(): boolean {
         return this.touchGestureOccurred;
@@ -151,6 +180,14 @@ class NavigationState {
         this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (this.touches.size >= 2) {
             this.touchGestureOccurred = true;
+            // First time we reach two fingers this gesture, seed the raw
+            // rotation accumulator from the current canvas rotation. The latch
+            // stays set across a transient drop to one finger, so a returning
+            // finger does NOT re-seed (which would jump the canvas).
+            if (!this.twoFingerActive) {
+                this.rawRotation = app.rotation;
+                this.twoFingerActive = true;
+            }
         } else if (!(config.get('input.fingerPainting') as boolean)) {
             // Single-finger touch → navigate (pan) instead of draw
             this.touchGestureOccurred = true;
@@ -214,14 +251,17 @@ class NavigationState {
             app.panY += curCy - prevCy;
         }
 
-        // Rotation: angular delta
-        app.rotation -= curAngle - prevAngle;
+        // Rotation: accumulate the angular delta on the unsnapped raw, then
+        // snap for display. No Alt on touch — cardinal detent only.
+        this.rawRotation -= curAngle - prevAngle;
+        app.rotation = this.snapCanvasRotation(this.rawRotation, false);
     }
 
     onTouchPointerUp(e: PointerEvent) {
         this.touches.delete(e.pointerId);
         if (this.touches.size === 0) {
             this.touchGestureOccurred = false;
+            this.twoFingerActive = false;
         }
     }
 

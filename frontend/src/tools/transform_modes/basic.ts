@@ -25,6 +25,7 @@ import {
 } from '../transform_projective';
 import { pointInPolygon } from './types';
 import type { BBoxPolygon, DragSession, GizmoGeometry, TransformMode } from './types';
+import { snapAngleToGrid } from '../../lib/angle';
 
 const enum Handle {
     TopLeft, Top, TopRight, Right, BottomRight, Bottom, BottomLeft, Left,
@@ -247,9 +248,8 @@ export const basicMode: TransformMode = {
                 // the gesture began (off by the free rotation already accrued
                 // when Shift is pressed mid-drag). `atan2(c, a)` recovers the
                 // base rotation baked into `initialMatrix`.
-                const snap = Math.PI / 12;
                 const base = Math.atan2(initialMatrix[3], initialMatrix[0]);
-                angle = Math.round((base + angle) / snap) * snap - base;
+                angle = snapAngleToGrid(base + angle) - base;
             }
             const cLocal: [number, number] = [srcW / 2, srcH / 2];
             const cOffset = affineTransform(initialMatrix, cLocal[0], cLocal[1]);

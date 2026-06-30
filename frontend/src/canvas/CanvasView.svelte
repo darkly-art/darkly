@@ -146,12 +146,10 @@
             ro.observe(canvas);
 
             // Fit canvas to view: scale down if needed, but never scale up.
-            // Uses the just-set per-instance dims so a tab opened from a
-            // non-default-sized image fits to its own canvas, not the
-            // global config default.
-            const dprRect = { w: canvas.width, h: canvas.height };
-            const fitZoom = Math.min(dprRect.w / inst.docW, dprRect.h / inst.docH, 1);
-            inst.zoom = fitZoom;
+            // Uses the just-set per-instance dims (viewportW/H from canvas.width/
+            // height above) so a tab opened from a non-default-sized image fits to
+            // its own canvas, not the global config default.
+            inst.zoom = inst.fitZoom();
 
             // Kick the first frame
             inst.requestFrame();

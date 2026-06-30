@@ -146,6 +146,8 @@ For a feature to count, it must be:
 - [ ] Saved swatches / palettes
 - [ ] History panel UI
 - [x] Mirror view
+- [x] Reset view (rotation / mirror / pan / zoom-to-fit)
+- [x] Canvas-rotation snapping (cardinal 45° detent + 15° discrete)
 - [ ] Fit to screen
 - [ ] 100% / zoom presets
 - [ ] Symmetry / mirror painting (X, Y, radial)
