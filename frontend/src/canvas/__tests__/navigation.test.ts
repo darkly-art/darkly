@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { fakeApp } = vi.hoisted(() => {
     const fakeApp = {
         panX: 0, panY: 0, zoom: 1, rotation: 0,
+        toolCursor: null as string | null,
         requestFrame: () => {},
     };
     return { fakeApp };
@@ -46,9 +47,36 @@ function finger2(angleDeg: number): [number, number] {
 
 beforeEach(() => {
     fakeApp.panX = 0; fakeApp.panY = 0; fakeApp.zoom = 1; fakeApp.rotation = 0;
+    fakeApp.toolCursor = null;
+    nav.spaceHeld = false;
+    nav.mode = 'none';
     // Drain any lingering touch state from a previous test.
     nav.onTouchPointerUp(ptr(1, 0, 0));
     nav.onTouchPointerUp(ptr(2, 0, 0));
+});
+
+describe('canvasCursor precedence', () => {
+    it('nav owns the cursor while navigating, even when a tool hides it', () => {
+        // Brush hides the native cursor (draws its own ring). Holding the nav
+        // trigger to drag must still surface the grab/rotate cursor, not 'none'.
+        fakeApp.toolCursor = 'none';
+        nav.spaceHeld = true;
+
+        nav.mode = 'pan';
+        expect(nav.canvasCursor).toBe('grabbing');
+        nav.mode = 'rotate';
+        expect(nav.canvasCursor).not.toBe('none'); // the custom rotate cursor
+        nav.mode = 'none';
+        expect(nav.canvasCursor).toBe('grab'); // held, not yet dragging
+    });
+
+    it('off the nav path the tool cursor wins, falling back to nav idle', () => {
+        nav.spaceHeld = false;
+        fakeApp.toolCursor = 'none';
+        expect(nav.canvasCursor).toBe('none');
+        fakeApp.toolCursor = null;
+        expect(nav.canvasCursor).toBe('crosshair');
+    });
 });
 
 describe('two-finger canvas rotation snapping', () => {

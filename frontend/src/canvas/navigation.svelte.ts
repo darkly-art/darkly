@@ -57,6 +57,17 @@ class NavigationState {
         }
     }
 
+    /** The cursor the canvas should display. While the user is navigating
+     *  (trigger key held) nav owns the cursor outright — otherwise a tool that
+     *  hides the native cursor (e.g. the brush's `'none'`, drawing its own ring)
+     *  would shadow the grab/rotate cursor and the drag gesture would show
+     *  nothing. Off the nav path, the active tool's cursor wins, falling back to
+     *  nav's idle cursor. */
+    get canvasCursor(): string {
+        if (this.spaceHeld) return this.cursor;
+        return app.toolCursor ?? this.cursor;
+    }
+
     onKeyDown(e: KeyboardEvent) {
         if (e.code === config.get('hotkeys.nav.trigger') && !e.repeat) {
             e.preventDefault();

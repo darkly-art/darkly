@@ -423,7 +423,7 @@
          duplicating that dispatch. -->
     <canvas
         bind:this={canvas}
-        style:cursor={inst.toolCursor ?? nav.cursor}
+        style:cursor={nav.canvasCursor}
         use:bindingSite={{
             name: 'canvas',
             ctx: () => ({ x: 0, y: 0 }),
