@@ -32,6 +32,20 @@ const PREFS: &[Pref] = &[
         kind: PrefKind::Str,
         widget: WidgetHint::Hotkey,
     },
+    Pref {
+        key: "hotkeys.nav.rotateSnap",
+        display_name: "Rotate snap modifier",
+        description: Some("Held while rotating to hard-snap the canvas to 15° increments."),
+        kind: PrefKind::Str,
+        widget: WidgetHint::Hotkey,
+    },
+    Pref {
+        key: "nav.rotateDetent",
+        display_name: "Snap rotation to 45° marks",
+        description: Some("Free canvas rotation sticks to the nearest 45° mark when close."),
+        kind: PrefKind::Bool,
+        widget: WidgetHint::Auto,
+    },
 ];
 
 pub fn register() -> SchemaSection {

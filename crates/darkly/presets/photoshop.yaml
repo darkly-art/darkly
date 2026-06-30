@@ -19,6 +19,10 @@ hotkeys:
   # view action, and M is already taken by rectSelectTool here. Users
   # who want a mirror-view hotkey under the PS preset can set one via
   # the settings UI.
+  # View framing. Photoshop binds View > "Fit on Screen" to Ctrl+0
+  # (Cmd+0 on macOS). It has no separate "center in window" command —
+  # centering is folded into the fit — so centerView is left unbound.
+  fitToScreen: $mod+Digit0
   # Tools.
   brushTool: KeyB
   fillTool: KeyG
