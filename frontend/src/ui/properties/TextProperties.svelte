@@ -6,7 +6,6 @@
         createTextFromPending,
         queueTextContent,
         flushTextContent,
-        applyStyleDefaults,
         dispatchStyle,
         shouldReseed,
         rgbaToHex,
@@ -19,7 +18,8 @@
     import ColorInput from '../settings/widgets/ColorInput.svelte';
     import Scrub from '../Scrub.svelte';
 
-    // The active layer, or null in pending mode (a placement with no layer yet).
+    // The active vector layer, or null when no vector layer is active (a
+    // placement that will become a fresh layer).
     let { node }: { node: { id: number; type: string } | null } = $props();
 
     const ALIGN_OPTIONS: [string, string][] = [
@@ -29,6 +29,10 @@
         ['justified', 'Justify'],
     ];
 
+    /** Content a new text object is seeded with — shown selected so the first
+     *  keystroke replaces it. */
+    const SEED_TEXT = 'text';
+
     let fontOptions = $state<[string, string][]>([['Noto Sans', 'Noto Sans']]);
 
     onMount(async () => {
@@ -37,14 +41,12 @@
         if (res?.fonts?.length) fontOptions = res.fonts.map((f) => [f, f] as [string, string]);
     });
 
-    /** One editor block — a text object, or the pending placeholder. The `key`
-     *  is the load-bearing detail: both modes render through the same keyed
-     *  `{#each}`, and the placeholder hands its key to the created object, so
-     *  the textarea element survives pending→bound (caret + focus preserved). */
+    /** The one text object the panel edits — a vector layer can own many, but
+     *  only the selected one is shown (the user picks it by clicking it on the
+     *  canvas; the text tool tracks it in `textSession.editing`). */
     interface Block {
-        key: string;
-        objectId: number | null;
-        layer: number | null;
+        objectId: number;
+        layer: number;
         content: string;
         font_family: string;
         size: number;
@@ -54,20 +56,17 @@
         color: Rgba;
     }
 
-    let blocks = $state<Block[]>([]);
+    let block = $state<Block | null>(null);
 
-    // Non-reactive bookkeeping. `els`/`lastSent` track the uncontrolled
-    // textareas; `localIdByObject` + `pendingLocalId` mint the stable keys.
-    const els = new Map<string, HTMLTextAreaElement>();
-    const lastSent = new Map<string, string>();
-    const localIdByObject = new Map<number, number>();
-    let pendingLocalId: number | null = null;
-    let nextLocalId = 0;
+    // The textarea is uncontrolled — its value is set imperatively. `lastSent`
+    // (by object id) lets us reseed only on an *external* change (undo/redo), not
+    // a self-echo, so the caret survives.
+    let textareaEl = $state<HTMLTextAreaElement | undefined>(undefined);
+    const lastSent = new Map<number, string>();
     let creating = false;
-    // Object id created from the current placement. Drives two things: the
-    // pending textarea's key is handed to exactly this object (so it isn't
-    // remounted on create), and the placement clears once this object is bound.
-    let justCreated: number | null = null;
+    // The next focus should select all (a fresh create, so typing replaces the
+    // seed); otherwise the caret goes to the end.
+    let selectAllOnFocus = false;
 
     function foregroundTuple(): Rgba {
         const c = app.foreground;
@@ -84,202 +83,144 @@
         };
     }
 
-    function pendingBlock(local: number): Block {
+    function toBlock(layerId: number, o: any): Block {
         return {
-            key: `b${local}`,
-            objectId: null,
-            layer: null,
-            content: '',
-            ...currentStyle(),
-            color: foregroundTuple(),
+            objectId: o.object,
+            layer: layerId,
+            content: o.content,
+            font_family: o.font_family,
+            size: o.size,
+            weight: o.weight,
+            italic: o.italic,
+            align: o.align,
+            color: o.color as Rgba,
         };
     }
 
-    function setBoundBlocks(layerId: number, objs: any[]) {
-        blocks = objs.map((o) => {
-            let local = localIdByObject.get(o.object);
-            if (local === undefined) {
-                // The object created from the pending placement inherits the
-                // pending key, so its textarea survives the create (no remount,
-                // caret kept). Other objects already on the layer get fresh ids
-                // — they must not steal the pending key.
-                if (pendingLocalId !== null && o.object === justCreated) {
-                    local = pendingLocalId;
-                    pendingLocalId = null;
-                } else {
-                    local = nextLocalId++;
-                }
-                localIdByObject.set(o.object, local);
-            }
-            return {
-                key: `b${local}`,
-                objectId: o.object,
-                layer: layerId,
-                content: o.content,
-                font_family: o.font_family,
-                size: o.size,
-                weight: o.weight,
-                italic: o.italic,
-                align: o.align,
-                color: o.color as Rgba,
-            };
-        });
+    /** Which object to show: the selected (`editing`) one on this layer, else the
+     *  topmost — so a freshly-selected layer still shows something to edit. */
+    function selectedObject(objs: any[]): any | null {
+        const e = textSession.editing;
+        if (e && node && e.layerId === node.id) {
+            const hit = objs.find((o) => o.object === e.objectId);
+            if (hit) return hit;
+        }
+        return objs[objs.length - 1] ?? null;
     }
 
-    // Build the block list. A vector layer being active gives bound blocks
-    // (refetched from `text_objects`, keyed on the layer id AND `app.layerTree`
-    // so undo/redo reflects). A placement adds a trailing pending block — on a
-    // vector layer it's a new object on that layer (the multi-object case); with
-    // no vector layer it's the only block (a new layer is born on first type).
+    // Resolve the single editable block for the active layer's selected object,
+    // refetched on layer-tree changes (undo/redo) and selection changes.
     $effect(() => {
         const n = node;
-        void app.layerTree; // dependency: refetch on undo/redo
-        const placement = textSession.placement;
-        const wantPending = !!placement && !creating;
-        if (n && n.type === 'vector' && app.engine) {
-            const layerId = n.id;
-            // Mint the pending key up front so the appended block is stable.
-            if (wantPending && pendingLocalId === null) pendingLocalId = nextLocalId++;
-            let cancelled = false;
-            app.engine
-                .send<{ objects: any[] }>('text_objects', { id: layerId })
-                .then((res) => {
-                    if (cancelled) return;
-                    setBoundBlocks(layerId, res?.objects ?? []);
-                    // Append the pending block if its key wasn't just consumed
-                    // by the created object (setBoundBlocks nulls it on handoff).
-                    if (wantPending && pendingLocalId !== null) {
-                        blocks = [...blocks, pendingBlock(pendingLocalId)];
-                    }
-                });
-            return () => {
-                cancelled = true;
-            };
+        void app.layerTree; // refetch on undo/redo
+        void textSession.editing; // re-resolve when the selected object changes
+        if (!(n && n.type === 'vector' && app.engine)) {
+            block = null;
+            return;
         }
-        if (placement) {
-            if (pendingLocalId === null) pendingLocalId = nextLocalId++;
-            // While a create is in flight its `refreshLayerTree` re-runs this
-            // effect; leave the existing pending block (and its uncontrolled
-            // textarea) alone so the just-typed character isn't wiped.
-            if (!creating) blocks = [pendingBlock(pendingLocalId)];
-        } else {
-            blocks = [];
-        }
-    });
-
-    // Seed the uncontrolled textareas: only on an *external* change (mount,
-    // undo/redo) where the engine content differs from what we last sent. A
-    // self-echo leaves the field — and the caret — untouched.
-    $effect(() => {
-        for (const b of blocks) {
-            const el = els.get(b.key);
-            if (!el) continue;
-            if (shouldReseed(b.content, lastSent.get(b.key))) {
-                el.value = b.content;
-                lastSent.set(b.key, b.content);
-            }
-        }
-    });
-
-    // Focus the requested object's editor once it has rendered (avoids racing
-    // the async `text_objects` fetch). Caret to end — not a mid-type event.
-    $effect(() => {
-        const target = textSession.focusObject;
-        if (target === null) return;
-        const b = blocks.find((x) => x.objectId === target);
-        if (!b) return;
-        const el = els.get(b.key);
-        if (!el) return;
-        el.focus();
-        const len = el.value.length;
-        el.setSelectionRange(len, len);
-        textSession.focusObject = null;
-    });
-
-    function bindTextarea(el: HTMLTextAreaElement, key: string) {
-        els.set(key, el);
-        const b = blocks.find((x) => x.key === key);
-        if (b) {
-            el.value = b.content;
-            lastSent.set(key, b.content);
-        }
-        return {
-            destroy() {
-                els.delete(key);
-            },
+        const layerId = n.id;
+        let cancelled = false;
+        app.engine
+            .send<{ objects: any[] }>('text_objects', { id: layerId })
+            .then((res) => {
+                if (cancelled) return;
+                const o = selectedObject(res?.objects ?? []);
+                block = o ? toBlock(layerId, o) : null;
+            });
+        return () => {
+            cancelled = true;
         };
-    }
+    });
 
-    async function createFromPending(block: Block, el: HTMLTextAreaElement) {
-        if (creating) return;
+    // A placement (click/drag with the text tool) creates an object immediately,
+    // seeded with "text" and selected — so the word appears on the canvas at
+    // once and the first keystroke replaces it.
+    $effect(() => {
         const placement = textSession.placement;
-        if (!placement) return;
+        if (!placement || creating || !app.engine) return;
+        void createFromPlacement(placement);
+    });
+
+    async function createFromPlacement(placement: NonNullable<typeof textSession.placement>) {
         creating = true;
-        const content = el.value;
         try {
-            // A vector layer already active → add the object to it; otherwise a
-            // new layer is born. `justCreated` lets the bound refetch keep this
-            // textarea (key handoff) and clears the placement once it's bound.
+            // A vector layer already active → add the object to it (many objects
+            // per layer); otherwise a new layer is born.
             const target = node?.type === 'vector' ? node.id : null;
             const r = await createTextFromPending(
                 app,
                 placement,
-                content,
+                SEED_TEXT,
                 currentStyle(),
-                block.color,
-                () => el.value,
+                foregroundTuple(),
+                () => SEED_TEXT,
                 target,
                 (layerId, objectId) => {
-                    // Set before the bound refetch: marks the key handoff target
-                    // and shows the new object's box gizmo (the text tool's
-                    // onFrame attaches to whatever `editing` points at).
-                    justCreated = objectId;
+                    // Select the new object (drives this panel and the box gizmo).
                     textSession.editing = { layerId, objectId };
                 },
             );
             if (!r) return;
-            lastSent.set(block.key, r.latest);
+            lastSent.set(r.objectId, r.latest);
+            selectAllOnFocus = true;
             textSession.focusObject = r.objectId;
-            // `placement` is cleared by the $effect below once the new object is
-            // bound — never here, so the panel can't fall into the "no layer yet
-            // AND no placement" gap that would unmount this editor mid-create.
+            textSession.placement = null;
         } finally {
             creating = false;
         }
     }
 
-    // Clear the placement once the object created from it appears in the bound
-    // blocks. This holds whether the object landed on a fresh layer (its vector
-    // layer becomes active) or on the already-active layer (the multi-object
-    // case) — in both, the PropertiesPanel gate stays satisfied across the drop.
+    // Seed the uncontrolled textarea on an *external* change (mount, undo/redo,
+    // switching to another object) where the engine content differs from what we
+    // last sent. A self-echo leaves the field — and the caret — untouched.
     $effect(() => {
-        if (justCreated !== null && textSession.placement && blocks.some((b) => b.objectId === justCreated)) {
-            textSession.placement = null;
-            justCreated = null;
+        if (!block || !textareaEl) return;
+        if (shouldReseed(block.content, lastSent.get(block.objectId))) {
+            textareaEl.value = block.content;
+            lastSent.set(block.objectId, block.content);
         }
     });
 
-    function onContentInput(block: Block, e: Event) {
-        const el = e.currentTarget as HTMLTextAreaElement;
-        if (block.objectId === null) {
-            // Pending placement: the first non-empty character creates the layer.
-            lastSent.set(block.key, el.value);
-            if (creating || el.value.trim().length === 0) return;
-            void createFromPending(block, el);
-            return;
+    // Focus the selected object's editor once it has rendered. Select-all for a
+    // fresh create (typing replaces the seed); caret to end for an existing one.
+    $effect(() => {
+        const target = textSession.focusObject;
+        if (target === null || !block || block.objectId !== target || !textareaEl) return;
+        textareaEl.focus();
+        if (selectAllOnFocus) {
+            textareaEl.select();
+            selectAllOnFocus = false;
+        } else {
+            const len = textareaEl.value.length;
+            textareaEl.setSelectionRange(len, len);
         }
-        lastSent.set(block.key, el.value);
-        if (block.layer !== null) queueTextContent(app, block.layer, block.objectId, el.value);
+        textSession.focusObject = null;
+    });
+
+    function bindTextarea(el: HTMLTextAreaElement) {
+        textareaEl = el;
+        if (block) {
+            el.value = block.content;
+            lastSent.set(block.objectId, block.content);
+        }
+        return {
+            destroy() {
+                if (textareaEl === el) textareaEl = undefined;
+            },
+        };
     }
 
-    function onStyle(block: Block, fields: StyleFields) {
+    function onContentInput(e: Event) {
+        if (!block) return;
+        const el = e.currentTarget as HTMLTextAreaElement;
+        lastSent.set(block.objectId, el.value);
+        queueTextContent(app, block.layer, block.objectId, el.value);
+    }
+
+    function onStyle(fields: StyleFields) {
+        if (!block) return;
         const defaults = textSession as unknown as Record<string, unknown>;
-        if (block.objectId !== null && block.layer !== null) {
-            dispatchStyle(app, block.layer, block.objectId, fields, defaults);
-        } else {
-            // Pending placement: no engine object yet — bake into the defaults.
-            applyStyleDefaults(defaults, fields);
-        }
+        dispatchStyle(app, block.layer, block.objectId, fields, defaults);
         // Reflect on the local block so its controls update immediately.
         if (fields.font_family !== undefined) block.font_family = fields.font_family;
         if (fields.size !== undefined) block.size = fields.size;
@@ -290,24 +231,29 @@
 </script>
 
 <div class="text-props">
-    {#each blocks as block (block.key)}
+    {#if block}
         <div class="block">
-            <textarea
-                class="content"
-                rows="2"
-                spellcheck="false"
-                placeholder="Type text…"
-                use:bindTextarea={block.key}
-                oninput={(e) => onContentInput(block, e)}
-                onblur={() => flushTextContent()}
-            ></textarea>
+            <!-- Remount the (uncontrolled) textarea per object so switching the
+                 selected object reseeds it; same-object content changes (undo)
+                 are handled by the reseed $effect without a remount. -->
+            {#key block.objectId}
+                <textarea
+                    class="content"
+                    rows="2"
+                    spellcheck="false"
+                    placeholder="Type text…"
+                    use:bindTextarea
+                    oninput={onContentInput}
+                    onblur={() => flushTextContent()}
+                ></textarea>
+            {/key}
 
             <label class="row" title="Font family">
                 <span class="label">Font</span>
                 <EnumDropdown
                     value={block.font_family}
                     options={fontOptions}
-                    onchange={(v) => onStyle(block, { font_family: v })}
+                    onchange={(v) => onStyle({ font_family: v })}
                 />
             </label>
 
@@ -321,7 +267,7 @@
                     max={512}
                     default={48}
                     formatValue={(v) => String(Math.round(v))}
-                    onChange={(v) => onStyle(block, { size: Math.round(v) })}
+                    onChange={(v) => onStyle({ size: Math.round(v) })}
                     title="Font size in canvas pixels."
                 />
             </div>
@@ -331,7 +277,7 @@
                 <EnumDropdown
                     value={block.align}
                     options={ALIGN_OPTIONS}
-                    onchange={(v) => onStyle(block, { align: v })}
+                    onchange={(v) => onStyle({ align: v })}
                 />
             </label>
 
@@ -340,7 +286,7 @@
                 <input
                     type="checkbox"
                     checked={block.italic}
-                    onchange={(e) => onStyle(block, { italic: (e.currentTarget as HTMLInputElement).checked })}
+                    onchange={(e) => onStyle({ italic: (e.currentTarget as HTMLInputElement).checked })}
                 />
             </label>
 
@@ -350,12 +296,12 @@
                     value={rgbaToHex(block.color)}
                     onchange={(hex) => {
                         const rgb = hexToRgb(hex);
-                        if (rgb) onStyle(block, { color: [rgb[0], rgb[1], rgb[2], block.color[3]] });
+                        if (rgb) onStyle({ color: [rgb[0], rgb[1], rgb[2], block.color[3]] });
                     }}
                 />
             </label>
         </div>
-    {/each}
+    {/if}
 </div>
 
 <style>

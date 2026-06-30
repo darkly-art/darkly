@@ -9,17 +9,16 @@ import type { Tool, ToolContext } from './registry';
  *  edits and drives the on-canvas box; the text controls live in
  *  `TextProperties.svelte`.
  *
- *  - The style fields are placement *defaults*: written by panel style edits,
- *    read by the deferred `add_text` for the next new block.
+ *  - The style fields are creation *defaults*: written by panel style edits,
+ *    read when the panel creates the next text object.
  *  - `focusObject` asks the panel to focus a specific object's editor next
- *    render (set when a text-tool click hits an existing object).
+ *    render (set when a text-tool click hits an existing object, or on create).
  *  - `editing` is the object whose box gizmo is shown on the canvas — the one
  *    just clicked or created. The box follows the active layer (see the tool's
  *    `onFrame`).
- *  - `placement` is a click/drag on empty canvas that hasn't been committed to a
- *    layer yet — the layer is born on the first typed character, so an
- *    abandoned placement never creates one. `box` is set when it was
- *    drag-created (area text). */
+ *  - `placement` is a click/drag on empty canvas handed to the panel, which
+ *    creates the text object there immediately (seeded "text", selected). `box`
+ *    is set when it was drag-created (area text). */
 class TextSession {
     /** Font size in canvas pixels. */
     size = $state(48);
@@ -34,8 +33,8 @@ class TextSession {
     focusObject = $state<number | null>(null);
     /** Object whose box gizmo is drawn on the canvas, or null. */
     editing = $state<{ layerId: number; objectId: number } | null>(null);
-    /** Where a new text layer will be born on the first typed character, or
-     *  null when there's no pending placement. */
+    /** Where the panel should create the next text object (consumed on create),
+     *  or null when there's no pending placement. */
     placement = $state<{
         x: number;
         y: number;
@@ -75,7 +74,7 @@ function clearCreateBand(): void {
 
 export const textTool: Tool = {
     id: 'text',
-    icon: 'fa6-solid:font',
+    icon: 'at-icons:text',
     group: 'paint',
     hotkeyAction: 'textTool',
 
@@ -185,9 +184,9 @@ export const textTool: Tool = {
         clearCreateBand();
         const w = Math.abs(c.cx - c.sx);
         const h = Math.abs(c.cy - c.sy);
-        // The layer is born on the first keystroke (deferred create), so until
-        // then this is only a pending placement. A drag past the threshold
-        // makes it an area-text box; a click makes it point text.
+        // Hand the placement to the panel, which creates the text object there.
+        // A drag past the threshold makes it an area-text box; a click makes it
+        // point text.
         textSession.placement =
             w > DRAG_THRESHOLD && h > DRAG_THRESHOLD
                 ? {
