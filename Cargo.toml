@@ -29,6 +29,9 @@ wgpu = { version = "29.0", features = ["webgpu"] }
 bytemuck = { version = "1.13", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# Typed-bridge TS codegen only (the `ts-export` feature on `darkly`); never
+# compiled into the wasm/production build — see that feature's comment.
+ts-rs = { version = "12", features = ["serde-json-impl"] }
 # serde_yaml_ng, not serde_yml: the original `serde_yaml` (dtolnay) is archived,
 # and the `serde_yml` fork is unmaintained — its 0.0.13 release swapped to a
 # `noyalib` backend that can't round-trip integer-keyed maps (`BTreeMap<u64,_>`),

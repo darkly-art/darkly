@@ -11,9 +11,15 @@ profile = []
 # Readbacks"); the feature exists so `cargo test` and the bench bins can opt
 # in while production / WASM builds cannot reach the API at all.
 testing = []
+# Pulls in `ts-rs` and the `#[derive(TS)]`/registration metadata that the
+# `protocol` codegen test reads to emit the typed `EngineApi` (`engine.api.*`).
+# Native-only: enabled solely for the codegen test run. Production and wasm
+# builds never enable it, so ts-rs stays out of the wasm binary entirely.
+ts-export = ["dep:ts-rs"]
 
 [dependencies]
 wgpu = { workspace = true }
+ts-rs = { workspace = true, optional = true }
 bytemuck = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

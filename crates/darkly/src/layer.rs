@@ -49,6 +49,21 @@ impl<'de> serde::Deserialize<'de> for LayerId {
     }
 }
 
+// On the wire a `LayerId` is just its packed `u64`, so to the typed TS client it
+// is a `number` — mirroring the serde impls above. The slotmap key has no fields
+// to derive `TS` from, so this maps it to the same primitive `u64` exports as.
+#[cfg(feature = "ts-export")]
+impl ts_rs::TS for LayerId {
+    type WithoutGenerics = Self;
+    type OptionInnerType = Self;
+    fn name(cfg: &ts_rs::Config) -> String {
+        u64::name(cfg)
+    }
+    fn inline(cfg: &ts_rs::Config) -> String {
+        u64::inline(cfg)
+    }
+}
+
 /// Properties shared by every node in the tree — raster layers, groups, and
 /// filters. Lock prevents any mutation; lives on every node by construction
 /// so the universal check is one line at every mutation entry point.
