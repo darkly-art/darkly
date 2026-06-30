@@ -139,6 +139,7 @@ mod tests {
             size: 42.0,
             line_height: 1.3,
             align: TextAlign::Center,
+            box_size: Some((300.0, 160.0)),
         };
         let obj = VectorObject::text(
             text,

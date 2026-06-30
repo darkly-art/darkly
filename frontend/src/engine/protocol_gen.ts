@@ -147,6 +147,7 @@ export type RequestKind =
     | 'set_overlay_mask'
     | 'set_pixel_filter'
     | 'set_preview_theme'
+    | 'set_text_box'
     | 'set_text_content'
     | 'set_text_style'
     | 'set_veil_visible'
@@ -319,6 +320,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_overlay_mask',
     'set_pixel_filter',
     'set_preview_theme',
+    'set_text_box',
     'set_text_content',
     'set_text_style',
     'set_veil_visible',

@@ -173,9 +173,16 @@ impl FontRegistry {
         }));
 
         let mut layout: Layout<()> = builder.build(&text.content);
-        layout.break_all_lines(None);
+        // Area text wraps to the box width; point text breaks only at explicit
+        // newlines (natural width). Either way, alignment resolves within a
+        // width — the box width for area text, the block's own natural width for
+        // point text — so the Align control is never inert (a single line still
+        // has nothing to shift, which is correct).
+        let max_adv = text.box_size.map(|(w, _)| w);
+        layout.break_all_lines(max_adv);
+        let align_width = max_adv.unwrap_or_else(|| layout.width());
         layout.align(
-            None,
+            Some(align_width),
             to_parley_align(text.align),
             AlignmentOptions::default(),
         );
@@ -218,5 +225,96 @@ mod tests {
     fn lists_the_bundled_family() {
         let reg = FontRegistry::new();
         assert!(reg.list_fonts().iter().any(|f| f == "Noto Sans"));
+    }
+
+    fn line_count(layout: &Layout<()>) -> usize {
+        layout.lines().count()
+    }
+
+    /// x of the first positioned glyph — its alignment offset within the box.
+    fn first_glyph_x(layout: &Layout<()>) -> f32 {
+        for line in layout.lines() {
+            for item in line.items() {
+                if let PositionedLayoutItem::GlyphRun(gr) = item {
+                    if let Some(g) = gr.positioned_glyphs().next() {
+                        return g.x;
+                    }
+                }
+            }
+        }
+        0.0
+    }
+
+    #[test]
+    fn area_text_wraps_to_the_box_width() {
+        let mut reg = FontRegistry::new();
+        let mut text = TextProps::new("the quick brown fox jumps over the lazy dog".to_string());
+        text.size = 32.0;
+
+        // Point text: one line (no explicit newlines, no wrap box).
+        text.box_size = None;
+        assert_eq!(line_count(&reg.shape(&text)), 1, "point text doesn't wrap");
+
+        // A narrow box wraps the same string onto multiple lines.
+        text.box_size = Some((120.0, 400.0));
+        assert!(
+            line_count(&reg.shape(&text)) >= 2,
+            "a narrow box wraps the text onto multiple lines",
+        );
+    }
+
+    #[test]
+    fn center_align_offsets_within_a_width() {
+        let mut reg = FontRegistry::new();
+        let mut text = TextProps::new("hi".to_string());
+        text.size = 32.0;
+        // A box much wider than the word: centering pushes the first glyph in.
+        text.box_size = Some((400.0, 80.0));
+
+        text.align = TextAlign::Start;
+        let start_x = first_glyph_x(&reg.shape(&text));
+
+        text.align = TextAlign::Center;
+        let center_x = first_glyph_x(&reg.shape(&text));
+
+        assert!(
+            center_x > start_x + 1.0,
+            "center alignment shifts the first glyph right of start (start={start_x}, center={center_x})",
+        );
+    }
+
+    #[test]
+    fn multiline_point_text_aligns_within_its_natural_width() {
+        // Even without a box, alignment resolves within the block's own width:
+        // a short second line is centered relative to the long first line.
+        let mut reg = FontRegistry::new();
+        let mut text = TextProps::new("wwwwwwwwww\ni".to_string());
+        text.size = 32.0;
+        text.box_size = None;
+
+        text.align = TextAlign::Start;
+        let start = reg.shape(&text);
+
+        text.align = TextAlign::Center;
+        let center = reg.shape(&text);
+
+        // The short line's glyph (second line) moves right under centering.
+        let short_glyph = |layout: &Layout<()>| -> f32 {
+            let mut last = 0.0;
+            for line in layout.lines() {
+                for item in line.items() {
+                    if let PositionedLayoutItem::GlyphRun(gr) = item {
+                        if let Some(g) = gr.positioned_glyphs().next() {
+                            last = g.x;
+                        }
+                    }
+                }
+            }
+            last
+        };
+        assert!(
+            short_glyph(&center) > short_glyph(&start) + 1.0,
+            "the short line centers within the block's natural width",
+        );
     }
 }

@@ -38,17 +38,24 @@
         {#if activeVeil}
             <VeilProperties veil={activeVeil} />
         {:else if activeLayer || textSession.placement}
-            <!-- Filter layers honor neither opacity nor blend mode yet (the
-                 first slice composites at full strength), so the blend/opacity
-                 controls are hidden rather than shown as inert. Re-enable when
-                 opacity/blend honoring lands. -->
-            {#if activeLayer && activeLayer.type !== 'filter'}
-                <LayerProperties node={activeLayer} />
-            {/if}
-            {#if activeLayer?.type === 'group'}
-                <GroupProperties group={activeLayer} />
-            {:else if activeLayer?.type === 'void'}
-                <VoidProperties node={activeLayer} />
+            <!-- A pending placement owns the panel: it shows only the text editor
+                 (the gate below stays true), so the still-active layer's own
+                 controls are suppressed. Placing text is a new-object gesture,
+                 and the text tool no longer deselects to express that — so we
+                 hide the other panels here instead. -->
+            {#if !textSession.placement}
+                <!-- Filter layers honor neither opacity nor blend mode yet (the
+                     first slice composites at full strength), so the blend/opacity
+                     controls are hidden rather than shown as inert. Re-enable when
+                     opacity/blend honoring lands. -->
+                {#if activeLayer && activeLayer.type !== 'filter'}
+                    <LayerProperties node={activeLayer} />
+                {/if}
+                {#if activeLayer?.type === 'group'}
+                    <GroupProperties group={activeLayer} />
+                {:else if activeLayer?.type === 'void'}
+                    <VoidProperties node={activeLayer} />
+                {/if}
             {/if}
             <!-- One TextProperties instance, rendered from a single template
                  position so Svelte keeps it across the pending→bound transition

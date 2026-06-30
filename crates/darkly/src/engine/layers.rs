@@ -34,6 +34,9 @@ pub(crate) enum VectorOpKind {
     Content,
     Style,
     Transform,
+    /// A text box-frame resize (origin + box size). Its own lane so a resize
+    /// drag coalesces to one undo step, distinct from a glyph transform.
+    Box,
 }
 
 /// Coalesce discriminator for one object's edits: distinct per `(object, op)`,
@@ -45,6 +48,7 @@ fn vector_coalesce_tag(object: crate::layer::ObjectId, op: VectorOpKind) -> u64 
         VectorOpKind::Content => 0,
         VectorOpKind::Style => 1,
         VectorOpKind::Transform => 2,
+        VectorOpKind::Box => 3,
     };
     (object.0 << 2) | op
 }
@@ -73,6 +77,9 @@ pub struct TextObjectEntry {
     pub italic: bool,
     pub align: crate::layer::TextAlign,
     pub color: [u8; 4],
+    /// `Some((w, h))` for area text, `None` for point text — lets the panel
+    /// tell which mode an object is in.
+    pub box_size: Option<(f32, f32)>,
 }
 
 impl DarklyEngine {
@@ -109,13 +116,20 @@ impl DarklyEngine {
         use kurbo::Shape;
         match &obj.source {
             crate::layer::ObjectSource::Text(t) => {
-                let layout = self.fonts.shape(t);
-                Some(kurbo::Rect::new(
-                    0.0,
-                    0.0,
-                    layout.width() as f64,
-                    layout.height() as f64,
-                ))
+                // Area text's extent is its fixed box; point text's is the
+                // natural shaped size. The box drives both the gizmo frame
+                // (`vector_object_info`) and hit-testing.
+                if let Some((w, h)) = t.box_size {
+                    Some(kurbo::Rect::new(0.0, 0.0, w as f64, h as f64))
+                } else {
+                    let layout = self.fonts.shape(t);
+                    Some(kurbo::Rect::new(
+                        0.0,
+                        0.0,
+                        layout.width() as f64,
+                        layout.height() as f64,
+                    ))
+                }
             }
             crate::layer::ObjectSource::Path(p) => Some(p.bounding_box()),
         }
@@ -320,6 +334,7 @@ impl DarklyEngine {
                     italic: matches!(t.style, crate::layer::TextStyle::Italic),
                     align: t.align,
                     color: brush_rgba(&obj.fill),
+                    box_size: t.box_size,
                 }),
                 crate::layer::ObjectSource::Path(_) => None,
             })
@@ -378,6 +393,37 @@ impl DarklyEngine {
         let new_transform = layer_affine.inverse() * transform_to_kurbo(&gizmo_canvas);
         self.edit_vector_object(id, object, VectorOpKind::Transform, |obj| {
             obj.transform = new_transform;
+        });
+    }
+
+    /// Resize a text object's layout box from the box gizmo's output, setting
+    /// the object transform (the box's moved origin, as the full canvas affine
+    /// `G`) and the box size atomically. Like
+    /// [`Self::set_vector_object_transform`] the layer transform is stripped
+    /// (`obj.transform = layer_transform⁻¹ · G`); both fields move under one
+    /// [`VectorOpKind::Box`] step so a whole resize drag is one undo. Converts a
+    /// point-text object to area text. No-op for a non-text object or a singular
+    /// layer transform.
+    pub fn set_text_box(
+        &mut self,
+        id: LayerId,
+        object: crate::layer::ObjectId,
+        gizmo_canvas: crate::transform::Transform,
+        box_size: (f32, f32),
+    ) {
+        let layer_affine = match self.doc.layer(id) {
+            Some(Layer::Vector(v)) => transform_to_kurbo(&v.transform),
+            _ => return,
+        };
+        if layer_affine.determinant().abs() < 1e-12 {
+            return;
+        }
+        let new_transform = layer_affine.inverse() * transform_to_kurbo(&gizmo_canvas);
+        self.edit_vector_object(id, object, VectorOpKind::Box, |obj| {
+            obj.transform = new_transform;
+            if let crate::layer::ObjectSource::Text(t) = &mut obj.source {
+                t.box_size = Some(box_size);
+            }
         });
     }
 

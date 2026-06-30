@@ -212,6 +212,9 @@
             if (!r) return;
             lastSent.set(block.key, r.latest);
             textSession.focusObject = r.objectId;
+            // Show the new object's box gizmo on the canvas (the text tool's
+            // onFrame attaches to whatever `editing` points at).
+            textSession.editing = { layerId: r.layerId, objectId: r.objectId };
             // `placement` is cleared reactively once the new vector layer is the
             // active node (see the $effect below) — never here, so the panel can
             // never fall into the "no layer yet AND no placement" gap that would

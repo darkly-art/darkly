@@ -264,3 +264,63 @@ fn object_id_stable_across_reorder() {
         "object id is stable across a layer reorder"
     );
 }
+
+#[test]
+fn area_text_bbox_is_the_box_not_the_natural_width() {
+    let mut engine = test_engine(256, 256);
+    let mut text = TextProps::new("the quick brown fox jumps".to_string());
+    text.size = 24.0;
+    text.box_size = Some((120.0, 80.0));
+    let (id, obj) = engine.add_text_layer(text, 10.0, 10.0, [255, 255, 255, 255], None);
+
+    let (_ox, _oy, w, h, _m) = engine
+        .vector_object_info(id, obj)
+        .expect("vector_object_info for the area-text object");
+    assert!(
+        (w - 120.0).abs() < 0.5,
+        "the gizmo bbox width is the box width (got {w})"
+    );
+    assert!(
+        (h - 80.0).abs() < 0.5,
+        "the gizmo bbox height is the box height (got {h})"
+    );
+}
+
+#[test]
+fn set_text_box_converts_point_text_and_coalesces_undo() {
+    let mut engine = test_engine(256, 256);
+    let (id, obj) = engine.add_text_layer(
+        TextProps::new("hello world".into()),
+        10.0,
+        10.0,
+        [255, 255, 255, 255],
+        None,
+    );
+    // Born as point text — no box.
+    assert_eq!(
+        engine.text_objects(id)[0].box_size,
+        None,
+        "point text has no box"
+    );
+
+    // A resize drag is several set_text_box calls; they coalesce to one step.
+    let g = Transform::from_affine([1.0, 0.0, 10.0, 0.0, 1.0, 10.0]);
+    engine.set_text_box(id, obj, g, (100.0, 60.0));
+    engine.set_text_box(id, obj, g, (140.0, 90.0));
+    assert_eq!(
+        engine.text_objects(id)[0].box_size,
+        Some((140.0, 90.0)),
+        "the resize set the box to its final size"
+    );
+
+    // One undo reverts the whole drag back to point text...
+    engine.undo();
+    assert_eq!(
+        engine.text_objects(id)[0].box_size,
+        None,
+        "one undo reverts the coalesced resize drag to point text"
+    );
+    // ...and the next undo removes the layer (the original add).
+    engine.undo();
+    assert!(!engine.has_layer(id), "second undo removes the text layer");
+}

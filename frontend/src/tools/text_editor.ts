@@ -30,6 +30,9 @@ export interface Placement {
     x: number;
     y: number;
     anchorLayerId: number | null;
+    /** `[w, h]` when the placement was drag-created as an area-text box; null/
+     *  absent for a click (point text). */
+    box?: [number, number] | null;
 }
 
 /** The slice of the app the editor logic drives. `app` satisfies it
@@ -70,6 +73,7 @@ export async function createTextFromPending(
         italic: style.italic,
         weight: style.weight,
         color,
+        box: placement.box ?? null,
         anchor: placement.anchorLayerId ?? -1,
     });
     if (!res || typeof res.id !== 'number' || typeof res.object !== 'number') return null;

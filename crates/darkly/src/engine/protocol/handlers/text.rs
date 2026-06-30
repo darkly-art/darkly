@@ -57,6 +57,9 @@ pub fn registrations() -> Vec<RequestRegistration> {
                     /// RGBA 0–255. Defaults to opaque black.
                     #[serde(default)]
                     color: Option<[u8; 4]>,
+                    /// `[w, h]` for a drag-created area-text box; absent → point text.
+                    #[serde(default)]
+                    r#box: Option<[f32; 2]>,
                     anchor: i64,
                 }
                 let r: Req = decode(payload)?;
@@ -74,12 +77,15 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 if let Some(a) = r.align {
                     text.align = parse_align(&a);
                 }
+                text.box_size = r.r#box.map(|b| (b[0], b[1]));
                 let anchor = (r.anchor >= 0).then(|| LayerId::from_ffi(r.anchor as u64));
                 let color = r.color.unwrap_or([0, 0, 0, 255]);
                 let (id, object) = engine.add_text_layer(text, r.x, r.y, color, anchor);
                 // Return the seeded object id alongside the layer id so the panel
                 // can address the new text object without a follow-up query.
-                Ok(Response::json(json!({ "id": id.to_ffi(), "object": object.0 })))
+                Ok(Response::json(
+                    json!({ "id": id.to_ffi(), "object": object.0 }),
+                ))
             },
         },
         RequestRegistration {
@@ -175,6 +181,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
                             "italic": o.italic,
                             "align": align_str(o.align),
                             "color": o.color,
+                            "box": o.box_size.map(|(w, h)| [w, h]),
                         })
                     })
                     .collect();
@@ -225,6 +232,26 @@ pub fn registrations() -> Vec<RequestRegistration> {
                     let id = LayerId::from_ffi(r.id);
                     engine.set_vector_object_transform(id, ObjectId(r.object), g);
                 }
+                Ok(Response::empty())
+            },
+        },
+        RequestRegistration {
+            kind: "set_text_box",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                struct Req {
+                    id: u64,
+                    object: u64,
+                    /// Full canvas affine `G` (row-major) for the box's moved
+                    /// origin; the engine strips the layer transform.
+                    matrix: [f32; 6],
+                    /// Box size `[w, h]` in canvas pixels.
+                    r#box: [f32; 2],
+                }
+                let r: Req = decode(payload)?;
+                let g = crate::transform::Transform::from_affine(r.matrix);
+                let id = LayerId::from_ffi(r.id);
+                engine.set_text_box(id, ObjectId(r.object), g, (r.r#box[0], r.r#box[1]));
                 Ok(Response::empty())
             },
         },

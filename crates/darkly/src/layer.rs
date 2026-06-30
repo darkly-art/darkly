@@ -267,6 +267,10 @@ pub struct TextProps {
     /// Multiplier on the font's natural line height (1.0 = natural).
     pub line_height: f32,
     pub align: TextAlign,
+    /// Fixed layout box in canvas pixels. `None` = point text (auto width,
+    /// grows with content). `Some((w, h))` = area text: lines wrap to `w`,
+    /// `align` resolves within `w`, and the on-canvas frame is `w × h`.
+    pub box_size: Option<(f32, f32)>,
 }
 
 impl TextProps {
@@ -279,6 +283,7 @@ impl TextProps {
             size: 48.0,
             line_height: 1.2,
             align: TextAlign::Start,
+            box_size: None,
         }
     }
 }
