@@ -61,10 +61,11 @@ fn brush_rgba(fill: &Option<peniko::Brush>) -> [u8; 4] {
     }
 }
 
-/// What [`DarklyEngine::text_object_info`] reports for re-opening a text object
-/// in the editor — content, style, fill color, plane-space placement, and
-/// shaped bounds.
-pub struct TextObjectInfo {
+/// One text object's content, style, and fill color — the data the
+/// text-properties panel binds each editor block to. Carries no geometry:
+/// the panel edits off-canvas, so shaping/bounds are never needed.
+pub struct TextObjectEntry {
+    pub object: crate::layer::ObjectId,
     pub content: String,
     pub font_family: String,
     pub size: f32,
@@ -72,10 +73,6 @@ pub struct TextObjectInfo {
     pub italic: bool,
     pub align: crate::layer::TextAlign,
     pub color: [u8; 4],
-    pub ox: f32,
-    pub oy: f32,
-    pub width: f32,
-    pub height: f32,
 }
 
 impl DarklyEngine {
@@ -103,24 +100,6 @@ impl DarklyEngine {
     /// Family names available to the font picker. Bundled fonts today.
     pub fn list_fonts(&self) -> Vec<String> {
         self.fonts.list_fonts().to_vec()
-    }
-
-    /// Local-space bounding box of one object on a vector layer, in the
-    /// object's own coordinate frame (before its `transform`). Text shapes via
-    /// parley from `(0, 0)` at the top-left of the line box; a path uses its
-    /// kurbo bounding box. `None` if the id pair doesn't resolve. The single
-    /// shaping-to-bounds convention — hit-testing, overlay sizing, and the
-    /// gizmo bbox all read it.
-    pub fn vector_object_local_bbox(
-        &mut self,
-        layer_id: LayerId,
-        object: crate::layer::ObjectId,
-    ) -> Option<kurbo::Rect> {
-        let obj = match self.doc.layer(layer_id) {
-            Some(Layer::Vector(v)) => v.object(object).cloned(),
-            _ => None,
-        }?;
-        self.object_bbox(&obj)
     }
 
     /// Local bbox of an owned object. Takes the object by reference so callers
@@ -320,41 +299,31 @@ impl DarklyEngine {
         self.compositor.mark_dirty();
     }
 
-    /// Read everything the text tool needs to re-open one text object for
-    /// editing: its content, style, fill color (RGBA 0–255), the placement
-    /// origin in PLANE space (the translation of `layer_transform *
-    /// obj.transform`), and the shaped bounds. `None` if the id pair doesn't
-    /// resolve to a text object.
-    pub fn text_object_info(
-        &mut self,
-        id: LayerId,
-        object: crate::layer::ObjectId,
-    ) -> Option<TextObjectInfo> {
-        let (obj, layer_affine) = match self.doc.layer(id) {
-            Some(Layer::Vector(v)) => {
-                (v.object(object).cloned()?, transform_to_kurbo(&v.transform))
-            }
-            _ => return None,
+    /// List every text object on a vector layer with its content, style, and
+    /// fill color (RGBA 0–255) — what the text-properties panel binds one
+    /// editor block to per object. Empty for a non-vector layer or one with no
+    /// text objects. Carries no geometry: the panel edits off-canvas, so
+    /// shaping/bounds are never needed.
+    pub fn text_objects(&self, id: LayerId) -> Vec<TextObjectEntry> {
+        let Some(Layer::Vector(v)) = self.doc.layer(id) else {
+            return Vec::new();
         };
-        let crate::layer::ObjectSource::Text(text) = &obj.source else {
-            return None;
-        };
-        let text = text.clone();
-        let bbox = self.object_bbox(&obj)?;
-        let origin = (layer_affine * obj.transform) * kurbo::Point::ORIGIN;
-        Some(TextObjectInfo {
-            content: text.content,
-            font_family: text.font_family,
-            size: text.size,
-            weight: text.weight,
-            italic: matches!(text.style, crate::layer::TextStyle::Italic),
-            align: text.align,
-            color: brush_rgba(&obj.fill),
-            ox: origin.x as f32,
-            oy: origin.y as f32,
-            width: bbox.width() as f32,
-            height: bbox.height() as f32,
-        })
+        v.objects
+            .iter()
+            .filter_map(|obj| match &obj.source {
+                crate::layer::ObjectSource::Text(t) => Some(TextObjectEntry {
+                    object: obj.id,
+                    content: t.content.clone(),
+                    font_family: t.font_family.clone(),
+                    size: t.size,
+                    weight: t.weight,
+                    italic: matches!(t.style, crate::layer::TextStyle::Italic),
+                    align: t.align,
+                    color: brush_rgba(&obj.fill),
+                }),
+                crate::layer::ObjectSource::Path(_) => None,
+            })
+            .collect()
     }
 
     /// Read one object's gizmo geometry: its local bbox size plus the full

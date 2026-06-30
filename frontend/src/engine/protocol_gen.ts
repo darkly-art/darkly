@@ -158,7 +158,7 @@ export type RequestKind =
     | 'start_preview'
     | 'start_save_document'
     | 'stroke_to'
-    | 'text_object_info'
+    | 'text_objects'
     | 'tool_types'
     | 'undo'
     | 'update_floating_matrix'
@@ -330,7 +330,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'start_preview',
     'start_save_document',
     'stroke_to',
-    'text_object_info',
+    'text_objects',
     'tool_types',
     'undo',
     'update_floating_matrix',

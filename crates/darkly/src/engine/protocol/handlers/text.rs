@@ -34,20 +34,6 @@ fn parse_style(italic: bool) -> TextStyle {
     }
 }
 
-/// `{ id, width, height }` shaped-bounds envelope returned by the create/edit
-/// handlers so the frontend can position its editing overlay.
-fn bounds_json(
-    engine: &mut crate::engine::DarklyEngine,
-    id: LayerId,
-    object: ObjectId,
-) -> serde_json::Value {
-    let (w, h) = engine
-        .vector_object_local_bbox(id, object)
-        .map(|r| (r.width() as f32, r.height() as f32))
-        .unwrap_or((0.0, 0.0));
-    json!({ "id": id.to_ffi(), "width": w, "height": h })
-}
-
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
         RequestRegistration {
@@ -91,7 +77,9 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 let anchor = (r.anchor >= 0).then(|| LayerId::from_ffi(r.anchor as u64));
                 let color = r.color.unwrap_or([0, 0, 0, 255]);
                 let (id, object) = engine.add_text_layer(text, r.x, r.y, color, anchor);
-                Ok(Response::json(bounds_json(engine, id, object)))
+                // Return the seeded object id alongside the layer id so the panel
+                // can address the new text object without a follow-up query.
+                Ok(Response::json(json!({ "id": id.to_ffi(), "object": object.0 })))
             },
         },
         RequestRegistration {
@@ -107,7 +95,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 let id = LayerId::from_ffi(r.id);
                 let object = ObjectId(r.object);
                 engine.set_text_content(id, object, r.content);
-                Ok(Response::json(bounds_json(engine, id, object)))
+                Ok(Response::empty())
             },
         },
         RequestRegistration {
@@ -143,7 +131,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
                     r.align.as_deref().map(parse_align),
                     r.color,
                 );
-                Ok(Response::json(bounds_json(engine, id, object)))
+                Ok(Response::empty())
             },
         },
         RequestRegistration {
@@ -166,32 +154,31 @@ pub fn registrations() -> Vec<RequestRegistration> {
             },
         },
         RequestRegistration {
-            kind: "text_object_info",
+            kind: "text_objects",
             handle: |engine, payload, _b| {
                 #[derive(Deserialize)]
                 struct Req {
                     id: u64,
-                    object: u64,
                 }
                 let r: Req = decode(payload)?;
                 let id = LayerId::from_ffi(r.id);
-                let value = match engine.text_object_info(id, ObjectId(r.object)) {
-                    Some(info) => json!({
-                        "content": info.content,
-                        "font_family": info.font_family,
-                        "size": info.size,
-                        "weight": info.weight,
-                        "italic": info.italic,
-                        "align": align_str(info.align),
-                        "color": info.color,
-                        "ox": info.ox,
-                        "oy": info.oy,
-                        "width": info.width,
-                        "height": info.height,
-                    }),
-                    None => serde_json::Value::Null,
-                };
-                Ok(Response::json(value))
+                let objects: Vec<_> = engine
+                    .text_objects(id)
+                    .into_iter()
+                    .map(|o| {
+                        json!({
+                            "object": o.object.0,
+                            "content": o.content,
+                            "font_family": o.font_family,
+                            "size": o.size,
+                            "weight": o.weight,
+                            "italic": o.italic,
+                            "align": align_str(o.align),
+                            "color": o.color,
+                        })
+                    })
+                    .collect();
+                Ok(Response::json(json!({ "objects": objects })))
             },
         },
         RequestRegistration {

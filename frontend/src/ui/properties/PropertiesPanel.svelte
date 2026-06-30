@@ -1,7 +1,9 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
+    import { textSession } from '../../tools/text.svelte';
     import LayerProperties from './LayerProperties.svelte';
     import GroupProperties from './GroupProperties.svelte';
+    import TextProperties from './TextProperties.svelte';
     import VeilProperties from '../veils/VeilProperties.svelte';
     import VoidProperties from '../voids/VoidProperties.svelte';
 
@@ -35,18 +37,25 @@
     <div class="panel-body">
         {#if activeVeil}
             <VeilProperties veil={activeVeil} />
-        {:else if activeLayer}
+        {:else if activeLayer || textSession.placement}
             <!-- Filter layers honor neither opacity nor blend mode yet (the
                  first slice composites at full strength), so the blend/opacity
                  controls are hidden rather than shown as inert. Re-enable when
                  opacity/blend honoring lands. -->
-            {#if activeLayer.type !== 'filter'}
+            {#if activeLayer && activeLayer.type !== 'filter'}
                 <LayerProperties node={activeLayer} />
             {/if}
-            {#if activeLayer.type === 'group'}
+            {#if activeLayer?.type === 'group'}
                 <GroupProperties group={activeLayer} />
-            {:else if activeLayer.type === 'void'}
+            {:else if activeLayer?.type === 'void'}
                 <VoidProperties node={activeLayer} />
+            {/if}
+            <!-- One TextProperties instance, rendered from a single template
+                 position so Svelte keeps it across the pending→bound transition
+                 (a fresh placement becoming a real layer). A second usage would
+                 remount and drop the caret on the first keystroke. -->
+            {#if activeLayer?.type === 'vector' || textSession.placement}
+                <TextProperties node={activeLayer?.type === 'vector' ? activeLayer : null} />
             {/if}
         {:else}
             <div class="empty">No selection</div>

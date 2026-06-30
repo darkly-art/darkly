@@ -213,7 +213,7 @@ fn distinct_ops_do_not_over_coalesce() {
 }
 
 #[test]
-fn text_object_info_round_trips() {
+fn text_objects_lists_objects() {
     let (w, h) = (256, 256);
     let mut engine = test_engine(w, h);
 
@@ -224,16 +224,16 @@ fn text_object_info_round_trips() {
     text.align = TextAlign::Center;
     let (id, obj) = engine.add_text_layer(text, 40.0, 50.0, [10, 20, 30, 255], None);
 
-    let info = engine.text_object_info(id, obj).expect("info");
-    assert_eq!(info.content, "Hello");
-    assert_eq!(info.size, 33.0);
-    assert_eq!(info.weight, 600.0);
-    assert!(info.italic);
-    assert_eq!(info.align, TextAlign::Center);
-    assert_eq!(info.color, [10, 20, 30, 255]);
-    assert!((info.ox - 40.0).abs() < 0.01, "placement origin x");
-    assert!((info.oy - 50.0).abs() < 0.01, "placement origin y");
-    assert!(info.width > 0.0 && info.height > 0.0);
+    let objects = engine.text_objects(id);
+    assert_eq!(objects.len(), 1, "one text object on the new layer");
+    let o = &objects[0];
+    assert_eq!(o.object, obj);
+    assert_eq!(o.content, "Hello");
+    assert_eq!(o.size, 33.0);
+    assert_eq!(o.weight, 600.0);
+    assert!(o.italic);
+    assert_eq!(o.align, TextAlign::Center);
+    assert_eq!(o.color, [10, 20, 30, 255]);
 }
 
 #[test]

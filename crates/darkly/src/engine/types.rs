@@ -137,11 +137,6 @@ pub enum LayerInfo {
         opacity: f32,
         blend_mode: &'static str,
         modifiers: Vec<ModifierInfo>,
-        /// Content of the layer's first text object, if any — lets the panel
-        /// label a text layer by its text and the tool re-open it for editing.
-        text: Option<String>,
-        /// Number of vector objects on the layer.
-        object_count: usize,
     },
     #[serde(rename_all = "camelCase")]
     Group {
@@ -527,33 +522,25 @@ pub(crate) fn node_to_layer_info(
                     .collect(),
                 pipeline: f.pipeline.clone(),
             },
-            Layer::Vector(v) => {
-                let text = v.objects.iter().find_map(|o| match &o.source {
-                    crate::layer::ObjectSource::Text(t) => Some(t.content.clone()),
-                    crate::layer::ObjectSource::Path(_) => None,
-                });
-                LayerInfo::Vector {
-                    id: v.id.to_ffi() as f64,
-                    name: v.common.name.clone(),
-                    visible: v.common.visible,
-                    locked: v.common.locked,
-                    editable,
-                    can_have_mask: kind.can_have_mask,
-                    can_rename: kind.can_rename,
-                    has_thumbnail: kind.has_thumbnail,
-                    icon: kind.icon,
-                    kind_name: kind.display_name,
-                    opacity: v.blend.opacity,
-                    blend_mode: v.blend.blend_mode.type_id,
-                    modifiers: v
-                        .filters
-                        .iter()
-                        .filter_map(|mid| doc.find_filter(*mid).map(|m| modifier_to_info(doc, m)))
-                        .collect(),
-                    text,
-                    object_count: v.objects.len(),
-                }
-            }
+            Layer::Vector(v) => LayerInfo::Vector {
+                id: v.id.to_ffi() as f64,
+                name: v.common.name.clone(),
+                visible: v.common.visible,
+                locked: v.common.locked,
+                editable,
+                can_have_mask: kind.can_have_mask,
+                can_rename: kind.can_rename,
+                has_thumbnail: kind.has_thumbnail,
+                icon: kind.icon,
+                kind_name: kind.display_name,
+                opacity: v.blend.opacity,
+                blend_mode: v.blend.blend_mode.type_id,
+                modifiers: v
+                    .filters
+                    .iter()
+                    .filter_map(|mid| doc.find_filter(*mid).map(|m| modifier_to_info(doc, m)))
+                    .collect(),
+            },
         },
         LayerNode::Group(g) => LayerInfo::Group {
             id: g.id.to_ffi() as f64,

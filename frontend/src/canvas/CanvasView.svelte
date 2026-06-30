@@ -15,6 +15,7 @@
     import { handleDroppedFile } from '../actions';
     import { THUMB_SIZE } from '../ui/layers/thumbnails.svelte';
     import { isColorPickerModifierActive } from '../tools/colorpicker_cursor';
+    import { isEditableTarget } from '../lib/isEditableTarget';
     import TransformModeMenu from '../ui/TransformModeMenu.svelte';
 
     /** Optional pre-built instance. When provided, CanvasView skips the
@@ -353,6 +354,11 @@
     const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta']);
 
     function onKeyDown(e: KeyboardEvent) {
+        // Keys typed into a text field (the text-properties editor, a rename
+        // box, etc.) are content, not canvas shortcuts — they must never pan,
+        // trigger a tool keybind, or dismiss a tool overlay. This is a window
+        // listener, so a textarea keystroke would otherwise bubble up to here.
+        if (isEditableTarget(e.target)) return;
         nav.onKeyDown(e);
         // Don't dismiss overlay for navigation or bare modifier keys
         if (nav.spaceHeld || MODIFIER_KEYS.has(e.key)) return;

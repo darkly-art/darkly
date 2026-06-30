@@ -99,7 +99,7 @@ For a feature to count, it must be:
     - [ ] Calligraphy
     - [ ] Oil / Impasto
 - [x] Brush tool, eraser, fill (flood), gradient (linear), color picker
-- [x] Text tool (vector-object layer, Vello-rendered, bundled fonts; raster-first; click-to-edit + per-object transform)
+- [x] Text tool (vector-object layer, Vello-rendered, bundled fonts; raster-first; edited in the properties panel — content + style + color — under any transform; per-object transform gizmo)
 - [x] Pressure / tilt / spacing / distance / angle inputs
 - [x] Laplacian stabilizer
 - [x] HSV picker, foreground/background swatches
@@ -142,9 +142,11 @@ For a feature to count, it must be:
 - [x] Flip canvas H / V
 - [x] Rotate canvas 90° CW / CCW / 180°
 - [x] Flip layer / selection H / V
-- [ ] Text tool / text layers
+- [x] Text tool / text layers
 - [ ] Recent colors
 - [ ] Saved swatches / palettes
+- [ ] Palette popup
+- [ ] Navigator / overview window
 - [ ] History panel UI
 - [x] Mirror view
 - [ ] Fit to screen
@@ -175,8 +177,6 @@ For a feature to count, it must be:
 - [ ] Posterize
 - [ ] Color harmonies
 - [ ] Palette file import (.aco, .gpl)
-- [ ] Palette Popup
-- [ ] Navigator / overview window
 - [ ] Trim to content / autocrop
 - [ ] Stroke selection (paint along marching ants)
 - [ ] Save / load selection to channel
