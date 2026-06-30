@@ -60,10 +60,16 @@ export async function createTextFromPending(
     style: FullStyle,
     color: Rgba,
     latest: () => string,
+    targetLayerId: number | null,
+    /** Called with the new ids the instant they're known — BEFORE the layer-tree
+     *  refresh that re-fetches the panel's bound blocks. The panel uses this to
+     *  mark which object the pending textarea hands its key to, so the refetch
+     *  doesn't remount it (and lose the caret). */
+    onCreated?: (layerId: number, objectId: number) => void,
 ): Promise<{ layerId: number; objectId: number; latest: string } | null> {
     const engine = host.engine;
     if (!engine) return null;
-    const res = await engine.send<{ id: number; object: number }>('add_text', {
+    const common = {
         content,
         x: placement.x,
         y: placement.y,
@@ -74,17 +80,40 @@ export async function createTextFromPending(
         weight: style.weight,
         color,
         box: placement.box ?? null,
-        anchor: placement.anchorLayerId ?? -1,
-    });
-    if (!res || typeof res.id !== 'number' || typeof res.object !== 'number') return null;
-    const layerId = res.id;
-    const objectId = res.object;
+    };
+
+    let layerId: number;
+    let objectId: number;
+    if (targetLayerId !== null) {
+        // A vector layer is active → add another object to it (a vector layer
+        // owns many objects). The layer stays selected, so no `selectLayer`.
+        const res = await engine.send<{ object: number }>('add_text_object', {
+            id: targetLayerId,
+            ...common,
+        });
+        if (!res || typeof res.object !== 'number' || res.object < 0) return null;
+        layerId = targetLayerId;
+        objectId = res.object;
+    } else {
+        // No vector layer active → a new text layer is born for this object.
+        const res = await engine.send<{ id: number; object: number }>('add_text', {
+            ...common,
+            anchor: placement.anchorLayerId ?? -1,
+        });
+        if (!res || typeof res.id !== 'number' || typeof res.object !== 'number') return null;
+        layerId = res.id;
+        objectId = res.object;
+    }
+
+    // Mark the new ids before the refetch so the panel's key handoff is
+    // deterministic (the refetch may fire as soon as the tree changes below).
+    onCreated?.(layerId, objectId);
     const latestVal = latest();
     if (latestVal !== content) {
         engine.post('set_text_content', { id: layerId, object: objectId, content: latestVal });
     }
     await host.refreshLayerTree();
-    host.selectLayer(layerId);
+    if (targetLayerId === null) host.selectLayer(layerId);
     host.requestFrame();
     return { layerId, objectId, latest: latestVal };
 }

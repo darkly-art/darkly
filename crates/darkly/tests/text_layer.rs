@@ -324,3 +324,53 @@ fn set_text_box_converts_point_text_and_coalesces_undo() {
     engine.undo();
     assert!(!engine.has_layer(id), "second undo removes the text layer");
 }
+
+#[test]
+fn add_text_object_appends_to_existing_layer_as_one_undo_step() {
+    let mut engine = test_engine(256, 256);
+    // A vector layer with one text object.
+    let (id, obj_a) = engine.add_text_layer(
+        TextProps::new("first".into()),
+        10.0,
+        10.0,
+        [255, 255, 255, 255],
+        None,
+    );
+    assert_eq!(engine.text_objects(id).len(), 1);
+
+    // A second text box lands on the SAME layer (the multi-object case).
+    let obj_b = engine
+        .add_text_object(
+            id,
+            TextProps::new("second".into()),
+            10.0,
+            80.0,
+            [255, 255, 255, 255],
+        )
+        .expect("add_text_object on a vector layer");
+    assert_ne!(obj_a, obj_b, "the new object gets a distinct id");
+    assert_eq!(
+        engine.text_objects(id).len(),
+        2,
+        "both text objects live on one layer"
+    );
+
+    // One undo removes just the added object; the layer and first object remain.
+    engine.undo();
+    assert!(engine.has_layer(id), "undo keeps the layer");
+    let objs = engine.text_objects(id);
+    assert_eq!(objs.len(), 1, "undo removes only the appended object");
+    assert_eq!(objs[0].object, obj_a, "the original object is untouched");
+}
+
+#[test]
+fn add_text_object_rejects_a_non_vector_layer() {
+    let mut engine = test_engine(128, 128);
+    let raster = engine.add_raster_layer(None);
+    assert!(
+        engine
+            .add_text_object(raster, TextProps::new("x".into()), 0.0, 0.0, [0, 0, 0, 255])
+            .is_none(),
+        "add_text_object is a no-op on a raster layer"
+    );
+}

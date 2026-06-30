@@ -189,6 +189,16 @@
         // input — touch-action:none only covers touch, not pen (Chromium bug).
         e.preventDefault();
 
+        // Pull keyboard focus onto the canvas. `bindingSite` normally does this
+        // via a synthetic `mousedown`, but the `preventDefault()` above
+        // suppresses pointer→mouse compatibility events, so it never fires here.
+        // Without this, a focused properties-panel field (text editor textarea,
+        // an align/font `<select>`) keeps focus and swallows tool keys —
+        // Enter/Escape to a transform gizmo, for one. A canvas interaction
+        // means the canvas owns the keyboard; tools that want a field focused
+        // (the text editor) re-focus it explicitly afterwards.
+        canvas?.focus();
+
         // Touch: always capture and track for gesture detection
         if (e.pointerType === 'touch') {
             canvas.setPointerCapture(e.pointerId);

@@ -64,6 +64,10 @@
     let pendingLocalId: number | null = null;
     let nextLocalId = 0;
     let creating = false;
+    // Object id created from the current placement. Drives two things: the
+    // pending textarea's key is handed to exactly this object (so it isn't
+    // remounted on create), and the placement clears once this object is bound.
+    let justCreated: number | null = null;
 
     function foregroundTuple(): Rgba {
         const c = app.foreground;
@@ -95,9 +99,11 @@
         blocks = objs.map((o) => {
             let local = localIdByObject.get(o.object);
             if (local === undefined) {
-                // The first newly-seen object after a placement inherits the
-                // pending key, so its textarea isn't remounted on create.
-                if (pendingLocalId !== null) {
+                // The object created from the pending placement inherits the
+                // pending key, so its textarea survives the create (no remount,
+                // caret kept). Other objects already on the layer get fresh ids
+                // — they must not steal the pending key.
+                if (pendingLocalId !== null && o.object === justCreated) {
                     local = pendingLocalId;
                     pendingLocalId = null;
                 } else {
@@ -120,21 +126,31 @@
         });
     }
 
-    // Build the block list. Bound mode (a vector layer is active) refetches
-    // `text_objects` keyed on the layer id AND `app.layerTree` (which changes
-    // every refresh) so undo/redo reflects. Pending mode renders one
-    // placeholder block.
+    // Build the block list. A vector layer being active gives bound blocks
+    // (refetched from `text_objects`, keyed on the layer id AND `app.layerTree`
+    // so undo/redo reflects). A placement adds a trailing pending block — on a
+    // vector layer it's a new object on that layer (the multi-object case); with
+    // no vector layer it's the only block (a new layer is born on first type).
     $effect(() => {
         const n = node;
         void app.layerTree; // dependency: refetch on undo/redo
         const placement = textSession.placement;
+        const wantPending = !!placement && !creating;
         if (n && n.type === 'vector' && app.engine) {
             const layerId = n.id;
+            // Mint the pending key up front so the appended block is stable.
+            if (wantPending && pendingLocalId === null) pendingLocalId = nextLocalId++;
             let cancelled = false;
             app.engine
                 .send<{ objects: any[] }>('text_objects', { id: layerId })
                 .then((res) => {
-                    if (!cancelled) setBoundBlocks(layerId, res?.objects ?? []);
+                    if (cancelled) return;
+                    setBoundBlocks(layerId, res?.objects ?? []);
+                    // Append the pending block if its key wasn't just consumed
+                    // by the created object (setBoundBlocks nulls it on handoff).
+                    if (wantPending && pendingLocalId !== null) {
+                        blocks = [...blocks, pendingBlock(pendingLocalId)];
+                    }
                 });
             return () => {
                 cancelled = true;
@@ -201,6 +217,10 @@
         creating = true;
         const content = el.value;
         try {
+            // A vector layer already active → add the object to it; otherwise a
+            // new layer is born. `justCreated` lets the bound refetch keep this
+            // textarea (key handoff) and clears the placement once it's bound.
+            const target = node?.type === 'vector' ? node.id : null;
             const r = await createTextFromPending(
                 app,
                 placement,
@@ -208,29 +228,34 @@
                 currentStyle(),
                 block.color,
                 () => el.value,
+                target,
+                (layerId, objectId) => {
+                    // Set before the bound refetch: marks the key handoff target
+                    // and shows the new object's box gizmo (the text tool's
+                    // onFrame attaches to whatever `editing` points at).
+                    justCreated = objectId;
+                    textSession.editing = { layerId, objectId };
+                },
             );
             if (!r) return;
             lastSent.set(block.key, r.latest);
             textSession.focusObject = r.objectId;
-            // Show the new object's box gizmo on the canvas (the text tool's
-            // onFrame attaches to whatever `editing` points at).
-            textSession.editing = { layerId: r.layerId, objectId: r.objectId };
-            // `placement` is cleared reactively once the new vector layer is the
-            // active node (see the $effect below) — never here, so the panel can
-            // never fall into the "no layer yet AND no placement" gap that would
-            // unmount this whole editor mid-create.
+            // `placement` is cleared by the $effect below once the new object is
+            // bound — never here, so the panel can't fall into the "no layer yet
+            // AND no placement" gap that would unmount this editor mid-create.
         } finally {
             creating = false;
         }
     }
 
-    // The pending placement is realized the moment its vector layer becomes
-    // active. Clearing it here (rather than in `createFromPending`) keeps the
-    // PropertiesPanel gate — `vector layer || placement` — true across the whole
-    // transition: `placement` only drops once `vector` already holds.
+    // Clear the placement once the object created from it appears in the bound
+    // blocks. This holds whether the object landed on a fresh layer (its vector
+    // layer becomes active) or on the already-active layer (the multi-object
+    // case) — in both, the PropertiesPanel gate stays satisfied across the drop.
     $effect(() => {
-        if (node?.type === 'vector' && textSession.placement) {
+        if (justCreated !== null && textSession.placement && blocks.some((b) => b.objectId === justCreated)) {
             textSession.placement = null;
+            justCreated = null;
         }
     });
 

@@ -14,6 +14,7 @@ function fakeHost() {
     const engine = {
         send: vi.fn((kind: string) => {
             if (kind === 'add_text') return Promise.resolve({ id: 7, object: 3 });
+            if (kind === 'add_text_object') return Promise.resolve({ object: 9 });
             if (kind === 'text_objects') return Promise.resolve({ objects: [{ object: 3 }] });
             return Promise.resolve(null);
         }),
@@ -45,6 +46,7 @@ describe('text editor logic', () => {
             STYLE,
             [10, 20, 30, 255],
             () => 'Hi',
+            null,
         );
         expect(engine.send).toHaveBeenCalledWith(
             'add_text',
@@ -65,10 +67,31 @@ describe('text editor logic', () => {
         expect(r).toEqual({ layerId: 7, objectId: 3, latest: 'Hi' });
     });
 
+    it('targeting an active vector layer adds an object to it without a new layer', async () => {
+        const { engine, host } = fakeHost();
+        const r = await createTextFromPending(
+            host,
+            PLACEMENT,
+            'Hi',
+            STYLE,
+            [0, 0, 0, 255],
+            () => 'Hi',
+            42, // active vector layer
+        );
+        expect(engine.send).toHaveBeenCalledWith(
+            'add_text_object',
+            expect.objectContaining({ id: 42, content: 'Hi', x: 100, y: 60 }),
+        );
+        // The target layer is already selected — adding an object must not
+        // re-select (nor create) a layer.
+        expect(host.selectLayer).not.toHaveBeenCalled();
+        expect(r).toEqual({ layerId: 42, objectId: 9, latest: 'Hi' });
+    });
+
     it('syncs characters typed during the create await via set_text_content', async () => {
         const { engine, host } = fakeHost();
         // `latest()` reports more than the value add_text was seeded with.
-        await createTextFromPending(host, PLACEMENT, 'H', STYLE, [0, 0, 0, 255], () => 'Hello');
+        await createTextFromPending(host, PLACEMENT, 'H', STYLE, [0, 0, 0, 255], () => 'Hello', null);
         expect(engine.post).toHaveBeenCalledWith('set_text_content', {
             id: 7,
             object: 3,

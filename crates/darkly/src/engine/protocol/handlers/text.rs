@@ -34,6 +34,37 @@ fn parse_style(italic: bool) -> TextStyle {
     }
 }
 
+/// Build a [`TextProps`] from the wire fields shared by `add_text` (new layer)
+/// and `add_text_object` (existing layer). `None` style fields take the
+/// [`TextProps::new`] defaults; `box` makes it area text.
+#[allow(clippy::too_many_arguments)]
+fn build_text_props(
+    content: String,
+    font_family: Option<String>,
+    size: Option<f32>,
+    weight: Option<f32>,
+    italic: bool,
+    align: Option<String>,
+    box_size: Option<[f32; 2]>,
+) -> TextProps {
+    let mut text = TextProps::new(content);
+    if let Some(f) = font_family {
+        text.font_family = f;
+    }
+    if let Some(s) = size {
+        text.size = s;
+    }
+    if let Some(w) = weight {
+        text.weight = w;
+    }
+    text.style = parse_style(italic);
+    if let Some(a) = align {
+        text.align = parse_align(&a);
+    }
+    text.box_size = box_size.map(|b| (b[0], b[1]));
+    text
+}
+
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
         RequestRegistration {
@@ -63,21 +94,15 @@ pub fn registrations() -> Vec<RequestRegistration> {
                     anchor: i64,
                 }
                 let r: Req = decode(payload)?;
-                let mut text = TextProps::new(r.content);
-                if let Some(f) = r.font_family {
-                    text.font_family = f;
-                }
-                if let Some(s) = r.size {
-                    text.size = s;
-                }
-                if let Some(w) = r.weight {
-                    text.weight = w;
-                }
-                text.style = parse_style(r.italic);
-                if let Some(a) = r.align {
-                    text.align = parse_align(&a);
-                }
-                text.box_size = r.r#box.map(|b| (b[0], b[1]));
+                let text = build_text_props(
+                    r.content,
+                    r.font_family,
+                    r.size,
+                    r.weight,
+                    r.italic,
+                    r.align,
+                    r.r#box,
+                );
                 let anchor = (r.anchor >= 0).then(|| LayerId::from_ffi(r.anchor as u64));
                 let color = r.color.unwrap_or([0, 0, 0, 255]);
                 let (id, object) = engine.add_text_layer(text, r.x, r.y, color, anchor);
@@ -86,6 +111,53 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 Ok(Response::json(
                     json!({ "id": id.to_ffi(), "object": object.0 }),
                 ))
+            },
+        },
+        RequestRegistration {
+            kind: "add_text_object",
+            handle: |engine, payload, _b| {
+                // Add another text object to an existing vector layer — the
+                // multi-object case (placing text while a text layer is active).
+                #[derive(Deserialize)]
+                struct Req {
+                    id: u64,
+                    content: String,
+                    #[serde(default)]
+                    font_family: Option<String>,
+                    #[serde(default)]
+                    size: Option<f32>,
+                    #[serde(default)]
+                    weight: Option<f32>,
+                    #[serde(default)]
+                    italic: bool,
+                    #[serde(default)]
+                    align: Option<String>,
+                    x: f64,
+                    y: f64,
+                    /// RGBA 0–255. Defaults to opaque black.
+                    #[serde(default)]
+                    color: Option<[u8; 4]>,
+                    /// `[w, h]` for a drag-created area-text box; absent → point text.
+                    #[serde(default)]
+                    r#box: Option<[f32; 2]>,
+                }
+                let r: Req = decode(payload)?;
+                let text = build_text_props(
+                    r.content,
+                    r.font_family,
+                    r.size,
+                    r.weight,
+                    r.italic,
+                    r.align,
+                    r.r#box,
+                );
+                let color = r.color.unwrap_or([0, 0, 0, 255]);
+                // `-1` for a non-vector id, mirroring `hit_test_vector_object`.
+                let object = engine
+                    .add_text_object(LayerId::from_ffi(r.id), text, r.x, r.y, color)
+                    .map(|o| o.0 as i64)
+                    .unwrap_or(-1);
+                Ok(Response::json(json!({ "object": object })))
             },
         },
         RequestRegistration {

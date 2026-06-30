@@ -203,6 +203,46 @@ impl DarklyEngine {
         (id, object_id)
     }
 
+    /// Add a text object to an *existing* vector layer, placed so its origin
+    /// sits at canvas `(x, y)`, filled with `color`. The vector layer owns an
+    /// ordered list of objects, so this is the natural "another text box on the
+    /// same layer" path. One undo step (the object list before/after, via
+    /// [`Property::VectorObjects`] — the same undo kind [`Self::edit_vector_object`]
+    /// records). Returns the stamped object id, or `None` for a non-vector id.
+    pub fn add_text_object(
+        &mut self,
+        layer_id: LayerId,
+        text: crate::layer::TextProps,
+        x: f64,
+        y: f64,
+        color: [u8; 4],
+    ) -> Option<crate::layer::ObjectId> {
+        let old = match self.doc.layer(layer_id) {
+            Some(Layer::Vector(v)) => v.objects.clone(),
+            _ => return None,
+        };
+        let fill = peniko::Brush::Solid(peniko::Color::from_rgba8(
+            color[0], color[1], color[2], color[3],
+        ));
+        let obj = crate::layer::VectorObject::text(text, kurbo::Affine::translate((x, y)), fill);
+        let object_id = match self.doc.find_node_mut(layer_id) {
+            Some(LayerNode::Layer(Layer::Vector(v))) => v.push_object(obj),
+            _ => return None,
+        };
+        let new = match self.doc.layer(layer_id) {
+            Some(Layer::Vector(v)) => v.objects.clone(),
+            _ => return None,
+        };
+        self.push_undo(Box::new(PropertyAction::new(
+            layer_id,
+            Property::VectorObjects(old),
+            Property::VectorObjects(new),
+        )));
+        self.sync_vector_layer(layer_id);
+        self.compositor.mark_dirty();
+        Some(object_id)
+    }
+
     /// Ensure the compositor's GPU state for a vector layer exists and rebuild
     /// its `vello::Scene` from the document's authoritative objects. Idempotent
     /// — safe after any object/style/transform change, on load, and on

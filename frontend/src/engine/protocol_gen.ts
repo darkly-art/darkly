@@ -7,6 +7,7 @@ export type RequestKind =
     | 'add_mask'
     | 'add_raster'
     | 'add_text'
+    | 'add_text_object'
     | 'add_veil'
     | 'add_void'
     | 'antialias_selection'
@@ -180,6 +181,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'add_mask',
     'add_raster',
     'add_text',
+    'add_text_object',
     'add_veil',
     'add_void',
     'antialias_selection',
