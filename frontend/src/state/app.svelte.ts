@@ -879,8 +879,19 @@ export class DarklyInstance {
         return !this.pointerActive && this._interactionCount === 0;
     }
 
-    /** Zoom that fits the canvas in the viewport, never upscaling. */
-    fitZoom(): number { return Math.min(this.viewportW / this.docW, this.viewportH / this.docH, 1); }
+    /** Zoom that frames the (possibly rotated) document inside the viewport.
+     *  The rotated axis-aligned bounding box is what must fit, so a tilted
+     *  canvas never clips its corners. `allowUpscale` lets a document smaller
+     *  than the viewport enlarge past 1:1 to fill it (Fit to Screen); the
+     *  default caps at 1:1, so Reset View never blows up a tiny document. */
+    fitZoom(allowUpscale = false): number {
+        const cos = Math.abs(Math.cos(this.rotation));
+        const sin = Math.abs(Math.sin(this.rotation));
+        const boxW = this.docW * cos + this.docH * sin;
+        const boxH = this.docW * sin + this.docH * cos;
+        const fit = Math.min(this.viewportW / boxW, this.viewportH / boxH);
+        return allowUpscale ? fit : Math.min(fit, 1);
+    }
 
     /** Reset rotation/mirror/pan and zoom-to-fit (Krita "Reset Display"). pan=0
      *  restores the document's default on-open framing. */
@@ -890,6 +901,25 @@ export class DarklyInstance {
         this.rotation = 0;
         this.mirrorH = false;
         this.zoom = this.fitZoom();
+        this.requestFrame();
+    }
+
+    /** Frame the document in the viewport: zoom-to-fit (enlarging a document
+     *  smaller than the viewport past 1:1 to fill it) and recenter, preserving
+     *  the current rotation and mirror. The orientation-agnostic counterpart to
+     *  {@link resetView} — GIMP "Fit Image in Window". */
+    fitToScreen() {
+        this.panX = 0;
+        this.panY = 0;
+        this.zoom = this.fitZoom(true);
+        this.requestFrame();
+    }
+
+    /** Recenter the canvas in the viewport, leaving zoom, rotation, and mirror
+     *  untouched — GIMP "Center Image in Window". */
+    centerView() {
+        this.panX = 0;
+        this.panY = 0;
         this.requestFrame();
     }
 

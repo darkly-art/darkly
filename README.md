@@ -148,7 +148,7 @@ For a feature to count, it must be:
 - [x] Mirror view
 - [x] Reset view (rotation / mirror / pan / zoom-to-fit)
 - [x] Canvas-rotation snapping (cardinal 45° detent + 15° discrete)
-- [ ] Fit to screen
+- [x] Fit to screen / center view
 - [ ] 100% / zoom presets
 - [ ] Symmetry / mirror painting (X, Y, radial)
 - [x] Installable PWA — offline app shell, add to home screen

@@ -25,6 +25,12 @@ hotkeys:
   # overlays leave mirrorViewH unbound rather than reuse M (Photoshop's
   # M is rectSelectTool).
   mirrorViewH: KeyM
+  # View framing. Krita's `zoom_to_fit` ("Fit to View") ships an empty
+  # <shortcut> in kritamenu.action — no default key — and Krita has no
+  # center-in-window action at all. Both fitToScreen and centerView are
+  # therefore left unbound under the Krita preset (neither lives in
+  # defaults.yaml, so omission here means no key). Users can bind them
+  # via the settings UI; GIMP/Photoshop carry their own defaults.
   # Tools.
   brushTool: KeyB
   fillTool: KeyF
