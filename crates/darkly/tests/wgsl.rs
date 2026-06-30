@@ -303,6 +303,143 @@ fn extent_protocol_composes_along_chain() {
 }
 
 #[test]
+fn extent_grows_with_shape_aspect_anisotropy() {
+    // The `aspect` knob squashes the tip into an ellipse; a thinner nib
+    // (smaller aspect) has a longer perpendicular axis, so the dab bbox must
+    // grow by the worst-case anisotropy factor `1 / aspect_min`. Build
+    // pen + shape(sine, amplitude unwired ⇒ base radius 1) + stamp + paint
+    // with a wire on `aspect` so its natural-range minimum (0.1) counts:
+    // factor must reach 1/0.1 = 10. Without folding `aspect` into the extent,
+    // the tall nib would be clipped to the round bbox on save-point rewind.
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node(
+        "pen_input",
+        reg.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let paint_color = graph.add_node(
+        "paint_color",
+        reg.get("paint_color").unwrap().ports.clone(),
+        vec![],
+    );
+    let rand_aspect = graph.add_node(
+        "random",
+        reg.get("random").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(0)],
+    );
+    let shape = graph.add_node(
+        "shape",
+        reg.get("shape").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(0)], // Sine, amplitude default 0
+    );
+    let stamp = graph.add_node(
+        "stamp",
+        reg.get("stamp").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(0)],
+    );
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let wires = [
+        (rand_aspect, "value", shape, "aspect"),
+        (shape, "mask", stamp, "tip"),
+        (paint_color, "color", stamp, "color"),
+        (stamp, "dab", term, "rgba"),
+        (pen, "position", term, "position"),
+    ];
+    for (fnode, fport, tnode, tport) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: fnode,
+                    port: fport.into(),
+                },
+                PortRef {
+                    node: tnode,
+                    port: tport.into(),
+                },
+            )
+            .unwrap();
+    }
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
+    // base = 1 (sine, amplitude 0); aniso_max = 1/aspect_min = 1/0.1 = 10.
+    assert!(
+        (compiled.brush_extent_factor - 10.0).abs() < 1e-3,
+        "wired aspect (min 0.1) must inflate the bbox ×10, got {}",
+        compiled.brush_extent_factor,
+    );
+    // The compiled silhouette must carry the aspect argument into ShapeParams.
+    assert!(
+        compiled.stroke_wgsl.contains("ShapeParams"),
+        "shape brush must emit a ShapeParams constructor",
+    );
+}
+
+#[test]
+fn extent_neutral_when_aspect_unwired() {
+    // Regression: the default `aspect` (1.0) must leave the bbox unchanged so
+    // every existing round brush keeps its footprint. pen + shape(sine,
+    // amplitude wired ⇒ 1.5) + stamp + paint with `aspect` left unwired: the
+    // factor must stay at the pre-anisotropy 1.5, not grow.
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node(
+        "pen_input",
+        reg.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let paint_color = graph.add_node(
+        "paint_color",
+        reg.get("paint_color").unwrap().ports.clone(),
+        vec![],
+    );
+    let rand_amp = graph.add_node(
+        "random",
+        reg.get("random").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(0)],
+    );
+    let shape = graph.add_node(
+        "shape",
+        reg.get("shape").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(0)], // Sine
+    );
+    let stamp = graph.add_node(
+        "stamp",
+        reg.get("stamp").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(0)],
+    );
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let wires = [
+        (rand_amp, "value", shape, "amplitude"),
+        (shape, "mask", stamp, "tip"),
+        (paint_color, "color", stamp, "color"),
+        (stamp, "dab", term, "rgba"),
+        (pen, "position", term, "position"),
+    ];
+    for (fnode, fport, tnode, tport) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: fnode,
+                    port: fport.into(),
+                },
+                PortRef {
+                    node: tnode,
+                    port: tport.into(),
+                },
+            )
+            .unwrap();
+    }
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
+    assert!(
+        (compiled.brush_extent_factor - 1.5).abs() < 1e-4,
+        "unwired aspect (default 1.0) must leave factor at 1.5, got {}",
+        compiled.brush_extent_factor,
+    );
+}
+
+#[test]
 fn extent_default_identity_when_no_shape() {
     // pen → paint with no upstream shape node — every node
     // returns the trait-default `Identity`, so the brush extent
