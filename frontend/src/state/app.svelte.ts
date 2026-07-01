@@ -3,6 +3,7 @@ import type { SaveBundle } from '../storage/saveDocument';
 import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry } from '../tools/registry';
 import { pollPick } from '../tools/color_pick_sync';
+import { beginToolSession, killToolSession, runHook } from '../tools/tool_session';
 import { tickColorPickerCursor } from '../tools/colorpicker_cursor';
 import { MediaStreamSource, describeMediaError, type CaptureKind } from '../lib/mediaStreamSource';
 
@@ -147,7 +148,7 @@ export class DarklyInstance {
      *  at startup. Drives the dynamic, auto-discovered Colors-menu actions in
      *  `registerActions` — a new filter in the Rust core surfaces a menu
      *  entry with zero frontend edits. */
-    filterTypes = $state<Array<{ type: string; displayName: string }>>([]);
+    filterTypes = $state<Array<{ type: string; displayName: string; params?: unknown[] }>>([]);
 
     toolDisplayName(id: string): string {
         return this.toolDisplayNames[id] ?? id;
@@ -166,6 +167,11 @@ export class DarklyInstance {
     }
     layerKindDisplayName(id: string): string {
         return this.layerKindDisplayNames[id] ?? id;
+    }
+    /** Display label for a filter `type_id` (e.g. `"curves"` → `"Curves"`),
+     *  resolved from the `filterTypes` registry list. */
+    filterDisplayName(id: string): string {
+        return this.filterTypes.find((f) => f.type === id)?.displayName ?? id;
     }
 
     /** Populate every registry-backed display-name map from the Rust core in
@@ -879,6 +885,50 @@ export class DarklyInstance {
         return !this.pointerActive && this._interactionCount === 0;
     }
 
+    /** Zoom that frames the (possibly rotated) document inside the viewport.
+     *  The rotated axis-aligned bounding box is what must fit, so a tilted
+     *  canvas never clips its corners. `allowUpscale` lets a document smaller
+     *  than the viewport enlarge past 1:1 to fill it (Fit to Screen); the
+     *  default caps at 1:1, so Reset View never blows up a tiny document. */
+    fitZoom(allowUpscale = false): number {
+        const cos = Math.abs(Math.cos(this.rotation));
+        const sin = Math.abs(Math.sin(this.rotation));
+        const boxW = this.docW * cos + this.docH * sin;
+        const boxH = this.docW * sin + this.docH * cos;
+        const fit = Math.min(this.viewportW / boxW, this.viewportH / boxH);
+        return allowUpscale ? fit : Math.min(fit, 1);
+    }
+
+    /** Reset rotation/mirror/pan and zoom-to-fit (Krita "Reset Display"). pan=0
+     *  restores the document's default on-open framing. */
+    resetView() {
+        this.panX = 0;
+        this.panY = 0;
+        this.rotation = 0;
+        this.mirrorH = false;
+        this.zoom = this.fitZoom();
+        this.requestFrame();
+    }
+
+    /** Frame the document in the viewport: zoom-to-fit (enlarging a document
+     *  smaller than the viewport past 1:1 to fill it) and recenter, preserving
+     *  the current rotation and mirror. The orientation-agnostic counterpart to
+     *  {@link resetView} — GIMP "Fit Image in Window". */
+    fitToScreen() {
+        this.panX = 0;
+        this.panY = 0;
+        this.zoom = this.fitZoom(true);
+        this.requestFrame();
+    }
+
+    /** Recenter the canvas in the viewport, leaving zoom, rotation, and mirror
+     *  untouched — GIMP "Center Image in Window". */
+    centerView() {
+        this.panX = 0;
+        this.panY = 0;
+        this.requestFrame();
+    }
+
     /** Schedule a render frame if one isn't already pending. */
     requestFrame() {
         if (this._framePending) return;
@@ -920,8 +970,10 @@ export class DarklyInstance {
             // changes) and document bools.
             if (frame.state) this.engineState = frame.state;
 
-            // Per-frame tool hook — async state sync (e.g. GPU readback completion).
-            toolRegistry.get(this.activeToolId)?.onFrame?.();
+            // Per-frame tool hook — async state sync (e.g. GPU readback
+            // completion). Wrapped so a hook whose engine op was cancelled by a
+            // session change mid-await settles cleanly (see tool_session.ts).
+            void runHook(toolRegistry.get(this.activeToolId)?.onFrame?.());
 
             // Global color-pick poll — drives both the color-picker tool and
             // the modifier-held `sampleColor` chord. Runs regardless of active
@@ -1001,6 +1053,17 @@ let activeInstance = $state<DarklyInstance | null>(null);
  *  `app.<x>` (because the proxy's getter reads the `$state` `activeInstance`,
  *  threading the dependency through). */
 export function setActiveInstance(inst: DarklyInstance | null) {
+    // Rebind the tool session to the newly-focused instance. This kills the
+    // outgoing session (any tool op parked on an await now rejects on resume
+    // instead of landing on the wrong tab) and starts a fresh one over the new
+    // tab's engine — necessary because every tab's `<CanvasView>` stays mounted
+    // across a focus switch, so the tool/layer effects that normally begin a
+    // session don't re-fire. When the new instance has no engine yet (the
+    // single-instance boot call, before `initEditor` sets it), leave the session
+    // severed; the tool effect begins it once the engine is ready.
+    // See tool_session.ts.
+    if (inst?.engine) beginToolSession(inst.engine);
+    else killToolSession();
     activeInstance = inst;
 }
 

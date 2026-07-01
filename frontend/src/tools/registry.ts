@@ -1,8 +1,12 @@
-import type { Engine } from '../engine/protocol';
+import type { SessionEngine } from './tool_session';
 import type { Component } from 'svelte';
 
 export interface ToolContext {
-    engine: Engine;
+    /** The engine bound to the current tool session — not the raw `Engine`. A
+     *  request that resolves after the session dies rejects with
+     *  `ToolSessionCancelled`, so tool code never resumes into a changed world.
+     *  See `tool_session.ts`. */
+    engine: SessionEngine;
     canvasEl: HTMLCanvasElement;
     screenToCanvas: (screenX: number, screenY: number) => { x: number; y: number };
 }

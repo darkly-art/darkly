@@ -760,6 +760,51 @@ impl DarklyEngine {
         ));
     }
 
+    /// Resolve a layer id to its filter `pipeline` id, if the layer is a filter.
+    /// Lets the protocol handler fetch the filter's param schema without
+    /// importing the layer enum.
+    pub fn filter_layer_pipeline(&self, layer_id: LayerId) -> Option<String> {
+        match self.doc.find_node(layer_id) {
+            Some(LayerNode::Layer(Layer::Filter(f))) => Some(f.pipeline.clone()),
+            _ => None,
+        }
+    }
+
+    /// Parameter schema for a filter type (empty for parameter-free filters).
+    /// Backs the protocol handler's JSON→`ParamValue` conversion.
+    pub fn filter_param_defs(&self, type_id: &str) -> &'static [crate::gpu::params::ParamDef] {
+        self.compositor.filter_pipeline_registry().params(type_id)
+    }
+
+    /// Replace a filter layer's parameter values. Coalesces with prior
+    /// `FilterParams` edits on the same layer so a curve drag is one undo step —
+    /// the exact analog of [`Self::update_void_params`]. The compositor rebuilds
+    /// any param-derived GPU resources (the curves LUT) lazily on the next
+    /// `sync_projection_states`, keyed by the param fingerprint.
+    pub fn update_filter_params(
+        &mut self,
+        layer_id: LayerId,
+        new_params: Vec<crate::gpu::params::ParamValue>,
+    ) {
+        if !self.doc.is_node_editable(layer_id) {
+            return;
+        }
+        let old_params = match self.doc.find_node(layer_id) {
+            Some(LayerNode::Layer(Layer::Filter(f))) => f.params.clone(),
+            _ => return,
+        };
+        if let Some(LayerNode::Layer(Layer::Filter(f))) = self.doc.find_node_mut(layer_id) {
+            f.params = new_params.clone();
+        }
+        self.compositor.mark_dirty();
+
+        self.coalesce_property_undo(PropertyAction::new(
+            layer_id,
+            Property::FilterParams(old_params),
+            Property::FilterParams(new_params),
+        ));
+    }
+
     /// Set a void layer's user transform (the void *consuming* the generic
     /// transform gizmo's output). Mirrors [`Self::update_void_params`]:
     /// reads the layer's CURRENT transform as the undo `old_value` before

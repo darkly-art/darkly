@@ -2,6 +2,7 @@
 // To add a new module, create a .rs file in this directory
 // that exports `pub fn register() -> crate::gpu::filter::FilterPipelineRegistration`.
 
+pub mod curves;
 pub mod invert;
 
 use crate::gpu::filter::FilterPipelineRegistration;
@@ -9,6 +10,7 @@ use crate::gpu::filter::FilterPipelineRegistration;
 #[rustfmt::skip]
 pub fn registrations() -> Vec<FilterPipelineRegistration> {
     vec![
+        curves::register(),
         invert::register(),
     ]
 }

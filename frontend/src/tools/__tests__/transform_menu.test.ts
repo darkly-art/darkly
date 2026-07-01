@@ -50,6 +50,7 @@ import {
     transformActiveMode,
     setTransformMode,
 } from '../transform.svelte';
+import { beginToolSession } from '../tool_session';
 
 const ctx = { canvasEl: {} as HTMLCanvasElement } as never;
 
@@ -72,6 +73,9 @@ describe('transform right-click mode menu', () => {
     beforeEach(() => {
         fakeApp.transformModeMenu = null;
         fakeApp.engine.post.mockClear();
+        // Tool code reaches the engine through the live session (see
+        // tool_session.ts); begin one over the fake engine.
+        beginToolSession(fakeApp.engine as never);
     });
 
     it('right-click inside the bbox opens the mode menu at the cursor', async () => {

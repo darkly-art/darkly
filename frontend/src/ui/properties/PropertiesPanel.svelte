@@ -6,6 +6,7 @@
     import TextProperties from './TextProperties.svelte';
     import VeilProperties from '../veils/VeilProperties.svelte';
     import VoidProperties from '../voids/VoidProperties.svelte';
+    import FilterProperties from '../filters/FilterProperties.svelte';
 
     function findNode(nodes: any[], id: number): any | null {
         for (const n of nodes) {
@@ -55,6 +56,8 @@
                     <GroupProperties group={activeLayer} />
                 {:else if activeLayer?.type === 'void'}
                     <VoidProperties node={activeLayer} />
+                {:else if activeLayer?.type === 'filter'}
+                    <FilterProperties node={activeLayer} />
                 {/if}
             {/if}
             <!-- One TextProperties instance, rendered from a single template

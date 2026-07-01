@@ -41,7 +41,7 @@ log = "0.4"
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 png = "0.18"
-quick-xml = "0.40"
+quick-xml = "0.41"
 base64 = "0.22"
 thiserror = "2.0"
 slotmap = { version = "1.0", features = ["serde"] }

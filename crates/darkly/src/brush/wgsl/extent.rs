@@ -85,6 +85,25 @@ impl ExtentCtx<'_> {
             port.default
         }
     }
+
+    /// Minimum value the named input port can take, given the wire graph —
+    /// the mirror of [`Self::port_max_value`]. Needed when *smaller* port
+    /// values grow the extent (e.g. `shape`'s `aspect`, where a thinner nib
+    /// has a longer perpendicular axis). Unknown ports return `0.0`.
+    pub fn port_min_value(&self, port_name: &str) -> f32 {
+        let Some(port) = self
+            .port_defs
+            .iter()
+            .find(|p| p.name == port_name && p.dir == PortDir::Input)
+        else {
+            return 0.0;
+        };
+        if self.wired_inputs.contains(port_name) {
+            port.natural_range.map(|(min, _)| min).unwrap_or(port.min)
+        } else {
+            port.default
+        }
+    }
 }
 
 /// Compose every node's [`ExtentContribution`] into a single

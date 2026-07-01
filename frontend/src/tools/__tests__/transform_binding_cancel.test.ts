@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // The void binding captures the pre-edit transform — INCLUDING its mode — on
 // first read, so cancelling reverts faithfully. Engine transport is mocked.
@@ -9,7 +9,15 @@ const { fakeApp } = vi.hoisted(() => {
 vi.mock('../../state/app.svelte', () => ({ app: fakeApp }));
 
 import { voidTransformBinding } from '../transform_bindings';
+import { beginToolSession } from '../tool_session';
 import type { Mat3 } from '../transform_projective';
+
+// The bindings reach the engine through the live tool session; establish one
+// over the fake engine so `toolEngine()` resolves (its send/post delegate to
+// the fake's spies).
+beforeEach(() => {
+    beginToolSession(fakeApp.engine as never);
+});
 
 describe('voidTransformBinding cancel preserves the original mode', () => {
     it('reverts a void that was already perspective to mode 1, not affine', async () => {

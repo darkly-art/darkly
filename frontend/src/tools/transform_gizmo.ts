@@ -13,6 +13,7 @@
  * live updates are fire-and-forget through the binding.
  */
 import { app } from '../state/app.svelte';
+import { toolEngine } from './tool_session';
 import { OverlayBuilder } from '../canvas/gpu_overlay';
 import { MAT3_IDENTITY, type Mat3 } from './transform_projective';
 import {
@@ -200,10 +201,11 @@ export class TransformGizmo {
     }
 
     private rebuildOverlay(): void {
-        if (!app.engine) return;
+        const engine = toolEngine();
+        if (!engine) return;
         const o = new OverlayBuilder(this.canvasEl);
         this.bbox = this.mode.buildOverlay(this.geo, o);
-        o.push(app.engine);
+        o.push(engine);
         this.overlay = o;
     }
 
@@ -212,7 +214,7 @@ export class TransformGizmo {
         this.drag = null;
         this.bbox = null;
         this.overlay = null;
-        app.engine?.post('clear_overlay');
+        toolEngine()?.post('clear_overlay');
         app.toolCursor = null;
     }
 }

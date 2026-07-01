@@ -165,6 +165,7 @@ export type RequestKind =
     | 'text_objects'
     | 'tool_types'
     | 'undo'
+    | 'update_filter_params'
     | 'update_floating_matrix'
     | 'update_vector_object_transform'
     | 'update_veil'
@@ -341,6 +342,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'text_objects',
     'tool_types',
     'undo',
+    'update_filter_params',
     'update_floating_matrix',
     'update_vector_object_transform',
     'update_veil',
