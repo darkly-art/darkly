@@ -17,6 +17,7 @@ use crate::layer::*;
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum SelectionMode {
     Replace,
     Add,
@@ -31,6 +32,7 @@ pub enum SelectionMode {
 /// decoded value without a hand-written `&str → variant` map.
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "target_type", content = "target_id")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum MoveTarget {
     #[serde(rename = "before")]
     Before(LayerId),

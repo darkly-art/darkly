@@ -1159,6 +1159,7 @@ impl DarklyEngine {
 /// appropriate widget (scrub slider, toggle, color picker, etc.).
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum ExposedValue {
     /// Float scrub slider with unit conversion.
     Scalar {
@@ -1189,6 +1190,7 @@ pub enum ExposedValue {
 /// Info about an exposed port — sent to the frontend for the BrushBar.
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct ExposedPortInfo {
     /// `"<node_id>.<port_name>"` — the same string used to address the
     /// entry in `Graph::exposed_ports`. Frontend passes it back to

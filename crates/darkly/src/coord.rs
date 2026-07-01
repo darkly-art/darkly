@@ -280,6 +280,38 @@ impl CanvasRect {
     }
 }
 
+// On the wire a `Point`/`Rect` is a plain `{ x, y }` / `{ origin, width, height }`
+// regardless of its phantom coordinate space, so to the typed TS client they are
+// inline object expressions — not declared, named types (which would collide
+// across `S` instantiations that share a TS shape). The space marker erases at
+// the boundary, mirroring its `#[serde(skip)]` `PhantomData`.
+#[cfg(feature = "ts-export")]
+impl<S: 'static> ts_rs::TS for Point<S> {
+    type WithoutGenerics = Self;
+    type OptionInnerType = Self;
+    fn name(_: &ts_rs::Config) -> String {
+        "{ x: number, y: number }".to_string()
+    }
+    fn inline(cfg: &ts_rs::Config) -> String {
+        <Self as ts_rs::TS>::name(cfg)
+    }
+}
+
+#[cfg(feature = "ts-export")]
+impl<S: 'static> ts_rs::TS for Rect<S> {
+    type WithoutGenerics = Self;
+    type OptionInnerType = Self;
+    fn name(cfg: &ts_rs::Config) -> String {
+        format!(
+            "{{ origin: {}, width: number, height: number }}",
+            <Point<S> as ts_rs::TS>::name(cfg)
+        )
+    }
+    fn inline(cfg: &ts_rs::Config) -> String {
+        <Self as ts_rs::TS>::name(cfg)
+    }
+}
+
 /// A point in the **plane** frame (see [`Plane`]).
 pub type CanvasPoint = Point<Plane>;
 /// A rect in the **plane** frame (see [`Plane`]).

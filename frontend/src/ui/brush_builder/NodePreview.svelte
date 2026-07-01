@@ -32,7 +32,7 @@
     async function refresh() {
         const engine = app.engine;
         if (!engine) return;
-        const { bytes } = await engine.send('brush_node_preview', { node_id: nodeId });
+        const { bytes } = await engine.api.brushNodePreview({ node_id: nodeId });
         if (!bytes || bytes.length === 0) return;
         if (bytes.length === lastLen && imgUrl) return;
         const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });

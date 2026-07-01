@@ -101,7 +101,7 @@ export async function createInstance(
     // plain "Untitled" — without this the first tab-strip read would
     // race the rename.
     if (instance.pendingName !== null) {
-        engine.post('set_document_name', { name: instance.pendingName });
+        engine.api.setDocumentName({ name: instance.pendingName });
         instance.pendingName = null;
     }
 
@@ -111,8 +111,8 @@ export async function createInstance(
     // bg layer — eliminates the "refresh after mutation" race the
     // LayerPanel would otherwise hit.
     if (options.seedBackground) {
-        const bg = await engine.send<number>('add_raster', { anchor: null });
-        engine.post('fill_background', { id: bg });
+        const bg = await engine.api.addRaster({ anchor: null });
+        engine.api.fillBackground({ id: bg });
         instance.selectLayer(bg);
     }
 
@@ -145,7 +145,7 @@ export function seedFreshDocument(instance: DarklyInstance, docW: number, docH: 
     // next call would unwrap on `views`. CanvasView issues its own
     // resize to the surface dims right after, so the only cost is one
     // GPU realloc that's immediately replaced.
-    instance.engine.post('resize', { width: docW, height: docH });
+    instance.engine.api.resize({ width: docW, height: docH });
     instance.addVeil('rainy_glass', { direction: 135, visible: false });
     instance.addVeil('grain',       { speed: 0.05,    visible: false });
     instance.addVeil('lens_blur',   { radius: 0.25,   visible: false });

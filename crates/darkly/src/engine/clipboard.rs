@@ -526,8 +526,9 @@ impl DarklyEngine {
     /// the metadata is stitched in when `complete_copy` runs.
     ///
     /// Returns `None` immediately. The result is available via
-    /// `poll_copy_rich_result()` once the readback lands (next frame).
-    #[handler]
+    /// `poll_copy_rich_result()` once the readback lands (next frame) — so the
+    /// wire verb is fire-and-forget despite the non-`()` return.
+    #[handler(post)]
     pub fn copy_layer_rich(&mut self, id: LayerId) -> Option<()> {
         // Snapshot metadata up-front. Layers can mutate while the readback
         // is in flight; pinning at copy time matches user intent and keeps

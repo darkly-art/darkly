@@ -22,7 +22,7 @@
         if (!engine) return;
         (async () => {
             try {
-                const list = await engine.send('void_types');
+                const list = await engine.api.voidTypes();
                 voidTypes = Array.isArray(list) ? list : [];
             } catch {
                 voidTypes = [];
@@ -53,7 +53,7 @@
         for (const p of vt.params) {
             defaults[p.name] = p.default;
         }
-        const id = await app.engine.send<number | null>('add_void', {
+        const id = await app.engine.api.addVoid({
             void_type: vt.type,
             params: defaults,
             anchor: app.activeLayerId,

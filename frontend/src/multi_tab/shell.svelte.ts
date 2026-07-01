@@ -55,7 +55,7 @@ class MultiTabShell {
         const inst = this.instances.find(i => i.id === id);
         if (!inst) return;
         if (inst.engine) {
-            inst.engine.post('set_document_name', { name });
+            inst.engine.api.setDocumentName({ name });
         } else {
             inst.pendingName = name;
         }

@@ -2,6 +2,7 @@
 /// Each module defines a `const` array of these describing its parameters.
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum ParamDef {
     Float {
         name: &'static str,
@@ -61,6 +62,7 @@ pub enum ParamDef {
 /// param matching (`match Some(ParamValue::Int(v))` would fall through).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum ParamValue {
     Bool(bool),
     Int(i32),

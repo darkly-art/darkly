@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { withApi } from '../../engine/testApi';
 
 // Minimal stand-ins for the Svelte-runic state proxy and the gizmo, so the
 // race in `dismissOverlay` can be driven without the Svelte/GPU runtime.
 const { engine, fakeApp, gizmo, TransformGizmoMock } = vi.hoisted(() => {
     const engine = {
+        post: vi.fn(),
         send: vi.fn((kind: string) => {
             if (kind === 'has_floating') return Promise.resolve(true);
             // A target layer that does NOT match activeLayerId, so dismissOverlay
@@ -50,6 +52,9 @@ beforeEach(() => {
  * the gizmo) before those awaits resolve. The resumed `dismissOverlay` must not
  * dereference the now-null gizmo, nor commit a second time.
  */
+// Give the fake engine a real typed `api` over its send/post spies.
+withApi(engine);
+
 describe('transform dismissOverlay race with onDeactivate', () => {
     it('does not throw or double-commit when deactivated mid-await', async () => {
         transformTool.onActivate?.(ctx);

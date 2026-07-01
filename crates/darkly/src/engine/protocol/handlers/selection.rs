@@ -8,20 +8,25 @@ use serde::Deserialize;
 use crate::document::SelectionMode;
 use crate::engine::protocol::{decode, RequestRegistration, Response};
 
+/// Lasso polygon + selection mode. `feather` is accepted but currently ignored
+/// by the engine.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct SelectLassoReq {
+    pub verts: Vec<[f32; 2]>,
+    pub mode: SelectionMode,
+    pub antialias: bool,
+    pub feather: f32,
+}
+
 pub fn registrations() -> Vec<RequestRegistration> {
-    vec![RequestRegistration {
-        kind: "select_lasso",
-        handle: |engine, payload, _b| {
-            #[derive(Deserialize)]
-            struct Req {
-                verts: Vec<[f32; 2]>,
-                mode: SelectionMode,
-                antialias: bool,
-                feather: f32,
-            }
-            let r: Req = decode(payload)?;
+    vec![
+        RequestRegistration::new("select_lasso", |engine, payload, _b| {
+            let r: SelectLassoReq = decode(payload)?;
             engine.select_lasso(&r.verts, r.mode, r.antialias, r.feather);
             Ok(Response::empty())
-        },
-    }]
+        })
+        .post()
+        .req::<SelectLassoReq>(),
+    ]
 }

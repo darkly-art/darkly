@@ -60,7 +60,7 @@
 
     function toggleEraseMode() {
         brushSession.eraseMode = !brushSession.eraseMode;
-        app.engine?.post('set_brush_blend_mode', { mode: brushSession.eraseMode ? 1 : 0 });
+        app.engine?.api.setBrushBlendMode({ mode: brushSession.eraseMode ? 1 : 0 });
     }
 
     // Brushes whose terminal doesn't honor `gpu.blend_mode` (smudge,
@@ -72,7 +72,7 @@
     $effect(() => {
         if (!brushGraph.supportsErase && brushSession.eraseMode) {
             brushSession.eraseMode = false;
-            app.engine?.post('set_brush_blend_mode', { mode: 0 });
+            app.engine?.api.setBrushBlendMode({ mode: 0 });
         }
     });
 </script>

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { withApi } from '../../engine/testApi';
 
 // Mock every dependency the clipboard actions import *before* importing the
 // module under test, so its top-level `import { app }` / `config` / … chain
@@ -44,6 +45,9 @@ beforeEach(() => {
     fakeApp.onCopyResult.mockClear();
     fakeApp.activeLayerId = 42;
 });
+
+// Give the fake engine a real typed `api` over its send/post spies.
+withApi(engine);
 
 describe('clipboard action registration', () => {
     it('registers copy, cut, paste, and pasteInPlace under the edit category', () => {

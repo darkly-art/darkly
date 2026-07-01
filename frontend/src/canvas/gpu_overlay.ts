@@ -169,7 +169,7 @@ export class OverlayBuilder {
             }));
         }
 
-        engine.post('set_overlay', { primitives: prims });
+        engine.api.setOverlay({ primitives: prims });
         // Overlay updates may originate outside a pointer event (e.g. async
         // GPU readback completion in a tool's onFrame hook). The frame loop
         // has already decided whether to continue based on render()'s return
@@ -179,7 +179,7 @@ export class OverlayBuilder {
 
     /** Clear the GPU overlay. */
     clear(engine: Engine): void {
-        engine.post('clear_overlay');
+        engine.api.clearOverlay();
         app.requestFrame();
     }
 

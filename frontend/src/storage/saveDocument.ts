@@ -107,14 +107,14 @@ async function acquireHandle(forceAs: boolean): Promise<FileSystemFileHandle | n
     if (!forceAs && app.fileHandle) return app.fileHandle;
 
     const suggested =
-        sanitizeFilename(await engine.send('document_name')) || 'darkly-document';
+        sanitizeFilename(await engine.api.documentName()) || 'darkly-document';
     const handle = await pickSaveFile(`${suggested}.darkly`);
     if (!handle) return null;
 
     // Reflect the chosen filename in the doc's display name so the tab
     // strip and a subsequent Ctrl+S both pick it up.
     const baseName = handle.name.replace(/\.darkly$/i, '');
-    if (baseName) engine.post('set_document_name', { name: baseName });
+    if (baseName) engine.api.setDocumentName({ name: baseName });
     return handle;
 }
 
@@ -134,7 +134,7 @@ function runSaveBundle(instance: DarklyInstance, snapshot: boolean): Promise<Sav
         // `start_save_document` rejects on error; surface that as the save
         // failure rather than waiting forever for a callback that won't fire.
         engine
-            .send('start_save_document', { snapshot })
+            .api.startSaveDocument({ snapshot })
             .catch((e) => reject(e instanceof Error ? e : new Error(String(e))));
     });
 }

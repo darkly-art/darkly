@@ -30,8 +30,8 @@ function applyGradient() {
     const c = app.foreground;
     const bg = app.background;
 
-    app.engine.post('begin_stroke', { id: layerId });
-    app.engine.post('stroke_to', {
+    app.engine.api.beginStroke({ id: layerId });
+    app.engine.api.strokeTo({
         op: {
             op: 'linear_gradient',
             x0: startX, y0: startY,
@@ -40,7 +40,7 @@ function applyGradient() {
             r1: bg.r, g1: bg.g, b1: bg.b, a1: bg.a,
         },
     });
-    app.engine.post('end_stroke');
+    app.engine.api.endStroke();
 }
 
 function clearPlacement() {
@@ -49,7 +49,7 @@ function clearPlacement() {
     pending = null;
     draggingHandle = null;
     overlay = null;
-    app.engine?.post('clear_overlay');
+    app.engine?.api.clearOverlay();
     app.toolCursor = null;
 }
 

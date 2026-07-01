@@ -44,6 +44,7 @@ pub struct EngineState {
 /// own registration and the UI follows with no consumer-side edit.
 #[derive(serde::Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum LayerInfo {
     #[serde(rename_all = "camelCase")]
     Raster {
@@ -147,6 +148,7 @@ pub enum LayerInfo {
 /// resolve to a display label via `modifier_types()`.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct ModifierInfo {
     pub id: f64,
     pub kind: &'static str,
@@ -160,6 +162,7 @@ pub struct ModifierInfo {
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct VeilTypeInfo {
     #[serde(rename = "type")]
     pub type_id: &'static str,
@@ -174,6 +177,7 @@ pub struct VeilTypeInfo {
 /// void-only and intentionally not symmetrized onto [`VeilTypeInfo`].
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct VoidTypeInfo {
     #[serde(rename = "type")]
     pub type_id: &'static str,
@@ -193,6 +197,7 @@ pub struct VoidTypeInfo {
 /// Mirrors `VeilTypeInfo` so the UI consumes both in the same shape.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct ToolTypeInfo {
     #[serde(rename = "type")]
     pub type_id: &'static str,
@@ -204,6 +209,7 @@ pub struct ToolTypeInfo {
 /// `category` drives the `<optgroup>` grouping (Darken / Lighten / etc.).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct BlendModeTypeInfo {
     #[serde(rename = "type")]
     pub type_id: &'static str,
@@ -215,6 +221,7 @@ pub struct BlendModeTypeInfo {
 /// "Add modifier" menu and to look up display labels for `ModifierInfo.kind`.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct ModifierTypeInfo {
     #[serde(rename = "type")]
     pub type_id: &'static str,
@@ -225,6 +232,7 @@ pub struct ModifierTypeInfo {
 /// like "Raster Layer" / "Group" for the layer's own `type` discriminator.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct LayerKindTypeInfo {
     #[serde(rename = "type")]
     pub type_id: &'static str,
@@ -235,6 +243,7 @@ pub struct LayerKindTypeInfo {
 /// resolve to a display label via `veil_types()` — never duplicate it here.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct VeilInfo {
     #[serde(rename = "type")]
     pub type_id: String,
@@ -246,6 +255,7 @@ pub struct VeilInfo {
 /// Flat serialization-friendly view of a parameter definition + current value.
 /// Avoids nesting a tagged enum (ParamDef) which serde_wasm_bindgen can't handle.
 #[derive(serde::Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct ParamInfo {
     pub kind: &'static str,
     pub name: &'static str,
@@ -259,6 +269,7 @@ pub struct ParamInfo {
     /// Enum: `["Label1", "Label2", ...]`.
     /// Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(type = "JsonValue | null"))]
     pub options: Option<serde_json::Value>,
 }
 
@@ -366,6 +377,7 @@ impl ParamInfo {
 
 #[derive(serde::Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum StrokeOp {
     FloodFill {
         x: f32,
@@ -411,6 +423,7 @@ pub enum StrokeOp {
 /// Data returned to the WASM bridge on copy/cut — always RGBA pixels regardless
 /// of the internal clipboard variant.
 #[derive(serde::Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct ClipboardExport {
     pub rgba: Vec<u8>,
     pub width: u32,

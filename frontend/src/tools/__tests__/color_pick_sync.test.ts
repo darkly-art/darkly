@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { withApi } from '../../engine/testApi';
 
 // Mock the `app` and `config` modules before importing the module under
 // test. The fakes are minimal stand-ins for the Svelte-runic state proxies
@@ -34,7 +35,7 @@ vi.mock('../../config/store.svelte', () => ({ config: fakeConfig }));
 // Module under test (imported after mocks are registered).
 import { startPick, pollPick } from '../color_pick_sync';
 
-/** Find the `engine.post('pick_color', payload)` payload, or undefined. */
+/** Find the `engine.api.pickColor(payload)` payload, or undefined. */
 function pickColorPayload() {
     const call = engine.post.mock.calls.find(([k]) => k === 'pick_color');
     return call?.[1];
@@ -57,6 +58,9 @@ function reset() {
     fakeConfig._mode = 'merged';
     fakeConfig.get.mockClear();
 }
+
+// Give the fake engine a real typed `api` over its send/post spies.
+withApi(engine);
 
 describe('startPick', () => {
     beforeEach(reset);

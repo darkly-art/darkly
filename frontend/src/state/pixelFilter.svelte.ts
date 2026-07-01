@@ -18,7 +18,7 @@ function pushToWasm() {
     const mode = typeof raw === 'string' ? raw : 'auto';
     if (mode === lastMode) return;
     lastMode = mode;
-    app.engine.post('set_pixel_filter', { mode });
+    app.engine.api.setPixelFilter({ mode });
     app.requestFrame();
 }
 

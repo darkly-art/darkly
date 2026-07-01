@@ -54,11 +54,11 @@
                 canvas.height = h;
                 inst.viewportW = w;
                 inst.viewportH = h;
-                inst.engine?.post('resize', { width: w, height: h });
+                inst.engine?.api.resize({ width: w, height: h });
                 // Re-sync the Rust view transform with the new screen dimensions
                 // so the compositor and JS coordinate conversion agree.
                 const dpr2 = dpr;
-                inst.engine?.post('set_view_transform', {
+                inst.engine?.api.setViewTransform({
                     pan_x: inst.panX * dpr2, pan_y: inst.panY * dpr2,
                     zoom: inst.zoom, rotation: inst.rotation,
                     mirror_h: inst.mirrorH,
@@ -122,7 +122,7 @@
                 await initEditor(canvas);
             }
             const engine = inst.engine!;
-            engine.post('resize', { width: canvas.width, height: canvas.height });
+            engine.api.resize({ width: canvas.width, height: canvas.height });
 
             // Drift guard: the engine auto-queues thumbnail readbacks
             // at `DEFAULT_THUMB_SIZE`; the panel renders <img> at the
@@ -395,7 +395,7 @@
     $effect(() => {
         if (inst.engine && canvas) {
             const dpr = window.devicePixelRatio || 1;
-            inst.engine.post('set_view_transform', {
+            inst.engine.api.setViewTransform({
                 pan_x: inst.panX * dpr, pan_y: inst.panY * dpr,
                 zoom: inst.zoom, rotation: inst.rotation,
                 mirror_h: inst.mirrorH,

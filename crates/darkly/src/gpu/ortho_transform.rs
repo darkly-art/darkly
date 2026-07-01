@@ -24,6 +24,7 @@ use crate::gpu::atlas::LayerTexture;
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum OrthoXform {
     FlipH = 0,
     FlipV = 1,

@@ -52,11 +52,11 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             continue;
         };
         let attr = method.attrs.remove(attr_idx);
-        let returns = match parse_returns(&attr) {
+        let args = match parse_handler_args(&attr) {
             Ok(v) => v,
             Err(e) => return e.to_compile_error().into(),
         };
-        match build_handler(method, returns) {
+        match build_handler(method, args) {
             Ok(Built { req_struct, reg_fn }) => {
                 if let Some(req) = req_struct {
                     req_structs.push(req);
@@ -102,18 +102,29 @@ enum ReturnMode {
     OkError,
 }
 
-/// Parse the optional `(returns = graph | bytes | ok_error)` body of a
-/// `#[handler]` attribute. Bare `#[handler]` → [`ReturnMode::Default`].
-fn parse_returns(attr: &syn::Attribute) -> syn::Result<ReturnMode> {
+/// Parsed `#[handler(...)]` options.
+struct HandlerArgs {
+    returns: ReturnMode,
+    /// Explicit `send`/`post` override; `None` derives the mode from the return
+    /// type (`()` → `Post`, else `Send`).
+    mode: Option<bool>, // Some(true) = send, Some(false) = post
+}
+
+/// Parse the optional `(returns = graph | bytes | ok_error, send | post)` body
+/// of a `#[handler]` attribute. Bare `#[handler]` → defaults.
+fn parse_handler_args(attr: &syn::Attribute) -> syn::Result<HandlerArgs> {
+    let mut out = HandlerArgs {
+        returns: ReturnMode::Default,
+        mode: None,
+    };
     match &attr.meta {
-        syn::Meta::Path(_) => Ok(ReturnMode::Default),
+        syn::Meta::Path(_) => Ok(out),
         syn::Meta::List(_) => {
-            let mut mode = ReturnMode::Default;
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("returns") {
                     let value = meta.value()?;
                     let ident: Ident = value.parse()?;
-                    mode =
+                    out.returns =
                         match ident.to_string().as_str() {
                             "graph" => ReturnMode::Graph,
                             "bytes" => ReturnMode::Bytes,
@@ -123,16 +134,47 @@ fn parse_returns(attr: &syn::Attribute) -> syn::Result<ReturnMode> {
                             )),
                         };
                     Ok(())
+                } else if meta.path.is_ident("send") {
+                    out.mode = Some(true);
+                    Ok(())
+                } else if meta.path.is_ident("post") {
+                    out.mode = Some(false);
+                    Ok(())
                 } else {
                     Err(meta.error("unknown `#[handler]` option"))
                 }
             })?;
-            Ok(mode)
+            Ok(out)
         }
         syn::Meta::NameValue(_) => Err(Error::new(
             attr.span(),
             "`#[handler]` takes no `= value` form",
         )),
+    }
+}
+
+/// If `ty` is `Result<T, _>`, return `T` — the success type the response
+/// metadata (and the `Send` `Promise<Resp>`) is shaped from.
+fn result_ok_type(ty: &Type) -> Option<&Type> {
+    let Type::Path(p) = ty else { return None };
+    let seg = p.path.segments.last()?;
+    if seg.ident != "Result" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return None;
+    };
+    args.args.iter().find_map(|a| match a {
+        syn::GenericArgument::Type(t) => Some(t),
+        _ => None,
+    })
+}
+
+/// Whether the method returns `()` (or has no return type).
+fn returns_unit(ret: &syn::ReturnType) -> bool {
+    match ret {
+        syn::ReturnType::Default => true,
+        syn::ReturnType::Type(_, ty) => matches!(&**ty, Type::Tuple(t) if t.elems.is_empty()),
     }
 }
 
@@ -146,7 +188,8 @@ struct Param {
     field: Option<(Ident, TokenStream2)>,
 }
 
-fn build_handler(method: &syn::ImplItemFn, returns: ReturnMode) -> syn::Result<Built> {
+fn build_handler(method: &syn::ImplItemFn, args: HandlerArgs) -> syn::Result<Built> {
+    let returns = args.returns;
     let name = &method.sig.ident;
     let kind = name.to_string();
 
@@ -176,6 +219,7 @@ fn build_handler(method: &syn::ImplItemFn, returns: ReturnMode) -> syn::Result<B
         let field_defs = fields.iter().map(|(id, ty)| quote!(#id: #ty));
         Some(quote! {
             #[derive(serde::Deserialize)]
+            #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
             pub(crate) struct #req_ident {
                 #(#field_defs,)*
             }
@@ -216,18 +260,64 @@ fn build_handler(method: &syn::ImplItemFn, returns: ReturnMode) -> syn::Result<B
         }},
     };
 
+    // Codegen metadata + transport mode, derived from the signature and the
+    // `returns`/`send`/`post` opts. The builder setters are no-ops without the
+    // `ts-export` feature, so they're always emitted unconditionally.
+    let req_call = if fields.is_empty() {
+        quote!()
+    } else {
+        quote!(.req::<#req_ident>())
+    };
+    let bytes_in_call = if uses_bytes {
+        quote!(.bytes_in())
+    } else {
+        quote!()
+    };
+
+    // The response type reference, and the default mode for the return type.
+    let ret_ty = &method.sig.output;
+    let is_unit = returns_unit(ret_ty);
+    let resp_call = match returns {
+        ReturnMode::Graph => quote!(.resp_literal("{ graph: JsonValue } | { error: string }")),
+        ReturnMode::OkError => quote!(.resp_literal("null | { error: string }")),
+        ReturnMode::Bytes => quote!(.bytes_out()),
+        ReturnMode::Default => {
+            if is_unit {
+                quote!()
+            } else if let syn::ReturnType::Type(_, ty) = ret_ty {
+                let resp_ty = result_ok_type(ty).unwrap_or(ty);
+                quote!(.resp::<#resp_ty>())
+            } else {
+                quote!()
+            }
+        }
+    };
+
+    // Mode: explicit `send`/`post` wins; otherwise `()` + `Default` → `Post`.
+    let default_send = !(is_unit && returns == ReturnMode::Default);
+    let send = args.mode.unwrap_or(default_send);
+    let mode_call = if send {
+        quote!(.send())
+    } else {
+        quote!(.post())
+    };
+
     let reg_fn_ident = format_ident!("__darkly_handler_{}", name);
     let reg_fn = quote! {
         #[doc(hidden)]
         pub(crate) fn #reg_fn_ident() -> crate::engine::protocol::RequestRegistration {
-            crate::engine::protocol::RequestRegistration {
-                kind: #kind,
-                handle: |engine, #payload_ident, #bytes_ident| {
+            crate::engine::protocol::RequestRegistration::new(
+                #kind,
+                |engine, #payload_ident, #bytes_ident| {
                     #decode
                     #call
                     #convert
                 },
-            }
+            )
+            #mode_call
+            #bytes_in_call
+            #req_call
+            #resp_call
         }
     };
 

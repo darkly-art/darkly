@@ -13,6 +13,8 @@ use crate::gpu::params::ParamDef;
 /// is constructed at registration time, never deserialized.
 #[derive(Clone, Debug, Serialize)]
 #[serde(bound = "")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(concrete(W = crate::brush::wire::BrushWireType), bound = "W: ts_rs::TS"))]
 pub struct NodeRegistration<W: WireKind> {
     /// Unique identifier (e.g. "pen_input", "multiply").
     pub type_id: &'static str,

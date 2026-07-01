@@ -21,8 +21,8 @@ export const fillTool: Tool = {
 
         const c = app.foreground;
 
-        ctx.engine.post('begin_stroke', { id: layerId });
-        ctx.engine.post('stroke_to', {
+        ctx.engine.api.beginStroke({ id: layerId });
+        ctx.engine.api.strokeTo({
             op: {
                 op: 'flood_fill',
                 x: cx, y: cy,
@@ -30,7 +30,7 @@ export const fillTool: Tool = {
                 tolerance: fillSession.tolerance,
             },
         });
-        ctx.engine.post('end_stroke');
+        ctx.engine.api.endStroke();
     },
 
     onPointerMove() {},

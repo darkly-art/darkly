@@ -26,12 +26,12 @@ function pushPreviewOverlay() {
     }
     // Closing line back to start
     prims.push(prim(KIND_LINE, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR, points[points.length - 1], points[0], { dashLen: 4, thickness: 1 }));
-    app.engine.post('set_overlay', { primitives: prims });
+    app.engine.api.setOverlay({ primitives: prims });
 }
 
 function clearPreviewOverlay() {
     points = [];
-    app.engine?.post('clear_overlay');
+    app.engine?.api.clearOverlay();
 }
 
 export const lassoSelectTool: Tool = {
@@ -64,20 +64,20 @@ export const lassoSelectTool: Tool = {
     onPointerUp(ctx, e) {
         if (points.length < 3) {
             if (selectionMode(e) === 'replace') {
-                ctx.engine.post('clear_selection');
+                ctx.engine.api.clearSelection();
             }
             clearPreviewOverlay();
             return;
         }
 
         const mode = selectionMode(e);
-        ctx.engine.post('select_lasso', { verts: points, mode, antialias: true, feather: 0 });
+        ctx.engine.api.selectLasso({ verts: points, mode, antialias: true, feather: 0 });
         clearPreviewOverlay();
     },
 
     onKeyDown(e) {
         if (e.key === 'Escape') {
-            app.engine?.post('clear_selection');
+            app.engine?.api.clearSelection();
             return true;
         }
         return false;

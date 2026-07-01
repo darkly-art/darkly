@@ -1,4 +1,5 @@
 import type { Engine, EngineState } from '../engine/protocol';
+import type { JsonValue } from '../engine/protocol_gen';
 import type { SaveBundle } from '../storage/saveDocument';
 import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry } from '../tools/registry';
@@ -181,13 +182,13 @@ export class DarklyInstance {
             return m;
         };
         const [tools, veils, voids, blends, modifiers, layerKinds, filters] = await Promise.all([
-            engine.send('tool_types'),
-            engine.send('veil_types'),
-            engine.send('void_types'),
-            engine.send('blend_mode_types'),
-            engine.send('modifier_types'),
-            engine.send('layer_kind_types'),
-            engine.send('filter_types'),
+            engine.api.toolTypes(),
+            engine.api.veilTypes(),
+            engine.api.voidTypes(),
+            engine.api.blendModeTypes(),
+            engine.api.modifierTypes(),
+            engine.api.layerKindTypes(),
+            engine.api.filterTypes(),
         ]);
         this.toolDisplayNames = buildMap(tools);
         this.veilDisplayNames = buildMap(veils);
@@ -216,14 +217,14 @@ export class DarklyInstance {
         const engine = this.engine;
         if (!engine) return;
         const { visible, ...params } = options;
-        engine.post('add_veil', { veil_type: type, params });
+        engine.api.addVeil({ veil_type: type, params: params as JsonValue });
         if (visible === false) {
             // `veil_list` returns highest-index first, so the just-added veil
             // sits at index 0 of the array. The list send is enqueued after the
             // add above, so FIFO ordering guarantees it sees the new veil.
-            const list = (await engine.send('veil_list')) as Array<{ index: number }>;
+            const list = (await engine.api.veilList()) as Array<{ index: number }>;
             const added = list[0];
-            if (added) engine.post('set_veil_visible', { index: added.index, visible: false });
+            if (added) engine.api.setVeilVisible({ index: added.index, visible: false });
         }
         await this.refreshVeilList();
         this.requestFrame();
@@ -328,7 +329,7 @@ export class DarklyInstance {
         // nothing if the new layer is hidden by isolation). Selecting the
         // same isolated node is a no-op.
         if (this.isolatedNodeId !== null && id !== this.isolatedNodeId) {
-            this.engine?.post('set_isolated_node', { id: null });
+            this.engine?.api.setIsolatedNode({ id: null });
             this.isolatedNodeId = null;
             this.requestFrame();
         }
@@ -391,7 +392,7 @@ export class DarklyInstance {
             return;
         }
         if (this.isolatedNodeId !== null) {
-            this.engine?.post('set_isolated_node', { id: null });
+            this.engine?.api.setIsolatedNode({ id: null });
             this.isolatedNodeId = null;
             this.requestFrame();
         }
@@ -716,7 +717,7 @@ export class DarklyInstance {
     /** Remove a veil and keep `activeVeilIndex` consistent with the new list. */
     removeVeil(index: number) {
         if (!this.engine) return;
-        this.engine.post('remove_veil', { index });
+        this.engine.api.removeVeil({ index });
         if (this.activeVeilIndex === index) {
             this.activeVeilIndex = null;
         } else if (this.activeVeilIndex !== null && this.activeVeilIndex > index) {
@@ -729,7 +730,7 @@ export class DarklyInstance {
     /** Reorder a veil and adjust `activeVeilIndex` so the selection follows the move. */
     moveVeil(from: number, to: number) {
         if (!this.engine || from === to) return;
-        this.engine.post('move_veil', { from, to });
+        this.engine.api.moveVeil({ from, to });
         const a = this.activeVeilIndex;
         if (a !== null) {
             if (a === from) {
@@ -762,7 +763,7 @@ export class DarklyInstance {
      *  window. Returns the `[ox, oy, w, h]` rect for callers that need it. */
     async syncCanvasRect(): Promise<[number, number, number, number] | null> {
         if (!this.engine) return null;
-        const r = (await this.engine.send('canvas_rect')) as {
+        const r = (await this.engine.api.canvasRect()) as {
             origin_x: number;
             origin_y: number;
             width: number;
@@ -777,7 +778,7 @@ export class DarklyInstance {
 
     async refreshLayerTree(): Promise<void> {
         if (!this.engine) return;
-        const parsed = await this.engine.send('layer_tree');
+        const parsed = await this.engine.api.layerTree();
         const next: any[] = Array.isArray(parsed) ? parsed : [];
         // Stream-backed voids (camera / screenshare) own a MediaStream +
         // <video>; reconcile the live set against the new tree so deleted /
@@ -799,7 +800,7 @@ export class DarklyInstance {
 
     async refreshVeilList(): Promise<void> {
         if (!this.engine) return;
-        const list = await this.engine.send('veil_list');
+        const list = await this.engine.api.veilList();
         this.veilList = Array.isArray(list) ? list : [];
     }
 
@@ -928,7 +929,7 @@ export class DarklyInstance {
 
             // Check for completed async copy/cut readback.
             if (this._copyCallback) {
-                engine.send('poll_copy_result').then((result) => {
+                engine.api.pollCopyResult().then((result) => {
                     if (result && this._copyCallback) {
                         const cb = this._copyCallback;
                         this._copyCallback = null;
@@ -940,7 +941,7 @@ export class DarklyInstance {
             // Check for completed async export readback.
             if (this._exportCallback) {
                 engine
-                    .send<{ width: number; height: number; bytes: Uint8Array }>('poll_export_result')
+                    .api.pollExportResult()
                     .then((result) => {
                         if (result && this._exportCallback) {
                             const cb = this._exportCallback;
@@ -954,7 +955,7 @@ export class DarklyInstance {
             // byte blobs arrive concatenated in `bytes`; slice them back out
             // into the per-blob shape `saveDocument.ts` expects.
             if (this._saveCallback) {
-                engine.send<PackedSaveResult>('poll_save_result').then((packed) => {
+                engine.api.pollSaveResult().then((packed) => {
                     if (!packed || !this._saveCallback) return;
                     const cb = this._saveCallback;
                     this._saveCallback = null;

@@ -30,7 +30,7 @@ function pushPreviewOverlay() {
     const cy = (sy0 + sy1) / 2;
     const rx = Math.abs(sx1 - sx0) / 2;
     const ry = Math.abs(sy1 - sy0) / 2;
-    app.engine.post('set_overlay', {
+    app.engine.api.setOverlay({
         primitives: [
             prim(KIND_ELLIPSE, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR, [cx, cy], [rx, ry], { dashLen: 6, thickness: 1 }),
         ],
@@ -40,7 +40,7 @@ function pushPreviewOverlay() {
 function clearPreviewOverlay() {
     dragStart = null;
     dragEnd = null;
-    app.engine?.post('clear_overlay');
+    app.engine?.api.clearOverlay();
 }
 
 export const ellipseSelectTool: Tool = {
@@ -86,10 +86,10 @@ export const ellipseSelectTool: Tool = {
         // Only commit if the snapped bbox has meaningful size.
         if (w > 0 && h > 0) {
             const mode = selectionMode(e);
-            ctx.engine.post('select_ellipse', { x, y, w, h, mode, antialias: true, feather: 0 });
+            ctx.engine.api.selectEllipse({ x, y, w, h, mode, antialias: true, feather: 0 });
         } else if (selectionMode(e) === 'replace') {
             // Click without drag = deselect (only in replace mode)
-            ctx.engine.post('clear_selection');
+            ctx.engine.api.clearSelection();
         }
 
         clearPreviewOverlay();
@@ -97,7 +97,7 @@ export const ellipseSelectTool: Tool = {
 
     onKeyDown(e) {
         if (e.key === 'Escape') {
-            app.engine?.post('clear_selection');
+            app.engine?.api.clearSelection();
             return true;
         }
         return false;

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { withApi } from '../../engine/testApi';
 
 // Mock app/config/coordinates *before* importing the module under test so
 // the action's `import { app }` / `startPick` chain resolves to our fakes.
@@ -34,6 +35,9 @@ beforeEach(() => {
     engine.post.mockClear();
     engine.send.mockClear();
 });
+
+// Give the fake engine a real typed `api` over its send/post spies.
+withApi(engine);
 
 describe('sampleColor action registration', () => {
     it('registers under the id "sampleColor" with the colors category', () => {

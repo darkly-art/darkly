@@ -98,32 +98,16 @@ fn bad_payload_is_a_protocol_error() {
     assert!(matches!(err, ProtocolError::BadPayload(_)));
 }
 
-/// The TS `RequestKind` union is generated from the registry. This test
-/// regenerates the expected file content and asserts it matches what's checked
-/// in, so a new handler can't ship without the frontend's kind union learning
-/// about it. Regenerate with `DARKLY_REGEN_TS=1`.
+/// The typed TS client (`protocol_gen.ts`) is generated from the registry:
+/// per-kind `Req`/`Resp` interfaces (ts-rs), the `RequestKind` union, and the
+/// `EngineApi` + `makeApi` surface. This test regenerates the expected file and
+/// asserts it matches what's checked in, so a handler can't drift from the
+/// frontend's typed client. Regenerate with `DARKLY_REGEN_TS=1`. Needs the
+/// `ts-export` feature (ts-rs is off the production/wasm path).
+#[cfg(feature = "ts-export")]
 #[test]
-fn request_kind_ts_union_is_in_sync() {
-    let reg = RequestRegistry::new();
-    let kinds = reg.all_kinds();
-
-    let mut ts = String::new();
-    ts.push_str("// @generated from RequestRegistry::all_kinds() — do not edit by hand.\n");
-    ts.push_str(
-        "// Regenerate: DARKLY_REGEN_TS=1 cargo test -p darkly --test protocol --features testing\n\n",
-    );
-    ts.push_str("export type RequestKind =\n");
-    for (i, k) in kinds.iter().enumerate() {
-        let sep = if i == 0 { '=' } else { '|' };
-        let _ = sep; // formatting handled below
-        ts.push_str(&format!("    | '{k}'\n"));
-    }
-    ts.push_str("    ;\n\n");
-    ts.push_str("export const REQUEST_KINDS: readonly RequestKind[] = [\n");
-    for k in &kinds {
-        ts.push_str(&format!("    '{k}',\n"));
-    }
-    ts.push_str("] as const;\n");
+fn protocol_gen_ts_is_in_sync() {
+    let ts = darkly::engine::protocol::codegen::generate_protocol_ts();
 
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../frontend/src/engine/protocol_gen.ts");
@@ -137,8 +121,23 @@ fn request_kind_ts_union_is_in_sync() {
     let actual = std::fs::read_to_string(&path).unwrap_or_default();
     assert_eq!(
         actual, ts,
-        "protocol_gen.ts is stale — run DARKLY_REGEN_TS=1 cargo test -p darkly --test protocol --features testing"
+        "protocol_gen.ts is stale — run DARKLY_REGEN_TS=1 cargo test -p darkly --test protocol --features testing,ts-export"
     );
+}
+
+/// Every registered kind must appear as an `EngineApi` method — no untyped gap.
+#[cfg(feature = "ts-export")]
+#[test]
+fn every_kind_has_an_engine_api_method() {
+    let reg = RequestRegistry::new();
+    let ts = darkly::engine::protocol::codegen::generate_protocol_ts();
+    for kind in reg.all_kinds() {
+        let method = darkly::engine::protocol::codegen::camel_case(kind);
+        assert!(
+            ts.contains(&format!("{method}(")),
+            "kind `{kind}` has no generated EngineApi method `{method}`"
+        );
+    }
 }
 
 /// `LayerId` is wire-native: it serializes as a bare `u64` and round-trips

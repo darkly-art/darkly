@@ -77,7 +77,7 @@
         prevTime = 0;
         data = null;
         framesRemaining = POLL_FRAMES;
-        app.engine?.post('start_preview', { kind, type });
+        app.engine?.api.startPreview({ kind, type });
         schedule();
     });
 

@@ -8,19 +8,24 @@ use serde::Deserialize;
 
 use crate::engine::protocol::{decode, ProtocolError, RequestRegistration, Response};
 
+/// `{ name }` — the brush to export as a bundle.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct BrushExportReq {
+    pub name: String,
+}
+
 pub fn registrations() -> Vec<RequestRegistration> {
-    vec![RequestRegistration {
-        kind: "brush_export",
-        handle: |engine, payload, _b| {
-            #[derive(Deserialize)]
-            struct Req {
-                name: String,
-            }
-            let r: Req = decode(payload)?;
+    vec![
+        RequestRegistration::new("brush_export", |engine, payload, _b| {
+            let r: BrushExportReq = decode(payload)?;
             let bytes = engine
                 .brush_export(&r.name)
                 .map_err(ProtocolError::engine)?;
             Ok(Response::binary(serde_json::Value::Null, bytes))
-        },
-    }]
+        })
+        .send()
+        .req::<BrushExportReq>()
+        .resp_literal("{ bytes: Uint8Array }"),
+    ]
 }

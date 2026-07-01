@@ -33,7 +33,7 @@ export const magicWandTool: Tool = {
         if (app.activeLayerId == null) return;
 
         const mode = selectionMode(e);
-        ctx.engine.post('select_magic_wand', {
+        ctx.engine.api.selectMagicWand({
             id: app.activeLayerId,
             seed_canvas: { x: Math.round(cx), y: Math.round(cy) },
             tolerance: magicWandSession.tolerance,
@@ -45,7 +45,7 @@ export const magicWandTool: Tool = {
 
     onKeyDown(e) {
         if (e.key === 'Escape') {
-            app.engine?.post('clear_selection');
+            app.engine?.api.clearSelection();
             return true;
         }
         return false;

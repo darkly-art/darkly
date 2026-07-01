@@ -43,7 +43,7 @@ class CloseGuardState {
     async guardedClose(id: string) {
         const inst = shell.instances.find(i => i.id === id);
         if (!inst) return;
-        const dirty = inst.engine ? await inst.engine.send<boolean>('is_dirty') : false;
+        const dirty = inst.engine ? await inst.engine.api.isDirty() : false;
         if (!dirty) {
             clearSnapshot(inst.recoveryId);
             shell.close(id);
@@ -78,7 +78,7 @@ class CloseGuardState {
         this.tabId = '';
         await saveDocument({ forceAs: false });
         const inst = shell.instances.find(i => i.id === id);
-        if (inst?.engine && !(await inst.engine.send<boolean>('is_dirty'))) {
+        if (inst?.engine && !(await inst.engine.api.isDirty())) {
             shell.close(id);
         }
     }

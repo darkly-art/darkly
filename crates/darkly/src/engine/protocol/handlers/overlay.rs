@@ -19,8 +19,9 @@ fn one() -> f32 {
 /// JSON-side overlay primitive (camelCase to match the frontend). Maps onto the
 /// `#[repr(C)]` GPU [`OverlayPrimitive`], which is not itself `Deserialize`.
 #[derive(Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
-struct PrimIn {
+pub struct PrimIn {
     kind: u32,
     #[serde(default)]
     flags: u32,
@@ -60,15 +61,17 @@ impl From<PrimIn> for OverlayPrimitive {
     }
 }
 
+/// `{ primitives }` — the full overlay primitive list to upload.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct SetOverlayReq {
+    pub primitives: Vec<PrimIn>,
+}
+
 pub fn registrations() -> Vec<RequestRegistration> {
-    vec![RequestRegistration {
-        kind: "set_overlay",
-        handle: |engine, payload, _b| {
-            #[derive(Deserialize)]
-            struct Req {
-                primitives: Vec<PrimIn>,
-            }
-            let r: Req = decode(payload)?;
+    vec![
+        RequestRegistration::new("set_overlay", |engine, payload, _b| {
+            let r: SetOverlayReq = decode(payload)?;
             let prims = r
                 .primitives
                 .into_iter()
@@ -76,6 +79,8 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 .collect();
             engine.set_overlay_primitives(prims);
             Ok(Response::empty())
-        },
-    }]
+        })
+        .post()
+        .req::<SetOverlayReq>(),
+    ]
 }
