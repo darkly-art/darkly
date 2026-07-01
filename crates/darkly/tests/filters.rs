@@ -697,10 +697,17 @@ fn filter_layer_is_non_destructive() {
 
 // ---- Curves (parametric) filter layer --------------------------------------
 //
-// Curves is the first parametric filter: five per-channel tone curves baked
-// into a GPU LUT. These pin the schema (five identity curves on add), the
-// param-edit + undo path, the destructive-path exclusion, and the two GPU
-// promises (identity ⇒ bit-unchanged; a value curve shifts pixels as baked).
+// Curves is the first parametric filter: Krita's eight "Color Adjustment
+// Curves" channels (RGB, Red, Green, Blue, Alpha, Hue, Saturation, Lightness)
+// baked into a GPU LUT. These pin the schema (eight identity curves on add),
+// the param-edit + undo path, the destructive-path exclusion, and the GPU
+// promises (identity ⇒ bit-unchanged; a composite curve shifts pixels as baked;
+// a hue curve rotates hue).
+
+/// Positional channel indices into a curves layer's param vector (Krita order).
+const CH_RGB: usize = 0;
+const CH_HUE: usize = 5;
+const CH_LIGHTNESS: usize = 7;
 
 /// An identity curve — a straight diagonal.
 fn identity_curve() -> ParamValue {
@@ -736,7 +743,7 @@ fn filter_layer_params(e: &DarklyEngine, id: LayerId) -> Vec<ParamValue> {
 }
 
 #[test]
-fn add_curves_layer_yields_five_identity_curves() {
+fn add_curves_layer_yields_eight_identity_curves() {
     let mut e = test_engine(8, 8);
     let params = filter_defaults(&e, "curves");
     let id = e
@@ -744,7 +751,11 @@ fn add_curves_layer_yields_five_identity_curves() {
         .expect("curves is a registered filter type");
 
     let got = filter_layer_params(&e, id);
-    assert_eq!(got.len(), 5, "curves exposes red/green/blue/value/alpha");
+    assert_eq!(
+        got.len(),
+        8,
+        "curves exposes RGB/Red/Green/Blue/Alpha/Hue/Saturation/Lightness"
+    );
     for (i, p) in got.iter().enumerate() {
         assert_eq!(
             p,
@@ -761,10 +772,10 @@ fn update_filter_params_mutates_and_undo_restores() {
         .add_filter_layer("curves", filter_defaults(&e, "curves"), None)
         .unwrap();
 
-    // Edit the value curve (index 3) to a non-identity darkening ramp.
+    // Edit the composite RGB curve to a non-identity darkening ramp.
     let edited = {
         let mut p = filter_defaults(&e, "curves");
-        p[3] = ParamValue::Curve(vec![[0.0, 0.0], [1.0, 0.5]]);
+        p[CH_RGB] = ParamValue::Curve(vec![[0.0, 0.0], [1.0, 0.5]]);
         p
     };
     e.update_filter_params(id, edited.clone());
@@ -830,11 +841,11 @@ fn curves_identity_leaves_composite_unchanged() {
     );
 }
 
-/// A non-identity value curve shifts pixels as baked: `value(x) = x/2` halves
-/// every color channel while leaving alpha untouched (the value curve is not
-/// applied to alpha).
+/// A non-identity composite RGB curve shifts pixels as baked: `rgb(x) = x/2`
+/// halves every color channel while leaving alpha untouched (the composite curve
+/// is not applied to alpha).
 #[test]
-fn curves_value_curve_shifts_pixels() {
+fn curves_composite_curve_shifts_pixels() {
     let (cw, ch) = (16u32, 16u32);
     let mut engine = test_engine(cw, ch);
 
@@ -843,25 +854,81 @@ fn curves_value_curve_shifts_pixels() {
     engine.test_flush_readbacks();
     engine.render(0.0);
 
-    // Value curve halves the input; red/green/blue identity, alpha identity.
-    let params = vec![
-        identity_curve(),
-        identity_curve(),
-        identity_curve(),
-        ParamValue::Curve(vec![[0.0, 0.0], [1.0, 0.5]]),
-        identity_curve(),
-    ];
+    // Composite RGB curve halves the input; all other channels identity.
+    let mut params = vec![identity_curve(); 8];
+    params[CH_RGB] = ParamValue::Curve(vec![[0.0, 0.0], [1.0, 0.5]]);
     engine.add_filter_layer("curves", params, None).unwrap();
     engine.test_flush_readbacks();
     engine.render(0.0);
 
     let p = px(&engine.test_readback_canvas(), cw, cw / 2, ch / 2);
-    // value(red(1.0)) = value(1.0) = 0.5 → ~128; g/b stay 0; alpha stays 255.
+    // rgb(1.0) = 0.5 → ~128; g/b stay 0; alpha stays 255.
     assert!(
         (p[0] as i32 - 128).abs() <= 2,
-        "value curve should halve red to ~128, got {p:?}"
+        "composite curve should halve red to ~128, got {p:?}"
     );
     assert_eq!(p[1], 0, "green stays 0");
     assert_eq!(p[2], 0, "blue stays 0");
-    assert_eq!(p[3], 255, "alpha untouched by the value curve");
+    assert_eq!(p[3], 255, "alpha untouched by the composite curve");
+}
+
+/// A Hue curve rotates hue in HSV space (Krita's `hsv_curve_adjustment`,
+/// non-relative): mapping input hue `2/3` (pure blue, 240°) to output `1/3`
+/// (120°, green) turns an opaque blue layer green, with saturation/value intact.
+/// This exercises the RGB→HSV→RGB path and the shader's `hsv_active` gate.
+#[test]
+fn curves_hue_curve_rotates_hue() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let base = engine.add_raster_layer(None);
+    fill_layer(&mut engine, base, 0, 0, 255); // opaque blue (hue 240° = 2/3)
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    // Hue curve maps normalized hue 2/3 → 1/3 (240° → 120°, green). A ramp with
+    // an interior control point pinned so hue(2/3) = 1/3.
+    let mut params = vec![identity_curve(); 8];
+    params[CH_HUE] = ParamValue::Curve(vec![[0.0, 0.0], [2.0 / 3.0, 1.0 / 3.0], [1.0, 1.0]]);
+    engine.add_filter_layer("curves", params, None).unwrap();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let p = px(&engine.test_readback_canvas(), cw, cw / 2, ch / 2);
+    // Pure blue rotated to ~120° at full saturation/value is pure green.
+    assert!(
+        p[1] > 200 && p[0] < 60 && p[2] < 60,
+        "hue curve should rotate blue → green, got {p:?}"
+    );
+    assert_eq!(p[3], 255, "alpha untouched by the hue curve");
+}
+
+/// A Lightness curve darkens on CIELAB L* (Krita's "Lightness L*a*b*"): halving
+/// L on a neutral gray yields a darker — but still neutral — gray. Exercises the
+/// sRGB→Lab→sRGB round trip and the `lightness_active` gate.
+#[test]
+fn curves_lightness_curve_darkens_neutral() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let base = engine.add_raster_layer(None);
+    fill_layer(&mut engine, base, 128, 128, 128); // neutral mid gray
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    // Lightness curve halves L*; every other channel identity.
+    let mut params = vec![identity_curve(); 8];
+    params[CH_LIGHTNESS] = ParamValue::Curve(vec![[0.0, 0.0], [1.0, 0.5]]);
+    engine.add_filter_layer("curves", params, None).unwrap();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let p = px(&engine.test_readback_canvas(), cw, cw / 2, ch / 2);
+    // Darker than the input gray, and still neutral (channels stay together).
+    assert!(p[0] < 120, "halving L* must darken the gray, got {p:?}");
+    assert!(
+        (p[0] as i32 - p[1] as i32).abs() <= 3 && (p[1] as i32 - p[2] as i32).abs() <= 3,
+        "lightness on L* must keep the gray neutral, got {p:?}"
+    );
+    assert_eq!(p[3], 255, "alpha untouched by the lightness curve");
 }

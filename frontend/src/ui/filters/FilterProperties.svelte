@@ -4,7 +4,13 @@
     import CurveEditor from '../CurveEditor.svelte';
     import { createGraphCoords } from '../brush_builder/coords';
     import type { NodeCanvasContext } from '../brush_builder/NodeCanvas.svelte';
-    import { partitionFilterParams, type FilterParam, type CurvePoints } from './filterParams';
+    import { partitionFilterParams, channelLabel, type FilterParam, type CurvePoints } from './filterParams';
+
+    /** The identity curve — a straight diagonal from (0,0) to (1,1). */
+    const IDENTITY_CURVE: CurvePoints = [
+        [0, 0],
+        [1, 1],
+    ];
 
     let { node }: {
         node: { id: number; pipeline: string; params: FilterParam[] };
@@ -73,6 +79,13 @@
         selectedCurve.value = pts;
         pushParams(true);
     }
+
+    // Reset the currently-shown channel's curve back to the identity diagonal.
+    function resetSelectedCurve() {
+        if (!selectedCurve) return;
+        selectedCurve.value = IDENTITY_CURVE.map((p) => [...p] as [number, number]);
+        pushParams(true);
+    }
 </script>
 
 <div class="filter-props" bind:this={rootEl}>
@@ -86,7 +99,7 @@
                 <span class="label">Channel</span>
                 <select class="channel-select" bind:value={selectedChannel}>
                     {#each curves as c (c.name)}
-                        <option value={c.name}>{c.name}</option>
+                        <option value={c.name}>{channelLabel(c.name)}</option>
                     {/each}
                 </select>
             </div>
@@ -101,6 +114,13 @@
                     onchange={onCurveChange}
                 />
             {/key}
+            <button
+                class="reset-btn"
+                onclick={resetSelectedCurve}
+                title="Reset {channelLabel(selectedCurve.name)} curve"
+            >
+                Reset
+            </button>
         {/if}
     {/if}
 
@@ -163,6 +183,21 @@
         color: var(--text-muted);
     }
 
+    .reset-btn {
+        align-self: center;
+        padding: 3px 12px;
+        background: var(--bg-hover);
+        border: 1px solid transparent;
+        border-radius: var(--radius-sm);
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 11px;
+    }
+    .reset-btn:hover {
+        border-color: var(--accent);
+        color: var(--text);
+    }
+
     .row {
         display: flex;
         align-items: center;
@@ -189,7 +224,6 @@
         border-radius: var(--radius-sm);
         font-size: 11px;
         padding: 2px 4px;
-        text-transform: capitalize;
     }
 
     .slider {
