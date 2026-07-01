@@ -27,8 +27,15 @@ class TextSession {
     /** start | center | end | justified */
     align = $state('start');
     italic = $state(false);
-    /** CSS weight, 100–900. */
-    weight = $state(400);
+    /** Variable-font axis defaults (tag → value), including `wght`. Merged into
+     *  by panel edits; empty means every axis takes the font's own default. */
+    variations = $state<Record<string, number>>({});
+    /** Extra horizontal space between letters, in canvas pixels. */
+    letterSpacing = $state(0);
+    /** Extra horizontal space between words, in canvas pixels. */
+    wordSpacing = $state(0);
+    /** Multiplier on the font's natural line height (1.0 = natural). */
+    lineHeight = $state(1.2);
     /** Object the panel should focus next render, or null. */
     focusObject = $state<number | null>(null);
     /** Object whose box gizmo is drawn on the canvas, or null. */

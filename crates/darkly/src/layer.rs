@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use kurbo::{Affine, BezPath, Stroke};
 use peniko::Brush;
 use serde::{Deserialize, Serialize};
@@ -247,10 +249,42 @@ pub enum TextStyle {
     Italic,
 }
 
+/// How a [`TextProps`] block lays out on the canvas. Modular by design so new
+/// layout modes slot in additively: `Point` (auto width, grows with content)
+/// and `Area` (fixed box, wraps + aligns within) today; a `Path` variant that
+/// maps glyphs onto a `kurbo` curve is the designed-for future addition — one
+/// new variant plus one shape/render arm, no rework of the readers here.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum TextLayout {
+    /// Auto-width point text: lines break only at explicit newlines, alignment
+    /// resolves within the block's own natural width.
+    Point,
+    /// Fixed area box in canvas pixels: lines wrap to `width`, `align` resolves
+    /// within `width`, and the on-canvas frame is `width × height`.
+    Area { width: f32, height: f32 },
+}
+
+impl TextLayout {
+    /// The fixed area-box size in canvas pixels, or `None` for point text. The
+    /// one accessor box readers use — no consumer matches the enum inline, so a
+    /// future `Path` variant (which is also `None`-sized) needs no edits here.
+    pub fn area_size(&self) -> Option<(f32, f32)> {
+        match self {
+            TextLayout::Area { width, height } => Some((*width, *height)),
+            TextLayout::Point => None,
+        }
+    }
+}
+
 /// Editable text — the one bespoke vector source Darkly adds. Its persistent
 /// state is a string plus a font selection, **not** glyph outlines: the layer
 /// re-shapes (parley) and re-rasterizes (vello) whenever any field changes.
 /// Everything else about a vector object is generic kurbo/peniko geometry.
+///
+/// Style is font-driven and open-ended: `variations` carries arbitrary
+/// variable-font axes (weight is just the `wght` axis), `features` carries
+/// OpenType features, and spacing/line-height are genuine fields — so a new
+/// font capability is additive data, never a new hard-coded knob.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TextProps {
     pub content: String,
@@ -258,19 +292,28 @@ pub struct TextProps {
     /// (e.g. `"Inter"`). A family the binary doesn't ship falls back to the
     /// collection default — see the font-portability open risk in the plan.
     pub font_family: String,
+    /// Italic is a *face selection* (upright vs italic face), not a variation
+    /// axis, so it stays a distinct field rather than living in `variations`.
     pub style: TextStyle,
-    /// CSS-style weight (100–900, 400 = regular).
-    pub weight: f32,
+    /// Variable-font axis values, keyed by the 4-char fvar tag (`"wght"`,
+    /// `"wdth"`, `"opsz"`, …). An absent axis takes the font's default, so this
+    /// stays empty for untouched/static fonts (clean serde, partial merges).
+    pub variations: BTreeMap<String, f32>,
+    /// OpenType feature values, keyed by the 4-char feature tag (`"liga"`,
+    /// `"smcp"`, …). Modelled + shaped now; no UI yet.
+    pub features: BTreeMap<String, u32>,
     /// Font size in canvas pixels (raster-first: this is the rasterization
     /// size, not a resolution-independent point size).
     pub size: f32,
     /// Multiplier on the font's natural line height (1.0 = natural).
     pub line_height: f32,
+    /// Extra horizontal space between letters, in canvas pixels (0 = natural).
+    pub letter_spacing: f32,
+    /// Extra horizontal space between words, in canvas pixels (0 = natural).
+    pub word_spacing: f32,
     pub align: TextAlign,
-    /// Fixed layout box in canvas pixels. `None` = point text (auto width,
-    /// grows with content). `Some((w, h))` = area text: lines wrap to `w`,
-    /// `align` resolves within `w`, and the on-canvas frame is `w × h`.
-    pub box_size: Option<(f32, f32)>,
+    /// Point vs fixed-area layout — see [`TextLayout`].
+    pub layout: TextLayout,
 }
 
 impl TextProps {
@@ -279,11 +322,14 @@ impl TextProps {
             content,
             font_family: "sans-serif".to_string(),
             style: TextStyle::Normal,
-            weight: 400.0,
+            variations: BTreeMap::new(),
+            features: BTreeMap::new(),
             size: 48.0,
             line_height: 1.2,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
             align: TextAlign::Start,
-            box_size: None,
+            layout: TextLayout::Point,
         }
     }
 }

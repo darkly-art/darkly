@@ -73,7 +73,14 @@ pub struct TextObjectEntry {
     pub content: String,
     pub font_family: String,
     pub size: f32,
-    pub weight: f32,
+    /// Variable-font axis values (tag → value), including `wght`. Empty for an
+    /// untouched/static font.
+    pub variations: std::collections::BTreeMap<String, f32>,
+    /// OpenType feature values (tag → value).
+    pub features: std::collections::BTreeMap<String, u32>,
+    pub letter_spacing: f32,
+    pub word_spacing: f32,
+    pub line_height: f32,
     pub italic: bool,
     pub align: crate::layer::TextAlign,
     pub color: [u8; 4],
@@ -128,7 +135,7 @@ impl DarklyEngine {
                 // Area text's extent is its fixed box; point text's is the
                 // natural shaped size. The box drives both the gizmo frame
                 // (`vector_object_info`) and hit-testing.
-                if let Some((w, h)) = t.box_size {
+                if let Some((w, h)) = t.layout.area_size() {
                     Some(kurbo::Rect::new(0.0, 0.0, w as f64, h as f64))
                 } else {
                     let layout = self.fonts.shape(t);
@@ -282,8 +289,13 @@ impl DarklyEngine {
         });
     }
 
-    /// Update one or more style fields (and/or fill color) of one text object
-    /// on a vector layer. `None` arguments leave that field unchanged.
+    /// Update one or more style fields (and/or fill color) of one text object on
+    /// a vector layer. `None` arguments leave that field unchanged. `variations`
+    /// and `features` are **merged** into the object's maps — passing one axis
+    /// keeps the rest — so the panel can edit a single slider without clobbering
+    /// the others. Box/layout is *not* here: it stays owned by
+    /// [`Self::set_text_box`] on its own undo lane (there is no second mutation
+    /// path for it).
     #[allow(clippy::too_many_arguments)]
     pub fn set_text_style(
         &mut self,
@@ -291,7 +303,11 @@ impl DarklyEngine {
         object: crate::layer::ObjectId,
         font_family: Option<String>,
         size: Option<f32>,
-        weight: Option<f32>,
+        variations: Option<std::collections::BTreeMap<String, f32>>,
+        features: Option<std::collections::BTreeMap<String, u32>>,
+        letter_spacing: Option<f32>,
+        word_spacing: Option<f32>,
+        line_height: Option<f32>,
         italic: Option<bool>,
         align: Option<crate::layer::TextAlign>,
         color: Option<[u8; 4]>,
@@ -304,8 +320,20 @@ impl DarklyEngine {
                 if let Some(s) = size {
                     t.size = s;
                 }
-                if let Some(w) = weight {
-                    t.weight = w;
+                if let Some(vars) = variations {
+                    t.variations.extend(vars);
+                }
+                if let Some(feats) = features {
+                    t.features.extend(feats);
+                }
+                if let Some(ls) = letter_spacing {
+                    t.letter_spacing = ls;
+                }
+                if let Some(ws) = word_spacing {
+                    t.word_spacing = ws;
+                }
+                if let Some(lh) = line_height {
+                    t.line_height = lh;
                 }
                 if let Some(i) = italic {
                     t.style = if i {
@@ -324,6 +352,13 @@ impl DarklyEngine {
                 )));
             }
         });
+    }
+
+    /// Report a font family's capabilities (variable axes + real italic face) so
+    /// the UI can render font-driven controls. Thin passthrough to
+    /// [`crate::text::FontRegistry::font_axes`].
+    pub fn font_axes(&mut self, family: &str) -> crate::text::FontCapabilities {
+        self.fonts.font_axes(family)
     }
 
     /// The single chokepoint for editing one object on a vector layer in place.
@@ -379,11 +414,15 @@ impl DarklyEngine {
                     content: t.content.clone(),
                     font_family: t.font_family.clone(),
                     size: t.size,
-                    weight: t.weight,
+                    variations: t.variations.clone(),
+                    features: t.features.clone(),
+                    letter_spacing: t.letter_spacing,
+                    word_spacing: t.word_spacing,
+                    line_height: t.line_height,
                     italic: matches!(t.style, crate::layer::TextStyle::Italic),
                     align: t.align,
                     color: brush_rgba(&obj.fill),
-                    box_size: t.box_size,
+                    box_size: t.layout.area_size(),
                 }),
                 crate::layer::ObjectSource::Path(_) => None,
             })
@@ -471,7 +510,10 @@ impl DarklyEngine {
         self.edit_vector_object(id, object, VectorOpKind::Box, |obj| {
             obj.transform = new_transform;
             if let crate::layer::ObjectSource::Text(t) = &mut obj.source {
-                t.box_size = Some(box_size);
+                t.layout = crate::layer::TextLayout::Area {
+                    width: box_size.0,
+                    height: box_size.1,
+                };
             }
         });
     }

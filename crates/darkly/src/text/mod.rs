@@ -18,13 +18,34 @@ use std::collections::HashMap;
 
 use kurbo::Affine;
 use parley::{
-    Alignment, AlignmentOptions, FontContext, FontStack, FontStyle, FontWeight, Layout,
-    LayoutContext, LineHeight, PositionedLayoutItem, StyleProperty,
+    Alignment, AlignmentOptions, FontContext, FontSettings, FontStack, FontStyle, FontWeight,
+    Layout, LayoutContext, LineHeight, PositionedLayoutItem, StyleProperty,
 };
 use peniko::{Brush, Color, Fill};
 use vello::Scene;
 
 use crate::layer::{ObjectSource, TextAlign, TextProps, TextStyle, VectorObject};
+
+/// A variable-font axis a family exposes, surfaced to the UI so it can render one
+/// control per axis with the font's real range. `tag` is the 4-char fvar tag
+/// (`"wght"`, `"wdth"`, …); the frontend maps it to a friendly label.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxisInfo {
+    pub tag: String,
+    pub min: f32,
+    pub default: f32,
+    pub max: f32,
+}
+
+/// What a font family can do, driving the text-properties panel: whether it has
+/// a real italic face (so the Italic control is meaningful) and its variable
+/// axes. Computed from the live font collection, so it works uniformly for
+/// bundled, imported, and system fonts.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FontCapabilities {
+    pub italic: bool,
+    pub axes: Vec<AxisInfo>,
+}
 
 /// Curated fonts embedded into the binary so text renders identically on every
 /// platform (wasm has no system fonts). Both faces register under the single
@@ -235,7 +256,26 @@ impl FontRegistry {
         builder.push_default(StyleProperty::LineHeight(LineHeight::FontSizeRelative(
             text.line_height,
         )));
-        builder.push_default(StyleProperty::FontWeight(FontWeight::new(text.weight)));
+        // Variable-font axes drive shaping via a CSS `font-variation-settings`
+        // string. Weight is just the `wght` axis, but we *also* push `FontWeight`
+        // from it so face selection + faux-bold stays correct (a `wght` on a
+        // static face is a harmless no-op). The two agree rather than fight — see
+        // `variations_and_font_weight_agree_on_coords`.
+        if let Some(css) = variation_settings(&text.variations) {
+            builder.push_default(StyleProperty::FontVariations(FontSettings::Source(
+                Cow::Owned(css),
+            )));
+        }
+        if let Some(&wght) = text.variations.get("wght") {
+            builder.push_default(StyleProperty::FontWeight(FontWeight::new(wght)));
+        }
+        if let Some(css) = feature_settings(&text.features) {
+            builder.push_default(StyleProperty::FontFeatures(FontSettings::Source(
+                Cow::Owned(css),
+            )));
+        }
+        builder.push_default(StyleProperty::LetterSpacing(text.letter_spacing));
+        builder.push_default(StyleProperty::WordSpacing(text.word_spacing));
         builder.push_default(StyleProperty::FontStyle(match text.style {
             TextStyle::Normal => FontStyle::Normal,
             TextStyle::Italic => FontStyle::Italic,
@@ -246,8 +286,9 @@ impl FontRegistry {
         // newlines (natural width). Either way, alignment resolves within a
         // width — the box width for area text, the block's own natural width for
         // point text — so the Align control is never inert (a single line still
-        // has nothing to shift, which is correct).
-        let max_adv = text.box_size.map(|(w, _)| w);
+        // has nothing to shift, which is correct). A future `Path` layout adds
+        // one arm here; area/point both go through `area_size`.
+        let max_adv = text.layout.area_size().map(|(w, _)| w);
         layout.break_all_lines(max_adv);
         let align_width = max_adv.unwrap_or_else(|| layout.width());
         layout.align(
@@ -257,6 +298,75 @@ impl FontRegistry {
         );
         layout
     }
+
+    /// Report what `family` can do — its variable axes and whether it has a real
+    /// italic face — so the UI renders font-driven controls. Reads the live font
+    /// collection (no blob reread), so it works uniformly for bundled, imported,
+    /// and system families. An unknown family reports no capabilities. Axes are
+    /// unioned across the family's faces (first face to expose a tag wins its
+    /// range), italic is true if any face is Italic/Oblique or carries an `ital`
+    /// axis.
+    pub fn font_axes(&mut self, family: &str) -> FontCapabilities {
+        use parley::fontique::FontStyle as FqStyle;
+        let Some(fam) = self.font_cx.collection.family_by_name(family) else {
+            return FontCapabilities::default();
+        };
+        let mut caps = FontCapabilities::default();
+        let mut seen: HashMap<String, ()> = HashMap::new();
+        for font in fam.fonts() {
+            if matches!(font.style(), FqStyle::Italic | FqStyle::Oblique(_))
+                || font.has_italic_axis()
+            {
+                caps.italic = true;
+            }
+            for axis in font.axes() {
+                let tag = axis.tag.to_string();
+                // The `ital` axis is surfaced as the Italic control, not a slider.
+                if tag == "ital" {
+                    continue;
+                }
+                if seen.insert(tag.clone(), ()).is_none() {
+                    caps.axes.push(AxisInfo {
+                        tag,
+                        min: axis.min,
+                        default: axis.default,
+                        max: axis.max,
+                    });
+                }
+            }
+        }
+        caps
+    }
+}
+
+/// Build a CSS `font-variation-settings` string (`"wght" 700, "opsz" 18`) from a
+/// tag→value map, or `None` when empty. The `BTreeMap` gives a deterministic
+/// axis order.
+fn variation_settings(vars: &std::collections::BTreeMap<String, f32>) -> Option<String> {
+    if vars.is_empty() {
+        return None;
+    }
+    Some(
+        vars.iter()
+            .map(|(tag, v)| format!("\"{tag}\" {v}"))
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
+}
+
+/// Build a CSS `font-feature-settings` string (`"liga" 1, "smcp" 1`) from a
+/// tag→value map, or `None` when empty.
+fn feature_settings(features: &std::collections::BTreeMap<String, u32>) -> Option<String> {
+    if features.is_empty() {
+        return None;
+    }
+    Some(
+        features
+            .iter()
+            .map(|(tag, v)| format!("\"{tag}\" {v}"))
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
 }
 
 fn to_parley_align(align: TextAlign) -> Alignment {
@@ -271,6 +381,7 @@ fn to_parley_align(align: TextAlign) -> Alignment {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layer::TextLayout;
 
     #[test]
     fn shapes_known_string_into_glyphs() {
@@ -334,9 +445,9 @@ mod tests {
         text.font_family = family;
         text.size = 48.0;
 
-        text.weight = 300.0;
+        text.variations.insert("wght".to_string(), 300.0);
         let light = first_run_coords(&mut reg, &text);
-        text.weight = 700.0;
+        text.variations.insert("wght".to_string(), 700.0);
         let bold = first_run_coords(&mut reg, &text);
 
         assert!(
@@ -412,11 +523,14 @@ mod tests {
         text.size = 32.0;
 
         // Point text: one line (no explicit newlines, no wrap box).
-        text.box_size = None;
+        text.layout = TextLayout::Point;
         assert_eq!(line_count(&reg.shape(&text)), 1, "point text doesn't wrap");
 
         // A narrow box wraps the same string onto multiple lines.
-        text.box_size = Some((120.0, 400.0));
+        text.layout = TextLayout::Area {
+            width: 120.0,
+            height: 400.0,
+        };
         assert!(
             line_count(&reg.shape(&text)) >= 2,
             "a narrow box wraps the text onto multiple lines",
@@ -429,7 +543,10 @@ mod tests {
         let mut text = TextProps::new("hi".to_string());
         text.size = 32.0;
         // A box much wider than the word: centering pushes the first glyph in.
-        text.box_size = Some((400.0, 80.0));
+        text.layout = TextLayout::Area {
+            width: 400.0,
+            height: 80.0,
+        };
 
         text.align = TextAlign::Start;
         let start_x = first_glyph_x(&reg.shape(&text));
@@ -450,7 +567,7 @@ mod tests {
         let mut reg = FontRegistry::new();
         let mut text = TextProps::new("wwwwwwwwww\ni".to_string());
         text.size = 32.0;
-        text.box_size = None;
+        text.layout = TextLayout::Point;
 
         text.align = TextAlign::Start;
         let start = reg.shape(&text);
@@ -475,6 +592,118 @@ mod tests {
         assert!(
             short_glyph(&center) > short_glyph(&start) + 1.0,
             "the short line centers within the block's natural width",
+        );
+    }
+
+    const CANTARELL_VF: &[u8] = include_bytes!("../../tests/fixtures/fonts/Cantarell-VF.otf");
+
+    /// Pushing a `wght` variation and pushing `FontWeight` must **agree**, not
+    /// fight: shaping with `variations={"wght":700}` yields the same
+    /// `normalized_coords` as an equivalent pure-`FontWeight(700)` shape. Guards
+    /// the deliberate double application in `shape()`.
+    #[test]
+    fn variations_and_font_weight_agree_on_coords() {
+        let mut reg = FontRegistry::new();
+        let family = reg
+            .register_font(CANTARELL_VF.to_vec())
+            .first()
+            .expect("Cantarell-VF family")
+            .clone();
+
+        let mut via_variation = TextProps::new("Weight".to_string());
+        via_variation.font_family = family.clone();
+        via_variation.size = 48.0;
+        via_variation.variations.insert("wght".to_string(), 700.0);
+        let variation_coords = first_run_coords(&mut reg, &via_variation);
+
+        // An equivalent shape that reaches the face through `FontWeight` alone —
+        // built by hand so no `variations` entry is present.
+        let mut pure_weight = TextProps::new("Weight".to_string());
+        pure_weight.font_family = family;
+        pure_weight.size = 48.0;
+        let pure_coords = {
+            let stack = format!("{}, Noto Sans, sans-serif", pure_weight.font_family);
+            let mut builder =
+                reg.layout_cx
+                    .ranged_builder(&mut reg.font_cx, &pure_weight.content, 1.0, true);
+            builder.push_default(StyleProperty::FontStack(FontStack::Source(Cow::Owned(
+                stack,
+            ))));
+            builder.push_default(StyleProperty::FontSize(pure_weight.size));
+            builder.push_default(StyleProperty::FontWeight(FontWeight::new(700.0)));
+            let mut layout: Layout<()> = builder.build(&pure_weight.content);
+            layout.break_all_lines(None);
+            let mut coords = Vec::new();
+            'outer: for line in layout.lines() {
+                for item in line.items() {
+                    if let PositionedLayoutItem::GlyphRun(gr) = item {
+                        coords = gr.run().normalized_coords().to_vec();
+                        break 'outer;
+                    }
+                }
+            }
+            coords
+        };
+
+        assert_eq!(
+            variation_coords, pure_coords,
+            "FontVariations + FontWeight must agree with a pure-weight shape \
+             (variation={variation_coords:?}, pure={pure_coords:?})"
+        );
+    }
+
+    /// A `wght` variation must never break shaping — pushing one onto a face
+    /// that can't honor it (a static face, or one whose axis range excludes the
+    /// value) is a harmless no-op, not a panic. Shaping still yields glyphs.
+    #[test]
+    fn wght_variation_never_breaks_shaping() {
+        let mut reg = FontRegistry::new();
+        let mut text = TextProps::new("Static".to_string());
+        text.font_family = "sans-serif".to_string();
+        text.size = 32.0;
+        text.variations.insert("wght".to_string(), 900.0);
+        assert!(
+            reg.shape(&text).width() > 0.0,
+            "a wght variation must never break shaping of a static/fallback face"
+        );
+    }
+
+    /// `font_axes` reports the real variable axes + italic for the bundled Noto
+    /// Sans, and nothing for a family that isn't registered.
+    #[test]
+    fn font_axes_reports_bundled_noto_capabilities() {
+        let mut reg = FontRegistry::new();
+        let caps = reg.font_axes("Noto Sans");
+        assert!(
+            caps.italic,
+            "bundled Noto Sans ships an italic face, so Italic is meaningful"
+        );
+        assert!(
+            caps.axes.iter().any(|a| a.tag == "wght"),
+            "bundled Noto Sans exposes a wght axis (got {:?})",
+            caps.axes
+        );
+
+        let empty = reg.font_axes("No Such Family Anywhere");
+        assert!(
+            !empty.italic && empty.axes.is_empty(),
+            "unknown family reports nothing"
+        );
+    }
+
+    /// Positive letter spacing widens a line's advance — the horizontal spacing
+    /// control reaches the shaper.
+    #[test]
+    fn letter_spacing_widens_advance() {
+        let mut reg = FontRegistry::new();
+        let mut text = TextProps::new("iiiii".to_string());
+        text.size = 32.0;
+        let natural = reg.shape(&text).width();
+        text.letter_spacing = 8.0;
+        let spaced = reg.shape(&text).width();
+        assert!(
+            spaced > natural + 1.0,
+            "letter spacing widens the advance (natural={natural}, spaced={spaced})"
         );
     }
 }

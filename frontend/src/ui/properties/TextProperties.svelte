@@ -20,6 +20,7 @@
     import NumberSlider from '../settings/widgets/NumberSlider.svelte';
     import FontBrowser from '../fonts/FontBrowser.svelte';
     import { fontLibrary } from '../../state/font_library.svelte';
+    import { fontCaps, type FontCapabilities } from '../../state/font_caps.svelte';
 
     // The active vector layer, or null when no vector layer is active (a
     // placement that will become a fresh layer).
@@ -31,6 +32,20 @@
         ['end', 'Right'],
         ['justified', 'Justify'],
     ];
+
+    /** Friendly labels for the common registered variable-font axis tags; an
+     *  unknown custom axis falls back to its raw 4-char tag. Lives beside the
+     *  axis UI it drives. */
+    const AXIS_LABELS: Record<string, string> = {
+        wght: 'Weight',
+        wdth: 'Width',
+        opsz: 'Optical Size',
+        slnt: 'Slant',
+        GRAD: 'Grade',
+        ital: 'Italic',
+    };
+
+    const axisLabel = (tag: string): string => AXIS_LABELS[tag] ?? tag;
 
     /** Content a new text object is seeded with — shown selected so the first
      *  keystroke replaces it. */
@@ -70,13 +85,36 @@
         content: string;
         font_family: string;
         size: number;
-        weight: number;
+        variations: Record<string, number>;
+        letter_spacing: number;
+        word_spacing: number;
+        line_height: number;
         italic: boolean;
         align: string;
         color: Rgba;
     }
 
     let block = $state<Block | null>(null);
+
+    // The active family's capabilities (variable axes + real italic face), which
+    // drive the font-driven controls. Fetched on family change; empty until then.
+    let caps = $state<FontCapabilities>({ italic: false, axes: [] });
+
+    $effect(() => {
+        void fontLibrary.families; // re-fetch when the library changes (re-import)
+        const family = block?.font_family;
+        if (!family || !app.engine) {
+            caps = { italic: false, axes: [] };
+            return;
+        }
+        let cancelled = false;
+        void fontCaps(app.engine, family).then((c) => {
+            if (!cancelled) caps = c;
+        });
+        return () => {
+            cancelled = true;
+        };
+    });
 
     // The textarea is uncontrolled — its value is set imperatively. `lastSent`
     // (by object id) lets us reseed only on an *external* change (undo/redo), not
@@ -97,7 +135,10 @@
         return {
             font_family: textSession.fontFamily,
             size: textSession.size,
-            weight: textSession.weight,
+            variations: { ...textSession.variations },
+            letter_spacing: textSession.letterSpacing,
+            word_spacing: textSession.wordSpacing,
+            line_height: textSession.lineHeight,
             italic: textSession.italic,
             align: textSession.align,
         };
@@ -110,7 +151,10 @@
             content: o.content,
             font_family: o.font_family,
             size: o.size,
-            weight: o.weight,
+            variations: (o.variations ?? {}) as Record<string, number>,
+            letter_spacing: o.letter_spacing ?? 0,
+            word_spacing: o.word_spacing ?? 0,
+            line_height: o.line_height ?? 1.2,
             italic: o.italic,
             align: o.align,
             color: o.color as Rgba,
@@ -244,7 +288,13 @@
         // Reflect on the local block so its controls update immediately.
         if (fields.font_family !== undefined) block.font_family = fields.font_family;
         if (fields.size !== undefined) block.size = fields.size;
-        if (fields.weight !== undefined) block.weight = fields.weight;
+        // Variations merge (an untouched axis stays as it was), matching the
+        // engine-side merge — editing one slider never resets the others.
+        if (fields.variations !== undefined)
+            block.variations = { ...block.variations, ...fields.variations };
+        if (fields.letter_spacing !== undefined) block.letter_spacing = fields.letter_spacing;
+        if (fields.word_spacing !== undefined) block.word_spacing = fields.word_spacing;
+        if (fields.line_height !== undefined) block.line_height = fields.line_height;
         if (fields.italic !== undefined) block.italic = fields.italic;
         if (fields.align !== undefined) block.align = fields.align;
         if (fields.color !== undefined) block.color = fields.color;
@@ -300,17 +350,21 @@
                 />
             </div>
 
-            <div class="row" title="Font weight (variable fonts only)">
-                <span class="label">Weight</span>
-                <NumberSlider
-                    value={block.weight}
-                    min={100}
-                    max={900}
-                    step={100}
-                    integer
-                    onchange={(w) => onStyle({ weight: w })}
-                />
-            </div>
+            <!-- One slider per variable-font axis the family exposes, with the
+                 font's real range. An untouched axis stays absent from the map
+                 (value falls back to the axis default). -->
+            {#each caps.axes as axis (axis.tag)}
+                <div class="row" title={`${axisLabel(axis.tag)} (${axis.tag} axis)`}>
+                    <span class="label">{axisLabel(axis.tag)}</span>
+                    <NumberSlider
+                        value={block.variations[axis.tag] ?? axis.default}
+                        min={axis.min}
+                        max={axis.max}
+                        integer={axis.tag === 'wght'}
+                        onchange={(v) => onStyle({ variations: { [axis.tag]: v } })}
+                    />
+                </div>
+            {/each}
 
             <label class="row" title="Horizontal alignment">
                 <span class="label">Align</span>
@@ -321,14 +375,47 @@
                 />
             </label>
 
-            <label class="row" title="Italic">
-                <span class="label">Italic</span>
-                <input
-                    type="checkbox"
-                    checked={block.italic}
-                    onchange={(e) => onStyle({ italic: (e.currentTarget as HTMLInputElement).checked })}
+            {#if caps.italic}
+                <label class="row" title="Italic">
+                    <span class="label">Italic</span>
+                    <input
+                        type="checkbox"
+                        checked={block.italic}
+                        onchange={(e) =>
+                            onStyle({ italic: (e.currentTarget as HTMLInputElement).checked })}
+                    />
+                </label>
+            {/if}
+
+            <div class="row" title="Extra space between letters, in canvas pixels.">
+                <span class="label">Letter Spacing</span>
+                <NumberSlider
+                    value={block.letter_spacing}
+                    min={-10}
+                    max={50}
+                    onchange={(v) => onStyle({ letter_spacing: v })}
                 />
-            </label>
+            </div>
+
+            <div class="row" title="Extra space between words, in canvas pixels.">
+                <span class="label">Word Spacing</span>
+                <NumberSlider
+                    value={block.word_spacing}
+                    min={-10}
+                    max={100}
+                    onchange={(v) => onStyle({ word_spacing: v })}
+                />
+            </div>
+
+            <div class="row" title="Line height, as a multiple of the font's natural height.">
+                <span class="label">Line Height</span>
+                <NumberSlider
+                    value={block.line_height}
+                    min={0.5}
+                    max={3}
+                    onchange={(v) => onStyle({ line_height: v })}
+                />
+            </div>
 
             <label class="row" title="Text color">
                 <span class="label">Color</span>

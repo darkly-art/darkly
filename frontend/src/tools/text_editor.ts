@@ -7,11 +7,18 @@ import type { Engine } from '../engine/protocol';
 
 export type Rgba = [number, number, number, number];
 
-/** The text-block style fields, in the engine's snake_case wire shape. */
+/** The text-block style fields, in the engine's snake_case wire shape. Style is
+ *  font-driven: `variations` (fvar axes, incl. `wght`) and `features` (OpenType)
+ *  are open maps merged into the object's maps engine-side, so a single-axis
+ *  edit never clobbers the rest. */
 export interface StyleFields {
     font_family?: string;
     size?: number;
-    weight?: number;
+    variations?: Record<string, number>;
+    features?: Record<string, number>;
+    letter_spacing?: number;
+    word_spacing?: number;
+    line_height?: number;
     italic?: boolean;
     align?: string;
     color?: Rgba;
@@ -21,7 +28,10 @@ export interface StyleFields {
 export interface FullStyle {
     font_family: string;
     size: number;
-    weight: number;
+    variations: Record<string, number>;
+    letter_spacing: number;
+    word_spacing: number;
+    line_height: number;
     italic: boolean;
     align: string;
 }
@@ -77,7 +87,10 @@ export async function createTextFromPending(
         font_family: style.font_family,
         align: style.align,
         italic: style.italic,
-        weight: style.weight,
+        variations: style.variations,
+        letter_spacing: style.letter_spacing,
+        word_spacing: style.word_spacing,
+        line_height: style.line_height,
         color,
         box: placement.box ?? null,
     };
@@ -166,21 +179,31 @@ export function flushTextContent() {
     hosts.forEach((h) => h.requestFrame());
 }
 
-/** Map an engine style field to its `TextSession` default property, or null for
- *  fields (color) that aren't a placement default. */
+/** Map a *scalar* engine style field to its `TextSession` default property.
+ *  `color` is absent (never a placement default); `variations`/`features` are
+ *  absent because they're nested maps that get *merged*, not overwritten — see
+ *  `applyStyleDefaults`. */
 const SESSION_DEFAULT_KEY: Record<string, string> = {
     font_family: 'fontFamily',
     size: 'size',
-    weight: 'weight',
+    letter_spacing: 'letterSpacing',
+    word_spacing: 'wordSpacing',
+    line_height: 'lineHeight',
     italic: 'italic',
     align: 'align',
 };
 
 /** Mirror a style edit into the placement defaults so the next new block reuses
- *  the latest style. Skips `color` (never a default — new blocks take the
- *  current foreground). */
+ *  the latest style. Scalars overwrite via the flat map; `variations`/`features`
+ *  are **merged** into the existing defaults (editing one axis keeps the rest).
+ *  Skips `color` (never a default — new blocks take the current foreground). */
 export function applyStyleDefaults(defaults: Record<string, unknown>, fields: StyleFields) {
     for (const [k, v] of Object.entries(fields)) {
+        if (k === 'variations' || k === 'features') {
+            const prev = (defaults[k] as Record<string, number> | undefined) ?? {};
+            defaults[k] = { ...prev, ...(v as Record<string, number>) };
+            continue;
+        }
         const key = SESSION_DEFAULT_KEY[k];
         if (key) defaults[key] = v;
     }

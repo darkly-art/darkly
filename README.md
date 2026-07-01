@@ -99,7 +99,7 @@ For a feature to count, it must be:
     - [ ] Calligraphy
     - [ ] Oil / Impasto
 - [x] Brush tool, eraser, fill (flood), gradient (linear), color picker
-- [x] Text tool (vector-object layer, Vello-rendered; raster-first; edited in the properties panel — content + style + color — under any transform; per-object transform gizmo; click for point text or drag for a resizable area-text box with on-canvas frame, wrapping, and alignment; font browser with disk upload (`.ttf`/`.otf`) and keyless Google Fonts import; used fonts embed into the saved `.darkly` so documents render self-contained, and your library persists across documents)
+- [x] Text tool (vector-object layer, Vello-rendered; raster-first; edited in the properties panel — content + style + color — under any transform; per-object transform gizmo; click for point text or drag for a resizable area-text box with on-canvas frame, wrapping, and alignment; **font-driven style** — real italic face selection plus a slider per variable-font axis the font exposes (weight, width, optical size, slant, …) with the font's own ranges, letter/word spacing, and line height; font browser with disk upload (`.ttf`/`.otf`) and keyless Google Fonts import; used fonts embed into the saved `.darkly` so documents render self-contained, and your library persists across documents) — roadmap: text-on-a-path, OpenType feature controls
 - [x] Pressure / tilt / spacing / distance / angle inputs
 - [x] Laplacian stabilizer
 - [x] HSV picker, foreground/background swatches
@@ -130,12 +130,12 @@ For a feature to count, it must be:
 - [x] Application menu (File/Edit/Select/… , pinnable to top bar)
 - [x] Autosave + crash recovery
 - [x] Filter layers (non-destructive; isolate to one layer via a group)
--     [ ] Brightness / Contrast
--     [ ] Hue / Saturation / Lightness
--     [ ] Levels
--     [ ] Curves
--     [x] Invert colors
--     [ ] Desaturate
+    - [ ] Brightness / Contrast
+    - [ ] Hue / Saturation / Lightness
+    - [ ] Levels
+    - [ ] Curves
+    - [x] Invert colors
+    - [ ] Desaturate
 - [ ] Clipping mask
 - [x] Feather + antialias
 - [x] Grow / Shrink / Border / Smooth as discrete commands

@@ -11,7 +11,7 @@ use darkly::engine::SavePurpose;
 use darkly::format::manifest::Manifest;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
-use darkly::layer::{TextAlign, TextProps, TextStyle};
+use darkly::layer::{TextAlign, TextLayout, TextProps, TextStyle};
 use darkly::transform::Transform;
 
 /// A genuine variable font (Cantarell-VF, CFF2, `wght` 100–800 axis) used as a
@@ -243,7 +243,7 @@ fn text_objects_lists_objects() {
 
     let mut text = TextProps::new("Hello".into());
     text.size = 33.0;
-    text.weight = 600.0;
+    text.variations.insert("wght".to_string(), 600.0);
     text.style = TextStyle::Italic;
     text.align = TextAlign::Center;
     let (id, obj) = engine.add_text_layer(text, 40.0, 50.0, [10, 20, 30, 255], None);
@@ -254,7 +254,7 @@ fn text_objects_lists_objects() {
     assert_eq!(o.object, obj);
     assert_eq!(o.content, "Hello");
     assert_eq!(o.size, 33.0);
-    assert_eq!(o.weight, 600.0);
+    assert_eq!(o.variations.get("wght"), Some(&600.0));
     assert!(o.italic);
     assert_eq!(o.align, TextAlign::Center);
     assert_eq!(o.color, [10, 20, 30, 255]);
@@ -294,7 +294,10 @@ fn area_text_bbox_is_the_box_not_the_natural_width() {
     let mut engine = test_engine(256, 256);
     let mut text = TextProps::new("the quick brown fox jumps".to_string());
     text.size = 24.0;
-    text.box_size = Some((120.0, 80.0));
+    text.layout = TextLayout::Area {
+        width: 120.0,
+        height: 80.0,
+    };
     let (id, obj) = engine.add_text_layer(text, 10.0, 10.0, [255, 255, 255, 255], None);
 
     let (_ox, _oy, w, h, _m) = engine

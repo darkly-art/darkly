@@ -4,6 +4,7 @@ import {
     queueTextContent,
     flushTextContent,
     dispatchStyle,
+    applyStyleDefaults,
     shouldReseed,
     type EditorHost,
 } from '../text_editor';
@@ -29,7 +30,16 @@ function fakeHost() {
     return { engine, host };
 }
 
-const STYLE = { font_family: 'Noto Sans', size: 48, weight: 400, italic: false, align: 'start' };
+const STYLE = {
+    font_family: 'Noto Sans',
+    size: 48,
+    variations: { wght: 400 },
+    letter_spacing: 0,
+    word_spacing: 0,
+    line_height: 1.2,
+    italic: false,
+    align: 'start',
+};
 const PLACEMENT = { x: 100, y: 60, anchorLayerId: 4 };
 
 beforeEach(() => {
@@ -58,7 +68,7 @@ describe('text editor logic', () => {
                 font_family: 'Noto Sans',
                 align: 'start',
                 italic: false,
-                weight: 400,
+                variations: { wght: 400 },
                 color: [10, 20, 30, 255],
                 anchor: 4,
             }),
@@ -132,6 +142,34 @@ describe('text editor logic', () => {
             align: 'center',
         });
         expect(defaults).toEqual({ fontFamily: 'Serif', align: 'center' });
+    });
+
+    it('dispatches a single-axis variation without a shape change to the wire', () => {
+        const { engine, host } = fakeHost();
+        const defaults: Record<string, unknown> = {};
+        dispatchStyle(host, 42, 3, { variations: { wght: 700 } }, defaults);
+        // The engine merges object-side, so the wire carries only the one axis.
+        expect(engine.post).toHaveBeenCalledWith('set_text_style', {
+            id: 42,
+            object: 3,
+            variations: { wght: 700 },
+        });
+    });
+
+    it('merges variations into the defaults instead of overwriting them', () => {
+        // A prior axis edit seeded the defaults; a new axis must not clobber it.
+        const defaults: Record<string, unknown> = { variations: { wght: 700 } };
+        applyStyleDefaults(defaults, { variations: { wdth: 120 } });
+        expect(defaults.variations).toEqual({ wght: 700, wdth: 120 });
+        // Editing an existing axis updates just that entry.
+        applyStyleDefaults(defaults, { variations: { wght: 300 } });
+        expect(defaults.variations).toEqual({ wght: 300, wdth: 120 });
+    });
+
+    it('mirrors scalar spacing edits into the defaults via the flat map', () => {
+        const defaults: Record<string, unknown> = {};
+        applyStyleDefaults(defaults, { letter_spacing: 4, line_height: 1.5 });
+        expect(defaults).toEqual({ letterSpacing: 4, lineHeight: 1.5 });
     });
 
     it('re-seeds only on an external change, not a self-echo', () => {

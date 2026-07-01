@@ -2,11 +2,13 @@
 //! edit its objects (content / style / transform), and list available fonts.
 //! Auto-discovered by `build.rs`.
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::engine::protocol::{decode, RequestRegistration, Response};
-use crate::layer::{LayerId, ObjectId, TextAlign, TextProps, TextStyle};
+use crate::layer::{LayerId, ObjectId, TextAlign, TextLayout, TextProps, TextStyle};
 
 fn parse_align(s: &str) -> TextAlign {
     match s {
@@ -34,34 +36,70 @@ fn parse_style(italic: bool) -> TextStyle {
     }
 }
 
-/// Build a [`TextProps`] from the wire fields shared by `add_text` (new layer)
-/// and `add_text_object` (existing layer). `None` style fields take the
-/// [`TextProps::new`] defaults; `box` makes it area text.
-#[allow(clippy::too_many_arguments)]
-fn build_text_props(
-    content: String,
+/// The style fields shared by `add_text` (new layer) and `add_text_object`
+/// (existing layer). Absent fields take the [`TextProps::new`] defaults; `box`
+/// makes it area text. One struct so both handlers deserialize the same shape.
+#[derive(Deserialize)]
+struct StyleWire {
+    #[serde(default)]
     font_family: Option<String>,
+    #[serde(default)]
     size: Option<f32>,
-    weight: Option<f32>,
+    /// Variable-font axis values (tag → value), including `wght`.
+    #[serde(default)]
+    variations: Option<BTreeMap<String, f32>>,
+    /// OpenType feature values (tag → value).
+    #[serde(default)]
+    features: Option<BTreeMap<String, u32>>,
+    #[serde(default)]
+    letter_spacing: Option<f32>,
+    #[serde(default)]
+    word_spacing: Option<f32>,
+    #[serde(default)]
+    line_height: Option<f32>,
+    #[serde(default)]
     italic: bool,
+    #[serde(default)]
     align: Option<String>,
-    box_size: Option<[f32; 2]>,
-) -> TextProps {
+    /// `[w, h]` for a drag-created area-text box; absent → point text.
+    #[serde(default)]
+    r#box: Option<[f32; 2]>,
+}
+
+/// Build a [`TextProps`] from the shared wire style fields.
+fn build_text_props(content: String, s: StyleWire) -> TextProps {
     let mut text = TextProps::new(content);
-    if let Some(f) = font_family {
+    if let Some(f) = s.font_family {
         text.font_family = f;
     }
-    if let Some(s) = size {
-        text.size = s;
+    if let Some(size) = s.size {
+        text.size = size;
     }
-    if let Some(w) = weight {
-        text.weight = w;
+    if let Some(vars) = s.variations {
+        text.variations = vars;
     }
-    text.style = parse_style(italic);
-    if let Some(a) = align {
+    if let Some(feats) = s.features {
+        text.features = feats;
+    }
+    if let Some(ls) = s.letter_spacing {
+        text.letter_spacing = ls;
+    }
+    if let Some(ws) = s.word_spacing {
+        text.word_spacing = ws;
+    }
+    if let Some(lh) = s.line_height {
+        text.line_height = lh;
+    }
+    text.style = parse_style(s.italic);
+    if let Some(a) = s.align {
         text.align = parse_align(&a);
     }
-    text.box_size = box_size.map(|b| (b[0], b[1]));
+    if let Some(b) = s.r#box {
+        text.layout = TextLayout::Area {
+            width: b[0],
+            height: b[1],
+        };
+    }
     text
 }
 
@@ -73,36 +111,17 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 #[derive(Deserialize)]
                 struct Req {
                     content: String,
-                    #[serde(default)]
-                    font_family: Option<String>,
-                    #[serde(default)]
-                    size: Option<f32>,
-                    #[serde(default)]
-                    weight: Option<f32>,
-                    #[serde(default)]
-                    italic: bool,
-                    #[serde(default)]
-                    align: Option<String>,
+                    #[serde(flatten)]
+                    style: StyleWire,
                     x: f64,
                     y: f64,
                     /// RGBA 0–255. Defaults to opaque black.
                     #[serde(default)]
                     color: Option<[u8; 4]>,
-                    /// `[w, h]` for a drag-created area-text box; absent → point text.
-                    #[serde(default)]
-                    r#box: Option<[f32; 2]>,
                     anchor: i64,
                 }
                 let r: Req = decode(payload)?;
-                let text = build_text_props(
-                    r.content,
-                    r.font_family,
-                    r.size,
-                    r.weight,
-                    r.italic,
-                    r.align,
-                    r.r#box,
-                );
+                let text = build_text_props(r.content, r.style);
                 let anchor = (r.anchor >= 0).then(|| LayerId::from_ffi(r.anchor as u64));
                 let color = r.color.unwrap_or([0, 0, 0, 255]);
                 let (id, object) = engine.add_text_layer(text, r.x, r.y, color, anchor);
@@ -122,35 +141,16 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 struct Req {
                     id: u64,
                     content: String,
-                    #[serde(default)]
-                    font_family: Option<String>,
-                    #[serde(default)]
-                    size: Option<f32>,
-                    #[serde(default)]
-                    weight: Option<f32>,
-                    #[serde(default)]
-                    italic: bool,
-                    #[serde(default)]
-                    align: Option<String>,
+                    #[serde(flatten)]
+                    style: StyleWire,
                     x: f64,
                     y: f64,
                     /// RGBA 0–255. Defaults to opaque black.
                     #[serde(default)]
                     color: Option<[u8; 4]>,
-                    /// `[w, h]` for a drag-created area-text box; absent → point text.
-                    #[serde(default)]
-                    r#box: Option<[f32; 2]>,
                 }
                 let r: Req = decode(payload)?;
-                let text = build_text_props(
-                    r.content,
-                    r.font_family,
-                    r.size,
-                    r.weight,
-                    r.italic,
-                    r.align,
-                    r.r#box,
-                );
+                let text = build_text_props(r.content, r.style);
                 let color = r.color.unwrap_or([0, 0, 0, 255]);
                 // `-1` for a non-vector id, mirroring `hit_test_vector_object`.
                 let object = engine
@@ -187,8 +187,17 @@ pub fn registrations() -> Vec<RequestRegistration> {
                     font_family: Option<String>,
                     #[serde(default)]
                     size: Option<f32>,
+                    /// Axis values to **merge** (tag → value); the rest are kept.
                     #[serde(default)]
-                    weight: Option<f32>,
+                    variations: Option<BTreeMap<String, f32>>,
+                    #[serde(default)]
+                    features: Option<BTreeMap<String, u32>>,
+                    #[serde(default)]
+                    letter_spacing: Option<f32>,
+                    #[serde(default)]
+                    word_spacing: Option<f32>,
+                    #[serde(default)]
+                    line_height: Option<f32>,
                     #[serde(default)]
                     italic: Option<bool>,
                     #[serde(default)]
@@ -204,7 +213,11 @@ pub fn registrations() -> Vec<RequestRegistration> {
                     object,
                     r.font_family,
                     r.size,
-                    r.weight,
+                    r.variations,
+                    r.features,
+                    r.letter_spacing,
+                    r.word_spacing,
+                    r.line_height,
                     r.italic,
                     r.align.as_deref().map(parse_align),
                     r.color,
@@ -249,7 +262,11 @@ pub fn registrations() -> Vec<RequestRegistration> {
                             "content": o.content,
                             "font_family": o.font_family,
                             "size": o.size,
-                            "weight": o.weight,
+                            "variations": o.variations,
+                            "features": o.features,
+                            "letter_spacing": o.letter_spacing,
+                            "word_spacing": o.word_spacing,
+                            "line_height": o.line_height,
                             "italic": o.italic,
                             "align": align_str(o.align),
                             "color": o.color,
@@ -331,6 +348,32 @@ pub fn registrations() -> Vec<RequestRegistration> {
             kind: "list_fonts",
             handle: |engine, _payload, _b| {
                 Ok(Response::json(json!({ "fonts": engine.list_fonts() })))
+            },
+        },
+        RequestRegistration {
+            kind: "font_axes",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                struct Req {
+                    family: String,
+                }
+                let r: Req = decode(payload)?;
+                let caps = engine.font_axes(&r.family);
+                let axes: Vec<_> = caps
+                    .axes
+                    .into_iter()
+                    .map(|a| {
+                        json!({
+                            "tag": a.tag,
+                            "min": a.min,
+                            "default": a.default,
+                            "max": a.max,
+                        })
+                    })
+                    .collect();
+                Ok(Response::json(
+                    json!({ "italic": caps.italic, "axes": axes }),
+                ))
             },
         },
         RequestRegistration {

@@ -123,7 +123,7 @@ fn remap_ids(node: &mut LayerNode, id_map: &IdMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layer::{TextAlign, TextProps, TextStyle, VectorObject};
+    use crate::layer::{TextAlign, TextLayout, TextProps, TextStyle, VectorObject};
     use kurbo::Affine;
     use peniko::{Brush, Color};
     use slotmap::SlotMap;
@@ -135,11 +135,17 @@ mod tests {
             content: "Hello\nDarkly".to_string(),
             font_family: "sans-serif".to_string(),
             style: TextStyle::Italic,
-            weight: 600.0,
+            variations: [("wght".to_string(), 600.0)].into_iter().collect(),
+            features: [("liga".to_string(), 1)].into_iter().collect(),
             size: 42.0,
             line_height: 1.3,
+            letter_spacing: 0.5,
+            word_spacing: 1.0,
             align: TextAlign::Center,
-            box_size: Some((300.0, 160.0)),
+            layout: TextLayout::Area {
+                width: 300.0,
+                height: 160.0,
+            },
         };
         let obj = VectorObject::text(
             text,
@@ -182,6 +188,19 @@ mod tests {
                 assert_eq!(t.content, "Hello\nDarkly");
                 assert_eq!(t.align, TextAlign::Center);
                 assert_eq!(t.style, TextStyle::Italic);
+                // Font-driven style survives the round-trip: variations,
+                // features, spacing, and the area layout.
+                assert_eq!(t.variations.get("wght"), Some(&600.0));
+                assert_eq!(t.features.get("liga"), Some(&1));
+                assert_eq!(t.letter_spacing, 0.5);
+                assert_eq!(t.word_spacing, 1.0);
+                assert_eq!(
+                    t.layout,
+                    TextLayout::Area {
+                        width: 300.0,
+                        height: 160.0
+                    }
+                );
             }
             _ => panic!("expected a text object"),
         }

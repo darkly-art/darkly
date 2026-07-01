@@ -82,6 +82,7 @@ export type RequestKind =
     | 'flip_node'
     | 'floating_info'
     | 'floating_target_layer'
+    | 'font_axes'
     | 'get_brush_cursor_preview_info'
     | 'group_layers'
     | 'grow_selection'
@@ -257,6 +258,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'flip_node',
     'floating_info',
     'floating_target_layer',
+    'font_axes',
     'get_brush_cursor_preview_info',
     'group_layers',
     'grow_selection',
