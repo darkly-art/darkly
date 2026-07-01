@@ -11,7 +11,7 @@
  *   before `read()` returns non-null.
  * - `voidTransformBinding` — a void's live, persistent transform property.
  */
-import { app } from '../state/app.svelte';
+import { toolEngine } from './tool_session';
 import { affineToMat3, mat3ToAffine, type Mat3 } from './transform_projective';
 import type { TransformBinding } from './transform_gizmo';
 
@@ -36,7 +36,7 @@ export function floatingTransformBinding(): TransformBinding {
     return {
         live: false,
         async read() {
-            const raw = await app.engine?.send<
+            const raw = await toolEngine()?.send<
                 { ox: number; oy: number; w: number; h: number; mode: number; matrix: number[] } | null
             >('floating_info');
             if (!raw) return null;
@@ -49,16 +49,16 @@ export function floatingTransformBinding(): TransformBinding {
             };
         },
         update(matrix: Mat3, modeTag: number) {
-            app.engine?.post('update_floating_matrix', {
+            toolEngine()?.post('update_floating_matrix', {
                 mode_tag: modeTag,
                 payload: wirePayload(matrix, modeTag),
             });
         },
         commit() {
-            app.engine?.post('commit_floating');
+            toolEngine()?.post('commit_floating');
         },
         cancel() {
-            app.engine?.post('cancel_floating');
+            toolEngine()?.post('cancel_floating');
         },
     };
 }
@@ -75,7 +75,7 @@ export function voidTransformBinding(layerId: number): TransformBinding {
     return {
         live: true,
         async read() {
-            const raw = await app.engine?.send<
+            const raw = await toolEngine()?.send<
                 { ox: number; oy: number; w: number; h: number; mode: number; matrix: number[] } | null
             >('void_transform_info', { id: layerId });
             if (!raw) return null;
@@ -90,7 +90,7 @@ export function voidTransformBinding(layerId: number): TransformBinding {
             };
         },
         update(matrix: Mat3, modeTag: number) {
-            app.engine?.post('update_void_transform', {
+            toolEngine()?.post('update_void_transform', {
                 id: layerId,
                 mode_tag: modeTag,
                 payload: wirePayload(matrix, modeTag),
@@ -101,7 +101,7 @@ export function voidTransformBinding(layerId: number): TransformBinding {
         },
         cancel() {
             if (original) {
-                app.engine?.post('update_void_transform', {
+                toolEngine()?.post('update_void_transform', {
                     id: layerId,
                     mode_tag: original.mode,
                     payload: wirePayload(original.matrix, original.mode),

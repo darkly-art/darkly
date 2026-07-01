@@ -18,6 +18,17 @@ export function reportEngineError(e: unknown): void {
     console.error('[engine] request failed:', err?.kind ?? 'error', err?.message ?? e);
 }
 
+/** The request surface of the engine: `send` (awaited) and `post`
+ *  (fire-and-forget). Both {@link Engine} and the tool-session wrapper
+ *  `SessionEngine` (`tools/tool_session.ts`) satisfy this shape. Helpers that
+ *  only issue requests should accept this rather than the concrete `Engine`, so
+ *  a session-scoped caller can hand in its cancellation-aware wrapper without a
+ *  type mismatch. */
+export interface EngineRequests {
+    send<T = any>(kind: RequestKind, payload?: object, bytes?: Uint8Array): Promise<T>;
+    post(kind: RequestKind, payload?: object, bytes?: Uint8Array): void;
+}
+
 interface Pending {
     resolve: (value: any) => void;
     reject: (reason: EngineError) => void;

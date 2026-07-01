@@ -45,6 +45,7 @@ vi.mock('../../canvas/gpu_overlay', () => ({
 }));
 
 import { transformTool, transformPerspectiveTool, transformActiveMode } from '../transform.svelte';
+import { beginToolSession } from '../tool_session';
 
 const ctx = { canvasEl: {} as HTMLCanvasElement } as never;
 
@@ -57,6 +58,9 @@ async function activate(tool: typeof transformTool) {
 describe('transform cluster entry modes', () => {
     beforeEach(() => {
         fakeApp.engine.post.mockClear();
+        // Tool code reaches the engine through the live session (see
+        // tool_session.ts); begin one over the fake engine.
+        beginToolSession(fakeApp.engine as never);
     });
 
     it('the free transform tool engages in mode 0 (adopts the document default)', async () => {

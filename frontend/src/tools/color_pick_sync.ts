@@ -1,4 +1,4 @@
-import type { Engine } from '../engine/protocol';
+import type { EngineRequests } from '../engine/protocol';
 import { app } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
 
@@ -19,7 +19,7 @@ let pollInFlight = false;
  *  and current-layer sampling. The Rust side falls back to the merged
  *  composite when the current-layer source can't resolve (group, mask, point
  *  outside layer extent), so this never silently no-ops. */
-export function startPick(engine: Engine, cx: number, cy: number): void {
+export function startPick(engine: EngineRequests, cx: number, cy: number): void {
     const mode = config.get('tools.colorPickerSampleSource');
     const layerId =
         mode === 'currentLayer' && app.activeLayerId != null ? app.activeLayerId : -1;
