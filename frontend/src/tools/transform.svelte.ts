@@ -183,10 +183,12 @@ function createTransformTool(opts: {
             // can end the session without it immediately reappearing.
             if (!gizmo.active && app.engine) {
                 if ((await app.engine.send<{ value: boolean }>('has_floating')).value) {
-                    if (await gizmo.attach(floatingTransformBinding())) applyEntryMode();
+                    if (await gizmo?.attach(floatingTransformBinding())) applyEntryMode();
                 }
             }
-            await gizmo.frame();
+            // The awaits above can outlive the gizmo: a tool switch or layer
+            // change may run onDeactivate and null it out before we resume.
+            await gizmo?.frame();
         },
 
         async dismissOverlay() {

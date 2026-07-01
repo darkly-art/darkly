@@ -30,21 +30,19 @@ describe('cssUrl', () => {
         );
     });
 
-    it('adds the ital axis alongside wght when italic is requested', () => {
+    it('requests the italic face across the weight range', () => {
         expect(
-            cssUrl(
-                'Inter',
-                [
-                    { tag: 'wght', min: 100, max: 900 },
-                    { tag: 'ital', min: 0, max: 1 },
-                ],
-                { italic: true },
-            ),
+            cssUrl('Inter', [{ tag: 'wght', min: 100, max: 900 }], { italic: true }),
         ).toBe(
-            'https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,100..900;1,100..900&display=swap',
+            'https://fonts.googleapis.com/css2?family=Inter:ital,wght@1,100..900&display=swap',
         );
     });
 
+    it('requests a static italic face when the family has no weight axis', () => {
+        expect(cssUrl('Lobster', [], { italic: true })).toBe(
+            'https://fonts.googleapis.com/css2?family=Lobster:ital@1&display=swap',
+        );
+    });
 });
 
 describe('previewUrl', () => {
@@ -52,6 +50,7 @@ describe('previewUrl', () => {
         family: 'Roboto',
         category: 'Sans Serif',
         axes: [{ tag: 'wght', min: 100, max: 900 }],
+        italic: true,
         subsets: ['latin'],
         popularity: 1,
     };
@@ -71,18 +70,13 @@ describe('previewUrl', () => {
 });
 
 describe('importFont', () => {
-    beforeEach(() => {
-        addSpy.mockClear();
-        decompressSpy.mockClear();
-    });
+    const cssText =
+        "/* latin */\n@font-face { font-family: 'Roboto';\n" +
+        '  src: url(https://fonts.gstatic.com/s/roboto/x.woff2) format("woff2");\n' +
+        '  unicode-range: U+0000-00FF, U+0131; }';
+    const woff2Bytes = new Uint8Array([0x77, 0x4f, 0x46, 0x32]); // "wOF2"
 
-    it('pipes css2 → latin woff2 → decode → library.add', async () => {
-        const cssText =
-            "/* latin */\n@font-face { font-family: 'Roboto';\n" +
-            '  src: url(https://fonts.gstatic.com/s/roboto/x.woff2) format("woff2");\n' +
-            '  unicode-range: U+0000-00FF, U+0131; }';
-        const woff2Bytes = new Uint8Array([0x77, 0x4f, 0x46, 0x32]); // "wOF2"
-
+    function stubFetch() {
         const fetchMock = vi.fn((url: string) => {
             if (url.includes('css2')) {
                 return Promise.resolve({ text: () => Promise.resolve(cssText) });
@@ -90,11 +84,22 @@ describe('importFont', () => {
             return Promise.resolve({ arrayBuffer: () => Promise.resolve(woff2Bytes.buffer) });
         });
         vi.stubGlobal('fetch', fetchMock);
+        return fetchMock;
+    }
+
+    beforeEach(() => {
+        addSpy.mockClear();
+        decompressSpy.mockClear();
+    });
+
+    it('pipes css2 → latin woff2 → decode → library.add', async () => {
+        const fetchMock = stubFetch();
 
         const font: CatalogFont = {
             family: 'Roboto',
             category: 'Sans Serif',
             axes: [{ tag: 'wght', min: 100, max: 900 }],
+            italic: false,
             subsets: ['latin'],
             popularity: 1,
         };
@@ -110,6 +115,55 @@ describe('importFont', () => {
         const passed = addSpy.mock.calls[0][0] as Uint8Array;
         expect(Array.from(passed.slice(0, 2))).toEqual([0x00, 0x01]); // decode output
         expect(families).toEqual(['Roboto']);
+
+        vi.unstubAllGlobals();
+    });
+
+    // Regression: the Italic control was inert because import only registered the
+    // upright face. Italic-capable families must also fetch and register an
+    // italic face so parley's FontStyle::Italic has a real face to match.
+    it('registers a second italic face when the family ships italic', async () => {
+        const fetchMock = stubFetch();
+
+        const font: CatalogFont = {
+            family: 'Roboto',
+            category: 'Sans Serif',
+            axes: [{ tag: 'wght', min: 100, max: 900 }],
+            italic: true,
+            subsets: ['latin'],
+            popularity: 1,
+        };
+        const families = await importFont(font);
+
+        // Two css2 fetches: upright, then the italic face.
+        const cssCalls = fetchMock.mock.calls
+            .map((c) => c[0] as string)
+            .filter((u) => u.includes('css2'));
+        expect(cssCalls).toHaveLength(2);
+        expect(cssCalls[0]).toContain('family=Roboto:wght@100..900');
+        expect(cssCalls[1]).toContain('family=Roboto:ital,wght@1,100..900');
+        // Both faces registered under the family.
+        expect(addSpy).toHaveBeenCalledTimes(2);
+        // The reported families come from the upright import.
+        expect(families).toEqual(['Roboto']);
+
+        vi.unstubAllGlobals();
+    });
+
+    it('registers only the upright face when the family has no italic', async () => {
+        stubFetch();
+
+        const font: CatalogFont = {
+            family: 'Roboto',
+            category: 'Sans Serif',
+            axes: [{ tag: 'wght', min: 100, max: 900 }],
+            italic: false,
+            subsets: ['latin'],
+            popularity: 1,
+        };
+        await importFont(font);
+
+        expect(addSpy).toHaveBeenCalledOnce();
 
         vi.unstubAllGlobals();
     });

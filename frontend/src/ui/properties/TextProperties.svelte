@@ -17,6 +17,7 @@
     import EnumDropdown from '../settings/widgets/EnumDropdown.svelte';
     import ColorInput from '../settings/widgets/ColorInput.svelte';
     import Scrub from '../Scrub.svelte';
+    import NumberSlider from '../settings/widgets/NumberSlider.svelte';
     import FontBrowser from '../fonts/FontBrowser.svelte';
     import { fontLibrary } from '../../state/font_library.svelte';
 
@@ -243,6 +244,7 @@
         // Reflect on the local block so its controls update immediately.
         if (fields.font_family !== undefined) block.font_family = fields.font_family;
         if (fields.size !== undefined) block.size = fields.size;
+        if (fields.weight !== undefined) block.weight = fields.weight;
         if (fields.italic !== undefined) block.italic = fields.italic;
         if (fields.align !== undefined) block.align = fields.align;
         if (fields.color !== undefined) block.color = fields.color;
@@ -295,6 +297,18 @@
                     formatValue={(v) => String(Math.round(v))}
                     onChange={(v) => onStyle({ size: Math.round(v) })}
                     title="Font size in canvas pixels."
+                />
+            </div>
+
+            <div class="row" title="Font weight (variable fonts only)">
+                <span class="label">Weight</span>
+                <NumberSlider
+                    value={block.weight}
+                    min={100}
+                    max={900}
+                    step={100}
+                    integer
+                    onchange={(w) => onStyle({ weight: w })}
                 />
             </div>
 

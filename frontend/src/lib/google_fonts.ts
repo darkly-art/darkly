@@ -29,6 +29,9 @@ export interface CatalogFont {
     family: string;
     category: string;
     axes: CatalogAxis[];
+    /** The family ships an italic face (a `*i` style in Google's metadata).
+     *  Italic is a separate face blob, not a variation axis — see `importFont`. */
+    italic: boolean;
     subsets: string[];
     popularity: number;
 }
@@ -48,9 +51,13 @@ export function loadCatalog(): Promise<CatalogFont[]> {
     return catalogPromise;
 }
 
-/** Build a keyless css2 URL for `family`. Requests the full `wght` range as a
- *  single variable file when the family has a `wght` axis (per the spike);
- *  otherwise the static family. `italic` adds the `ital` axis if present.
+/** Build a keyless css2 URL for one face of `family`. Requests the full `wght`
+ *  range as a single variable file when the family has a `wght` axis (per the
+ *  spike); otherwise the static family. `opts.italic` selects the **italic**
+ *  face instead of the upright one — Google serves italic via the css2 `ital`
+ *  pseudo-axis for any family that ships italic files, not only the rare
+ *  families with a true `ital` variation axis, so the caller gates this on the
+ *  catalog's `italic` flag (see `CatalogFont.italic`), never on the axis list.
  *
  *  Deliberately never subsets via `&text=`: that switches Google to the dynamic
  *  `/l/font` endpoint, which is unreliable for cross-origin `@font-face` loads
@@ -60,14 +67,13 @@ export function loadCatalog(): Promise<CatalogFont[]> {
 export function cssUrl(family: string, axes: CatalogAxis[], opts: { italic?: boolean } = {}): string {
     const name = family.trim().replace(/\s+/g, '+');
     const wght = axes.find((a) => a.tag === 'wght');
-    const hasItal = opts.italic && axes.some((a) => a.tag === 'ital');
 
     let spec = name;
-    if (wght && hasItal) {
-        spec = `${name}:ital,wght@0,${wght.min}..${wght.max};1,${wght.min}..${wght.max}`;
+    if (wght && opts.italic) {
+        spec = `${name}:ital,wght@1,${wght.min}..${wght.max}`;
     } else if (wght) {
         spec = `${name}:wght@${wght.min}..${wght.max}`;
-    } else if (hasItal) {
+    } else if (opts.italic) {
         spec = `${name}:ital@1`;
     }
 
@@ -118,20 +124,32 @@ async function decodeWoff2(woff2: Uint8Array): Promise<Uint8Array> {
     return await decompress(woff2);
 }
 
-/**
- * Import a Google font into the personal library: fetch its css2, decode the
- * Latin woff2 to TTF, and register it. Returns the family names the decoded font
- * contributed (empty on failure). Idempotent via the library's content-hash
- * dedup — importing the same font twice costs nothing.
- */
-export async function importFont(font: CatalogFont): Promise<string[]> {
-    const css = await (await fetch(cssUrl(font.family, font.axes))).text();
+/** Fetch one css2 face, decode its Latin woff2 to TTF, and register it. Returns
+ *  the family names the decoded face contributed (empty on failure). */
+async function importFace(family: string, href: string): Promise<string[]> {
+    const css = await (await fetch(href)).text();
     const url = pickLatinUrl(css);
     if (!url) {
-        console.warn(`[fonts] no font URL in css2 response for ${font.family}`);
+        console.warn(`[fonts] no font URL in css2 response for ${family}`);
         return [];
     }
     const woff2 = new Uint8Array(await (await fetch(url)).arrayBuffer());
     const ttf = await decodeWoff2(woff2);
     return await fontLibrary.add(ttf, 'google');
+}
+
+/**
+ * Import a Google font into the personal library: fetch its css2, decode the
+ * Latin woff2 to TTF, and register it. Families that ship an italic face
+ * (`font.italic`) register a second blob under the same family name, so parley's
+ * `FontStyle::Italic` has a real face to shape against. Returns the family names
+ * the decoded font contributed (empty on failure). Idempotent via the library's
+ * content-hash dedup — importing the same font twice costs nothing.
+ */
+export async function importFont(font: CatalogFont): Promise<string[]> {
+    const families = await importFace(font.family, cssUrl(font.family, font.axes));
+    if (font.italic) {
+        await importFace(font.family, cssUrl(font.family, font.axes, { italic: true }));
+    }
+    return families;
 }

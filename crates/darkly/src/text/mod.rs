@@ -9,8 +9,9 @@
 //! The same glyph runs would feed `vello_cpu`'s `glyph_run` unchanged, so the
 //! shaping step is renderer-independent (see the text-tool plan, §6).
 //!
-//! Bundled font: Noto Sans (SIL Open Font License 1.1), © the Noto Project
-//! Authors — <https://github.com/notofonts/latin-greek-cyrillic>.
+//! Bundled font: Noto Sans, upright + italic variable faces (SIL Open Font
+//! License 1.1), © the Noto Project Authors —
+//! <https://github.com/notofonts/latin-greek-cyrillic>.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -26,13 +27,16 @@ use vello::Scene;
 use crate::layer::{ObjectSource, TextAlign, TextProps, TextStyle, VectorObject};
 
 /// Curated fonts embedded into the binary so text renders identically on every
-/// platform (wasm has no system fonts). Family name → bytes. OS-font
-/// enumeration (fontique does it for free on native) and user upload are
-/// additive later behind this same registry.
-const BUNDLED_FONTS: &[(&str, &[u8])] = &[(
-    "Noto Sans",
-    include_bytes!("../../resources/fonts/NotoSans-Regular.ttf"),
-)];
+/// platform (wasm has no system fonts). Both faces register under the single
+/// "Noto Sans" family: the upright variable face covers the whole weight range,
+/// and the italic variable face gives parley a real face to satisfy
+/// `FontStyle::Italic` (synthesis would be poor). OS-font enumeration (fontique
+/// does it for free on native) and user upload are additive behind this same
+/// registry.
+const BUNDLED_FONTS: &[&[u8]] = &[
+    include_bytes!("../../resources/fonts/NotoSans-VF.ttf"),
+    include_bytes!("../../resources/fonts/NotoSans-Italic-VF.ttf"),
+];
 
 /// The platform-agnostic font collection plus parley's reusable layout state.
 /// Owned by the engine; the shaping/scene-build methods take `&mut self` because
@@ -81,12 +85,19 @@ impl Default for FontRegistry {
 impl FontRegistry {
     pub fn new() -> Self {
         let mut font_cx = FontContext::new();
-        let mut families = Vec::new();
-        for (name, bytes) in BUNDLED_FONTS {
-            font_cx
+        let mut families: Vec<String> = Vec::new();
+        for bytes in BUNDLED_FONTS {
+            let registered = font_cx
                 .collection
                 .register_fonts(peniko::Blob::from(bytes.to_vec()), None);
-            families.push((*name).to_string());
+            for (family_id, _) in registered {
+                if let Some(name) = font_cx.collection.family_name(family_id) {
+                    let name = name.to_string();
+                    if !families.contains(&name) {
+                        families.push(name);
+                    }
+                }
+            }
         }
         FontRegistry {
             font_cx,
@@ -337,6 +348,42 @@ mod tests {
             "a weight scrub against a variable face must change the wght axis coord \
              — if equal, parley is snapping to a static instance and imports must \
              fetch discrete weights instead"
+        );
+    }
+
+    /// Identity of the face parley selected for `text`'s first run: the font
+    /// Regression: the Italic control was inert because the bundled default font
+    /// shipped only an upright face. On wasm (the real target — no system fonts)
+    /// parley's `FontStyle::Italic` then had nothing to match and rendered
+    /// upright. The bundle must provide a genuine italic face for "Noto Sans".
+    ///
+    /// Checked against a **system-font-free** collection: on native, a
+    /// system-installed Noto Sans would otherwise supply an italic face and mask
+    /// a missing bundled one — exactly the gap that bites in the browser.
+    #[test]
+    fn bundled_noto_provides_an_italic_face() {
+        use parley::fontique::{Collection, CollectionOptions, FontStyle};
+        let mut collection = Collection::new(CollectionOptions {
+            system_fonts: false,
+            ..Default::default()
+        });
+        for bytes in BUNDLED_FONTS {
+            collection.register_fonts(peniko::Blob::from(bytes.to_vec()), None);
+        }
+        let family = collection
+            .family_by_name("Noto Sans")
+            .expect("bundled Noto Sans family is registered");
+        let styles: Vec<_> = family.fonts().iter().map(|f| f.style()).collect();
+        assert!(
+            styles.contains(&FontStyle::Normal),
+            "bundled Noto Sans must keep an upright face (styles={styles:?})"
+        );
+        assert!(
+            styles
+                .iter()
+                .any(|s| matches!(s, FontStyle::Italic | FontStyle::Oblique(_))),
+            "bundled Noto Sans must ship an italic face so FontStyle::Italic isn't \
+             inert on wasm (styles={styles:?})"
         );
     }
 
