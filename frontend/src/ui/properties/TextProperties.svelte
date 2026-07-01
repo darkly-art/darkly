@@ -17,6 +17,8 @@
     import EnumDropdown from '../settings/widgets/EnumDropdown.svelte';
     import ColorInput from '../settings/widgets/ColorInput.svelte';
     import Scrub from '../Scrub.svelte';
+    import FontBrowser from '../fonts/FontBrowser.svelte';
+    import { fontLibrary } from '../../state/font_library.svelte';
 
     // The active vector layer, or null when no vector layer is active (a
     // placement that will become a fresh layer).
@@ -33,13 +35,30 @@
      *  keystroke replaces it. */
     const SEED_TEXT = 'text';
 
-    let fontOptions = $state<[string, string][]>([['Noto Sans', 'Noto Sans']]);
+    // The engine's own families (the fallback + anything already registered),
+    // fetched once; merged reactively with the personal library so uploaded /
+    // Google-imported fonts appear in the quick list without a refetch.
+    let engineFonts = $state<string[]>(['Noto Sans']);
+    let fontBrowserOpen = $state(false);
 
     onMount(async () => {
+        void fontLibrary.loadAll();
         if (!app.engine) return;
         const res = (await app.engine.send('list_fonts')) as { fonts: string[] } | null;
-        if (res?.fonts?.length) fontOptions = res.fonts.map((f) => [f, f] as [string, string]);
+        if (res?.fonts?.length) engineFonts = res.fonts;
     });
+
+    const fontOptions = $derived.by(() => {
+        const set = new Set<string>([...engineFonts, ...fontLibrary.families]);
+        // Include the current block's family even if it's not (yet) registered
+        // in this handle, so the dropdown never shows a blank selection.
+        if (block?.font_family) set.add(block.font_family);
+        return [...set].sort((a, b) => a.localeCompare(b)).map((f) => [f, f] as [string, string]);
+    });
+
+    function onFontPicked(family: string): void {
+        onStyle({ font_family: family });
+    }
 
     /** The one text object the panel edits — a vector layer can own many, but
      *  only the selected one is shown (the user picks it by clicking it on the
@@ -258,6 +277,13 @@
             </label>
 
             <div class="row">
+                <span class="label"></span>
+                <button type="button" class="browse" onclick={() => (fontBrowserOpen = true)}>
+                    Browse / upload…
+                </button>
+            </div>
+
+            <div class="row">
                 <span class="label">Size</span>
                 <Scrub
                     mode="drag"
@@ -304,6 +330,12 @@
     {/if}
 </div>
 
+<FontBrowser
+    bind:open={fontBrowserOpen}
+    onSelect={onFontPicked}
+    onClose={() => (fontBrowserOpen = false)}
+/>
+
 <style>
     .text-props {
         display: flex;
@@ -345,5 +377,18 @@
         font-size: 11px;
         color: var(--text-muted);
         min-width: 56px;
+    }
+
+    .browse {
+        background: var(--bg-hover);
+        border: 1px solid var(--bg-hover);
+        border-radius: var(--radius-sm);
+        color: var(--text);
+        font-size: 12px;
+        padding: 4px 10px;
+        cursor: pointer;
+    }
+    .browse:hover {
+        border-color: var(--accent);
     }
 </style>

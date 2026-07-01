@@ -99,7 +99,7 @@ For a feature to count, it must be:
     - [ ] Calligraphy
     - [ ] Oil / Impasto
 - [x] Brush tool, eraser, fill (flood), gradient (linear), color picker
-- [x] Text tool (vector-object layer, Vello-rendered, bundled fonts; raster-first; edited in the properties panel — content + style + color — under any transform; per-object transform gizmo; click for point text or drag for a resizable area-text box with on-canvas frame, wrapping, and alignment)
+- [x] Text tool (vector-object layer, Vello-rendered; raster-first; edited in the properties panel — content + style + color — under any transform; per-object transform gizmo; click for point text or drag for a resizable area-text box with on-canvas frame, wrapping, and alignment; font browser with disk upload (`.ttf`/`.otf`) and keyless Google Fonts import; used fonts embed into the saved `.darkly` so documents render self-contained, and your library persists across documents)
 - [x] Pressure / tilt / spacing / distance / angle inputs
 - [x] Laplacian stabilizer
 - [x] HSV picker, foreground/background swatches

@@ -557,6 +557,59 @@ fn round_trip_kitchen_sink_document() {
     );
 }
 
+/// Reproducibility: a non-fallback font applied to a text object embeds in the
+/// saved `.darkly` and re-registers when the file is opened in a **fresh**
+/// engine that never saw the upload — the document is self-contained without the
+/// personal library. Uses Cantarell-VF (a real variable font) as the fixture.
+#[test]
+fn embedded_font_round_trips() {
+    const CANTARELL_VF: &[u8] = include_bytes!("../../tests/fixtures/fonts/Cantarell-VF.otf");
+
+    let mut engine = kitchen_sink_engine(64, 64);
+    let family = engine
+        .register_font(CANTARELL_VF.to_vec())
+        .first()
+        .expect("Cantarell-VF contributes a family")
+        .clone();
+
+    let mut text = crate::layer::TextProps::new("Ag".to_string());
+    text.font_family = family.clone();
+    text.size = 32.0;
+    engine.add_text_layer(text, 8.0, 8.0, [255, 255, 255, 255], None);
+
+    let bundle = drive_save_to_completion(&mut engine);
+    let manifest: crate::format::manifest::Manifest =
+        serde_json::from_slice(&bundle.manifest_json).unwrap();
+    assert!(
+        manifest.fonts.iter().any(|f| f.family == family),
+        "the used font is listed in manifest.fonts (got {:?})",
+        manifest.fonts
+    );
+
+    let zip_bytes = assemble_zip(&bundle);
+    let mut reloaded = kitchen_sink_engine(1, 1);
+    assert!(
+        !reloaded.list_fonts().contains(&family),
+        "the fresh engine has not seen this font yet"
+    );
+    reloaded
+        .open_document(&zip_bytes)
+        .expect("reload happy path");
+    assert!(
+        reloaded.list_fonts().contains(&family),
+        "opening the document registers its embedded font"
+    );
+
+    // The text object survived the round-trip with its family intact.
+    let vec_layer = reloaded.doc.all_vector_layers()[0].id;
+    let objs = reloaded.text_objects(vec_layer);
+    assert!(
+        objs.iter()
+            .any(|o| o.content == "Ag" && o.font_family == family),
+        "the reloaded text object keeps its content and embedded family"
+    );
+}
+
 /// A *sub-canvas* mask (bounds smaller than the canvas window) round-trips
 /// through save/load with its independent bounds + pixels intact. Mask bounds
 /// serialize independently of the host (Document Authority Principle); the
@@ -886,6 +939,7 @@ fn synth_minimal_manifest() -> Manifest {
         modifiers: Vec::new(),
         selection_id: None,
         veils: Vec::new(),
+        fonts: Vec::new(),
     }
 }
 

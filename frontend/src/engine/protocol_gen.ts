@@ -120,6 +120,7 @@ export type RequestKind =
     | 'poll_save_result'
     | 'redo'
     | 'refresh_brush_cursor_preview'
+    | 'register_font'
     | 'remove_layer'
     | 'remove_layers'
     | 'remove_mask'
@@ -294,6 +295,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'poll_save_result',
     'redo',
     'refresh_brush_cursor_preview',
+    'register_font',
     'remove_layer',
     'remove_layers',
     'remove_mask',

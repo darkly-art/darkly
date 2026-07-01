@@ -109,6 +109,15 @@ impl DarklyEngine {
         self.fonts.list_fonts().to_vec()
     }
 
+    /// Register a font blob (uploaded `.ttf`/`.otf` or a decoded Google import)
+    /// into this engine's font collection. Returns the family names it
+    /// contributed so the frontend library can index them. A thin passthrough to
+    /// [`crate::text::FontRegistry::register_font`] — the bytes are content-hashed
+    /// and cached there so the families round-trip through `.darkly` save/load.
+    pub fn register_font(&mut self, bytes: Vec<u8>) -> Vec<String> {
+        self.fonts.register_font(bytes)
+    }
+
     /// Local bbox of an owned object. Takes the object by reference so callers
     /// iterating a cloned object list can shape each without re-borrowing the
     /// document while `&mut self.fonts` is live.

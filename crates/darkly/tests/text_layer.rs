@@ -7,15 +7,39 @@
 //! Run with: `cargo test -p darkly --test text_layer --features testing -- --test-threads=1`
 
 use darkly::engine::DarklyEngine;
+use darkly::engine::SavePurpose;
+use darkly::format::manifest::Manifest;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
 use darkly::layer::{TextAlign, TextProps, TextStyle};
 use darkly::transform::Transform;
 
+/// A genuine variable font (Cantarell-VF, CFF2, `wght` 100–800 axis) used as a
+/// non-fallback fixture — registering it proves upload, and embedding it proves
+/// the `.darkly` round-trip. OFL 1.1, © the Cantarell Authors.
+const CANTARELL_VF: &[u8] = include_bytes!("fixtures/fonts/Cantarell-VF.otf");
+
 fn test_engine(width: u32, height: u32) -> DarklyEngine {
     let (device, queue) = test_device();
     let gpu = GpuContext::new_headless(device, queue);
     DarklyEngine::new(gpu, width, height)
+}
+
+/// Drive an in-flight save to completion and hand back the bundle. Mirrors the
+/// engine's own save-flow tests: pump readbacks + render until `poll_save_result`
+/// yields.
+fn drive_save_to_completion(engine: &mut DarklyEngine) -> darkly::format::manifest::SaveBundle {
+    engine
+        .start_save_document(SavePurpose::File)
+        .expect("save kicks off");
+    for _ in 0..32 {
+        engine.test_flush_readbacks();
+        engine.render(0.0);
+        if let Some(bundle) = engine.poll_save_result() {
+            return bundle;
+        }
+    }
+    panic!("save did not complete within 32 frames");
 }
 
 /// Count non-transparent pixels in an RGBA buffer.
@@ -372,5 +396,83 @@ fn add_text_object_rejects_a_non_vector_layer() {
             .add_text_object(raster, TextProps::new("x".into()), 0.0, 0.0, [0, 0, 0, 255])
             .is_none(),
         "add_text_object is a no-op on a raster layer"
+    );
+}
+
+/// Registering a real second font's bytes grows the picker list and makes the
+/// family resolvable for shaping — the shared contract all three ingestion
+/// paths (upload, Google, embedded) converge on.
+#[test]
+fn register_font_adds_family() {
+    let mut engine = test_engine(256, 128);
+    let before = engine.list_fonts().len();
+
+    let families = engine.register_font(CANTARELL_VF.to_vec());
+    let family = families
+        .first()
+        .expect("Cantarell-VF contributes a family")
+        .clone();
+    assert!(
+        engine.list_fonts().contains(&family),
+        "the registered family joins the picker list"
+    );
+    assert!(
+        engine.list_fonts().len() > before,
+        "the family list grew by the registration"
+    );
+
+    // The family shapes to real coverage (not an empty fallback miss).
+    let mut text = TextProps::new("Hello".to_string());
+    text.font_family = family;
+    text.size = 64.0;
+    let (id, _obj) = engine.add_text_layer(text, 16.0, 16.0, [255, 255, 255, 255], None);
+    let _ = engine.test_readback_canvas();
+    assert!(
+        covered_pixels(&engine.test_readback_layer(id)) > 0,
+        "text in the registered family produces coverage"
+    );
+}
+
+/// Dedup regression: two text objects sharing one font family must emit a
+/// **single** `fonts/*` blob and one `manifest.fonts` entry — not one per
+/// object. Fails against a naive per-object embed.
+#[test]
+fn same_font_embedded_once() {
+    let mut engine = test_engine(128, 64);
+    let family = engine
+        .register_font(CANTARELL_VF.to_vec())
+        .first()
+        .expect("family")
+        .clone();
+
+    let mut a = TextProps::new("A".to_string());
+    a.font_family = family.clone();
+    a.size = 24.0;
+    let (layer, _obj_a) = engine.add_text_layer(a, 4.0, 4.0, [255, 255, 255, 255], None);
+
+    let mut b = TextProps::new("B".to_string());
+    b.font_family = family.clone();
+    b.size = 24.0;
+    engine
+        .add_text_object(layer, b, 60.0, 4.0, [255, 255, 255, 255])
+        .expect("second text object on the same layer");
+
+    let bundle = drive_save_to_completion(&mut engine);
+    let manifest: Manifest = serde_json::from_slice(&bundle.manifest_json).unwrap();
+
+    assert_eq!(
+        manifest.fonts.len(),
+        1,
+        "one manifest.fonts entry for the shared family (got {:?})",
+        manifest.fonts
+    );
+    let font_blobs = bundle
+        .blobs
+        .iter()
+        .filter(|blk| blk.path.starts_with("fonts/"))
+        .count();
+    assert_eq!(
+        font_blobs, 1,
+        "exactly one fonts/* blob for the shared bytes"
     );
 }

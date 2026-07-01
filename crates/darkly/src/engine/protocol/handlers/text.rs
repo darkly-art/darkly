@@ -333,5 +333,16 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 Ok(Response::json(json!({ "fonts": engine.list_fonts() })))
             },
         },
+        RequestRegistration {
+            kind: "register_font",
+            handle: |engine, _payload, bytes| {
+                // Raw SFNT (`.ttf`/`.otf`) bytes arrive alongside the payload —
+                // the same binary-in pattern as `brush_upload_image`. Returns
+                // the family names the blob contributed so the frontend library
+                // can index them.
+                let families = engine.register_font(bytes.to_vec());
+                Ok(Response::json(json!({ "families": families })))
+            },
+        },
     ]
 }

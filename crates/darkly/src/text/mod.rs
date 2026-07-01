@@ -13,6 +13,7 @@
 //! Authors — <https://github.com/notofonts/latin-greek-cyrillic>.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 
 use kurbo::Affine;
 use parley::{
@@ -42,8 +43,33 @@ const BUNDLED_FONTS: &[(&str, &[u8])] = &[(
 pub struct FontRegistry {
     font_cx: FontContext,
     layout_cx: LayoutContext<()>,
-    /// Display names of the bundled families, surfaced to the UI font picker.
+    /// Display names of every registered family, surfaced to the UI font picker.
     families: Vec<String>,
+    /// Content-addressed cache of the raw SFNT bytes behind every
+    /// user-registered font, keyed by the hex content hash. One blob can
+    /// register several families, so bytes are keyed by hash (not family) and
+    /// deduped — registering the same bytes twice is free. The bundled fallback
+    /// (Noto Sans) is deliberately absent: it's binary-resident and never
+    /// embedded, and the *absence* of runtime bytes is exactly what excludes it
+    /// from `.darkly` embedding.
+    font_data: HashMap<String, Vec<u8>>,
+    /// Family name → content hash of the blob that registered it, resolving a
+    /// `font_family` back to its bytes at save time.
+    family_hash: HashMap<String, String>,
+}
+
+/// Stable 64-bit FNV-1a content hash of `bytes`, hex-encoded. Used to address
+/// font blobs by content: identical bytes always hash the same (dedup), and the
+/// hex string is both the `font_data` key and the `fonts/<hash>.ttf` container
+/// path. Deterministic across runs — no random seeding — so saved files are
+/// reproducible.
+fn content_hash(bytes: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
 }
 
 impl Default for FontRegistry {
@@ -66,6 +92,8 @@ impl FontRegistry {
             font_cx,
             layout_cx: LayoutContext::new(),
             families,
+            font_data: HashMap::new(),
+            family_hash: HashMap::new(),
         }
     }
 
@@ -75,13 +103,18 @@ impl FontRegistry {
         &self.families
     }
 
-    /// Register a user-supplied font (e.g. uploaded `.ttf`/`.otf`). Returns the
-    /// family names it contributed so the picker can refresh.
+    /// Register a user-supplied font (uploaded `.ttf`/`.otf`, a Google import,
+    /// or a font embedded in an opened `.darkly`). Caches the raw bytes under
+    /// their content hash so the families they provide can be re-embedded on
+    /// save, and returns the family names it contributed so the picker can
+    /// refresh. Registering identical bytes twice is free — the byte cache
+    /// dedups on the content hash.
     pub fn register_font(&mut self, bytes: Vec<u8>) -> Vec<String> {
+        let hash = content_hash(&bytes);
         let registered = self
             .font_cx
             .collection
-            .register_fonts(peniko::Blob::from(bytes), None);
+            .register_fonts(peniko::Blob::from(bytes.clone()), None);
         let mut names = Vec::new();
         for (family_id, _) in registered {
             if let Some(name) = self.font_cx.collection.family_name(family_id) {
@@ -89,10 +122,35 @@ impl FontRegistry {
                 if !self.families.contains(&name) {
                     self.families.push(name.clone());
                 }
+                self.family_hash.insert(name.clone(), hash.clone());
                 names.push(name);
             }
         }
+        // Only cache the bytes if the blob actually registered a family — a blob
+        // parley rejected contributes nothing to embed.
+        if !names.is_empty() {
+            self.font_data.entry(hash).or_insert(bytes);
+        }
         names
+    }
+
+    /// Raw SFNT bytes backing `family`, if it was registered from bytes (upload
+    /// / Google / embedded). `None` for the binary-resident fallback and generic
+    /// families (`sans-serif`) — they have no runtime bytes, which is exactly
+    /// what keeps them out of `.darkly` embedding.
+    pub fn font_bytes(&self, family: &str) -> Option<&[u8]> {
+        let hash = self.family_hash.get(family)?;
+        self.font_data.get(hash).map(Vec::as_slice)
+    }
+
+    /// The content hash + raw bytes backing `family`, for the save path to emit
+    /// one `fonts/<hash>.ttf` blob per unique hash (multiple families may share
+    /// one blob → same hash → deduped). `None` when the family has no runtime
+    /// bytes (fallback / generic), so it's skipped from embedding naturally.
+    pub fn font_blob(&self, family: &str) -> Option<(&str, &[u8])> {
+        let hash = self.family_hash.get(family)?;
+        let bytes = self.font_data.get(hash)?;
+        Some((hash.as_str(), bytes.as_slice()))
     }
 
     /// Build a `vello::Scene` realizing every object on a vector layer. Text is
@@ -225,6 +283,61 @@ mod tests {
     fn lists_the_bundled_family() {
         let reg = FontRegistry::new();
         assert!(reg.list_fonts().iter().any(|f| f == "Noto Sans"));
+    }
+
+    /// The `wght`-axis normalized coordinates of the first glyph run when
+    /// `text` is shaped — empty for a non-variable face (parley emits no
+    /// variation coords). Used by the variable-axis spike to prove a weight
+    /// scrub reaches the face as a real variation.
+    fn first_run_coords(reg: &mut FontRegistry, text: &TextProps) -> Vec<i16> {
+        let layout = reg.shape(text);
+        for line in layout.lines() {
+            for item in line.items() {
+                if let PositionedLayoutItem::GlyphRun(gr) = item {
+                    return gr.run().normalized_coords().to_vec();
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    /// Phase-0 gate for the font-import strategy: parley must honor a `weight`
+    /// scrub against a **variable** face as a real axis variation, not snap to a
+    /// named static instance. Register one variable family (Cantarell-VF, a CFF2
+    /// font with a `wght` 100–800 axis), shape the same string at weight 300 vs
+    /// 700, and assert the run's `normalized_coords` (the `wght` axis coord)
+    /// actually differ. Passing means a single variable file per family covers
+    /// every weight (`css2?family=X:wght@100..900`); failing would force discrete
+    /// static-weight imports. See `polished-booping-tulip.md` §Phase-0.
+    #[test]
+    fn variable_weight_scrub_varies_normalized_coords() {
+        let mut reg = FontRegistry::new();
+        let bytes = include_bytes!("../../tests/fixtures/fonts/Cantarell-VF.otf").to_vec();
+        let families = reg.register_font(bytes);
+        let family = families
+            .first()
+            .expect("Cantarell-VF registers at least one family")
+            .clone();
+
+        let mut text = TextProps::new("Weight".to_string());
+        text.font_family = family;
+        text.size = 48.0;
+
+        text.weight = 300.0;
+        let light = first_run_coords(&mut reg, &text);
+        text.weight = 700.0;
+        let bold = first_run_coords(&mut reg, &text);
+
+        assert!(
+            !light.is_empty() && !bold.is_empty(),
+            "the variable face must emit variation coords (light={light:?}, bold={bold:?})"
+        );
+        assert_ne!(
+            light, bold,
+            "a weight scrub against a variable face must change the wght axis coord \
+             — if equal, parley is snapping to a static instance and imports must \
+             fetch discrete weights instead"
+        );
     }
 
     fn line_count(layout: &Layout<()>) -> usize {
