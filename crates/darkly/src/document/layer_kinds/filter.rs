@@ -149,6 +149,38 @@ mod tests {
         assert!(f_after.params.is_empty());
     }
 
+    /// A parametric filter (curves) round-trips its full param vector — the
+    /// five per-channel curves are the whole document state, exactly like a
+    /// void's params. Regression against dropping/reordering the curves on save.
+    #[test]
+    fn curves_body_round_trips_with_params() {
+        use crate::gpu::params::ParamValue;
+
+        let mut doc = Document::new(64, 64);
+        let params = vec![
+            ParamValue::Curve(vec![[0.0, 0.0], [0.5, 0.7], [1.0, 1.0]]),
+            ParamValue::Curve(vec![[0.0, 0.1], [1.0, 0.9]]),
+            ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]]),
+            ParamValue::Curve(vec![[0.0, 0.0], [1.0, 0.5]]),
+            ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]]),
+        ];
+        let id = doc.add_filter_layer("curves".to_string(), "Curves", params.clone(), None);
+
+        let reg = register();
+        let node = doc.find_node(id).expect("filter exists");
+        let serialized = (reg.serialize)(node);
+        let restored = (reg.deserialize)(&serialized.body, id).expect("deserialize must succeed");
+        let f_after = match &restored {
+            LayerNode::Layer(Layer::Filter(f)) => f,
+            _ => panic!("deserialize must yield a Filter layer"),
+        };
+        assert_eq!(f_after.pipeline, "curves");
+        assert_eq!(
+            f_after.params, params,
+            "all five curve params must survive the round-trip in order"
+        );
+    }
+
     /// A corrupt blend_mode in the saved body must surface as
     /// `CorruptManifest`, not a silent fallback — the same contract every
     /// other layer kind holds.
