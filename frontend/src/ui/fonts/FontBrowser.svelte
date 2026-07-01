@@ -84,6 +84,7 @@
                 toast.show('error', `Couldn't import ${font.family}`);
                 return;
             }
+            toast.show('success', `Added ${families[0]}`);
             onSelect(families[0]);
             onClose();
         } catch (e) {
@@ -212,8 +213,11 @@
                         >
                             <span class="sample">{sampleFor(font.family)}</span>
                             <span class="name">
-                                {font.family}
-                                {#if importing.has(font.family)}<span class="spinner">…</span>{/if}
+                                {#if importing.has(font.family)}
+                                    <span class="importing">Importing…</span>
+                                {:else}
+                                    {font.family}
+                                {/if}
                             </span>
                         </button>
                     {/each}
@@ -339,8 +343,9 @@
         text-overflow: ellipsis;
         max-width: 100%;
     }
-    .spinner {
+    .importing {
         color: var(--accent);
+        font-style: italic;
     }
     .muted {
         color: var(--text-muted);

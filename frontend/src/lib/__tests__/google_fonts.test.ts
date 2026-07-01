@@ -8,11 +8,12 @@ vi.mock('../../state/font_library.svelte', () => ({
     fontLibrary: { add: addSpy },
 }));
 
-// wawoff2 is a WASM decoder; stand in with an identity "decode".
+// woff2-encoder/decompress is a WASM decoder (default export); stand in with an
+// identity "decode".
 const { decompressSpy } = vi.hoisted(() => ({
     decompressSpy: vi.fn((buf: Uint8Array) => Promise.resolve(new Uint8Array([0x00, 0x01, ...buf]))),
 }));
-vi.mock('wawoff2', () => ({ decompress: decompressSpy }));
+vi.mock('woff2-encoder/decompress', () => ({ default: decompressSpy }));
 
 import { cssUrl, previewUrl, importFont, type CatalogFont } from '../google_fonts';
 

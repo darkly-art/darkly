@@ -6,8 +6,8 @@
  * lazily imported so it stays out of the main bundle. The byte path is the
  * keyless, CORS-enabled css2 endpoint: we ask `fonts.googleapis.com/css2` for a
  * family, the browser receives woff2 files from `fonts.gstatic.com`, and we
- * decode woff2 → SFNT on the frontend with `wawoff2` before handing raw TTF to
- * the engine via the personal font library.
+ * decode woff2 → SFNT on the frontend with `woff2-encoder` before handing raw
+ * TTF to the engine via the personal font library.
  *
  * The Phase-0 spike proved parley honors a weight scrub against a variable face,
  * so we request a single variable file per family (`css2?family=X:wght@min..max`)
@@ -107,11 +107,14 @@ function pickLatinUrl(css: string): string | null {
     return all.length ? all[all.length - 1] : null;
 }
 
-/** Decode a woff2 blob to raw SFNT (TTF) bytes. `wawoff2` is a WASM module,
+/** Decode a woff2 blob to raw SFNT (TTF/OTF) bytes. `woff2-encoder/decompress`
+ *  is a WASM module (WASM embedded as a base64 data URI, so no sidecar fetch),
  *  dynamically imported so it stays out of the main bundle until a font is
- *  actually imported. */
+ *  actually imported. Its promise-based API avoids the Emscripten
+ *  `onRuntimeInitialized` race that made the previous decoder hang under a
+ *  bundler. */
 async function decodeWoff2(woff2: Uint8Array): Promise<Uint8Array> {
-    const { decompress } = await import('wawoff2');
+    const decompress = (await import('woff2-encoder/decompress')).default;
     return await decompress(woff2);
 }
 

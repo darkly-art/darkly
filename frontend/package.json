@@ -35,6 +35,6 @@
         "defu": "^6.1.4",
         "fflate": "^0.8.3",
         "tinykeys": "^4.0.0",
-        "wawoff2": "^2.0.1"
+        "woff2-encoder": "^2.0.0"
     }
 }
