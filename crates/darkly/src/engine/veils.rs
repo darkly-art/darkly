@@ -204,7 +204,14 @@ impl DarklyEngine {
             .children_of(self.doc.root_id())
             .iter()
             .rev()
-            .filter_map(|id| node_to_layer_info(&self.doc, self.compositor.void_registry(), *id))
+            .filter_map(|id| {
+                node_to_layer_info(
+                    &self.doc,
+                    self.compositor.void_registry(),
+                    self.compositor.filter_pipeline_registry(),
+                    *id,
+                )
+            })
             .collect()
     }
 
