@@ -12,24 +12,29 @@
 use super::super::rendering::commit_undo_region;
 use super::super::{DarklyEngine, PendingFilter};
 use crate::coord::WindowRect;
-use crate::engine::types::VeilTypeInfo;
+use crate::engine::types::{ParamInfo, VeilTypeInfo};
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
 impl DarklyEngine {
-    /// All registered filter types (id + display name), as the same
-    /// `VeilTypeInfo` shape veils/voids use — filters carry no params, so
-    /// the list is empty there. Drives the frontend's dynamic Colors-menu
-    /// action registration.
+    /// All registered filter types (id + display name + param schema), as the
+    /// same `VeilTypeInfo` shape veils/voids use. Parameter-free filters (invert)
+    /// carry an empty `params`; parametric ones (curves) carry their schema.
+    /// Drives both the frontend's dynamic Colors-menu action registration and
+    /// the filter-layer properties panel.
     pub fn filter_types(&self) -> Vec<VeilTypeInfo> {
-        self.compositor
-            .filter_pipeline_registry()
+        let registry = self.compositor.filter_pipeline_registry();
+        registry
             .types()
             .into_iter()
             .map(|(type_id, display_name)| VeilTypeInfo {
                 type_id,
                 display_name,
-                params: Vec::new(),
+                params: registry
+                    .params(type_id)
+                    .iter()
+                    .map(|d| ParamInfo::from_def(d, None))
+                    .collect(),
             })
             .collect()
     }
@@ -43,6 +48,18 @@ impl DarklyEngine {
             return false;
         }
         if !self.compositor.filter_pipeline_registry().has(filter_type) {
+            return false;
+        }
+        // Parametric filters (curves, …) are non-destructive-only: the
+        // one-click destructive path has no UI to author their params, so it
+        // would bake an identity no-op. Keep them out of it — they're used
+        // exclusively as filter *layers*.
+        if !self
+            .compositor
+            .filter_pipeline_registry()
+            .params(filter_type)
+            .is_empty()
+        {
             return false;
         }
         self.auto_commit_floating();
@@ -145,7 +162,7 @@ impl DarklyEngine {
                 node_id,
                 region,
                 mask_view.as_ref(),
-                &pipeline,
+                pipeline.as_ref(),
             );
         });
 

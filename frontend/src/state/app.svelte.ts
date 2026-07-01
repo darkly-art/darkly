@@ -147,7 +147,7 @@ export class DarklyInstance {
      *  at startup. Drives the dynamic, auto-discovered Colors-menu actions in
      *  `registerActions` — a new filter in the Rust core surfaces a menu
      *  entry with zero frontend edits. */
-    filterTypes = $state<Array<{ type: string; displayName: string }>>([]);
+    filterTypes = $state<Array<{ type: string; displayName: string; params?: unknown[] }>>([]);
 
     toolDisplayName(id: string): string {
         return this.toolDisplayNames[id] ?? id;
@@ -166,6 +166,11 @@ export class DarklyInstance {
     }
     layerKindDisplayName(id: string): string {
         return this.layerKindDisplayNames[id] ?? id;
+    }
+    /** Display label for a filter `type_id` (e.g. `"curves"` → `"Curves"`),
+     *  resolved from the `filterTypes` registry list. */
+    filterDisplayName(id: string): string {
+        return this.filterTypes.find((f) => f.type === id)?.displayName ?? id;
     }
 
     /** Populate every registry-backed display-name map from the Rust core in

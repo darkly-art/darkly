@@ -85,14 +85,36 @@ pub fn registrations() -> Vec<RequestRegistration> {
                 }
                 let r: Req = decode(payload)?;
                 let anchor = (r.anchor >= 0).then(|| LayerId::from_ffi(r.anchor as u64));
-                // Filters carry no params today (invert is parameter-free), so
-                // the schema is empty; `params_from_json` yields an empty vec.
-                let pv = params_from_json(&r.params, &[]);
+                // Convert against the filter's schema so a curves layer created
+                // with `{}` gets five identity curves; invert's empty schema
+                // yields an empty vec.
+                let defs: &'static [ParamDef] = engine.filter_param_defs(&r.pipeline);
+                let pv = params_from_json(&r.params, defs);
                 let value = match engine.add_filter_layer(&r.pipeline, pv, anchor) {
                     Some(id) => json!({ "id": id.to_ffi() }),
                     None => json!({ "id": -1 }),
                 };
                 Ok(Response::json(value))
+            },
+        },
+        RequestRegistration {
+            kind: "update_filter_params",
+            handle: |engine, payload, _b| {
+                #[derive(Deserialize)]
+                struct Req {
+                    id: u64,
+                    params: serde_json::Value,
+                }
+                let r: Req = decode(payload)?;
+                let id = LayerId::from_ffi(r.id);
+                let pipeline = match engine.filter_layer_pipeline(id) {
+                    Some(p) => p,
+                    None => return Ok(Response::empty()),
+                };
+                let defs = engine.filter_param_defs(&pipeline);
+                let pv = params_from_json(&r.params, defs);
+                engine.update_filter_params(id, pv);
+                Ok(Response::empty())
             },
         },
         RequestRegistration {

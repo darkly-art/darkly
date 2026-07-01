@@ -155,6 +155,7 @@ export type RequestKind =
     | 'stroke_to'
     | 'tool_types'
     | 'undo'
+    | 'update_filter_params'
     | 'update_floating_matrix'
     | 'update_veil'
     | 'update_void_params'
@@ -319,6 +320,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'stroke_to',
     'tool_types',
     'undo',
+    'update_filter_params',
     'update_floating_matrix',
     'update_veil',
     'update_void_params',

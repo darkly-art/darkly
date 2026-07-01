@@ -11,9 +11,10 @@
 
 use darkly::coord::{CanvasPoint, CanvasRect};
 use darkly::document::SelectionMode;
-use darkly::engine::types::StrokeOp;
+use darkly::engine::types::{LayerInfo, StrokeOp};
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
+use darkly::gpu::params::ParamValue;
 use darkly::gpu::test_utils::*;
 use darkly::layer::LayerId;
 
@@ -692,4 +693,175 @@ fn filter_layer_is_non_destructive() {
         original,
         "deleting the filter must restore the original composite exactly"
     );
+}
+
+// ---- Curves (parametric) filter layer --------------------------------------
+//
+// Curves is the first parametric filter: five per-channel tone curves baked
+// into a GPU LUT. These pin the schema (five identity curves on add), the
+// param-edit + undo path, the destructive-path exclusion, and the two GPU
+// promises (identity ⇒ bit-unchanged; a value curve shifts pixels as baked).
+
+/// An identity curve — a straight diagonal.
+fn identity_curve() -> ParamValue {
+    ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]])
+}
+
+/// The default param vector for a filter type, straight from its schema.
+fn filter_defaults(e: &DarklyEngine, type_id: &str) -> Vec<ParamValue> {
+    e.filter_param_defs(type_id)
+        .iter()
+        .map(|d| d.default_value())
+        .collect()
+}
+
+/// Pull a root filter layer's effective param values (`value`, else `default`)
+/// from the engine's layer-tree query.
+fn filter_layer_params(e: &DarklyEngine, id: LayerId) -> Vec<ParamValue> {
+    let ffi = id.to_ffi() as f64;
+    for node in e.layer_tree() {
+        if let LayerInfo::Filter {
+            id: nid, params, ..
+        } = &node
+        {
+            if *nid == ffi {
+                return params
+                    .iter()
+                    .map(|p| p.value.clone().unwrap_or_else(|| p.default.clone()))
+                    .collect();
+            }
+        }
+    }
+    panic!("filter layer {ffi} not found in layer tree");
+}
+
+#[test]
+fn add_curves_layer_yields_five_identity_curves() {
+    let mut e = test_engine(8, 8);
+    let params = filter_defaults(&e, "curves");
+    let id = e
+        .add_filter_layer("curves", params, None)
+        .expect("curves is a registered filter type");
+
+    let got = filter_layer_params(&e, id);
+    assert_eq!(got.len(), 5, "curves exposes red/green/blue/value/alpha");
+    for (i, p) in got.iter().enumerate() {
+        assert_eq!(
+            p,
+            &identity_curve(),
+            "default curve param {i} must be identity"
+        );
+    }
+}
+
+#[test]
+fn update_filter_params_mutates_and_undo_restores() {
+    let mut e = test_engine(8, 8);
+    let id = e
+        .add_filter_layer("curves", filter_defaults(&e, "curves"), None)
+        .unwrap();
+
+    // Edit the value curve (index 3) to a non-identity darkening ramp.
+    let edited = {
+        let mut p = filter_defaults(&e, "curves");
+        p[3] = ParamValue::Curve(vec![[0.0, 0.0], [1.0, 0.5]]);
+        p
+    };
+    e.update_filter_params(id, edited.clone());
+    assert_eq!(
+        filter_layer_params(&e, id),
+        edited,
+        "update_filter_params must set the new curves"
+    );
+
+    e.undo();
+    let restored = filter_layer_params(&e, id);
+    for (i, p) in restored.iter().enumerate() {
+        assert_eq!(
+            p,
+            &identity_curve(),
+            "undo must restore curve {i} to identity"
+        );
+    }
+}
+
+#[test]
+fn apply_filter_excludes_parametric_curves() {
+    let (w, h) = (4u32, 4u32);
+    let mut e = test_engine(w, h);
+    let layer = e.paste_image(w, h, &distinct_rgba(w, h), 0, 0, None);
+    let before = e.test_readback_layer(layer);
+
+    assert!(
+        !e.apply_filter(layer, "curves"),
+        "a parametric filter must be excluded from the destructive one-click path"
+    );
+    assert_eq!(
+        e.test_readback_layer(layer),
+        before,
+        "the excluded destructive curves call must not touch pixels"
+    );
+}
+
+/// Identity curves ⇒ the composite is bit-unchanged. Validates the
+/// `textureLoad(round(v*255))` index convention: LUT[i] == i, so every byte
+/// maps to itself.
+#[test]
+fn curves_identity_leaves_composite_unchanged() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let base = engine.add_raster_layer(None);
+    fill_layer(&mut engine, base, 200, 64, 128);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+    let before = engine.test_readback_canvas();
+
+    engine
+        .add_filter_layer("curves", filter_defaults(&engine, "curves"), None)
+        .unwrap();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    assert_eq!(
+        engine.test_readback_canvas(),
+        before,
+        "an identity curves layer must not change any pixel"
+    );
+}
+
+/// A non-identity value curve shifts pixels as baked: `value(x) = x/2` halves
+/// every color channel while leaving alpha untouched (the value curve is not
+/// applied to alpha).
+#[test]
+fn curves_value_curve_shifts_pixels() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let base = engine.add_raster_layer(None);
+    fill_layer(&mut engine, base, 255, 0, 0); // opaque red
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    // Value curve halves the input; red/green/blue identity, alpha identity.
+    let params = vec![
+        identity_curve(),
+        identity_curve(),
+        identity_curve(),
+        ParamValue::Curve(vec![[0.0, 0.0], [1.0, 0.5]]),
+        identity_curve(),
+    ];
+    engine.add_filter_layer("curves", params, None).unwrap();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let p = px(&engine.test_readback_canvas(), cw, cw / 2, ch / 2);
+    // value(red(1.0)) = value(1.0) = 0.5 → ~128; g/b stay 0; alpha stays 255.
+    assert!(
+        (p[0] as i32 - 128).abs() <= 2,
+        "value curve should halve red to ~128, got {p:?}"
+    );
+    assert_eq!(p[1], 0, "green stays 0");
+    assert_eq!(p[2], 0, "blue stays 0");
+    assert_eq!(p[3], 255, "alpha untouched by the value curve");
 }
