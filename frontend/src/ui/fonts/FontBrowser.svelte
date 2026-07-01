@@ -1,7 +1,7 @@
 <script lang="ts">
     import Modal from '../Modal.svelte';
     import { fontLibrary } from '../../state/font_library.svelte';
-    import { loadCatalog, cssUrl, importFont, type CatalogFont } from '../../lib/google_fonts';
+    import { loadCatalog, previewUrl, importFont, type CatalogFont } from '../../lib/google_fonts';
     import { toast } from '../../state/toast.svelte';
 
     interface Props {
@@ -12,6 +12,8 @@
     let { open = $bindable(false), onSelect, onClose }: Props = $props();
 
     let query = $state('');
+    /** Custom preview text. Empty → each tile previews its own family name. */
+    let preview = $state('');
     let catalog = $state<CatalogFont[]>([]);
     let catalogLoaded = $state(false);
     /** Families currently being imported from Google (shows a spinner + guards
@@ -59,12 +61,19 @@
             .slice(0, GOOGLE_LIMIT),
     );
 
-    /** Preview stylesheet URLs — one keyless css2 request per visible Google
-     *  font, subset to just the family-name characters so the browser can render
-     *  the tile in its own face without downloading the whole font. */
-    const previewLinks = $derived(
-        googleResults.map((f) => cssUrl(f.family, f.axes, { text: `${f.family} Ag` })),
-    );
+    /** What a tile renders in its own face: the user's custom preview text, or
+     *  the family's own name when the override is empty. */
+    function sampleFor(family: string): string {
+        const custom = preview.trim();
+        return custom.length ? preview : family;
+    }
+
+    /** Preview stylesheet URLs — one keyless css2 embed per visible Google font
+     *  so each tile renders in its own face. Loads the full Latin subset (not a
+     *  per-tile `&text=` subset, which hits a CORS-flaky endpoint), so the
+     *  custom preview override re-renders from already-loaded glyphs without
+     *  refetching. Re-derives only when the visible set changes. */
+    const previewLinks = $derived(googleResults.map((f) => previewUrl(f)));
 
     async function pickGoogle(font: CatalogFont): Promise<void> {
         if (importing.has(font.family)) return;
@@ -130,14 +139,24 @@
 
 <Modal bind:open title="Fonts" size="lg">
     <div class="font-browser">
-        <input
-            class="search"
-            type="search"
-            placeholder="Search fonts…"
-            bind:value={query}
-            autocomplete="off"
-            spellcheck="false"
-        />
+        <div class="fields">
+            <input
+                class="search"
+                type="search"
+                placeholder="Search fonts…"
+                bind:value={query}
+                autocomplete="off"
+                spellcheck="false"
+            />
+            <input
+                class="search preview-input"
+                type="text"
+                placeholder="Preview text (defaults to the font name)…"
+                bind:value={preview}
+                autocomplete="off"
+                spellcheck="false"
+            />
+        </div>
 
         <div
             class="dropzone"
@@ -169,7 +188,7 @@
                             onclick={() => pickInstalled(family)}
                             title={family}
                         >
-                            <span class="sample">Ag</span>
+                            <span class="sample">{sampleFor(family)}</span>
                             <span class="name">{family}</span>
                         </button>
                     {/each}
@@ -191,7 +210,7 @@
                             disabled={importing.has(font.family)}
                             title={font.family}
                         >
-                            <span class="sample">Ag</span>
+                            <span class="sample">{sampleFor(font.family)}</span>
                             <span class="name">
                                 {font.family}
                                 {#if importing.has(font.family)}<span class="spinner">…</span>{/if}
@@ -211,6 +230,15 @@
         gap: 12px;
         min-width: 520px;
         max-height: 70vh;
+    }
+
+    .fields {
+        display: flex;
+        gap: 8px;
+    }
+    .fields .search {
+        flex: 1;
+        min-width: 0;
     }
 
     .search {
@@ -296,7 +324,11 @@
     }
     .sample {
         font-size: 26px;
-        line-height: 1;
+        line-height: 1.15;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
     }
     .name {
         font-family: var(--font-ui, sans-serif);

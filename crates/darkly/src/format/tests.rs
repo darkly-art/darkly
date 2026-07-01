@@ -610,6 +610,71 @@ fn embedded_font_round_trips() {
     );
 }
 
+/// The stronger embedding guarantee: an embedded font doesn't just round-trip by
+/// *name* — its glyphs **rasterize identically** after save/reload. Renders the
+/// same string with the embedded font and asserts (a) it differs from the
+/// fallback face (proving the real font is used, not a silent Noto fallback that
+/// would make a name-only test pass regardless), and (b) a fresh engine that
+/// only has the embedded bytes reproduces the exact same pixels. Uses
+/// Cantarell-VF — a variable CFF2 (`OTTO`) font, an outline format distinct from
+/// the bundled glyf TTF, so this also exercises a "weird" font kind end to end.
+#[test]
+fn embedded_font_renders_identically_after_reload() {
+    const CANTARELL_VF: &[u8] = include_bytes!("../../tests/fixtures/fonts/Cantarell-VF.otf");
+    let (w, h) = (96u32, 48u32);
+
+    fn render_text(engine: &mut DarklyEngine, family: Option<&str>) -> (LayerId, Vec<u8>) {
+        let mut text = crate::layer::TextProps::new("Ag".to_string());
+        text.size = 32.0;
+        if let Some(f) = family {
+            text.font_family = f.to_string();
+        }
+        let (id, _) = engine.add_text_layer(text, 4.0, 4.0, [255, 255, 255, 255], None);
+        let _ = engine.test_readback_canvas(); // force the Vello realization
+        (id, engine.test_readback_layer(id))
+    }
+
+    // Baseline: the same string in the fallback face (a family with no bytes →
+    // Noto / sans-serif), rendered in a throwaway engine so the saved doc stays
+    // clean.
+    let fallback_px = {
+        let mut fe = kitchen_sink_engine(w, h);
+        render_text(&mut fe, None).1
+    };
+
+    // The Cantarell render, in the engine we'll save.
+    let mut engine = kitchen_sink_engine(w, h);
+    let family = engine
+        .register_font(CANTARELL_VF.to_vec())
+        .first()
+        .expect("Cantarell-VF contributes a family")
+        .clone();
+    let (_layer, cantarell_px) = render_text(&mut engine, Some(&family));
+
+    assert_ne!(
+        cantarell_px, fallback_px,
+        "the embedded font must rasterize differently from the fallback — else a \
+         name-only round-trip would pass even if the font never registered"
+    );
+
+    // Round-trip into a fresh engine that has only the embedded bytes.
+    let bundle = drive_save_to_completion(&mut engine);
+    let zip_bytes = assemble_zip(&bundle);
+    let mut reloaded = kitchen_sink_engine(1, 1);
+    reloaded
+        .open_document(&zip_bytes)
+        .expect("reload happy path");
+    let reloaded_layer = reloaded.doc.all_vector_layers()[0].id;
+    let _ = reloaded.test_readback_canvas();
+    let reloaded_px = reloaded.test_readback_layer(reloaded_layer);
+
+    assert_eq!(
+        cantarell_px, reloaded_px,
+        "text must rasterize pixel-identically after embedding + reload — proving \
+         the embedded bytes reproduce the glyph outlines, not a fallback"
+    );
+}
+
 /// A *sub-canvas* mask (bounds smaller than the canvas window) round-trips
 /// through save/load with its independent bounds + pixels intact. Mask bounds
 /// serialize independently of the host (Document Authority Principle); the

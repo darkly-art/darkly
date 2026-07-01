@@ -50,14 +50,14 @@ export function loadCatalog(): Promise<CatalogFont[]> {
 
 /** Build a keyless css2 URL for `family`. Requests the full `wght` range as a
  *  single variable file when the family has a `wght` axis (per the spike);
- *  otherwise the static family. `italic` adds the `ital` axis if present;
- *  `text` subsets the download to just those characters (used for name
- *  previews — the browser loads it natively, no decode). */
-export function cssUrl(
-    family: string,
-    axes: CatalogAxis[],
-    opts: { italic?: boolean; text?: string } = {},
-): string {
+ *  otherwise the static family. `italic` adds the `ital` axis if present.
+ *
+ *  Deliberately never subsets via `&text=`: that switches Google to the dynamic
+ *  `/l/font` endpoint, which is unreliable for cross-origin `@font-face` loads
+ *  (its cached edges can omit `Access-Control-Allow-Origin`, so the browser
+ *  blocks the font). The plain css2 URL yields the standard `/s/…woff2` — the
+ *  universally CORS-enabled Google Fonts embed. See [`previewUrl`]. */
+export function cssUrl(family: string, axes: CatalogAxis[], opts: { italic?: boolean } = {}): string {
     const name = family.trim().replace(/\s+/g, '+');
     const wght = axes.find((a) => a.tag === 'wght');
     const hasItal = opts.italic && axes.some((a) => a.tag === 'ital');
@@ -71,9 +71,16 @@ export function cssUrl(
         spec = `${name}:ital@1`;
     }
 
-    let url = `${CSS2}?family=${spec}&display=swap`;
-    if (opts.text) url += `&text=${encodeURIComponent(opts.text)}`;
-    return url;
+    return `${CSS2}?family=${spec}&display=swap`;
+}
+
+/** Stylesheet URL for previewing a font in its own face — a `<link>` the browser
+ *  loads natively (no decode). Uses the plain css2 embed (the CORS-safe `/s/`
+ *  woff2 path), so it loads the full Latin subset once: a custom preview string
+ *  then renders from already-loaded glyphs with no per-keystroke refetch, and no
+ *  cross-origin block. */
+export function previewUrl(font: CatalogFont): string {
+    return cssUrl(font.family, font.axes);
 }
 
 /** Every `url(...)` in a css2 response, in document order. */

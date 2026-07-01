@@ -14,7 +14,7 @@ const { decompressSpy } = vi.hoisted(() => ({
 }));
 vi.mock('wawoff2', () => ({ decompress: decompressSpy }));
 
-import { cssUrl, importFont, type CatalogFont } from '../google_fonts';
+import { cssUrl, previewUrl, importFont, type CatalogFont } from '../google_fonts';
 
 describe('cssUrl', () => {
     it('requests the full weight range as a single variable file', () => {
@@ -44,10 +44,28 @@ describe('cssUrl', () => {
         );
     });
 
-    it('subsets the download to preview text', () => {
-        expect(cssUrl('Roboto', [], { text: 'Roboto Ag' })).toBe(
-            'https://fonts.googleapis.com/css2?family=Roboto&display=swap&text=Roboto%20Ag',
+});
+
+describe('previewUrl', () => {
+    const roboto: CatalogFont = {
+        family: 'Roboto',
+        category: 'Sans Serif',
+        axes: [{ tag: 'wght', min: 100, max: 900 }],
+        subsets: ['latin'],
+        popularity: 1,
+    };
+
+    it('uses the standard css2 embed', () => {
+        expect(previewUrl(roboto)).toBe(
+            'https://fonts.googleapis.com/css2?family=Roboto:wght@100..900&display=swap',
         );
+    });
+
+    // Regression: never subset previews via `&text=`. That endpoint (`/l/font`)
+    // is CORS-flaky for cross-origin @font-face loads and blocks the preview;
+    // the plain `/s/` woff2 embed is the reliable path.
+    it('never requests the CORS-flaky text-subset endpoint', () => {
+        expect(previewUrl(roboto)).not.toContain('text=');
     });
 });
 
