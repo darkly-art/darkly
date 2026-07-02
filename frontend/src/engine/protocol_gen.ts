@@ -6,6 +6,8 @@ export type RequestKind =
     | 'add_group'
     | 'add_mask'
     | 'add_raster'
+    | 'add_text'
+    | 'add_text_object'
     | 'add_veil'
     | 'add_void'
     | 'antialias_selection'
@@ -80,18 +82,21 @@ export type RequestKind =
     | 'flip_node'
     | 'floating_info'
     | 'floating_target_layer'
+    | 'font_axes'
     | 'get_brush_cursor_preview_info'
     | 'group_layers'
     | 'grow_selection'
     | 'has_floating'
     | 'has_pending_color_pick'
     | 'has_selection'
+    | 'hit_test_vector_object'
     | 'invert_selection'
     | 'is_dirty'
     | 'last_picked_color'
     | 'layer_kind_types'
     | 'layer_transform_capability'
     | 'layer_tree'
+    | 'list_fonts'
     | 'mark_dirty'
     | 'mask_to_selection'
     | 'merge_down'
@@ -116,6 +121,7 @@ export type RequestKind =
     | 'poll_save_result'
     | 'redo'
     | 'refresh_brush_cursor_preview'
+    | 'register_font'
     | 'remove_layer'
     | 'remove_layers'
     | 'remove_mask'
@@ -144,6 +150,9 @@ export type RequestKind =
     | 'set_overlay_mask'
     | 'set_pixel_filter'
     | 'set_preview_theme'
+    | 'set_text_box'
+    | 'set_text_content'
+    | 'set_text_style'
     | 'set_veil_visible'
     | 'set_view_transform'
     | 'set_viewport_bg'
@@ -153,13 +162,16 @@ export type RequestKind =
     | 'start_preview'
     | 'start_save_document'
     | 'stroke_to'
+    | 'text_objects'
     | 'tool_types'
     | 'undo'
     | 'update_filter_params'
     | 'update_floating_matrix'
+    | 'update_vector_object_transform'
     | 'update_veil'
     | 'update_void_params'
     | 'update_void_transform'
+    | 'vector_object_info'
     | 'veil_list'
     | 'veil_types'
     | 'void_transform_info'
@@ -171,6 +183,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'add_group',
     'add_mask',
     'add_raster',
+    'add_text',
+    'add_text_object',
     'add_veil',
     'add_void',
     'antialias_selection',
@@ -245,18 +259,21 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'flip_node',
     'floating_info',
     'floating_target_layer',
+    'font_axes',
     'get_brush_cursor_preview_info',
     'group_layers',
     'grow_selection',
     'has_floating',
     'has_pending_color_pick',
     'has_selection',
+    'hit_test_vector_object',
     'invert_selection',
     'is_dirty',
     'last_picked_color',
     'layer_kind_types',
     'layer_transform_capability',
     'layer_tree',
+    'list_fonts',
     'mark_dirty',
     'mask_to_selection',
     'merge_down',
@@ -281,6 +298,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'poll_save_result',
     'redo',
     'refresh_brush_cursor_preview',
+    'register_font',
     'remove_layer',
     'remove_layers',
     'remove_mask',
@@ -309,6 +327,9 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_overlay_mask',
     'set_pixel_filter',
     'set_preview_theme',
+    'set_text_box',
+    'set_text_content',
+    'set_text_style',
     'set_veil_visible',
     'set_view_transform',
     'set_viewport_bg',
@@ -318,13 +339,16 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'start_preview',
     'start_save_document',
     'stroke_to',
+    'text_objects',
     'tool_types',
     'undo',
     'update_filter_params',
     'update_floating_matrix',
+    'update_vector_object_transform',
     'update_veil',
     'update_void_params',
     'update_void_transform',
+    'vector_object_info',
     'veil_list',
     'veil_types',
     'void_transform_info',

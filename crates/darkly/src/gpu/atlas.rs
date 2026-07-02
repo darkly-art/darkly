@@ -49,6 +49,7 @@ impl LayerTexture {
             width,
             height,
             wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureUsages::empty(),
             "layer-texture",
         )
     }
@@ -62,6 +63,25 @@ impl LayerTexture {
         t
     }
 
+    /// RGBA layer texture with `STORAGE_BINDING` for renderers that write the
+    /// texture as a storage image (Vello's `render_to_texture` requires it).
+    /// Only vector layers ask for this — it is not a global flag, so ordinary
+    /// raster/void textures stay free of the storage-binding surface.
+    pub fn with_bounds_storage(device: &wgpu::Device, bounds: CanvasRect) -> Self {
+        let mut t = Self::with_format(
+            device,
+            None,
+            bounds.width,
+            bounds.height,
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureUsages::STORAGE_BINDING,
+            "vector-layer-texture",
+        );
+        t.offset_x = bounds.origin.x;
+        t.offset_y = bounds.origin.y;
+        t
+    }
+
     /// R8Unorm mask texture — default fill is 255 (white = reveal all).
     pub fn new_mask(device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32) -> Self {
         Self::with_format(
@@ -70,6 +90,7 @@ impl LayerTexture {
             width,
             height,
             wgpu::TextureFormat::R8Unorm,
+            wgpu::TextureUsages::empty(),
             "mask-texture",
         )
     }
@@ -94,6 +115,7 @@ impl LayerTexture {
         width: u32,
         height: u32,
         format: wgpu::TextureFormat,
+        extra_usage: wgpu::TextureUsages,
         label: &str,
     ) -> Self {
         let bpp = format.block_copy_size(None).unwrap_or(1);
@@ -116,7 +138,8 @@ impl LayerTexture {
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | extra_usage,
             view_formats: &[],
         });
 

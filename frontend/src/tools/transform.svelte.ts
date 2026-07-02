@@ -6,10 +6,17 @@
  * (`transform_gizmo.ts`) and the mode strategies know nothing about voids or
  * floating; this file is where that routing lives.
  *
- * Routing (via the backend's `layer_transform_capability`):
+ * Routing:
+ *   - vector layer  → per-object: hit-test the click; on a hit attach that
+ *                     object's transform binding. A different *axis* than the
+ *                     whole-layer capability below, so it isn't a
+ *                     `TransformCapability` arm — vector knowledge stays here.
  *   - `live`        → a void's persistent transform property (camera, …).
  *   - `destructive` → floating extract/commit (raster paste & move).
  *   - `none`        → inert: no gizmo, no cursor change.
+ *
+ * The `live` / `destructive` / `none` split comes from the backend's
+ * `layer_transform_capability`.
  *
  * Two tools share this implementation behind a toolbar cluster: `transform`
  * (free / affine) and `transform_perspective` (enters perspective). They are
@@ -21,7 +28,11 @@ import type { Tool, ToolContext } from './registry';
 import { app } from '../state/app.svelte';
 import { toolEngine, runHook } from './tool_session';
 import { TransformGizmo } from './transform_gizmo';
-import { floatingTransformBinding, voidTransformBinding } from './transform_bindings';
+import {
+    floatingTransformBinding,
+    voidTransformBinding,
+    vectorObjectTransformBinding,
+} from './transform_bindings';
 
 let gizmo: TransformGizmo | null = null;
 
@@ -134,7 +145,25 @@ function createTransformTool(opts: {
                 return;
             }
             // First click (or a click after Enter/Escape) re-engages the gizmo.
-            if (!gizmo.active) await activate();
+            if (!gizmo.active) {
+                // A click landing on a vector object attaches a per-object gizmo.
+                // `hit_test_vector_object` returns -1 for a miss or a non-vector
+                // layer, so this gate doubles as the "is it a vector layer" check —
+                // no separate kind query, no `TransformCapability::Vector` arm.
+                if (app.engine && app.activeLayerId != null) {
+                    const hit = await app.engine.send<{ object: number }>('hit_test_vector_object', {
+                        id: app.activeLayerId,
+                        x: cx,
+                        y: cy,
+                    });
+                    if (hit && hit.object >= 0) {
+                        await gizmo.attach(vectorObjectTransformBinding(app.activeLayerId, hit.object));
+                        app.requestFrame();
+                    }
+                }
+                // Not a vector hit → fall back to void / floating routing.
+                if (!gizmo.active) await activate();
+            }
             if (gizmo.active) gizmo.pointerDown(cx, cy);
         },
 
@@ -176,7 +205,9 @@ function createTransformTool(opts: {
                     if (await gizmo.attach(floatingTransformBinding())) applyEntryMode();
                 }
             }
-            await gizmo.frame();
+            // The awaits above can outlive the gizmo: a tool switch or layer
+            // change may run onDeactivate and null it out before we resume.
+            await gizmo?.frame();
         },
 
         async dismissOverlay() {

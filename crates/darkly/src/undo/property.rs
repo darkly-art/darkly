@@ -33,6 +33,13 @@ pub enum Property {
     /// exactly like `VoidParams`. The GPU re-sync happens in
     /// `sync_compositor_layers` after the doc is restored.
     Transform(crate::transform::Transform),
+    /// Full object list of a vector layer. Replaced in bulk (like `VoidParams`)
+    /// because a text edit / style change rewrites the bespoke object that owns
+    /// the change, and the realization rebuilds from the whole list anyway.
+    /// Coalesces so a run of edits (e.g. typing) collapses into one undo step;
+    /// the compositor re-realizes via `sync_vector_layer` after the doc is
+    /// restored.
+    VectorObjects(Vec<crate::layer::VectorObject>),
 }
 
 impl Property {
@@ -77,6 +84,11 @@ impl Property {
                     v.transform = *t;
                 }
             }
+            Property::VectorObjects(objects) => {
+                if let LayerNode::Layer(Layer::Vector(v)) = node {
+                    v.objects = objects.clone();
+                }
+            }
         }
     }
 }
@@ -86,22 +98,47 @@ pub struct PropertyAction {
     layer_id: LayerId,
     old_value: Property,
     new_value: Property,
+    /// Finer-grained coalesce key, layered on top of `(layer_id, Property
+    /// kind)`. Default `0` for callers separated by `Property` kind alone
+    /// (opacity, blend, void params…). A single `Property` kind that carries
+    /// several distinct logical ops — `VectorObjects` is content / style /
+    /// transform of one object — sets a non-zero tag so a typing run and a
+    /// later gizmo drag don't collapse into one undo step.
+    coalesce_tag: u64,
 }
 
 impl PropertyAction {
     pub fn new(layer_id: LayerId, old_value: Property, new_value: Property) -> Self {
+        Self::new_coalescing(layer_id, old_value, new_value, 0)
+    }
+
+    /// Like [`Self::new`] but with an explicit coalesce discriminator. Two
+    /// actions only merge when their tags also match, so callers that route
+    /// multiple logical ops through one `Property` kind can keep them in
+    /// separate undo steps.
+    pub fn new_coalescing(
+        layer_id: LayerId,
+        old_value: Property,
+        new_value: Property,
+        coalesce_tag: u64,
+    ) -> Self {
         PropertyAction {
             layer_id,
             old_value,
             new_value,
+            coalesce_tag,
         }
     }
 
     /// Try to coalesce another PropertyAction into this one.
-    /// Succeeds if both target the same layer and same property kind,
-    /// in which case we keep our `old_value` and take their `new_value`.
+    /// Succeeds if both target the same layer, the same property kind, and the
+    /// same coalesce tag — in which case we keep our `old_value` and take their
+    /// `new_value`.
     pub fn try_coalesce(&mut self, other: &PropertyAction) -> bool {
-        if self.layer_id == other.layer_id && self.new_value.same_kind(&other.new_value) {
+        if self.layer_id == other.layer_id
+            && self.coalesce_tag == other.coalesce_tag
+            && self.new_value.same_kind(&other.new_value)
+        {
             self.new_value = other.new_value.clone();
             true
         } else {

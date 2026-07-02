@@ -22,6 +22,7 @@ pub mod preview_config;
 pub mod registry_types;
 pub mod selection;
 pub mod stroke;
+pub mod text;
 pub mod veils;
 pub mod view;
 
@@ -50,6 +51,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
     all.extend(registry_types::registrations());
     all.extend(selection::registrations());
     all.extend(stroke::registrations());
+    all.extend(text::registrations());
     all.extend(veils::registrations());
     all.extend(view::registrations());
     all

@@ -325,6 +325,10 @@ pub struct DarklyEngine {
     pub(crate) doc: Document,
     pub(crate) compositor: Compositor,
     pub(crate) gpu: GpuContext,
+    /// Font collection + parley shaping state, used to realize vector (text)
+    /// layers. Platform-agnostic: bundled fonts now; the platform layer feeds
+    /// OS fonts later through [`crate::text::FontRegistry::register_font`].
+    pub(crate) fonts: crate::text::FontRegistry,
     pub(crate) undo_stack: UndoStack,
     pub(crate) active_stroke_layer: Option<LayerId>,
     /// Session-level "isolate this node" flag. When set, the renderer shows
@@ -592,6 +596,7 @@ impl DarklyEngine {
             doc,
             compositor,
             gpu,
+            fonts: crate::text::FontRegistry::new(),
             undo_stack,
             active_stroke_layer: None,
             isolated_node: None,

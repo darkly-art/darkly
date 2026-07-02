@@ -18,6 +18,7 @@ import { registerClipboardActions } from './clipboard';
 import { pickOpenFile, type OpenedFile } from '../storage/fileHandle';
 import { detectKind, isImageKind, type FileKind } from '../storage/detectKind';
 import { saveDocument } from '../storage/saveDocument';
+import { fontLibrary } from '../state/font_library.svelte';
 import { canSave } from '../storage/fileHandle';
 import { shell } from '../multi_tab/shell.svelte';
 import { about } from '../state/about.svelte';
@@ -108,6 +109,10 @@ export function openDarklyAsTab(picked: OpenedFile): void {
     inst.onHandleReady = async (engine) => {
         try {
             await engine.send('open_document', {}, picked.bytes);
+            // Fonts embedded in the opened file join the personal library so
+            // they survive reload and reach future tabs (the engine already
+            // registered them into this handle during the load).
+            void fontLibrary.absorbDarkly(picked.bytes);
             // Tab strip reads through the engine's `document_name`
             // request (which the loader populated from `manifest.name`),
             // but the shell's `nameVersion` doesn't bump on its own —

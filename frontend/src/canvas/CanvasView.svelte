@@ -16,6 +16,7 @@
     import { handleDroppedFile } from '../actions';
     import { THUMB_SIZE } from '../ui/layers/thumbnails.svelte';
     import { isColorPickerModifierActive } from '../tools/colorpicker_cursor';
+    import { isEditableTarget } from '../lib/isEditableTarget';
     import TransformModeMenu from '../ui/TransformModeMenu.svelte';
 
     /** Optional pre-built instance. When provided, CanvasView skips the
@@ -192,6 +193,16 @@
         // input — touch-action:none only covers touch, not pen (Chromium bug).
         e.preventDefault();
 
+        // Pull keyboard focus onto the canvas. `bindingSite` normally does this
+        // via a synthetic `mousedown`, but the `preventDefault()` above
+        // suppresses pointer→mouse compatibility events, so it never fires here.
+        // Without this, a focused properties-panel field (text editor textarea,
+        // an align/font `<select>`) keeps focus and swallows tool keys —
+        // Enter/Escape to a transform gizmo, for one. A canvas interaction
+        // means the canvas owns the keyboard; tools that want a field focused
+        // (the text editor) re-focus it explicitly afterwards.
+        canvas?.focus();
+
         // Touch: always capture and track for gesture detection
         if (e.pointerType === 'touch') {
             canvas.setPointerCapture(e.pointerId);
@@ -357,6 +368,11 @@
     const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta']);
 
     function onKeyDown(e: KeyboardEvent) {
+        // Keys typed into a text field (the text-properties editor, a rename
+        // box, etc.) are content, not canvas shortcuts — they must never pan,
+        // trigger a tool keybind, or dismiss a tool overlay. This is a window
+        // listener, so a textarea keystroke would otherwise bubble up to here.
+        if (isEditableTarget(e.target)) return;
         nav.onKeyDown(e);
         // Don't dismiss overlay for navigation or bare modifier keys
         if (nav.spaceHeld || MODIFIER_KEYS.has(e.key)) return;

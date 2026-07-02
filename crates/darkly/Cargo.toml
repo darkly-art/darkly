@@ -36,6 +36,14 @@ slotmap = { workspace = true }
 smallvec = { workspace = true }
 indexmap = { version = "2", features = ["serde"] }
 
+# Vector / text. The document model speaks the kurbo/peniko geometry+style
+# vocabulary directly (objects persist via their `serde` features); parley
+# shapes text into glyph runs; vello realizes both into the layer texture.
+vello = { workspace = true }
+kurbo = { workspace = true }
+peniko = { workspace = true }
+parley = { workspace = true }
+
 [dev-dependencies]
 pollster = "0.4"
 naga = { version = "29.0", features = ["wgsl-in"] }

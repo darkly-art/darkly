@@ -89,7 +89,7 @@ For a feature to count, it must be:
 - Brushes
     - [x] Simple round
     - [x] Ink pen
-    - [x] Charcoal (Pencil still TODO)
+    - [x] Charcoal
     - [x] Smudge
     - [x] Watercolor
     - [x] Liquify
@@ -98,73 +98,76 @@ For a feature to count, it must be:
     - [ ] Dodge/burn
     - [x] Calligraphy
     - [ ] Oil / Impasto
-- [x] Brush tool, eraser, fill (flood), gradient (linear), color picker
+- [x] Brush tool, eraser, fill, gradient, color picker
+- [x] Text tool
 - [x] Pressure / tilt / spacing / distance / angle inputs
 - [x] Laplacian stabilizer
 - [x] HSV picker, foreground/background swatches
-- [x] Color picker (Ctrl-held temporary pick)
-- [x] Raster layers + groups, drag‑reorder, visibility, lock, opacity, name, collapse, passthrough
+- [x] Color picker
+- [x] Raster layers + groups
 - [x] 16 blend modes
 - [x] Layer masks
 - [x] Rect, ellipse, lasso, polygon, magic wand selection
 - [x] Selection Replace / Add / Subtract / Intersect modes
 - [x] Pan / zoom / rotate view
-- [x] Undo / redo (configurable depth, defaults 100)
-- [x] New document (custom canvas size + background color)
+- [x] Undo / redo
+- [x] New document
 - [x] Open image from file
 - [x] Save / Open native `.darkly` document
 - [x] Export to PNG / JPEG / WebP file
-- [x] Clipboard copy / cut / paste (PNG via browser clipboard)
+- [x] Clipboard copy / cut / paste
 
 ### Important — expected for serious work
-- [x] Generic transform tool (translate / scale / rotate gizmo — floating content + transformable voids)
-- [x] Perspective transform (transform-tool popout or right-click in transform mode → Perspective, drag the four corners for a vanishing-point warp; floating content and voids)
+- [x] Generic transform tool
+- [x] Perspective transform
 - [x] Merge down
 - [x] Duplicate layer / group
 - [x] Crop to selection
 - [x] Canvas resize
 - [x] Image rescale
-- [x] Select All / Deselect / Invert as menu+hotkey actions
-- [x] Command palette (Ctrl+Shift+P)
-- [x] Application menu (File/Edit/Select/… , pinnable to top bar)
+- [x] Select All / Deselect / Invert
+- [x] Command palette
+- [x] Application menu
 - [x] Autosave + crash recovery
-- [x] Filter layers (non-destructive; isolate to one layer via a group)
--     [ ] Brightness / Contrast
--     [ ] Hue / Saturation / Lightness
--     [ ] Levels
--     [x] Curves
--     [x] Invert colors
--     [ ] Desaturate
+- [x] Filter layers
+    - [ ] Brightness / Contrast
+    - [ ] Hue / Saturation / Lightness
+    - [ ] Levels
+    - [x] Curves
+    - [x] Invert colors
+    - [ ] Desaturate
 - [ ] Clipping mask
 - [x] Feather + antialias
-- [x] Grow / Shrink / Border / Smooth as discrete commands
+- [x] Grow / Shrink / Border / Smooth
 - [x] Flip canvas H / V
 - [x] Rotate canvas 90° CW / CCW / 180°
 - [x] Flip layer / selection H / V
-- [ ] Text tool / text layers
 - [ ] Recent colors
 - [ ] Saved swatches / palettes
+- [ ] Palette popup
+- [ ] Navigator / overview window
 - [ ] History panel UI
 - [x] Mirror view
-- [x] Reset view (rotation / mirror / pan / zoom-to-fit)
-- [x] Canvas-rotation snapping (cardinal 45° detent + 15° discrete)
+- [x] Reset view
+- [x] Canvas-rotation snapping
 - [x] Fit to screen / center view
 - [ ] 100% / zoom presets
-- [ ] Symmetry / mirror painting (X, Y, radial)
-- [x] Installable PWA — offline app shell, add to home screen
+- [ ] Symmetry / mirror painting
+- [x] Installable PWA
 - [x] Krita / Photoshop / GIMP hotkey presets
-- [x] Settings modal (8 config sections, typed widgets), theme system
-- [x] Hotkey system + searchable cheatsheet (80+ rebindable actions)
-- [x] Floating layers (transient paste / transform)
+- [x] Settings modal
+- [x] Theme system
+- [x] Hotkey system + searchable cheatsheet
+- [x] Floating layers
 
 ### Advanced & specialized — power-user, niche, and polish
-- [x] Veils (stackable viewport post-process effects: frozen, grain, lens blur, monochrome, painting, pixelate, rainy glass, VHS, watercolor)
-- [x] Veil picker with live animated previews
-- [x] Void layers (domain‑warped FBM noise)
-- [x] Camera void (live webcam, positioned with the on-canvas transform gizmo)
-- [x] Screenshare void (live `getDisplayMedia` capture, positioned with the on-canvas transform gizmo)
-- [x] Group blend mode / opacity (isolated + passthrough compositing)
-- [ ] Brush save/load + editable nodes/wires (e.g. YAML)
+- [x] Veils
+- [x] Veil picker
+- [x] Void layers
+- [x] Camera void
+- [x] Screenshare void
+- [x] Group blend mode / opacity
+- [ ] Brush save/load + editable nodes/wires
 - [ ] Recent files
 - [ ] PSD / XCF / KRA import
 - [ ] Perspective, skew, free distort
@@ -175,13 +178,11 @@ For a feature to count, it must be:
 - [ ] Threshold
 - [ ] Posterize
 - [ ] Color harmonies
-- [ ] Palette file import (.aco, .gpl)
-- [ ] Palette Popup
-- [ ] Navigator / overview window
+- [ ] Palette file import
 - [ ] Trim to content / autocrop
-- [ ] Stroke selection (paint along marching ants)
+- [ ] Stroke selection
 - [ ] Save / load selection to channel
-- [ ] Snap canvas to right angles (0, 90, 180, 270)
+- [ ] Snap canvas to right angles
 - [ ] Branched history
 
 ## Getting started
