@@ -36,7 +36,13 @@ function deferred<T>() {
     return { promise, resolve };
 }
 
-const INFO = { origin: [0, 0] as [number, number], w: 10, h: 10, mode: 0, affine: [1, 0, 0, 1, 0, 0] };
+const INFO = {
+    origin: [0, 0] as [number, number],
+    w: 10,
+    h: 10,
+    mode: 0,
+    matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+};
 
 beforeEach(() => {
     pushSpy.mockClear();

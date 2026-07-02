@@ -94,9 +94,9 @@ For a feature to count, it must be:
     - [x] Watercolor
     - [x] Liquify
     - [ ] Clone
-    - [ ] Blur
+    - [x] Blur
     - [ ] Dodge/burn
-    - [ ] Calligraphy
+    - [x] Calligraphy
     - [ ] Oil / Impasto
 - [x] Brush tool, eraser, fill (flood), gradient (linear), color picker
 - [x] Pressure / tilt / spacing / distance / angle inputs
@@ -118,6 +118,7 @@ For a feature to count, it must be:
 
 ### Important — expected for serious work
 - [x] Generic transform tool (translate / scale / rotate gizmo — floating content + transformable voids)
+- [x] Perspective transform (transform-tool popout or right-click in transform mode → Perspective, drag the four corners for a vanishing-point warp; floating content and voids)
 - [x] Merge down
 - [x] Duplicate layer / group
 - [x] Crop to selection
@@ -131,7 +132,7 @@ For a feature to count, it must be:
 -     [ ] Brightness / Contrast
 -     [ ] Hue / Saturation / Lightness
 -     [ ] Levels
--     [ ] Curves
+-     [x] Curves
 -     [x] Invert colors
 -     [ ] Desaturate
 - [ ] Clipping mask
@@ -145,7 +146,9 @@ For a feature to count, it must be:
 - [ ] Saved swatches / palettes
 - [ ] History panel UI
 - [x] Mirror view
-- [ ] Fit to screen
+- [x] Reset view (rotation / mirror / pan / zoom-to-fit)
+- [x] Canvas-rotation snapping (cardinal 45° detent + 15° discrete)
+- [x] Fit to screen / center view
 - [ ] 100% / zoom presets
 - [ ] Symmetry / mirror painting (X, Y, radial)
 - [x] Installable PWA — offline app shell, add to home screen
@@ -210,6 +213,21 @@ chromium --enable-features=Vulkan --enable-unsafe-webgpu
 
 You can verify the active backend at `chrome://gpu` - look for "Vulkan" under Graphics Feature Status. On macOS and Windows this is generally not needed (Metal and D3D12 are used by default).
 
+## Use it in your own project
+
+Darkly's core is a standalone, platform-agnostic Rust crate, [`darkly`](https://crates.io/crates/darkly). The document model, brush engine, GPU compositor, and undo system all live here with zero platform dependencies, and run anywhere [wgpu](https://wgpu.rs) does: native (Vulkan / Metal / DX12) or the browser (WebGPU). The app above is a Svelte frontend over this exact crate, through a thin WebAssembly bridge.
+
+If you're building a graphics tool in Rust -- a drawing app, annotation layer, whiteboard, texture editor, etc. -- you can embed the engine instead of writing all these features from scratch.
+
+[![crates.io](https://img.shields.io/crates/v/darkly?style=for-the-badge&logo=rust&label=crates.io&labelColor=black&color=9500ff)](https://crates.io/crates/darkly)
+[![docs.rs](https://img.shields.io/docsrs/darkly?style=for-the-badge&logo=docsdotrs&labelColor=black&color=4400ff)](https://docs.rs/darkly)
+
+```sh
+cargo add darkly
+```
+
+See the [crate README](crates/darkly/README.md) for a runnable example, and the [API docs](https://docs.rs/darkly) for full details.
+
 ## Use of AI
 
 It's acceptable to use AI for this codebase, but careless vibe coding is **strictly forbidden**.
@@ -235,6 +253,8 @@ Darkly stands on the shoulders of giants. Three programs in particular have infl
 **[Graphite](https://graphite.art/)** ([source](https://github.com/GraphiteEditor/Graphite)) - founded by **Keavon Chambers** (@Keavon), with the core team of **Dennis Kobert** (@TrueDoctor), **Timon Schelling** (@timon-schelling), and **Adam Gerhant** (@pendapia), plus heroic contributions from **Hypercube** (@0HyperCube), **James Lindsay**, and [hundreds more](https://github.com/GraphiteEditor/Graphite/graphs/contributors). Graphite is a pioneer in bringing serious 2D graphics tooling to **Rust + WebAssembly + WebGPU**.
 
 While Darkly's architecture is fundamentally different, it was really insightful to see how these tools tackled many of the same hard problems, and their unique and smart approaches that made them pillars of open source!
+
+A special thank you to **[Nick Cameron](https://github.com/nrc)** for graciously gifting us the `darkly` crate on crates.io. 💜
 
 ### Veils & Voids
 

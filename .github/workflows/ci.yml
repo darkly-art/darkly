@@ -14,13 +14,19 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  # Disable HTTP/2 multiplexing for crates.io downloads. curl's HTTP/2
+  # against the GitHub-hosted runner network intermittently fails with
+  # "[16] Error in the HTTP2 framing layer", aborting dependency fetches
+  # (e.g. moxcms via image). Forcing HTTP/1.1 makes registry fetches
+  # reliable at a negligible throughput cost.
+  CARGO_HTTP_MULTIPLEXING: "false"
 
 jobs:
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -30,7 +36,7 @@ jobs:
     name: clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -40,7 +46,7 @@ jobs:
     name: clippy (wasm32)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -51,7 +57,7 @@ jobs:
     name: cargo test + coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install Mesa Vulkan software renderer (lavapipe)
         run: |
           sudo apt-get update
@@ -86,7 +92,7 @@ jobs:
     name: wasm-pack build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -101,7 +107,7 @@ jobs:
     name: frontend typecheck + build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
           node-version: 22

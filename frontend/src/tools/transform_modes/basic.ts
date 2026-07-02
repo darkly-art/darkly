@@ -16,7 +16,16 @@ import {
     affineTranslate,
     type Affine2D,
 } from '../transform_affine';
+import {
+    affineToMat3,
+    mat3Apply,
+    mat3Inverse,
+    mat3ToAffine,
+    type Mat3,
+} from '../transform_projective';
+import { pointInPolygon } from './types';
 import type { BBoxPolygon, DragSession, GizmoGeometry, TransformMode } from './types';
+import { snapAngleToGrid } from '../../lib/angle';
 
 const enum Handle {
     TopLeft, Top, TopRight, Right, BottomRight, Bottom, BottomLeft, Left,
@@ -91,9 +100,11 @@ interface BasicDrag {
     startAngle: number;
 }
 
-/** Convert a source-local point to canvas space using the geometry. */
+/** Convert a source-local point to canvas space using the geometry. The
+ *  carried matrix is a `Mat3`; for basic mode its bottom row is [0,0,1] so the
+ *  perspective divide is a no-op. */
 function toCanvas(geo: GizmoGeometry, lx: number, ly: number): [number, number] {
-    const [cx, cy] = affineTransform(geo.matrix, lx, ly);
+    const [cx, cy] = mat3Apply(geo.matrix, lx, ly);
     return [cx + geo.origin[0], cy + geo.origin[1]];
 }
 
@@ -101,22 +112,64 @@ function mid(a: [number, number], b: [number, number]): [number, number] {
     return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 }
 
-/** Ray-casting point-in-polygon test. */
-function pointInPolygon(px: number, py: number, poly: readonly [number, number][]): boolean {
-    let inside = false;
-    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-        const [xi, yi] = poly[i];
-        const [xj, yj] = poly[j];
-        if (((yi > py) !== (yj > py)) &&
-            (px < ((xj - xi) * (py - yi)) / (yj - yi) + xi)) {
-            inside = !inside;
-        }
+/** The four source-rect corners in TL, TR, BR, BL order. */
+function srcCorners(w: number, ht: number): [number, number][] {
+    return [
+        [0, 0],
+        [w, 0],
+        [w, ht],
+        [0, ht],
+    ];
+}
+
+/**
+ * Least-squares affine fit of `src` corners → `dst` corners — the affine that
+ * minimizes the squared error over the four correspondences (solving the
+ * 3-unknown normal equations for `[a, b, tx]` and `[c, d, ty]` independently).
+ *
+ * This is an honest fit, NOT a "drop the projective bottom row" truncation:
+ * truncation ignores the per-pixel perspective divide and yields a visibly
+ * wrong parallelogram when switching out of a strongly-warped perspective quad.
+ * For an affine (parallelogram) input the fit is exact.
+ */
+function leastSquaresAffine(src: [number, number][], dst: [number, number][]): Affine2D {
+    // Normal-equation accumulators: A = MᵀM (3×3 symmetric, rows of M are
+    // [sx, sy, 1]); bx = Mᵀ·dstX, by = Mᵀ·dstY.
+    let s00 = 0, s01 = 0, s02 = 0, s11 = 0, s12 = 0, s22 = 0;
+    let bx0 = 0, bx1 = 0, bx2 = 0, by0 = 0, by1 = 0, by2 = 0;
+    for (let i = 0; i < src.length; i++) {
+        const [sx, sy] = src[i];
+        const [dx, dy] = dst[i];
+        s00 += sx * sx; s01 += sx * sy; s02 += sx;
+        s11 += sy * sy; s12 += sy; s22 += 1;
+        bx0 += sx * dx; bx1 += sy * dx; bx2 += dx;
+        by0 += sx * dy; by1 += sy * dy; by2 += dy;
     }
-    return inside;
+    const normal: Mat3 = [s00, s01, s02, s01, s11, s12, s02, s12, s22];
+    const inv = mat3Inverse(normal);
+    // Degenerate source (zero extent) — nothing to fit; keep identity.
+    if (!inv) return [1, 0, 0, 0, 1, 0];
+    const solve = (b0: number, b1: number, b2: number) =>
+        [
+            inv[0] * b0 + inv[1] * b1 + inv[2] * b2,
+            inv[3] * b0 + inv[4] * b1 + inv[5] * b2,
+            inv[6] * b0 + inv[7] * b1 + inv[8] * b2,
+        ] as [number, number, number];
+    const [a, b, tx] = solve(bx0, bx1, bx2);
+    const [c, d, ty] = solve(by0, by1, by2);
+    return [a, b, tx, c, d, ty];
 }
 
 export const basicMode: TransformMode = {
     tag: 0,
+    label: 'Free transform',
+    liveCapable: true,
+
+    seedMatrix(geo: GizmoGeometry): Mat3 {
+        const src = srcCorners(geo.srcW, geo.srcH);
+        const dst = src.map(([x, y]) => mat3Apply(geo.matrix, x, y)) as [number, number][];
+        return affineToMat3(leastSquaresAffine(src, dst));
+    },
 
     buildOverlay(geo: GizmoGeometry, o: OverlayBuilder): BBoxPolygon {
         const { srcW, srcH } = geo;
@@ -159,7 +212,9 @@ export const basicMode: TransformMode = {
 
     beginDrag(geo, handleId, cx, cy): DragSession {
         const handle = handleId as Handle;
-        const initialMatrix: Affine2D = [...geo.matrix];
+        // Internal handle math stays affine; lower the carried Mat3 here and
+        // lift the result back to a Mat3 at the `updateDrag` boundary.
+        const initialMatrix: Affine2D = mat3ToAffine(geo.matrix);
         const startCanvas: [number, number] = [cx, cy];
 
         const anchorLocal = handleLocal(oppositeHandle(handle), geo.srcW, geo.srcH);
@@ -174,7 +229,7 @@ export const basicMode: TransformMode = {
         return drag;
     },
 
-    updateDrag(geo, dragSession, cx, cy, shift): Affine2D {
+    updateDrag(geo, dragSession, cx, cy, shift): Mat3 {
         const drag = dragSession as BasicDrag;
         const { handle, initialMatrix, startCanvas, anchorLocal, centerCanvas, startAngle } = drag;
         const { srcW, srcH, origin } = geo;
@@ -182,7 +237,7 @@ export const basicMode: TransformMode = {
         if (handle === Handle.Body) {
             const dx = cx - startCanvas[0];
             const dy = cy - startCanvas[1];
-            return affineMultiply(affineTranslate(dx, dy), initialMatrix);
+            return affineToMat3(affineMultiply(affineTranslate(dx, dy), initialMatrix));
         }
 
         if (handle === Handle.Rotate) {
@@ -193,17 +248,18 @@ export const basicMode: TransformMode = {
                 // the gesture began (off by the free rotation already accrued
                 // when Shift is pressed mid-drag). `atan2(c, a)` recovers the
                 // base rotation baked into `initialMatrix`.
-                const snap = Math.PI / 12;
                 const base = Math.atan2(initialMatrix[3], initialMatrix[0]);
-                angle = Math.round((base + angle) / snap) * snap - base;
+                angle = snapAngleToGrid(base + angle) - base;
             }
             const cLocal: [number, number] = [srcW / 2, srcH / 2];
             const cOffset = affineTransform(initialMatrix, cLocal[0], cLocal[1]);
-            return affineMultiply(
-                affineTranslate(cOffset[0], cOffset[1]),
+            return affineToMat3(
                 affineMultiply(
-                    affineRotate(angle),
-                    affineMultiply(affineTranslate(-cOffset[0], -cOffset[1]), initialMatrix),
+                    affineTranslate(cOffset[0], cOffset[1]),
+                    affineMultiply(
+                        affineRotate(angle),
+                        affineMultiply(affineTranslate(-cOffset[0], -cOffset[1]), initialMatrix),
+                    ),
                 ),
             );
         }
@@ -212,7 +268,7 @@ export const basicMode: TransformMode = {
         const mouseOffset: [number, number] = [cx - origin[0], cy - origin[1]];
 
         const inv = affineInverse(initialMatrix);
-        if (!inv) return initialMatrix;
+        if (!inv) return affineToMat3(initialMatrix);
         const mouseLocal = affineTransform(inv, mouseOffset[0], mouseOffset[1]);
 
         const dLocalX = dragLocal[0] - anchorLocal[0];
@@ -232,11 +288,16 @@ export const basicMode: TransformMode = {
             sy = uniform * Math.sign(sy || 1);
         }
 
-        return affineMultiply(
-            initialMatrix,
+        return affineToMat3(
             affineMultiply(
-                affineTranslate(anchorLocal[0], anchorLocal[1]),
-                affineMultiply(affineScale(sx, sy), affineTranslate(-anchorLocal[0], -anchorLocal[1])),
+                initialMatrix,
+                affineMultiply(
+                    affineTranslate(anchorLocal[0], anchorLocal[1]),
+                    affineMultiply(
+                        affineScale(sx, sy),
+                        affineTranslate(-anchorLocal[0], -anchorLocal[1]),
+                    ),
+                ),
             ),
         );
     },

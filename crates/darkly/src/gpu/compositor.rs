@@ -635,6 +635,15 @@ pub struct Compositor {
     /// resource, exactly like `void_registry`'s pipelines.
     filter_pipeline_registry: crate::gpu::filter::FilterPipelineRegistry,
 
+    /// Per-filter-layer GPU state for *parametric* filters (curves, …). The
+    /// stored `Vec<ParamValue>` is the change-detection fingerprint — when a
+    /// layer's params differ from it, the effect rebuilds its resources (the
+    /// LUT) into the paired [`EffectCache`] during the pre-compose ensure phase
+    /// (`sync_projection_states`). Compose then merely binds the cache. Entries
+    /// for removed filter layers are pruned there too. Parameter-free filters
+    /// (invert) never populate this — their `ensure` is a no-op.
+    filter_caches: HashMap<LayerId, (Vec<ParamValue>, crate::gpu::effect::EffectCache)>,
+
     // --- Floating Content Transform ---
     pub(super) transform_pass: crate::gpu::transform::TransformPass,
 
@@ -889,7 +898,7 @@ impl Compositor {
                 label: Some("mask-lerp-shader"),
                 source: wgpu::ShaderSource::Wgsl(
                     crate::gpu::canvas_lib::with_canvas_lib(include_str!(
-                        "../../../../shaders/mask_lerp.wgsl"
+                        "../../shaders/mask_lerp.wgsl"
                     ))
                     .into(),
                 ),
@@ -984,9 +993,7 @@ impl Compositor {
 
         let present_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("present-shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/present.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/present.wgsl").into()),
         });
 
         let present_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1130,6 +1137,7 @@ impl Compositor {
             veil_chain,
             void_registry: VoidRegistry::new(),
             filter_pipeline_registry: crate::gpu::filter::FilterPipelineRegistry::new(),
+            filter_caches: HashMap::new(),
             transform_pass,
             rescale_pass,
             ortho_pass,
@@ -1513,8 +1521,12 @@ impl Compositor {
         node_id: LayerId,
         region: CanvasRect,
         mask_view: Option<&wgpu::TextureView>,
-        pipeline: &crate::gpu::effect::MaskedFilterPipeline,
+        pipeline: &dyn crate::gpu::filter::FilterEffect,
     ) {
+        // The destructive path serves only parameter-free filters (parametric
+        // ones are excluded upstream in `apply_filter`), so a throwaway empty
+        // cache is all the effect's `render` needs — invert ignores it.
+        let cache = crate::gpu::effect::EffectCache::empty();
         let ran = run_filter_region(
             &self.node_textures,
             device,
@@ -1524,7 +1536,7 @@ impl Compositor {
             region,
             mask_view,
             |dev, _q, enc, src, mask, out, _w, _h, fmt| {
-                pipeline.render(dev, enc, src, mask, out, fmt)
+                pipeline.render(dev, enc, src, mask, out, fmt, &cache)
             },
         );
         if ran {
@@ -3464,6 +3476,38 @@ impl Compositor {
             let pms = &self.mask_snapshot_state[&host_id];
             queue.write_buffer(&pms.uniform_buf, 0, bytemuck::bytes_of(&lu));
         }
+
+        // Build/refresh parametric-filter GPU resources (the curves LUT). This
+        // is the one place with both `device` and `queue`; the compose walk that
+        // follows only *binds* the cache. Walk every filter layer — the loops
+        // above (`layer_cache.keys()`, `masked_in_place_hosts()`) miss an
+        // unmasked filter layer. Rebuild only when the param fingerprint changes,
+        // and prune caches for filter layers that no longer exist.
+        let filters: Vec<(LayerId, String, Vec<ParamValue>)> = doc
+            .all_filter_layers()
+            .iter()
+            .map(|f| (f.id, f.pipeline.clone(), f.params.clone()))
+            .collect();
+        let live: HashSet<LayerId> = filters.iter().map(|(id, ..)| *id).collect();
+        self.filter_caches.retain(|id, _| live.contains(id));
+        for (id, pipeline_id, params) in filters {
+            let unchanged = self
+                .filter_caches
+                .get(&id)
+                .is_some_and(|(stored, _)| *stored == params);
+            if unchanged {
+                continue;
+            }
+            let Some(effect) = self.filter_pipeline_registry.pipeline(&pipeline_id, device) else {
+                continue;
+            };
+            let entry = self
+                .filter_caches
+                .entry(id)
+                .or_insert_with(|| (Vec::new(), crate::gpu::effect::EffectCache::empty()));
+            effect.ensure(device, queue, &params, &mut entry.1);
+            entry.0 = params;
+        }
     }
 
     /// De-fused leaf-mask compose: host content → projection, mask modulates
@@ -3844,6 +3888,18 @@ impl Compositor {
 
         {
             let gs = &self.group_state[&parent_group];
+            // The LUT (for parametric filters) is built in `sync_projection_states`
+            // before this walk, keyed by `filter.id`. Parameter-free filters have
+            // an empty cache; an absent entry (should not happen post-sync) falls
+            // back to a transient empty one.
+            let empty;
+            let cache = match self.filter_caches.get(&filter.id) {
+                Some((_, c)) => c,
+                None => {
+                    empty = crate::gpu::effect::EffectCache::empty();
+                    &empty
+                }
+            };
             pipeline.render(
                 device,
                 encoder,
@@ -3851,6 +3907,7 @@ impl Compositor {
                 None,
                 &gs.accum.views[dst],
                 wgpu::TextureFormat::Rgba8Unorm,
+                cache,
             );
         }
 

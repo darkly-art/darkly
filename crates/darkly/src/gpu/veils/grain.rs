@@ -283,7 +283,7 @@ impl Veil for Grain {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("grain-apply-shader"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../../shaders/veils/grain.wgsl").into(),
+                include_str!("../../../shaders/veils/grain.wgsl").into(),
             ),
         });
 
@@ -484,9 +484,7 @@ fn create_evolve_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("grain-shader"),
-        source: wgpu::ShaderSource::Wgsl(
-            include_str!("../../../../../shaders/veils/grain.wgsl").into(),
-        ),
+        source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/veils/grain.wgsl").into()),
     });
 
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

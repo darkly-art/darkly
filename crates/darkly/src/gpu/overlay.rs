@@ -205,9 +205,7 @@ impl ToolOverlay {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("overlay-shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/overlay.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/overlay.wgsl").into()),
         });
 
         let vertex_state = wgpu::VertexState {

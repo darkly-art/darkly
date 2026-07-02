@@ -6,32 +6,35 @@
 //! and `Compositor::filter_node_region` supplies the region plumbing. This
 //! file is everything specific to invert.
 
+use std::sync::Arc;
+
 use crate::gpu::effect::MaskedFilterPipeline;
-use crate::gpu::filter::FilterPipelineRegistration;
+use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
 
 /// Prepend the shared color atom to the invert shader so `fs_invert` /
 /// `fs_invert_masked` can call `invert_color` — the same `include_str!`
 /// concatenation `voids/noise.rs` uses for `lib/fbm.wgsl`.
 fn shader_source() -> String {
-    let color = include_str!("../../../../../shaders/lib/color.wgsl");
-    let invert = include_str!("../../../../../shaders/filters/invert.wgsl");
+    let color = include_str!("../../../shaders/lib/color.wgsl");
+    let invert = include_str!("../../../shaders/filters/invert.wgsl");
     format!("{color}\n{invert}")
 }
 
-fn create_pipeline(device: &wgpu::Device) -> MaskedFilterPipeline {
-    MaskedFilterPipeline::new(
+fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
+    Arc::new(MaskedFilterPipeline::new(
         device,
         "filter-invert",
         &shader_source(),
         "fs_invert",
         "fs_invert_masked",
-    )
+    ))
 }
 
 pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "invert",
         display_name: "Invert Colors",
+        params: &[],
         create_pipeline,
     }
 }

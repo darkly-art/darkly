@@ -86,7 +86,7 @@ impl ApplyMaskPipeline {
             label: Some("apply-mask-shader"),
             source: wgpu::ShaderSource::Wgsl(
                 crate::gpu::canvas_lib::with_canvas_lib(include_str!(
-                    "../../../../shaders/apply_mask.wgsl"
+                    "../../shaders/apply_mask.wgsl"
                 ))
                 .into(),
             ),

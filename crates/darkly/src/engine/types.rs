@@ -120,6 +120,11 @@ pub enum LayerInfo {
         /// Stable filter `type_id` (e.g. `"invert"`) — UI resolves to a
         /// display label via `filter_types()`.
         pipeline: String,
+        /// Param schema + current values, in the order the filter's `ParamDef`
+        /// slice declares them. Empty for parameter-free filters (invert);
+        /// carries the five tone curves for `curves`. Same shape the void panel
+        /// uses.
+        params: Vec<ParamInfo>,
     },
     #[serde(rename_all = "camelCase")]
     Group {
@@ -435,6 +440,7 @@ pub struct ClipboardExport {
 pub(crate) fn node_to_layer_info(
     doc: &crate::document::Document,
     void_registry: &crate::gpu::void::VoidRegistry,
+    filter_registry: &crate::gpu::filter::FilterPipelineRegistry,
     node_id: crate::layer::LayerId,
 ) -> Option<LayerInfo> {
     use crate::layer::{Layer, LayerNode};
@@ -497,26 +503,35 @@ pub(crate) fn node_to_layer_info(
                     params,
                 }
             }
-            Layer::Filter(f) => LayerInfo::Filter {
-                id: f.id.to_ffi() as f64,
-                name: f.common.name.clone(),
-                visible: f.common.visible,
-                locked: f.common.locked,
-                editable,
-                can_have_mask: kind.can_have_mask,
-                can_rename: kind.can_rename,
-                has_thumbnail: kind.has_thumbnail,
-                icon: kind.icon,
-                kind_name: kind.display_name,
-                opacity: f.blend.opacity,
-                blend_mode: f.blend.blend_mode.type_id,
-                modifiers: f
-                    .filters
+            Layer::Filter(f) => {
+                let param_defs = filter_registry.params(&f.pipeline);
+                let params = param_defs
                     .iter()
-                    .filter_map(|mid| doc.find_filter(*mid).map(|m| modifier_to_info(doc, m)))
-                    .collect(),
-                pipeline: f.pipeline.clone(),
-            },
+                    .enumerate()
+                    .map(|(j, def)| ParamInfo::from_def(def, f.params.get(j)))
+                    .collect();
+                LayerInfo::Filter {
+                    id: f.id.to_ffi() as f64,
+                    name: f.common.name.clone(),
+                    visible: f.common.visible,
+                    locked: f.common.locked,
+                    editable,
+                    can_have_mask: kind.can_have_mask,
+                    can_rename: kind.can_rename,
+                    has_thumbnail: kind.has_thumbnail,
+                    icon: kind.icon,
+                    kind_name: kind.display_name,
+                    opacity: f.blend.opacity,
+                    blend_mode: f.blend.blend_mode.type_id,
+                    modifiers: f
+                        .filters
+                        .iter()
+                        .filter_map(|mid| doc.find_filter(*mid).map(|m| modifier_to_info(doc, m)))
+                        .collect(),
+                    pipeline: f.pipeline.clone(),
+                    params,
+                }
+            }
         },
         LayerNode::Group(g) => LayerInfo::Group {
             id: g.id.to_ffi() as f64,
@@ -542,7 +557,7 @@ pub(crate) fn node_to_layer_info(
                 .children
                 .iter()
                 .rev()
-                .filter_map(|cid| node_to_layer_info(doc, void_registry, *cid))
+                .filter_map(|cid| node_to_layer_info(doc, void_registry, filter_registry, *cid))
                 .collect(),
         },
     };

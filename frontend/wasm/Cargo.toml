@@ -3,6 +3,9 @@ name = "darkly-wasm"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
+# The browser bridge depends on `darkly` by path and is built with wasm-pack,
+# never shipped to a registry.
+publish = false
 
 [lib]
 crate-type = ["cdylib"]

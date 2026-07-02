@@ -29,6 +29,27 @@ pub const MAX_PREVIEW_MASK_SIDE: u32 = 512;
 /// so the linear-upsampling overlay sample has enough texels to read.
 pub const MIN_PREVIEW_MASK_SIDE: u32 = 128;
 
+/// Power-of-two preview-mask side for a dab whose canvas-pixel half-extent
+/// is `bbox_radius`, clamped to `[MIN_PREVIEW_MASK_SIDE,
+/// MAX_PREVIEW_MASK_SIDE]`.
+///
+/// Robust against non-finite or astronomically large radii: a brush extent
+/// can legitimately blow up (e.g. a thin-star superformula `r(θ)` that
+/// peaks in the thousands), and the `f32 → u32` cast saturates `+∞` / huge
+/// values to `u32::MAX`. Capping the requested side to `MAX_PREVIEW_MASK_SIDE`
+/// *before* `next_power_of_two` keeps the round-up from overflowing `u32` —
+/// otherwise `u32::MAX.next_power_of_two()` panics and takes down the hover
+/// preview.
+fn preview_mask_side(bbox_radius: f32) -> u32 {
+    // `max(0.0)` maps NaN and negatives to 0; the `as u32` cast then
+    // saturates `+∞` / out-of-range values to `u32::MAX`, which the clamp
+    // pulls back into range.
+    let requested = ((bbox_radius * 2.0).ceil().max(0.0) as u32).clamp(1, MAX_PREVIEW_MASK_SIDE);
+    requested
+        .next_power_of_two()
+        .clamp(MIN_PREVIEW_MASK_SIDE, MAX_PREVIEW_MASK_SIDE)
+}
+
 /// Per-context brush perf counters. Drained at `submit_final` and folded
 /// into the engine-side accumulator via [`AddAssign`]. Engine-only events
 /// (mid-stroke full re-renders) live directly on `DarklyEngine`, not on
@@ -489,10 +510,7 @@ impl<'a> BrushGpuContext<'a> {
         bbox_radius: f32,
     ) -> Option<(wgpu::TextureView, u32, u32)> {
         let preview = self.preview.as_mut()?;
-        let requested = ((bbox_radius * 2.0).ceil() as u32).max(1);
-        let side = requested
-            .next_power_of_two()
-            .clamp(MIN_PREVIEW_MASK_SIDE, MAX_PREVIEW_MASK_SIDE);
+        let side = preview_mask_side(bbox_radius);
         if let Some(overlay) = preview.mask_overlay.as_mut() {
             let view = overlay
                 .ensure_cursor_preview_mask(self.device, side, side)
@@ -684,4 +702,32 @@ pub struct DabFootprint {
     pub copy_local_origin: [u32; 2],
     /// `scratch read mirror` snapshot dimensions in pixels.
     pub copy_size: [u32; 2],
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_mask_side_is_clamped_power_of_two() {
+        // Normal radii round up to the next power of two within range.
+        assert_eq!(preview_mask_side(100.0), 256); // diameter 200 → 256
+        assert_eq!(preview_mask_side(0.0), MIN_PREVIEW_MASK_SIDE); // tiny → floor
+        assert_eq!(preview_mask_side(40.0), MIN_PREVIEW_MASK_SIDE); // diameter 80 → 128 floor
+    }
+
+    #[test]
+    fn preview_mask_side_never_overflows_on_blown_up_extent() {
+        // Regression: a thin-star superformula `r(θ)` can explode the brush
+        // extent so `bbox_radius` becomes huge or `+∞`. The old inline sizing
+        // cast that to `u32::MAX` and called `next_power_of_two`, which
+        // overflows and panicked the hover preview. The side must instead pin
+        // to the cap.
+        assert_eq!(preview_mask_side(f32::INFINITY), MAX_PREVIEW_MASK_SIDE);
+        assert_eq!(preview_mask_side(1.0e21), MAX_PREVIEW_MASK_SIDE);
+        assert_eq!(preview_mask_side(f32::MAX), MAX_PREVIEW_MASK_SIDE);
+        // Non-finite / negative degenerate inputs fall to the floor, not a panic.
+        assert_eq!(preview_mask_side(f32::NAN), MIN_PREVIEW_MASK_SIDE);
+        assert_eq!(preview_mask_side(-5.0), MIN_PREVIEW_MASK_SIDE);
+    }
 }

@@ -6,6 +6,7 @@
     import { tooltipForAction } from '../../config/store.svelte';
     import { toast } from '../../state/toast.svelte';
     import Icon from '../../icons/Icon.svelte';
+    import ContextMenu, { type ContextMenuItem } from '../ContextMenu.svelte';
 
     interface Modifier {
         id: number; kind: string; name: string; visible: boolean; locked: boolean;
@@ -143,9 +144,6 @@
         maskMenuX = e.clientX;
         maskMenuY = e.clientY;
         showMaskMenu = true;
-
-        const close = () => { showMaskMenu = false; document.removeEventListener('click', close); };
-        requestAnimationFrame(() => document.addEventListener('click', close));
     }
 
     function onLayerContextMenu(e: MouseEvent) {
@@ -163,10 +161,38 @@
         layerMenuX = e.clientX;
         layerMenuY = e.clientY;
         showLayerMenu = true;
-
-        const close = () => { showLayerMenu = false; document.removeEventListener('click', close); };
-        requestAnimationFrame(() => document.addEventListener('click', close));
     }
+
+    let maskMenuItems = $derived<ContextMenuItem[]>([
+        { label: maskEnabled ? 'Disable mask' : 'Enable mask', onclick: toggleMaskEnabled },
+        { label: isMaskIsolated ? 'Hide mask' : 'Show mask', onclick: toggleShowMask },
+        { label: 'Apply mask', disabled: !editable, onclick: applyMask },
+        { label: 'Delete mask', disabled: !editable, onclick: removeMask },
+    ]);
+
+    let layerMenuItems = $derived.by<ContextMenuItem[]>(() => {
+        const items: ContextMenuItem[] = [
+            { label: dupLabel, onclick: menuDuplicate },
+        ];
+        if (!isMulti) {
+            items.push({ label: 'Add mask', disabled: !canAddMask, onclick: menuAddMask });
+        }
+        items.push({
+            label: mergeLabel,
+            disabled: !isMulti && (!canMergeDownForThis || !editable),
+            onclick: menuMerge,
+        });
+        if (!isMulti && hasMask) {
+            items.push({ label: 'Flatten', disabled: !editable, onclick: menuFlatten });
+        }
+        items.push({ separator: true });
+        items.push({
+            label: deleteLabel,
+            disabled: !isMulti && !editable,
+            onclick: menuDelete,
+        });
+        return items;
+    });
 
     // Structural menu items dispatch WITHOUT `ctx.layerId` — the action
     // handler reads `app.selectedLayerIds` (the right-click handler above
@@ -422,42 +448,24 @@
     </button>
 </div>
 
+<!-- Duplicate stays enabled even when locked: it reads the source and creates
+     a new layer rather than mutating the locked one. -->
 {#if showMaskMenu}
-    <div class="mask-menu" style:left="{maskMenuX}px" style:top="{maskMenuY}px">
-        <button onclick={toggleMaskEnabled}>
-            {maskEnabled ? 'Disable mask' : 'Enable mask'}
-        </button>
-        <button onclick={toggleShowMask}>
-            {isMaskIsolated ? 'Hide mask' : 'Show mask'}
-        </button>
-        <button onclick={applyMask} disabled={!editable}>Apply mask</button>
-        <button onclick={removeMask} disabled={!editable}>Delete mask</button>
-    </div>
+    <ContextMenu
+        x={maskMenuX}
+        y={maskMenuY}
+        items={maskMenuItems}
+        onclose={() => (showMaskMenu = false)}
+    />
 {/if}
 
 {#if showLayerMenu}
-    <div class="layer-menu" style:left="{layerMenuX}px" style:top="{layerMenuY}px">
-        <!-- Duplicate is a read-of-source / create-new-layer op; it does
-             not mutate the locked layer, so it stays enabled. -->
-        <button onclick={menuDuplicate}>
-            {dupLabel}
-        </button>
-        {#if !isMulti}
-            <button onclick={menuAddMask} disabled={!canAddMask}>
-                Add mask
-            </button>
-        {/if}
-        <button onclick={menuMerge} disabled={!isMulti && (!canMergeDownForThis || !editable)}>
-            {mergeLabel}
-        </button>
-        {#if !isMulti && hasMask}
-            <button onclick={menuFlatten} disabled={!editable}>Flatten</button>
-        {/if}
-        <div class="layer-menu-sep"></div>
-        <button onclick={menuDelete} disabled={!isMulti && !editable}>
-            {deleteLabel}
-        </button>
-    </div>
+    <ContextMenu
+        x={layerMenuX}
+        y={layerMenuY}
+        items={layerMenuItems}
+        onclose={() => (showLayerMenu = false)}
+    />
 {/if}
 
 <style>
@@ -599,71 +607,5 @@
         padding: 1px 4px;
         outline: none;
         min-width: 0;
-    }
-
-    .mask-menu {
-        position: fixed;
-        z-index: 1000;
-        background: var(--bg-active);
-        border: 1px solid var(--bg-hover);
-        border-radius: 6px;
-        padding: 4px 0;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-    }
-
-    .mask-menu button {
-        display: block;
-        width: 100%;
-        background: none;
-        border: none;
-        color: var(--text);
-        font-size: 12px;
-        padding: 6px 16px;
-        text-align: left;
-        cursor: pointer;
-        white-space: nowrap;
-    }
-
-    .mask-menu button:hover {
-        background: var(--bg-hover);
-    }
-
-    .layer-menu {
-        position: fixed;
-        z-index: 1000;
-        background: var(--bg-active);
-        border: 1px solid var(--bg-hover);
-        border-radius: 6px;
-        padding: 4px 0;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-        min-width: 160px;
-    }
-
-    .layer-menu button {
-        display: block;
-        width: 100%;
-        background: none;
-        border: none;
-        color: var(--text);
-        font-size: 12px;
-        padding: 6px 16px;
-        text-align: left;
-        cursor: pointer;
-        white-space: nowrap;
-    }
-
-    .layer-menu button:hover:not(:disabled) {
-        background: var(--bg-hover);
-    }
-
-    .layer-menu button:disabled {
-        color: var(--text-dim);
-        cursor: default;
-    }
-
-    .layer-menu-sep {
-        height: 1px;
-        background: var(--bg-hover);
-        margin: 4px 0;
     }
 </style>

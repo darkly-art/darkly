@@ -14,9 +14,11 @@
  */
 import { app } from '../state/app.svelte';
 import { OverlayBuilder } from '../canvas/gpu_overlay';
-import { IDENTITY, type Affine2D } from './transform_affine';
+import { MAT3_IDENTITY, type Mat3 } from './transform_projective';
 import {
+    allModes,
     modeForTag,
+    pointInPolygon,
     type BBoxPolygon,
     type DragSession,
     type GizmoGeometry,
@@ -29,16 +31,20 @@ import {
  * Implementations live next to their consumers (see `transform_bindings.ts`).
  */
 export interface TransformBinding {
+    /** Whether the consumer composites this transform live, every frame (a
+     *  void), versus committing it once (floating raster). A live binding
+     *  offers only `liveCapable` modes in the mode-switch menu. */
+    readonly live: boolean;
     /** Current bbox + transform, or `null` if the target is no longer valid. */
     read(): Promise<{
         origin: [number, number];
         w: number;
         h: number;
         mode: number;
-        affine: Affine2D;
+        matrix: Mat3;
     } | null>;
-    /** Live preview: push an updated affine for the given mode. */
-    update(affine: Affine2D, modeTag: number): void;
+    /** Live preview: push an updated 3×3 matrix for the given mode. */
+    update(matrix: Mat3, modeTag: number): void;
     /** Finalize. */
     commit(): void;
     /** Abandon (restore the pre-edit state). */
@@ -49,7 +55,7 @@ export class TransformGizmo {
     private canvasEl: HTMLCanvasElement;
     private binding: TransformBinding | null = null;
     private mode: TransformMode = modeForTag(0);
-    private geo: GizmoGeometry = { matrix: [...IDENTITY], origin: [0, 0], srcW: 0, srcH: 0 };
+    private geo: GizmoGeometry = { matrix: [...MAT3_IDENTITY], origin: [0, 0], srcW: 0, srcH: 0 };
     private drag: DragSession | null = null;
     private overlay: OverlayBuilder | null = null;
     private bbox: BBoxPolygon | null = null;
@@ -87,7 +93,7 @@ export class TransformGizmo {
         if (this.binding !== binding) return 'stale';
         if (!info) return 'gone';
         this.geo = {
-            matrix: [...info.affine],
+            matrix: [...info.matrix],
             origin: [...info.origin],
             srcW: info.w,
             srcH: info.h,
@@ -121,6 +127,45 @@ export class TransformGizmo {
         const { id } = this.mode.resolveHandle(this.geo, this.overlay, this.bbox, cx, cy);
         this.drag = this.mode.beginDrag(this.geo, id, cx, cy);
         return true;
+    }
+
+    /** Whether canvas point `(cx, cy)` is inside the current transform bbox. */
+    isInside(cx: number, cy: number): boolean {
+        return this.bbox ? pointInPolygon(cx, cy, this.bbox) : false;
+    }
+
+    /** Wire tag of the gizmo's current mode (matches the document's stored
+     *  `Transform::mode_tag`). */
+    get modeTag(): number {
+        return this.mode.tag;
+    }
+
+    /** Modes offered for the current binding: all registered modes, minus any
+     *  the binding can't render live. Empty when inactive. */
+    availableModes(): { tag: number; label: string }[] {
+        if (!this.binding) return [];
+        const live = this.binding.live;
+        return allModes()
+            .filter((m) => !live || m.liveCapable)
+            .map((m) => ({ tag: m.tag, label: m.label }));
+    }
+
+    /**
+     * Switch the gizmo to `tag`, seeding the new mode's matrix from the current
+     * geometry and **pushing it through the binding** — mode is
+     * document-derived (the stored `Transform`), not a session-local flag, so
+     * the next `adopt()` reads the same mode back and the gizmo stays put. A
+     * no-op when inactive or already in `tag`.
+     */
+    setMode(tag: number): void {
+        if (!this.binding || this.mode.tag === tag) return;
+        const target = modeForTag(tag);
+        const m = target.seedMatrix(this.geo);
+        this.geo.matrix = m;
+        this.mode = target;
+        this.binding.update(m, tag);
+        this.rebuildOverlay();
+        app.requestFrame();
     }
 
     pointerMove(cx: number, cy: number, shift: boolean): void {

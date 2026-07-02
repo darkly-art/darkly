@@ -111,7 +111,7 @@ pub fn registry() -> &'static BlendModeRegistry {
 /// Per-mode arms are emitted in `gpu_value` order so the `case` numbers
 /// match what the rest of the engine reads from `BlendModeRegistration.gpu_value`.
 pub fn build_composite_source() -> String {
-    const TEMPLATE: &str = include_str!("../../../../shaders/composite.wgsl");
+    const TEMPLATE: &str = include_str!("../../shaders/composite.wgsl");
     const MARKER: &str = "// @blend-switch";
 
     let mut arms = String::new();

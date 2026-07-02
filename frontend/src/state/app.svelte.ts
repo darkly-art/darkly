@@ -148,7 +148,7 @@ export class DarklyInstance {
      *  at startup. Drives the dynamic, auto-discovered Colors-menu actions in
      *  `registerActions` — a new filter in the Rust core surfaces a menu
      *  entry with zero frontend edits. */
-    filterTypes = $state<Array<{ type: string; displayName: string }>>([]);
+    filterTypes = $state<Array<{ type: string; displayName: string; params?: unknown[] }>>([]);
 
     toolDisplayName(id: string): string {
         return this.toolDisplayNames[id] ?? id;
@@ -167,6 +167,11 @@ export class DarklyInstance {
     }
     layerKindDisplayName(id: string): string {
         return this.layerKindDisplayNames[id] ?? id;
+    }
+    /** Display label for a filter `type_id` (e.g. `"curves"` → `"Curves"`),
+     *  resolved from the `filterTypes` registry list. */
+    filterDisplayName(id: string): string {
+        return this.filterTypes.find((f) => f.type === id)?.displayName ?? id;
     }
 
     /** Populate every registry-backed display-name map from the Rust core in
@@ -313,6 +318,12 @@ export class DarklyInstance {
 
     // Tool cursor — when non-null, overrides nav cursor on the canvas element.
     toolCursor = $state<string | null>(null);
+
+    // Transform-mode context menu: viewport coords where the user right-clicked
+    // inside the active transform gizmo, or null when closed. The transform
+    // tool sets it; `TransformModeMenu` renders against it (mirrors how
+    // `toolCursor` flows tool → reactive UI).
+    transformModeMenu = $state<{ x: number; y: number } | null>(null);
 
     // Canvas element reference, set by CanvasView on mount. Tools that
     // are activated outside the canvas's pointer event flow (e.g. paste
@@ -872,6 +883,50 @@ export class DarklyInstance {
      *  is mid-stroke on the canvas or mid-drag in the brush builder. */
     get idleForSnapshot(): boolean {
         return !this.pointerActive && this._interactionCount === 0;
+    }
+
+    /** Zoom that frames the (possibly rotated) document inside the viewport.
+     *  The rotated axis-aligned bounding box is what must fit, so a tilted
+     *  canvas never clips its corners. `allowUpscale` lets a document smaller
+     *  than the viewport enlarge past 1:1 to fill it (Fit to Screen); the
+     *  default caps at 1:1, so Reset View never blows up a tiny document. */
+    fitZoom(allowUpscale = false): number {
+        const cos = Math.abs(Math.cos(this.rotation));
+        const sin = Math.abs(Math.sin(this.rotation));
+        const boxW = this.docW * cos + this.docH * sin;
+        const boxH = this.docW * sin + this.docH * cos;
+        const fit = Math.min(this.viewportW / boxW, this.viewportH / boxH);
+        return allowUpscale ? fit : Math.min(fit, 1);
+    }
+
+    /** Reset rotation/mirror/pan and zoom-to-fit (Krita "Reset Display"). pan=0
+     *  restores the document's default on-open framing. */
+    resetView() {
+        this.panX = 0;
+        this.panY = 0;
+        this.rotation = 0;
+        this.mirrorH = false;
+        this.zoom = this.fitZoom();
+        this.requestFrame();
+    }
+
+    /** Frame the document in the viewport: zoom-to-fit (enlarging a document
+     *  smaller than the viewport past 1:1 to fill it) and recenter, preserving
+     *  the current rotation and mirror. The orientation-agnostic counterpart to
+     *  {@link resetView} — GIMP "Fit Image in Window". */
+    fitToScreen() {
+        this.panX = 0;
+        this.panY = 0;
+        this.zoom = this.fitZoom(true);
+        this.requestFrame();
+    }
+
+    /** Recenter the canvas in the viewport, leaving zoom, rotation, and mirror
+     *  untouched — GIMP "Center Image in Window". */
+    centerView() {
+        this.panX = 0;
+        this.panY = 0;
+        this.requestFrame();
     }
 
     /** Schedule a render frame if one isn't already pending. */

@@ -267,7 +267,7 @@ fn create_monochrome_pipeline(
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("monochrome-shader"),
         source: wgpu::ShaderSource::Wgsl(
-            include_str!("../../../../../shaders/veils/monochrome.wgsl").into(),
+            include_str!("../../../shaders/veils/monochrome.wgsl").into(),
         ),
     });
 

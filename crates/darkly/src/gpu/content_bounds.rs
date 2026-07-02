@@ -53,7 +53,7 @@ impl ContentBoundsPass {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("content-bounds-shader"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/content_bounds.wgsl").into(),
+                include_str!("../../shaders/content_bounds.wgsl").into(),
             ),
         });
 

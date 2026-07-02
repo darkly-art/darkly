@@ -11,6 +11,8 @@ impl std::fmt::Debug for EffectPipeline {
     }
 }
 
+use super::filter::FilterEffect;
+
 /// Cached GPU objects for an effect instance.
 /// Created once at instance creation, never in the render loop.
 /// Used by both filters (layer-level) and veils (viewport-level).
@@ -29,6 +31,21 @@ pub struct EffectCache {
     pub aux_pipelines: Vec<wgpu::RenderPipeline>,
 }
 
+impl EffectCache {
+    /// An empty cache holding no resources. The starting state a `FilterEffect`
+    /// fills in `ensure`, and the throwaway a parameter-free filter's
+    /// `render` reads from on the destructive region path.
+    pub fn empty() -> Self {
+        EffectCache {
+            uniform_bufs: Vec::new(),
+            bind_groups: Vec::new(),
+            aux_textures: Vec::new(),
+            aux_views: Vec::new(),
+            aux_pipelines: Vec::new(),
+        }
+    }
+}
+
 /// Build a render pipeline from a passthrough blit shader.
 /// Used by veils and the compositor's final blit to surface.
 pub fn create_blit_pipeline(
@@ -40,7 +57,7 @@ pub fn create_blit_pipeline(
         device,
         format,
         label,
-        include_str!("../../../../shaders/blit.wgsl"),
+        include_str!("../../shaders/blit.wgsl"),
         "fs_blit",
     )
 }
@@ -59,7 +76,7 @@ pub fn create_downscale_pipeline(
         device,
         format,
         label,
-        include_str!("../../../../shaders/downscale.wgsl"),
+        include_str!("../../shaders/downscale.wgsl"),
         "fs_downscale",
     )
 }
@@ -343,6 +360,34 @@ impl MaskedFilterPipeline {
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.draw(0..3, 0..1);
+    }
+}
+
+/// A `MaskedFilterPipeline` is a parameter-free [`FilterEffect`]: `ensure` has
+/// nothing to build, and `render` delegates straight to the inherent method,
+/// ignoring the cache. This is all invert (and any future parameter-free
+/// filter) needs to slot into the filter registry.
+impl FilterEffect for MaskedFilterPipeline {
+    fn ensure(
+        &self,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        _params: &[super::params::ParamValue],
+        _cache: &mut EffectCache,
+    ) {
+    }
+
+    fn render(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        src: &wgpu::TextureView,
+        mask: Option<&wgpu::TextureView>,
+        out: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        _cache: &EffectCache,
+    ) {
+        MaskedFilterPipeline::render(self, device, encoder, src, mask, out, format);
     }
 }
 

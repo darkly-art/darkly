@@ -15,6 +15,7 @@
     import { handleDroppedFile } from '../actions';
     import { THUMB_SIZE } from '../ui/layers/thumbnails.svelte';
     import { isColorPickerModifierActive } from '../tools/colorpicker_cursor';
+    import TransformModeMenu from '../ui/TransformModeMenu.svelte';
 
     /** Optional pre-built instance. When provided, CanvasView skips the
      *  single-instance bootstrap (`initEditor`) and just wires the canvas
@@ -145,12 +146,10 @@
             ro.observe(canvas);
 
             // Fit canvas to view: scale down if needed, but never scale up.
-            // Uses the just-set per-instance dims so a tab opened from a
-            // non-default-sized image fits to its own canvas, not the
-            // global config default.
-            const dprRect = { w: canvas.width, h: canvas.height };
-            const fitZoom = Math.min(dprRect.w / inst.docW, dprRect.h / inst.docH, 1);
-            inst.zoom = fitZoom;
+            // Uses the just-set per-instance dims (viewportW/H from canvas.width/
+            // height above) so a tab opened from a non-default-sized image fits to
+            // its own canvas, not the global config default.
+            inst.zoom = inst.fitZoom();
 
             // Kick the first frame
             inst.requestFrame();
@@ -424,12 +423,13 @@
          duplicating that dispatch. -->
     <canvas
         bind:this={canvas}
-        style:cursor={inst.toolCursor ?? nav.cursor}
+        style:cursor={nav.canvasCursor}
         use:bindingSite={{
             name: 'canvas',
             ctx: () => ({ x: 0, y: 0 }),
             mouse: false,
         }}
+        oncontextmenu={(e: MouseEvent) => e.preventDefault()}
         onpointerdown={onPointerDown}
         onpointermove={onPointerMove}
         onpointerup={onPointerUp}
@@ -439,6 +439,10 @@
         ondrop={onCanvasDrop}
         onwheel={(e: WheelEvent) => { nav.onWheel(e, canvas); inst.requestFrame(); }}
     ></canvas>
+
+    <!-- Right-click mode-switch menu for the transform tool. The tool sets
+         `app.transformModeMenu`; this renders against it. -->
+    <TransformModeMenu />
 </div>
 
 <style>

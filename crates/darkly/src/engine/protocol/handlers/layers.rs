@@ -27,7 +27,8 @@ pub struct VoidTransformInfoReq {
 }
 
 /// Flat transform info for a void layer — `mode`/`matrix` derived from the
-/// engine's `Transform`.
+/// engine's `Transform` (6 affine floats for `Basic`, 9 homography floats for
+/// `Perspective`; the frontend's `liftMatrix` picks the variant by `mode`).
 #[derive(Serialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct VoidTransformInfoResp {
@@ -36,7 +37,7 @@ pub struct VoidTransformInfoResp {
     pub w: f32,
     pub h: f32,
     pub mode: u32,
-    pub matrix: [f32; 6],
+    pub matrix: Vec<f32>,
 }
 
 pub fn registrations() -> Vec<RequestRegistration> {
@@ -50,7 +51,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
                     w,
                     h,
                     mode: t.mode_tag(),
-                    matrix: t.to_affine(),
+                    matrix: t.wire_payload(),
                 })
                 .map_err(crate::engine::protocol::bad_payload)?,
                 None => serde_json::Value::Null,

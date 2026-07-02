@@ -741,6 +741,33 @@ impl Document {
         }
     }
 
+    /// Iterate every filter layer in the tree, regardless of visibility or
+    /// nesting depth. The compositor uses this to build/refresh each parametric
+    /// filter's GPU resources (curves LUT) in the pre-compose ensure phase.
+    /// Same shape as [`Self::all_void_layers`].
+    pub fn all_filter_layers(&self) -> Vec<&crate::layer::FilterLayer> {
+        let mut out = Vec::new();
+        self.collect_filter_layers(self.root, &mut out);
+        out
+    }
+
+    fn collect_filter_layers<'a>(
+        &'a self,
+        group_id: LayerId,
+        out: &mut Vec<&'a crate::layer::FilterLayer>,
+    ) {
+        let Some(LayerNode::Group(g)) = self.find_node(group_id) else {
+            return;
+        };
+        for &child_id in &g.children {
+            match self.find_node(child_id) {
+                Some(LayerNode::Layer(Layer::Filter(f))) => out.push(f),
+                Some(LayerNode::Group(_)) => self.collect_filter_layers(child_id, out),
+                _ => {}
+            }
+        }
+    }
+
     /// Add a new empty group; positioning follows the same rules as
     /// [`Document::add_raster_layer`].
     pub fn add_group(&mut self, anchor: Option<LayerId>) -> LayerId {

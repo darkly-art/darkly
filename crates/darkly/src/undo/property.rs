@@ -23,6 +23,11 @@ pub enum Property {
     /// (multiple `VoidParams` edits in a row) into one undo step, matching
     /// how opacity behaves.
     VoidParams(Vec<ParamValue>),
+    /// Full parameter vector of a filter layer (the five curves of a `curves`
+    /// layer, say). Direct analog of `VoidParams`: replaces in bulk, coalesces a
+    /// curve drag into one undo step. The compositor rebuilds the derived LUT
+    /// from the restored params on the next `sync_projection_states`.
+    FilterParams(Vec<ParamValue>),
     /// A void layer's user transform (gizmo-edited pan / scale / rotate).
     /// Coalesces on `same_kind` so a whole gizmo drag is one undo step,
     /// exactly like `VoidParams`. The GPU re-sync happens in
@@ -60,6 +65,11 @@ impl Property {
             Property::VoidParams(values) => {
                 if let LayerNode::Layer(Layer::Void(v)) = node {
                     v.params = values.clone();
+                }
+            }
+            Property::FilterParams(values) => {
+                if let LayerNode::Layer(Layer::Filter(f)) = node {
+                    f.params = values.clone();
                 }
             }
             Property::Transform(t) => {

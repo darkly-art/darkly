@@ -143,7 +143,7 @@ impl OrthoTransformPass {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ortho-transform-shader"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/ortho_transform.wgsl").into(),
+                include_str!("../../shaders/ortho_transform.wgsl").into(),
             ),
         });
 

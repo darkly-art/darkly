@@ -970,6 +970,36 @@ export function registerActions() {
     });
 
     actions.register({
+        id: 'resetView',
+        displayName: 'Reset View',
+        category: 'view',
+        description: 'Reset rotation, mirror, pan, and zoom-to-fit. View-only — the document is unchanged.',
+        icon: 'fa6-solid:expand',
+        menuPath: ['View:11'],
+        handler: () => { app.resetView(); },
+    });
+
+    actions.register({
+        id: 'fitToScreen',
+        displayName: 'Fit to Screen',
+        category: 'view',
+        description: 'Zoom and recenter so the whole canvas fills the viewport, keeping the current rotation and mirror. View-only — the document is unchanged.',
+        icon: 'fa6-solid:maximize',
+        menuPath: ['View:12'],
+        handler: () => { app.fitToScreen(); },
+    });
+
+    actions.register({
+        id: 'centerView',
+        displayName: 'Center View',
+        category: 'view',
+        description: 'Recenter the canvas in the viewport without changing zoom, rotation, or mirror. View-only — the document is unchanged.',
+        icon: 'fa6-solid:crosshairs',
+        menuPath: ['View:13'],
+        handler: () => { app.centerView(); },
+    });
+
+    actions.register({
         id: 'commandPalette',
         displayName: 'Command Palette',
         category: 'view',
