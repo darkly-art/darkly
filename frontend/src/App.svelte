@@ -1,5 +1,4 @@
 <script lang="ts">
-    import LeftSidebar from './ui/LeftSidebar.svelte';
     import Workspace from './ui/workspace/Workspace.svelte';
     import Toast from './ui/Toast.svelte';
     import LoadErrorToast from './ui/LoadErrorToast.svelte';
@@ -49,7 +48,6 @@
         <MenuBar />
     {/if}
     <div class="app-layout">
-        <LeftSidebar />
         <Workspace workspaceId={0} />
     </div>
 </div>

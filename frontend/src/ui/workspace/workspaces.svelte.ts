@@ -102,6 +102,9 @@ export function hitTest(doc: Document, x: number, y: number): HitTarget {
         const groupId = Number(body.dataset.groupId);
         const r = body.getBoundingClientRect();
         const edge = detectDockingEdge(x, y, { left: r.left, top: r.top, width: r.width, height: r.height });
+        // An anchor group (the canvas) can't be tabbed into — its center is not
+        // a valid drop; only the surrounding edges dock panels around it.
+        if (body.hasAttribute('data-anchor') && edge === 'center') return { kind: 'none' };
         return { kind: 'body', workspaceId, groupId, edge };
     }
 

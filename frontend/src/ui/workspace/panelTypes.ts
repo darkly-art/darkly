@@ -21,6 +21,10 @@ export interface PanelMeta {
     closable: boolean;
     /** Whether this panel may be popped out into its own OS window. */
     poppable: boolean;
+    /** Whether this panel can be dragged/tiled at all. A non-movable panel (the
+     *  canvas) is a fixed *anchor*: it renders with no tab bar, can't be grabbed,
+     *  and can't be tabbed into — other panels dock *around* its edges only. */
+    movable: boolean;
 }
 
 const registry = new Map<PanelType, PanelMeta>();

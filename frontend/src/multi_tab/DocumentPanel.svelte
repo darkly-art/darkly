@@ -1,4 +1,5 @@
 <script lang="ts">
+    import LeftSidebar from '../ui/LeftSidebar.svelte';
     import TabStrip from './TabStrip.svelte';
     import ToolOptionsBar from '../ui/ToolOptionsBar.svelte';
     import { canvasSlot } from './canvasSlot.svelte';
@@ -13,14 +14,28 @@
     }
 </script>
 
+<!-- The tool bar is part of the canvas unit: it, the document tab strip, the
+     canvas, and the tool-options bar travel together as one Document panel. -->
 <div class="document-panel">
-    <TabStrip />
-    <div class="canvas-region" use:canvasMount></div>
-    <ToolOptionsBar />
+    <LeftSidebar />
+    <div class="doc-main">
+        <TabStrip />
+        <div class="canvas-region" use:canvasMount></div>
+        <ToolOptionsBar />
+    </div>
 </div>
 
 <style>
     .document-panel {
+        display: flex;
+        flex-direction: row;
+        flex: 1;
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .doc-main {
         display: flex;
         flex-direction: column;
         flex: 1;

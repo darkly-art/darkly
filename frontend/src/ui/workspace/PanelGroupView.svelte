@@ -8,6 +8,10 @@
         $props();
 
     let activeTab = $derived(group.state.tabs[group.state.activeTabIndex] ?? group.state.tabs[0]);
+
+    // An anchor group holds a non-movable panel (the canvas): render no tab bar,
+    // so it can't be grabbed or tabbed into — only docked around (see hitTest).
+    let anchor = $derived(group.state.tabs.some((t) => !resolvePanel(t).movable));
     // Type-owned dispatch: the registry resolves the component; this view never
     // switches on which panel it is. Only the active tab's component is
     // rendered (mount/unmount) — load-bearing for `bindingSite` hotkey scoping,
@@ -44,21 +48,29 @@
 </script>
 
 <div class="panel-group">
-    <div class="tab-bar" data-panel-tab-bar data-group-id={group.id} data-workspace-id={workspaceId}>
-        {#each group.state.tabs as tab, i (tab)}
-            <button
-                class="tab"
-                class:active={tab === activeTab}
-                data-tab-index={i}
-                onpointerdown={(e) => onTabPointerDown(e, tab, i)}
-                oncontextmenu={(e) => onTabContextMenu(e, tab)}
-            >
-                {resolvePanel(tab).title}
-            </button>
-        {/each}
-    </div>
+    {#if !anchor}
+        <div class="tab-bar" data-panel-tab-bar data-group-id={group.id} data-workspace-id={workspaceId}>
+            {#each group.state.tabs as tab, i (tab)}
+                <button
+                    class="tab"
+                    class:active={tab === activeTab}
+                    data-tab-index={i}
+                    onpointerdown={(e) => onTabPointerDown(e, tab, i)}
+                    oncontextmenu={(e) => onTabContextMenu(e, tab)}
+                >
+                    {resolvePanel(tab).title}
+                </button>
+            {/each}
+        </div>
+    {/if}
 
-    <div class="panel-body" data-panel-body data-group-id={group.id} data-workspace-id={workspaceId}>
+    <div
+        class="panel-body"
+        data-panel-body
+        data-group-id={group.id}
+        data-workspace-id={workspaceId}
+        data-anchor={anchor ? '' : undefined}
+    >
         {#if ActiveComponent}
             <ActiveComponent />
         {/if}
