@@ -75,7 +75,7 @@ function drawCreateBand(): void {
 }
 
 function clearCreateBand(): void {
-    app.engine?.post('clear_overlay');
+    app.engine?.api.clearOverlay();
     app.requestFrame();
 }
 
@@ -95,9 +95,7 @@ export const textTool: Tool = {
         // focused object, else the topmost) so editing existing text is direct.
         const layerId = app.activeLayerId;
         if (app.engine && layerId !== null) {
-            const res = await app.engine.send<{ objects: { object: number }[] }>('text_objects', {
-                id: layerId,
-            });
+            const res = await app.engine.api.textObjects({ id: layerId });
             const objs = res?.objects ?? [];
             if (objs.length) {
                 const focus = textSession.focusObject;
@@ -143,7 +141,7 @@ export const textTool: Tool = {
         // box. `hit_test_vector_object` covers the whole box (its bbox), so a
         // click anywhere inside it re-targets the object.
         if (engine && layerId !== null) {
-            const hit = await engine.send<{ object: number }>('hit_test_vector_object', {
+            const hit = await engine.api.hitTestVectorObject({
                 id: layerId,
                 x: cx,
                 y: cy,

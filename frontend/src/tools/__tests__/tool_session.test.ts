@@ -9,7 +9,7 @@ import {
     runHook,
 } from '../tool_session';
 
-/** A deferred promise so a `send` can be parked, then resolved after a kill. */
+/** A deferred promise so a request can be parked, then resolved after a kill. */
 function deferred<T>() {
     let resolve!: (v: T) => void;
     let reject!: (e: unknown) => void;
@@ -20,64 +20,68 @@ function deferred<T>() {
     return { promise, resolve, reject };
 }
 
+/** A stand-in for the real `Engine`: only its `transport` is needed, since a
+ *  `SessionEngine` layers cancellation over that and builds its own typed api. */
+function fakeEngine(request: () => Promise<unknown>, postFF: () => void = () => {}) {
+    return { transport: { request: vi.fn(request), postFF: vi.fn(postFF) } };
+}
+
 beforeEach(() => {
     killToolSession();
 });
 
-describe('SessionEngine.send', () => {
+describe('SessionEngine.api', () => {
     it('resolves normally while the session is alive', async () => {
-        const inner = { send: vi.fn(() => Promise.resolve({ value: 7 })), post: vi.fn() };
+        const inner = fakeEngine(() => Promise.resolve(true));
         const session = new SessionEngine(inner as never);
-        await expect(session.send('has_floating')).resolves.toEqual({ value: 7 });
-        expect(inner.send).toHaveBeenCalledWith('has_floating', undefined, undefined);
+        await expect(session.api.hasFloating()).resolves.toBe(true);
+        expect(inner.transport.request).toHaveBeenCalledWith('has_floating', undefined, undefined);
     });
 
-    it('rejects an in-flight send with ToolSessionCancelled once killed', async () => {
-        const gate = deferred<{ value: boolean }>();
-        const inner = { send: vi.fn(() => gate.promise), post: vi.fn() };
+    it('rejects an in-flight request with ToolSessionCancelled once killed', async () => {
+        const gate = deferred<boolean>();
+        const inner = fakeEngine(() => gate.promise);
         const session = new SessionEngine(inner as never);
 
-        const p = session.send('has_floating');
+        const p = session.api.hasFloating();
         // The world changes while the request is parked.
         session.kill();
-        gate.resolve({ value: true });
+        gate.resolve(true);
 
         await expect(p).rejects.toBeInstanceOf(ToolSessionCancelled);
     });
 
-    it('drops a post issued after kill', () => {
-        const inner = { send: vi.fn(), post: vi.fn() };
+    it('drops a fire-and-forget request issued after kill', () => {
+        const inner = fakeEngine(() => Promise.resolve(null));
         const session = new SessionEngine(inner as never);
 
-        session.post('clear_overlay');
-        expect(inner.post).toHaveBeenCalledTimes(1);
+        session.api.clearOverlay();
+        expect(inner.transport.postFF).toHaveBeenCalledTimes(1);
 
         session.kill();
-        session.post('clear_overlay');
+        session.api.clearOverlay();
         // Still 1 — the post-kill call was dropped.
-        expect(inner.post).toHaveBeenCalledTimes(1);
+        expect(inner.transport.postFF).toHaveBeenCalledTimes(1);
     });
 });
 
 describe('session registry', () => {
     it('beginToolSession installs the live session and kills the prior one', async () => {
-        const inner = { send: vi.fn(() => Promise.resolve('ok')), post: vi.fn() };
-
-        const first = beginToolSession(inner as never);
+        const first = beginToolSession(fakeEngine(() => Promise.resolve(true)) as never);
         expect(toolEngine()).toBe(first);
 
-        const parked = first.send('has_floating'); // in flight on the first session
-        const second = beginToolSession(inner as never);
+        const parked = first.api.hasFloating(); // in flight on the first session
+        const second = beginToolSession(fakeEngine(() => Promise.resolve(true)) as never);
         expect(toolEngine()).toBe(second);
 
         // Beginning the second session killed the first, so its parked op rejects.
         await expect(parked).rejects.toBeInstanceOf(ToolSessionCancelled);
         // The new session is alive.
-        await expect(second.send('has_floating')).resolves.toBe('ok');
+        await expect(second.api.hasFloating()).resolves.toBe(true);
     });
 
     it('killToolSession leaves no live session', () => {
-        beginToolSession({ send: vi.fn(), post: vi.fn() } as never);
+        beginToolSession(fakeEngine(() => Promise.resolve(null)) as never);
         killToolSession();
         expect(toolEngine()).toBeNull();
     });

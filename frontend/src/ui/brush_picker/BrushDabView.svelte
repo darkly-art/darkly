@@ -33,7 +33,7 @@
     async function refresh() {
         const engine = app.engine;
         if (!engine) return;
-        const { bytes } = await engine.send('brush_active_dab_preview');
+        const { bytes } = await engine.api.brushActiveDabPreview();
         if (!bytes || bytes.length === 0) return;
         if (bytes.length === lastLen && dabUrl) return;
         const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });

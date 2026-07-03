@@ -41,9 +41,7 @@ export async function fontCaps(engine: Engine, family: string): Promise<FontCapa
     }
     const hit = cache.get(family);
     if (hit) return hit;
-    const res = (await engine
-        .send<FontCapabilities>('font_axes', { family })
-        .catch(() => null)) as FontCapabilities | null;
+    const res = await engine.api.fontAxes({ family }).catch(() => null);
     const caps: FontCapabilities = { italic: !!res?.italic, axes: res?.axes ?? [] };
     cache.set(family, caps);
     return caps;

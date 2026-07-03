@@ -2,17 +2,18 @@
     import Modal from './Modal.svelte';
     import { selectionModify, type SelectionModifyOp } from '../state/selectionModify.svelte';
     import { app } from '../state/app.svelte';
+    import type { EngineApi } from '../engine/protocol';
 
-    // Per-op presentation + the engine request kind to post. One dialog serves
-    // all four parameterized selection-modify commands.
+    // Per-op presentation + the typed engine call. One dialog serves all four
+    // parameterized selection-modify commands.
     const OPS: Record<
         SelectionModifyOp,
-        { title: string; kind: string; default: number }
+        { title: string; call: (api: EngineApi, req: { radius: number }) => void; default: number }
     > = {
-        grow: { title: 'Grow Selection', kind: 'grow_selection', default: 4 },
-        shrink: { title: 'Shrink Selection', kind: 'shrink_selection', default: 4 },
-        border: { title: 'Border Selection', kind: 'border_selection', default: 4 },
-        feather: { title: 'Feather Selection', kind: 'feather_selection', default: 6 },
+        grow: { title: 'Grow Selection', call: (api, req) => api.growSelection(req), default: 4 },
+        shrink: { title: 'Shrink Selection', call: (api, req) => api.shrinkSelection(req), default: 4 },
+        border: { title: 'Border Selection', call: (api, req) => api.borderSelection(req), default: 4 },
+        feather: { title: 'Feather Selection', call: (api, req) => api.featherSelection(req), default: 6 },
     };
 
     const MAX_RADIUS = 512;
@@ -38,7 +39,7 @@
     }
 
     function apply() {
-        app.engine?.post(meta.kind, { radius: clamp(radius) });
+        if (app.engine) meta.call(app.engine.api, { radius: clamp(radius) });
         app.requestFrame();
         close();
     }

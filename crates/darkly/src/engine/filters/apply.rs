@@ -9,6 +9,8 @@
 //! *shape* via the uploaded mask; with none, the whole node is filtered. The
 //! pixel extent never changes, so undo is a single [`GpuRegionAction`].
 
+use darkly_macros::handlers;
+
 use super::super::rendering::commit_undo_region;
 use super::super::{DarklyEngine, PendingFilter};
 use crate::coord::WindowRect;
@@ -16,12 +18,14 @@ use crate::engine::types::{ParamInfo, VeilTypeInfo};
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
+#[handlers]
 impl DarklyEngine {
     /// All registered filter types (id + display name + param schema), as the
     /// same `VeilTypeInfo` shape veils/voids use. Parameter-free filters (invert)
     /// carry an empty `params`; parametric ones (curves) carry their schema.
     /// Drives both the frontend's dynamic Colors-menu action registration and
     /// the filter-layer properties panel.
+    #[handler]
     pub fn filter_types(&self) -> Vec<VeilTypeInfo> {
         let registry = self.compositor.filter_pipeline_registry();
         registry
@@ -43,6 +47,7 @@ impl DarklyEngine {
     /// the given node (raster layer or mask filter). Returns `false` if the
     /// node isn't editable, has no texture, the type is unknown, or the
     /// filter was deferred waiting on the selection cache.
+    #[handler]
     pub fn apply_filter(&mut self, node_id: LayerId, filter_type: &str) -> bool {
         if !self.doc.is_node_editable(node_id) {
             return false;

@@ -1,88 +1,46 @@
-//! Floating content (paste/transform) lifecycle + queries.
+//! Floating content (paste/transform) query that needs wire shaping the
+//! `#[handler]` macro can't derive. The lifecycle verbs and the scalar queries
+//! are `#[handler]`-generated on `engine/floating.rs`; only `floating_info`
+//! stays here — its engine return is a composite `Option<(ox, oy, w, h, Transform)>`
+//! tuple, and the wire wants a flat `{ ox, oy, w, h, mode, matrix }` object with
+//! `mode`/`matrix` *derived* from the `Transform` (6 affine floats for `Basic`,
+//! 9 homography floats for `Perspective`; the frontend's `liftMatrix` picks the
+//! variant by `mode`).
 
-use serde::Deserialize;
-use serde_json::json;
+use serde::Serialize;
 
-use crate::engine::protocol::{decode, layer_id, RequestRegistration, Response};
+use crate::engine::protocol::{RequestRegistration, Response};
+
+/// Flat bounds + mode-tagged transform payload of the active floating content.
+#[derive(Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct FloatingInfoResp {
+    pub ox: f32,
+    pub oy: f32,
+    pub w: f32,
+    pub h: f32,
+    pub mode: u32,
+    pub matrix: Vec<f32>,
+}
 
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
-        RequestRegistration {
-            kind: "update_floating_matrix",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    #[serde(default)]
-                    mode_tag: u32,
-                    payload: Vec<f32>,
-                }
-                let r: Req = decode(payload)?;
-                // Shared decoder: tag 0 → 6-float affine, tag 1 → 9-float
-                // homography. Unknown tags / short payloads are ignored.
-                if let Some(t) =
-                    crate::transform::Transform::from_tag_payload(r.mode_tag, &r.payload)
-                {
-                    engine.update_floating_matrix(t);
-                }
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "commit_floating",
-            handle: |engine, _payload, _b| {
-                engine.commit_floating();
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "cancel_floating",
-            handle: |engine, _payload, _b| {
-                engine.cancel_floating();
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "paste_in_place_floating",
-            handle: |engine, payload, _b| {
-                let ok = engine.paste_in_place_floating(layer_id(payload)?);
-                Ok(Response::json(json!({ "ok": ok })))
-            },
-        },
-        RequestRegistration {
-            kind: "begin_transform",
-            handle: |engine, payload, _b| {
-                let ok = engine.begin_transform(layer_id(payload)?);
-                Ok(Response::json(json!({ "ok": ok })))
-            },
-        },
-        RequestRegistration {
-            kind: "has_floating",
-            handle: |engine, _payload, _b| {
-                Ok(Response::json(json!({ "value": engine.has_floating() })))
-            },
-        },
-        RequestRegistration {
-            kind: "floating_info",
-            handle: |engine, _payload, _b| {
-                let value = match engine.floating_info() {
-                    Some((ox, oy, w, h, t)) => json!({
-                        "ox": ox, "oy": oy, "w": w, "h": h,
-                        "mode": t.mode_tag(), "matrix": t.wire_payload(),
-                    }),
-                    None => serde_json::Value::Null,
-                };
-                Ok(Response::json(value))
-            },
-        },
-        RequestRegistration {
-            kind: "floating_target_layer",
-            handle: |engine, _payload, _b| {
-                let id = engine
-                    .floating_target_layer()
-                    .map(|i| i.to_ffi() as i64)
-                    .unwrap_or(-1);
-                Ok(Response::json(json!({ "id": id })))
-            },
-        },
+        RequestRegistration::new("floating_info", |engine, _payload, _b| {
+            let value = match engine.floating_info() {
+                Some((ox, oy, w, h, t)) => serde_json::to_value(FloatingInfoResp {
+                    ox,
+                    oy,
+                    w,
+                    h,
+                    mode: t.mode_tag(),
+                    matrix: t.wire_payload(),
+                })
+                .map_err(crate::engine::protocol::bad_payload)?,
+                None => serde_json::Value::Null,
+            };
+            Ok(Response::json(value))
+        })
+        .send()
+        .resp::<Option<FloatingInfoResp>>(),
     ]
 }

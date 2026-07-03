@@ -1,15 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { withApi } from '../../engine/testApi';
 
 // The transform cluster has two members sharing one gizmo: `transform` (free)
 // and `transform_perspective` (enters perspective). This pins each variant's
 // entry mode. Engine transport is mocked; a 'live' void (mode 0) is the target.
+// The typed `api` forwards to the `send`/`post` spies, so `send` returns bare
+// values and `update_void_transform` crosses as `{ id, transform: { mode, data } }`.
 const { fakeApp } = vi.hoisted(() => {
     const engine = {
         post: vi.fn(),
         send: vi.fn((kind: string) => {
             switch (kind) {
                 case 'layer_transform_capability':
-                    return Promise.resolve({ value: 'live' });
+                    return Promise.resolve('live');
                 case 'void_transform_info':
                     return Promise.resolve({
                         ox: 0,
@@ -47,6 +50,8 @@ vi.mock('../../canvas/gpu_overlay', () => ({
 import { transformTool, transformPerspectiveTool, transformActiveMode } from '../transform.svelte';
 import { beginToolSession } from '../tool_session';
 
+withApi(fakeApp.engine);
+
 const ctx = { canvasEl: {} as HTMLCanvasElement } as never;
 
 // onActivate fires `void activate()` (not awaited), so let its microtasks drain.
@@ -78,9 +83,9 @@ describe('transform cluster entry modes', () => {
         expect(transformActiveMode()).toBe(1);
         // Entering perspective seeds + pushes the 9-float homography.
         const persp = fakeApp.engine.post.mock.calls.find(
-            (c) => c[0] === 'update_void_transform' && c[1]?.mode_tag === 1,
+            (c) => c[0] === 'update_void_transform' && c[1]?.transform?.mode === 'Perspective',
         );
         expect(persp).toBeTruthy();
-        expect(persp![1].payload.length).toBe(9);
+        expect(persp![1].transform.data.length).toBe(9);
     });
 });

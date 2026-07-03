@@ -12,6 +12,11 @@ const { engine, instances } = vi.hoisted(() => {
 vi.mock('../../multi_tab/shell.svelte', () => ({ shell: { instances } }));
 
 import { fontLibrary, contentHash } from '../font_library.svelte';
+import { withApi } from '../../engine/testApi';
+
+// The library reaches each handle through its typed api; layer one over the
+// fake's `send` spy so `registerFont(bytes)` forwards to it.
+withApi(engine);
 
 /** Read every persisted record straight from IndexedDB. */
 function readStore(): Promise<any[]> {
@@ -55,7 +60,7 @@ describe('fontLibrary', () => {
         expect(engine.send).not.toHaveBeenCalled();
 
         // A freshly-created handle gets the whole library replayed into it.
-        const fresh = { send: vi.fn(() => Promise.resolve({})) };
+        const fresh = withApi({ send: vi.fn(() => Promise.resolve({})) });
         await fontLibrary.registerIntoHandle(fresh as any);
         expect(fresh.send).toHaveBeenCalledWith('register_font', {}, bytes);
     });

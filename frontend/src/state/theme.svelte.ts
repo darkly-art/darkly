@@ -103,13 +103,13 @@ class ThemeState {
     pushToWasm() {
         if (!app.engine) return;
         const colors = PREVIEW_COLORS[this.current];
-        app.engine.post('set_preview_theme', {
-            fg: Array.from(colors.fg),
-            bg: Array.from(colors.bg),
+        app.engine.api.setPreviewTheme({
+            fg: Array.from(colors.fg) as [number, number, number, number],
+            bg: Array.from(colors.bg) as [number, number, number, number],
         });
         const viewportBg = readCanvasBg();
         if (viewportBg) {
-            app.engine.post('set_viewport_bg', { bg: Array.from(viewportBg) });
+            app.engine.api.setViewportBg({ bg: Array.from(viewportBg) as [number, number, number, number] });
             app.requestFrame();
         }
     }

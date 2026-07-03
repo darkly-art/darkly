@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { withApi } from '../../engine/testApi';
 
 // The void binding captures the pre-edit transform — INCLUDING its mode — on
-// first read, so cancelling reverts faithfully. Engine transport is mocked.
+// first read, so cancelling reverts faithfully. Engine transport is mocked; the
+// real typed `api` forwards to the `send`/`post` spies, so `cancel` crosses the
+// wire as `updateVoidTransform({ id, transform: { mode, data } })`.
 const { fakeApp } = vi.hoisted(() => {
     const engine = { post: vi.fn(), send: vi.fn() };
     return { fakeApp: { engine } };
@@ -12,9 +15,10 @@ import { voidTransformBinding } from '../transform_bindings';
 import { beginToolSession } from '../tool_session';
 import type { Mat3 } from '../transform_projective';
 
-// The bindings reach the engine through the live tool session; establish one
-// over the fake engine so `toolEngine()` resolves (its send/post delegate to
-// the fake's spies).
+// Attach a real transport + typed api to the fake engine, then open a tool
+// session over it so the bindings' `toolEngine()` resolves — its api forwards to
+// the same `send`/`post` spies, so assertions still inspect them by kind.
+withApi(fakeApp.engine);
 beforeEach(() => {
     beginToolSession(fakeApp.engine as never);
 });
@@ -41,9 +45,9 @@ describe('voidTransformBinding cancel preserves the original mode', () => {
         expect(fakeApp.engine.post).toHaveBeenCalledTimes(1);
         const [kind, payload] = fakeApp.engine.post.mock.calls[0];
         expect(kind).toBe('update_void_transform');
-        expect(payload.mode_tag).toBe(1);
-        expect(payload.payload.length).toBe(9);
-        expect(payload.payload).toEqual([...homography]);
+        expect(payload.transform.mode).toBe('Perspective');
+        expect(payload.transform.data.length).toBe(9);
+        expect(payload.transform.data).toEqual([...homography]);
     });
 
     it('reverts an affine void to mode 0 with the 6-float payload', async () => {
@@ -63,8 +67,8 @@ describe('voidTransformBinding cancel preserves the original mode', () => {
         binding.cancel();
 
         const [, payload] = fakeApp.engine.post.mock.calls[0];
-        expect(payload.mode_tag).toBe(0);
-        expect(payload.payload).toEqual([2, 0, 5, 0, 2, 9]);
+        expect(payload.transform.mode).toBe('Basic');
+        expect(payload.transform.data).toEqual([2, 0, 5, 0, 2, 9]);
         // (the lifted Mat3 round-trips back to its affine wire form)
         expect(affineMat3[8]).toBe(1);
     });

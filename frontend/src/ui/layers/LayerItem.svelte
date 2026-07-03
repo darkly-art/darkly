@@ -236,30 +236,30 @@
 
     function toggleMaskEnabled() {
         if (app.engine && maskModifier !== null) {
-            app.engine.post('set_layer_visible', { id: maskModifier.id, visible: !maskEnabled });
+            app.engine.api.setLayerVisible({ id: maskModifier.id, visible: !maskEnabled });
             onupdate();
         }
     }
 
     function toggleShowMask() {
         if (app.engine && maskModifier !== null) {
-            const next = isMaskIsolated ? 0 : maskModifier.id;
-            app.engine.post('set_isolated_node', { id: next });
-            app.isolatedNodeId = next === 0 ? null : next;
+            const next = isMaskIsolated ? null : maskModifier.id;
+            app.engine.api.setIsolatedNode({ id: next });
+            app.isolatedNodeId = next;
             onupdate();
         }
     }
 
     function applyMask() {
         if (app.engine) {
-            app.engine.post('apply_mask', { id: layer.id });
+            app.engine.api.applyMask({ id: layer.id });
             onupdate();
         }
     }
 
     function removeMask() {
         if (app.engine) {
-            app.engine.post('remove_mask', { id: layer.id });
+            app.engine.api.removeMask({ id: layer.id });
             onupdate();
         }
     }
@@ -274,7 +274,7 @@
     function finishRename() {
         editing = false;
         if (app.engine && editInput) {
-            app.engine.post('set_layer_name', { id: layer.id, name: editInput.value });
+            app.engine.api.setLayerName({ id: layer.id, name: editInput.value });
             onupdate();
         }
     }
@@ -335,8 +335,8 @@
         const where = ratio < 0.5 ? 'after' : 'before';
 
         try {
-            const { skipped } = await engine.send('move_layers', {
-                ids, target_type: where, target_id: layer.id,
+            const skipped = await engine.api.moveLayers({
+                ids, target: { target_type: where, target_id: layer.id },
             });
             if (skipped > 0) {
                 toast.show('info', `${skipped} locked layer${skipped === 1 ? '' : 's'} skipped`);

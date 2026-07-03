@@ -78,7 +78,7 @@ async function activate(): Promise<void> {
     const engine = toolEngine();
     if (!gizmo || !engine || app.activeLayerId == null) return;
     const layerId = app.activeLayerId;
-    const { value: cap } = await engine.send<{ value: string }>('layer_transform_capability', {
+    const cap = await engine.api.layerTransformCapability({
         id: layerId,
     });
     if (cap === 'live') {
@@ -86,8 +86,8 @@ async function activate(): Promise<void> {
     } else if (cap === 'destructive') {
         // Floating extract may resolve asynchronously (content-bounds readback);
         // if it isn't ready this frame, `onFrame` picks it up once it is.
-        if (!(await engine.send<{ value: boolean }>('has_floating')).value) {
-            await engine.send('begin_transform', { id: layerId });
+        if (!(await engine.api.hasFloating())) {
+            await engine.api.beginTransform({ id: layerId });
         }
         if (await gizmo.attach(floatingTransformBinding())) applyEntryMode();
     }
@@ -151,7 +151,7 @@ function createTransformTool(opts: {
                 // layer, so this gate doubles as the "is it a vector layer" check —
                 // no separate kind query, no `TransformCapability::Vector` arm.
                 if (app.engine && app.activeLayerId != null) {
-                    const hit = await app.engine.send<{ object: number }>('hit_test_vector_object', {
+                    const hit = await app.engine.api.hitTestVectorObject({
                         id: app.activeLayerId,
                         x: cx,
                         y: cy,
@@ -197,11 +197,11 @@ function createTransformTool(opts: {
             // can end the session without it immediately reappearing.
             //
             // The engine read is session-routed: if a tool/layer/tab change ran
-            // `onDeactivate` (nulling `gizmo`) mid-await, the resumed `send`
+            // `onDeactivate` (nulling `gizmo`) mid-await, the resumed request
             // rejects and unwinds here — so the `gizmo` deref below can't hit
             // null. No stopgap re-check needed.
             if (!gizmo.active && engine) {
-                if ((await engine.send<{ value: boolean }>('has_floating')).value) {
+                if (await engine.api.hasFloating()) {
                     if (await gizmo.attach(floatingTransformBinding())) applyEntryMode();
                 }
             }
@@ -213,12 +213,12 @@ function createTransformTool(opts: {
         async dismissOverlay() {
             if (!gizmo) return;
             const engine = toolEngine();
-            if (engine && (await engine.send<{ value: boolean }>('has_floating')).value) {
+            if (engine && (await engine.api.hasFloating())) {
                 // Activating the floating's own target layer (e.g.
                 // paste-as-floating creates a new layer and selects it) is part
                 // of the floating workflow, not a user-switched-away signal.
-                const { id } = await engine.send<{ id: number }>('floating_target_layer');
-                if (id >= 0 && id === app.activeLayerId) {
+                const id = await engine.api.floatingTargetLayer();
+                if (id !== null && id === app.activeLayerId) {
                     return;
                 }
             }

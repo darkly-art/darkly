@@ -46,7 +46,7 @@
         const engine = app.engine;
         if (!engine) return;
         const stroke = loadPng(
-            (await engine.send('brush_thumbnail', { name: brushName })).bytes,
+            (await engine.api.brushThumbnail({ name: brushName })).bytes,
             strokeUrl,
             lastStrokeLen,
         );
@@ -55,7 +55,7 @@
             lastStrokeLen = stroke.len;
         }
         const dab = loadPng(
-            (await engine.send('brush_dab_thumbnail', { name: brushName })).bytes,
+            (await engine.api.brushDabThumbnail({ name: brushName })).bytes,
             dabUrl,
             lastDabLen,
         );

@@ -20,7 +20,7 @@
         if (!engine) return;
         (async () => {
             try {
-                blendModeTypes = (await engine.send('blend_mode_types')) as BlendModeType[];
+                blendModeTypes = (await engine.api.blendModeTypes()) as BlendModeType[];
             } catch {
                 blendModeTypes = [];
             }
@@ -42,14 +42,14 @@
     })());
 
     function setOpacity(value: number) {
-        app.engine?.post('set_opacity', { id: node.id, opacity: value });
+        app.engine?.api.setOpacity({ id: node.id, opacity: value });
         app.refreshLayerTree();
         app.requestFrame();
     }
 
     function onBlendModeChange(e: Event) {
         const value = (e.target as HTMLSelectElement).value;
-        app.engine?.post('set_blend_mode', { id: node.id, type_id: value });
+        app.engine?.api.setBlendMode({ id: node.id, type_id: value });
         app.refreshLayerTree();
         app.requestFrame();
     }

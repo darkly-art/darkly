@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { withApi } from '../../engine/testApi';
 import {
     createTextFromPending,
     queueTextContent,
@@ -12,7 +13,7 @@ import {
 // Minimal engine + host fakes (no DOM): record `send`/`post` and stand in for
 // the app's selection / refresh / frame plumbing.
 function fakeHost() {
-    const engine = {
+    const engine = withApi({
         send: vi.fn((kind: string) => {
             if (kind === 'add_text') return Promise.resolve({ id: 7, object: 3 });
             if (kind === 'add_text_object') return Promise.resolve({ object: 9 });
@@ -20,7 +21,7 @@ function fakeHost() {
             return Promise.resolve(null);
         }),
         post: vi.fn(),
-    };
+    });
     const host: EditorHost = {
         engine: engine as never,
         selectLayer: vi.fn(),

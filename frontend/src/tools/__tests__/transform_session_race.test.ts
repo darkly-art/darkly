@@ -15,8 +15,8 @@ const { engine, fakeApp, gizmo, TransformGizmoMock, deferrals } = vi.hoisted(() 
                 return new Promise((r) => (deferrals.cap.resolve = r as never));
             if (kind === 'has_floating' && deferrals.hf)
                 return new Promise((r) => (deferrals.hf.resolve = r as never));
-            if (kind === 'layer_transform_capability') return Promise.resolve({ value: 'none' });
-            if (kind === 'has_floating') return Promise.resolve({ value: false });
+            if (kind === 'layer_transform_capability') return Promise.resolve('none');
+            if (kind === 'has_floating') return Promise.resolve(false);
             return Promise.resolve({});
         }),
         post: vi.fn(),
@@ -52,6 +52,11 @@ import {
     toolEngine,
     ToolSessionCancelled,
 } from '../tool_session';
+import { withApi } from '../../engine/testApi';
+
+// Layer a real transport + typed api over the fake engine's send/post spies so a
+// `SessionEngine` can be begun over it.
+withApi(engine);
 
 const ctx = { canvasEl: {} } as never;
 
@@ -98,7 +103,7 @@ describe('transform onFrame resumes into a torn-down tool', () => {
         transformTool.onDeactivate?.(ctx);
         killToolSession();
 
-        deferrals.hf.resolve({ value: false });
+        deferrals.hf.resolve(false);
 
         await expect(framePromise).rejects.toBeInstanceOf(ToolSessionCancelled);
         expect(gizmo.frame).not.toHaveBeenCalled();
@@ -125,7 +130,7 @@ describe('transform activate resumes after an active-layer change', () => {
 
         // Capability resolves 'destructive' while the session is still alive, so
         // activate advances to the has_floating read...
-        deferrals.cap.resolve({ value: 'destructive' });
+        deferrals.cap.resolve('destructive');
         await flush();
 
         // ...the active layer changes and the session is rebegun (as the
@@ -136,7 +141,7 @@ describe('transform activate resumes after an active-layer change', () => {
 
         // The parked has_floating read now resolves — but on the dead session, so
         // activate unwinds without issuing begin_transform or attaching.
-        deferrals.hf.resolve({ value: false });
+        deferrals.hf.resolve(false);
         await flush();
 
         const beganTransform = engine.send.mock.calls.some((c) => c[0] === 'begin_transform');

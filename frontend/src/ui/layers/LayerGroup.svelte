@@ -107,7 +107,7 @@
     function toggleCollapsed(e: MouseEvent) {
         e.stopPropagation();
         if (app.engine) {
-            app.engine.post('set_group_collapsed', { id: group.id, collapsed: !group.collapsed });
+            app.engine.api.setGroupCollapsed({ id: group.id, collapsed: !group.collapsed });
             onupdate();
         }
     }
@@ -128,7 +128,7 @@
     function finishRename() {
         editing = false;
         if (app.engine && editInput) {
-            app.engine.post('set_layer_name', { id: group.id, name: editInput.value });
+            app.engine.api.setLayerName({ id: group.id, name: editInput.value });
             onupdate();
         }
     }
@@ -228,23 +228,23 @@
 
     function toggleMaskEnabled() {
         if (app.engine && maskModifier !== null) {
-            app.engine.post('set_layer_visible', { id: maskModifier.id, visible: !maskEnabled });
+            app.engine.api.setLayerVisible({ id: maskModifier.id, visible: !maskEnabled });
             onupdate();
         }
     }
 
     function toggleShowMask() {
         if (app.engine && maskModifier !== null) {
-            const next = isMaskIsolated ? 0 : maskModifier.id;
-            app.engine.post('set_isolated_node', { id: next });
-            app.isolatedNodeId = next === 0 ? null : next;
+            const next = isMaskIsolated ? null : maskModifier.id;
+            app.engine.api.setIsolatedNode({ id: next });
+            app.isolatedNodeId = next;
             onupdate();
         }
     }
 
     function removeMask() {
         if (app.engine) {
-            app.engine.post('remove_mask', { id: group.id });
+            app.engine.api.removeMask({ id: group.id });
             onupdate();
         }
     }
@@ -305,8 +305,8 @@
             : 'into_top';
 
         try {
-            const { skipped } = await engine.send('move_layers', {
-                ids, target_type: where, target_id: group.id,
+            const skipped = await engine.api.moveLayers({
+                ids, target: { target_type: where, target_id: group.id },
             });
             if (skipped > 0) {
                 toast.show('info', `${skipped} locked layer${skipped === 1 ? '' : 's'} skipped`);

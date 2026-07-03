@@ -108,7 +108,7 @@ export function openDarklyAsTab(picked: OpenedFile): void {
     inst.fileHandle = picked.handle;
     inst.onHandleReady = async (engine) => {
         try {
-            await engine.send('open_document', {}, picked.bytes);
+            await engine.api.openDocument(picked.bytes);
             // Fonts embedded in the opened file join the personal library so
             // they survive reload and reach future tabs (the engine already
             // registered them into this handle during the load).
@@ -117,7 +117,7 @@ export function openDarklyAsTab(picked: OpenedFile): void {
             // request (which the loader populated from `manifest.name`),
             // but the shell's `nameVersion` doesn't bump on its own —
             // nudge it so the strip re-derives.
-            const { name } = await engine.send('document_name');
+            const name = await engine.api.documentName();
             shell.setName(inst.id, name);
             // The loaded manifest's dimensions override whatever the tab
             // was seeded with; refresh the JS mirror so coord transforms
@@ -169,7 +169,7 @@ async function openImageAsTab(picked: OpenedFile, kind: FileKind): Promise<void>
         // bg seed (the `onHandleReady` presence suppresses it), so
         // paste lands at the bottom of root, which is the only sensible
         // position for the doc's first layer.
-        await engine.send('paste_image', { width, height, offset_x: 0, offset_y: 0, active_layer_id: -1 }, rgba);
+        await engine.api.pasteImage({ width, height, offset_x: 0, offset_y: 0, active_layer_id: -1 }, rgba);
         await app.refreshLayerTree();
         app.requestFrame();
     };
@@ -193,9 +193,7 @@ export async function pasteImageIntoCurrent(file: File): Promise<number> {
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const rgba = new Uint8Array(imageData.data.buffer);
         const activeId = app.activeLayerId ?? -1;
-        const { id: layerId } = await engine.send(
-            'paste_image',
-            {
+        const { id: layerId } = await engine.api.pasteImage({
                 width: canvas.width,
                 height: canvas.height,
                 offset_x: 0,
@@ -255,7 +253,7 @@ export function registerActions() {
         description: 'Undo the last action.',
         icon: 'fa6-solid:rotate-left',
         menuPath: ['Edit:10'],
-        handler: async () => { app.engine?.post('undo'); await app.syncCanvasRect(); await app.refreshLayerTree(); },
+        handler: async () => { app.engine?.api.undo(); await app.syncCanvasRect(); await app.refreshLayerTree(); },
     });
     actions.register({
         id: 'redo',
@@ -264,7 +262,7 @@ export function registerActions() {
         description: 'Redo the last undone action.',
         icon: 'fa6-solid:rotate-right',
         menuPath: ['Edit:20'],
-        handler: async () => { app.engine?.post('redo'); await app.syncCanvasRect(); await app.refreshLayerTree(); },
+        handler: async () => { app.engine?.api.redo(); await app.syncCanvasRect(); await app.refreshLayerTree(); },
     });
 
     // -- Colors --
@@ -295,7 +293,7 @@ export function registerActions() {
         description: 'Select the entire canvas.',
         icon: 'fa6-solid:vector-square',
         menuPath: ['Select:10'],
-        handler: () => app.engine?.post('select_all'),
+        handler: () => app.engine?.api.selectAll(),
     });
     actions.register({
         id: 'clearSelection',
@@ -304,7 +302,7 @@ export function registerActions() {
         description: 'Clear the active selection.',
         icon: 'fa6-solid:ban',
         menuPath: ['Select:20'],
-        handler: () => app.engine?.post('clear_selection'),
+        handler: () => app.engine?.api.clearSelection(),
     });
     actions.register({
         id: 'clearSelectionContents',
@@ -315,7 +313,7 @@ export function registerActions() {
         menuPath: ['Select:40'],
         handler: () => {
             if (app.activeLayerId != null) {
-                app.engine?.post('clear_selection_contents', { id: app.activeLayerId });
+                app.engine?.api.clearSelectionContents({ id: app.activeLayerId });
             }
         },
     });
@@ -326,7 +324,7 @@ export function registerActions() {
         description: 'Invert the current selection.',
         icon: 'tabler:flip-horizontal',
         menuPath: ['Select:30'],
-        handler: () => app.engine?.post('invert_selection'),
+        handler: () => app.engine?.api.invertSelection(),
     });
     actions.register({
         id: 'growSelection',
@@ -366,7 +364,7 @@ export function registerActions() {
         icon: 'fa6-solid:wand-magic-sparkles',
         menuPath: ['Select:80'],
         enabled: () => app.engineState?.hasSelection || 'No active selection',
-        handler: () => app.engine?.post('smooth_selection', { radius: 2 }),
+        handler: () => app.engine?.api.smoothSelection({ radius: 2 }),
     });
     actions.register({
         id: 'featherSelection',
@@ -386,7 +384,7 @@ export function registerActions() {
         icon: 'fa6-solid:wand-magic',
         menuPath: ['Select:100'],
         enabled: () => app.engineState?.hasSelection || 'No active selection',
-        handler: () => app.engine?.post('antialias_selection'),
+        handler: () => app.engine?.api.antialiasSelection(),
     });
 
     // -- Image (canvas) --
@@ -426,7 +424,7 @@ export function registerActions() {
         // than a live query.
         enabled: () => app.engineState?.hasSelection || 'No active selection',
         handler: async () => {
-            app.engine?.post('crop_to_selection');
+            app.engine?.api.cropToSelection();
             await app.syncCanvasRect();
             app.requestFrame();
         },
@@ -439,7 +437,7 @@ export function registerActions() {
         icon: 'fa6-solid:arrows-left-right',
         menuPath: ['Image:30'],
         handler: async () => {
-            app.engine?.post('flip_canvas', { axis: 'h' });
+            app.engine?.api.flipCanvas({ axis: 'h' });
             await app.syncCanvasRect();
             app.requestFrame();
         },
@@ -452,7 +450,7 @@ export function registerActions() {
         icon: 'fa6-solid:arrows-up-down',
         menuPath: ['Image:31'],
         handler: async () => {
-            app.engine?.post('flip_canvas', { axis: 'v' });
+            app.engine?.api.flipCanvas({ axis: 'v' });
             await app.syncCanvasRect();
             app.requestFrame();
         },
@@ -465,7 +463,7 @@ export function registerActions() {
         icon: 'fa6-solid:rotate-right',
         menuPath: ['Image:40'],
         handler: async () => {
-            app.engine?.post('rotate_canvas', { dir: 'cw' });
+            app.engine?.api.rotateCanvas({ dir: 'cw' });
             await app.syncCanvasRect();
             app.requestFrame();
         },
@@ -478,7 +476,7 @@ export function registerActions() {
         icon: 'fa6-solid:rotate-left',
         menuPath: ['Image:41'],
         handler: async () => {
-            app.engine?.post('rotate_canvas', { dir: 'ccw' });
+            app.engine?.api.rotateCanvas({ dir: 'ccw' });
             await app.syncCanvasRect();
             app.requestFrame();
         },
@@ -491,7 +489,7 @@ export function registerActions() {
         icon: 'fa6-solid:rotate',
         menuPath: ['Image:42'],
         handler: async () => {
-            app.engine?.post('rotate_canvas', { dir: '180' });
+            app.engine?.api.rotateCanvas({ dir: '180' });
             await app.syncCanvasRect();
             app.requestFrame();
         },
@@ -576,7 +574,7 @@ export function registerActions() {
         icon: 'fa6-solid:check',
         handler: () => {
             if (!app.engine) return;
-            app.engine.post('commit_floating');
+            app.engine.api.commitFloating();
             app.requestFrame();
         },
     });
@@ -587,7 +585,7 @@ export function registerActions() {
         icon: 'fa6-solid:xmark',
         handler: () => {
             if (!app.engine) return;
-            app.engine.post('cancel_floating');
+            app.engine.api.cancelFloating();
             app.requestFrame();
         },
     });
@@ -634,7 +632,7 @@ export function registerActions() {
                 return;
             }
             brushSession.eraseMode = !brushSession.eraseMode;
-            app.engine?.post('set_brush_blend_mode', { mode: brushSession.eraseMode ? 1 : 0 });
+            app.engine?.api.setBrushBlendMode({ mode: brushSession.eraseMode ? 1 : 0 });
         },
     });
 
@@ -649,7 +647,7 @@ export function registerActions() {
         handler: async () => {
             const engine = app.engine;
             if (!engine) return;
-            const { id } = await engine.send('add_raster', { anchor: app.activeLayerId ?? -1 });
+            const id = await engine.api.addRaster({ anchor: app.activeLayerId });
             app.selectLayer(id);
             await app.refreshLayerTree();
         },
@@ -667,7 +665,7 @@ export function registerActions() {
             if (!engine) return;
             if (app.selectedLayerIds.size > 0) {
                 try {
-                    const { id: groupId } = await engine.send('group_layers', {
+                    const groupId = await engine.api.groupLayers({
                         ids: [...app.selectedLayerIds],
                     });
                     if (groupId) app.selectLayer(groupId);
@@ -675,7 +673,7 @@ export function registerActions() {
                     toast.show('error', e.message ?? String(e));
                 }
             } else {
-                const { id } = await engine.send('add_group', { anchor: app.activeLayerId ?? -1 });
+                const id = await engine.api.addGroup({ anchor: app.activeLayerId });
                 app.selectLayer(id);
             }
             await app.refreshLayerTree();
@@ -695,7 +693,7 @@ export function registerActions() {
             if (layerId == null || !app.engine) return;
             const layer = findLayer(app.layerTree, layerId);
             if (layer) {
-                app.engine.post('set_layer_visible', { id: layerId, visible: !layer.visible });
+                app.engine.api.setLayerVisible({ id: layerId, visible: !layer.visible });
             }
         },
     });
@@ -713,7 +711,7 @@ export function registerActions() {
             if (layerId == null || !app.engine) return;
             const layer = findLayer(app.layerTree, layerId);
             if (layer) {
-                app.engine.post('set_node_locked', { id: layerId, locked: !layer.locked });
+                app.engine.api.setNodeLocked({ id: layerId, locked: !layer.locked });
             }
         },
     });
@@ -768,10 +766,10 @@ export function registerActions() {
                 // indicator immediately.
                 for (const id of targets) app.stopMediaStreamVoid(id);
                 if (targets.length === 1) {
-                    await engine.send('remove_layer', { id: targets[0] });
+                    await engine.api.removeLayer({ id: targets[0] });
                     app.clearSelection();
                 } else {
-                    const { skipped } = await engine.send('remove_layers', { ids: targets });
+                    const skipped = await engine.api.removeLayers({ ids: targets });
                     if (skipped > 0) {
                         toast.show('info', `${skipped} locked layer${skipped === 1 ? '' : 's'} skipped`);
                     }
@@ -798,13 +796,13 @@ export function registerActions() {
                 : app.activeLayerId !== null ? [app.activeLayerId] : [];
             if (targets.length === 0) return;
             if (targets.length === 1) {
-                const { id: newId } = await engine.send('duplicate_node', { source_id: targets[0] });
+                const newId = await engine.api.duplicateNode({ source_id: targets[0] });
                 await app.refreshLayerTree();
                 if (newId) app.selectLayer(newId);
             } else {
-                const { ids: newIds } = await engine.send('duplicate_nodes', { ids: targets });
+                const newIds = await engine.api.duplicateNodes({ ids: targets });
                 await app.refreshLayerTree();
-                if (newIds.length > 0) app.selectLayers(newIds as number[]);
+                if (newIds.length > 0) app.selectLayers(newIds);
             }
         },
     });
@@ -820,7 +818,7 @@ export function registerActions() {
         handler: async () => {
             const engine = app.engine;
             if (!engine || app.activeLayerId === null) return;
-            await engine.send('flip_node', { node_id: app.activeLayerId, axis: 'h' });
+            await engine.api.flipNode({ node_id: app.activeLayerId, xform: 'flip_h' });
             app.requestFrame();
         },
     });
@@ -835,7 +833,7 @@ export function registerActions() {
         handler: async () => {
             const engine = app.engine;
             if (!engine || app.activeLayerId === null) return;
-            await engine.send('flip_node', { node_id: app.activeLayerId, axis: 'v' });
+            await engine.api.flipNode({ node_id: app.activeLayerId, xform: 'flip_v' });
             app.requestFrame();
         },
     });
@@ -858,7 +856,7 @@ export function registerActions() {
             handler: async () => {
                 const engine = app.engine;
                 if (!engine || app.activeLayerId === null) return;
-                await engine.send('apply_filter', {
+                await engine.api.applyFilter({
                     node_id: app.activeLayerId,
                     filter_type: filterType,
                 });
@@ -879,7 +877,7 @@ export function registerActions() {
             if (!engine) return;
             if (app.selectedLayerIds.size >= 2) {
                 try {
-                    const { id: newId } = await engine.send('merge_layers', {
+                    const newId = await engine.api.mergeLayers({
                         ids: [...app.selectedLayerIds],
                     });
                     await app.refreshLayerTree();
@@ -892,7 +890,7 @@ export function registerActions() {
             const sourceId = app.activeLayerId;
             if (sourceId == null) return;
             try {
-                const { id: newId } = await engine.send('merge_down', { source_id: sourceId });
+                const newId = await engine.api.mergeDown({ source_id: sourceId });
                 await app.refreshLayerTree();
                 if (newId) app.selectLayer(newId);
             } catch (e: any) {
@@ -916,7 +914,7 @@ export function registerActions() {
             const id = ctx.layerId ?? app.activeLayerId;
             if (id == null) return;
             try {
-                const { id: newId } = await engine.send('flatten_node', { node_id: id });
+                const newId = await engine.api.flattenNode({ node_id: id });
                 await app.refreshLayerTree();
                 if (newId) app.selectLayer(newId);
             } catch (e: any) {
@@ -938,7 +936,7 @@ export function registerActions() {
             if (!engine) return;
             const hostId = ctx.layerId ?? app.activeLayerId;
             if (hostId == null) return;
-            engine.post('add_mask', { id: hostId });
+            engine.api.addMask({ id: hostId });
             // `add_mask` doesn't return the new modifier id, and we want
             // the mask to be the active paint target after creation —
             // refresh the tree, then locate the freshly-added mask
@@ -1100,9 +1098,9 @@ export function registerActions() {
 function toggleIsolation(targetId: number) {
     const engine = app.engine;
     if (!engine) return;
-    const next = app.isolatedNodeId === targetId ? 0 : targetId;
-    engine.post('set_isolated_node', { id: next });
-    app.isolatedNodeId = next === 0 ? null : next;
+    const next = app.isolatedNodeId === targetId ? null : targetId;
+    engine.api.setIsolatedNode({ id: next });
+    app.isolatedNodeId = next;
     app.requestFrame();
 }
 

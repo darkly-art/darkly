@@ -1,17 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { withApi } from '../../engine/testApi';
 
 // Minimal stand-ins for the Svelte-runic state proxy and the gizmo, so the
 // race in `dismissOverlay` can be driven without the Svelte/GPU runtime.
 const { engine, fakeApp, gizmo, TransformGizmoMock, resolveHasFloating } = vi.hoisted(() => {
-    let resolve: (v: { value: boolean }) => void = () => {};
+    let resolve: (v: boolean) => void = () => {};
     const engine = {
         // has_floating is deferred so dismissOverlay parks on its await, giving
-        // the test a window to tear the tool down before it resolves.
+        // the test a window to tear the tool down before it resolves. The typed
+        // api returns bare values, so the mock resolves a bare boolean / id.
         send: vi.fn((kind: string) => {
-            if (kind === 'has_floating') return new Promise<{ value: boolean }>((r) => (resolve = r));
+            if (kind === 'has_floating') return new Promise<boolean>((r) => (resolve = r));
             // A target layer that does NOT match activeLayerId, so a resumed
             // dismissOverlay would fall through to the commit at the end.
-            if (kind === 'floating_target_layer') return Promise.resolve({ id: 999 });
+            if (kind === 'floating_target_layer') return Promise.resolve(999);
             return Promise.resolve({});
         }),
         post: vi.fn(),
@@ -25,7 +27,7 @@ const { engine, fakeApp, gizmo, TransformGizmoMock, resolveHasFloating } = vi.ho
     const TransformGizmoMock = vi.fn(function () {
         return gizmo;
     });
-    return { engine, fakeApp, gizmo, TransformGizmoMock, resolveHasFloating: () => resolve({ value: true }) };
+    return { engine, fakeApp, gizmo, TransformGizmoMock, resolveHasFloating: () => resolve(true) };
 });
 vi.mock('../../state/app.svelte', () => ({ app: fakeApp }));
 vi.mock('../transform_gizmo', () => ({ TransformGizmo: TransformGizmoMock }));
@@ -36,6 +38,11 @@ vi.mock('../transform_bindings', () => ({
 
 import { transformTool } from '../transform.svelte';
 import { beginToolSession, killToolSession, runHook, ToolSessionCancelled } from '../tool_session';
+
+// Attach a real transport + typed api over the fake engine's send/post spies so
+// a `SessionEngine` can be begun over it (the bindings reach the engine only
+// through the live session).
+withApi(engine);
 
 const ctx = { canvasEl: {} } as never;
 

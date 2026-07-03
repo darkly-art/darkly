@@ -60,7 +60,7 @@
     onMount(async () => {
         void fontLibrary.loadAll();
         if (!app.engine) return;
-        const res = (await app.engine.send('list_fonts')) as { fonts: string[] } | null;
+        const res = await app.engine.api.listFonts();
         if (res?.fonts?.length) engineFonts = res.fonts;
     });
 
@@ -184,8 +184,8 @@
         }
         const layerId = n.id;
         let cancelled = false;
-        app.engine
-            .send<{ objects: any[] }>('text_objects', { id: layerId })
+        app.engine.api
+            .textObjects({ id: layerId })
             .then((res) => {
                 if (cancelled) return;
                 const o = selectedObject(res?.objects ?? []);

@@ -120,9 +120,7 @@ class FontLibrary {
         // families (identical across handles — same bytes, same collection).
         let families: string[] = [];
         for (const engine of liveEngines()) {
-            const res = (await engine
-                .send<{ families: string[] }>('register_font', {}, bytes)
-                .catch(() => null)) as { families: string[] } | null;
+            const res = await engine.api.registerFont(bytes).catch(() => null);
             if (res?.families?.length && families.length === 0) families = res.families;
         }
         if (families.length === 0) {
@@ -151,7 +149,7 @@ class FontLibrary {
     async registerIntoHandle(engine: Engine): Promise<void> {
         await this.loadAll();
         for (const rec of this.records.values()) {
-            await engine.send('register_font', {}, rec.bytes).catch((e) => {
+            await engine.api.registerFont(rec.bytes).catch((e) => {
                 console.warn('[fonts] replay into handle failed', e);
             });
         }

@@ -15,6 +15,9 @@ use slotmap::{SecondaryMap, SlotMap};
 use crate::coord::{CanvasPoint, CanvasRect};
 use crate::layer::*;
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum SelectionMode {
     Replace,
     Add,
@@ -22,11 +25,22 @@ pub enum SelectionMode {
     Intersect,
 }
 
-#[derive(Clone, Copy)]
+/// Where a move/group operation drops its payload, relative to an anchor node.
+///
+/// Wire-native: an adjacently-tagged enum deserializes straight from the
+/// `{ target_type, target_id }` request shape, so move handlers forward the
+/// decoded value without a hand-written `&str → variant` map.
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "target_type", content = "target_id")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum MoveTarget {
+    #[serde(rename = "before")]
     Before(LayerId),
+    #[serde(rename = "after")]
     After(LayerId),
+    #[serde(rename = "into_top")]
     IntoGroupTop(LayerId),
+    #[serde(rename = "into_bottom")]
     IntoGroupBottom(LayerId),
 }
 

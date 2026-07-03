@@ -214,7 +214,7 @@ export class TransformGizmo {
         this.drag = null;
         this.bbox = null;
         this.overlay = null;
-        toolEngine()?.post('clear_overlay');
+        toolEngine()?.api.clearOverlay();
         app.toolCursor = null;
     }
 }

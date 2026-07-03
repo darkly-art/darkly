@@ -1,5 +1,7 @@
 //! Rendering, view transform, thumbnails, undo/redo, and async readback polling.
 
+use darkly_macros::handlers;
+
 use super::{DarklyEngine, ReadbackContext};
 use crate::coord::{CanvasPoint, CanvasRect, LayerRect};
 use crate::gpu::atlas::CanvasFrame;
@@ -67,9 +69,11 @@ impl PickSource {
 /// the panel renders. Don't drift the literal in `thumbnails.ts`.
 pub const DEFAULT_THUMB_SIZE: u32 = 36;
 
+#[handlers]
 impl DarklyEngine {
     // --- View transform ---
 
+    #[handler]
     pub fn set_view_transform(
         &mut self,
         pan_x: f32,
@@ -141,6 +145,7 @@ impl DarklyEngine {
     /// Push the workspace background color (the area shown outside the
     /// canvas rectangle by the present shader). Frontend calls this on
     /// theme change with the resolved `--canvas-bg` CSS value.
+    #[handler]
     pub fn set_viewport_bg(&mut self, bg: [f32; 4]) {
         self.compositor.set_viewport_bg(&self.gpu.queue, bg);
     }
@@ -148,6 +153,7 @@ impl DarklyEngine {
     /// Set the canvas-to-screen pixel filter mode: `"linear"`, `"nearest"`,
     /// or `"auto"`. Frontend calls this when `display.pixelFilter` changes
     /// so the new mode takes effect without waiting for a zoom/pan.
+    #[handler]
     pub fn set_pixel_filter(&mut self, mode: &str) {
         self.compositor.set_pixel_filter(&self.gpu.queue, mode);
     }
@@ -202,11 +208,12 @@ impl DarklyEngine {
     /// `drain_dirty_thumbnail_readbacks` (driven by `mark_node_pixels_dirty`
     /// at every pixel-write site). Auto-queueing from this getter would
     /// create a feedback loop with the JS-side `thumbnailEpoch` sync.
-    pub fn node_thumbnail(&self, node_id: LayerId, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
+    #[handler(returns = bytes)]
+    pub fn node_thumbnail(&self, node_id: LayerId, width: u32, height: u32) -> Vec<u8> {
         self.thumbnail_cache
             .get(node_id)
             .cloned()
-            .unwrap_or_else(|| vec![0u8; (thumb_w * thumb_h * 4) as usize])
+            .unwrap_or_else(|| vec![0u8; (width * height * 4) as usize])
     }
 
     /// Kick off an async GPU readback for a thumbnail of any node by id,
@@ -536,11 +543,13 @@ impl DarklyEngine {
     }
 
     /// Get the most recently picked color (updated asynchronously).
+    #[handler(returns = bytes)]
     pub fn last_picked_color(&self) -> [u8; 4] {
         self.last_picked_color
     }
 
     /// True if a color pick readback is still in flight.
+    #[handler]
     pub fn has_pending_color_pick(&self) -> bool {
         self.readbacks
             .any(|c| matches!(c, ReadbackContext::ColorPick))
@@ -644,6 +653,7 @@ impl DarklyEngine {
             || self.diff_rect.is_pending()
     }
 
+    #[handler]
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 || self.gpu.is_headless() {
             return;
@@ -657,11 +667,13 @@ impl DarklyEngine {
 
     // --- Undo / Redo ---
 
+    #[handler]
     pub fn undo(&mut self) {
         self.auto_commit_floating();
         self.apply_undo(UndoDirection::Undo);
     }
 
+    #[handler]
     pub fn redo(&mut self) {
         self.auto_commit_floating();
         self.apply_undo(UndoDirection::Redo);

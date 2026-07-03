@@ -21,7 +21,7 @@
         for (const p of veil.params) {
             params[p.name] = p.value ?? p.default;
         }
-        app.engine.post('update_veil', { index: veil.index, params });
+        app.engine.api.updateVeil({ index: veil.index, params });
         app.refreshVeilList();
         app.requestFrame();
     }

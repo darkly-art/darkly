@@ -1,5 +1,7 @@
 //! Void (procedural-content layer) queries and picker previews.
 
+use darkly_macros::handlers;
+
 use super::types::{ParamInfo, VoidTypeInfo};
 use super::DarklyEngine;
 use super::PreviewJob;
@@ -14,11 +16,13 @@ use crate::gpu::void::Void;
 /// atlas format), which is also the format the per-frame readback expects.
 const VOID_PREVIEW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+#[handlers]
 impl DarklyEngine {
     // --- Queries ---
 
     /// Return all registered void types with their parameter definitions, icon,
     /// and whether each supports a rendered picker preview.
+    #[handler]
     pub fn void_types(&self) -> Vec<VoidTypeInfo> {
         self.compositor
             .void_registry()
@@ -42,6 +46,21 @@ impl DarklyEngine {
     /// Get the parameter definitions for a void type.
     pub fn void_param_defs(&self, type_id: &str) -> &'static [ParamDef] {
         self.compositor.void_registry().param_defs(type_id)
+    }
+
+    /// Coerce a raw JSON params object into typed [`ParamValue`]s against a void
+    /// type's `ParamDef` schema. The single param-coercion seam every
+    /// void-param handler shares (add / update): it pairs the raw `params` with
+    /// the sibling `void_type` that names the schema, which is exactly the
+    /// pairing generic request routing can't do for itself.
+    ///
+    /// [`ParamValue`]: crate::gpu::params::ParamValue
+    pub fn coerce_void_params(
+        &self,
+        type_id: &str,
+        params: &serde_json::Value,
+    ) -> Vec<crate::gpu::params::ParamValue> {
+        crate::gpu::params::param_values_from_json(params, self.void_param_defs(type_id))
     }
 
     /// Resolve a layer id to its void type, if the layer is a void.

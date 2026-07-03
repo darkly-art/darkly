@@ -100,7 +100,7 @@ let hoverGen = 0;
  *  extent) can keep the preview in sync after mutating the graph. */
 export async function pushHoverOverlay(engine: EngineRequests, pose: PenPose, cx: number, cy: number) {
     const gen = hoverGen;
-    const info = (await engine.send('refresh_brush_cursor_preview', {
+    const info = (await engine.api.refreshBrushCursorPreview({
         x: cx,
         y: cy,
         pressure: pose.pressure,
@@ -113,13 +113,13 @@ export async function pushHoverOverlay(engine: EngineRequests, pose: PenPose, cx
     // cleared the overlay, so drawing now would resurrect a frozen ghost dab.
     if (gen !== hoverGen) return;
     if (!info) {
-        engine.post('clear_overlay');
+        engine.api.clearOverlay();
         app.toolCursor = null;
         lastHover = null;
         return;
     }
     app.toolCursor = 'none';
-    engine.post('set_overlay', {
+    engine.api.setOverlay({
         primitives: [
             prim(
                 KIND_MASKED_STAMP,
@@ -203,10 +203,10 @@ export const brushTool: Tool = {
         // Sync session erase-mode flag to the engine. Other tools that
         // don't paint never read brush_blend_mode; brush tools that do
         // (color_output) will pick this up on the next stroke.
-        ctx.engine.post('set_brush_blend_mode', { mode: brushSession.eraseMode ? 1 : 0 });
+        ctx.engine.api.setBrushBlendMode({ mode: brushSession.eraseMode ? 1 : 0 });
         // Hide the native cursor only if a preview is available — otherwise
         // fall back to the default cursor so the user has *something* to see.
-        const info = await ctx.engine.send('get_brush_cursor_preview_info');
+        const info = await ctx.engine.api.getBrushCursorPreviewInfo();
         app.toolCursor = info ? 'none' : null;
     },
 
@@ -214,10 +214,10 @@ export const brushTool: Tool = {
         // Leaving the brush tool drops the builder's fullscreen mode so the
         // pinned bottom-area overlay can't outlive the panel that owns it.
         brushGraph.fullscreen = false;
-        ctx.engine.post('clear_overlay');
+        ctx.engine.api.clearOverlay();
         // Reset engine blend mode so a future paint-capable tool (or a
         // direct WASM call) doesn't inherit our erase state.
-        ctx.engine.post('set_brush_blend_mode', { mode: 0 });
+        ctx.engine.api.setBrushBlendMode({ mode: 0 });
         app.toolCursor = null;
         clearHover();
     },
@@ -228,13 +228,13 @@ export const brushTool: Tool = {
 
         // Clear the hover overlay while painting — the stamp renders onto
         // the canvas directly; a ghost at the cursor would just clutter.
-        ctx.engine.post('clear_overlay');
-        ctx.engine.post('clear_brush_cursor_preview_pose');
+        ctx.engine.api.clearOverlay();
+        ctx.engine.api.clearBrushCursorPreviewPose();
         clearHover();
         app.toolCursor = 'none';
         const params = brushStrokeParams(e, cx, cy);
-        ctx.engine.post('begin_stroke', { id: layerId });
-        ctx.engine.post('stroke_to', { op: 'brush_stroke', ...params });
+        ctx.engine.api.beginStroke({ id: layerId });
+        ctx.engine.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
         const dims = currentCanvasDimensions();
         if (dims) strokeRecorder.beginStroke(dims[0], dims[1], params);
     },
@@ -242,7 +242,7 @@ export const brushTool: Tool = {
     onPointerMove(ctx, e, cx, cy) {
         if (e.buttons & 1) {
             const params = brushStrokeParams(e, cx, cy);
-            ctx.engine.post('stroke_to', { op: 'brush_stroke', ...params });
+            ctx.engine.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
             strokeRecorder.addEvent(params);
             return;
         }
@@ -251,15 +251,15 @@ export const brushTool: Tool = {
     },
 
     onPointerUp(ctx) {
-        ctx.engine.post('end_stroke');
+        ctx.engine.api.endStroke();
         strokeRecorder.endStroke();
     },
 
     onPointerLeave(ctx) {
         // Pointer left the canvas: drop the hover ghost so it doesn't
         // linger at the last-seen edge position.
-        ctx.engine.post('clear_overlay');
-        ctx.engine.post('clear_brush_cursor_preview_pose');
+        ctx.engine.api.clearOverlay();
+        ctx.engine.api.clearBrushCursorPreviewPose();
         clearHover();
     },
 

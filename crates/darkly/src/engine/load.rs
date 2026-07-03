@@ -650,7 +650,7 @@ fn restore_veils(engine: &mut DarklyEngine, manifest: &Manifest) {
             );
             continue;
         }
-        engine.add_veil(&type_id, &params);
+        engine.add_veil_layer(&type_id, &params);
         if !veil.visible {
             let last = engine.compositor.veil_chain().count().saturating_sub(1);
             engine.set_veil_visible(last, false);

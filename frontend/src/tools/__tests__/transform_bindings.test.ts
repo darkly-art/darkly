@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { withApi } from '../../engine/testApi';
 
 // Stand-in for the Svelte-runic `app` proxy: records `post` calls and answers
-// the one `send` the binding makes on first read.
+// the one `send` the binding makes on first read. A real typed api + transport
+// is layered on so `toolEngine()` resolves and forwards to these spies.
 const { engine, fakeApp } = vi.hoisted(() => {
     const engine = {
         send: vi.fn((_kind: string, _payload?: object) =>
@@ -18,9 +20,11 @@ import { vectorObjectTransformBinding } from '../transform_bindings';
 import { beginToolSession } from '../tool_session';
 import type { Mat3 } from '../transform_projective';
 
+withApi(engine);
+
 // The bindings reach the engine through the live tool session; establish one
-// over the fake engine so `toolEngine()` resolves (its send/post delegate to
-// the fake's spies).
+// over the fake engine so `toolEngine()` resolves (its api delegates to the
+// fake's spies).
 beforeEach(() => {
     engine.send.mockClear();
     engine.post.mockClear();
@@ -43,7 +47,6 @@ describe('vectorObjectTransformBinding', () => {
         expect(updatePayload).toEqual({
             id: 42,
             object: 3,
-            mode_tag: 0,
             payload: [2, 0, 9, 0, 2, 11],
         });
     });
@@ -60,7 +63,6 @@ describe('vectorObjectTransformBinding', () => {
         expect(payload).toEqual({
             id: 42,
             object: 3,
-            mode_tag: 0,
             payload: [1, 0, 5, 0, 1, 7],
         });
     });

@@ -100,7 +100,7 @@ export async function createTextFromPending(
     if (targetLayerId !== null) {
         // A vector layer is active → add another object to it (a vector layer
         // owns many objects). The layer stays selected, so no `selectLayer`.
-        const res = await engine.send<{ object: number }>('add_text_object', {
+        const res = await engine.api.addTextObject({
             id: targetLayerId,
             ...common,
         });
@@ -109,7 +109,7 @@ export async function createTextFromPending(
         objectId = res.object;
     } else {
         // No vector layer active → a new text layer is born for this object.
-        const res = await engine.send<{ id: number; object: number }>('add_text', {
+        const res = await engine.api.addText({
             ...common,
             anchor: placement.anchorLayerId ?? -1,
         });
@@ -123,7 +123,7 @@ export async function createTextFromPending(
     onCreated?.(layerId, objectId);
     const latestVal = latest();
     if (latestVal !== content) {
-        engine.post('set_text_content', { id: layerId, object: objectId, content: latestVal });
+        engine.api.setTextContent({ id: layerId, object: objectId, content: latestVal });
     }
     await host.refreshLayerTree();
     if (targetLayerId === null) host.selectLayer(layerId);
@@ -172,7 +172,7 @@ export function flushTextContent() {
     if (pendingContent.size === 0) return;
     const hosts = new Set<EditorHost>();
     for (const [object, e] of pendingContent) {
-        e.host.engine?.post('set_text_content', { id: e.layer, object, content: e.content });
+        e.host.engine?.api.setTextContent({ id: e.layer, object, content: e.content });
         hosts.add(e.host);
     }
     pendingContent.clear();
@@ -219,7 +219,7 @@ export function dispatchStyle(
     defaults: Record<string, unknown>,
 ) {
     applyStyleDefaults(defaults, fields);
-    host.engine?.post('set_text_style', { id: layer, object, ...fields });
+    host.engine?.api.setTextStyle({ id: layer, object, ...fields });
     host.requestFrame();
 }
 

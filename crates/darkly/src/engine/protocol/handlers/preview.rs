@@ -11,11 +11,13 @@ use serde_json::json;
 use crate::engine::protocol::{decode, RequestRegistration, Response};
 use crate::engine::PreviewKind;
 
+/// `{ kind, type }` — which picker (`veil`/`void`) and which effect type id.
 #[derive(Deserialize)]
-struct PreviewReq {
-    kind: String,
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct PreviewReq {
+    pub kind: String,
     #[serde(rename = "type")]
-    type_id: String,
+    pub type_id: String,
 }
 
 /// Resolve the wire `kind` string to a [`PreviewKind`]. Unknown kinds return
@@ -30,44 +32,45 @@ fn parse_kind(kind: &str) -> Option<PreviewKind> {
 
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
-        RequestRegistration {
-            kind: "start_preview",
-            handle: |engine, payload, _b| {
-                let r: PreviewReq = decode(payload)?;
-                match parse_kind(&r.kind) {
-                    Some(PreviewKind::Veil) => engine.start_veil_preview(&r.type_id),
-                    Some(PreviewKind::Void) => engine.start_void_preview(&r.type_id),
-                    None => {}
-                }
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "poll_preview",
-            handle: |engine, payload, _b| {
-                let r: PreviewReq = decode(payload)?;
-                let Some(kind) = parse_kind(&r.kind) else {
-                    return Ok(Response::json(serde_json::Value::Null));
-                };
-                let Some((width, height, frames)) = engine.poll_preview(kind, &r.type_id) else {
-                    return Ok(Response::json(serde_json::Value::Null));
-                };
-                // Frames are concatenated into the single bytes side-channel;
-                // the JS edge slices them back out using width*height*4 stride.
-                let fps = crate::gpu::preview::PREVIEW_FPS;
-                let frame_count = frames.len();
-                let mut bytes = Vec::new();
-                for f in &frames {
-                    bytes.extend_from_slice(f);
-                }
-                let value = json!({
-                    "width": width,
-                    "height": height,
-                    "fps": fps,
-                    "frameCount": frame_count,
-                });
-                Ok(Response::binary(value, bytes))
-            },
-        },
+        RequestRegistration::new("start_preview", |engine, payload, _b| {
+            let r: PreviewReq = decode(payload)?;
+            match parse_kind(&r.kind) {
+                Some(PreviewKind::Veil) => engine.start_veil_preview(&r.type_id),
+                Some(PreviewKind::Void) => engine.start_void_preview(&r.type_id),
+                None => {}
+            }
+            Ok(Response::empty())
+        })
+        .post()
+        .req::<PreviewReq>(),
+        RequestRegistration::new("poll_preview", |engine, payload, _b| {
+            let r: PreviewReq = decode(payload)?;
+            let Some(kind) = parse_kind(&r.kind) else {
+                return Ok(Response::json(serde_json::Value::Null));
+            };
+            let Some((width, height, frames)) = engine.poll_preview(kind, &r.type_id) else {
+                return Ok(Response::json(serde_json::Value::Null));
+            };
+            // Frames are concatenated into the single bytes side-channel;
+            // the JS edge slices them back out using width*height*4 stride.
+            let fps = crate::gpu::preview::PREVIEW_FPS;
+            let frame_count = frames.len();
+            let mut bytes = Vec::new();
+            for f in &frames {
+                bytes.extend_from_slice(f);
+            }
+            let value = json!({
+                "width": width,
+                "height": height,
+                "fps": fps,
+                "frameCount": frame_count,
+            });
+            Ok(Response::binary(value, bytes))
+        })
+        .send()
+        .req::<PreviewReq>()
+        .resp_literal(
+            "{ width: number, height: number, fps: number, frameCount: number, bytes: Uint8Array } | null",
+        ),
     ]
 }

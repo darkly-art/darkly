@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/darkly",
+    "crates/darkly-macros",
     "frontend/wasm",
 ]
 default-members = [
@@ -14,6 +15,12 @@ license = "AGPL-3.0-or-later"
 [workspace.dependencies]
 # Local crates
 darkly = { path = "crates/darkly" }
+darkly-macros = { path = "crates/darkly-macros" }
+
+# Proc-macro toolchain (the `#[handlers]` engine-bridge macro + build.rs scan)
+syn = { version = "2", features = ["full", "visit"] }
+quote = "1"
+proc-macro2 = "1"
 
 # GPU
 wgpu = { version = "29.0", features = ["webgpu"] }
@@ -31,6 +38,9 @@ parley = "0.7"
 bytemuck = { version = "1.13", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# Typed-bridge TS codegen only (the `ts-export` feature on `darkly`); never
+# compiled into the wasm/production build — see that feature's comment.
+ts-rs = { version = "12", features = ["serde-json-impl"] }
 # serde_yaml_ng, not serde_yml: the original `serde_yaml` (dtolnay) is archived,
 # and the `serde_yml` fork is unmaintained — its 0.0.13 release swapped to a
 # `noyalib` backend that can't round-trip integer-keyed maps (`BTreeMap<u64,_>`),
@@ -44,7 +54,11 @@ png = "0.18"
 quick-xml = "0.41"
 base64 = "0.22"
 thiserror = "2.0"
-slotmap = { version = "1.0", features = ["serde"] }
+# `serde` feature intentionally off: slotmap's derived key serde encodes the
+# generational key as a `{ idx, version }` struct, but `LayerId` crosses the
+# wire as a single packed `u64` (see its hand-written serde impl in `layer.rs`).
+# The two would conflict, and nothing serializes a `SlotMap` directly.
+slotmap = { version = "1.0" }
 smallvec = "1"
 
 # WASM

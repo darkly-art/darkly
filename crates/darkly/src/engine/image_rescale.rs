@@ -9,6 +9,8 @@
 //! `Compositor::rescale_nodes`; the undo restore-across-extent-change lives in
 //! `apply_undo` (`engine/rendering.rs`).
 
+use darkly_macros::handlers;
+
 use super::canvas_resize::MAX_CANVAS_DIM;
 use super::DarklyEngine;
 use crate::coord::CanvasRect;
@@ -17,12 +19,14 @@ use crate::gpu::region_store::UndoRegionEntry;
 use crate::layer::LayerId;
 use crate::undo::CanvasGeometryAction;
 
+#[handlers]
 impl DarklyEngine {
     /// Resample all layer + mask pixels to `(new_width, new_height)`, scaling
     /// content about the canvas origin (which stays fixed). Lossy + undoable.
     /// No-ops on a zero/over-limit target, a no-op size, or if any node would
     /// exceed the max texture dimension after scaling. Clears the active
     /// selection (folded into the same undo step).
+    #[handler]
     pub fn rescale_image(&mut self, new_width: u32, new_height: u32) {
         self.auto_commit_floating();
         let (old_w, old_h) = (self.doc.width, self.doc.height);

@@ -1,5 +1,7 @@
 //! Brush library management methods on DarklyEngine.
 
+use darkly_macros::handlers;
+
 use super::{DarklyEngine, ReadbackContext};
 use crate::brush::bundle::{Brush, BrushMetadata};
 use crate::brush::library::BrushInfo;
@@ -29,13 +31,16 @@ pub(crate) const BRUSH_STROKE_PATH_INSET: f32 = 32.0;
 /// thumbnail (no truncation, auto-centered).
 pub(crate) const BRUSH_DAB_RENDER_SIZE: (u32, u32) = (256, 256);
 
+#[handlers]
 impl DarklyEngine {
     /// List all brushes in the library (summary info only).
+    #[handler]
     pub fn brush_list(&self) -> Vec<BrushInfo> {
         self.brush_library.list()
     }
 
     /// Load a brush by name and set it as the active brush graph.
+    #[handler]
     pub fn brush_load(&mut self, name: &str) -> Result<(), String> {
         let brush = self
             .brush_library
@@ -59,6 +64,7 @@ impl DarklyEngine {
     /// before the bake completes simply get an archive without
     /// `preview.png` — loads still work, pickers fall back to whatever
     /// placeholder they prefer.
+    #[handler]
     pub fn brush_save(&mut self, name: &str, category: &str) -> Result<(), String> {
         let mut metadata = BrushMetadata::from_graph(name, self.active_brush_graph());
         metadata.category = category.to_string();
@@ -109,6 +115,7 @@ impl DarklyEngine {
     /// off an async bake if none exists yet. Returns an empty vector when
     /// the bake is in flight (or the brush is missing); the frontend polls
     /// on rAF until non-empty bytes arrive. Subsequent calls hit the cache.
+    #[handler(returns = bytes)]
     pub fn brush_thumbnail(&mut self, name: &str) -> Vec<u8> {
         if let Some(png) = self.brush_library.thumbnail_png(name) {
             return png.to_vec();
@@ -156,6 +163,7 @@ impl DarklyEngine {
     /// `brush_thumbnail` but renders a single full-pressure dab instead
     /// of an S-curve, giving the picker a tip silhouette to show next
     /// to the stroke preview.
+    #[handler(returns = bytes)]
     pub fn brush_dab_thumbnail(&mut self, name: &str) -> Vec<u8> {
         if let Some(png) = self.brush_library.dab_thumbnail_png(name) {
             return png.to_vec();
@@ -201,6 +209,7 @@ impl DarklyEngine {
     }
 
     /// Import a brush from `.darkly-brush` ZIP bytes into the library.
+    #[handler]
     pub fn brush_import(&mut self, bytes: &[u8]) -> Result<String, String> {
         self.brush_library.import_bytes(bytes)
     }

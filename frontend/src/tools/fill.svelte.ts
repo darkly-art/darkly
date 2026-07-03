@@ -21,14 +21,16 @@ export const fillTool: Tool = {
 
         const c = app.foreground;
 
-        ctx.engine.post('begin_stroke', { id: layerId });
-        ctx.engine.post('stroke_to', {
-            op: 'flood_fill',
-            x: cx, y: cy,
-            r: c.r, g: c.g, b: c.b, a: c.a,
-            tolerance: fillSession.tolerance,
+        ctx.engine.api.beginStroke({ id: layerId });
+        ctx.engine.api.strokeTo({
+            op: {
+                op: 'flood_fill',
+                x: cx, y: cy,
+                r: c.r, g: c.g, b: c.b, a: c.a,
+                tolerance: fillSession.tolerance,
+            },
         });
-        ctx.engine.post('end_stroke');
+        ctx.engine.api.endStroke();
     },
 
     onPointerMove() {},

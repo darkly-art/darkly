@@ -28,7 +28,7 @@
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
         if (app.engine) {
-            app.engine.post('set_veil_visible', { index: veil.index, visible: !veil.visible });
+            app.engine.api.setVeilVisible({ index: veil.index, visible: !veil.visible });
             onupdate();
         }
     }

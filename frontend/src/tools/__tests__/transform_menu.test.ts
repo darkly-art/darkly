@@ -1,15 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { withApi } from '../../engine/testApi';
 
 // A live void binding drives this test: the transform tool routes a 'live'
 // capability to `voidTransformBinding`, whose read/update cross the engine
-// transport (mocked here). The gizmo + mode registry are real.
+// transport (mocked here). The gizmo + mode registry are real. The typed `api`
+// forwards to the `send`/`post` spies, so bare values come back off `send` and
+// `update_void_transform` crosses as `{ id, transform: { mode, data } }`.
 const { fakeApp } = vi.hoisted(() => {
     const engine = {
         post: vi.fn(),
         send: vi.fn((kind: string) => {
             switch (kind) {
                 case 'layer_transform_capability':
-                    return Promise.resolve({ value: 'live' });
+                    return Promise.resolve('live');
                 case 'void_transform_info':
                     return Promise.resolve({
                         ox: 0,
@@ -51,6 +54,8 @@ import {
     setTransformMode,
 } from '../transform.svelte';
 import { beginToolSession } from '../tool_session';
+
+withApi(fakeApp.engine);
 
 const ctx = { canvasEl: {} as HTMLCanvasElement } as never;
 
@@ -111,10 +116,10 @@ describe('transform right-click mode menu', () => {
         setTransformMode(1);
         expect(transformActiveMode()).toBe(1);
         const persp = fakeApp.engine.post.mock.calls.find(
-            (c) => c[0] === 'update_void_transform' && c[1]?.mode_tag === 1,
+            (c) => c[0] === 'update_void_transform' && c[1]?.transform?.mode === 'Perspective',
         );
         expect(persp).toBeTruthy();
         // Perspective sends the full 9-float homography.
-        expect(persp![1].payload.length).toBe(9);
+        expect(persp![1].transform.data.length).toBe(9);
     });
 });

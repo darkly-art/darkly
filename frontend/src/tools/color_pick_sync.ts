@@ -23,7 +23,7 @@ export function startPick(engine: EngineRequests, cx: number, cy: number): void 
     const mode = config.get('tools.colorPickerSampleSource');
     const layerId =
         mode === 'currentLayer' && app.activeLayerId != null ? app.activeLayerId : -1;
-    engine.post('pick_color', { x: cx, y: cy, id: layerId });
+    engine.api.pickColor({ x: cx, y: cy, id: layerId });
     waitingForPick = true;
 }
 
@@ -37,14 +37,14 @@ export function pollPick(): void {
     if (!engine) return;
     pollInFlight = true;
     engine
-        .send<{ value: boolean }>('has_pending_color_pick')
+        .api.hasPendingColorPick()
         .then((pending) => {
-            if (pending.value) {
+            if (pending) {
                 pollInFlight = false;
                 return; // still in flight; retry next frame
             }
             return engine
-                .send<{ bytes: Uint8Array }>('last_picked_color')
+                .api.lastPickedColor()
                 .then(({ bytes }) => {
                     waitingForPick = false;
                     pollInFlight = false;

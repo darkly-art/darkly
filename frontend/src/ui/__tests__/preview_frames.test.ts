@@ -7,6 +7,7 @@ import {
     type PreviewKind,
 } from '../preview_frames';
 import type { Engine } from '../../engine/protocol';
+import { withApi } from '../../engine/testApi';
 
 // vitest's default node environment has no DOM globals. The conversion only
 // uses `ImageData` as a plain RGBA frame container, so a minimal stand-in is
@@ -39,7 +40,8 @@ function rawPreview(frameCount: number, w = 2, h = 2): RawPreview {
  *  Captures the payload so tests can assert the `{ kind, type }` wire shape. */
 function fakeEngine(payload: RawPreview | null) {
     const send = vi.fn(async (_kind: string, _payload: unknown) => payload);
-    return { engine: { send } as unknown as Engine, send };
+    const engine = withApi({ send, post: vi.fn() }) as unknown as Engine;
+    return { engine, send };
 }
 
 describe('toPreviewData', () => {

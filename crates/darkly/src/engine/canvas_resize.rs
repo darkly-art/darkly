@@ -7,6 +7,8 @@
 //! resize is a planned follow-up — it needs lossy per-node pixel-snapshot
 //! undo, distinct from this document-only path.)
 
+use darkly_macros::handlers;
+
 use super::DarklyEngine;
 use crate::coord::{CanvasRect, WindowRect};
 use crate::undo::CanvasResizeAction;
@@ -16,6 +18,7 @@ use crate::undo::CanvasResizeAction;
 /// layer extent past this is refused rather than silently clamped.
 pub const MAX_CANVAS_DIM: u32 = 8192;
 
+#[handlers]
 impl DarklyEngine {
     /// Resize / move the canvas window.
     ///
@@ -57,6 +60,7 @@ impl DarklyEngine {
 
     /// Crop the canvas to the active selection's plane bounds. No-op if there
     /// is no active selection (or its bounds are still empty/unknown).
+    #[handler]
     pub fn crop_to_selection(&mut self) {
         if !self.has_selection() {
             return;

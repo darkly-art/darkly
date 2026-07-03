@@ -3,8 +3,8 @@
  * specific consumer's protocol surface — this is where knowledge of *what's
  * being transformed* lives (deliberately NOT in the gizmo).
  *
- * Reads go through the async `engine.send` request/response transport; live
- * updates and commit/cancel are fire-and-forget `engine.post`.
+ * Reads go through the async typed request transport (`engine.api.*`); live
+ * updates and commit/cancel are fire-and-forget.
  *
  * - `floatingTransformBinding` — destructive raster extract/commit (paste &
  *   move). The floating session must already be begun (`begin_transform`)
@@ -13,20 +13,27 @@
  * - `vectorObjectTransformBinding` — a single vector object's live transform.
  *
  * The last two are the same shape — a live, persistent, coalesced transform
- * property read by one kind and updated by another — so both are thin wrappers
- * over `liveTransformBinding`.
+ * property read by one typed call and updated by another — so both are thin
+ * wrappers over `liveTransformBinding`, differing only in the typed api calls
+ * they close over.
  */
 import { toolEngine } from './tool_session';
 import { affineToMat3, mat3ToAffine, type Mat3 } from './transform_projective';
-import type { RequestKind } from '../engine/protocol';
 import type { TransformBinding } from './transform_gizmo';
+import type { Transform } from '../engine/protocol_gen';
 
-/** Shape the wire payload for a `(matrix, modeTag)` update: basic mode (tag 0)
- *  carries the 6 affine components; perspective (tag 1) the full 9-float
- *  homography. The shared Rust decoder `Transform::from_tag_payload` picks the
- *  variant by tag. */
-function wirePayload(matrix: Mat3, modeTag: number): number[] {
-    return modeTag === 0 ? mat3ToAffine(matrix) : Array.from(matrix);
+/** The flat transform info the engine returns for a floating/void/vector query
+ *  — `matrix` is 6 affine floats (mode 0) or 9 homography floats (mode 1). */
+type TransformInfo = { ox: number; oy: number; w: number; h: number; mode: number; matrix: number[] };
+
+/** Wrap a `(matrix, modeTag)` pair as the Rust `Transform` enum's wire form
+ *  (adjacently tagged `{ mode, data }`): basic mode (tag 0) carries the 6 affine
+ *  components; perspective (tag 1) the full 9-float homography. The Rust side
+ *  picks the variant by tag. */
+function transformWire(matrix: Mat3, modeTag: number): Transform {
+    return modeTag === 1
+        ? { mode: 'Perspective', data: Array.from(matrix) as [number, number, number, number, number, number, number, number, number] }
+        : { mode: 'Basic', data: mat3ToAffine(matrix) as [number, number, number, number, number, number] };
 }
 
 /** Lift a wire `matrix` payload back to a `Mat3` by mode: 6 floats (affine,
@@ -42,9 +49,7 @@ export function floatingTransformBinding(): TransformBinding {
     return {
         live: false,
         async read() {
-            const raw = await toolEngine()?.send<
-                { ox: number; oy: number; w: number; h: number; mode: number; matrix: number[] } | null
-            >('floating_info');
+            const raw = await toolEngine()?.api.floatingInfo();
             if (!raw) return null;
             return {
                 origin: [raw.ox, raw.oy] as [number, number],
@@ -55,47 +60,41 @@ export function floatingTransformBinding(): TransformBinding {
             };
         },
         update(matrix: Mat3, modeTag: number) {
-            toolEngine()?.post('update_floating_matrix', {
-                mode_tag: modeTag,
-                payload: wirePayload(matrix, modeTag),
-            });
+            toolEngine()?.api.updateFloatingMatrix({ transform: transformWire(matrix, modeTag) });
         },
         commit() {
-            toolEngine()?.post('commit_floating');
+            toolEngine()?.api.commitFloating();
         },
         cancel() {
-            toolEngine()?.post('cancel_floating');
+            toolEngine()?.api.cancelFloating();
         },
     };
 }
 
 /**
  * Binding over any "live, persistent, coalesced transform property" consumer:
- * read its bbox + matrix via `readKind`, push live updates and the cancel-time
- * revert via `updateKind`. `params` (e.g. `{ id }`, `{ id, object }`) is the
- * consumer's addressing, spread into every request.
+ * `read` fetches its bbox + matrix, `update` pushes a live matrix and the
+ * cancel-time revert. Both close over the consumer's typed api calls, so the
+ * generic binding stays ignorant of which kind it's driving.
  *
  * The transform composites every frame (`live: true`), and the homography is
  * shared with the floating path, so consumers that opt in support perspective
  * like everything else.
  *
  * Commit is a no-op — edits are already live on the document and coalesced into
- * the undo stack. Cancel re-posts the transform captured on first read,
+ * the undo stack. Cancel re-pushes the transform captured on first read,
  * including its *mode*, so cancelling a consumer that was already perspective
  * restores perspective rather than a downgraded affine.
  */
 export function liveTransformBinding(
-    readKind: RequestKind,
-    updateKind: RequestKind,
-    params: Record<string, unknown>,
+    read: () => Promise<TransformInfo | null> | undefined,
+    update: (matrix: Mat3, modeTag: number) => void,
 ): TransformBinding {
     let original: { matrix: Mat3; mode: number } | null = null;
     return {
         live: true,
         async read() {
-            const raw = await toolEngine()?.send<
-                { ox: number; oy: number; w: number; h: number; mode: number; matrix: number[] } | null
-            >(readKind, params);
+            const raw = await read();
             if (!raw) return null;
             const matrix = liftMatrix(raw.mode, raw.matrix);
             if (original === null) original = { matrix: [...matrix] as Mat3, mode: raw.mode };
@@ -108,36 +107,37 @@ export function liveTransformBinding(
             };
         },
         update(matrix: Mat3, modeTag: number) {
-            toolEngine()?.post(updateKind, {
-                ...params,
-                mode_tag: modeTag,
-                payload: wirePayload(matrix, modeTag),
-            });
+            update(matrix, modeTag);
         },
         commit() {
             // Live + undoable already; nothing to finalize.
         },
         cancel() {
-            if (original) {
-                toolEngine()?.post(updateKind, {
-                    ...params,
-                    mode_tag: original.mode,
-                    payload: wirePayload(original.matrix, original.mode),
-                });
-            }
+            if (original) update(original.matrix, original.mode);
         },
     };
 }
 
 /** Binding over a void layer's live transform property. */
 export function voidTransformBinding(layerId: number): TransformBinding {
-    return liveTransformBinding('void_transform_info', 'update_void_transform', { id: layerId });
+    return liveTransformBinding(
+        () => toolEngine()?.api.voidTransformInfo({ id: layerId }),
+        (matrix, modeTag) =>
+            toolEngine()?.api.updateVoidTransform({ id: layerId, transform: transformWire(matrix, modeTag) }),
+    );
 }
 
-/** Binding over a single vector object's live transform. */
+/** Binding over a single vector object's live transform. Vector objects carry
+ *  an affine only, so the mode tag is ignored and the 6-float payload is sent
+ *  raw (the engine reorders it into kurbo). */
 export function vectorObjectTransformBinding(layerId: number, objectId: number): TransformBinding {
-    return liveTransformBinding('vector_object_info', 'update_vector_object_transform', {
-        id: layerId,
-        object: objectId,
-    });
+    return liveTransformBinding(
+        () => toolEngine()?.api.vectorObjectInfo({ id: layerId, object: objectId }),
+        (matrix) =>
+            toolEngine()?.api.updateVectorObjectTransform({
+                id: layerId,
+                object: objectId,
+                payload: mat3ToAffine(matrix),
+            }),
+    );
 }

@@ -11,6 +11,7 @@ use crate::nodegraph::Graph;
 
 /// Summary info for listing brushes without loading the full graph.
 #[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct BrushInfo {
     pub name: String,
     pub category: String,

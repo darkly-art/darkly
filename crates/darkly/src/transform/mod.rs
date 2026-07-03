@@ -108,6 +108,7 @@ pub fn affine_rotate(angle: f32) -> Affine2D {
 /// the frontend mode strategy.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "mode", content = "data")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum Transform {
     /// Affine: pan / scale / rotate. Stored as [`Affine2D`].
     Basic(Affine2D),

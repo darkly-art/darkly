@@ -111,7 +111,7 @@ class AutosaveScheduler {
     async snapshot(inst: DarklyInstance, debounceMs = 0): Promise<void> {
         const engine = inst.engine;
         if (!engine) return;
-        const dirty = (await engine.send<{ value: boolean }>('is_dirty')).value;
+        const dirty = await engine.api.isDirty();
         const eligible = snapshotEligible({
             isDirty: dirty,
             idle: inst.idleForSnapshot,

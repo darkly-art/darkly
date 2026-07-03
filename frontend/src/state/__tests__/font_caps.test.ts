@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { withApi } from '../../engine/testApi';
 
 // Control the invalidation token directly — a plain object standing in for the
 // library store, so a test can swap `families` to a fresh array to simulate a
@@ -11,7 +12,7 @@ import { fontCaps } from '../font_caps.svelte';
 const CAPS = { italic: true, axes: [{ tag: 'wght', min: 100, default: 400, max: 900 }] };
 
 function fakeEngine(caps: unknown = CAPS) {
-    return { send: vi.fn(() => Promise.resolve(caps)) };
+    return withApi({ send: vi.fn(() => Promise.resolve(caps)) });
 }
 
 beforeEach(() => {

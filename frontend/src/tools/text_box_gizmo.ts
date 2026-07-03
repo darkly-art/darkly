@@ -126,13 +126,13 @@ export class TextBoxGizmo {
 
     private async readGeo(): Promise<boolean> {
         if (!app.engine || this.layerId === null || this.objectId === null) return false;
-        const info = await app.engine.send<{ w: number; h: number; matrix: Affine2D } | null>(
-            'vector_object_info',
-            { id: this.layerId, object: this.objectId },
-        );
+        const info = await app.engine.api.vectorObjectInfo({
+            id: this.layerId,
+            object: this.objectId,
+        });
         // A stale read can land after detach/re-attach; ignore it.
         if (!info || this.layerId === null || this.objectId === null) return false;
-        this.geo = { G: info.matrix, w: info.w, h: info.h };
+        this.geo = { G: info.matrix as Affine2D, w: info.w, h: info.h };
         return true;
     }
 
@@ -151,7 +151,7 @@ export class TextBoxGizmo {
         this.geo = null;
         this.overlay = null;
         this.drag = null;
-        if (was) app.engine?.post('clear_overlay');
+        if (was) app.engine?.api.clearOverlay();
         if (app.toolCursor) app.toolCursor = null;
     }
 
@@ -195,9 +195,9 @@ export class TextBoxGizmo {
             const next = resizeBox(this.drag.geo0, this.drag.id, cx, cy);
             if (!next) return;
             this.geo = next;
-            app.engine?.post('set_text_box', {
-                id: this.layerId,
-                object: this.objectId,
+            app.engine?.api.setTextBox({
+                id: this.layerId!,
+                object: this.objectId!,
                 matrix: next.G,
                 box: [next.w, next.h],
             });

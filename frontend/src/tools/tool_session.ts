@@ -31,9 +31,10 @@
  * A finer-grained sibling of this idiom is the brush tool's `hoverGen`, which
  * invalidates on stroke start too — a tighter boundary than a whole session.
  */
-import type { Engine, EngineRequests, RequestKind } from '../engine/protocol';
+import type { Engine, EngineRequests } from '../engine/protocol';
+import { makeApi, type EngineApi } from '../engine/protocol_gen';
 
-/** Thrown by a dead session's `send` when its response resolves. Swallowed by
+/** Thrown by a dead session's request when its response resolves. Swallowed by
  *  {@link runHook} at the dispatcher's hook call sites — a cancelled op is a
  *  no-op, not an error. */
 export class ToolSessionCancelled extends Error {
@@ -44,36 +45,36 @@ export class ToolSessionCancelled extends Error {
 }
 
 /** A thin, cancellation-aware wrapper over the real {@link Engine}, bound to one
- *  tool session. Tool code holds no direct `Engine` reference — it goes through
- *  the live session, so the resource itself enforces safety. */
+ *  tool session. Tool code holds no direct `Engine` reference — it reaches the
+ *  engine only through this session's typed {@link api}, so the resource itself
+ *  enforces safety. The `api` is a second {@link makeApi} client over the inner
+ *  engine's transport, wrapped so a dead session rejects awaited requests and
+ *  drops fire-and-forget ones. */
 export class SessionEngine implements EngineRequests {
-    #inner: Engine;
     #alive = true;
+    readonly api: EngineApi;
 
     constructor(inner: Engine) {
-        this.#inner = inner;
-    }
-
-    /** Sever this session. In-flight `send`s reject on resume; new `post`s drop. */
-    kill(): void {
-        this.#alive = false;
-    }
-
-    /** Awaited request. Resolves normally only if the session is still alive
-     *  when the response lands; otherwise rejects with {@link ToolSessionCancelled},
-     *  unwinding the caller before it can touch state that died with the session.
-     *  This is the one cancellation point — there is no per-call-site guard
-     *  anywhere else. */
-    send<T = any>(kind: RequestKind, payload?: object, bytes?: Uint8Array): Promise<T> {
-        return this.#inner.send<T>(kind, payload, bytes).then((v) => {
-            if (!this.#alive) throw new ToolSessionCancelled();
-            return v;
+        const t = inner.transport;
+        this.api = makeApi({
+            request: (kind, payload, bytes) =>
+                t.request(kind, payload, bytes).then((v) => {
+                    // The one cancellation point — reaching any line past an
+                    // await routed through the session proves it's still alive.
+                    if (!this.#alive) throw new ToolSessionCancelled();
+                    return v;
+                }),
+            postFF: (kind, payload, bytes) => {
+                // A dead session drops it — its effect is moot.
+                if (this.#alive) t.postFF(kind, payload, bytes);
+            },
         });
     }
 
-    /** Fire-and-forget request. A dead session drops it — its effect is moot. */
-    post(kind: RequestKind, payload?: object, bytes?: Uint8Array): void {
-        if (this.#alive) this.#inner.post(kind, payload, bytes);
+    /** Sever this session. In-flight requests reject on resume; new fire-and-forget
+     *  posts drop. */
+    kill(): void {
+        this.#alive = false;
     }
 }
 

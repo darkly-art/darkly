@@ -309,7 +309,7 @@ function tryEngage(): void {
     // tool's placement gizmo, etc.) so the canvas shows only the picker
     // cursor while the modifier is held. `clear_overlay` is a generic
     // engine API — the picker doesn't know which tool drew the overlay.
-    app.engine?.post('clear_overlay');
+    app.engine?.api.clearOverlay();
     refreshCursor();
     app.requestFrame();
 }

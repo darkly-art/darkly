@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { withApi } from '../../engine/testApi';
 
 // Stand-ins for the Svelte-runic state proxy, the GPU overlay builder, and the
 // transform-mode strategy, so the gizmo's async lifecycle can be driven without
@@ -60,6 +61,9 @@ beforeEach(() => {
  * resolves — and its continuation must NOT rebuild the overlay. If it does, the
  * gizmo handles reappear and the user has to press Enter a second time.
  */
+// Give the fake engine a real typed `api` over its send/post spies.
+withApi(engine);
+
 describe('transform gizmo commit during in-flight frame read', () => {
     it('does not resurrect the overlay when committed mid-read', async () => {
         const gizmo = new TransformGizmo({} as never);

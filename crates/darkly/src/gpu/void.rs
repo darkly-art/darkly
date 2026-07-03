@@ -246,6 +246,7 @@ pub trait Void: std::fmt::Debug {
 /// for [`Self::Display`]. Purely procedural voids (noise) declare `None`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum CaptureKind {
     Camera,
     Display,

@@ -26,6 +26,7 @@ use crate::nodegraph::WireKind;
 /// The set of data types that can flow along wires in a brush graph.
 /// Strictly mirrors WGSL shapes — no semantic skins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum BrushWireType {
     /// Single `f32`. Used for sensor outputs, coverage values, mask
     /// luminance — anything one-channel.

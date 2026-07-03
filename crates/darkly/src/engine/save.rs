@@ -565,7 +565,7 @@ mod tests {
             .iter()
             .map(crate::gpu::params::ParamDef::default_value)
             .collect();
-        engine.add_veil("grain", &defaults);
+        engine.add_veil_layer("grain", &defaults);
 
         let requires = requires_from_doc(&engine);
         assert!(

@@ -65,7 +65,7 @@ hotkeys:
   mergeDown: $mod+KeyE
   # Selection.
   clearSelection: $mod+Shift+KeyA
-  # GIMP binds Select > Invert to Ctrl+I. This is why `adjustInvert` (Colors >
+  # GIMP binds Select > Invert to Ctrl+I. This is why `filterInvert` (Colors >
   # Invert) is intentionally left unbound for GIMP: Colors > Invert ships no
   # default key, and Ctrl+I is taken here. Krita/PS put invert-colors on Ctrl+I;
   # GIMP keeps Ctrl+I for invert-selection.

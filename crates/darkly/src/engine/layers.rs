@@ -1,7 +1,10 @@
 //! Layer CRUD and property operations.
 
+use darkly_macros::handlers;
+
 use super::DarklyEngine;
 use crate::document::MoveTarget;
+use crate::engine::protocol::{params_from_json, RawParams};
 use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::property::Property;
 use crate::undo::{
@@ -89,6 +92,7 @@ pub struct TextObjectEntry {
     pub box_size: Option<(f32, f32)>,
 }
 
+#[handlers]
 impl DarklyEngine {
     // --- Layer CRUD ---
 
@@ -107,6 +111,59 @@ impl DarklyEngine {
         self.push_undo(Box::new(LayerAddAction::new(id, parent, pos)));
 
         id
+    }
+
+    // --- Wire entry points ---
+    //
+    // These are the protocol verbs the frontend calls: they take wire-friendly
+    // arguments (`RawParams`, `Option<LayerId>`) and forward to the typed
+    // primitives above/below. The param-bearing ones own the single coercion
+    // seam (`coerce_void_params`), pairing a raw params object with the sibling
+    // field that names its schema — the one thing generic request routing can't
+    // do for itself. Direct Rust callers (and tests) use the typed primitives.
+
+    /// Wire entry for `add_raster` — see [`Self::add_raster_layer`].
+    #[handler]
+    pub fn add_raster(&mut self, anchor: Option<LayerId>) -> LayerId {
+        self.add_raster_layer(anchor)
+    }
+
+    /// Wire entry for `add_void` — coerces `params` against the void type's
+    /// schema, then [`Self::add_void_layer`].
+    #[handler]
+    pub fn add_void(
+        &mut self,
+        void_type: String,
+        params: RawParams,
+        anchor: Option<LayerId>,
+    ) -> Option<LayerId> {
+        let pv = self.coerce_void_params(&void_type, &params.0);
+        self.add_void_layer(&void_type, pv, anchor)
+    }
+
+    /// Wire entry for `add_filter` — filters carry no params today (the schema
+    /// is empty), then [`Self::add_filter_layer`].
+    #[handler]
+    pub fn add_filter(
+        &mut self,
+        pipeline: String,
+        params: RawParams,
+        anchor: Option<LayerId>,
+    ) -> Option<LayerId> {
+        let pv = params_from_json(&params.0, &[]);
+        self.add_filter_layer(&pipeline, pv, anchor)
+    }
+
+    /// Wire entry for `set_void_params` — resolves the layer's void type,
+    /// coerces `params` against its schema, then [`Self::update_void_params`].
+    /// A non-void (or stale) id is a silent no-op.
+    #[handler]
+    pub fn set_void_params(&mut self, id: LayerId, params: RawParams) {
+        let Some(type_id) = self.void_layer_type(id) else {
+            return;
+        };
+        let pv = self.coerce_void_params(&type_id, &params.0);
+        self.update_void_params(id, pv);
     }
 
     // --- Vector / text layers ---
@@ -518,6 +575,7 @@ impl DarklyEngine {
         });
     }
 
+    #[handler]
     pub fn add_group(&mut self, anchor: Option<LayerId>) -> LayerId {
         let id = self.doc.add_group(anchor);
 
@@ -538,6 +596,7 @@ impl DarklyEngine {
     /// skipped; the new group is created only if at least one editable
     /// source remains. The whole op is one [`CompoundAction`], so a
     /// single undo restores the original tree.
+    #[handler]
     pub fn group_layers(&mut self, ids: Vec<LayerId>) -> Result<LayerId, String> {
         if ids.is_empty() {
             return Err("Need at least one layer to group".into());
@@ -810,29 +869,26 @@ impl DarklyEngine {
     /// reads the layer's CURRENT transform as the undo `old_value` before
     /// writing, so a whole gizmo drag coalesces into one undo step that
     /// restores the true pre-drag state — never identity.
-    pub fn update_void_transform(
-        &mut self,
-        layer_id: LayerId,
-        new_transform: crate::transform::Transform,
-    ) {
-        if !self.doc.is_node_editable(layer_id) {
+    #[handler]
+    pub fn update_void_transform(&mut self, id: LayerId, transform: crate::transform::Transform) {
+        if !self.doc.is_node_editable(id) {
             return;
         }
-        let old_transform = match self.doc.find_node(layer_id) {
+        let old_transform = match self.doc.find_node(id) {
             Some(LayerNode::Layer(Layer::Void(v))) => v.transform,
             _ => return,
         };
-        if let Some(LayerNode::Layer(Layer::Void(v))) = self.doc.find_node_mut(layer_id) {
-            v.transform = new_transform;
+        if let Some(LayerNode::Layer(Layer::Void(v))) = self.doc.find_node_mut(id) {
+            v.transform = transform;
         }
         self.compositor
-            .update_void_layer_transform(&self.gpu.queue, layer_id, &new_transform);
+            .update_void_layer_transform(&self.gpu.queue, id, &transform);
         self.compositor.mark_dirty();
 
         self.coalesce_property_undo(PropertyAction::new(
-            layer_id,
+            id,
             Property::Transform(old_transform),
-            Property::Transform(new_transform),
+            Property::Transform(transform),
         ));
     }
 
@@ -871,9 +927,10 @@ impl DarklyEngine {
     /// How the user may transform a layer — `live` / `destructive` / `none`.
     /// Resolves the void's static capability through the compositor-owned
     /// registry. Returned as a stable string for the WASM boundary.
-    pub fn layer_transform_capability(&self, layer_id: LayerId) -> &'static str {
+    #[handler]
+    pub fn layer_transform_capability(&self, id: LayerId) -> &'static str {
         use crate::layer::TransformCapability;
-        let cap = match self.doc.find_node(layer_id) {
+        let cap = match self.doc.find_node(id) {
             Some(LayerNode::Layer(l)) => l.transform_capability(self.compositor.void_registry()),
             _ => TransformCapability::None,
         };
@@ -982,15 +1039,16 @@ impl DarklyEngine {
             .map(|p| p.bounds)
     }
 
-    pub fn remove_layer(&mut self, layer_id: LayerId) -> Result<(), String> {
-        if !self.doc.is_node_editable(layer_id) {
+    #[handler]
+    pub fn remove_layer(&mut self, id: LayerId) -> Result<(), String> {
+        if !self.doc.is_node_editable(id) {
             return Err("Layer is locked".into());
         }
         if self.doc.node_count() <= 1 {
             return Err("Cannot delete the last layer".into());
         }
 
-        if let Some(action) = self.detach_layer_for_remove(layer_id) {
+        if let Some(action) = self.detach_layer_for_remove(id) {
             self.push_undo(action);
         }
         self.compositor.mark_dirty();
@@ -1020,6 +1078,7 @@ impl DarklyEngine {
     /// return value is the count of locked layers that were ignored so the
     /// UI can surface a "N locked layers skipped" toast. Errors only when
     /// removing the editable set would leave zero layers in the document.
+    #[handler]
     pub fn remove_layers(&mut self, ids: Vec<LayerId>) -> Result<usize, String> {
         let mut editable = Vec::with_capacity(ids.len());
         let mut skipped_locked = 0usize;
@@ -1054,8 +1113,9 @@ impl DarklyEngine {
         Ok(skipped_locked)
     }
 
-    pub fn move_layer(&mut self, layer_id: LayerId, target: MoveTarget) {
-        if let Some(action) = self.move_layer_inner(layer_id, target) {
+    #[handler]
+    pub fn move_layer(&mut self, id: LayerId, target: MoveTarget) {
+        if let Some(action) = self.move_layer_inner(id, target) {
             self.push_undo(action);
         }
         self.compositor.mark_dirty();
@@ -1089,6 +1149,7 @@ impl DarklyEngine {
     /// of locked-layer skips so the UI can toast. Errors when `target`
     /// references an id in `ids` or a descendant of one (the drop is
     /// self-referential).
+    #[handler]
     pub fn move_layers(&mut self, ids: Vec<LayerId>, target: MoveTarget) -> Result<usize, String> {
         let target_id = match target {
             MoveTarget::Before(t)
@@ -1152,32 +1213,34 @@ impl DarklyEngine {
 
     // --- Layer properties ---
 
-    pub fn set_opacity(&mut self, layer_id: LayerId, opacity: f32) {
-        if !self.doc.is_node_editable(layer_id) {
+    #[handler]
+    pub fn set_opacity(&mut self, id: LayerId, opacity: f32) {
+        if !self.doc.is_node_editable(id) {
             return;
         }
-        let old_opacity = match self.doc.find_node(layer_id) {
+        let old_opacity = match self.doc.find_node(id) {
             Some(n) => n.blend().opacity,
             None => return,
         };
-        if let Some(node) = self.doc.find_node_mut(layer_id) {
+        if let Some(node) = self.doc.find_node_mut(id) {
             node.blend_mut().opacity = opacity;
         } else {
             return;
         }
 
-        self.refresh_blend_uniforms(layer_id);
+        self.refresh_blend_uniforms(id);
         self.compositor.mark_dirty();
 
         self.coalesce_property_undo(PropertyAction::new(
-            layer_id,
+            id,
             Property::Opacity(old_opacity),
             Property::Opacity(opacity),
         ));
     }
 
-    pub fn set_blend_mode(&mut self, layer_id: LayerId, type_id: &str) {
-        if !self.doc.is_node_editable(layer_id) {
+    #[handler]
+    pub fn set_blend_mode(&mut self, id: LayerId, type_id: &str) {
+        if !self.doc.is_node_editable(id) {
             return;
         }
         // Unknown blend-mode strings keep the existing mode rather than
@@ -1187,7 +1250,7 @@ impl DarklyEngine {
             Some(reg) => reg,
             None => return,
         };
-        let old_mode = match self.doc.find_node(layer_id) {
+        let old_mode = match self.doc.find_node(id) {
             Some(n) => n.blend().blend_mode,
             None => return,
         };
@@ -1195,10 +1258,10 @@ impl DarklyEngine {
         // to isolated — passthrough ignores the group's blend mode, so the
         // user's choice would have no visible effect otherwise.
         let was_passthrough = matches!(
-            self.doc.find_node(layer_id),
+            self.doc.find_node(id),
             Some(LayerNode::Group(g)) if g.passthrough,
         );
-        if let Some(node) = self.doc.find_node_mut(layer_id) {
+        if let Some(node) = self.doc.find_node_mut(id) {
             node.blend_mut().blend_mode = blend_mode;
             if was_passthrough {
                 if let LayerNode::Group(g) = node {
@@ -1211,19 +1274,19 @@ impl DarklyEngine {
 
         if was_passthrough {
             self.compositor
-                .ensure_group_state(&self.gpu.device, &self.gpu.queue, layer_id);
+                .ensure_group_state(&self.gpu.device, &self.gpu.queue, id);
         }
-        self.refresh_blend_uniforms(layer_id);
+        self.refresh_blend_uniforms(id);
         self.compositor.mark_dirty();
 
         let blend_action: Box<dyn UndoAction> = Box::new(PropertyAction::new(
-            layer_id,
+            id,
             Property::BlendMode(old_mode),
             Property::BlendMode(blend_mode),
         ));
         if was_passthrough {
             let passthrough_action: Box<dyn UndoAction> = Box::new(PropertyAction::new(
-                layer_id,
+                id,
                 Property::Passthrough(true),
                 Property::Passthrough(false),
             ));
@@ -1238,13 +1301,14 @@ impl DarklyEngine {
 
     /// Set the `visible` flag on any node — layer, group, or filter.
     /// Works uniformly across kinds because they all carry [`NodeCommon`].
-    pub fn set_layer_visible(&mut self, node_id: LayerId, visible: bool) {
+    #[handler]
+    pub fn set_layer_visible(&mut self, id: LayerId, visible: bool) {
         // Try layers/groups first; fall through to filters.
-        let old_visible = if let Some(node) = self.doc.find_node_mut(node_id) {
+        let old_visible = if let Some(node) = self.doc.find_node_mut(id) {
             let old = node.common().visible;
             node.common_mut().visible = visible;
             Some(old)
-        } else if let Some(filter) = self.doc.find_filter_mut(node_id) {
+        } else if let Some(filter) = self.doc.find_filter_mut(id) {
             let old = filter.common.visible;
             filter.common.visible = visible;
             Some(old)
@@ -1253,17 +1317,18 @@ impl DarklyEngine {
         };
         if let Some(old) = old_visible {
             self.compositor.mark_dirty();
-            self.push_undo(Box::new(crate::undo::NodeVisibleAction::new(node_id, old)));
+            self.push_undo(Box::new(crate::undo::NodeVisibleAction::new(id, old)));
         }
     }
 
     /// Set the `locked` flag on any node — layer, group, or filter.
-    pub fn set_node_locked(&mut self, node_id: LayerId, locked: bool) {
-        let old_locked = if let Some(node) = self.doc.find_node_mut(node_id) {
+    #[handler]
+    pub fn set_node_locked(&mut self, id: LayerId, locked: bool) {
+        let old_locked = if let Some(node) = self.doc.find_node_mut(id) {
             let old = node.common().locked;
             node.common_mut().locked = locked;
             Some(old)
-        } else if let Some(filter) = self.doc.find_filter_mut(node_id) {
+        } else if let Some(filter) = self.doc.find_filter_mut(id) {
             let old = filter.common.locked;
             filter.common.locked = locked;
             Some(old)
@@ -1271,7 +1336,7 @@ impl DarklyEngine {
             None
         };
         if let Some(old) = old_locked {
-            self.push_undo(Box::new(crate::undo::NodeLockedAction::new(node_id, old)));
+            self.push_undo(Box::new(crate::undo::NodeLockedAction::new(id, old)));
         }
     }
 
@@ -1286,6 +1351,7 @@ impl DarklyEngine {
     /// every layer is independent: toggling visibility while isolated
     /// modifies that layer's `visible` field, and clearing isolation
     /// preserves whatever the user set.
+    #[handler]
     pub fn set_isolated_node(&mut self, id: Option<LayerId>) {
         if self.isolated_node == id {
             return;
@@ -1319,6 +1385,7 @@ impl DarklyEngine {
 
     /// User-visible document name. Backs the tab title and the Save As
     /// picker's `suggestedName`. Persisted on disk as `manifest.name`.
+    #[handler]
     pub fn document_name(&self) -> &str {
         &self.doc.name
     }
@@ -1336,6 +1403,7 @@ impl DarklyEngine {
     /// successful save (`poll_save_result`) or load (`open_document`
     /// installs a fresh `dirty = false` doc). UI close-tab and
     /// `beforeunload` flows consult this to decide whether to prompt.
+    #[handler]
     pub fn is_dirty(&self) -> bool {
         self.doc.dirty
     }
@@ -1357,6 +1425,7 @@ impl DarklyEngine {
     /// crash-recovery snapshot: the restored document is unsaved work
     /// with no backing file handle, so it must read as dirty (otherwise
     /// closing the tab would silently discard the recovered work).
+    #[handler]
     pub fn mark_dirty(&mut self) {
         self.doc.dirty = true;
     }
@@ -1365,26 +1434,28 @@ impl DarklyEngine {
     /// users expect to be free-standing, matching every other editor's
     /// "title bar rename" affordance. The save flow picks the new name
     /// up from `doc.name` the next time `start_save_document` runs.
+    #[handler]
     pub fn set_document_name(&mut self, name: String) {
         self.doc.name = name;
     }
 
-    pub fn set_layer_name(&mut self, layer_id: LayerId, name: &str) {
-        if !self.doc.is_node_editable(layer_id) {
+    #[handler]
+    pub fn set_layer_name(&mut self, id: LayerId, name: &str) {
+        if !self.doc.is_node_editable(id) {
             return;
         }
-        let old_name = match self.doc.find_node(layer_id) {
+        let old_name = match self.doc.find_node(id) {
             Some(n) => n.common().name.clone(),
             None => return,
         };
-        if let Some(node) = self.doc.find_node_mut(layer_id) {
+        if let Some(node) = self.doc.find_node_mut(id) {
             node.common_mut().name = name.to_string();
         } else {
             return;
         }
 
         self.push_undo(Box::new(PropertyAction::new(
-            layer_id,
+            id,
             Property::Name(old_name),
             Property::Name(name.to_string()),
         )));
@@ -1424,31 +1495,33 @@ impl DarklyEngine {
         }
     }
 
-    pub fn set_group_collapsed(&mut self, group_id: LayerId, collapsed: bool) {
-        if let Some(LayerNode::Group(g)) = self.doc.find_node_mut(group_id) {
+    #[handler]
+    pub fn set_group_collapsed(&mut self, id: LayerId, collapsed: bool) {
+        if let Some(LayerNode::Group(g)) = self.doc.find_node_mut(id) {
             g.collapsed = collapsed;
         }
     }
 
-    pub fn set_group_passthrough(&mut self, group_id: LayerId, passthrough: bool) {
-        if !self.doc.is_node_editable(group_id) {
+    #[handler]
+    pub fn set_group_passthrough(&mut self, id: LayerId, passthrough: bool) {
+        if !self.doc.is_node_editable(id) {
             return;
         }
-        let old = match self.doc.find_node(group_id) {
+        let old = match self.doc.find_node(id) {
             Some(LayerNode::Group(g)) => g.passthrough,
             _ => return,
         };
-        if let Some(LayerNode::Group(g)) = self.doc.find_node_mut(group_id) {
+        if let Some(LayerNode::Group(g)) = self.doc.find_node_mut(id) {
             g.passthrough = passthrough;
         }
         if !passthrough {
             self.compositor
-                .ensure_group_state(&self.gpu.device, &self.gpu.queue, group_id);
-            let isolated = self.host_renders_isolated(group_id);
-            if let Some(LayerNode::Group(g)) = self.doc.find_node(group_id) {
+                .ensure_group_state(&self.gpu.device, &self.gpu.queue, id);
+            let isolated = self.host_renders_isolated(id);
+            if let Some(LayerNode::Group(g)) = self.doc.find_node(id) {
                 self.compositor.update_group_uniforms(
                     &self.gpu.queue,
-                    group_id,
+                    id,
                     g.blend.opacity,
                     g.blend.blend_mode.gpu_value,
                     isolated,
@@ -1457,7 +1530,7 @@ impl DarklyEngine {
         }
         self.compositor.mark_dirty();
         self.push_undo(Box::new(PropertyAction::new(
-            group_id,
+            id,
             Property::Passthrough(old),
             Property::Passthrough(passthrough),
         )));
