@@ -1,6 +1,6 @@
 <script lang="ts">
     import LeftSidebar from './ui/LeftSidebar.svelte';
-    import RightSidebar from './ui/RightSidebar.svelte';
+    import Workspace from './ui/workspace/Workspace.svelte';
     import ToolOptionsBar from './ui/ToolOptionsBar.svelte';
     import Toast from './ui/Toast.svelte';
     import LoadErrorToast from './ui/LoadErrorToast.svelte';
@@ -23,6 +23,8 @@
     import { anyTabDirty } from './multi_tab/closeGuard.svelte';
     // Register all tools
     import './tools/index';
+    // Register dockable workspace panels (layers, properties)
+    import './ui/workspace/registerPanels';
 
     // Open the first tab synchronously before children render. Sidebars and
     // ToolOptionsBar read `app.<x>` (the active-instance proxy) during their
@@ -55,7 +57,7 @@
             <CanvasStack />
             <ToolOptionsBar />
         </div>
-        <RightSidebar />
+        <Workspace workspaceId={0} />
     </div>
 </div>
 <Toast />
