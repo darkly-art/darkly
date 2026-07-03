@@ -403,7 +403,13 @@
         // op parked on an await from the previous tool now rejects on resume.
         beginToolSession(engine);
         const nextCtx = getToolContext();
-        if (nextCtx) toolRegistry.get(id)?.onActivate?.(nextCtx);
+        // `onActivate` is async and awaits engine round-trips through the live
+        // session, so wrap it like every other hook call site: if the session
+        // dies mid-activate (the initial-load race where the active-layer effect
+        // rebinds the session while a fresh tool's onActivate is parked on an
+        // await), the resumed op rejects with ToolSessionCancelled — a no-op to
+        // swallow, not an unhandled rejection.
+        if (nextCtx) void runHook(toolRegistry.get(id)?.onActivate?.(nextCtx));
         prevToolId = id;
     });
 

@@ -55,8 +55,9 @@ hotkeys:
   # Colors. Photoshop binds Image > Adjustments > Invert to Ctrl+I (selection
   # invert is the Shift variant above). Krita agrees (Ctrl+I → Invert filter);
   # GIMP does NOT (its Ctrl+I is Invert Selection, Colors > Invert is unbound),
-  # so this is per-overlay, not a default.
-  adjustInvert: $mod+KeyI
+  # so this is per-overlay, not a default. The action id is `filterInvert` —
+  # the dynamically-registered id for the `invert` filter (`filter` + type).
+  filterInvert: $mod+KeyI
 
 mouse_clicks:
   # Photoshop's eyedropper modifier is Alt+drag (not Ctrl+drag).
