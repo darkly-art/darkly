@@ -45,7 +45,7 @@ function clearPreviewOverlay() {
 
 export const ellipseSelectTool: Tool = {
     id: 'ellipse_select',
-    icon: 'tabler:circle-dashed',
+    icon: 'lucide:circle-dashed',
     group: 'select',
     cluster: 'select',
     hotkeyAction: 'ellipseSelectTool',

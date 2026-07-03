@@ -102,3 +102,47 @@ describe('icon bundle completeness (offline)', () => {
         expect(missing).toEqual([]);
     });
 });
+
+/** Parse the `left top width height` viewBox that the generator baked into an
+ *  icon, as Iconify exposes it on the rendered SVG's attributes. */
+function viewBox(name: string): [number, number, number, number] {
+    const g = generateIcon({ icon: name });
+    const vb = (g?.attributes as { viewBox?: string } | undefined)?.viewBox;
+    if (!vb) throw new Error(`no viewBox for ${name}`);
+    return vb.split(/\s+/).map(Number) as [number, number, number, number];
+}
+
+// Every icon renders into the same 1em box (Icon.svelte + `.tool svg`), so its
+// on-screen size is how much of its viewBox the artwork fills. gen-icons
+// shrink-wraps each viewBox to the inked bounds at build time so all icons —
+// regardless of source set's built-in margins — render at a uniform optical
+// size. These guard that the tightening actually ran and didn't over-crop.
+describe('icon viewBox tightening (offline)', () => {
+    it('crops the canonical padded icon to its inked bounds', () => {
+        // boxicons:square-dashed ships on a 24×24 grid with the marquee inset
+        // ~3 units on every side. Untightened it would read "0 0 24 24"; the
+        // baked box must hug the ~18×18 artwork instead.
+        const [l, t, w, h] = viewBox('boxicons:square-dashed');
+        expect(l).toBeCloseTo(3, 0);
+        expect(t).toBeCloseTo(3, 0);
+        expect(w).toBeCloseTo(18, 0);
+        expect(h).toBeCloseTo(18, 0);
+    });
+
+    it('tightens the outline select-tool icons off their full grid', () => {
+        // The dashed/lasso marquees are the icons that motivated this: each is
+        // drawn inside a padded 24-grid. After tightening every one must be
+        // cropped below the full 24-unit canvas, yet not collapsed to nothing.
+        for (const name of [
+            'boxicons:square-dashed',
+            'lucide:circle-dashed',
+            'lucide:triangle-dashed',
+            'tabler:lasso',
+        ]) {
+            const [, , w, h] = viewBox(name);
+            const span = Math.max(w, h);
+            expect(span, `${name} not cropped`).toBeLessThan(24);
+            expect(span, `${name} over-cropped`).toBeGreaterThan(10);
+        }
+    });
+});

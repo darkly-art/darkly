@@ -1,6 +1,7 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
     import Icon from '../../icons/Icon.svelte';
+    import Slider from '../settings/widgets/Slider.svelte';
 
     interface VoidParam {
         kind: 'float' | 'int' | 'bool';
@@ -26,11 +27,8 @@
         app.requestFrame();
     }
 
-    function onSliderInput(param: VoidParam, e: Event) {
-        const target = e.target as HTMLInputElement;
-        param.value = param.kind === 'int'
-            ? parseInt(target.value, 10)
-            : parseFloat(target.value);
+    function onSliderChange(param: VoidParam, v: number) {
+        param.value = v;
         pushParams();
     }
 
@@ -123,18 +121,14 @@
         <div class="row">
             <span class="label">{param.name}</span>
             {#if param.kind === 'float' || param.kind === 'int'}
-                <input
-                    type="range"
-                    class="slider"
-                    min={param.min}
-                    max={param.max}
-                    step={param.kind === 'int' ? 1 : ((param.max! - param.min!) / 100)}
-                    value={param.value ?? param.default}
-                    oninput={(e) => onSliderInput(param, e)}
+                <Slider
+                    value={(param.value ?? param.default) as number}
+                    min={param.min ?? 0}
+                    max={param.max ?? 1}
+                    integer={param.kind === 'int'}
+                    onchange={(v) => onSliderChange(param, v)}
+                    format={(v) => (param.kind === 'int' ? String(v) : v.toFixed(2))}
                 />
-                <span class="value">
-                    {param.kind === 'int' ? (param.value ?? param.default) : ((param.value ?? param.default) as number).toFixed(2)}
-                </span>
             {:else if param.kind === 'bool'}
                 <input
                     type="checkbox"
@@ -202,20 +196,6 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-    }
-
-    .slider {
-        flex: 1;
-        height: 4px;
-        min-width: 0;
-    }
-
-    .value {
-        font-size: 11px;
-        color: var(--text-muted);
-        min-width: 56px;
-        text-align: right;
-        font-variant-numeric: tabular-nums;
     }
 
     .checkbox {
