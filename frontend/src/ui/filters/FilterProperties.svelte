@@ -5,6 +5,7 @@
     import { createGraphCoords } from '../brush_builder/coords';
     import type { NodeCanvasContext } from '../brush_builder/NodeCanvas.svelte';
     import { partitionFilterParams, channelLabel, type FilterParam, type CurvePoints } from './filterParams';
+    import Slider from '../settings/widgets/Slider.svelte';
 
     /** The identity curve — a straight diagonal from (0,0) to (1,1). */
     const IDENTITY_CURVE: CurvePoints = [
@@ -60,9 +61,8 @@
         app.requestFrame();
     }
 
-    function onSliderInput(param: FilterParam, e: Event) {
-        const target = e.target as HTMLInputElement;
-        param.value = param.kind === 'int' ? parseInt(target.value, 10) : parseFloat(target.value);
+    function onSliderChange(param: FilterParam, v: number) {
+        param.value = v;
         pushParams(true);
     }
     function onBoolChange(param: FilterParam, e: Event) {
@@ -128,20 +128,14 @@
         <div class="row">
             <span class="label">{param.name}</span>
             {#if param.kind === 'float' || param.kind === 'int'}
-                <input
-                    type="range"
-                    class="slider"
-                    min={param.min}
-                    max={param.max}
-                    step={param.kind === 'int' ? 1 : (((param.max as number) - (param.min as number)) / 100)}
+                <Slider
                     value={(param.value ?? param.default) as number}
-                    oninput={(e) => onSliderInput(param, e)}
+                    min={(param.min ?? 0) as number}
+                    max={(param.max ?? 1) as number}
+                    integer={param.kind === 'int'}
+                    onchange={(v) => onSliderChange(param, v)}
+                    format={(v) => (param.kind === 'int' ? String(v) : v.toFixed(2))}
                 />
-                <span class="value">
-                    {param.kind === 'int'
-                        ? (param.value ?? param.default)
-                        : ((param.value ?? param.default) as number).toFixed(2)}
-                </span>
             {:else if param.kind === 'bool'}
                 <input
                     type="checkbox"
@@ -224,20 +218,6 @@
         border-radius: var(--radius-sm);
         font-size: 11px;
         padding: 2px 4px;
-    }
-
-    .slider {
-        flex: 1;
-        height: 4px;
-        min-width: 0;
-    }
-
-    .value {
-        font-size: 11px;
-        color: var(--text-muted);
-        min-width: 36px;
-        text-align: right;
-        font-variant-numeric: tabular-nums;
     }
 
     .checkbox {

@@ -17,7 +17,7 @@
     import EnumDropdown from '../settings/widgets/EnumDropdown.svelte';
     import ColorInput from '../settings/widgets/ColorInput.svelte';
     import Scrub from '../Scrub.svelte';
-    import NumberSlider from '../settings/widgets/NumberSlider.svelte';
+    import Slider from '../settings/widgets/Slider.svelte';
     import FontBrowser from '../fonts/FontBrowser.svelte';
     import { fontLibrary } from '../../state/font_library.svelte';
     import { fontCaps, type FontCapabilities } from '../../state/font_caps.svelte';
@@ -356,7 +356,7 @@
             {#each caps.axes as axis (axis.tag)}
                 <div class="row" title={`${axisLabel(axis.tag)} (${axis.tag} axis)`}>
                     <span class="label">{axisLabel(axis.tag)}</span>
-                    <NumberSlider
+                    <Slider
                         value={block.variations[axis.tag] ?? axis.default}
                         min={axis.min}
                         max={axis.max}
@@ -389,7 +389,7 @@
 
             <div class="row" title="Extra space between letters, in canvas pixels.">
                 <span class="label">Letter Spacing</span>
-                <NumberSlider
+                <Slider
                     value={block.letter_spacing}
                     min={-10}
                     max={50}
@@ -399,7 +399,7 @@
 
             <div class="row" title="Extra space between words, in canvas pixels.">
                 <span class="label">Word Spacing</span>
-                <NumberSlider
+                <Slider
                     value={block.word_spacing}
                     min={-10}
                     max={100}
@@ -409,7 +409,7 @@
 
             <div class="row" title="Line height, as a multiple of the font's natural height.">
                 <span class="label">Line Height</span>
-                <NumberSlider
+                <Slider
                     value={block.line_height}
                     min={0.5}
                     max={3}

@@ -1,5 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
+    import Slider from '../settings/widgets/Slider.svelte';
 
     let { node }: {
         node: { id: number; opacity: number; blendMode: string; editable?: boolean };
@@ -40,8 +41,7 @@
         return groups;
     })());
 
-    function onOpacityInput(e: Event) {
-        const value = parseFloat((e.target as HTMLInputElement).value);
+    function setOpacity(value: number) {
         app.engine?.api.setOpacity({ id: node.id, opacity: value });
         app.refreshLayerTree();
         app.requestFrame();
@@ -75,15 +75,15 @@
 
 <div class="row" class:disabled={!editable}>
     <span class="label">Opacity</span>
-    <input
-        type="range"
-        class="slider"
-        min="0" max="1" step="0.01"
-        value={node.opacity}
-        oninput={onOpacityInput}
+    <Slider
+        value={node.opacity ?? 1}
+        min={0}
+        max={1}
+        step={0.01}
         disabled={!editable}
+        onchange={setOpacity}
+        format={(v) => `${Math.round(v * 100)}%`}
     />
-    <span class="value">{Math.round((node.opacity ?? 1) * 100)}%</span>
 </div>
 
 <style>
@@ -98,20 +98,6 @@
         font-size: 11px;
         color: var(--text-muted);
         min-width: 56px;
-    }
-
-    .slider {
-        flex: 1;
-        height: 4px;
-        min-width: 0;
-    }
-
-    .value {
-        font-size: 11px;
-        color: var(--text-muted);
-        min-width: 36px;
-        text-align: right;
-        font-variant-numeric: tabular-nums;
     }
 
     .select {
@@ -130,13 +116,11 @@
         border-color: var(--accent);
     }
 
-    .row.disabled .label,
-    .row.disabled .value {
+    .row.disabled .label {
         color: var(--text-dim);
     }
 
-    .select:disabled,
-    .slider:disabled {
+    .select:disabled {
         opacity: 0.4;
         cursor: not-allowed;
     }
