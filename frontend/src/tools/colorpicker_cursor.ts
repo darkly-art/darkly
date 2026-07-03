@@ -1,5 +1,6 @@
 import { app, type Color } from '../state/app.svelte';
 import { toolRegistry } from './registry';
+import { toolEngine } from './tool_session';
 import { screenToCanvas } from '../canvas/coordinates';
 import { effectiveMouseClicks } from '../actions/triggers';
 import { parseBinding } from '../actions/hotkey_resolve';
@@ -342,10 +343,11 @@ function disengage(): void {
         // not implementing `restoreHover`.
         const tool = toolRegistry.get(app.activeToolId);
         const canvasEl = app.canvasEl;
-        if (tool?.restoreHover && app.engine && canvasEl && lastCanvas) {
+        const engine = toolEngine();
+        if (tool?.restoreHover && engine && canvasEl && lastCanvas) {
             tool.restoreHover(
                 {
-                    engine: app.engine,
+                    engine,
                     canvasEl,
                     screenToCanvas: (sx, sy) => screenToCanvas(sx, sy, canvasEl),
                 },

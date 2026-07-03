@@ -55,7 +55,7 @@
         for (const p of node.params) {
             params[p.name] = (p.value ?? p.default) as number | boolean | CurvePoints;
         }
-        app.engine.post('update_filter_params', { id: node.id, params });
+        app.engine.api.updateFilterParams({ id: node.id, params });
         if (refresh) app.refreshLayerTree();
         app.requestFrame();
     }

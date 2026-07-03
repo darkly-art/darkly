@@ -121,6 +121,7 @@ pub mod straight_composite;
 pub mod test_utils;
 pub mod texture_registry;
 pub mod transform;
+pub mod vector_renderer;
 pub mod veil;
 pub mod veil_chain;
 pub mod veil_preview;

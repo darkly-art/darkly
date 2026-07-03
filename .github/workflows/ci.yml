@@ -37,6 +37,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Install fontconfig (native font enumeration via fontique)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -58,10 +62,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Install Mesa Vulkan software renderer (lavapipe)
+      - name: Install Mesa Vulkan software renderer (lavapipe) + fontconfig
         run: |
           sudo apt-get update
-          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools libvulkan1
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools libvulkan1 libfontconfig1-dev
           vulkaninfo --summary || true
       - uses: dtolnay/rust-toolchain@stable
         with:

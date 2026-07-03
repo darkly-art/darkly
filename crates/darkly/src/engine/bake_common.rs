@@ -44,10 +44,13 @@ impl DarklyEngine {
                     }
                 }
             }
-            LayerNode::Layer(Layer::Void(_)) | LayerNode::Layer(Layer::Filter(_)) => {
-                // Voids and filter layers hold no pixel data of their own — a
-                // void's texture is GPU-regenerable from params, a filter
-                // transforms the accumulator — so bake collection skips the
+            LayerNode::Layer(Layer::Void(_))
+            | LayerNode::Layer(Layer::Filter(_))
+            | LayerNode::Layer(Layer::Vector(_)) => {
+                // Voids, filter, and vector layers hold no pixel data of their
+                // own — a void's texture is GPU-regenerable from params, a
+                // filter transforms the accumulator, a vector layer's texture
+                // is realized from its objects — so bake collection skips the
                 // node itself. Attached filter pixels (e.g. a mask attached to
                 // the node) still need to participate.
                 let mods = node.filters().to_vec();

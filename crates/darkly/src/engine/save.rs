@@ -23,8 +23,8 @@ use crate::document::filter;
 use crate::document::layer_kind::{self, PixelBlobSpec};
 use crate::document::Entity;
 use crate::format::manifest::{
-    Manifest, ManifestCanvas, ManifestEntry, ManifestRequires, ManifestVeil, ManifestWriter,
-    SaveBlob, SaveBundle, CONTAINER_VERSION, FORMAT_TAG,
+    Manifest, ManifestCanvas, ManifestEntry, ManifestFontRef, ManifestRequires, ManifestVeil,
+    ManifestWriter, SaveBlob, SaveBundle, CONTAINER_VERSION, FORMAT_TAG,
 };
 use crate::format::registry_io::InstancePayload;
 use crate::gpu::readback;
@@ -106,6 +106,11 @@ pub struct SaveJob {
     /// Composite readback result. `None` until the `Composite` arm
     /// fires.
     composite: Option<(u32, u32, Vec<u8>)>,
+    /// Embedded-font blobs (`fonts/<hash>.ttf`), captured synchronously at
+    /// submit time — their bytes are already in CPU RAM, so unlike pixel blobs
+    /// they need no async readback. Merged verbatim into the bundle's `blobs`
+    /// at drain.
+    font_blobs: Vec<SaveBlob>,
     /// Why this save was started — gates whether the drain clears
     /// `doc.dirty` (see [`SavePurpose`]).
     purpose: SavePurpose,
@@ -133,7 +138,7 @@ impl DarklyEngine {
             return Err(SaveError::InProgress);
         }
 
-        let (manifest, pixel_blobs) = build_manifest(self);
+        let (manifest, pixel_blobs, font_blobs) = build_manifest(self);
 
         // Force an offscreen composite so the composite texture is fresh,
         // even when this engine is headless (no surface present has run
@@ -183,6 +188,7 @@ impl DarklyEngine {
             pinned_textures,
             pending_blobs,
             composite: None,
+            font_blobs,
             purpose,
         });
 
@@ -226,6 +232,9 @@ impl DarklyEngine {
                 bytes: bytes.unwrap_or_default(),
             })
             .collect();
+        // Embedded fonts carry raw bytes captured at submit time (no readback),
+        // so they join the bundle directly alongside the pixel blobs.
+        blobs.extend(job.font_blobs);
         // Stable ordering for tests + bit-stable output.
         blobs.sort_by(|a, b| a.path.cmp(&b.path));
         // Only a real file save means "disk matches" — an autosave snapshot
@@ -276,7 +285,7 @@ impl DarklyEngine {
 /// per-entity pixel-blob declarations the save flow uses to queue
 /// readbacks. Synchronous — runs as part of `start_save_document`'s
 /// prelude.
-fn build_manifest(engine: &DarklyEngine) -> (Manifest, Vec<PixelBlobSpec>) {
+fn build_manifest(engine: &DarklyEngine) -> (Manifest, Vec<PixelBlobSpec>, Vec<SaveBlob>) {
     let doc = &engine.doc;
     let mut nodes: Vec<ManifestEntry> = Vec::new();
     let mut filters: Vec<ManifestEntry> = Vec::new();
@@ -320,6 +329,7 @@ fn build_manifest(engine: &DarklyEngine) -> (Manifest, Vec<PixelBlobSpec>) {
 
     let veils = build_manifest_veils(engine);
     let requires = requires_from_doc(engine);
+    let (fonts, font_blobs) = build_font_blobs(engine);
 
     let manifest = Manifest {
         format: FORMAT_TAG.to_string(),
@@ -339,8 +349,59 @@ fn build_manifest(engine: &DarklyEngine) -> (Manifest, Vec<PixelBlobSpec>) {
         modifiers: filters,
         selection_id: doc.selection_id().map(LayerId::to_ffi),
         veils,
+        fonts,
     };
-    (manifest, blobs)
+    (manifest, blobs, font_blobs)
+}
+
+/// Collect every font a text object references that the registry has runtime
+/// bytes for, and produce (a) the `ManifestFontRef` list for the manifest and
+/// (b) one `fonts/<hash>.ttf` [`SaveBlob`] per unique hash. Fonts are treated
+/// exactly like pixel blobs — content-addressed and deduped — except the bytes
+/// are already in CPU RAM, so no GPU readback is queued; they go straight into
+/// the bundle. Families with no runtime bytes (the binary-resident fallback,
+/// generic `sans-serif`) resolve to `None` and are skipped naturally, so a
+/// document whose text uses only the fallback embeds nothing.
+///
+/// Google-imported fonts have runtime bytes like any upload, so they embed by
+/// value here — never by URL reference. A URL-only form would break opening the
+/// `.darkly` offline, so this must stay by-value.
+fn build_font_blobs(engine: &DarklyEngine) -> (Vec<ManifestFontRef>, Vec<SaveBlob>) {
+    // Every distinct family referenced by a text object across the document.
+    let mut families: Vec<String> = Vec::new();
+    for v in engine.doc.all_vector_layers() {
+        for obj in &v.objects {
+            if let crate::layer::ObjectSource::Text(t) = &obj.source {
+                if !families.contains(&t.font_family) {
+                    families.push(t.font_family.clone());
+                }
+            }
+        }
+    }
+    families.sort();
+
+    let mut fonts: Vec<ManifestFontRef> = Vec::new();
+    let mut seen_hashes: HashSet<String> = HashSet::new();
+    let mut blobs: Vec<SaveBlob> = Vec::new();
+    for family in families {
+        let Some((hash, bytes)) = engine.fonts.font_blob(&family) else {
+            continue;
+        };
+        let path = format!("fonts/{hash}.ttf");
+        // One blob per unique hash — several families can share one file.
+        if seen_hashes.insert(hash.to_string()) {
+            blobs.push(SaveBlob {
+                path: path.clone(),
+                bytes: bytes.to_vec(),
+            });
+        }
+        fonts.push(ManifestFontRef {
+            family,
+            hash: hash.to_string(),
+            path,
+        });
+    }
+    (fonts, blobs)
 }
 
 fn build_manifest_veils(engine: &DarklyEngine) -> Vec<ManifestVeil> {

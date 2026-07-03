@@ -6,10 +6,17 @@
  * (`transform_gizmo.ts`) and the mode strategies know nothing about voids or
  * floating; this file is where that routing lives.
  *
- * Routing (via the backend's `layer_transform_capability`):
+ * Routing:
+ *   - vector layer  → per-object: hit-test the click; on a hit attach that
+ *                     object's transform binding. A different *axis* than the
+ *                     whole-layer capability below, so it isn't a
+ *                     `TransformCapability` arm — vector knowledge stays here.
  *   - `live`        → a void's persistent transform property (camera, …).
  *   - `destructive` → floating extract/commit (raster paste & move).
  *   - `none`        → inert: no gizmo, no cursor change.
+ *
+ * The `live` / `destructive` / `none` split comes from the backend's
+ * `layer_transform_capability`.
  *
  * Two tools share this implementation behind a toolbar cluster: `transform`
  * (free / affine) and `transform_perspective` (enters perspective). They are
@@ -19,8 +26,13 @@
  */
 import type { Tool, ToolContext } from './registry';
 import { app } from '../state/app.svelte';
+import { toolEngine, runHook } from './tool_session';
 import { TransformGizmo } from './transform_gizmo';
-import { floatingTransformBinding, voidTransformBinding } from './transform_bindings';
+import {
+    floatingTransformBinding,
+    voidTransformBinding,
+    vectorObjectTransformBinding,
+} from './transform_bindings';
 
 let gizmo: TransformGizmo | null = null;
 
@@ -54,19 +66,28 @@ function applyEntryMode(): void {
     if (entryMode !== 0) gizmo?.setMode(entryMode);
 }
 
-/** Resolve the selected layer's capability and attach the matching binding. */
+/** Resolve the selected layer's capability and attach the matching binding.
+ *
+ *  Engine access is routed through the tool session, and `layerId` is captured
+ *  *before* the first await: reaching any line past an await proves the session
+ *  survived — same layer, same tool, same tab — so the captured id is still the
+ *  one being transformed. A layer/tool/tab change mid-sequence kills the session,
+ *  and the next `send` rejects with `ToolSessionCancelled` (swallowed upstream),
+ *  so we never attach a binding to a layer that's no longer active. */
 async function activate(): Promise<void> {
-    if (!gizmo || !app.engine || app.activeLayerId == null) return;
-    const cap = await app.engine.api.layerTransformCapability({
-        id: app.activeLayerId,
+    const engine = toolEngine();
+    if (!gizmo || !engine || app.activeLayerId == null) return;
+    const layerId = app.activeLayerId;
+    const cap = await engine.api.layerTransformCapability({
+        id: layerId,
     });
     if (cap === 'live') {
-        if (await gizmo.attach(voidTransformBinding(app.activeLayerId))) applyEntryMode();
+        if (await gizmo.attach(voidTransformBinding(layerId))) applyEntryMode();
     } else if (cap === 'destructive') {
         // Floating extract may resolve asynchronously (content-bounds readback);
         // if it isn't ready this frame, `onFrame` picks it up once it is.
-        if (!(await app.engine.api.hasFloating())) {
-            await app.engine.api.beginTransform({ id: app.activeLayerId });
+        if (!(await engine.api.hasFloating())) {
+            await engine.api.beginTransform({ id: layerId });
         }
         if (await gizmo.attach(floatingTransformBinding())) applyEntryMode();
     }
@@ -91,7 +112,10 @@ function createTransformTool(opts: {
         onActivate(ctx: ToolContext) {
             gizmo = new TransformGizmo(ctx.canvasEl);
             entryMode = opts.entry;
-            void activate();
+            // Fire-and-forget: if the session dies mid-activate (a rapid re-switch
+            // or layer change), activate() rejects with ToolSessionCancelled —
+            // swallow it here since onActivate can't await it.
+            void runHook(activate());
         },
 
         onDeactivate() {
@@ -121,7 +145,25 @@ function createTransformTool(opts: {
                 return;
             }
             // First click (or a click after Enter/Escape) re-engages the gizmo.
-            if (!gizmo.active) await activate();
+            if (!gizmo.active) {
+                // A click landing on a vector object attaches a per-object gizmo.
+                // `hit_test_vector_object` returns -1 for a miss or a non-vector
+                // layer, so this gate doubles as the "is it a vector layer" check —
+                // no separate kind query, no `TransformCapability::Vector` arm.
+                if (app.engine && app.activeLayerId != null) {
+                    const hit = await app.engine.api.hitTestVectorObject({
+                        id: app.activeLayerId,
+                        x: cx,
+                        y: cy,
+                    });
+                    if (hit && hit.object >= 0) {
+                        await gizmo.attach(vectorObjectTransformBinding(app.activeLayerId, hit.object));
+                        app.requestFrame();
+                    }
+                }
+                // Not a vector hit → fall back to void / floating routing.
+                if (!gizmo.active) await activate();
+            }
             if (gizmo.active) gizmo.pointerDown(cx, cy);
         },
 
@@ -148,34 +190,42 @@ function createTransformTool(opts: {
 
         async onFrame() {
             if (!gizmo) return;
+            const engine = toolEngine();
             // Pick up an async floating extract once its content-bounds readback
             // lands (begin_transform may defer a frame). Never auto-attaches
             // voids — those attach explicitly via activate(), so Enter/Escape
             // can end the session without it immediately reappearing.
-            if (!gizmo.active && app.engine) {
-                if (await app.engine.api.hasFloating()) {
+            //
+            // The engine read is session-routed: if a tool/layer/tab change ran
+            // `onDeactivate` (nulling `gizmo`) mid-await, the resumed request
+            // rejects and unwinds here — so the `gizmo` deref below can't hit
+            // null. No stopgap re-check needed.
+            if (!gizmo.active && engine) {
+                if (await engine.api.hasFloating()) {
                     if (await gizmo.attach(floatingTransformBinding())) applyEntryMode();
                 }
             }
-            await gizmo.frame();
+            // The awaits above can outlive the gizmo: a tool switch or layer
+            // change may run onDeactivate and null it out before we resume.
+            await gizmo?.frame();
         },
 
         async dismissOverlay() {
             if (!gizmo) return;
-            if (app.engine && (await app.engine.api.hasFloating())) {
+            const engine = toolEngine();
+            if (engine && (await engine.api.hasFloating())) {
                 // Activating the floating's own target layer (e.g.
                 // paste-as-floating creates a new layer and selects it) is part
                 // of the floating workflow, not a user-switched-away signal.
-                const id = await app.engine.api.floatingTargetLayer();
+                const id = await engine.api.floatingTargetLayer();
                 if (id !== null && id === app.activeLayerId) {
                     return;
                 }
             }
-            // The awaits above can outlive the gizmo: a tool switch or layer
-            // change may run onDeactivate (which already commits) and null it out
-            // before we resume. Re-check so we neither dereference null nor
-            // double-commit.
-            gizmo?.commit();
+            // Reaching here past the session-routed awaits proves the session
+            // (and thus `gizmo`) is still alive, so this commit is safe and
+            // single: a tool/layer change mid-await would have rejected above.
+            gizmo.commit();
         },
     };
 }

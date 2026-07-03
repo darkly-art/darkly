@@ -280,6 +280,36 @@ impl DarklyEngine {
 
                 Some(new_id)
             }
+            LayerNode::Layer(Layer::Vector(v)) => {
+                // Vector state is fully procedural: copy the object list and
+                // layer transform, then re-realize on the copy. No pixels to
+                // clone — the texture rebuilds from the objects.
+                let objects = v.objects.clone();
+                let transform = v.transform;
+                let new_id = self.doc.add_vector_layer(anchor);
+
+                let new_name = if is_root {
+                    format!("{common_name} copy")
+                } else {
+                    common_name
+                };
+                if let Some(LayerNode::Layer(Layer::Vector(nv))) = self.doc.find_node_mut(new_id) {
+                    nv.common.name = new_name;
+                    nv.common.visible = common_visible;
+                    nv.common.locked = common_locked;
+                    nv.blend.opacity = blend_opacity;
+                    nv.blend.blend_mode = blend_mode_reg;
+                    nv.objects = objects;
+                    nv.transform = transform;
+                }
+                self.sync_vector_layer(new_id);
+                self.refresh_blend_uniforms(new_id);
+
+                // Vector layers can carry mask filters like any other host.
+                self.clone_modifiers(source_id, new_id);
+
+                Some(new_id)
+            }
         }
     }
 

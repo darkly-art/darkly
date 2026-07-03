@@ -29,6 +29,7 @@ vi.mock('../transform_modes', () => ({
 }));
 
 import { TransformGizmo } from '../transform_gizmo';
+import { beginToolSession } from '../tool_session';
 
 function deferred<T>() {
     let resolve!: (v: T) => void;
@@ -47,6 +48,9 @@ const INFO = {
 beforeEach(() => {
     pushSpy.mockClear();
     engine.post.mockClear();
+    // The gizmo pushes/clears its overlay through the live tool session; begin
+    // one over the fake engine so `toolEngine()` resolves.
+    beginToolSession(engine as never);
 });
 
 /**
@@ -87,7 +91,8 @@ describe('transform gizmo commit during in-flight frame read', () => {
         // ...the user presses Enter mid-read: commit clears the gizmo.
         gizmo.commit();
         expect(gizmo.active).toBe(false);
-        expect(engine.post).toHaveBeenCalledWith('clear_overlay');
+        // Routed through the session wrapper, so trailing payload/bytes ride along.
+        expect(engine.post.mock.calls.some((c) => c[0] === 'clear_overlay')).toBe(true);
 
         // The stale read resolves. The overlay must stay cleared.
         gate.resolve(INFO);

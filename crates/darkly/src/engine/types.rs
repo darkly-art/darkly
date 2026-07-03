@@ -126,6 +126,24 @@ pub enum LayerInfo {
         /// uses.
         params: Vec<ParamInfo>,
     },
+    /// Vector-object layer (text today). Carries no pixel buffer — the texture
+    /// is realized from its `objects`.
+    #[serde(rename_all = "camelCase")]
+    Vector {
+        id: f64,
+        name: String,
+        visible: bool,
+        locked: bool,
+        editable: bool,
+        can_have_mask: bool,
+        can_rename: bool,
+        has_thumbnail: bool,
+        icon: &'static str,
+        kind_name: &'static str,
+        opacity: f32,
+        blend_mode: &'static str,
+        modifiers: Vec<ModifierInfo>,
+    },
     #[serde(rename_all = "camelCase")]
     Group {
         id: f64,
@@ -532,6 +550,25 @@ pub(crate) fn node_to_layer_info(
                     params,
                 }
             }
+            Layer::Vector(v) => LayerInfo::Vector {
+                id: v.id.to_ffi() as f64,
+                name: v.common.name.clone(),
+                visible: v.common.visible,
+                locked: v.common.locked,
+                editable,
+                can_have_mask: kind.can_have_mask,
+                can_rename: kind.can_rename,
+                has_thumbnail: kind.has_thumbnail,
+                icon: kind.icon,
+                kind_name: kind.display_name,
+                opacity: v.blend.opacity,
+                blend_mode: v.blend.blend_mode.type_id,
+                modifiers: v
+                    .filters
+                    .iter()
+                    .filter_map(|mid| doc.find_filter(*mid).map(|m| modifier_to_info(doc, m)))
+                    .collect(),
+            },
         },
         LayerNode::Group(g) => LayerInfo::Group {
             id: g.id.to_ffi() as f64,

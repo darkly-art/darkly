@@ -25,6 +25,15 @@ proc-macro2 = "1"
 # GPU
 wgpu = { version = "29.0", features = ["webgpu"] }
 
+# Vector / text — the Vello family shares one geometry/style vocabulary
+# (kurbo/peniko), so the renderer is a swappable backend behind one data model.
+# vello 0.9 pins wgpu 29.0.3, matching the workspace resolution above; keep the
+# two bumped together (vello's pipelines and our compositor share one device).
+vello = "0.9"
+kurbo = { version = "0.13", features = ["serde"] }
+peniko = { version = "0.6", features = ["serde"] }
+parley = "0.7"
+
 # Data
 bytemuck = { version = "1.13", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -42,7 +51,7 @@ log = "0.4"
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 png = "0.18"
-quick-xml = "0.40"
+quick-xml = "0.41"
 base64 = "0.22"
 thiserror = "2.0"
 # `serde` feature intentionally off: slotmap's derived key serde encodes the

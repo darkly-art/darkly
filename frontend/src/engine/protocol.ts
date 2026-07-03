@@ -18,6 +18,20 @@ export function reportEngineError(e: unknown): void {
     console.error('[engine] request failed:', err?.kind ?? 'error', err?.message ?? e);
 }
 
+/** The request surface of the engine: `send` (awaited) and `post`
+ *  (fire-and-forget). Both {@link Engine} and the tool-session wrapper
+ *  `SessionEngine` (`tools/tool_session.ts`) satisfy this shape. Helpers that
+ *  only issue requests should accept this rather than the concrete `Engine`, so
+ *  a session-scoped caller can hand in its cancellation-aware wrapper without a
+ *  type mismatch. */
+/** The minimal typed-request contract a tool/consumer needs: the generated
+ *  per-kind {@link EngineApi}. Both the real {@link Engine} and a
+ *  cancellation-scoped `SessionEngine` satisfy it, so consumers stay ignorant
+ *  of which one drives them. */
+export interface EngineRequests {
+    readonly api: EngineApi;
+}
+
 interface Pending {
     resolve: (value: any) => void;
     reject: (reason: EngineError) => void;
@@ -80,15 +94,19 @@ export class Engine {
      *  closes over this transport's private request/postFF hop. */
     readonly api: EngineApi;
 
+    /** The private request/postFF hop, surfaced so a session wrapper can layer
+     *  cancellation over the same transport (see `SessionEngine`). */
+    readonly transport: Transport;
+
     constructor(handle: DarklyHandle) {
         this.handle = handle;
         this.channel = new MessageChannel();
         this.channel.port1.onmessage = () => this.runScheduledDrain();
-        const transport: Transport = {
+        this.transport = {
             request: (kind, payload, bytes) => this.#request(kind, payload ?? {}, bytes),
             postFF: (kind, payload, bytes) => this.#postFF(kind, payload ?? {}, bytes),
         };
-        this.api = makeApi(transport);
+        this.api = makeApi(this.transport);
     }
 
     /** Awaited path — resolves with the response value (a binary response

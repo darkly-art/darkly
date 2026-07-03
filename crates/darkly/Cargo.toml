@@ -43,6 +43,14 @@ smallvec = { workspace = true }
 darkly-macros = { workspace = true }
 indexmap = { version = "2", features = ["serde"] }
 
+# Vector / text. The document model speaks the kurbo/peniko geometry+style
+# vocabulary directly (objects persist via their `serde` features); parley
+# shapes text into glyph runs; vello realizes both into the layer texture.
+vello = { workspace = true }
+kurbo = { workspace = true }
+peniko = { workspace = true }
+parley = { workspace = true }
+
 [build-dependencies]
 # build.rs parses `src/engine` to aggregate every `#[handler]`-tagged method
 # into `macro_registrations()` (the wasm-safe stand-in for `linkme`).

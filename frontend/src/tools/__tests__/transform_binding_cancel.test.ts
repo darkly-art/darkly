@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { withApi } from '../../engine/testApi';
 
 // The void binding captures the pre-edit transform — INCLUDING its mode — on
@@ -12,9 +12,16 @@ const { fakeApp } = vi.hoisted(() => {
 vi.mock('../../state/app.svelte', () => ({ app: fakeApp }));
 
 import { voidTransformBinding } from '../transform_bindings';
+import { beginToolSession } from '../tool_session';
 import type { Mat3 } from '../transform_projective';
 
+// Attach a real transport + typed api to the fake engine, then open a tool
+// session over it so the bindings' `toolEngine()` resolves — its api forwards to
+// the same `send`/`post` spies, so assertions still inspect them by kind.
 withApi(fakeApp.engine);
+beforeEach(() => {
+    beginToolSession(fakeApp.engine as never);
+});
 
 describe('voidTransformBinding cancel preserves the original mode', () => {
     it('reverts a void that was already perspective to mode 1, not affine', async () => {

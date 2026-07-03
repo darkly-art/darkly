@@ -69,6 +69,25 @@ pub struct Manifest {
     pub selection_id: Option<u64>,
     /// Veil chain in apply order.
     pub veils: Vec<ManifestVeil>,
+    /// Fonts embedded in this document so it renders self-contained on any
+    /// machine — one entry per `font_family` a text object actually uses that
+    /// the engine has runtime bytes for. Several families may share one blob
+    /// (`hash`/`path`), so the loader deps on `hash` when re-registering. Empty
+    /// for documents with no text, or whose text uses only the fallback family.
+    #[serde(default)]
+    pub fonts: Vec<ManifestFontRef>,
+}
+
+/// Reference to a font blob (`fonts/<hash>.ttf`) embedded in the container.
+/// `hash` is the content hash the byte cache addresses the blob by; multiple
+/// families sharing one blob share the same `hash`/`path`, so the load path
+/// registers each unique blob once. Path uses `.ttf` uniformly — the extension
+/// is cosmetic; the bytes are raw SFNT (TTF or OTF) either way.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestFontRef {
+    pub family: String,
+    pub hash: String,
+    pub path: String,
 }
 
 /// Wire envelope for one entity (layer kind or modifier kind). The
@@ -298,6 +317,11 @@ mod tests {
                     ],
                 ),
                 visible: true,
+            }],
+            fonts: vec![ManifestFontRef {
+                family: "Inter".into(),
+                hash: "0123456789abcdef".into(),
+                path: "fonts/0123456789abcdef.ttf".into(),
             }],
         };
         let json = serde_json::to_string(&m).unwrap();

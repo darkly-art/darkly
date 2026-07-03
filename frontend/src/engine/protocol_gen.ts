@@ -14,6 +14,42 @@ export type AddMaskReq = { id: number, };
 
 export type AddRasterReq = { anchor: number | null, };
 
+export type AddTextReq = { content: string, x: number, y: number, 
+/**
+ * RGBA 0–255. Defaults to opaque black.
+ */
+color?: [number, number, number, number], anchor: number, font_family?: string, size?: number, 
+/**
+ * Variable-font axis values (tag → value), including `wght`.
+ */
+variations?: { [key in string]: number }, 
+/**
+ * OpenType feature values (tag → value).
+ */
+features?: { [key in string]: number }, letter_spacing?: number, word_spacing?: number, line_height?: number, italic: boolean, align?: string, 
+/**
+ * `[w, h]` for a drag-created area-text box; `null`/absent → point text.
+ */
+box?: [number, number] | null, };
+
+export type AddTextObjectReq = { id: number, content: string, x: number, y: number, 
+/**
+ * RGBA 0–255. Defaults to opaque black.
+ */
+color?: [number, number, number, number], font_family?: string, size?: number, 
+/**
+ * Variable-font axis values (tag → value), including `wght`.
+ */
+variations?: { [key in string]: number }, 
+/**
+ * OpenType feature values (tag → value).
+ */
+features?: { [key in string]: number }, letter_spacing?: number, word_spacing?: number, line_height?: number, italic: boolean, align?: string, 
+/**
+ * `[w, h]` for a drag-created area-text box; `null`/absent → point text.
+ */
+box?: [number, number] | null, };
+
 export type AddVeilReq = { veil_type: string, params: JsonValue, };
 
 export type AddVoidReq = { void_type: string, params: JsonValue, anchor: number | null, };
@@ -103,6 +139,12 @@ export type BrushInfo = { name: string, category: string, author: string, descri
 export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: number, };
+
+export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, };
+
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
+
+export type PortDir = "Input" | "Output";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -237,12 +279,6 @@ natural_range: [number, number] | null,
  */
 persist_in_thumbnail: boolean, };
 
-export type PortDir = "Input" | "Output";
-
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
-
-export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, };
-
 export type NodeRegistration = { 
 /**
  * Unique identifier (e.g. "pen_input", "multiply").
@@ -353,11 +389,15 @@ export type OrthoXform = "flip_h" | "flip_v" | "rot180" | "rot90_cw" | "rot90_cc
 
 export type FloatingInfoResp = { ox: number, oy: number, w: number, h: number, mode: number, matrix: Array<number>, };
 
+export type FontAxesReq = { family: string, };
+
 export type BrushCursorPreviewInfoResp = { halfExtent: [number, number], };
 
 export type GroupLayersReq = { ids: Array<number>, };
 
 export type GrowSelectionReq = { radius: number, };
+
+export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 
 export type LayerKindTypeInfo = { type: string, displayName: string, };
 
@@ -413,7 +453,7 @@ pipeline: string,
  * carries the five tone curves for `curves`. Same shape the void panel
  * uses.
  */
-params: Array<ParamInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
+params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
 
 export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
 /**
@@ -518,6 +558,25 @@ export type SetPixelFilterReq = { mode: string, };
 
 export type SetPreviewThemeReq = { fg: [number, number, number, number], bg: [number, number, number, number], };
 
+export type SetTextBoxReq = { id: number, object: number, 
+/**
+ * Full canvas affine `G` (row-major) for the box's moved origin; the engine
+ * strips the layer transform.
+ */
+matrix: [number, number, number, number, number, number], 
+/**
+ * Box size `[w, h]` in canvas pixels.
+ */
+box: [number, number], };
+
+export type SetTextContentReq = { id: number, object: number, content: string, };
+
+export type SetTextStyleReq = { id: number, object: number, font_family?: string, size?: number, 
+/**
+ * Axis values to **merge** (tag → value); the rest are kept.
+ */
+variations?: { [key in string]: number }, features?: { [key in string]: number }, letter_spacing?: number, word_spacing?: number, line_height?: number, italic?: boolean, align?: string, color?: [number, number, number, number], };
+
 export type SetVeilVisibleReq = { index: number, visible: boolean, };
 
 export type SetViewTransformReq = { pan_x: number, pan_y: number, zoom: number, rotation: number, mirror_h: boolean, screen_w: number, screen_h: number, };
@@ -540,15 +599,21 @@ export type StrokeOp = { "op": "flood_fill", x: number, y: number, r: number, g:
  */
 cr: number, cg: number, cb: number, ca: number, };
 
+export type LayerIdReq = { id: number, };
+
 export type ToolTypeInfo = { type: string, displayName: string, params: Array<ParamInfo>, };
 
 export type UpdateFloatingMatrixReq = { transform: Transform, };
 
 export type Transform = { "mode": "Basic", "data": [number, number, number, number, number, number] } | { "mode": "Perspective", "data": [number, number, number, number, number, number, number, number, number] };
 
+export type UpdateVectorObjectTransformReq = { id: number, object: number, payload: Array<number>, };
+
 export type UpdateVeilReq = { index: number, params: JsonValue, };
 
 export type UpdateVoidTransformReq = { id: number, transform: Transform, };
+
+export type ObjectRefReq = { id: number, object: number, };
 
 export type VeilInfo = { type: string, visible: boolean, index: number, params: Array<ParamInfo>, };
 
@@ -572,6 +637,8 @@ export type RequestKind =
     | 'add_group'
     | 'add_mask'
     | 'add_raster'
+    | 'add_text'
+    | 'add_text_object'
     | 'add_veil'
     | 'add_void'
     | 'antialias_selection'
@@ -646,18 +713,21 @@ export type RequestKind =
     | 'flip_node'
     | 'floating_info'
     | 'floating_target_layer'
+    | 'font_axes'
     | 'get_brush_cursor_preview_info'
     | 'group_layers'
     | 'grow_selection'
     | 'has_floating'
     | 'has_pending_color_pick'
     | 'has_selection'
+    | 'hit_test_vector_object'
     | 'invert_selection'
     | 'is_dirty'
     | 'last_picked_color'
     | 'layer_kind_types'
     | 'layer_transform_capability'
     | 'layer_tree'
+    | 'list_fonts'
     | 'mark_dirty'
     | 'mask_to_selection'
     | 'merge_down'
@@ -682,6 +752,7 @@ export type RequestKind =
     | 'poll_save_result'
     | 'redo'
     | 'refresh_brush_cursor_preview'
+    | 'register_font'
     | 'remove_layer'
     | 'remove_layers'
     | 'remove_mask'
@@ -710,6 +781,9 @@ export type RequestKind =
     | 'set_overlay_mask'
     | 'set_pixel_filter'
     | 'set_preview_theme'
+    | 'set_text_box'
+    | 'set_text_content'
+    | 'set_text_style'
     | 'set_veil_visible'
     | 'set_view_transform'
     | 'set_viewport_bg'
@@ -720,11 +794,14 @@ export type RequestKind =
     | 'start_preview'
     | 'start_save_document'
     | 'stroke_to'
+    | 'text_objects'
     | 'tool_types'
     | 'undo'
     | 'update_floating_matrix'
+    | 'update_vector_object_transform'
     | 'update_veil'
     | 'update_void_transform'
+    | 'vector_object_info'
     | 'veil_list'
     | 'veil_types'
     | 'void_transform_info'
@@ -736,6 +813,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'add_group',
     'add_mask',
     'add_raster',
+    'add_text',
+    'add_text_object',
     'add_veil',
     'add_void',
     'antialias_selection',
@@ -810,18 +889,21 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'flip_node',
     'floating_info',
     'floating_target_layer',
+    'font_axes',
     'get_brush_cursor_preview_info',
     'group_layers',
     'grow_selection',
     'has_floating',
     'has_pending_color_pick',
     'has_selection',
+    'hit_test_vector_object',
     'invert_selection',
     'is_dirty',
     'last_picked_color',
     'layer_kind_types',
     'layer_transform_capability',
     'layer_tree',
+    'list_fonts',
     'mark_dirty',
     'mask_to_selection',
     'merge_down',
@@ -846,6 +928,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'poll_save_result',
     'redo',
     'refresh_brush_cursor_preview',
+    'register_font',
     'remove_layer',
     'remove_layers',
     'remove_mask',
@@ -874,6 +957,9 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_overlay_mask',
     'set_pixel_filter',
     'set_preview_theme',
+    'set_text_box',
+    'set_text_content',
+    'set_text_style',
     'set_veil_visible',
     'set_view_transform',
     'set_viewport_bg',
@@ -884,11 +970,14 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'start_preview',
     'start_save_document',
     'stroke_to',
+    'text_objects',
     'tool_types',
     'undo',
     'update_floating_matrix',
+    'update_vector_object_transform',
     'update_veil',
     'update_void_transform',
+    'vector_object_info',
     'veil_list',
     'veil_types',
     'void_transform_info',
@@ -908,6 +997,8 @@ export interface EngineApi {
     addGroup(req: AddGroupReq): Promise<number>;
     addMask(req: AddMaskReq): void;
     addRaster(req: AddRasterReq): Promise<number>;
+    addText(req: AddTextReq): Promise<{ id: number, object: number }>;
+    addTextObject(req: AddTextObjectReq): Promise<{ object: number }>;
     addVeil(req: AddVeilReq): void;
     addVoid(req: AddVoidReq): Promise<number | null>;
     antialiasSelection(): void;
@@ -982,18 +1073,21 @@ export interface EngineApi {
     flipNode(req: FlipNodeReq): Promise<boolean>;
     floatingInfo(): Promise<FloatingInfoResp | null>;
     floatingTargetLayer(): Promise<number | null>;
+    fontAxes(req: FontAxesReq): Promise<{ italic: boolean, axes: Array<{ tag: string, min: number, default: number, max: number }> }>;
     getBrushCursorPreviewInfo(): Promise<BrushCursorPreviewInfoResp | null>;
     groupLayers(req: GroupLayersReq): Promise<number>;
     growSelection(req: GrowSelectionReq): void;
     hasFloating(): Promise<boolean>;
     hasPendingColorPick(): Promise<boolean>;
     hasSelection(): Promise<boolean>;
+    hitTestVectorObject(req: HitTestVectorObjectReq): Promise<{ object: number }>;
     invertSelection(): void;
     isDirty(): Promise<boolean>;
     lastPickedColor(): Promise<{ bytes: Uint8Array }>;
     layerKindTypes(): Promise<Array<LayerKindTypeInfo>>;
     layerTransformCapability(req: LayerTransformCapabilityReq): Promise<string>;
     layerTree(): Promise<Array<LayerInfo>>;
+    listFonts(): Promise<{ fonts: string[] }>;
     markDirty(): void;
     maskToSelection(req: MaskToSelectionReq): void;
     mergeDown(req: MergeDownReq): Promise<number>;
@@ -1018,6 +1112,7 @@ export interface EngineApi {
     pollSaveResult(): Promise<{ manifestLen: number, compositeWidth: number, compositeHeight: number, compositeLen: number, blobs: { path: string, len: number }[], bytes: Uint8Array } | null>;
     redo(): void;
     refreshBrushCursorPreview(req: RefreshBrushCursorPreviewReq): Promise<BrushCursorPreviewInfoResp | null>;
+    registerFont(bytes: Uint8Array): Promise<{ families: string[] }>;
     removeLayer(req: RemoveLayerReq): Promise<null>;
     removeLayers(req: RemoveLayersReq): Promise<number>;
     removeMask(req: RemoveMaskReq): void;
@@ -1046,6 +1141,9 @@ export interface EngineApi {
     setOverlayMask(req: SetOverlayMaskReq): void;
     setPixelFilter(req: SetPixelFilterReq): void;
     setPreviewTheme(req: SetPreviewThemeReq): void;
+    setTextBox(req: SetTextBoxReq): void;
+    setTextContent(req: SetTextContentReq): void;
+    setTextStyle(req: SetTextStyleReq): void;
     setVeilVisible(req: SetVeilVisibleReq): void;
     setViewTransform(req: SetViewTransformReq): void;
     setViewportBg(req: SetViewportBgReq): void;
@@ -1056,11 +1154,14 @@ export interface EngineApi {
     startPreview(req: PreviewReq): void;
     startSaveDocument(req: StartSaveDocumentReq): Promise<void>;
     strokeTo(req: StrokeToReq): void;
+    textObjects(req: LayerIdReq): Promise<{ objects: Array<{ object: number, content: string, font_family: string, size: number, variations: Record<string, number>, features: Record<string, number>, letter_spacing: number, word_spacing: number, line_height: number, italic: boolean, align: string, color: [number, number, number, number], box: [number, number] | null }> }>;
     toolTypes(): Promise<Array<ToolTypeInfo>>;
     undo(): void;
     updateFloatingMatrix(req: UpdateFloatingMatrixReq): void;
+    updateVectorObjectTransform(req: UpdateVectorObjectTransformReq): void;
     updateVeil(req: UpdateVeilReq): void;
     updateVoidTransform(req: UpdateVoidTransformReq): void;
+    vectorObjectInfo(req: ObjectRefReq): Promise<{ ox: number, oy: number, w: number, h: number, mode: number, matrix: number[] } | null>;
     veilList(): Promise<Array<VeilInfo>>;
     veilTypes(): Promise<Array<VeilTypeInfo>>;
     voidTransformInfo(req: VoidTransformInfoReq): Promise<VoidTransformInfoResp | null>;
@@ -1074,6 +1175,8 @@ export function makeApi(t: Transport): EngineApi {
         addGroup: (req) => t.request('add_group', req),
         addMask: (req) => t.postFF('add_mask', req),
         addRaster: (req) => t.request('add_raster', req),
+        addText: (req) => t.request('add_text', req),
+        addTextObject: (req) => t.request('add_text_object', req),
         addVeil: (req) => t.postFF('add_veil', req),
         addVoid: (req) => t.request('add_void', req),
         antialiasSelection: () => t.postFF('antialias_selection'),
@@ -1148,18 +1251,21 @@ export function makeApi(t: Transport): EngineApi {
         flipNode: (req) => t.request('flip_node', req),
         floatingInfo: () => t.request('floating_info'),
         floatingTargetLayer: () => t.request('floating_target_layer'),
+        fontAxes: (req) => t.request('font_axes', req),
         getBrushCursorPreviewInfo: () => t.request('get_brush_cursor_preview_info'),
         groupLayers: (req) => t.request('group_layers', req),
         growSelection: (req) => t.postFF('grow_selection', req),
         hasFloating: () => t.request('has_floating'),
         hasPendingColorPick: () => t.request('has_pending_color_pick'),
         hasSelection: () => t.request('has_selection'),
+        hitTestVectorObject: (req) => t.request('hit_test_vector_object', req),
         invertSelection: () => t.postFF('invert_selection'),
         isDirty: () => t.request('is_dirty'),
         lastPickedColor: () => t.request('last_picked_color'),
         layerKindTypes: () => t.request('layer_kind_types'),
         layerTransformCapability: (req) => t.request('layer_transform_capability', req),
         layerTree: () => t.request('layer_tree'),
+        listFonts: () => t.request('list_fonts'),
         markDirty: () => t.postFF('mark_dirty'),
         maskToSelection: (req) => t.postFF('mask_to_selection', req),
         mergeDown: (req) => t.request('merge_down', req),
@@ -1184,6 +1290,7 @@ export function makeApi(t: Transport): EngineApi {
         pollSaveResult: () => t.request('poll_save_result'),
         redo: () => t.postFF('redo'),
         refreshBrushCursorPreview: (req) => t.request('refresh_brush_cursor_preview', req),
+        registerFont: (bytes) => t.request('register_font', {}, bytes),
         removeLayer: (req) => t.request('remove_layer', req),
         removeLayers: (req) => t.request('remove_layers', req),
         removeMask: (req) => t.postFF('remove_mask', req),
@@ -1212,6 +1319,9 @@ export function makeApi(t: Transport): EngineApi {
         setOverlayMask: (req) => t.postFF('set_overlay_mask', req),
         setPixelFilter: (req) => t.postFF('set_pixel_filter', req),
         setPreviewTheme: (req) => t.postFF('set_preview_theme', req),
+        setTextBox: (req) => t.postFF('set_text_box', req),
+        setTextContent: (req) => t.postFF('set_text_content', req),
+        setTextStyle: (req) => t.postFF('set_text_style', req),
         setVeilVisible: (req) => t.postFF('set_veil_visible', req),
         setViewTransform: (req) => t.postFF('set_view_transform', req),
         setViewportBg: (req) => t.postFF('set_viewport_bg', req),
@@ -1222,11 +1332,14 @@ export function makeApi(t: Transport): EngineApi {
         startPreview: (req) => t.postFF('start_preview', req),
         startSaveDocument: (req) => t.request('start_save_document', req),
         strokeTo: (req) => t.postFF('stroke_to', req),
+        textObjects: (req) => t.request('text_objects', req),
         toolTypes: () => t.request('tool_types'),
         undo: () => t.postFF('undo'),
         updateFloatingMatrix: (req) => t.postFF('update_floating_matrix', req),
+        updateVectorObjectTransform: (req) => t.postFF('update_vector_object_transform', req),
         updateVeil: (req) => t.postFF('update_veil', req),
         updateVoidTransform: (req) => t.postFF('update_void_transform', req),
+        vectorObjectInfo: (req) => t.request('vector_object_info', req),
         veilList: () => t.request('veil_list'),
         veilTypes: () => t.request('veil_types'),
         voidTransformInfo: (req) => t.request('void_transform_info', req),

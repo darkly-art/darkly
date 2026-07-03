@@ -4,6 +4,7 @@ import { config } from '../config/store.svelte';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { copyToSystemClipboard, readImageFromClipboard, readLayerFromClipboard } from '../clipboard';
 import { toolRegistry, type ToolContext } from '../tools/registry';
+import { beginToolSession } from '../tools/tool_session';
 import { screenToCanvas } from '../canvas/coordinates';
 
 /** Switch to the transform tool after a paste so the freshly-floated layer is
@@ -16,8 +17,13 @@ function enterTransformTool() {
     app.activeToolId = 'transform';
     if (wasTransform && app.engine && app.canvasEl) {
         const canvasEl = app.canvasEl;
+        // The CanvasView tool-change effect no-ops on a same-tool switch, so it
+        // won't begin a fresh session for us. Begin one here so transform's
+        // onActivate → activate() runs against a live session and picks up the
+        // just-pasted floating (see tool_session.ts).
+        const engine = beginToolSession(app.engine);
         const ctx: ToolContext = {
-            engine: app.engine,
+            engine,
             canvasEl,
             screenToCanvas: (sx: number, sy: number) => screenToCanvas(sx, sy, canvasEl),
         };

@@ -1,5 +1,5 @@
 import type { Tool } from './registry';
-import type { Engine } from '../engine/protocol';
+import type { EngineRequests } from '../engine/protocol';
 import { app } from '../state/app.svelte';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { srgbToLinear } from '../lib/color';
@@ -86,14 +86,19 @@ let lastHover: { cx: number; cy: number; pose: PenPose } | null = null;
  *  when a stroke begins could otherwise land its `set_overlay` *after*
  *  pointerdown's `clear_overlay`, freezing a ghost dab on-canvas for the whole
  *  stroke. Capturing the generation before the await and re-checking after lets
- *  an invalidated hover bail instead of overtaking the clear. */
+ *  an invalidated hover bail instead of overtaking the clear.
+ *
+ *  This is a finer-grained sibling of `tool_session.ts`: that primitive
+ *  invalidates on session boundaries (tool switch, layer change, tab swap);
+ *  `hoverGen` also invalidates on *stroke start* within the same session, a
+ *  boundary a tool session doesn't draw — so it stays. */
 let hoverGen = 0;
 
 /** Refresh the on-canvas brush cursor preview at `(cx, cy)` using the
  *  given pose. Exported so non-brush callers (e.g. the shift+drag size
  *  scrub, which uses `cursorPose` so the circle shows the brush's full
  *  extent) can keep the preview in sync after mutating the graph. */
-export async function pushHoverOverlay(engine: Engine, pose: PenPose, cx: number, cy: number) {
+export async function pushHoverOverlay(engine: EngineRequests, pose: PenPose, cx: number, cy: number) {
     const gen = hoverGen;
     const info = (await engine.api.refreshBrushCursorPreview({
         x: cx,
@@ -132,7 +137,7 @@ export async function pushHoverOverlay(engine: Engine, pose: PenPose, cx: number
  *  if the pointer isn't currently hovering the canvas (no cached
  *  pose). Used by hotkey-driven brush-param changes so the on-canvas
  *  preview reflects the new value without requiring pointer motion. */
-export function refreshHoverOverlay(engine: Engine) {
+export function refreshHoverOverlay(engine: EngineRequests) {
     if (!lastHover) return;
     void pushHoverOverlay(engine, lastHover.pose, lastHover.cx, lastHover.cy);
 }

@@ -25,7 +25,7 @@ import {
     FLAG_CANVAS_SPACE, prim,
     type GpuPrim,
 } from '../tools/selection_helpers';
-import type { Engine } from '../engine/protocol';
+import type { EngineRequests } from '../engine/protocol';
 import { app } from '../state/app.svelte';
 
 // ---------------------------------------------------------------------------
@@ -140,7 +140,7 @@ export class OverlayBuilder {
     }
 
     /** Convert to GPU primitives and push to the overlay system. */
-    push(engine: Engine): void {
+    push(engine: EngineRequests): void {
         const dpr = window.devicePixelRatio || 1;
         const prims: GpuPrim[] = [];
 
@@ -178,7 +178,7 @@ export class OverlayBuilder {
     }
 
     /** Clear the GPU overlay. */
-    clear(engine: Engine): void {
+    clear(engine: EngineRequests): void {
         engine.api.clearOverlay();
         app.requestFrame();
     }

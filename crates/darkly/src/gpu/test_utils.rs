@@ -19,7 +19,11 @@ pub fn test_device() -> (wgpu::Device, wgpu::Queue) {
     block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("test-device"),
         required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::downlevel_defaults(),
+        // Raised to Vello's needs so headless GPU tests can realize vector
+        // (text) layers — same bump the production wasm device applies.
+        required_limits: crate::gpu::vector_renderer::required_limits(
+            wgpu::Limits::downlevel_defaults(),
+        ),
         ..Default::default()
     }))
     .expect("failed to create test device")

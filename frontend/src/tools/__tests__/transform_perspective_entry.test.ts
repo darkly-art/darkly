@@ -1,4 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { withApi } from '../../engine/testApi';
 
 // Stand-ins for the Svelte state proxy + GPU overlay builder so the gizmo's
 // lifecycle runs without the Svelte/GPU/DOM runtime. The transform-mode
@@ -20,8 +21,17 @@ vi.mock('../../canvas/gpu_overlay', () => ({
 
 import { TransformGizmo } from '../transform_gizmo';
 import { mat3Apply, type Mat3 } from '../transform_projective';
+import { beginToolSession } from '../tool_session';
 
 const IDENTITY_MAT3: Mat3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+
+// The gizmo pushes/clears its overlay through the live tool session; establish
+// one over the fake engine so `toolEngine()` resolves and the overlay (and thus
+// the bbox that `isInside` reads) is built.
+withApi(fakeApp.engine);
+beforeEach(() => {
+    beginToolSession(fakeApp.engine as never);
+});
 
 function makeBinding(live = false) {
     return {

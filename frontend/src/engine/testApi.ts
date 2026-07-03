@@ -1,4 +1,4 @@
-import { makeApi, type EngineApi } from './protocol_gen';
+import { makeApi, type EngineApi, type Transport } from './protocol_gen';
 
 /** A minimal fake engine transport for unit tests: `send`/`post` spies plus a
  *  real {@link EngineApi} that forwards to them. Because `api` closes over the
@@ -9,13 +9,17 @@ export interface MockEngine {
     send: (kind: string, payload?: object, bytes?: Uint8Array) => Promise<any>;
     post: (kind: string, payload?: object, bytes?: Uint8Array) => void;
     api: EngineApi;
+    transport: Transport;
 }
 
-/** Attach a real `api` to a fake engine whose `send`/`post` are test spies.
- *  `post` is optional — a mock exercising only awaited requests can omit it. */
+/** Attach a real `api` (and the underlying {@link Transport}) to a fake engine
+ *  whose `send`/`post` are test spies. `post` is optional — a mock exercising
+ *  only awaited requests can omit it. Exposing `transport` lets the fake stand
+ *  in for a real {@link import('../engine/protocol').Engine} wherever a
+ *  `SessionEngine` is begun over it (`beginToolSession(fakeEngine)`). */
 export function withApi<T extends { send: MockEngine['send']; post?: MockEngine['post'] }>(
     engine: T,
-): T & { api: EngineApi } {
+): T & { api: EngineApi; transport: Transport } {
     // Forward with the exact arity of the old direct `send`/`post` calls
     // (dropping trailing `undefined` payload/bytes) so tests can assert the
     // precise `(kind)` / `(kind, payload)` shape via `toHaveBeenCalledWith`.
@@ -24,11 +28,11 @@ export function withApi<T extends { send: MockEngine['send']; post?: MockEngine[
         if (payload !== undefined) return [kind, payload];
         return [kind];
     };
-    const api = makeApi({
+    const transport: Transport = {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         request: (kind, payload, bytes) => (engine.send as any)(...args(kind, payload, bytes)),
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         postFF: (kind, payload, bytes) => (engine.post as any)?.(...args(kind, payload, bytes)),
-    });
-    return Object.assign(engine, { api });
+    };
+    return Object.assign(engine, { api: makeApi(transport), transport });
 }

@@ -7,6 +7,7 @@ import { theme } from './state/theme.svelte';
 import { pixelFilter } from './state/pixelFilter.svelte';
 import { DarklyInstance, setActiveInstance, getActiveInstance } from './state/app.svelte';
 import { createHandle } from './state/session';
+import { fontLibrary } from './state/font_library.svelte';
 import type { Engine } from './engine/protocol';
 import { setupColorPickerModifierTracking } from './tools/colorpicker_cursor';
 import { autosave } from './state/autosave.svelte';
@@ -89,6 +90,11 @@ export async function createInstance(
     // identical for every instance, but loading them per-instance keeps the
     // instance self-contained (no shell-level "registry source" coupling).
     await instance.loadRegistries(engine);
+
+    // Replay the personal font library into this fresh handle so its engine's
+    // font collection matches every other tab's before the first frame — the
+    // single chokepoint every new handle passes through.
+    await fontLibrary.registerIntoHandle(engine);
 
     // Action/hotkey registration is process-wide but reads the active
     // instance via the `app` proxy. Calling it here is idempotent.

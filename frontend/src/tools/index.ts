@@ -9,11 +9,13 @@ import { lassoSelectTool } from './lasso_select.svelte';
 import { polygonSelectTool } from './polygon_select.svelte';
 import { magicWandTool } from './magic_wand.svelte';
 import { transformTool, transformPerspectiveTool } from './transform.svelte';
+import { textTool } from './text.svelte';
 
 toolRegistry.register(brushTool);
 toolRegistry.register(fillTool);
 toolRegistry.register(gradientTool);
 toolRegistry.register(colorPickerTool);
+toolRegistry.register(textTool);
 toolRegistry.register(rectSelectTool);
 toolRegistry.register(ellipseSelectTool);
 toolRegistry.register(lassoSelectTool);

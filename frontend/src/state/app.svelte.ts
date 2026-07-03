@@ -4,6 +4,7 @@ import type { SaveBundle } from '../storage/saveDocument';
 import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry } from '../tools/registry';
 import { pollPick } from '../tools/color_pick_sync';
+import { beginToolSession, killToolSession, runHook } from '../tools/tool_session';
 import { tickColorPickerCursor } from '../tools/colorpicker_cursor';
 import { MediaStreamSource, describeMediaError, type CaptureKind } from '../lib/mediaStreamSource';
 
@@ -970,8 +971,10 @@ export class DarklyInstance {
             // changes) and document bools.
             if (frame.state) this.engineState = frame.state;
 
-            // Per-frame tool hook — async state sync (e.g. GPU readback completion).
-            toolRegistry.get(this.activeToolId)?.onFrame?.();
+            // Per-frame tool hook — async state sync (e.g. GPU readback
+            // completion). Wrapped so a hook whose engine op was cancelled by a
+            // session change mid-await settles cleanly (see tool_session.ts).
+            void runHook(toolRegistry.get(this.activeToolId)?.onFrame?.());
 
             // Global color-pick poll — drives both the color-picker tool and
             // the modifier-held `sampleColor` chord. Runs regardless of active
@@ -1051,6 +1054,17 @@ let activeInstance = $state<DarklyInstance | null>(null);
  *  `app.<x>` (because the proxy's getter reads the `$state` `activeInstance`,
  *  threading the dependency through). */
 export function setActiveInstance(inst: DarklyInstance | null) {
+    // Rebind the tool session to the newly-focused instance. This kills the
+    // outgoing session (any tool op parked on an await now rejects on resume
+    // instead of landing on the wrong tab) and starts a fresh one over the new
+    // tab's engine — necessary because every tab's `<CanvasView>` stays mounted
+    // across a focus switch, so the tool/layer effects that normally begin a
+    // session don't re-fire. When the new instance has no engine yet (the
+    // single-instance boot call, before `initEditor` sets it), leave the session
+    // severed; the tool effect begins it once the engine is ready.
+    // See tool_session.ts.
+    if (inst?.engine) beginToolSession(inst.engine);
+    else killToolSession();
     activeInstance = inst;
 }
 

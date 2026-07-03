@@ -443,6 +443,10 @@ fn install_staging(
     );
     restore_veils(engine, manifest);
     ensure_selection_state(engine);
+    // Register embedded fonts before `sync_compositor_layers` realizes the
+    // vector scenes, so text shapes with its real face on the first frame
+    // rather than falling back to Noto.
+    register_embedded_fonts(engine, manifest, entries);
     engine.sync_compositor_layers();
     // Restore void persistent pixels (camera void's last frame, etc.)
     // AFTER `sync_compositor_layers` — that's where the void's GPU cache
@@ -601,6 +605,31 @@ fn upload_to_node(engine: &mut DarklyEngine, node_id: LayerId, bytes: &[u8]) {
         .upload_node_pixels(&engine.gpu.queue, node_id, bytes);
     if !ok {
         log::error!("load: pixel upload failed for node {:?}", node_id.to_ffi());
+    }
+}
+
+/// Register every font embedded in the container back into the engine's font
+/// collection so text renders self-contained — the same
+/// [`crate::text::FontRegistry::register_font`] path uploads and Google imports
+/// use. Deduped by content hash (several families can share one blob), and
+/// best-effort: a font blob missing from the archive is skipped, and the text
+/// falls through the existing `"{family}, Noto Sans, sans-serif"` fallback
+/// stack rather than failing the load.
+fn register_embedded_fonts(
+    engine: &mut DarklyEngine,
+    manifest: &Manifest,
+    entries: &HashMap<String, Vec<u8>>,
+) {
+    let mut registered: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for font in &manifest.fonts {
+        if !registered.insert(font.hash.as_str()) {
+            continue;
+        }
+        let Some(bytes) = entries.get(&font.path) else {
+            log::error!("load: embedded font blob missing: {}", font.path);
+            continue;
+        };
+        engine.register_font(bytes.clone());
     }
 }
 
@@ -765,6 +794,7 @@ mod tests {
             }],
             selection_id: None,
             veils: Vec::new(),
+            fonts: Vec::new(),
         };
 
         let (doc, id_map) = build_staging_document(&manifest).expect("build staging doc");

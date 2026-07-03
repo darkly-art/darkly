@@ -13,6 +13,7 @@ pub mod layers;
 pub mod overlay;
 pub mod preview;
 pub mod selection;
+pub mod text;
 pub mod view;
 
 use crate::engine::protocol::RequestRegistration;
@@ -31,6 +32,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
     all.extend(overlay::registrations());
     all.extend(preview::registrations());
     all.extend(selection::registrations());
+    all.extend(text::registrations());
     all.extend(view::registrations());
     all
 }

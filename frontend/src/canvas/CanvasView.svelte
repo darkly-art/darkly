@@ -6,6 +6,7 @@
     import { nav } from './navigation.svelte';
     import { toolRegistry } from '../tools/registry';
     import type { ToolContext } from '../tools/registry';
+    import { beginToolSession, toolEngine, runHook } from '../tools/tool_session';
     import { screenToCanvas } from './coordinates';
     import { toast } from '../state/toast.svelte';
     import { theme } from '../state/theme.svelte';
@@ -15,6 +16,7 @@
     import { handleDroppedFile } from '../actions';
     import { THUMB_SIZE } from '../ui/layers/thumbnails.svelte';
     import { isColorPickerModifierActive } from '../tools/colorpicker_cursor';
+    import { isEditableTarget } from '../lib/isEditableTarget';
     import TransformModeMenu from '../ui/TransformModeMenu.svelte';
 
     /** Optional pre-built instance. When provided, CanvasView skips the
@@ -161,9 +163,14 @@
 
 
     function getToolContext(): ToolContext | null {
-        if (!inst.engine) return null;
+        // Tool code reaches the engine only through the live tool session, never
+        // `inst.engine` directly — so a request that resolves after the session
+        // dies (tool switch, layer change, tab swap) rejects instead of touching
+        // stale state. See `tools/tool_session.ts`.
+        const engine = toolEngine();
+        if (!engine) return null;
         return {
-            engine: inst.engine,
+            engine,
             canvasEl: canvas,
             screenToCanvas(sx: number, sy: number) {
                 return screenToCanvas(sx, sy, canvas);
@@ -186,6 +193,16 @@
         // input — touch-action:none only covers touch, not pen (Chromium bug).
         e.preventDefault();
 
+        // Pull keyboard focus onto the canvas. `bindingSite` normally does this
+        // via a synthetic `mousedown`, but the `preventDefault()` above
+        // suppresses pointer→mouse compatibility events, so it never fires here.
+        // Without this, a focused properties-panel field (text editor textarea,
+        // an align/font `<select>`) keeps focus and swallows tool keys —
+        // Enter/Escape to a transform gizmo, for one. A canvas interaction
+        // means the canvas owns the keyboard; tools that want a field focused
+        // (the text editor) re-focus it explicitly afterwards.
+        canvas?.focus();
+
         // Touch: always capture and track for gesture detection
         if (e.pointerType === 'touch') {
             canvas.setPointerCapture(e.pointerId);
@@ -194,7 +211,7 @@
                 const ctx = getToolContext();
                 if (ctx) {
                     const tool = toolRegistry.get(inst.activeToolId);
-                    tool?.onPointerUp(ctx, e);
+                    void runHook(tool?.onPointerUp(ctx, e));
                 }
                 return;
             }
@@ -219,7 +236,7 @@
         canvas.setPointerCapture(e.pointerId);
 
         if (!ctx) return;
-        tool?.onPointerDown(ctx, e, pos.x, pos.y);
+        void runHook(tool?.onPointerDown(ctx, e, pos.x, pos.y));
         // Mark a tool interaction in flight so autosave doesn't snapshot
         // mid-stroke. Released in onPointerUp / onPointerCancel (pointer
         // capture guarantees one of them fires on this element).
@@ -271,7 +288,7 @@
         // that needs `pollPick` to commit on the next frame.
         if (!isColorPickerModifierActive()) {
             const tool = toolRegistry.get(inst.activeToolId);
-            tool?.onPointerMove(ctx, e, pos.x, pos.y);
+            void runHook(tool?.onPointerMove(ctx, e, pos.x, pos.y));
         }
         inst.requestFrame();
     }
@@ -295,7 +312,7 @@
         const ctx = getToolContext();
         if (!ctx) return;
         const tool = toolRegistry.get(inst.activeToolId);
-        tool?.onPointerUp(ctx, e);
+        void runHook(tool?.onPointerUp(ctx, e));
         inst.requestFrame();
     }
 
@@ -316,7 +333,7 @@
         const ctx = getToolContext();
         if (!ctx) return;
         const tool = toolRegistry.get(inst.activeToolId);
-        tool?.onPointerUp(ctx, e);
+        void runHook(tool?.onPointerUp(ctx, e));
         inst.requestFrame();
     }
 
@@ -324,7 +341,7 @@
         const ctx = getToolContext();
         if (!ctx) return;
         const tool = toolRegistry.get(inst.activeToolId);
-        tool?.onPointerLeave?.(ctx);
+        void runHook(tool?.onPointerLeave?.(ctx));
         inst.requestFrame();
     }
 
@@ -351,40 +368,59 @@
     const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta']);
 
     function onKeyDown(e: KeyboardEvent) {
+        // Keys typed into a text field (the text-properties editor, a rename
+        // box, etc.) are content, not canvas shortcuts — they must never pan,
+        // trigger a tool keybind, or dismiss a tool overlay. This is a window
+        // listener, so a textarea keystroke would otherwise bubble up to here.
+        if (isEditableTarget(e.target)) return;
         nav.onKeyDown(e);
         // Don't dismiss overlay for navigation or bare modifier keys
         if (nav.spaceHeld || MODIFIER_KEYS.has(e.key)) return;
         const tool = toolRegistry.get(inst.activeToolId);
         if (tool?.onKeyDown?.(e)) return;
-        tool?.dismissOverlay?.();
+        void runHook(tool?.dismissOverlay?.());
         inst.requestFrame();
     }
 
-    // Call onDeactivate/onActivate when the active tool changes.
+    // Call onDeactivate/onActivate when the active tool changes. This is one of
+    // the ~3 sites that own the tool session's lifecycle (see tool_session.ts):
+    // the outgoing tool is deactivated through its still-alive session, then a
+    // fresh session is begun for the incoming tool. `inst.engine` is read
+    // directly so the effect re-runs once the engine finishes async init.
     let prevToolId = '';
     $effect(() => {
         const id = inst.activeToolId;
-        if (id !== prevToolId) {
-            const ctx = getToolContext();
-            if (ctx) {
-                // Reset before deactivate so a tool's onDeactivate can still
-                // override; whatever the new tool's onActivate sets wins.
-                inst.toolCursor = null;
-                toolRegistry.get(prevToolId)?.onDeactivate?.(ctx);
-                toolRegistry.get(id)?.onActivate?.(ctx);
-                prevToolId = id;
-            }
-        }
+        const engine = inst.engine;
+        if (id === prevToolId || !engine) return;
+        // Reset before deactivate so a tool's onDeactivate can still override;
+        // whatever the new tool's onActivate sets wins.
+        inst.toolCursor = null;
+        // Deactivate through the outgoing session (its synchronous commit/detach
+        // posts must land on the session that's still alive).
+        const prevCtx = getToolContext();
+        if (prevCtx) toolRegistry.get(prevToolId)?.onDeactivate?.(prevCtx);
+        // Begin a fresh session for the incoming tool, killing the old one — any
+        // op parked on an await from the previous tool now rejects on resume.
+        beginToolSession(engine);
+        const nextCtx = getToolContext();
+        if (nextCtx) toolRegistry.get(id)?.onActivate?.(nextCtx);
+        prevToolId = id;
     });
 
-    // Dismiss tool overlay when the active layer changes.
+    // Dismiss tool overlay when the active layer changes. Rebinding the session
+    // first kills the outgoing one, so an op parked on an await from before the
+    // change rejects instead of resuming against the new layer; dismissOverlay
+    // then runs on the fresh (alive) session and can still finalize in-flight
+    // work (e.g. commit a floating being moved). This is what makes wrong-layer
+    // resumption unrepresentable too.
     let prevLayerId: number | null = null;
     $effect(() => {
         const id = inst.activeLayerId;
         if (id !== prevLayerId) {
             prevLayerId = id;
+            if (inst.engine) beginToolSession(inst.engine);
             const tool = toolRegistry.get(inst.activeToolId);
-            tool?.dismissOverlay?.();
+            void runHook(tool?.dismissOverlay?.());
         }
     });
 

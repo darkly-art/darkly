@@ -53,22 +53,34 @@ import {
     transformActiveMode,
     setTransformMode,
 } from '../transform.svelte';
+import { beginToolSession } from '../tool_session';
 
 withApi(fakeApp.engine);
 
 const ctx = { canvasEl: {} as HTMLCanvasElement } as never;
+
+/** Drain all pending microtasks (one macrotask hop). `onActivate` fires a
+ *  detached `void activate()` whose async `read()`→bbox rebuild outlives the
+ *  awaited pointer handlers; production rebuilds the bbox every frame via
+ *  `gizmo.frame()` long before any right-click, so the test must likewise let
+ *  activation settle before exercising bbox-dependent behavior. */
+const settle = () => new Promise((r) => setTimeout(r, 0));
 
 async function activeTool() {
     transformTool.onActivate?.(ctx);
     // A left-click on an inactive gizmo runs activate() then claims the pointer.
     await transformTool.onPointerDown(ctx, { button: 0 } as PointerEvent, 50, 40);
     transformTool.onPointerUp?.(ctx, {} as PointerEvent);
+    await settle();
 }
 
 describe('transform right-click mode menu', () => {
     beforeEach(() => {
         fakeApp.transformModeMenu = null;
         fakeApp.engine.post.mockClear();
+        // Tool code reaches the engine through the live session (see
+        // tool_session.ts); begin one over the fake engine.
+        beginToolSession(fakeApp.engine as never);
     });
 
     it('right-click inside the bbox opens the mode menu at the cursor', async () => {
