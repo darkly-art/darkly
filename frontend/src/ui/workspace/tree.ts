@@ -138,6 +138,20 @@ export function isEmptyLayout(node: Subdivision): boolean {
     return collectPanelTypes(node).length === 0;
 }
 
+/** Resolve a `split` by its path of child indices from the root (root itself is
+ *  `[]`). Used to address a specific split's gutter for resize without giving
+ *  splits ids. Returns null if the path doesn't land on a `split`. */
+export function resolveSplitByPath(root: Subdivision, path: number[]): Extract<Subdivision, { kind: 'split' }> | null {
+    let node: Subdivision = root;
+    for (const idx of path) {
+        if (node.kind !== 'split') return null;
+        const child = node.children[idx];
+        if (!child) return null;
+        node = child.subdivision;
+    }
+    return node.kind === 'split' ? node : null;
+}
+
 function containsGroup(node: Subdivision, id: number): boolean {
     if (node.kind === 'group') return node.id === id;
     return node.children.some((c) => containsGroup(c.subdivision, id));

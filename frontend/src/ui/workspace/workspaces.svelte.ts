@@ -34,6 +34,7 @@ import {
     isEmptyLayout,
     foldPanelsIntoMain,
     loadOrDefault,
+    resolveSplitByPath,
 } from './tree';
 import { resolvePanel } from './panelTypes';
 import { detectDockingEdge, edgeToSplit, tabInsertionIndex } from './dropZones';
@@ -148,6 +149,20 @@ class WorkspaceStore {
         prune(root);
         ws.layout.root = root;
         if (workspaceId !== MAIN_ID && isEmptyLayout(root)) this.closeWindow(workspaceId);
+    }
+
+    /** Set the sizes of two adjacent children of the split at `path` (a gutter
+     *  drag). Mutates the store-owned reactive tree in place — no clone/prune,
+     *  since only two sibling sizes change (structure is untouched, and their
+     *  sum is preserved by the caller). Routing through the store keeps the tree
+     *  owned here rather than mutated through a component's `node` prop. */
+    resizeSplit(workspaceId: number, path: number[], index: number, sizeA: number, sizeB: number) {
+        const ws = this.getWorkspace(workspaceId);
+        if (!ws) return;
+        const split = resolveSplitByPath(ws.layout.root, path);
+        if (!split || !split.children[index] || !split.children[index + 1]) return;
+        split.children[index].size = sizeA;
+        split.children[index + 1].size = sizeB;
     }
 
     setActiveTab(workspaceId: number, groupId: number, tab: PanelType) {

@@ -10,6 +10,18 @@
     // mounted (hidden).
     let rect = $state<{ left: number; top: number; width: number; height: number } | null>(null);
 
+    // CanvasStack must first mount only once the overlay has a real, visible
+    // rect — CanvasView sizes its WebGPU surface from getBoundingClientRect on
+    // mount, and a 0×0 init (which happens if it mounts while display:none)
+    // leaves the surface and initial view fit broken. This latches true on the
+    // first valid rect and never flips back, so the canvases mount exactly once
+    // and then persist (hidden via display:none when the Document panel is away,
+    // never unmounted).
+    let everSized = $state(false);
+    $effect(() => {
+        if (rect && !everSized) everSized = true;
+    });
+
     function reposition() {
         const el = canvasSlot.current;
         if (!el) {
@@ -54,20 +66,23 @@
     let interactive = $derived(!workspaces.dragging);
 </script>
 
-<!-- CanvasStack is ALWAYS mounted (never behind an `{#if}`): unmounting it
-     would destroy every canvas's WebGPU surface. When no Document panel is
-     showing (rect null) we only hide the overlay — the canvases persist. -->
-<div
-    class="canvas-overlay"
-    style:display={rect ? 'flex' : 'none'}
-    style:left="{rect?.left ?? 0}px"
-    style:top="{rect?.top ?? 0}px"
-    style:width="{rect?.width ?? 0}px"
-    style:height="{rect?.height ?? 0}px"
-    style:pointer-events={interactive ? 'auto' : 'none'}
->
-    <CanvasStack />
-</div>
+<!-- Gated on `everSized` for the FIRST mount only (so the canvas inits at a
+     real size); once mounted it stays mounted — unmounting would destroy every
+     canvas's WebGPU surface. When no Document panel is showing (rect null) the
+     overlay is only hidden via display:none, never removed. -->
+{#if everSized}
+    <div
+        class="canvas-overlay"
+        style:display={rect ? 'flex' : 'none'}
+        style:left="{rect?.left ?? 0}px"
+        style:top="{rect?.top ?? 0}px"
+        style:width="{rect?.width ?? 0}px"
+        style:height="{rect?.height ?? 0}px"
+        style:pointer-events={interactive ? 'auto' : 'none'}
+    >
+        <CanvasStack />
+    </div>
+{/if}
 
 <style>
     .canvas-overlay {

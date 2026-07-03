@@ -15,6 +15,7 @@ import {
     foldPanelsIntoMain,
     defaultMainLayout,
     ensureDocument,
+    resolveSplitByPath,
     loadOrDefault,
     type PanelType,
 } from '../tree';
@@ -250,6 +251,24 @@ describe('loadOrDefault', () => {
         expect(collectPanelTypes(root).sort()).toEqual(['document', 'layers', 'properties']);
         // Ids renumbered contiguously; nextGroupId past the max.
         expect(nextGroupId).toBeGreaterThan(0);
+    });
+});
+
+describe('resolveSplitByPath', () => {
+    it('resolves the root split and nested splits, disambiguating shared first-groups', () => {
+        // Row[ Document, Column[ layers, properties ] ]. The inner column shares
+        // its first-group (layers) with... nothing here, but the root and the
+        // column are distinct splits reachable only by path.
+        const inner = split(group(1, ['layers']), group(2, ['properties']));
+        const root = split(group(0, ['document']), slot(inner, 1));
+        expect(resolveSplitByPath(root, [])).toBe(root);
+        expect(resolveSplitByPath(root, [1])).toBe(inner);
+    });
+
+    it('returns null when the path does not land on a split', () => {
+        const root = split(group(0, ['document']), group(1, ['layers']));
+        expect(resolveSplitByPath(root, [0])).toBeNull(); // a group, not a split
+        expect(resolveSplitByPath(root, [5])).toBeNull(); // out of range
     });
 });
 

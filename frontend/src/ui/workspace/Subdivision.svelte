@@ -1,11 +1,20 @@
 <script lang="ts">
     import type { Subdivision } from './tree';
-    import { MIN_PANEL_PX, renormalize } from './tree';
+    import { MIN_PANEL_PX } from './tree';
     import { pointerDrag } from './pointerDrag';
+    import { workspaces } from './workspaces.svelte';
     import PanelGroupView from './PanelGroupView.svelte';
     import Self from './Subdivision.svelte';
 
-    let { node, workspaceId, depth = 0 }: { node: Subdivision; workspaceId: number; depth?: number } = $props();
+    // `path` addresses this split from the workspace root (child-index chain,
+    // root = []) so gutter resizes route through the store instead of mutating
+    // the `node` prop (which the store owns).
+    let { node, workspaceId, depth = 0, path = [] }: {
+        node: Subdivision;
+        workspaceId: number;
+        depth?: number;
+        path?: number[];
+    } = $props();
 
     // Axis is implicit from depth (Graphite's trick): even depth = row.
     let horizontal = $derived(depth % 2 === 0);
@@ -35,11 +44,7 @@
         if (minFrac * 2 > pair) minFrac = pair * 0.1;
 
         const a = Math.max(minFrac, Math.min(pair - minFrac, startA + deltaFrac));
-        // Mutating the live reactive tree directly (no prune needed — only two
-        // sizes change); the persistence effect picks it up.
-        node.children[i].size = a;
-        node.children[i + 1].size = pair - a;
-        renormalize(node.children);
+        workspaces.resizeSplit(workspaceId, path, i, a, pair - a);
     }
 </script>
 
@@ -49,7 +54,7 @@
     <div class="split" class:horizontal class:vertical={!horizontal} bind:this={containerEl}>
         {#each node.children as child, i (i)}
             <div class="slot" style:flex-grow={child.size} style:flex-basis="0">
-                <Self node={child.subdivision} {workspaceId} depth={depth + 1} />
+                <Self node={child.subdivision} {workspaceId} depth={depth + 1} path={[...path, i]} />
             </div>
             {#if i < node.children.length - 1}
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
