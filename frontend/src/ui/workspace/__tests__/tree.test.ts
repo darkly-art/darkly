@@ -4,7 +4,6 @@ import {
     type SplitChild,
     makeGroup,
     findGroup,
-    firstGroupId,
     removeTab,
     insertTab,
     reorderTab,
@@ -15,6 +14,7 @@ import {
     isEmptyLayout,
     foldPanelsIntoMain,
     defaultMainLayout,
+    ensureDocument,
     loadOrDefault,
     type PanelType,
 } from '../tree';
@@ -186,18 +186,18 @@ describe('prune', () => {
 // --- op-sequence round trip ------------------------------------------------
 
 describe('op-sequence round trip', () => {
-    it('split then move-back returns to a single group', () => {
-        const layout = defaultMainLayout(0, 1);
+    it('split then move-back returns to the default panel set', () => {
+        const layout = defaultMainLayout(0, 1, 2);
         const root = layout.root;
-        // Split properties off to the right of layers.
-        const layersId = firstGroupId(root)!;
+        // Split a scratch panel off to the right of the Layers group.
+        const layersId = findGroup(root, 1)!.id;
         const newId = splitPanelGroup(root, layersId, 'right', ['history'] as unknown as PanelType[], 0, 99)!;
         prune(root);
         expect(collectPanelTypes(root)).toContain('history');
         // Remove it again.
         removeTab(root, newId, 'history' as unknown as PanelType);
         prune(root);
-        expect(collectPanelTypes(root).sort()).toEqual(['layers', 'properties']);
+        expect(collectPanelTypes(root).sort()).toEqual(['document', 'layers', 'properties']);
     });
 });
 
@@ -210,39 +210,62 @@ describe('loadOrDefault', () => {
 
     it('falls back to the default on null', () => {
         const { root } = loadOrDefault(null);
-        expect(collectPanelTypes(root).sort()).toEqual(['layers', 'properties']);
+        expect(collectPanelTypes(root).sort()).toEqual(['document', 'layers', 'properties']);
     });
 
     it('falls back to the default on malformed JSON', () => {
         const { root } = loadOrDefault('{not json');
-        expect(collectPanelTypes(root).sort()).toEqual(['layers', 'properties']);
+        expect(collectPanelTypes(root).sort()).toEqual(['document', 'layers', 'properties']);
     });
 
-    it('strips unknown panel types', () => {
+    it('strips unknown panel types (and injects the missing Document)', () => {
         const { root } = loadOrDefault(persist(split(group(0, ['layers', 'bogus'] as unknown as PanelType[]))));
-        expect(collectPanelTypes(root)).toEqual(['layers']);
+        expect(collectPanelTypes(root).sort()).toEqual(['document', 'layers']);
     });
 
     it('drops a group emptied by stripping (strip then prune)', () => {
         const raw = persist(split(group(0, ['layers']), group(1, ['bogus'] as unknown as PanelType[])));
         const { root } = loadOrDefault(raw);
-        expect(collectPanelTypes(root)).toEqual(['layers']);
-        // The emptied group is gone, not a zero-tab phantom.
-        expect(shape(root)).toEqual([['layers']]);
+        // The emptied group is gone; Document is prepended to the surviving row.
+        expect(shape(root)).toEqual([['document'], ['layers']]);
     });
 
     it('falls back to the default when stripping empties everything', () => {
         const { root } = loadOrDefault(persist(split(group(0, ['bogus'] as unknown as PanelType[]))));
-        expect(collectPanelTypes(root).sort()).toEqual(['layers', 'properties']);
+        expect(collectPanelTypes(root).sort()).toEqual(['document', 'layers', 'properties']);
+    });
+
+    it('preserves a persisted Document without duplicating it', () => {
+        const raw = persist(split(group(0, ['document']), group(1, ['layers'])));
+        const { root } = loadOrDefault(raw);
+        expect(collectPanelTypes(root).filter((t) => t === 'document')).toHaveLength(1);
+        expect(collectPanelTypes(root).sort()).toEqual(['document', 'layers']);
     });
 
     it('folds pop-out workspace trees back into the main tree', () => {
-        // Main has only layers; a pop-out workspace holds properties.
+        // Main has layers; a pop-out workspace holds properties. Document is
+        // injected into main.
         const raw = persist(split(group(0, ['layers'])), split(group(1, ['properties'])));
         const { root, nextGroupId } = loadOrDefault(raw);
-        expect(collectPanelTypes(root).sort()).toEqual(['layers', 'properties']);
+        expect(collectPanelTypes(root).sort()).toEqual(['document', 'layers', 'properties']);
         // Ids renumbered contiguously; nextGroupId past the max.
         expect(nextGroupId).toBeGreaterThan(0);
+    });
+});
+
+describe('ensureDocument', () => {
+    it('prepends the canvas when absent and renormalizes', () => {
+        const root = split(group(0, ['layers']), group(1, ['properties']));
+        ensureDocument(root, 9);
+        expect(shape(root)).toEqual([['document'], ['layers'], ['properties']]);
+        const total = (root as { children: SplitChild[] }).children.reduce((a, c) => a + c.size, 0);
+        expect(total).toBeCloseTo(1, 6);
+    });
+
+    it('is a no-op when the canvas is already present', () => {
+        const root = split(group(0, ['document']), group(1, ['layers']));
+        ensureDocument(root, 9);
+        expect(collectPanelTypes(root).filter((t) => t === 'document')).toHaveLength(1);
     });
 });
 

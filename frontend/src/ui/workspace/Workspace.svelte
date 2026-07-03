@@ -1,7 +1,6 @@
 <script lang="ts">
     import Subdivision from './Subdivision.svelte';
     import { workspaces, hitTest } from './workspaces.svelte';
-    import { pointerDrag } from './pointerDrag';
     import { resolvePanel } from './panelTypes';
     import type { DragMode } from './dragGesture';
 
@@ -41,9 +40,6 @@
             win.removeEventListener('keydown', onKey);
         };
     });
-
-    // Region-width resize (main window only). Captured baseline width at start.
-    let regionStart = 0;
 
     // Ghost + drop hint are painted only by the window currently reporting the
     // pointer (only one holds it at a time).
@@ -91,23 +87,7 @@
     }
 </script>
 
-<div
-    class="workspace"
-    class:main={isMain}
-    bind:this={rootEl}
-    style:width={isMain ? `${workspaces.regionWidth}px` : undefined}
->
-    {#if isMain}
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div
-            class="region-resize"
-            use:pointerDrag={{
-                onStart: () => (regionStart = workspaces.regionWidth),
-                onMove: (dx) => (workspaces.regionWidth = Math.max(180, Math.min(500, regionStart - dx))),
-            }}
-        ></div>
-    {/if}
-
+<div class="workspace" class:main={isMain} bind:this={rootEl}>
     {#if ws}
         <Subdivision node={ws.layout.root} {workspaceId} depth={0} />
     {/if}
@@ -137,10 +117,11 @@
         overflow: hidden;
     }
 
+    /* Main workspace fills the whole app area right of the tool sidebar; the
+       canvas↔panels split is a normal tiling gutter, not a fixed region edge. */
     .workspace.main {
-        min-width: 180px;
-        max-width: 500px;
-        flex-shrink: 0;
+        flex: 1;
+        min-width: 0;
         background: var(--bg);
     }
 
@@ -149,21 +130,6 @@
         flex: 1;
         width: 100%;
         height: 100%;
-    }
-
-    .region-resize {
-        position: absolute;
-        left: 0;
-        top: 0;
-        bottom: 0;
-        width: 4px;
-        cursor: col-resize;
-        z-index: 10;
-        touch-action: none;
-    }
-
-    .region-resize:hover {
-        background: var(--accent);
     }
 
     /* Ghost + hint match Modal/ContextMenu z-index and never intercept the

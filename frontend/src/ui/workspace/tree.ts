@@ -15,8 +15,13 @@
  */
 
 /** A top-level dockable panel. Additive: register a new one in
- *  `registerPanels.ts` and extend this union. */
-export type PanelType = 'layers' | 'properties';
+ *  `registerPanels.ts` and extend this union.
+ *
+ *  `document` is the canvas/viewport itself — a first-class panel (as in
+ *  Graphite), so the whole window tiles and horizontal splitting (canvas |
+ *  panels) is meaningful. It is a non-closable, non-poppable singleton kept
+ *  present by {@link ensureDocument}. */
+export type PanelType = 'document' | 'layers' | 'properties';
 
 export interface PanelGroupState {
     tabs: PanelType[];
@@ -49,6 +54,11 @@ const DEFAULT_SPLIT_SHARE = 0.5;
  *  the region is too small to satisfy every slot) by the gutter-resize clamp. */
 export const MIN_PANEL_PX = 80;
 
+/** Root-row share given to the canvas (`document`) in the default layout; the
+ *  rest goes to the Layers/Properties column. Mirrors Graphite's
+ *  `DOCUMENT_PANEL_SHARE`. */
+const DOCUMENT_SHARE = 0.8;
+
 // ---------------------------------------------------------------------------
 // Construction helpers
 // ---------------------------------------------------------------------------
@@ -57,26 +67,29 @@ export function makeGroup(id: number, tabs: PanelType[], activeTabIndex = 0): Su
     return { kind: 'group', id, state: { tabs, activeTabIndex } };
 }
 
-/** The main window's default arrangement: Layers over Properties.
+/** The main window's default arrangement — Graphite's shape:
  *
- *  Root is a `horizontal` split (depth 0) holding a single `vertical` sub-split
- *  (depth 1) of `[layers 0.6, properties 0.4]`. The wrapper exists purely to
- *  flip the top-level axis to vertical (root parity is horizontal); it survives
- *  `prune` because its single child is a *2-child* split, not the degenerate
- *  single-`split`-in-`split` that `prune` flattens. The 0.6/0.4 ratio preserves
- *  the historical (non-even) Layers/Properties proportion. */
-export function defaultMainLayout(idA: number, idB: number): WorkspaceLayout {
+ *  ```
+ *  Row [ Document | Column[ Layers 0.6, Properties 0.4 ] ]
+ *  ```
+ *
+ *  Root is a `horizontal` split (depth 0): the canvas (`document`) takes
+ *  {@link DOCUMENT_SHARE} on the left, and a `vertical` sub-split (depth 1) of
+ *  Layers-over-Properties takes the rest on the right. The 0.6/0.4 ratio
+ *  preserves the historical Layers/Properties proportion. */
+export function defaultMainLayout(docId: number, layersId: number, propsId: number): WorkspaceLayout {
     return {
         root: {
             kind: 'split',
             children: [
+                { size: DOCUMENT_SHARE, subdivision: makeGroup(docId, ['document']) },
                 {
-                    size: 1,
+                    size: 1 - DOCUMENT_SHARE,
                     subdivision: {
                         kind: 'split',
                         children: [
-                            { size: 0.6, subdivision: makeGroup(idA, ['layers']) },
-                            { size: 0.4, subdivision: makeGroup(idB, ['properties']) },
+                            { size: 0.6, subdivision: makeGroup(layersId, ['layers']) },
+                            { size: 0.4, subdivision: makeGroup(propsId, ['properties']) },
                         ],
                     },
                 },
@@ -354,6 +367,17 @@ export function foldPanelsIntoMain(mainRoot: Subdivision, panels: PanelType[]): 
     }
 }
 
+/** Guarantee the singleton `document` panel exists. If absent (a corrupted
+ *  save, or a layout persisted before the canvas became a panel), prepend it as
+ *  the root row's first child so the canvas sits left of everything else, then
+ *  renormalize. Root is always a `split` by contract. */
+export function ensureDocument(root: Subdivision, docId: number): void {
+    if (root.kind !== 'split') return;
+    if (collectPanelTypes(root).includes('document')) return;
+    root.children.unshift({ size: DOCUMENT_SHARE, subdivision: makeGroup(docId, ['document']) });
+    renormalize(root.children);
+}
+
 /** Reassign every group id sequentially from 0 and return the next free id.
  *  Guarantees uniqueness after folding independently-numbered trees. */
 export function renumber(node: Subdivision, start = 0): number {
@@ -369,7 +393,7 @@ export function renumber(node: Subdivision, start = 0): number {
     return next;
 }
 
-const KNOWN_PANEL_TYPES: readonly PanelType[] = ['layers', 'properties'];
+const KNOWN_PANEL_TYPES: readonly PanelType[] = ['document', 'layers', 'properties'];
 
 function stripUnknownTabs(node: Subdivision): void {
     if (node.kind === 'group') {
@@ -406,12 +430,14 @@ function isSubdivision(v: unknown): v is Subdivision {
  * pop-out trees are **folded back into the main tree** here rather than
  * recreated. Steps: parse → per-workspace strip unknown `PanelType`s → prune
  * (a group emptied by stripping becomes an unhittable zero) → fold non-main
- * workspaces into main → empty ⇒ default. Malformed JSON ⇒ default.
+ * workspaces into main → empty ⇒ default → ensure the singleton `document`
+ * panel is present (self-heals a layout saved before the canvas was a panel).
+ * Malformed JSON ⇒ default.
  */
 export function loadOrDefault(raw: string | null): { root: Subdivision; nextGroupId: number } {
     const fallback = () => {
-        const layout = defaultMainLayout(0, 1);
-        return { root: layout.root, nextGroupId: 2 };
+        const layout = defaultMainLayout(0, 1, 2);
+        return { root: layout.root, nextGroupId: 3 };
     };
     if (raw === null) return fallback();
 
@@ -443,8 +469,15 @@ export function loadOrDefault(raw: string | null): { root: Subdivision; nextGrou
     foldPanelsIntoMain(mainRoot, orphans);
     prune(mainRoot);
 
+    // Empty check runs *before* injecting Document: a fully-stripped layout
+    // should reset to the full default (Document + Layers + Properties), not a
+    // lone canvas.
     if (isEmptyLayout(mainRoot)) return fallback();
 
+    // Renumber first so ensureDocument can hand the injected group a free id.
+    const usedIds = renumber(mainRoot, 0);
+    ensureDocument(mainRoot, usedIds);
+    prune(mainRoot);
     const nextGroupId = renumber(mainRoot, 0);
     return { root: mainRoot, nextGroupId };
 }

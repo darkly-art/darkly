@@ -18,7 +18,6 @@
 
 import { mount, unmount } from 'svelte';
 import Workspace from './Workspace.svelte';
-import { persistedState } from '../../state/persisted.svelte';
 import {
     type Subdivision,
     type WorkspaceLayout,
@@ -119,10 +118,6 @@ class WorkspaceStore {
      *  the ghost/hint). Null when no tab drag is in flight. */
     drag = $state<{ state: DragState; reportingWorkspaceId: number } | null>(null);
 
-    /** Persisted main-region width (scalar — a separate mechanism from the deep
-     *  tree persistence below; deliberate, they store different shapes). */
-    #regionWidth = persistedState<number>('darkly.workspaceRegionWidth', 280);
-
     /** OS windows + mounted component handles, keyed by workspace id. Not
      *  reactive — Window/component handles aren't serializable state. */
     #windows = new Map<number, Window>();
@@ -135,13 +130,6 @@ class WorkspaceStore {
         this.nextGroupId = nextGroupId;
         if (typeof window !== 'undefined') this.#windows.set(MAIN_ID, window);
         this.#setupPersistence();
-    }
-
-    get regionWidth() {
-        return this.#regionWidth.value;
-    }
-    set regionWidth(px: number) {
-        this.#regionWidth.value = px;
     }
 
     getWorkspace(id: number): WorkspaceWindow | undefined {
@@ -259,6 +247,10 @@ class WorkspaceStore {
         targetWorkspaceId: number,
         insert: (targetRoot: Subdivision) => void,
     ) {
+        // A non-poppable panel (the canvas) can't leave its window — its WebGPU
+        // surface can't migrate documents. Drop is a no-op; the panel stays put.
+        if (sourceWorkspaceId !== targetWorkspaceId && !resolvePanel(tab).poppable) return;
+
         if (sourceWorkspaceId === targetWorkspaceId) {
             this.#mutate(targetWorkspaceId, (root) => {
                 removeTab(root, sourceGroupId, tab);
