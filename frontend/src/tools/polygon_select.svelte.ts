@@ -109,7 +109,7 @@ function commit(e: MouseEvent | PointerEvent | KeyboardEvent) {
 
 export const polygonSelectTool: Tool = {
     id: 'polygon_select',
-    icon: 'fa6-solid:draw-polygon',
+    icon: 'lucide:triangle-dashed',
     group: 'select',
     cluster: 'select',
     hotkeyAction: 'polygonSelectTool',

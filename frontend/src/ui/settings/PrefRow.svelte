@@ -2,7 +2,7 @@
     import type { PrefInfo } from '../../config/schema';
     import { config } from '../../config/store.svelte';
     import BoolToggle from './widgets/BoolToggle.svelte';
-    import NumberSlider from './widgets/NumberSlider.svelte';
+    import Slider from './widgets/Slider.svelte';
     import NumberInput from './widgets/NumberInput.svelte';
     import TextInput from './widgets/TextInput.svelte';
     import EnumDropdown from './widgets/EnumDropdown.svelte';
@@ -60,7 +60,7 @@
                         {onchange}
                     />
                 {:else}
-                    <NumberSlider
+                    <Slider
                         value={value as number}
                         min={pref.min ?? 0}
                         max={pref.max ?? 1}
