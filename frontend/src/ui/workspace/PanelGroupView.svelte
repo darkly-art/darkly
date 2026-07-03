@@ -96,15 +96,16 @@
         display: flex;
         flex-shrink: 0;
         background: var(--bg-active);
-        border-bottom: 1px solid var(--bg-hover);
         overflow: hidden;
     }
 
+    /* Inactive tabs read clearly: recessed (darker than the bar) with a mid-tone
+       label, instead of near-invisible --text-dim on the bar itself. */
     .tab {
         appearance: none;
         border: none;
-        background: none;
-        color: var(--text-dim);
+        background: var(--bg-raised);
+        color: var(--text-muted);
         font-size: 12px;
         padding: 6px 12px;
         cursor: pointer;
