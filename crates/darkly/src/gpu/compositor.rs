@@ -1779,8 +1779,6 @@ impl Compositor {
         }
         // Invalidate all layer content bounds — pixels may have changed.
         self.content_bounds.invalidate_all();
-        // Invalidate cached histograms — the composite a filter sees may change.
-        self.histogram.invalidate_all();
     }
 
     /// Mark that a node's pixels changed. Records the node id in the
@@ -1806,6 +1804,10 @@ impl Compositor {
     /// invariant is "if your signature carries a LayerId, you mark it".
     pub fn mark_node_pixels_dirty(&mut self, node_id: LayerId) {
         self.dirty_node_pixels.insert(node_id);
+        // Cached histograms are keyed off a filter's *input* pixels — only an
+        // actual pixel write can change them. Filter param edits (a Levels drag)
+        // call `mark_dirty` but not this, so the histogram stays put mid-drag.
+        self.histogram.invalidate_all();
         self.mark_dirty();
     }
 

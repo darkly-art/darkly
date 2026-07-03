@@ -1,13 +1,18 @@
 // Compute shader: bin a texture into eight 256-bin histograms — one per virtual
 // channel, matching the LUT filter's channel order:
 //
-//   0 luma (Rec.709), 1 red, 2 green, 3 blue, 4 alpha,
-//   5 hue, 6 saturation, 7 lightness (CIELAB L*)
+//   0 rgb (composite), 1 red, 2 green, 3 blue, 4 alpha,
+//   5 hue, 6 saturation, 7 lightness
 //
 // Each thread bins one pixel with atomic adds into an 8×256 u32 storage buffer.
-// Hue/Saturation/Lightness use the same conversions the filter applies, so the
-// histogram lines up with the tone the Levels editor shows — `rgb_to_hsv` and
-// `rgb_to_lab` are prepended from `shaders/lib/colorspace.wgsl` at load time.
+//
+// Prior art (Krita `KisLevelsConfigWidget` / `KoBasicHistogramProducers`):
+//   - R/G/B/A bin the raw gamma-encoded 8-bit value directly (no linearization)
+//     — `KoGenericRGBHistogramProducer::addRegionToBin` bins `c.red()` etc.
+//   - The composite/default and Lightness channels both bin CIELAB L*
+//     (`KoGenericLabHistogramProducer`, D65, channel 0, L*/100 → 0..255).
+// Hue/Saturation use the same HSV conversion the filter applies. `rgb_to_hsv`
+// and `rgb_to_lab` are prepended from `shaders/lib/colorspace.wgsl` at load time.
 
 @group(0) @binding(0) var tex: texture_2d<f32>;
 
@@ -32,9 +37,13 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     if gid.x >= params.width || gid.y >= params.height { return; }
 
     let c = textureLoad(tex, vec2u(gid.x, gid.y), 0);
-    let luma = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
 
-    atomicAdd(&hist.bins[0u * 256u + bin_of(luma)], 1u);
+    // Composite (0) and Lightness (7) both bin CIELAB L*, as Krita does.
+    let lightness = bin_of(rgb_to_lab(c.rgb).x / 100.0);
+    atomicAdd(&hist.bins[0u * 256u + lightness], 1u);
+    atomicAdd(&hist.bins[7u * 256u + lightness], 1u);
+
+    // Raw gamma-encoded channel values.
     atomicAdd(&hist.bins[1u * 256u + bin_of(c.r)], 1u);
     atomicAdd(&hist.bins[2u * 256u + bin_of(c.g)], 1u);
     atomicAdd(&hist.bins[3u * 256u + bin_of(c.b)], 1u);
@@ -43,7 +52,4 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let hsv = rgb_to_hsv(c.rgb);
     atomicAdd(&hist.bins[5u * 256u + bin_of(hsv.x / 360.0)], 1u);
     atomicAdd(&hist.bins[6u * 256u + bin_of(hsv.y)], 1u);
-
-    let lab = rgb_to_lab(c.rgb);
-    atomicAdd(&hist.bins[7u * 256u + bin_of(lab.x / 100.0)], 1u);
 }

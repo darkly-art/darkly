@@ -1,9 +1,12 @@
 //! GPU-accelerated per-channel histogram.
 //!
 //! A compute shader bins a texture into eight 256-bin histograms (one per LUT
-//! filter channel — luma, red, green, blue, alpha, hue, saturation, lightness)
-//! using atomic adds, then reads back the 8×256 u32 result asynchronously — no
-//! blocking readback. Modeled on [`ContentBoundsPass`](super::content_bounds).
+//! filter channel — rgb-composite, red, green, blue, alpha, hue, saturation,
+//! lightness) using atomic adds, then reads back the 8×256 u32 result
+//! asynchronously — no blocking readback. Composite and Lightness both bin
+//! CIELAB L*, R/G/B/A bin the raw gamma-encoded value (matching Krita's
+//! `KoBasicHistogramProducers`). Modeled on
+//! [`ContentBoundsPass`](super::content_bounds).
 //!
 //! Unlike content bounds (which reads a node's own persistent texture and can
 //! self-submit), the histogram samples a filter's *input* — a group accumulator
@@ -336,7 +339,7 @@ mod tests {
 
     /// A constant-color texture lands all its pixels in the expected per-channel
     /// bins. Red/Green/Blue/Alpha bins are exact (8-bit value → bin index); the
-    /// derived channels (luma/hue/sat/lightness) are checked by total count.
+    /// derived channels (composite/hue/sat/lightness) are checked by total count.
     #[test]
     fn constant_color_bins_each_channel() {
         let (device, queue) = test_device();

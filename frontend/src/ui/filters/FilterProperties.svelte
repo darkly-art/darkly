@@ -56,6 +56,10 @@
     };
     const HIST_BINS = 256;
     const showsLevels = $derived(channels.some((c) => c.kind === 'levels'));
+    // Stable primitive id: a layer-tree refresh replaces the `node` object but
+    // keeps the same id, so keying the effect on this (not `node.id`) stops it
+    // re-running — and re-fetching the histogram — on every param edit.
+    const filterId = $derived(node.id);
 
     let histogramBins = $state<Uint32Array | null>(null);
     // The selected channel's 256-bin slice, handed to the Levels editor.
@@ -69,8 +73,8 @@
     // and poll for the result. Cleared when the panel changes or unmounts.
     $effect(() => {
         const engine = app.engine;
+        const id = filterId;
         if (!engine || !showsLevels) return;
-        const id = node.id;
         engine.post('request_histogram', { id });
         let stopped = false;
         let timer: ReturnType<typeof setTimeout> | undefined;
@@ -138,7 +142,12 @@
     // curve for Curves, the identity transfer for Levels).
     function resetSelectedChannel() {
         if (!selectedParam) return;
-        selectedParam.value = structuredClone(selectedParam.default);
+        // `default` is a reactive proxy (curve pairs, or a levels array) that
+        // `structuredClone` can't clone — deep-copy the array by hand.
+        const d = selectedParam.default;
+        selectedParam.value = (
+            Array.isArray(d) ? d.map((v) => (Array.isArray(v) ? [...v] : v)) : d
+        ) as typeof d;
         pushParams(true);
     }
 </script>
