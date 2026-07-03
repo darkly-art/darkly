@@ -9,27 +9,40 @@ const curve = (name: string): FilterParam => ({
         [1, 1],
     ],
 });
+const levels = (name: string): FilterParam => ({
+    kind: 'levels',
+    name,
+    default: [0, 1, 1, 0, 1],
+});
 const scalar = (name: string): FilterParam => ({ kind: 'float', name, default: 0 });
 
 describe('partitionFilterParams', () => {
     it("groups the curves layer's eight Krita channels under the selector", () => {
         const names = ['rgb', 'red', 'green', 'blue', 'alpha', 'hue', 'saturation', 'lightness'];
         const params = names.map(curve);
-        const { curves, scalars } = partitionFilterParams(params);
-        expect(curves.map((c) => c.name)).toEqual(names);
+        const { channels, scalars } = partitionFilterParams(params);
+        expect(channels.map((c) => c.name)).toEqual(names);
         expect(scalars).toHaveLength(0);
     });
 
-    it('separates curves from scalars while preserving order', () => {
-        const params = [scalar('amount'), curve('red'), scalar('mix'), curve('blue')];
-        const { curves, scalars } = partitionFilterParams(params);
-        expect(curves.map((c) => c.name)).toEqual(['red', 'blue']);
+    it("groups the levels layer's channels under the same selector", () => {
+        const names = ['rgb', 'red', 'green', 'blue', 'alpha', 'hue', 'saturation', 'lightness'];
+        const params = names.map(levels);
+        const { channels, scalars } = partitionFilterParams(params);
+        expect(channels.map((c) => c.name)).toEqual(names);
+        expect(scalars).toHaveLength(0);
+    });
+
+    it('separates channel params from scalars while preserving order', () => {
+        const params = [scalar('amount'), curve('red'), scalar('mix'), levels('blue')];
+        const { channels, scalars } = partitionFilterParams(params);
+        expect(channels.map((c) => c.name)).toEqual(['red', 'blue']);
         expect(scalars.map((s) => s.name)).toEqual(['amount', 'mix']);
     });
 
     it('handles a parameter-free filter (invert)', () => {
-        const { curves, scalars } = partitionFilterParams([]);
-        expect(curves).toHaveLength(0);
+        const { channels, scalars } = partitionFilterParams([]);
+        expect(channels).toHaveLength(0);
         expect(scalars).toHaveLength(0);
     });
 });

@@ -132,7 +132,7 @@ For a feature to count, it must be:
 - [x] Filter layers
     - [ ] Brightness / Contrast
     - [ ] Hue / Saturation / Lightness
-    - [ ] Levels
+    - [x] Levels
     - [x] Curves
     - [x] Invert colors
     - [ ] Desaturate

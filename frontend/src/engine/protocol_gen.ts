@@ -719,7 +719,9 @@ export type RequestKind =
     | 'grow_selection'
     | 'has_floating'
     | 'has_pending_color_pick'
+    | 'has_pending_histogram'
     | 'has_selection'
+    | 'histogram_result'
     | 'hit_test_vector_object'
     | 'invert_selection'
     | 'is_dirty'
@@ -757,6 +759,7 @@ export type RequestKind =
     | 'remove_layers'
     | 'remove_mask'
     | 'remove_veil'
+    | 'request_histogram'
     | 'rescale_image'
     | 'resize'
     | 'resize_canvas_rect'
@@ -895,7 +898,9 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'grow_selection',
     'has_floating',
     'has_pending_color_pick',
+    'has_pending_histogram',
     'has_selection',
+    'histogram_result',
     'hit_test_vector_object',
     'invert_selection',
     'is_dirty',
@@ -933,6 +938,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'remove_layers',
     'remove_mask',
     'remove_veil',
+    'request_histogram',
     'rescale_image',
     'resize',
     'resize_canvas_rect',

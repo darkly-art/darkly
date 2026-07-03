@@ -107,6 +107,8 @@ pub mod filter;
 pub mod filters;
 pub mod floating_preview;
 pub mod flood_fill;
+pub mod histogram;
+pub mod lut_filter;
 pub mod ortho_transform;
 pub mod overlay;
 pub mod paint_target;

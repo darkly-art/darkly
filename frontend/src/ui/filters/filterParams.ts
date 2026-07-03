@@ -2,13 +2,18 @@
  * Pure helpers for the filter-layer properties panel.
  *
  * A filter's params (the `ParamInfo[]` emitted by the Rust `filter_types()` /
- * layer-tree query) mix scalar controls (sliders, checkboxes) with tone curves.
- * The panel renders every curve param through one shared channel selector +
- * `<CurveEditor>`; the scalars render as their own rows. This module owns the
- * split so the component stays declarative and the grouping is unit-testable.
+ * layer-tree query) mix scalar controls (sliders, checkboxes) with per-channel
+ * tone params. Both the `curve` (Curves) and `levels` (Levels) kinds expose the
+ * same eight virtual channels and share the channel selector, differing only in
+ * their editor widget. The panel renders every channel param through one shared
+ * selector + a `<CurveEditor>`/`<LevelsEditor>`; the scalars render as their own
+ * rows. This module owns the split so the component stays declarative and the
+ * grouping is unit-testable.
  */
 
 export type CurvePoints = [number, number][];
+/** `[inBlack, inWhite, gamma, outBlack, outWhite]` — a Levels transfer. */
+export type LevelsValues = [number, number, number, number, number];
 
 /** One entry of a filter's `params` array — a `ParamInfo` view. */
 export interface FilterParam {
@@ -16,27 +21,33 @@ export interface FilterParam {
     name: string;
     min?: number;
     max?: number;
-    default: number | boolean | CurvePoints;
-    value?: number | boolean | CurvePoints;
+    default: number | boolean | CurvePoints | LevelsValues;
+    value?: number | boolean | CurvePoints | LevelsValues;
+}
+
+/** Kinds that are per-channel tone params, sharing the channel selector. */
+export function isChannelParam(kind: string): boolean {
+    return kind === 'curve' || kind === 'levels';
 }
 
 /**
- * Partition a filter's params into its curve params — each a channel that gets
- * its own entry in the channel selector — and its scalar params, preserving
- * declaration order within each group. A filter with N curve params (curves
- * exposes rgb/red/green/blue/alpha/hue/saturation/lightness) surfaces one
- * selector with N options and a single curve editor bound to the chosen channel.
+ * Partition a filter's params into its per-channel tone params — each a channel
+ * that gets its own entry in the channel selector — and its scalar params,
+ * preserving declaration order within each group. A filter with N channel params
+ * (Curves and Levels both expose rgb/red/green/blue/alpha/hue/saturation/
+ * lightness) surfaces one selector with N options and a single per-channel
+ * editor bound to the chosen channel.
  */
 export function partitionFilterParams(params: FilterParam[]): {
-    curves: FilterParam[];
+    channels: FilterParam[];
     scalars: FilterParam[];
 } {
-    const curves: FilterParam[] = [];
+    const channels: FilterParam[] = [];
     const scalars: FilterParam[] = [];
     for (const p of params) {
-        (p.kind === 'curve' ? curves : scalars).push(p);
+        (isChannelParam(p.kind) ? channels : scalars).push(p);
     }
-    return { curves, scalars };
+    return { channels, scalars };
 }
 
 /** Channel ids that must render fully uppercase, not title-cased. */

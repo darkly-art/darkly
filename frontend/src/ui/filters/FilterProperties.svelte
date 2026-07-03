@@ -2,16 +2,17 @@
     import { setContext } from 'svelte';
     import { app } from '../../state/app.svelte';
     import CurveEditor from '../CurveEditor.svelte';
+    import LevelsEditor from './LevelsEditor.svelte';
     import { createGraphCoords } from '../brush_builder/coords';
     import type { NodeCanvasContext } from '../brush_builder/NodeCanvas.svelte';
-    import { partitionFilterParams, channelLabel, type FilterParam, type CurvePoints } from './filterParams';
+    import {
+        partitionFilterParams,
+        channelLabel,
+        type FilterParam,
+        type CurvePoints,
+        type LevelsValues,
+    } from './filterParams';
     import Slider from '../settings/widgets/Slider.svelte';
-
-    /** The identity curve — a straight diagonal from (0,0) to (1,1). */
-    const IDENTITY_CURVE: CurvePoints = [
-        [0, 0],
-        [1, 1],
-    ];
 
     let { node }: {
         node: { id: number; pipeline: string; params: FilterParam[] };
@@ -32,20 +33,71 @@
     const filterLabel = $derived(app.filterDisplayName(node.pipeline));
 
     const partition = $derived(partitionFilterParams(node.params ?? []));
-    const curves = $derived(partition.curves);
+    const channels = $derived(partition.channels);
     const scalars = $derived(partition.scalars);
 
-    // The channel currently shown in the curve editor. Kept valid as the param
-    // set changes (layer swap, load) — defaults to the first curve.
+    // The channel currently shown in the per-channel editor. Kept valid as the
+    // param set changes (layer swap, load) — defaults to the first channel.
     let selectedChannel = $state<string | null>(null);
     $effect(() => {
-        if (curves.length === 0) {
+        if (channels.length === 0) {
             selectedChannel = null;
-        } else if (!curves.some((c) => c.name === selectedChannel)) {
-            selectedChannel = curves[0].name;
+        } else if (!channels.some((c) => c.name === selectedChannel)) {
+            selectedChannel = channels[0].name;
         }
     });
-    const selectedCurve = $derived(curves.find((c) => c.name === selectedChannel) ?? null);
+    const selectedParam = $derived(channels.find((c) => c.name === selectedChannel) ?? null);
+
+    // --- Input histogram (Levels only) ---------------------------------------
+    // Channel name → its row in the engine's 8×256 histogram buffer (same order
+    // the LUT filter and the histogram compute shader use).
+    const HISTOGRAM_CHANNEL: Record<string, number> = {
+        rgb: 0, red: 1, green: 2, blue: 3, alpha: 4, hue: 5, saturation: 6, lightness: 7,
+    };
+    const HIST_BINS = 256;
+    const showsLevels = $derived(channels.some((c) => c.kind === 'levels'));
+
+    let histogramBins = $state<Uint32Array | null>(null);
+    // The selected channel's 256-bin slice, handed to the Levels editor.
+    const selectedHistogram = $derived.by(() => {
+        if (!histogramBins || !selectedParam) return null;
+        const idx = HISTOGRAM_CHANNEL[selectedParam.name] ?? 0;
+        return Array.from(histogramBins.subarray(idx * HIST_BINS, (idx + 1) * HIST_BINS));
+    });
+
+    // While a Levels filter is shown, target its input for histogram compute
+    // and poll for the result. Cleared when the panel changes or unmounts.
+    $effect(() => {
+        const engine = app.engine;
+        if (!engine || !showsLevels) return;
+        const id = node.id;
+        engine.post('request_histogram', { id });
+        let stopped = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const poll = () => {
+            if (stopped) return;
+            engine
+                .send<{ bytes: Uint8Array }>('histogram_result', { id })
+                .then(({ bytes }) => {
+                    if (stopped) return;
+                    if (bytes && bytes.length >= 8 * HIST_BINS * 4) {
+                        // Copy to an aligned buffer before viewing as u32.
+                        histogramBins = new Uint32Array(bytes.slice().buffer);
+                    }
+                    timer = setTimeout(poll, 500);
+                })
+                .catch(() => {
+                    if (!stopped) timer = setTimeout(poll, 500);
+                });
+        };
+        poll();
+        return () => {
+            stopped = true;
+            if (timer !== undefined) clearTimeout(timer);
+            histogramBins = null;
+            engine.post('request_histogram', { id: -1 });
+        };
+    });
 
     // Post the whole `{name: value}` param map. `refresh` re-pulls the layer
     // tree (skipped mid curve-drag so the live edit isn't churned; the editor
@@ -69,21 +121,24 @@
         param.value = (e.target as HTMLInputElement).checked;
         pushParams(true);
     }
-    function onCurveInput(pts: CurvePoints) {
-        if (!selectedCurve) return;
-        selectedCurve.value = pts;
+    // Live edit (mid-drag) — post without refreshing the layer tree so the edit
+    // isn't churned. Works for both the curve and levels channel editors.
+    function onChannelInput(value: CurvePoints | LevelsValues) {
+        if (!selectedParam) return;
+        selectedParam.value = value;
         pushParams(false);
     }
-    function onCurveChange(pts: CurvePoints) {
-        if (!selectedCurve) return;
-        selectedCurve.value = pts;
+    function onChannelChange(value: CurvePoints | LevelsValues) {
+        if (!selectedParam) return;
+        selectedParam.value = value;
         pushParams(true);
     }
 
-    // Reset the currently-shown channel's curve back to the identity diagonal.
-    function resetSelectedCurve() {
-        if (!selectedCurve) return;
-        selectedCurve.value = IDENTITY_CURVE.map((p) => [...p] as [number, number]);
+    // Reset the currently-shown channel back to its schema default (the identity
+    // curve for Curves, the identity transfer for Levels).
+    function resetSelectedChannel() {
+        if (!selectedParam) return;
+        selectedParam.value = structuredClone(selectedParam.default);
         pushParams(true);
     }
 </script>
@@ -93,31 +148,40 @@
         <span class="type-label">{filterLabel}</span>
     </div>
 
-    {#if curves.length > 0}
-        {#if curves.length > 1}
+    {#if channels.length > 0}
+        {#if channels.length > 1}
             <div class="row">
                 <span class="label">Channel</span>
                 <select class="channel-select" bind:value={selectedChannel}>
-                    {#each curves as c (c.name)}
+                    {#each channels as c (c.name)}
                         <option value={c.name}>{channelLabel(c.name)}</option>
                     {/each}
                 </select>
             </div>
         {/if}
-        {#if selectedCurve}
+        {#if selectedParam}
             <!-- Remount the editor on channel switch so its drag/selection
-                 state resets to the newly-shown curve. -->
+                 state resets to the newly-shown channel. -->
             {#key selectedChannel}
-                <CurveEditor
-                    points={(selectedCurve.value ?? selectedCurve.default) as CurvePoints}
-                    oninput={onCurveInput}
-                    onchange={onCurveChange}
-                />
+                {#if selectedParam.kind === 'levels'}
+                    <LevelsEditor
+                        values={(selectedParam.value ?? selectedParam.default) as LevelsValues}
+                        histogram={selectedHistogram}
+                        oninput={onChannelInput}
+                        onchange={onChannelChange}
+                    />
+                {:else}
+                    <CurveEditor
+                        points={(selectedParam.value ?? selectedParam.default) as CurvePoints}
+                        oninput={onChannelInput}
+                        onchange={onChannelChange}
+                    />
+                {/if}
             {/key}
             <button
                 class="reset-btn"
-                onclick={resetSelectedCurve}
-                title="Reset {channelLabel(selectedCurve.name)} curve"
+                onclick={resetSelectedChannel}
+                title="Reset {channelLabel(selectedParam.name)} channel"
             >
                 Reset
             </button>
