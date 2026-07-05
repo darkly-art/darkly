@@ -294,6 +294,13 @@ impl DarklyEngine {
 
         // Poll content bounds compute readbacks.
         let bounds_completed = self.compositor.poll_content_bounds(&self.gpu.device);
+        // Poll histogram compute readbacks (the Levels editor's input histogram).
+        // Deliberately not folded into the return value below: completion must
+        // not trigger `mark_dirty`, which would re-invalidate the histogram and
+        // recompute it every frame. The result just lands in the cache; the
+        // frontend polls `histogram_result` for it, and `has_pending_histogram`
+        // keeps the frame loop alive until the dispatch resolves.
+        self.compositor.poll_histogram(&self.gpu.device);
         let mut any_completed = false;
 
         // Complete pending transform if content bounds just arrived.
@@ -555,6 +562,28 @@ impl DarklyEngine {
             .any(|c| matches!(c, ReadbackContext::ColorPick))
     }
 
+    /// Select the filter layer whose input histogram the compositor computes
+    /// (the Levels editor's target), or `None` to stop. Requests a frame so the
+    /// dispatch runs.
+    pub fn set_histogram_target(&mut self, target: Option<LayerId>) {
+        self.compositor.set_histogram_target(target);
+    }
+
+    /// The cached 8×256 histogram bytes (channel-major `u32` LE) for a layer, or
+    /// an empty vec while the readback is pending.
+    pub fn histogram(&self, layer_id: LayerId) -> Vec<u8> {
+        self.compositor
+            .histogram(layer_id)
+            .map(bytemuck::cast_slice::<u32, u8>)
+            .map(|s| s.to_vec())
+            .unwrap_or_default()
+    }
+
+    /// True if a histogram computation is in flight.
+    pub fn has_pending_histogram(&self) -> bool {
+        self.compositor.has_pending_histogram()
+    }
+
     /// Monotonic counter bumped each time a thumbnail readback lands in
     /// the cache. The frontend mirrors this into a Svelte-reactive epoch
     /// so the layer panel's `$derived` re-runs on async cache updates.
@@ -607,6 +636,7 @@ impl DarklyEngine {
                 };
                 return self.readbacks.has_pending()
                     || self.compositor.has_pending_content_bounds()
+                    || self.compositor.has_pending_histogram()
                     || self.diff_rect.is_pending();
             }
         };
@@ -621,7 +651,9 @@ impl DarklyEngine {
                 anim_us: 0,
                 compositor_us: 0,
             };
-            return self.readbacks.has_pending() || self.compositor.has_pending_content_bounds();
+            return self.readbacks.has_pending()
+                || self.compositor.has_pending_content_bounds()
+                || self.compositor.has_pending_histogram();
         }
 
         let t_anim = web_time::Instant::now();
@@ -650,6 +682,7 @@ impl DarklyEngine {
         self.compositor.needs_animation(&self.doc)
             || self.readbacks.has_pending()
             || self.compositor.has_pending_content_bounds()
+            || self.compositor.has_pending_histogram()
             || self.diff_rect.is_pending()
     }
 

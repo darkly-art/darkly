@@ -4,6 +4,7 @@
 
 pub mod curves;
 pub mod invert;
+pub mod levels;
 
 use crate::gpu::filter::FilterPipelineRegistration;
 
@@ -12,5 +13,6 @@ pub fn registrations() -> Vec<FilterPipelineRegistration> {
     vec![
         curves::register(),
         invert::register(),
+        levels::register(),
     ]
 }

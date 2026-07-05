@@ -28,6 +28,14 @@ pub enum ParamDef {
         name: &'static str,
         default: &'static [[f32; 2]],
     },
+    /// Levels adjustment — a black/gamma/white/output transfer, stored as
+    /// `[inBlack, inWhite, gamma, outBlack, outWhite]` (all normalized `[0,1]`
+    /// except `gamma`, the raw `0.1–10` exponent). Baked into the same LUT as a
+    /// [`Curve`](ParamDef::Curve) by the shared LUT-filter scaffold.
+    Levels {
+        name: &'static str,
+        default: [f32; 5],
+    },
     /// Enum displayed as a dropdown.  Stored as Int (index into `options`).
     Enum {
         name: &'static str,
@@ -69,6 +77,10 @@ pub enum ParamValue {
     Float(f32),
     String(String),
     Curve(Vec<[f32; 2]>),
+    /// Levels transfer `[inBlack, inWhite, gamma, outBlack, outWhite]`.
+    /// A flat 5-number array; disjoint from `Curve` (an array of `[x, y]`
+    /// pairs) under `#[serde(untagged)]`, so it follows `Curve` here.
+    Levels([f32; 5]),
 }
 
 /// Convert a JSON object of `{ "name": value, ... }` into `Vec<ParamValue>`
@@ -117,6 +129,13 @@ pub fn param_values_from_json(obj: &serde_json::Value, defs: &[ParamDef]) -> Vec
                     .unwrap_or_else(|| default.to_vec());
                 ParamValue::Curve(points)
             }
+            ParamDef::Levels { name, default } => {
+                let arr = map
+                    .get(*name)
+                    .and_then(|v| serde_json::from_value::<[f32; 5]>(v.clone()).ok())
+                    .unwrap_or(*default);
+                ParamValue::Levels(arr)
+            }
             ParamDef::Enum { name, default, .. } => {
                 let v = map
                     .get(*name)
@@ -151,6 +170,7 @@ impl ParamDef {
             ParamDef::Bool { default, .. } => ParamValue::Bool(*default),
             ParamDef::String { default, .. } => ParamValue::String(default.to_string()),
             ParamDef::Curve { default, .. } => ParamValue::Curve(default.to_vec()),
+            ParamDef::Levels { default, .. } => ParamValue::Levels(*default),
             ParamDef::Enum { default, .. } => ParamValue::Int(*default),
             ParamDef::FloatInput { default, .. } => ParamValue::Float(*default),
             ParamDef::Icon { default, .. } => ParamValue::String(default.to_string()),
@@ -165,6 +185,7 @@ impl ParamDef {
             | ParamDef::Bool { name, .. }
             | ParamDef::String { name, .. }
             | ParamDef::Curve { name, .. }
+            | ParamDef::Levels { name, .. }
             | ParamDef::Enum { name, .. }
             | ParamDef::Icon { name, .. } => name,
         }
@@ -199,6 +220,10 @@ impl ParamDef {
                 PortableValue::Curve(c) => Ok(ParamValue::Curve(c)),
                 _ => mismatch("curve (list of [x, y] pairs)"),
             },
+            ParamDef::Levels { .. } => match v {
+                PortableValue::Levels(a) => Ok(ParamValue::Levels(a)),
+                _ => mismatch("levels (5 numbers)"),
+            },
         }
     }
 }
@@ -228,6 +253,7 @@ pub enum PortableValue {
     Float(f64),
     String(String),
     Curve(Vec<[f32; 2]>),
+    Levels([f32; 5]),
 }
 
 impl PortableValue {
@@ -238,6 +264,7 @@ impl PortableValue {
             ParamValue::Float(f) => Self::Float(*f as f64),
             ParamValue::String(s) => Self::String(s.clone()),
             ParamValue::Curve(c) => Self::Curve(c.clone()),
+            ParamValue::Levels(a) => Self::Levels(*a),
         }
     }
 
@@ -248,6 +275,7 @@ impl PortableValue {
             Self::Float(_) => "float",
             Self::String(_) => "string",
             Self::Curve(_) => "curve",
+            Self::Levels(_) => "levels",
         }
     }
 }
@@ -280,6 +308,8 @@ mod tests {
             ParamValue::Float(-2.25),
             ParamValue::String("hello".into()),
             ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]]),
+            ParamValue::Levels([0.0, 1.0, 1.0, 0.0, 1.0]),
+            ParamValue::Levels([0.1, 0.9, 2.2, 0.05, 0.95]),
         ] {
             let json = serde_json::to_string(&v).unwrap();
             let back: ParamValue = serde_json::from_str(&json).unwrap();
@@ -289,6 +319,7 @@ mod tests {
                 (ParamValue::Float(a), ParamValue::Float(b)) => a == b,
                 (ParamValue::String(a), ParamValue::String(b)) => a == b,
                 (ParamValue::Curve(a), ParamValue::Curve(b)) => a == b,
+                (ParamValue::Levels(a), ParamValue::Levels(b)) => a == b,
                 _ => false,
             };
             assert!(ok, "round-trip changed variant: {v:?} → {json} → {back:?}");

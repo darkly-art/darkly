@@ -4,6 +4,7 @@ use crate::gpu::atlas::LayerTexture;
 use crate::gpu::blend::BlendPipelines;
 use crate::gpu::content_bounds::ContentBoundsPass;
 use crate::gpu::effect::EffectCache;
+use crate::gpu::histogram::HistogramPass;
 use crate::gpu::overlay::ToolOverlay;
 use crate::gpu::params::ParamValue;
 use crate::gpu::veil_chain::VeilChain;
@@ -711,6 +712,12 @@ pub struct Compositor {
     // --- Content Bounds (GPU compute) ---
     content_bounds: ContentBoundsPass,
 
+    // --- Histogram (GPU compute) ---
+    histogram: HistogramPass,
+    /// The filter layer whose input histogram is being computed (the Levels
+    /// editor's selected filter), or `None` when no histogram is wanted.
+    histogram_target: Option<LayerId>,
+
     // --- Frame Scheduler ---
     /// Monotonic frame counter, incremented on each rAF tick.
     /// Systems fire when `frame_count % divisor == 0`.
@@ -1135,6 +1142,7 @@ impl Compositor {
         let rescale_pass = crate::gpu::rescale::RescalePass::new(device);
         let ortho_pass = crate::gpu::ortho_transform::OrthoTransformPass::new(device);
         let content_bounds = ContentBoundsPass::new(device);
+        let histogram = HistogramPass::new(device);
 
         Compositor {
             group_state,
@@ -1175,6 +1183,8 @@ impl Compositor {
             isolated_node: None,
             selection_state: None,
             content_bounds,
+            histogram,
+            histogram_target: None,
             tool_overlay,
             cached_view_transform: identity,
             viewport_bg: DEFAULT_WORKSPACE_BG,
@@ -1794,6 +1804,10 @@ impl Compositor {
     /// invariant is "if your signature carries a LayerId, you mark it".
     pub fn mark_node_pixels_dirty(&mut self, node_id: LayerId) {
         self.dirty_node_pixels.insert(node_id);
+        // Cached histograms are keyed off a filter's *input* pixels — only an
+        // actual pixel write can change them. Filter param edits (a Levels drag)
+        // call `mark_dirty` but not this, so the histogram stays put mid-drag.
+        self.histogram.invalidate_all();
         self.mark_dirty();
     }
 
@@ -1859,6 +1873,36 @@ impl Compositor {
     /// True if a content bounds computation is in flight for a specific layer.
     pub fn is_content_bounds_pending(&self, layer_id: LayerId) -> bool {
         self.content_bounds.is_pending(layer_id)
+    }
+
+    // --- Histogram (GPU compute) ---
+
+    /// Select the filter layer whose input histogram is computed each compose
+    /// (the Levels editor's target), or `None` to stop computing. Forces a
+    /// recomposite so the histogram dispatches for the new target.
+    pub fn set_histogram_target(&mut self, target: Option<LayerId>) {
+        if self.histogram_target != target {
+            if let Some(prev) = self.histogram_target {
+                self.histogram.remove_layer(prev);
+            }
+            self.histogram_target = target;
+            self.mark_dirty();
+        }
+    }
+
+    /// The cached 8×256 histogram (channel-major) for a layer, if available.
+    pub fn histogram(&self, layer_id: LayerId) -> Option<&[u32]> {
+        self.histogram.get(layer_id)
+    }
+
+    /// Poll pending histogram computations. Call once per frame.
+    pub fn poll_histogram(&mut self, device: &wgpu::Device) -> Vec<LayerId> {
+        self.histogram.poll(device)
+    }
+
+    /// True if any histogram computation is in flight.
+    pub fn has_pending_histogram(&self) -> bool {
+        self.histogram.has_pending()
     }
 
     // --- Paint Target Accessors ---
@@ -4037,6 +4081,21 @@ impl Compositor {
             gs.current_accum = dst;
             (src, dst)
         };
+
+        // Bin the filter's *input* (the composite of everything below it, in
+        // `src`) into the per-channel histogram when this is the target filter.
+        // `src` is only valid mid-composite, so this records into the compose
+        // encoder rather than a self-submitted one. Disjoint field borrows keep
+        // `group_state` and `histogram` independent.
+        if self.histogram_target == Some(filter.id) && self.histogram.needs(filter.id) {
+            if let Some(gs) = self.group_state.get(&parent_group) {
+                let view = &gs.accum.views[src];
+                let tex = &gs.accum.textures[src];
+                let (w, h) = (tex.width(), tex.height());
+                self.histogram
+                    .dispatch(device, encoder, view, w, h, filter.id);
+            }
+        }
 
         {
             let gs = &self.group_state[&parent_group];

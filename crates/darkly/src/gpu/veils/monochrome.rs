@@ -266,8 +266,15 @@ fn create_monochrome_pipeline(
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("monochrome-shader"),
+        // Prepend the shared colour-space lib for `hsv_to_rgb` (same pattern the
+        // LUT filter and histogram use).
         source: wgpu::ShaderSource::Wgsl(
-            include_str!("../../../shaders/veils/monochrome.wgsl").into(),
+            format!(
+                "{}\n{}",
+                include_str!("../../../shaders/lib/colorspace.wgsl"),
+                include_str!("../../../shaders/veils/monochrome.wgsl"),
+            )
+            .into(),
         ),
     });
 

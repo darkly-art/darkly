@@ -354,6 +354,15 @@ impl ParamInfo {
                 value: value.cloned(),
                 options: None,
             },
+            ParamDef::Levels { name, default } => ParamInfo {
+                kind: "levels",
+                name,
+                min: None,
+                max: None,
+                default: ParamValue::Levels(*default),
+                value: value.cloned(),
+                options: None,
+            },
             ParamDef::Enum {
                 name,
                 options,
