@@ -90,7 +90,7 @@
     let grooveCanvas: HTMLCanvasElement | undefined = $state();
     const CANVAS_W = 256;
 
-    // Histogram bars for the selected channel, log-scaled so faint tails show.
+    // Histogram bars for the selected channel.
     $effect(() => {
         const cv = histCanvas;
         if (!cv) return;
@@ -99,13 +99,13 @@
         ctx.clearRect(0, 0, cv.width, cv.height);
         const bins = histogram;
         if (!bins || bins.length === 0) return;
-        const scaled = bins.map((c) => Math.log1p(c));
-        const max = Math.max(1, ...scaled);
+        // Linear scale (Krita's default) — raw counts, normalized to the peak.
+        const max = Math.max(1, ...bins);
         const h = cv.height;
         const n = bins.length;
         ctx.fillStyle = 'rgba(255,255,255,0.55)';
         for (let i = 0; i < n; i++) {
-            const bh = (scaled[i] / max) * h;
+            const bh = (bins[i] / max) * h;
             ctx.fillRect((i / n) * cv.width, h - bh, cv.width / n, bh);
         }
     });

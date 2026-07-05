@@ -140,8 +140,6 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: number, };
 
-export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, };
-
 export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
 
 export type PortDir = "Input" | "Output";
@@ -279,6 +277,8 @@ natural_range: [number, number] | null,
  */
 persist_in_thumbnail: boolean, };
 
+export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "levels", name: string, default: [number, number, number, number, number], } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, };
+
 export type NodeRegistration = { 
 /**
  * Unique identifier (e.g. "pen_input", "multiply").
@@ -366,7 +366,7 @@ export type FillBackgroundReq = { id: number, };
 
 export type FillBackgroundColorReq = { id: number, rgba: [number, number, number, number], };
 
-export type ParamValue = boolean | number | number | string | Array<[number, number]>;
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number];
 
 export type ParamInfo = { kind: string, name: string, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
 /**
@@ -397,11 +397,20 @@ export type GroupLayersReq = { ids: Array<number>, };
 
 export type GrowSelectionReq = { radius: number, };
 
+export type HistogramReq = { id: number, };
+
 export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 
 export type LayerKindTypeInfo = { type: string, displayName: string, };
 
 export type LayerTransformCapabilityReq = { id: number, };
+
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
 
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
@@ -454,13 +463,6 @@ pipeline: string,
  * uses.
  */
 params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
-
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
-/**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -719,7 +721,6 @@ export type RequestKind =
     | 'grow_selection'
     | 'has_floating'
     | 'has_pending_color_pick'
-    | 'has_pending_histogram'
     | 'has_selection'
     | 'histogram_result'
     | 'hit_test_vector_object'
@@ -898,7 +899,6 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'grow_selection',
     'has_floating',
     'has_pending_color_pick',
-    'has_pending_histogram',
     'has_selection',
     'histogram_result',
     'hit_test_vector_object',
@@ -1086,6 +1086,7 @@ export interface EngineApi {
     hasFloating(): Promise<boolean>;
     hasPendingColorPick(): Promise<boolean>;
     hasSelection(): Promise<boolean>;
+    histogramResult(req: HistogramReq): Promise<{ bytes: Uint8Array }>;
     hitTestVectorObject(req: HitTestVectorObjectReq): Promise<{ object: number }>;
     invertSelection(): void;
     isDirty(): Promise<boolean>;
@@ -1123,6 +1124,7 @@ export interface EngineApi {
     removeLayers(req: RemoveLayersReq): Promise<number>;
     removeMask(req: RemoveMaskReq): void;
     removeVeil(req: RemoveVeilReq): void;
+    requestHistogram(req: HistogramReq): void;
     rescaleImage(req: RescaleImageReq): void;
     resize(req: ResizeReq): void;
     resizeCanvasRect(req: ResizeCanvasRectReq): void;
@@ -1264,6 +1266,7 @@ export function makeApi(t: Transport): EngineApi {
         hasFloating: () => t.request('has_floating'),
         hasPendingColorPick: () => t.request('has_pending_color_pick'),
         hasSelection: () => t.request('has_selection'),
+        histogramResult: (req) => t.request('histogram_result', req),
         hitTestVectorObject: (req) => t.request('hit_test_vector_object', req),
         invertSelection: () => t.postFF('invert_selection'),
         isDirty: () => t.request('is_dirty'),
@@ -1301,6 +1304,7 @@ export function makeApi(t: Transport): EngineApi {
         removeLayers: (req) => t.request('remove_layers', req),
         removeMask: (req) => t.postFF('remove_mask', req),
         removeVeil: (req) => t.postFF('remove_veil', req),
+        requestHistogram: (req) => t.postFF('request_histogram', req),
         rescaleImage: (req) => t.postFF('rescale_image', req),
         resize: (req) => t.postFF('resize', req),
         resizeCanvasRect: (req) => t.postFF('resize_canvas_rect', req),
