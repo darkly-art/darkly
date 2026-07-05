@@ -1,7 +1,5 @@
 <script lang="ts">
-    import LeftSidebar from './ui/LeftSidebar.svelte';
-    import RightSidebar from './ui/RightSidebar.svelte';
-    import ToolOptionsBar from './ui/ToolOptionsBar.svelte';
+    import Workspace from './ui/workspace/Workspace.svelte';
     import Toast from './ui/Toast.svelte';
     import LoadErrorToast from './ui/LoadErrorToast.svelte';
     import PresetPicker from './ui/PresetPicker.svelte';
@@ -17,12 +15,13 @@
     import MenuBar from './ui/menu/MenuBar.svelte';
     import CommandPalette from './ui/menu/CommandPalette.svelte';
     import { menuBar } from './state/menuBar.svelte';
-    import TabStrip from './multi_tab/TabStrip.svelte';
-    import CanvasStack from './multi_tab/CanvasStack.svelte';
+    import CanvasOverlay from './multi_tab/CanvasOverlay.svelte';
     import { shell } from './multi_tab/shell.svelte';
     import { anyTabDirty } from './multi_tab/closeGuard.svelte';
     // Register all tools
     import './tools/index';
+    // Register dockable workspace panels (layers, properties)
+    import './ui/workspace/registerPanels';
 
     // Open the first tab synchronously before children render. Sidebars and
     // ToolOptionsBar read `app.<x>` (the active-instance proxy) during their
@@ -49,15 +48,12 @@
         <MenuBar />
     {/if}
     <div class="app-layout">
-        <LeftSidebar />
-        <div class="center-column">
-            <TabStrip />
-            <CanvasStack />
-            <ToolOptionsBar />
-        </div>
-        <RightSidebar />
+        <Workspace workspaceId={0} />
     </div>
 </div>
+<!-- The WebGPU canvases live here, mounted once, positioned over the Document
+     panel's placeholder wherever the user tiles it (see CanvasOverlay). -->
+<CanvasOverlay />
 <Toast />
 <LoadErrorToast />
 <PresetPicker />
@@ -94,11 +90,4 @@
         overflow: hidden;
     }
 
-    .center-column {
-        display: flex;
-        flex-direction: column;
-        flex: 1;
-        min-width: 0;
-        overflow: hidden;
-    }
 </style>

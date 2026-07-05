@@ -74,11 +74,13 @@
 </div>
 
 <style>
+    /* Fills the docking group's body: the tab bar supplies the title and the
+       group frame supplies the border, so this panel no longer imposes the
+       sidebar-stack chrome (border-top / max-height:50%) it once did. */
     .panel {
         display: flex;
         flex-direction: column;
-        border-top: 1px solid var(--bg-hover);
-        max-height: 50%;
+        flex: 1;
         min-height: 0;
         overflow-y: auto;
     }
