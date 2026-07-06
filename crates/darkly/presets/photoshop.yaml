@@ -62,6 +62,10 @@ hotkeys:
 mouse_clicks:
   # Photoshop's eyedropper modifier is Alt+drag (not Ctrl+drag).
   sampleColor: canvas@paint:alt+drag
+  # Clone Stamp set-source — Photoshop's canonical Alt+click to set the
+  # clone origin (same Alt modifier as the eyedropper). Brush-scoped so it
+  # out-ranks `sampleColor` only while the Clone brush is active.
+  setCloneSource: canvas@paint@clone:alt+drag
   # Photoshop uses Alt+click on a layer/mask thumbnail to isolate.
   isolateLayer:
     - layerThumb:alt+click

@@ -93,7 +93,7 @@ For a feature to count, it must be:
     - [x] Smudge
     - [x] Watercolor
     - [x] Liquify
-    - [ ] Clone
+    - [x] Clone
     - [x] Blur
     - [ ] Dodge/burn
     - [x] Calligraphy

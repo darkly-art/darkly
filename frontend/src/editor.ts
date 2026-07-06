@@ -10,6 +10,7 @@ import { createHandle } from './state/session';
 import { fontLibrary } from './state/font_library.svelte';
 import type { Engine } from './engine/protocol';
 import { setupColorPickerModifierTracking } from './tools/colorpicker_cursor';
+import { setupCloneSourceModifierTracking } from './tools/clone_source_cursor';
 import { autosave } from './state/autosave.svelte';
 import { recovery } from './state/recovery.svelte';
 
@@ -39,6 +40,11 @@ export async function ensureProcessInit(): Promise<void> {
     // as soon as the user holds the modifier with a paint tool active
     // (not just on pointerdown). Idempotent.
     setupColorPickerModifierTracking();
+
+    // Same for the Clone brush's set-source cursor — arms the crosshair
+    // when the clone brush is active and a source is needed / the modifier
+    // is held. Idempotent.
+    setupCloneSourceModifierTracking();
 
     // Autosave + crash recovery. `recovery.init()` registers this browser
     // session (heartbeat + clean-exit handler) and, if a prior session

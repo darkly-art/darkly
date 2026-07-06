@@ -140,9 +140,9 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: number, };
 
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
-
 export type PortDir = "Input" | "Output";
+
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -405,13 +405,6 @@ export type LayerKindTypeInfo = { type: string, displayName: string, };
 
 export type LayerTransformCapabilityReq = { id: number, };
 
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
-/**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
-
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
  * Effective editability — `false` when this node *or any ancestor*
@@ -463,6 +456,13 @@ pipeline: string,
  * uses.
  */
 params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
+
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -533,6 +533,8 @@ export type SelectionToMaskReq = { id: number, };
 export type SetBlendModeReq = { id: number, type_id: string, };
 
 export type SetBrushBlendModeReq = { mode: number, };
+
+export type SetCloneSourceReq = { x: number, y: number, };
 
 export type SetDocumentNameReq = { name: string, };
 
@@ -635,6 +637,7 @@ export type VoidTypeInfo = { type: string, displayName: string, params: Array<Pa
 captureKind: CaptureKind | null, };
 
 export type RequestKind =
+    | 'active_brush_needs_source'
     | 'add_filter'
     | 'add_group'
     | 'add_mask'
@@ -773,6 +776,7 @@ export type RequestKind =
     | 'selection_to_mask'
     | 'set_blend_mode'
     | 'set_brush_blend_mode'
+    | 'set_clone_source'
     | 'set_document_name'
     | 'set_group_collapsed'
     | 'set_group_passthrough'
@@ -813,6 +817,7 @@ export type RequestKind =
     ;
 
 export const REQUEST_KINDS: readonly RequestKind[] = [
+    'active_brush_needs_source',
     'add_filter',
     'add_group',
     'add_mask',
@@ -951,6 +956,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'selection_to_mask',
     'set_blend_mode',
     'set_brush_blend_mode',
+    'set_clone_source',
     'set_document_name',
     'set_group_collapsed',
     'set_group_passthrough',
@@ -999,6 +1005,7 @@ export interface Transport {
 
 /** Typed, per-kind engine surface. */
 export interface EngineApi {
+    activeBrushNeedsSource(): Promise<boolean>;
     addFilter(req: AddFilterReq): Promise<number | null>;
     addGroup(req: AddGroupReq): Promise<number>;
     addMask(req: AddMaskReq): void;
@@ -1137,6 +1144,7 @@ export interface EngineApi {
     selectionToMask(req: SelectionToMaskReq): void;
     setBlendMode(req: SetBlendModeReq): void;
     setBrushBlendMode(req: SetBrushBlendModeReq): void;
+    setCloneSource(req: SetCloneSourceReq): void;
     setDocumentName(req: SetDocumentNameReq): void;
     setGroupCollapsed(req: SetGroupCollapsedReq): void;
     setGroupPassthrough(req: SetGroupPassthroughReq): void;
@@ -1179,6 +1187,7 @@ export interface EngineApi {
 /** Build the typed client over a transport (in-process today, Tauri later). */
 export function makeApi(t: Transport): EngineApi {
     return {
+        activeBrushNeedsSource: () => t.request('active_brush_needs_source'),
         addFilter: (req) => t.request('add_filter', req),
         addGroup: (req) => t.request('add_group', req),
         addMask: (req) => t.postFF('add_mask', req),
@@ -1317,6 +1326,7 @@ export function makeApi(t: Transport): EngineApi {
         selectionToMask: (req) => t.postFF('selection_to_mask', req),
         setBlendMode: (req) => t.postFF('set_blend_mode', req),
         setBrushBlendMode: (req) => t.postFF('set_brush_blend_mode', req),
+        setCloneSource: (req) => t.postFF('set_clone_source', req),
         setDocumentName: (req) => t.postFF('set_document_name', req),
         setGroupCollapsed: (req) => t.postFF('set_group_collapsed', req),
         setGroupPassthrough: (req) => t.postFF('set_group_passthrough', req),

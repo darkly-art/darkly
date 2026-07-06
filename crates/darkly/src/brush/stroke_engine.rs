@@ -70,6 +70,16 @@ pub struct StrokeEngine {
     /// Stroke seed for deterministic per-dab randomness.  Passed to
     /// the runner so random nodes can generate independent sequences.
     stroke_seed: u32,
+
+    /// Clone set-source anchor (plane / canvas pixels), or `None` for a
+    /// non-clone brush. Combined with `clone_dest_anchor` into the
+    /// runner's [`CloneState`] each dab so the `clone_source` node's
+    /// anchor uniforms are seeded.
+    clone_source_anchor: Option<[f32; 2]>,
+    /// Destination anchor — the position of the stroke's first rendered
+    /// dab. Captured lazily in `place_dab` (the stabilizer offsets the
+    /// first dab, so raw engine input is wrong); reset on full re-render.
+    clone_dest_anchor: Option<[f32; 2]>,
 }
 
 impl StrokeEngine {
@@ -83,6 +93,7 @@ impl StrokeEngine {
         color: [f32; 4],
         spacing: SpacingConfig,
         stabilizer: Box<dyn StabilizerAlgorithm>,
+        clone_source_anchor: Option<[f32; 2]>,
     ) -> Self {
         let stroke_seed = web_time::SystemTime::now()
             .duration_since(web_time::SystemTime::UNIX_EPOCH)
@@ -103,6 +114,8 @@ impl StrokeEngine {
             last_dab_pos: None,
             dab_count: 0,
             stroke_seed,
+            clone_source_anchor,
+            clone_dest_anchor: None,
         }
     }
 
@@ -169,6 +182,9 @@ impl StrokeEngine {
         self.last_dab_size = [d, d];
         self.last_dab_pos = None;
         self.dab_count = 0;
+        // Recapture the destination anchor from the re-stabilized first
+        // dab on the next `place_dab`.
+        self.clone_dest_anchor = None;
         self.save_points.clear();
     }
 
@@ -346,6 +362,18 @@ impl StrokeEngine {
         // Interpolators leave it zero (they have no view of dab order); we
         // fill it here so smudge sees the correct smear-sample offset.
         dab_info.motion = self.next_dab_motion(dab_info.pos);
+
+        // Clone anchors: capture the destination at the first rendered
+        // dab (post-stabilization), then seed the runner's CloneState so
+        // the `clone_source` node's uniforms carry both anchors. No-op
+        // for non-clone brushes (`clone_source_anchor` is `None`).
+        if let Some(source_anchor) = self.clone_source_anchor {
+            let dest_anchor = *self.clone_dest_anchor.get_or_insert(dab_info.pos);
+            self.runner.set_clone_state(Some(super::eval::CloneState {
+                source_anchor,
+                dest_anchor,
+            }));
+        }
 
         self.runner.clear_slots();
         self.runner.seed_sensors(

@@ -4,6 +4,7 @@ import { buildChordIndex, resolveChord, type ChordEntry } from './hotkey_resolve
 import { canonicalModsFromEvent, substituteModInBinding } from './mods';
 import { app } from '../state/app.svelte';
 import { toolRegistry } from '../tools/registry';
+import { brushGraph } from '../state/brush_graph.svelte';
 
 /** Derive a canonical chord from a MouseEvent's modifier state.
  *  Format: sorted modifiers joined with '+', then the interaction type.
@@ -100,6 +101,14 @@ function activeToolGroup(): string | null {
     return toolRegistry.get(app.activeToolId)?.group ?? null;
 }
 
+/** Active brush name, lowercased, for the brush dimension of a chord
+ *  binding (`canvas@paint@clone:…`). Lowercasing keeps the binding string
+ *  case-insensitive against the brush's display name ("Clone" → "clone").
+ *  `null` when no named brush is active (a Custom edited graph). */
+function activeBrushName(): string | null {
+    return brushGraph.activeBrush?.toLowerCase() ?? null;
+}
+
 /** Look up a click on `(site, e)` and dispatch the bound action if any.
  *  Returns true if a binding existed and was dispatched. */
 export function dispatchClick(
@@ -111,7 +120,7 @@ export function dispatchClick(
     if (chord === 'click') return false; // plain click = component default
     const entries = clickIndex.get(chord);
     if (!entries) return false;
-    const resolved = resolveChord(entries, [{ name: site }], activeToolGroup());
+    const resolved = resolveChord(entries, [{ name: site }], activeToolGroup(), activeBrushName());
     if (!resolved) return false;
     actions.dispatch(resolved.entry.actionId, ctx);
     return true;
@@ -136,7 +145,7 @@ export function dispatchDrag(
     const chord = dragChord(e);
     const entries = clickIndex.get(chord);
     if (!entries) return false;
-    const resolved = resolveChord(entries, [{ name: site }], activeToolGroup());
+    const resolved = resolveChord(entries, [{ name: site }], activeToolGroup(), activeBrushName());
     if (!resolved) return false;
     const actionId = resolved.entry.actionId;
 

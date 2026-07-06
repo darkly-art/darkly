@@ -4,6 +4,7 @@ import { actions } from '../actions/registry';
 import { app } from '../state/app.svelte';
 import { activeSiteChain } from '../actions/active_site';
 import { toolRegistry } from '../tools/registry';
+import { brushGraph } from '../state/brush_graph.svelte';
 import { isEditableTarget } from '../lib/isEditableTarget';
 import {
     parseBinding,
@@ -77,7 +78,8 @@ export function registerHotkeys() {
 
             const chain = activeSiteChain();
             const toolGroup = toolRegistry.get(app.activeToolId)?.group ?? null;
-            const resolved = resolveChord(entries, chain, toolGroup);
+            const activeBrush = brushGraph.activeBrush?.toLowerCase() ?? null;
+            const resolved = resolveChord(entries, chain, toolGroup, activeBrush);
             if (!resolved) return;
             e.preventDefault();
             const ctx = resolved.site

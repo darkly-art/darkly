@@ -131,6 +131,16 @@ pub struct CompiledBrush {
     /// pipeline-build time; deduplicated by the compiler so two
     /// nodes sampling the same paper texture share one binding.
     pub graph_texture_names: Vec<String>,
+    /// `true` when a node in this graph (`clone_source`) requested the
+    /// frozen pre-stroke source snapshot via
+    /// [`CompileWgslCtx::request_source_texture`]. Drives three
+    /// consumers off one derived fact: `paint`'s `flush_dabs` binds the
+    /// snapshot at `@group(3)`, the engine skips creating a stroke with
+    /// no source set, and the frontend arms the set-source gesture. The
+    /// stroke shader declares the source binding; the preview shader
+    /// omits it (the `clone_source` preview body emits a neutral fill,
+    /// with no live snapshot to sample).
+    pub samples_source: bool,
 }
 
 impl std::fmt::Debug for CompiledBrush {
@@ -232,6 +242,10 @@ pub fn compile_brush_to_wgsl(
     // accumulator across the walk gives stable, dedup'd slot indices
     // so two nodes sampling the same paper share a binding.
     let graph_textures_cell: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+
+    // Flagged by `clone_source` through `CompileWgslCtx::request_source_texture`
+    // during the walk; read out onto `CompiledBrush::samples_source` after.
+    let samples_source_cell: std::cell::RefCell<bool> = std::cell::RefCell::new(false);
 
     // Track each output port's emitted expression so downstream nodes
     // can substitute.
@@ -337,6 +351,7 @@ pub fn compile_brush_to_wgsl(
             lut: lut.as_ref(),
             consumed_outputs,
             graph_textures: &graph_textures_cell,
+            samples_source: &samples_source_cell,
         };
 
         let result =
@@ -396,6 +411,7 @@ pub fn compile_brush_to_wgsl(
                 lut: lut.as_ref(),
                 consumed_outputs: preview_consumed,
                 graph_textures: &graph_textures_cell,
+                samples_source: &samples_source_cell,
             };
             let preview_result = evaluator
                 .compile_cursor_preview_body(&preview_cctx)
@@ -459,6 +475,31 @@ pub fn compile_brush_to_wgsl(
     let stroke_body = format!("{shared_body}{stroke_terminal_body}");
     let preview_body = format!("{shared_body}{preview_terminal_body}");
     let graph_texture_names = graph_textures_cell.into_inner();
+    let samples_source = samples_source_cell.into_inner();
+    // A source-sampling node (`clone_source`) owns `@group(3)` for the
+    // frozen pre-stroke snapshot, the same slot named graph textures and
+    // terminal-owned bindings use. Reject either combination now so the
+    // failure mode is "brush won't load" rather than a runtime binding
+    // mismatch; today `clone.yaml` uses neither, and the slot the source
+    // reserves is always 0.
+    if samples_source && !graph_texture_names.is_empty() {
+        return Err(CompileError::NodeNotCompilable {
+            type_id: "clone_source".into(),
+            reason: format!(
+                "graph combines a source-sampling node with `image` graph textures \
+                 ({}); this combination is not yet supported",
+                graph_texture_names.join(", ")
+            ),
+        });
+    }
+    if samples_source && !terminal_bindings.is_empty() {
+        return Err(CompileError::NodeNotCompilable {
+            type_id: "clone_source".into(),
+            reason: "graph combines a source-sampling node with a terminal that owns \
+                     @group(3) bindings; this combination is not yet supported"
+                .into(),
+        });
+    }
     // `@group(3)` collision check. Terminal `terminal_bindings`
     // (e.g. watercolor's pickup atlas) and the `image` node's
     // graph textures both target group 3 — the highest slot WebGPU's
@@ -486,6 +527,7 @@ pub fn compile_brush_to_wgsl(
         &stroke_body,
         &terminal_bindings,
         &graph_texture_names,
+        samples_source,
     );
     let cursor_preview_wgsl = assemble_shader(
         ShaderMode::CursorPreview,
@@ -495,6 +537,7 @@ pub fn compile_brush_to_wgsl(
         &preview_body,
         "",
         &graph_texture_names,
+        samples_source,
     );
 
     // Topology hash: stable across runs (uses DefaultHasher; if process
@@ -515,6 +558,7 @@ pub fn compile_brush_to_wgsl(
         brush_extent_factor,
         brush_extent_extra_px,
         graph_texture_names,
+        samples_source,
     })
 }
 
@@ -683,6 +727,16 @@ pub fn render_compiled_cursor_preview(
     Some(())
 }
 
+/// Emit a `textureSample` against a `@group(3)` graph texture, addressed
+/// by its slot index (see [`assemble_shader`]'s group-3 layout: shared
+/// sampler `graph_smp` at binding 0, `graph_tex_{slot}` at binding
+/// `1 + slot`). Shared by the `image` node (named bundle textures) and
+/// the `clone_source` node (the frozen pre-stroke snapshot) so the
+/// binding-name convention lives in exactly one place.
+pub fn sample_graph_texture(slot: u32, uv_expr: &str) -> String {
+    format!("textureSample(graph_tex_{slot}, graph_smp, {uv_expr})")
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 /// Wire-boundary scalar remap, mirroring [`crate::brush::eval`]'s
@@ -773,6 +827,7 @@ fn hash_graph_topology(graph: &crate::nodegraph::Graph<BrushWireType>) -> u64 {
 
 // ── Shader assembly ─────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn assemble_shader(
     mode: ShaderMode,
     dab_fields: &[DabField],
@@ -781,6 +836,7 @@ fn assemble_shader(
     fs_body: &str,
     terminal_bindings: &str,
     graph_texture_names: &[String],
+    samples_source: bool,
 ) -> String {
     let mut out = String::new();
     // Shared canvas-window helpers (plane_to_selection_uv) — WGSL has no
@@ -847,13 +903,30 @@ fn assemble_shader(
     // their own `terminal_bindings` (pickup atlas). The compile walk
     // rejects graphs that try to claim both — see the early-return
     // check in [`compile_brush_to_wgsl`].
-    if !graph_texture_names.is_empty() {
+    //
+    // The frozen `clone_source` snapshot (`samples_source`) shares
+    // group 3, bound at the slot after any named textures. It is
+    // declared in *both* modes — the `clone_source` body is a single
+    // non-terminal contribution shared by the stroke and preview
+    // skeletons, so the binding must exist wherever that body samples.
+    // The stroke pipeline binds the live per-stroke snapshot; the
+    // preview pipeline binds the registry's `_fallback` tile (hover has
+    // no snapshot), giving a neutral cursor thumbnail.
+    let source_slot = graph_texture_names.len();
+    if !graph_texture_names.is_empty() || samples_source {
         out.push_str("@group(3) @binding(0) var graph_smp: sampler;\n");
         for (i, _) in graph_texture_names.iter().enumerate() {
             out.push_str(&format!(
                 "@group(3) @binding({}) var graph_tex_{}: texture_2d<f32>;\n",
                 1 + i,
                 i
+            ));
+        }
+        if samples_source {
+            out.push_str(&format!(
+                "@group(3) @binding({}) var graph_tex_{}: texture_2d<f32>;\n",
+                1 + source_slot,
+                source_slot
             ));
         }
     }

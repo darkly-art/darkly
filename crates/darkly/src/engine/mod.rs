@@ -470,6 +470,14 @@ pub struct DarklyEngine {
     /// Composite blend mode for the current stroke: 0 = paint, 1 = erase.
     pub(crate) brush_blend_mode: u32,
 
+    /// Clone-brush set-source anchor in plane / canvas pixels, or `None`
+    /// until the user sets it via the set-source gesture. Session state:
+    /// persists across strokes and across brush / tool switches (so the
+    /// source survives lifting the pen), but not across reload. A clone
+    /// brush with no anchor set paints nothing (the no-op gate in
+    /// `brush_stroke_to`).
+    pub(crate) clone_source_anchor: Option<crate::coord::CanvasPoint>,
+
     // --- Diff rect (undo region computation) ---
     pub(crate) diff_rect: DiffRectPass,
     pub(crate) pending_undo_commit: Option<PendingUndoCommit>,
@@ -639,6 +647,7 @@ impl DarklyEngine {
             checkpoint_ring: CheckpointRing::new(),
             stabilizer_registry: StabilizerRegistry::new(),
             brush_blend_mode: 0,
+            clone_source_anchor: None,
             diff_rect,
             pending_undo_commit: None,
             selection_pipelines,

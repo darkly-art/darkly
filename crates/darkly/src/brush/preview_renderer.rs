@@ -158,7 +158,15 @@ impl BrushStrokePreviewRenderer {
         // real stroke uses — so scrubbing the spacing slider actually moves
         // the dabs in the preview.
         let spacing = pen_input::spacing_config(graph);
-        let mut engine = StrokeEngine::new(runner, fg_color, spacing, Box::new(PassThrough::new()));
+        // No clone source in the editor preview — a clone brush renders
+        // its synthetic preview stroke without a set-source anchor.
+        let mut engine = StrokeEngine::new(
+            runner,
+            fg_color,
+            spacing,
+            Box::new(PassThrough::new()),
+            None,
+        );
 
         // Pre-cooked points: pass them through a pass-through stabilizer so
         // `render_from_stabilized_range_to` walks them verbatim. No

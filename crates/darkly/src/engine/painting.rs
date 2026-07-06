@@ -280,6 +280,40 @@ impl DarklyEngine {
         );
     }
 
+    // --- Clone brush set-source ---
+
+    /// Set the clone-brush source anchor from a plane / canvas-pixel
+    /// position (the set-source gesture). Persists as session state until
+    /// overwritten — surviving strokes and brush / tool switches so the
+    /// source stays put while the user paints. Rounded to whole pixels
+    /// (the snapshot is sampled at pixel resolution).
+    #[handler]
+    pub fn set_clone_source(&mut self, x: f32, y: f32) {
+        self.clone_source_anchor = Some(crate::coord::CanvasPoint::new(
+            x.round() as i32,
+            y.round() as i32,
+        ));
+    }
+
+    /// `true` when the active brush graph contains a `clone_source` node
+    /// — i.e. it needs a set-source anchor before it can paint. The
+    /// frontend polls this to arm the set-source gesture and show the
+    /// "set a source" hint. A structural graph check (no compile): the
+    /// `clone_source` node is exactly what sets `CompiledBrush::samples_source`.
+    #[handler]
+    pub fn active_brush_needs_source(&self) -> bool {
+        use crate::brush::state::BrushState;
+        let tool = self.tool_session.read();
+        let Some(brush) = tool.get::<BrushState>() else {
+            return false;
+        };
+        brush
+            .graph
+            .nodes()
+            .values()
+            .any(|n| n.type_id == crate::brush::nodes::clone_source::TYPE_ID)
+    }
+
     // --- Stroke lifecycle ---
     // The active node id directly identifies the paint target — for a mask
     // filter id, paint goes to the mask's R8 PixelBuffer; for a raster id,
@@ -790,6 +824,15 @@ impl DarklyEngine {
                 }
             };
 
+            // Clone no-op gate: a source-sampling brush with no set-source
+            // anchor has nothing to copy, so don't start a stroke at all
+            // (mirrors `begin_stroke`'s node-missing no-op). The frontend
+            // arms the set-source gesture and shows a hint in this state.
+            if runner.samples_source() && self.clone_source_anchor.is_none() {
+                return;
+            }
+            let clone_source_anchor = self.clone_source_anchor.map(|p| [p.x as f32, p.y as f32]);
+
             // Derive stabilizer from the pen_input node's "stabilize" port.
             let strength = self.pen_input_stabilize_strength();
             let stabilizer_config = if strength > 0.0 {
@@ -809,6 +852,7 @@ impl DarklyEngine {
                 color,
                 self.active_spacing_config(),
                 stabilizer,
+                clone_source_anchor,
             ));
 
             // Create the stroke buffer and save the pre-stroke snapshot.

@@ -135,6 +135,14 @@ pub struct CompileWgslCtx<'a> {
     /// `RefCell` so `compile_wgsl(&self)` can append without forcing
     /// a `&mut CompileWgslCtx` rewrite across every existing node.
     pub graph_textures: &'a RefCell<Vec<String>>,
+    /// Set to `true` by [`Self::request_source_texture`] when a node
+    /// (currently `clone_source`) asks to sample the frozen pre-stroke
+    /// snapshot at `@group(3)`. The compiler copies the final value onto
+    /// [`crate::brush::wgsl::CompiledBrush::samples_source`]; the terminal
+    /// pipeline (`paint`) reads it to bind the snapshot per flush, and the
+    /// engine reads it for the no-op / gesture-arming gate. `RefCell` for
+    /// the same `&self`-append reason as `graph_textures`.
+    pub samples_source: &'a RefCell<bool>,
 }
 
 impl CompileWgslCtx<'_> {
@@ -178,7 +186,7 @@ impl CompileWgslCtx<'_> {
         format!("n{}_{}", self.node_id.0, base)
     }
 
-    /// Reserve (or look up) a `@group(4)` binding slot for the named
+    /// Reserve (or look up) a `@group(3)` binding slot for the named
     /// graph texture. Returns the slot index — `0` for the first
     /// distinct texture in the graph, `1` for the second, and so on.
     /// Re-requesting the same name returns the existing slot.
@@ -196,6 +204,23 @@ impl CompileWgslCtx<'_> {
         let idx = list.len() as u32;
         list.push(name.to_string());
         idx
+    }
+
+    /// Reserve the `@group(3)` slot holding the frozen pre-stroke source
+    /// snapshot (the `clone_source` node's read texture) and flag the
+    /// compiled brush as source-sampling. Returns the slot index to
+    /// reference in emitted WGSL as `graph_tex_{slot}` (shared sampler
+    /// `graph_smp`), positioned after any named graph textures.
+    ///
+    /// Unlike [`Self::request_texture`], the source is not resolved
+    /// against the [`crate::gpu::texture_registry::TextureRegistry`] —
+    /// the terminal binds the live per-stroke snapshot view instead (see
+    /// `paint`'s `flush_dabs`). The compiler rejects graphs that combine
+    /// a source-sampling node with named graph textures, so the returned
+    /// slot is always `0` today.
+    pub fn request_source_texture(&self) -> u32 {
+        *self.samples_source.borrow_mut() = true;
+        self.graph_textures.borrow().len() as u32
     }
 }
 

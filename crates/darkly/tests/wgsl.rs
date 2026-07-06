@@ -513,3 +513,37 @@ fn paint_only_graph_falls_through_to_disc() {
         .stroke_wgsl
         .contains("vec4<f32>(1.0, 1.0, 1.0, 1.0)"));
 }
+
+/// The Clone builtin compiles to WGSL with `samples_source` set, the
+/// stroke shader declares the `@group(3)` source binding and calls the
+/// clone-sample helper, and the preview variant compiles too (it binds a
+/// fallback so it must still declare the source). Naga validation of the
+/// assembled shader happens when the pipeline builds — see `tests/clone.rs`.
+#[test]
+fn clone_brush_compiles_with_samples_source() {
+    let clone = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Clone")
+        .expect("Clone brush registered");
+    let reg = registry();
+    let plan = compile(&clone.metadata.graph, reg.as_map()).unwrap();
+    let compiled =
+        compile_brush_to_wgsl(&clone.metadata.graph, &plan, &evals()).expect("clone compiles");
+
+    assert!(compiled.samples_source, "clone must set samples_source");
+    assert!(
+        compiled.graph_texture_names.is_empty(),
+        "clone source is not a named registry texture"
+    );
+    // Stroke shader declares the @group(3) source texture and samples it.
+    assert!(compiled
+        .stroke_wgsl
+        .contains("@group(3) @binding(0) var graph_smp"));
+    assert!(compiled.stroke_wgsl.contains("graph_tex_0"));
+    assert!(compiled.stroke_wgsl.contains("fn clone_sample"));
+    // Preview declares the binding too (bound to the fallback tile).
+    assert!(compiled
+        .cursor_preview_wgsl
+        .contains("@group(3) @binding(0) var graph_smp"));
+    assert!(compiled.cursor_preview_wgsl.contains("fn clone_sample"));
+}

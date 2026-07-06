@@ -1,0 +1,30 @@
+name: Clone
+category: Retouch
+nodes:
+  1:
+    type: pen_input
+    port_defaults:
+      spacing: 0.05
+  2:
+    type: shape
+    port_defaults:
+      softness: 0.2
+  3:
+    type: clone_source
+  4:
+    type: stamp
+  5:
+    type: paint
+connections:
+- '1.position -> 3.center'
+- '1.position -> 5.position'
+- '1.pressure -> 5.size_input'
+- '2.mask -> 4.tip'
+- '3.color -> 4.color'
+- '4.dab -> 5.rgba'
+exposed_ports:
+  '1.spacing': {}
+  '5.size': {}
+  '5.opacity': {}
+  '3.angle': {}
+  '3.mode': {}
