@@ -9,6 +9,7 @@
     import ResizeCanvasModal from './ui/ResizeCanvasModal.svelte';
     import ImageRescaleModal from './ui/ImageRescaleModal.svelte';
     import SelectionModifyModal from './ui/SelectionModifyModal.svelte';
+    import FilterModal from './ui/filters/FilterModal.svelte';
     import ConfirmDiscardModal from './ui/ConfirmDiscardModal.svelte';
     import RecoveryModal from './ui/RecoveryModal.svelte';
     import AboutModal from './ui/AboutModal.svelte';
@@ -63,6 +64,7 @@
 <ResizeCanvasModal />
 <ImageRescaleModal />
 <SelectionModifyModal />
+<FilterModal />
 <ConfirmDiscardModal />
 <RecoveryModal />
 <AboutModal />

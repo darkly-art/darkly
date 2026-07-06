@@ -11,8 +11,8 @@
 //! [`CurveLut`](crate::brush::curve_math::CurveLut) natural-cubic spline (the
 //! same Krita algorithm the brush curve node uses).
 //!
-//! Curves is a thin provider over the shared [`LutFilter`] scaffold: it hands
-//! [`bake_lut`] eight per-channel spline evaluators and the shared code owns the
+//! Curves is a thin provider over the shared [`lut_param_filter`] scaffold: it
+//! hands [`bake_lut`] eight per-channel spline evaluators and the shared code owns the
 //! rest — the composite-over-channel fold, the HSV/Lab round trips gated by
 //! `_active` flags, and the whole GPU pipeline (see
 //! [`gpu::lut_filter`](crate::gpu::lut_filter) and `curves.wgsl`). Levels reuses
@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::brush::curve_math::CurveLut;
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
-use crate::gpu::lut_filter::{bake_lut, lut_shader_source, Baked, LutFilter};
+use crate::gpu::lut_filter::{bake_lut, lut_param_filter, lut_shader_source, Baked};
 use crate::gpu::params::{ParamDef, ParamValue};
 
 /// Identity curve — a straight line through the two endpoints.
@@ -86,7 +86,7 @@ fn build_lut(params: &[ParamValue]) -> Baked {
 }
 
 fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
-    Arc::new(LutFilter::new(device, &lut_shader_source(), build_lut))
+    Arc::new(lut_param_filter(device, &lut_shader_source(), build_lut))
 }
 
 pub fn register() -> FilterPipelineRegistration {

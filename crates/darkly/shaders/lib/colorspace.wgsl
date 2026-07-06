@@ -53,6 +53,119 @@ fn hsv_to_rgb(hsv: vec3f) -> vec3f {
     }
 }
 
+// --- HSL (Krita KoColorConversions RGBToHSL / HSLToRGB, "A Fast HSL-to-RGB
+//     Transform" by Ken Fishkin, Graphics Gems 1990) --------------------------
+
+// h in [0,360), s and l in [0,1]. Achromatic hue collapses to 0.
+fn rgb_to_hsl(c: vec3f) -> vec3f {
+    let v = max(c.r, max(c.g, c.b));
+    let m = min(c.r, min(c.g, c.b));
+    let l = (m + v) * 0.5;
+    if (l <= 0.0) { return vec3f(0.0, 0.0, 0.0); }
+    let vm = v - m;
+    if (vm <= 0.0) { return vec3f(0.0, 0.0, l); }
+    var s = vm;
+    if (l <= 0.5) { s /= (v + m); } else { s /= (2.0 - v - m); }
+    let r2 = (v - c.r) / vm;
+    let g2 = (v - c.g) / vm;
+    let b2 = (v - c.b) / vm;
+    var h: f32;
+    if (c.r == v) {
+        h = select(1.0 - g2, 5.0 + b2, c.g == m);
+    } else if (c.g == v) {
+        h = select(3.0 - b2, 1.0 + r2, c.b == m);
+    } else {
+        h = select(5.0 - r2, 3.0 + g2, c.r == m);
+    }
+    h *= 60.0;
+    h = h - floor(h / 360.0) * 360.0; // fmod into [0,360)
+    return vec3f(h, s, l);
+}
+
+fn hsl_to_rgb(hsl: vec3f) -> vec3f {
+    let sl = hsl.y;
+    let l = hsl.z;
+    let v = select(l + sl - l * sl, l * (1.0 + sl), l <= 0.5);
+    if (v <= 0.0) { return vec3f(0.0); }
+    let m = l + l - v;
+    let sv = (v - m) / v;
+    var h = hsl.x - floor(hsl.x / 360.0) * 360.0;
+    h /= 60.0;
+    let sextant = i32(floor(h));
+    let fr = h - f32(sextant);
+    let vsf = v * sv * fr;
+    let mid1 = m + vsf;
+    let mid2 = v - vsf;
+    switch (sextant) {
+        case 0: { return vec3f(v, mid1, m); }
+        case 1: { return vec3f(mid2, v, m); }
+        case 2: { return vec3f(m, v, mid1); }
+        case 3: { return vec3f(m, mid2, v); }
+        case 4: { return vec3f(mid1, m, v); }
+        default: { return vec3f(v, m, mid2); }
+    }
+}
+
+// --- HSY = HCY (Krita KoColorConversions RGBToHCY / HCYToRGB). "HSY" is Krita's
+//     name for luma-weighted HCY. Rec.601 luma weights (the same used by Krita's
+//     desaturate and colour maths). Hue is carried in [0,1) here. -------------
+
+const HCY_R: f32 = 0.299;
+const HCY_G: f32 = 0.587;
+const HCY_B: f32 = 0.114;
+
+// Returns h in [0,1), chroma in [0,1], luma y in [0,1].
+fn rgb_to_hsy(col: vec3f) -> vec3f {
+    let minval = min(col.r, min(col.g, col.b));
+    let maxval = max(col.r, max(col.g, col.b));
+    let luma = HCY_R * col.r + HCY_G * col.g + HCY_B * col.b;
+    let chroma = maxval - minval;
+    var hue = 0.0;
+    if (chroma > 0.0) {
+        if (maxval == col.r) {
+            hue = select((col.g - col.b) / chroma + 6.0, (col.g - col.b) / chroma, minval == col.b);
+        } else if (maxval == col.g) {
+            hue = (col.b - col.r) / chroma + 2.0;
+        } else {
+            hue = (col.r - col.g) / chroma + 4.0;
+        }
+        hue /= 6.0;
+    }
+    return vec3f(clamp(hue, 0.0, 1.0), max(chroma, 0.0), max(luma, 0.0));
+}
+
+// HCY → RGB, but with the requested chroma capped to the largest value that
+// keeps the luma-offset RGB inside [0,1] — so luma `y` is preserved *exactly*.
+// This deviates from Krita's HCYToRGB, which clamps out-of-gamut RGB to ≥0
+// post-hoc and thereby shifts luma; capping chroma instead is the defining
+// luma-preserving property of the HSY model (and of colorize).
+fn hsy_to_rgb(hcy: vec3f) -> vec3f {
+    let hue = fract(hcy.x); // wrap into [0,1)
+    let luma = clamp(hcy.z, 0.0, 1.0);
+    let h6 = hue * 6.0;
+    let f = 1.0 - abs((h6 - 2.0 * floor(h6 * 0.5)) - 1.0); // fmod(h6,2)
+    let sextant = i32(h6);
+    // Unit base: RGB at chroma = 1, before the luma offset.
+    var base = vec3f(0.0);
+    switch (sextant) {
+        case 0: { base = vec3f(1.0, f, 0.0); }
+        case 1: { base = vec3f(f, 1.0, 0.0); }
+        case 2: { base = vec3f(0.0, 1.0, f); }
+        case 3: { base = vec3f(0.0, f, 1.0); }
+        case 4: { base = vec3f(f, 0.0, 1.0); }
+        default: { base = vec3f(1.0, 0.0, f); }
+    }
+    let k = HCY_R * base.r + HCY_G * base.g + HCY_B * base.b;
+    let d = base - vec3f(k); // per-channel slope in chroma
+    // channel = d*c + luma; require 0 ≤ channel ≤ 1 on every channel.
+    var cmax = max(hcy.y, 0.0);
+    if (d.r > EPS) { cmax = min(cmax, (1.0 - luma) / d.r); } else if (d.r < -EPS) { cmax = min(cmax, -luma / d.r); }
+    if (d.g > EPS) { cmax = min(cmax, (1.0 - luma) / d.g); } else if (d.g < -EPS) { cmax = min(cmax, -luma / d.g); }
+    if (d.b > EPS) { cmax = min(cmax, (1.0 - luma) / d.b); } else if (d.b < -EPS) { cmax = min(cmax, -luma / d.b); }
+    let c = max(0.0, cmax);
+    return clamp(d * c + vec3f(luma), vec3f(0.0), vec3f(1.0));
+}
+
 // --- CIELAB (sRGB / D65) — Krita's "Lightness L*a*b*" channel -----------------
 
 fn srgb_to_linear(c: f32) -> f32 {

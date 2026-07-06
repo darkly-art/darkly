@@ -54,7 +54,7 @@ export type AddVeilReq = { veil_type: string, params: JsonValue, };
 
 export type AddVoidReq = { void_type: string, params: JsonValue, anchor: number | null, };
 
-export type ApplyFilterReq = { node_id: number, filter_type: string, };
+export type ApplyFilterReq = { node_id: number, filter_type: string, params: JsonValue, };
 
 export type ApplyMaskReq = { id: number, };
 
@@ -139,10 +139,6 @@ export type BrushInfo = { name: string, category: string, author: string, descri
 export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: number, };
-
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
-
-export type PortDir = "Input" | "Output";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -277,6 +273,10 @@ natural_range: [number, number] | null,
  */
 persist_in_thumbnail: boolean, };
 
+export type PortDir = "Input" | "Output";
+
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
+
 export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "levels", name: string, default: [number, number, number, number, number], } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, };
 
 export type NodeRegistration = { 
@@ -366,14 +366,14 @@ export type FillBackgroundReq = { id: number, };
 
 export type FillBackgroundColorReq = { id: number, rgba: [number, number, number, number], };
 
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number];
-
 export type ParamInfo = { kind: string, name: string, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
 /**
  * Enum: `["Label1", "Label2", ...]`.
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
 options: JsonValue | null, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number];
 
 export type VeilTypeInfo = { type: string, displayName: string, params: Array<ParamInfo>, };
 
@@ -535,6 +535,8 @@ export type SetBlendModeReq = { id: number, type_id: string, };
 export type SetBrushBlendModeReq = { mode: number, };
 
 export type SetDocumentNameReq = { name: string, };
+
+export type SetFilterParamsReq = { id: number, params: JsonValue, };
 
 export type SetGroupCollapsedReq = { id: number, collapsed: boolean, };
 
@@ -761,6 +763,7 @@ export type RequestKind =
     | 'remove_mask'
     | 'remove_veil'
     | 'request_histogram'
+    | 'request_node_histogram'
     | 'rescale_image'
     | 'resize'
     | 'resize_canvas_rect'
@@ -774,6 +777,7 @@ export type RequestKind =
     | 'set_blend_mode'
     | 'set_brush_blend_mode'
     | 'set_document_name'
+    | 'set_filter_params'
     | 'set_group_collapsed'
     | 'set_group_passthrough'
     | 'set_isolated_node'
@@ -939,6 +943,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'remove_mask',
     'remove_veil',
     'request_histogram',
+    'request_node_histogram',
     'rescale_image',
     'resize',
     'resize_canvas_rect',
@@ -952,6 +957,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_blend_mode',
     'set_brush_blend_mode',
     'set_document_name',
+    'set_filter_params',
     'set_group_collapsed',
     'set_group_passthrough',
     'set_isolated_node',
@@ -1125,6 +1131,7 @@ export interface EngineApi {
     removeMask(req: RemoveMaskReq): void;
     removeVeil(req: RemoveVeilReq): void;
     requestHistogram(req: HistogramReq): void;
+    requestNodeHistogram(req: HistogramReq): void;
     rescaleImage(req: RescaleImageReq): void;
     resize(req: ResizeReq): void;
     resizeCanvasRect(req: ResizeCanvasRectReq): void;
@@ -1138,6 +1145,7 @@ export interface EngineApi {
     setBlendMode(req: SetBlendModeReq): void;
     setBrushBlendMode(req: SetBrushBlendModeReq): void;
     setDocumentName(req: SetDocumentNameReq): void;
+    setFilterParams(req: SetFilterParamsReq): void;
     setGroupCollapsed(req: SetGroupCollapsedReq): void;
     setGroupPassthrough(req: SetGroupPassthroughReq): void;
     setIsolatedNode(req: SetIsolatedNodeReq): void;
@@ -1305,6 +1313,7 @@ export function makeApi(t: Transport): EngineApi {
         removeMask: (req) => t.postFF('remove_mask', req),
         removeVeil: (req) => t.postFF('remove_veil', req),
         requestHistogram: (req) => t.postFF('request_histogram', req),
+        requestNodeHistogram: (req) => t.postFF('request_node_histogram', req),
         rescaleImage: (req) => t.postFF('rescale_image', req),
         resize: (req) => t.postFF('resize', req),
         resizeCanvasRect: (req) => t.postFF('resize_canvas_rect', req),
@@ -1318,6 +1327,7 @@ export function makeApi(t: Transport): EngineApi {
         setBlendMode: (req) => t.postFF('set_blend_mode', req),
         setBrushBlendMode: (req) => t.postFF('set_brush_blend_mode', req),
         setDocumentName: (req) => t.postFF('set_document_name', req),
+        setFilterParams: (req) => t.postFF('set_filter_params', req),
         setGroupCollapsed: (req) => t.postFF('set_group_collapsed', req),
         setGroupPassthrough: (req) => t.postFF('set_group_passthrough', req),
         setIsolatedNode: (req) => t.postFF('set_isolated_node', req),

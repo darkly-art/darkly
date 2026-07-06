@@ -14,7 +14,9 @@ use darkly_macros::handlers;
 use super::super::rendering::commit_undo_region;
 use super::super::{DarklyEngine, PendingFilter};
 use crate::coord::WindowRect;
+use crate::engine::protocol::{params_from_json, RawParams};
 use crate::engine::types::{ParamInfo, VeilTypeInfo};
+use crate::gpu::params::ParamValue;
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
@@ -43,28 +45,38 @@ impl DarklyEngine {
             .collect()
     }
 
-    /// Apply a destructive filter (by registered `filter_type` id) to
-    /// the given node (raster layer or mask filter). Returns `false` if the
-    /// node isn't editable, has no texture, the type is unknown, or the
-    /// filter was deferred waiting on the selection cache.
+    /// Wire entry for `apply_filter` — coerces `params` against the filter
+    /// type's schema (defaults fill any omitted values), then
+    /// [`Self::apply_filter_typed`]. Parameter-free filters (invert) carry an
+    /// empty `params`; parametric ones (curves/levels/hsv) carry the values the
+    /// destructive modal authored.
     #[handler]
-    pub fn apply_filter(&mut self, node_id: LayerId, filter_type: &str) -> bool {
+    pub fn apply_filter(
+        &mut self,
+        node_id: LayerId,
+        filter_type: String,
+        params: RawParams,
+    ) -> bool {
+        let pv = params_from_json(&params.0, self.filter_param_defs(&filter_type));
+        self.apply_filter_typed(node_id, &filter_type, pv)
+    }
+
+    /// Apply a destructive filter (by registered `filter_type` id) to the given
+    /// node (raster layer or mask filter) with typed `params`. Returns `false`
+    /// if the node isn't editable, has no texture, the type is unknown, or the
+    /// filter was deferred waiting on the selection cache. Parametric filters
+    /// bake `params` into a throwaway cache inside `filter_node_region`, exactly
+    /// as the filter-layer compose path does.
+    pub fn apply_filter_typed(
+        &mut self,
+        node_id: LayerId,
+        filter_type: &str,
+        params: Vec<ParamValue>,
+    ) -> bool {
         if !self.doc.is_node_editable(node_id) {
             return false;
         }
         if !self.compositor.filter_pipeline_registry().has(filter_type) {
-            return false;
-        }
-        // Parametric filters (curves, …) are non-destructive-only: the
-        // one-click destructive path has no UI to author their params, so it
-        // would bake an identity no-op. Keep them out of it — they're used
-        // exclusively as filter *layers*.
-        if !self
-            .compositor
-            .filter_pipeline_registry()
-            .params(filter_type)
-            .is_empty()
-        {
             return false;
         }
         self.auto_commit_floating();
@@ -96,6 +108,7 @@ impl DarklyEngine {
                             self.pending_filter = Some(PendingFilter {
                                 node_id,
                                 filter_type: filter_type.to_string(),
+                                params,
                             });
                             self.kick_selection_readback();
                             return false;
@@ -168,6 +181,7 @@ impl DarklyEngine {
                 region,
                 mask_view.as_ref(),
                 pipeline.as_ref(),
+                &params,
             );
         });
 

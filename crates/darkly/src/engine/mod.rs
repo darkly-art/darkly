@@ -88,6 +88,7 @@ pub(crate) struct PendingFlip {
 pub(crate) struct PendingFilter {
     pub node_id: LayerId,
     pub filter_type: String,
+    pub params: Vec<crate::gpu::params::ParamValue>,
 }
 
 /// Deferred copy/cut — waiting for selection CPU cache to be populated.

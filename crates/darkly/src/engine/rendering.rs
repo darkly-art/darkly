@@ -416,7 +416,7 @@ impl DarklyEngine {
                         self.flip_node(pf.node_id, pf.xform);
                     }
                     if let Some(pa) = self.pending_filter.take() {
-                        self.apply_filter(pa.node_id, &pa.filter_type);
+                        self.apply_filter_typed(pa.node_id, &pa.filter_type, pa.params);
                     }
                 }
             }
@@ -569,6 +569,14 @@ impl DarklyEngine {
         self.compositor.set_histogram_target(target);
     }
 
+    /// Select a node whose own texture is histogrammed (the destructive Levels
+    /// modal's backdrop), or `None` to stop. The dispatch is pumped in
+    /// [`render`](Self::render); the result reads back via [`histogram`](Self::histogram)
+    /// under the same node id.
+    pub fn set_node_histogram_target(&mut self, target: Option<LayerId>) {
+        self.compositor.set_node_histogram_target(target);
+    }
+
     /// The cached 8×256 histogram bytes (channel-major `u32` LE) for a layer, or
     /// an empty vec while the readback is pending.
     pub fn histogram(&self, layer_id: LayerId) -> Vec<u8> {
@@ -623,6 +631,12 @@ impl DarklyEngine {
         // production frame loop does.
         self.drain_dirty_thumbnail_readbacks();
         let thumb_us = t_thumb.elapsed().as_micros() as u64;
+
+        // Dispatch the node-histogram (destructive Levels modal) if one is
+        // wanted. Self-submitting and `needs`-guarded, so it runs regardless of
+        // compose gating and re-dispatches only when the cache is empty.
+        self.compositor
+            .pump_node_histogram(&self.gpu.device, &self.gpu.queue);
 
         // Headless mode (tests): poll pending ops but skip presentation.
         let (surface, surface_config) = match (&self.gpu.surface, &self.gpu.surface_config) {
