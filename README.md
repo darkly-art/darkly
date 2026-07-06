@@ -166,6 +166,7 @@ For a feature to count, it must be:
 - [x] Void layers
 - [x] Camera void
 - [x] Screenshare void
+- [x] Blender camera stream void
 - [x] Group blend mode / opacity
 - [x] Dockable / tiled panels (drag to reorder, tab, split-dock)
 - [x] Pop out panels into separate OS windows (cross-window drag)

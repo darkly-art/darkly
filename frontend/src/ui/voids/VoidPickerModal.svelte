@@ -4,7 +4,7 @@
     import EffectPreview from '../EffectPreview.svelte';
     import Icon from '../../icons/Icon.svelte';
     import { voidShowsPreview } from '../preview_frames';
-    import type { CaptureKind } from '../../lib/mediaStreamSource';
+    import type { CaptureKind } from '../../lib/frameSource';
 
     let { onclose }: { onclose: () => void } = $props();
 
@@ -32,16 +32,18 @@
 
     async function pick(vt: any) {
         if (!app.engine) return;
-        // For stream-backed voids (camera / screenshare), acquire the
+        // For MediaStream-backed voids (camera / screenshare), acquire the
         // MediaStream IN this click gesture, BEFORE the awaitable `add_void`
         // round-trip. `getDisplayMedia` requires transient user activation,
         // which would expire if we acquired only after awaiting add_void. If
         // the user cancels / denies, we still create the layer and record the
-        // error so the properties panel can offer Resume.
+        // error so the properties panel can offer Resume. A `stream` void
+        // (Blender) needs no gesture or permission — it connects over localhost
+        // HTTP after the layer exists — so skip acquisition entirely.
         const captureKind: CaptureKind | undefined = vt.captureKind;
         let stream: MediaStream | undefined;
         let acquireError: unknown;
-        if (captureKind) {
+        if (captureKind === 'camera' || captureKind === 'display') {
             try {
                 stream = await app.acquireMediaStream(captureKind);
             } catch (err) {
@@ -66,8 +68,8 @@
             // a saved doc does NOT add to this set, which is why loaded
             // stream voids hold their saved frame until the user clicks Resume.
             if (captureKind) {
-                app.markMediaStreamVoidStarted(id);
-                await app.startMediaStreamVoid(id, captureKind, stream, acquireError);
+                app.markStreamVoidStarted(id);
+                await app.startStreamSource(id, captureKind, stream, acquireError);
             }
         } else if (stream) {
             // Layer creation failed but we acquired a stream — release it so the
