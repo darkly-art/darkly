@@ -91,6 +91,21 @@ pub(crate) struct PendingFilter {
     pub params: Vec<crate::gpu::params::ParamValue>,
 }
 
+/// A live destructive-filter preview session (the non-dimming modal). Holds the
+/// pristine "before" pixels of the affected region so each param edit can
+/// restore-then-refilter, and cancel/commit can restore the true original. See
+/// [`DarklyEngine::preview_filter`].
+pub(crate) struct FilterPreview {
+    pub node_id: LayerId,
+    pub filter_type: String,
+    /// The region being previewed (canvas coords), clipped to the node + selection.
+    pub region: crate::coord::CanvasRect,
+    /// Region-sized copy of the node's pristine pixels.
+    pub snapshot: wgpu::Texture,
+    /// Region-sized R8 selection mask, when a selection was active at begin.
+    pub mask: Option<wgpu::Texture>,
+}
+
 /// Deferred copy/cut — waiting for selection CPU cache to be populated.
 pub(crate) struct PendingCopy {
     pub layer_id: LayerId,
@@ -489,6 +504,8 @@ pub struct DarklyEngine {
     pub(crate) pending_flip: Option<PendingFlip>,
     /// Pending destructive filter waiting for the selection CPU cache.
     pub(crate) pending_filter: Option<PendingFilter>,
+    /// Active live destructive-filter preview (the non-dimming modal), if any.
+    pub(crate) filter_preview: Option<FilterPreview>,
     /// Pending copy/cut waiting for selection CPU cache.
     pub(crate) pending_copy: Option<PendingCopy>,
 
@@ -646,6 +663,7 @@ impl DarklyEngine {
             pending_transform: None,
             pending_flip: None,
             pending_filter: None,
+            filter_preview: None,
             pending_copy: None,
             readbacks: ReadbackScheduler::new(),
             pending_copy_result: None,

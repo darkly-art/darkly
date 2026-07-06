@@ -894,6 +894,83 @@ fn destructive_hsv_with_selection_only_touches_selection() {
     assert_destructive_selection("hsv", hsv_params(0, 120.0, 0.0, 0.0, false));
 }
 
+// ---- Live preview session (the non-dimming modal) --------------------------
+//
+// The modal previews a destructive filter non-destructively (`preview_filter`)
+// before committing (`commit_filter_preview`) or discarding (`cancel_filter_preview`).
+// These pin: a committed preview equals a direct apply; a cancelled preview
+// restores the pristine pixels exactly; and preview honors the selection shape.
+
+#[test]
+fn preview_then_commit_matches_direct_apply() {
+    let (w, h) = (8u32, 8u32);
+    let params = hsv_params(0, 120.0, 30.0, 0.0, false);
+
+    // Direct one-shot apply.
+    let mut e1 = test_engine(w, h);
+    let l1 = e1.paste_image(w, h, &solid_rgba(w, h, [200, 100, 50, 255]), 0, 0, None);
+    assert!(e1.apply_filter_typed(l1, "hsv", params.clone()));
+    let direct = e1.test_readback_layer(l1);
+
+    // Preview (twice, to exercise restore-then-refilter) then commit.
+    let mut e2 = test_engine(w, h);
+    let l2 = e2.paste_image(w, h, &solid_rgba(w, h, [200, 100, 50, 255]), 0, 0, None);
+    assert!(e2.preview_filter_typed(l2, "hsv", hsv_params(0, 40.0, 0.0, 0.0, false)));
+    assert!(e2.preview_filter_typed(l2, "hsv", params.clone()));
+    assert!(e2.commit_filter_preview_typed(l2, "hsv", params));
+    assert_eq!(
+        e2.test_readback_layer(l2),
+        direct,
+        "a committed preview must equal a direct apply"
+    );
+}
+
+#[test]
+fn preview_then_cancel_restores_pristine() {
+    let (w, h) = (8u32, 8u32);
+    let mut e = test_engine(w, h);
+    let layer = e.paste_image(w, h, &solid_rgba(w, h, [200, 100, 50, 255]), 0, 0, None);
+    let before = e.test_readback_layer(layer);
+
+    assert!(e.preview_filter_typed(layer, "hsv", hsv_params(0, 120.0, -40.0, 20.0, false)));
+    assert_ne!(
+        e.test_readback_layer(layer),
+        before,
+        "an active preview must change the pixels"
+    );
+
+    e.cancel_filter_preview();
+    assert_eq!(
+        e.test_readback_layer(layer),
+        before,
+        "cancelling the preview must restore the pristine pixels exactly"
+    );
+}
+
+#[test]
+fn preview_with_selection_only_touches_selection() {
+    let (w, h) = (12u32, 12u32);
+    let mut e = test_engine(w, h);
+    let layer = e.paste_image(w, h, &solid_rgba(w, h, [200, 100, 50, 255]), 0, 0, None);
+    let before = e.test_readback_layer(layer);
+
+    e.select_rect(3.0, 3.0, 5.0, 5.0, SelectionMode::Replace, false, 0.0);
+    assert!(e.preview_filter_typed(layer, "hsv", hsv_params(0, 120.0, 0.0, 0.0, false)));
+    let previewed = e.test_readback_layer(layer);
+
+    // Selected pixel changed; unselected pixels untouched — preview clips too.
+    assert_ne!(px(&previewed, w, 5, 5), px(&before, w, 5, 5));
+    assert_eq!(px(&previewed, w, 0, 0), px(&before, w, 0, 0));
+    assert_eq!(px(&previewed, w, 10, 10), px(&before, w, 10, 10));
+
+    e.cancel_filter_preview();
+    assert_eq!(
+        e.test_readback_layer(layer),
+        before,
+        "cancel restores the layer"
+    );
+}
+
 // ---- HSV GPU correctness ---------------------------------------------------
 //
 // Pin the four HSV modes against Krita's `hsvadjustment`: identity is a no-op,

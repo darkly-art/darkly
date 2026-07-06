@@ -64,7 +64,6 @@
 <style>
     .veil-folder {
         background: color-mix(in srgb, var(--accent) 8%, transparent);
-        border-left: 3px solid var(--accent);
     }
 
     .folder-header {

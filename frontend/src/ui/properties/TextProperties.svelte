@@ -423,7 +423,7 @@
                     value={rgbaToHex(block.color)}
                     onchange={(hex) => {
                         const rgb = hexToRgb(hex);
-                        if (rgb) onStyle({ color: [rgb[0], rgb[1], rgb[2], block.color[3]] });
+                        if (rgb && block) onStyle({ color: [rgb[0], rgb[1], rgb[2], block.color[3]] });
                     }}
                 />
             </label>

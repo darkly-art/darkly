@@ -36,7 +36,7 @@
             ...rest,
         };
         if (cls) props.class = cls;
-        return generateIcon(props as Parameters<typeof generateIcon>[0]);
+        return generateIcon(props as unknown as Parameters<typeof generateIcon>[0]);
     });
 
     // Catch-all for nonexistent / mistyped names that slip past the build-time

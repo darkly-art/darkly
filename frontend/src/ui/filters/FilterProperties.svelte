@@ -25,13 +25,13 @@
         const engine = app.engine;
         const id = filterId;
         if (!engine || !showsLevels) return;
-        engine.post('request_histogram', { id });
+        engine.api.requestHistogram({ id });
         let stopped = false;
         let timer: ReturnType<typeof setTimeout> | undefined;
         const poll = () => {
             if (stopped) return;
-            engine
-                .send<{ bytes: Uint8Array }>('histogram_result', { id })
+            engine.api
+                .histogramResult({ id })
                 .then(({ bytes }) => {
                     if (stopped) return;
                     if (bytes && bytes.length >= 8 * HIST_BINS * 4) {
@@ -49,7 +49,7 @@
             stopped = true;
             if (timer !== undefined) clearTimeout(timer);
             histogramBins = null;
-            engine.post('request_histogram', { id: -1 });
+            engine.api.requestHistogram({ id: -1 });
         };
     });
 
@@ -58,7 +58,7 @@
     // churned; the editor holds its own drag state either way).
     function pushParams(refresh: boolean) {
         if (!app.engine) return;
-        app.engine.api.updateFilterParams({ id: node.id, params: filterParamMap(node.params) });
+        app.engine.api.setFilterParams({ id: node.id, params: filterParamMap(node.params) });
         if (refresh) app.refreshLayerTree();
         app.requestFrame();
     }

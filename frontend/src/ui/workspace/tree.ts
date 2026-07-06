@@ -57,7 +57,7 @@ export const MIN_PANEL_PX = 80;
 /** Root-row share given to the canvas (`document`) in the default layout; the
  *  rest goes to the (deliberately narrow) Layers/Properties column. Mirrors
  *  Graphite's `DOCUMENT_PANEL_SHARE`. */
-const DOCUMENT_SHARE = 0.80;
+const DOCUMENT_SHARE = 0.75;
 
 // ---------------------------------------------------------------------------
 // Construction helpers

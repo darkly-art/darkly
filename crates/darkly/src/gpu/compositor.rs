@@ -1601,6 +1601,111 @@ impl Compositor {
         }
     }
 
+    /// Copy a node's `region` (canvas coords) into a fresh region-sized texture —
+    /// the pristine "before" for a live filter preview. Returns the snapshot and
+    /// the clipped region actually captured, or `None` if the node has no texture
+    /// or the region doesn't overlap it.
+    pub fn snapshot_node_region(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        node_id: LayerId,
+        region: CanvasRect,
+    ) -> Option<(wgpu::Texture, CanvasRect)> {
+        let tex = self.node_textures.get(&node_id)?;
+        let extent = tex.canvas_extent();
+        let region = extent.intersect(region)?;
+        if region.width == 0 || region.height == 0 {
+            return None;
+        }
+        let snap = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("filter-preview-snapshot"),
+            size: wgpu::Extent3d {
+                width: region.width,
+                height: region.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: tex.format(),
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let lx = (region.origin.x - extent.origin.x) as u32;
+        let ly = (region.origin.y - extent.origin.y) as u32;
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("filter-preview-save"),
+        });
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: tex.texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: lx, y: ly, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &snap,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: region.width,
+                height: region.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(Some(encoder.finish()));
+        Some((snap, region))
+    }
+
+    /// Copy a previously [snapshotted](Self::snapshot_node_region) region back
+    /// into the node — undo a live preview so a fresh set of params (or a
+    /// cancel) starts from the pristine pixels.
+    pub fn restore_node_region(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        node_id: LayerId,
+        region: CanvasRect,
+        snapshot: &wgpu::Texture,
+    ) {
+        {
+            let Some(tex) = self.node_textures.get(&node_id) else {
+                return;
+            };
+            let extent = tex.canvas_extent();
+            let lx = (region.origin.x - extent.origin.x) as u32;
+            let ly = (region.origin.y - extent.origin.y) as u32;
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("filter-preview-restore"),
+            });
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: snapshot,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: tex.texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: lx, y: ly, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: region.width,
+                    height: region.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            queue.submit(Some(encoder.finish()));
+        }
+        self.mark_node_pixels_dirty(node_id);
+        self.mark_dirty();
+    }
+
     /// Ensure a non-passthrough group has GPU state allocated.
     /// Called when a group is created or switches from passthrough to normal.
     pub fn ensure_group_state(
