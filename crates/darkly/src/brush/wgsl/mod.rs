@@ -727,14 +727,22 @@ pub fn render_compiled_cursor_preview(
     Some(())
 }
 
-/// Emit a `textureSample` against a `@group(3)` graph texture, addressed
-/// by its slot index (see [`assemble_shader`]'s group-3 layout: shared
-/// sampler `graph_smp` at binding 0, `graph_tex_{slot}` at binding
-/// `1 + slot`). Shared by the `image` node (named bundle textures) and
-/// the `clone_source` node (the frozen pre-stroke snapshot) so the
-/// binding-name convention lives in exactly one place.
+/// Emit a `textureSampleLevel` (explicit LOD 0) against a `@group(3)`
+/// graph texture, addressed by its slot index (see [`assemble_shader`]'s
+/// group-3 layout: shared sampler `graph_smp` at binding 0,
+/// `graph_tex_{slot}` at binding `1 + slot`). Shared by the `image` node
+/// (named bundle textures) and the `clone_source` node (the frozen
+/// pre-stroke snapshot) so the binding-name convention lives in one place.
+///
+/// `textureSampleLevel` (not `textureSample`) because graph textures and
+/// the source snapshot are all single-mip, so automatic-LOD derivatives
+/// buy nothing — and, crucially, an implicit-derivative `textureSample`
+/// may only be called from *uniform* control flow. The browser's WGSL
+/// validator rejects `clone_source`'s in-bounds branch around the sample
+/// otherwise (native naga is lenient; Dawn is not). Explicit LOD 0 is
+/// derivative-free and legal anywhere, with identical output.
 pub fn sample_graph_texture(slot: u32, uv_expr: &str) -> String {
-    format!("textureSample(graph_tex_{slot}, graph_smp, {uv_expr})")
+    format!("textureSampleLevel(graph_tex_{slot}, graph_smp, {uv_expr}, 0.0)")
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────

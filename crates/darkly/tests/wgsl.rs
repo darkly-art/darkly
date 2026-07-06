@@ -541,6 +541,19 @@ fn clone_brush_compiles_with_samples_source() {
         .contains("@group(3) @binding(0) var graph_smp"));
     assert!(compiled.stroke_wgsl.contains("graph_tex_0"));
     assert!(compiled.stroke_wgsl.contains("fn clone_sample"));
+    // Regression: the source sample sits behind a `uv`-dependent in-bounds
+    // branch (non-uniform control flow), so it must use derivative-free
+    // `textureSampleLevel`. `textureSample` computes implicit derivatives
+    // and is illegal in non-uniform control flow — native naga is lenient,
+    // but the browser's WGSL validator rejects it and the brush fails at
+    // pipeline-build time in-app.
+    assert!(
+        compiled
+            .stroke_wgsl
+            .contains("textureSampleLevel(graph_tex_0"),
+        "clone must sample with textureSampleLevel (derivative-free), not textureSample"
+    );
+    assert!(!compiled.stroke_wgsl.contains("textureSample(graph_tex_0"));
     // Preview declares the binding too (bound to the fallback tile).
     assert!(compiled
         .cursor_preview_wgsl
