@@ -3,19 +3,23 @@
  *
  * A [`FrameSource`](./frameSource.ts) whose frames arrive over a long-lived HTTP
  * response instead of a browser `MediaStream`. The companion Blender add-on
- * (`blender-addon/`) renders the active camera to an offscreen buffer, encodes
- * WebP-with-alpha, and serves frames on `GET <url>` as a single chunked
- * response. Each frame is **length-prefixed** on the wire —
- * `[4-byte big-endian length][WebP bytes]` — so this class reassembles whole
- * frames from the byte stream independent of HTTP chunk boundaries, stashing the
- * latest complete frame as a `Blob`.
+ * (`blender-addon/`) draws the active camera's viewport to an offscreen buffer,
+ * encodes an alpha-carrying still image (PNG today), and serves frames on
+ * `GET <url>` as a single chunked response. Each frame is **length-prefixed** on
+ * the wire — `[4-byte big-endian length][image bytes]` — so this class
+ * reassembles whole frames from the byte stream independent of HTTP chunk
+ * boundaries, stashing the latest complete frame as a `Blob`.
+ *
+ * The frame format is intentionally not baked in here: the blob carries no MIME
+ * type and `createImageBitmap` decodes by content-sniffing the bytes, so the
+ * add-on can switch codecs (PNG, WebP, …) without any frontend change.
  *
  * The shared base owns the per-`tick()` gate and the off-thread
  * `createImageBitmap → uploadVoidExternalImage` upload; `presentFrame()` hands it
- * the latest WebP blob with `{ premultiplyAlpha: 'none' }` so the browser keeps
- * the straight alpha Blender's WebP writer emits (see `docs`/plan "Alpha
- * correctness"). No user gesture or permission is needed for a localhost stream,
- * so unlike `MediaStreamSource` this connects immediately.
+ * the latest blob with `{ premultiplyAlpha: 'none' }` so the browser keeps the
+ * straight alpha the add-on emits (see `docs`/plan "Alpha correctness"). No user
+ * gesture or permission is needed for a localhost stream, so unlike
+ * `MediaStreamSource` this connects immediately.
  *
  * Sink-side dedup: a static camera produces identical frames, so the add-on only
  * pushes bytes on a real change. `hasNewFrame` flips true when a frame is parsed
@@ -35,7 +39,7 @@ export class HttpStreamSource extends FrameSource {
     /** Bytes received but not yet forming a complete frame — carried across
      *  `fetch` chunk boundaries. */
     private buffer = new Uint8Array(0);
-    /** Latest fully-received WebP frame, ready to decode. */
+    /** Latest fully-received encoded frame, ready to decode. */
     private latestFrame: Blob | null = null;
     /** True once a new frame has been parsed and not yet uploaded (dedup gate). */
     private hasNewFrame = false;
@@ -136,7 +140,9 @@ export class HttpStreamSource extends FrameSource {
             // `.slice` copies, so the Blob owns its bytes and the DataView above
             // always sees byteOffset 0 on the next iteration.
             const frameBytes = this.buffer.slice(4, 4 + len);
-            this.latestFrame = new Blob([frameBytes], { type: 'image/webp' });
+            // No MIME type: `createImageBitmap` decodes by sniffing the bytes, so
+            // this stays agnostic to whichever codec the add-on emits.
+            this.latestFrame = new Blob([frameBytes]);
             this.hasNewFrame = true;
             this.buffer = this.buffer.slice(4 + len);
         }
@@ -152,7 +158,7 @@ export class HttpStreamSource extends FrameSource {
         this.onEnded?.(this.layerId);
     }
 
-    /** The latest complete WebP frame, decoded with straight alpha preserved. */
+    /** The latest complete encoded frame, decoded with straight alpha preserved. */
     protected presentFrame(): PresentedFrame | null {
         if (!this.latestFrame) return null;
         return { source: this.latestFrame, options: { premultiplyAlpha: 'none' } };

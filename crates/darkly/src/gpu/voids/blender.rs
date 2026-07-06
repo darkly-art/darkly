@@ -54,7 +54,7 @@ const PARAMS: &[ParamDef] = &[
 static CONFIG: VideoStreamConfig = VideoStreamConfig {
     type_id: TYPE_ID,
     display_name: "Blender",
-    icon: "tabler:brand-blender",
+    icon: "file-icons:blender",
     params: PARAMS,
     capture_kind: CaptureKind::Stream,
     default_transform: |_, _| crate::transform::Transform::identity(),
