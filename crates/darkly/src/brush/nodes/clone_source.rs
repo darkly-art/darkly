@@ -23,12 +23,10 @@
 //! comes out neutral). The bind/sample plumbing is shared with `image`
 //! via [`crate::brush::wgsl::sample_graph_texture`].
 //!
-//! ## Two modes + rotation
+//! ## Two modes
 //!
-//! Per fragment the node computes `src = rotate(target_pos − center,
-//! angle) + center + offset` and samples the snapshot there. `center` is
-//! the per-dab pen position; `angle` is a wired/exposed scalar. `offset`
-//! is the clone offset:
+//! Per fragment the node computes `src = target_pos + offset` and samples
+//! the snapshot there. `offset` is the clone offset:
 //!
 //! - **Aligned** (`mode = 0`): `offset = source_anchor − dest_anchor` —
 //!   constant for the whole stroke, so the source tracks the cursor.
@@ -54,7 +52,7 @@ use crate::brush::wgsl::{
     sample_graph_texture, CompileWgslCtx, InputBinding, NodeWgsl, UniformField, WgslType,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
-use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
+use crate::nodegraph::{NodeRegistration, PortDef};
 
 pub const TYPE_ID: &str = "clone_source";
 
@@ -68,19 +66,12 @@ pub fn register() -> BrushNodeRegistration {
             ports: vec![
                 PortDef::input("center", BrushWireType::Vec2)
                     .with_description("Per-dab pen position in canvas pixels (wire Pen Input → Position)."),
-                PortDef::input("angle", BrushWireType::Scalar)
-                    .with_range(-std::f32::consts::PI, std::f32::consts::PI, 0.01)
-                    .with_label("Rotation")
-                    .with_icon("fa6-solid:rotate")
-                    .exposed()
-                    .with_description("Rotate the sampled patch around each dab centre (radians)."),
-                // Aligned (0) vs anchored (1). Exposed as a 0/1 toggle;
+                // Aligned (0) vs anchored (1). Exposed as a Bool toggle;
                 // read from the port default and baked into the WGSL
                 // offset expression at compile time.
-                PortDef::input("mode", BrushWireType::Scalar)
-                    .with_range(0.0, 1.0, 1.0)
-                    .with_natural_range(0.0, 1.0)
-                    .with_unit(UnitType::Percent)
+                PortDef::input("mode", BrushWireType::Bool)
+                    .with_range(0.0, 1.0, 0.0)
+                    .with_step(1.0)
                     .with_label("Anchored")
                     .with_icon("fa6-solid:anchor")
                     .exposed()
@@ -163,7 +154,6 @@ impl BrushNodeEvaluator for CloneSourceEvaluator {
         }
 
         let center = cctx.input("center").as_vec2();
-        let angle = cctx.input("angle").as_f32();
         let offset = if mode_is_anchored(cctx) {
             // Anchored: source stays pinned regardless of cursor travel.
             format!("(u.{sa_field} - ({center}))")
@@ -175,16 +165,12 @@ impl BrushNodeEvaluator for CloneSourceEvaluator {
         // Helper function so the per-fragment math is emitted once. It
         // references the module-scope `u` uniform and the `@group(3)`
         // source texture directly. `tp` is the fragment's plane-space
-        // position; `center` the dab centre; both in canvas pixels.
+        // position in canvas pixels; `off` the clone offset.
         let fn_name = cctx.ident("clone_sample");
         let sample = sample_graph_texture(slot, "uv");
         wgsl.decls = format!(
-            "fn {fn_name}(tp: vec2<f32>, center: vec2<f32>, angle: f32, off: vec2<f32>) -> vec4<f32> {{\n\
-             \x20   let rel = tp - center;\n\
-             \x20   let c = cos(angle);\n\
-             \x20   let s = sin(angle);\n\
-             \x20   let rr = vec2<f32>(rel.x * c - rel.y * s, rel.x * s + rel.y * c);\n\
-             \x20   let src = rr + center + off;\n\
+            "fn {fn_name}(tp: vec2<f32>, off: vec2<f32>) -> vec4<f32> {{\n\
+             \x20   let src = tp + off;\n\
              \x20   let lo = vec2<f32>(f32(u.intrinsic.layer_offset.x), f32(u.intrinsic.layer_offset.y));\n\
              \x20   let lsz = vec2<f32>(f32(u.intrinsic.layer_size.x), f32(u.intrinsic.layer_size.y));\n\
              \x20   let uv = (src - lo) / lsz;\n\
@@ -195,8 +181,7 @@ impl BrushNodeEvaluator for CloneSourceEvaluator {
              }}\n"
         );
         let out = cctx.ident("clone_c");
-        wgsl.body =
-            format!("    let {out} = {fn_name}(target_pos, {center}, {angle}, {offset});\n");
+        wgsl.body = format!("    let {out} = {fn_name}(target_pos, {offset});\n");
         wgsl.outputs.insert("color".into(), out);
         Ok(wgsl)
     }
@@ -230,7 +215,7 @@ impl BrushNodeEvaluator for CloneSourceEvaluator {
 /// semantics can't silently drift.
 ///
 /// `center` is the per-dab pen position; the returned offset is added to
-/// `rotate(target_pos − center, angle) + center` before sampling.
+/// `target_pos` before sampling.
 #[cfg(test)]
 pub(crate) fn clone_offset(
     anchored: bool,
@@ -257,13 +242,23 @@ mod tests {
         let reg = register();
         assert_eq!(reg.node.type_id, "clone_source");
         assert_eq!(reg.node.category, "texture");
-        // Three inputs (center, angle, mode) + one output (color).
-        assert_eq!(reg.node.ports.len(), 4);
+        // Two inputs (center, mode) + one output (color).
+        assert_eq!(reg.node.ports.len(), 3);
         assert!(reg.node.ports.iter().any(|p| p.name == "color"));
         assert!(reg.node.ports.iter().any(|p| p.name == "center"));
-        assert!(reg.node.ports.iter().any(|p| p.name == "angle"));
-        assert!(reg.node.ports.iter().any(|p| p.name == "mode"));
+        assert!(!reg.node.ports.iter().any(|p| p.name == "angle"));
         assert!(reg.node.params.is_empty());
+
+        // Anchored `mode` is a Bool toggle defaulting to aligned (0.0).
+        let mode = reg
+            .node
+            .ports
+            .iter()
+            .find(|p| p.name == "mode")
+            .expect("mode port");
+        assert_eq!(mode.wire_type, BrushWireType::Bool);
+        assert_eq!(mode.default, 0.0);
+        assert!(!mode_default_is_anchored(mode.default));
     }
 
     /// The two-mode offset formula: aligned is a stroke-constant shift

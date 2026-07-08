@@ -1,5 +1,5 @@
 name: Clone
-category: Retouch
+category: Misc
 nodes:
   1:
     type: pen_input
@@ -23,8 +23,8 @@ connections:
 - '3.color -> 4.color'
 - '4.dab -> 5.rgba'
 exposed_ports:
-  '1.spacing': {}
   '5.size': {}
   '5.opacity': {}
-  '3.angle': {}
+  '2.softness': {}
+  '1.spacing': {}
   '3.mode': {}

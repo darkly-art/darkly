@@ -1,11 +1,9 @@
 import { app } from '../state/app.svelte';
 import { toolRegistry } from './registry';
 import { brushGraph } from '../state/brush_graph.svelte';
-import { effectiveMouseClicks } from '../actions/triggers';
-import { parseBinding } from '../actions/hotkey_resolve';
-import { canonicalModsFromEvent, substituteMod } from '../actions/mods';
+import { dragModifierActions } from '../actions/triggers';
+import { heldMods, onHeldModsChange } from '../actions/held_mods';
 import { config } from '../config/store.svelte';
-import { modPrefixOfChord } from './colorpicker_cursor';
 import { OverlayBuilder } from '../canvas/gpu_overlay';
 import { canvasToScreen } from '../canvas/coordinates';
 
@@ -204,42 +202,24 @@ export function onCloneHoverLeave(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Modifier tracking + arming
+// Arming
 // ---------------------------------------------------------------------------
 
-let currentMods = '';
-let engagementMods: Set<string> = new Set();
 let lastCursorKey: string | null = null;
-
-/** Modifier prefixes that arm the set-source cursor, derived from the
- *  effective `setCloneSource` bindings (brush-scoped or group-scoped for
- *  clone). Preset swaps + user overrides flow through automatically. */
-function cloneEngagementMods(): Set<string> {
-    const out = new Set<string>();
-    for (const raw of effectiveMouseClicks('setCloneSource')) {
-        const { site, scope, brush, chord } = parseBinding(raw);
-        if (site !== null && site !== 'canvas') continue;
-        if (scope !== null && scope !== 'paint') continue;
-        if (brush !== null && brush !== 'clone') continue;
-        const prefix = modPrefixOfChord(substituteMod(chord));
-        // A bare-drag binding (no modifier) would arm on hover and fight
-        // every stroke; skip it (the no-source prompt below still shows).
-        if (prefix === null || prefix === '') continue;
-        out.add(prefix);
-    }
-    return out;
-}
 
 function isPaintToolActive(): boolean {
     return toolRegistry.get(app.activeToolId)?.group === 'paint';
 }
 
 /** The crosshair is shown when the active paint brush needs a source and
- *  either no source is set (a prompt) or the arming modifier is held. */
+ *  either no source is set (a prompt) or the held modifier resolves to
+ *  `setCloneSource`. Clone's binding is the most specific, so it always wins
+ *  the chord — but reading the one shared resolver means this cursor and the
+ *  color picker can never disagree about who owns the modifier. */
 function isArmed(): boolean {
     if (!needsSource || !isPaintToolActive()) return false;
     if (!hasSource) return true;
-    return engagementMods.has(currentMods);
+    return dragModifierActions('canvas', heldMods()).has('setCloneSource');
 }
 
 function refreshCursor(): void {
@@ -272,49 +252,19 @@ export function clearCloneSourceCursor(): void {
     clearCloneMarker();
 }
 
-function modsFromEvent(e: {
-    ctrlKey: boolean;
-    altKey: boolean;
-    shiftKey: boolean;
-    metaKey: boolean;
-}): string {
-    return canonicalModsFromEvent(e).join('+');
-}
-
 let wired = false;
 
-/** Wire global modifier tracking for the set-source cursor. Idempotent.
- *  The arming modifier set is sourced from the `setCloneSource` binding so
- *  preset swaps / user overrides flow through. */
+/** Wire the set-source cursor's engagement re-evaluation. Idempotent. Which
+ *  modifier arms the crosshair is decided by the shared specificity resolver
+ *  (`dragModifierActions` over `heldMods()`), and the held set itself is
+ *  owned by `held_mods.ts`, so preset swaps / user overrides flow through
+ *  and this cursor can't disagree with the color picker over the modifier. */
 export function setupCloneSourceModifierTracking(): void {
     if (wired) return;
     wired = true;
 
-    engagementMods = cloneEngagementMods();
-    config.onChange(() => {
-        engagementMods = cloneEngagementMods();
-        refreshCursor();
-    });
-
-    const onKey = (e: KeyboardEvent) => {
-        const next = modsFromEvent(e);
-        if (next === currentMods) return;
-        currentMods = next;
-        refreshCursor();
-    };
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('keyup', onKey);
-    window.addEventListener('blur', () => {
-        if (currentMods !== '') {
-            currentMods = '';
-            refreshCursor();
-        }
-    });
-    window.addEventListener('pointermove', (e) => {
-        const next = modsFromEvent(e);
-        if (next !== currentMods) {
-            currentMods = next;
-            refreshCursor();
-        }
-    });
+    // Re-evaluate the cursor when the held set changes or a rebind changes
+    // the winner (`clickIndex` is rebuilt on config change before this runs).
+    onHeldModsChange(refreshCursor);
+    config.onChange(refreshCursor);
 }

@@ -11,6 +11,7 @@ import { fontLibrary } from './state/font_library.svelte';
 import type { Engine } from './engine/protocol';
 import { setupColorPickerModifierTracking } from './tools/colorpicker_cursor';
 import { setupCloneSourceModifierTracking } from './tools/clone_source_cursor';
+import { setupHeldModsTracking } from './actions/held_mods';
 import { autosave } from './state/autosave.svelte';
 import { recovery } from './state/recovery.svelte';
 
@@ -36,14 +37,20 @@ export async function ensureProcessInit(): Promise<void> {
         rebuildClickIndex();
     });
 
-    // Wire global Ctrl/Meta tracking so the color-picker cursor engages
-    // as soon as the user holds the modifier with a paint tool active
-    // (not just on pointerdown). Idempotent.
+    // Own the canonical held-modifier string once, window-level. The
+    // picker + clone set-source cursors subscribe to it (via
+    // `onHeldModsChange`) rather than each tracking modifiers themselves.
+    // Idempotent.
+    setupHeldModsTracking();
+
+    // Wire the color-picker cursor so it engages as soon as the held
+    // modifier resolves to `sampleColor` with a paint tool active (not just
+    // on pointerdown). Idempotent.
     setupColorPickerModifierTracking();
 
     // Same for the Clone brush's set-source cursor — arms the crosshair
-    // when the clone brush is active and a source is needed / the modifier
-    // is held. Idempotent.
+    // when the clone brush is active and a source is needed / the held
+    // modifier resolves to `setCloneSource`. Idempotent.
     setupCloneSourceModifierTracking();
 
     // Autosave + crash recovery. `recovery.init()` registers this browser
