@@ -12,6 +12,7 @@
     import { watchDismiss } from '../lib/dismiss';
 
     let brushPickerOpen = $state(false);
+    let brushPickerTrigger: HTMLButtonElement | undefined = $state();
 
     function ensureInit() {
         if (!brushGraph.graph && app.engine) brushGraph.init();
@@ -84,6 +85,7 @@
              Its dropdown menu anchors to this button. -->
         <div class="brush-picker-section">
             <button
+                bind:this={brushPickerTrigger}
                 class="brush-picker-button bar-control"
                 data-keep-open="brush-picker"
                 onclick={() => { ensureInit(); brushPickerOpen = !brushPickerOpen; }}
@@ -106,7 +108,7 @@
             </button>
 
             {#if brushPickerOpen}
-                <BrushPicker onSelect={selectBrush} onClose={() => (brushPickerOpen = false)} />
+                <BrushPicker anchor={brushPickerTrigger} onSelect={selectBrush} onClose={() => (brushPickerOpen = false)} />
             {/if}
         </div>
 

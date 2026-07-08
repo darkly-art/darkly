@@ -7,8 +7,39 @@
     interface Props {
         onSelect: (brush: BrushInfo) => void;
         onClose: () => void;
+        /** Trigger element the dropdown anchors to. The picker is
+         *  `position: fixed` so it escapes the panel tiles' `overflow: hidden`
+         *  clipping and paints above the docked side panels; that means it can't
+         *  ride the trigger via CSS flow, so it measures the anchor instead. */
+        anchor: HTMLElement | undefined;
     }
-    let { onSelect, onClose }: Props = $props();
+    let { onSelect, onClose, anchor }: Props = $props();
+
+    let pickerEl: HTMLElement | undefined = $state();
+    let left = $state(0);
+    let bottom = $state(0);
+
+    // Anchor the fixed dropdown above the trigger, left-aligned and clamped
+    // into the viewport. Recomputed on scroll/resize because the tool-options
+    // bar reflows (controls wrap) as the window changes.
+    function reposition() {
+        if (!anchor) return;
+        const r = anchor.getBoundingClientRect();
+        const gap = 6;
+        const width = pickerEl?.offsetWidth ?? 480;
+        left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+        bottom = window.innerHeight - r.top + gap;
+    }
+
+    $effect(() => {
+        reposition();
+        window.addEventListener('resize', reposition);
+        window.addEventListener('scroll', reposition, true);
+        return () => {
+            window.removeEventListener('resize', reposition);
+            window.removeEventListener('scroll', reposition, true);
+        };
+    });
 
     let query = $state('');
     let searchInput: HTMLInputElement | undefined = $state();
@@ -99,7 +130,14 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="brush-picker" data-keep-open="brush-picker" onkeydown={handleKey}>
+<div
+    class="brush-picker"
+    bind:this={pickerEl}
+    data-keep-open="brush-picker"
+    onkeydown={handleKey}
+    style:left="{left}px"
+    style:bottom="{bottom}px"
+>
     <!-- Non-scrolling header: the search box stays put while the grid
          below scrolls. The active brush lives on the trigger foot. -->
     <div class="picker-header">
@@ -150,16 +188,17 @@
     /* A black rounded dropdown anchored to the trigger button and popping
      * upward. No border, no shadow: it reads against the raised bar and the
      * canvas by fill contrast, and its lighter tile wells give it body.
-     * `max-width` keeps it from pushing past the viewport edge. */
+     * `max-width` keeps it from pushing past the viewport edge.
+     *
+     * `position: fixed` (with `left`/`bottom` set from the trigger's rect in
+     * script) lifts it out of the panel tiles' `overflow: hidden` so it paints
+     * over the docked side panels; the overlay z-index matches ContextMenu. */
     .brush-picker {
-        position: absolute;
-        bottom: 100%;
-        left: 0;
-        margin-bottom: 6px;
+        position: fixed;
         width: 480px;
         max-width: calc(100vw - 32px);
         max-height: 60vh;
-        z-index: 100;
+        z-index: 1000;
         background: var(--bg);
         border-radius: var(--radius-md);
         /* Non-scrolling flex column so the header stays put while only

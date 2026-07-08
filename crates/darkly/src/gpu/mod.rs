@@ -94,6 +94,7 @@ pub fn blit_region(
 
 pub mod apply_mask;
 pub mod atlas;
+pub mod bbox;
 pub mod blend;
 pub mod blend_mode;
 pub mod blend_modes;

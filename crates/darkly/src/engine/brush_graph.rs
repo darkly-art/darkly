@@ -530,40 +530,13 @@ impl DarklyEngine {
             return cached.unwrap_or_default();
         }
 
-        let fg = self.preview_theme_fg;
-        let bg = self.preview_theme_bg;
-
-        // Neutralize ports flagged `preview_value` (paint.size,
-        // watercolor.size, …) on a clone so the stroke preview matches the
-        // brush picker's tile-shape thumbnail: size-invariant, fits
-        // the fixed render canvas regardless of the user's working
-        // scrubs. Same generalization the dab path relies on via
-        // `reset_exposed_scrubs`; both previews show brush identity,
-        // not momentary parameter state. Per-node knowledge about
-        // what to neutralize lives on the port registrations — this
-        // pipeline doesn't introspect node types.
-        let mut graph = self.active_brush_graph();
-        graph.apply_preview_overrides();
-        let (rw, rh) = super::brush_library::BRUSH_STROKE_RENDER_SIZE;
-        let path = crate::brush::preview_renderer::synthesize_stroke_path(
-            rw as f32,
-            rh as f32,
-            30,
-            super::brush_library::BRUSH_STROKE_PATH_INSET,
-        );
-        self.render_preview_and_request_readback(
-            &graph,
-            &path,
-            rw,
-            rh,
-            fg,
-            bg,
+        self.request_stroke_preview_readback(self.active_brush_graph(), |width, height| {
             ReadbackContext::BrushStrokePreview {
-                width: rw,
-                height: rh,
+                width,
+                height,
                 graph_version: current_graph_version,
-            },
-        );
+            }
+        });
         self.last_rendered_stroke_preview_version = current_graph_version;
 
         cached.unwrap_or_default()
@@ -631,27 +604,11 @@ impl DarklyEngine {
             return cached.unwrap_or_default();
         }
 
-        let fg = self.preview_theme_fg;
-        let bg = self.preview_theme_bg;
-        // Reset every exposed scrub (size, opacity, hardness, …) to its
-        // registration default before rendering. The dab thumbnail
-        // represents the brush's identity (shape, texture, dynamics);
-        // user-facing scrubs belong in the brush bar, not the icon.
-        let mut graph = self.active_brush_graph();
-        crate::brush::reset_exposed_scrubs(&mut graph);
-        let (rw, rh) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
-        let path = crate::brush::preview_renderer::synthesize_dab_path(rw as f32, rh as f32);
-        self.render_preview_and_request_readback(
-            &graph,
-            &path,
-            rw,
-            rh,
-            fg,
-            bg,
+        self.request_dab_preview_readback(self.active_brush_graph(), |_width, _height| {
             ReadbackContext::ActiveBrushDab {
                 topology_version: current_topology,
-            },
-        );
+            }
+        });
         self.last_rendered_dab_topology_version = current_topology;
 
         cached.unwrap_or_default()
@@ -726,6 +683,73 @@ impl DarklyEngine {
         );
         self.gpu.queue.submit([encoder.finish()]);
         self.readbacks.submit(request, context);
+    }
+
+    /// Neutralize the given graph's `preview_value` ports, lay the synthetic
+    /// S-curve at the proportional inset, and kick off a stroke-preview render
+    /// + readback tagged with the context built from the render dims.
+    ///
+    /// Shared by the live editor preview and both library thumbnail bakes —
+    /// the only things that differ across those three are which graph feeds in
+    /// and which [`ReadbackContext`] variant tags the result, which is why the
+    /// context is produced by the caller from the render dimensions.
+    ///
+    /// `apply_preview_overrides` makes every stroke preview size-invariant:
+    /// the tile-shape thumbnail, the save bake, and the editor preview all
+    /// show brush *identity*, not the momentary scrub value the user happened
+    /// to have. Per-node knowledge of what to neutralize lives on the port
+    /// registrations — this pipeline never introspects node types.
+    pub(crate) fn request_stroke_preview_readback(
+        &mut self,
+        mut graph: Graph<BrushWireType>,
+        make_context: impl FnOnce(u32, u32) -> ReadbackContext,
+    ) {
+        graph.apply_preview_overrides();
+        let (rw, rh) = super::brush_library::BRUSH_STROKE_RENDER_SIZE;
+        let inset =
+            rw.min(rh) as f32 * super::brush_library::BRUSH_STROKE_PATH_INSET_FRACTION;
+        let path =
+            crate::brush::preview_renderer::synthesize_stroke_path(rw as f32, rh as f32, 30, inset);
+        let fg = self.preview_theme_fg;
+        let bg = self.preview_theme_bg;
+        self.render_preview_and_request_readback(
+            &graph,
+            &path,
+            rw,
+            rh,
+            fg,
+            bg,
+            make_context(rw, rh),
+        );
+    }
+
+    /// Reset the given graph's exposed scrubs to their registration defaults,
+    /// synthesize a centered single dab, and kick off a dab-preview render +
+    /// readback tagged with the context built from the render dims.
+    ///
+    /// Shared by the baked dab thumbnail and the active-dab preview — they
+    /// differ only in the graph and the [`ReadbackContext`] variant. The dab
+    /// thumbnail represents brush identity (shape, texture, dynamics), so
+    /// user-facing scrubs that vary across instances shouldn't bias it.
+    pub(crate) fn request_dab_preview_readback(
+        &mut self,
+        mut graph: Graph<BrushWireType>,
+        make_context: impl FnOnce(u32, u32) -> ReadbackContext,
+    ) {
+        crate::brush::reset_exposed_scrubs(&mut graph);
+        let (rw, rh) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
+        let path = crate::brush::preview_renderer::synthesize_dab_path(rw as f32, rh as f32);
+        let fg = self.preview_theme_fg;
+        let bg = self.preview_theme_bg;
+        self.render_preview_and_request_readback(
+            &graph,
+            &path,
+            rw,
+            rh,
+            fg,
+            bg,
+            make_context(rw, rh),
+        );
     }
 
     /// Serialize the active graph as JSON.
