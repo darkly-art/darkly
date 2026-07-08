@@ -23,7 +23,7 @@ quote = "1"
 proc-macro2 = "1"
 
 # GPU
-wgpu = { version = "29.0", features = ["webgpu"] }
+wgpu = { version = "30.0", features = ["webgpu"] }
 
 # Vector / text — the Vello family shares one geometry/style vocabulary
 # (kurbo/peniko), so the renderer is a swappable backend behind one data model.
@@ -32,7 +32,7 @@ wgpu = { version = "29.0", features = ["webgpu"] }
 vello = "0.9"
 kurbo = { version = "0.13", features = ["serde"] }
 peniko = { version = "0.6", features = ["serde"] }
-parley = "0.7"
+parley = "0.11"
 
 # Data
 bytemuck = { version = "1.13", features = ["derive"] }

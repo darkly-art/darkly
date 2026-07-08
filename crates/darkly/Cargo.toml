@@ -58,7 +58,7 @@ syn = { workspace = true }
 
 [dev-dependencies]
 pollster = "0.4"
-naga = { version = "29.0", features = ["wgsl-in"] }
+naga = { version = "30.0", features = ["wgsl-in"] }
 syn = { version = "2", features = ["visit", "full"] }
 
 [[bin]]
