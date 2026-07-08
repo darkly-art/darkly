@@ -5,8 +5,8 @@
 //! entire GPU realization with [Curves](super::curves): the same eight virtual
 //! channels (RGB composite, Red, Green, Blue, Alpha, Hue, Saturation, Lightness),
 //! the same 256×2 LUT, the same `curves.wgsl` shader. Levels is a thin provider
-//! over the shared [`LutFilter`] scaffold — it hands [`bake_lut`] eight per-channel
-//! [`levels_transfer`] evaluators and the shared code owns the composite fold,
+//! over the shared [`lut_param_filter`] scaffold — it hands [`bake_lut`] eight
+//! per-channel [`levels_transfer`] evaluators and the shared code owns the composite fold,
 //! the HSV/Lab round trips, and the pipeline.
 //!
 //! Transfer function — Krita `libs/image/KisLevelsCurve.cpp:58`:
@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
-use crate::gpu::lut_filter::{bake_lut, lut_shader_source, Baked, LutFilter};
+use crate::gpu::lut_filter::{bake_lut, lut_param_filter, lut_shader_source, Baked};
 use crate::gpu::params::{ParamDef, ParamValue};
 
 /// Identity levels — `[inBlack, inWhite, gamma, outBlack, outWhite]`. Maps the
@@ -105,7 +105,7 @@ fn build_lut(params: &[ParamValue]) -> Baked {
 }
 
 fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
-    Arc::new(LutFilter::new(device, &lut_shader_source(), build_lut))
+    Arc::new(lut_param_filter(device, &lut_shader_source(), build_lut))
 }
 
 pub fn register() -> FilterPipelineRegistration {

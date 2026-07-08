@@ -3,11 +3,12 @@
         value: string;
         options: [string, string][];
         onchange: (v: string) => void;
+        disabled?: boolean;
     };
-    let { value, options, onchange }: Props = $props();
+    let { value, options, onchange, disabled = false }: Props = $props();
 </script>
 
-<select {value} onchange={(e) => onchange(e.currentTarget.value)}>
+<select {value} {disabled} onchange={(e) => onchange(e.currentTarget.value)}>
     {#each options as [k, label] (k)}
         <option value={k}>{label}</option>
     {/each}
@@ -24,4 +25,5 @@
         min-width: 180px;
     }
     select:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+    select:disabled { opacity: 0.45; cursor: not-allowed; }
 </style>

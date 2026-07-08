@@ -54,7 +54,7 @@ export type AddVeilReq = { veil_type: string, params: JsonValue, };
 
 export type AddVoidReq = { void_type: string, params: JsonValue, anchor: number | null, };
 
-export type ApplyFilterReq = { node_id: number, filter_type: string, };
+export type ApplyFilterReq = { node_id: number, filter_type: string, params: JsonValue, };
 
 export type ApplyMaskReq = { id: number, };
 
@@ -140,9 +140,7 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: number, };
 
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
-
-export type PortDir = "Input" | "Output";
+export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "levels", name: string, default: [number, number, number, number, number], } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, };
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -277,7 +275,9 @@ natural_range: [number, number] | null,
  */
 persist_in_thumbnail: boolean, };
 
-export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "levels", name: string, default: [number, number, number, number, number], } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, };
+export type PortDir = "Input" | "Output";
+
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
 
 export type NodeRegistration = { 
 /**
@@ -348,6 +348,8 @@ export type CanvasRectResp = { origin_x: number, origin_y: number, width: number
 
 export type ClearSelectionContentsReq = { id: number, };
 
+export type CommitFilterPreviewReq = { node_id: number, filter_type: string, params: JsonValue, };
+
 export type CopyReq = { id: number, };
 
 export type ClipboardExport = { rgba: Array<number>, width: number, height: number, offset_x: number, offset_y: number, };
@@ -405,13 +407,6 @@ export type LayerKindTypeInfo = { type: string, displayName: string, };
 
 export type LayerTransformCapabilityReq = { id: number, };
 
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
-/**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
-
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
  * Effective editability — `false` when this node *or any ancestor*
@@ -464,6 +459,13 @@ pipeline: string,
  */
 params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
 
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
+
 export type MaskToSelectionReq = { id: number, };
 
 export type MergeDownReq = { source_id: number, };
@@ -497,6 +499,8 @@ export type PasteLayerRichReq = { json: string, active_layer_id: number, };
 export type PickColorReq = { x: number, y: number, id: number, };
 
 export type PreviewReq = { kind: string, type: string, };
+
+export type PreviewFilterReq = { node_id: number, filter_type: string, params: JsonValue, };
 
 export type RefreshBrushCursorPreviewReq = { x: number, y: number, pressure: number, tilt_x: number, tilt_y: number, rotation: number, tangential_pressure: number, };
 
@@ -535,6 +539,8 @@ export type SetBlendModeReq = { id: number, type_id: string, };
 export type SetBrushBlendModeReq = { mode: number, };
 
 export type SetDocumentNameReq = { name: string, };
+
+export type SetFilterParamsReq = { id: number, params: JsonValue, };
 
 export type SetGroupCollapsedReq = { id: number, collapsed: boolean, };
 
@@ -687,6 +693,7 @@ export type RequestKind =
     | 'can_flatten'
     | 'can_flatten_node'
     | 'can_merge_down'
+    | 'cancel_filter_preview'
     | 'cancel_floating'
     | 'canvas_dimensions'
     | 'canvas_rect'
@@ -696,6 +703,7 @@ export type RequestKind =
     | 'clear_selection'
     | 'clear_selection_contents'
     | 'clear_veils'
+    | 'commit_filter_preview'
     | 'commit_floating'
     | 'copy'
     | 'copy_layer_rich'
@@ -753,6 +761,7 @@ export type RequestKind =
     | 'poll_export_result'
     | 'poll_preview'
     | 'poll_save_result'
+    | 'preview_filter'
     | 'redo'
     | 'refresh_brush_cursor_preview'
     | 'register_font'
@@ -761,6 +770,7 @@ export type RequestKind =
     | 'remove_mask'
     | 'remove_veil'
     | 'request_histogram'
+    | 'request_node_histogram'
     | 'rescale_image'
     | 'resize'
     | 'resize_canvas_rect'
@@ -774,6 +784,7 @@ export type RequestKind =
     | 'set_blend_mode'
     | 'set_brush_blend_mode'
     | 'set_document_name'
+    | 'set_filter_params'
     | 'set_group_collapsed'
     | 'set_group_passthrough'
     | 'set_isolated_node'
@@ -865,6 +876,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'can_flatten',
     'can_flatten_node',
     'can_merge_down',
+    'cancel_filter_preview',
     'cancel_floating',
     'canvas_dimensions',
     'canvas_rect',
@@ -874,6 +886,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'clear_selection',
     'clear_selection_contents',
     'clear_veils',
+    'commit_filter_preview',
     'commit_floating',
     'copy',
     'copy_layer_rich',
@@ -931,6 +944,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'poll_export_result',
     'poll_preview',
     'poll_save_result',
+    'preview_filter',
     'redo',
     'refresh_brush_cursor_preview',
     'register_font',
@@ -939,6 +953,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'remove_mask',
     'remove_veil',
     'request_histogram',
+    'request_node_histogram',
     'rescale_image',
     'resize',
     'resize_canvas_rect',
@@ -952,6 +967,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_blend_mode',
     'set_brush_blend_mode',
     'set_document_name',
+    'set_filter_params',
     'set_group_collapsed',
     'set_group_passthrough',
     'set_isolated_node',
@@ -1051,6 +1067,7 @@ export interface EngineApi {
     canFlatten(): Promise<boolean>;
     canFlattenNode(req: CanFlattenNodeReq): Promise<boolean>;
     canMergeDown(req: CanMergeDownReq): Promise<boolean>;
+    cancelFilterPreview(): void;
     cancelFloating(): void;
     canvasDimensions(): Promise<CanvasDimensionsResp>;
     canvasRect(): Promise<CanvasRectResp>;
@@ -1060,6 +1077,7 @@ export interface EngineApi {
     clearSelection(): void;
     clearSelectionContents(req: ClearSelectionContentsReq): void;
     clearVeils(): void;
+    commitFilterPreview(req: CommitFilterPreviewReq): Promise<boolean>;
     commitFloating(): void;
     copy(req: CopyReq): Promise<ClipboardExport | null>;
     copyLayerRich(req: CopyLayerRichReq): void;
@@ -1117,6 +1135,7 @@ export interface EngineApi {
     pollExportResult(): Promise<{ width: number, height: number, bytes: Uint8Array } | null>;
     pollPreview(req: PreviewReq): Promise<{ width: number, height: number, fps: number, frameCount: number, bytes: Uint8Array } | null>;
     pollSaveResult(): Promise<{ manifestLen: number, compositeWidth: number, compositeHeight: number, compositeLen: number, blobs: { path: string, len: number }[], bytes: Uint8Array } | null>;
+    previewFilter(req: PreviewFilterReq): Promise<boolean>;
     redo(): void;
     refreshBrushCursorPreview(req: RefreshBrushCursorPreviewReq): Promise<BrushCursorPreviewInfoResp | null>;
     registerFont(bytes: Uint8Array): Promise<{ families: string[] }>;
@@ -1125,6 +1144,7 @@ export interface EngineApi {
     removeMask(req: RemoveMaskReq): void;
     removeVeil(req: RemoveVeilReq): void;
     requestHistogram(req: HistogramReq): void;
+    requestNodeHistogram(req: HistogramReq): void;
     rescaleImage(req: RescaleImageReq): void;
     resize(req: ResizeReq): void;
     resizeCanvasRect(req: ResizeCanvasRectReq): void;
@@ -1138,6 +1158,7 @@ export interface EngineApi {
     setBlendMode(req: SetBlendModeReq): void;
     setBrushBlendMode(req: SetBrushBlendModeReq): void;
     setDocumentName(req: SetDocumentNameReq): void;
+    setFilterParams(req: SetFilterParamsReq): void;
     setGroupCollapsed(req: SetGroupCollapsedReq): void;
     setGroupPassthrough(req: SetGroupPassthroughReq): void;
     setIsolatedNode(req: SetIsolatedNodeReq): void;
@@ -1231,6 +1252,7 @@ export function makeApi(t: Transport): EngineApi {
         canFlatten: () => t.request('can_flatten'),
         canFlattenNode: (req) => t.request('can_flatten_node', req),
         canMergeDown: (req) => t.request('can_merge_down', req),
+        cancelFilterPreview: () => t.postFF('cancel_filter_preview'),
         cancelFloating: () => t.postFF('cancel_floating'),
         canvasDimensions: () => t.request('canvas_dimensions'),
         canvasRect: () => t.request('canvas_rect'),
@@ -1240,6 +1262,7 @@ export function makeApi(t: Transport): EngineApi {
         clearSelection: () => t.postFF('clear_selection'),
         clearSelectionContents: (req) => t.postFF('clear_selection_contents', req),
         clearVeils: () => t.postFF('clear_veils'),
+        commitFilterPreview: (req) => t.request('commit_filter_preview', req),
         commitFloating: () => t.postFF('commit_floating'),
         copy: (req) => t.request('copy', req),
         copyLayerRich: (req) => t.postFF('copy_layer_rich', req),
@@ -1297,6 +1320,7 @@ export function makeApi(t: Transport): EngineApi {
         pollExportResult: () => t.request('poll_export_result'),
         pollPreview: (req) => t.request('poll_preview', req),
         pollSaveResult: () => t.request('poll_save_result'),
+        previewFilter: (req) => t.request('preview_filter', req),
         redo: () => t.postFF('redo'),
         refreshBrushCursorPreview: (req) => t.request('refresh_brush_cursor_preview', req),
         registerFont: (bytes) => t.request('register_font', {}, bytes),
@@ -1305,6 +1329,7 @@ export function makeApi(t: Transport): EngineApi {
         removeMask: (req) => t.postFF('remove_mask', req),
         removeVeil: (req) => t.postFF('remove_veil', req),
         requestHistogram: (req) => t.postFF('request_histogram', req),
+        requestNodeHistogram: (req) => t.postFF('request_node_histogram', req),
         rescaleImage: (req) => t.postFF('rescale_image', req),
         resize: (req) => t.postFF('resize', req),
         resizeCanvasRect: (req) => t.postFF('resize_canvas_rect', req),
@@ -1318,6 +1343,7 @@ export function makeApi(t: Transport): EngineApi {
         setBlendMode: (req) => t.postFF('set_blend_mode', req),
         setBrushBlendMode: (req) => t.postFF('set_brush_blend_mode', req),
         setDocumentName: (req) => t.postFF('set_document_name', req),
+        setFilterParams: (req) => t.postFF('set_filter_params', req),
         setGroupCollapsed: (req) => t.postFF('set_group_collapsed', req),
         setGroupPassthrough: (req) => t.postFF('set_group_passthrough', req),
         setIsolatedNode: (req) => t.postFF('set_isolated_node', req),

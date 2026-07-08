@@ -28,6 +28,17 @@ pub fn registrations() -> Vec<RequestRegistration> {
         })
         .post()
         .req::<HistogramReq>(),
+        // Fire-and-forget: bin a *node's own* texture (the destructive Levels
+        // modal — no filter arm to intercept). `id < 0` clears. The result reads
+        // back through `histogram_result` under the same id.
+        RequestRegistration::new("request_node_histogram", |engine, payload, _b| {
+            let r: HistogramReq = decode(payload)?;
+            let target = (r.id >= 0.0).then(|| LayerId::from_ffi(r.id as u64));
+            engine.set_node_histogram_target(target);
+            Ok(Response::json(serde_json::Value::Null))
+        })
+        .post()
+        .req::<HistogramReq>(),
         // Awaited: the cached 8×256 u32 histogram bytes (empty while pending).
         RequestRegistration::new("histogram_result", |engine, payload, _b| {
             let r: HistogramReq = decode(payload)?;

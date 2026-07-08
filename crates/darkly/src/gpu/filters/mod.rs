@@ -3,6 +3,7 @@
 // that exports `pub fn register() -> crate::gpu::filter::FilterPipelineRegistration`.
 
 pub mod curves;
+pub mod hsv;
 pub mod invert;
 pub mod levels;
 
@@ -12,6 +13,7 @@ use crate::gpu::filter::FilterPipelineRegistration;
 pub fn registrations() -> Vec<FilterPipelineRegistration> {
     vec![
         curves::register(),
+        hsv::register(),
         invert::register(),
         levels::register(),
     ]

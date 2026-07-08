@@ -112,6 +112,7 @@ pub mod lut_filter;
 pub mod ortho_transform;
 pub mod overlay;
 pub mod paint_target;
+pub mod param_filter;
 pub mod params;
 pub mod preview;
 pub mod readback;

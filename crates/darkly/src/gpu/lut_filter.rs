@@ -13,7 +13,7 @@
 //! so each filter is a thin "give me eight per-channel evaluators" provider.
 
 use crate::gpu::effect::EffectCache;
-use crate::gpu::filter::FilterEffect;
+use crate::gpu::param_filter::ParamFilter;
 use crate::gpu::params::ParamValue;
 
 /// The LUT fragment-shader source shared by every LUT filter (Curves, Levels):
@@ -118,228 +118,94 @@ pub fn bake_lut(eval: impl Fn(Channel, f32) -> f32) -> Baked {
     }
 }
 
-/// A `textureLoad` source binding (no sampler / hardware filtering).
-fn load_tex_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    }
-}
-
-/// GPU realization shared by every LUT filter: one plain-RGBA pipeline that binds
-/// `[src texture, lut texture, gate uniform]`, plus a per-filter `bake` function
-/// that turns the layer's params into the baked LUT. The per-layer LUT texture
-/// and uniform live in the compositor's [`EffectCache`], built by [`ensure`].
-///
-/// [`ensure`]: FilterEffect::ensure
-pub struct LutFilter {
-    pipeline: wgpu::RenderPipeline,
-    bgl: wgpu::BindGroupLayout,
+/// Allocate (once) and refresh the LUT texture + gate uniform for a LUT filter —
+/// the [`ParamFilter`] `prepare` half for the aux-carrying Curves/Levels family.
+/// `bake` turns the layer's params into the baked LUT + stage-gate flags.
+fn lut_prepare(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
     bake: fn(&[ParamValue]) -> Baked,
-}
-
-impl LutFilter {
-    /// Build the LUT pipeline from `shader_src` (its fragment entry point must be
-    /// `fs_curves`) and bind the per-filter `bake` function.
-    pub fn new(device: &wgpu::Device, shader_src: &str, bake: fn(&[ParamValue]) -> Baked) -> Self {
-        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("filter-lut-bgl"),
-            entries: &[
-                load_tex_entry(0),
-                load_tex_entry(1),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("filter-lut-layout"),
-            bind_group_layouts: &[Some(&bgl)],
-            immediate_size: 0,
-        });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("filter-lut-shader"),
-            source: wgpu::ShaderSource::Wgsl(shader_src.into()),
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("filter-lut"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_curves"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    // LUT filters only serve the filter-*layer* compose path,
-                    // which is RGBA8-only (the destructive/R8 path excludes
-                    // parametric filters at the engine layer).
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-        LutFilter {
-            pipeline,
-            bgl,
-            bake,
-        }
-    }
-}
-
-impl std::fmt::Debug for LutFilter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LutFilter").finish_non_exhaustive()
-    }
-}
-
-impl FilterEffect for LutFilter {
-    fn ensure(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        params: &[ParamValue],
-        cache: &mut EffectCache,
-    ) {
-        // Allocate the LUT texture + gate uniform once; param edits reuse them.
-        if cache.aux_textures.is_empty() {
-            let tex = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("filter-lut-tex"),
-                size: wgpu::Extent3d {
-                    width: LUT_LEN as u32,
-                    height: LUT_ROWS as u32,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-            cache.aux_textures.push(tex);
-            cache.aux_views.push(view);
-        }
-        if cache.uniform_bufs.is_empty() {
-            cache
-                .uniform_bufs
-                .push(device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("filter-lut-flags"),
-                    size: 16,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
-        }
-
-        let baked = (self.bake)(params);
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &cache.aux_textures[0],
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &baked.lut,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some((LUT_LEN * 4) as u32),
-                rows_per_image: Some(LUT_ROWS as u32),
-            },
-            wgpu::Extent3d {
+    params: &[ParamValue],
+    cache: &mut EffectCache,
+) {
+    // Allocate the LUT texture + gate uniform once; param edits reuse them.
+    if cache.aux_textures.is_empty() {
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("filter-lut-tex"),
+            size: wgpu::Extent3d {
                 width: LUT_LEN as u32,
                 height: LUT_ROWS as u32,
                 depth_or_array_layers: 1,
             },
-        );
-        let flags = [
-            baked.hsv_active as u32,
-            baked.lightness_active as u32,
-            0u32,
-            0u32,
-        ];
-        queue.write_buffer(&cache.uniform_bufs[0], 0, bytemuck::cast_slice(&flags));
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        cache.aux_textures.push(tex);
+        cache.aux_views.push(view);
+    }
+    if cache.uniform_bufs.is_empty() {
+        cache
+            .uniform_bufs
+            .push(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("filter-lut-flags"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
     }
 
-    fn render(
-        &self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        src: &wgpu::TextureView,
-        _mask: Option<&wgpu::TextureView>,
-        out: &wgpu::TextureView,
-        _format: wgpu::TextureFormat,
-        cache: &EffectCache,
-    ) {
-        // The compose path always runs `ensure` first (pre-compose sync phase),
-        // so the LUT view + uniform are present. Guard defensively rather than
-        // panic in the render loop.
-        let (Some(lut_view), Some(uniform)) = (cache.aux_views.first(), cache.uniform_bufs.first())
-        else {
-            return;
-        };
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("filter-lut-bg"),
-            layout: &self.bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(src),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(lut_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: uniform.as_entire_binding(),
-                },
-            ],
-        });
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("filter-lut-pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: out,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.draw(0..3, 0..1);
-    }
+    let baked = bake(params);
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &cache.aux_textures[0],
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &baked.lut,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some((LUT_LEN * 4) as u32),
+            rows_per_image: Some(LUT_ROWS as u32),
+        },
+        wgpu::Extent3d {
+            width: LUT_LEN as u32,
+            height: LUT_ROWS as u32,
+            depth_or_array_layers: 1,
+        },
+    );
+    let flags = [
+        baked.hsv_active as u32,
+        baked.lightness_active as u32,
+        0u32,
+        0u32,
+    ];
+    queue.write_buffer(&cache.uniform_bufs[0], 0, bytemuck::cast_slice(&flags));
+}
+
+/// Build the aux-carrying [`ParamFilter`] specialization every LUT filter
+/// (Curves, Levels) shares: the `[src, lut, uniform]` bind-group shape and the
+/// `fs_curves` / `fs_curves_masked` entry points, with a `prepare` that bakes
+/// `bake(params)` into the LUT texture + gate uniform on each param change.
+/// `shader_src`'s fragment entries must be `fs_curves` (plain) and
+/// `fs_curves_masked` (selection-clipped).
+pub fn lut_param_filter(
+    device: &wgpu::Device,
+    shader_src: &str,
+    bake: fn(&[ParamValue]) -> Baked,
+) -> ParamFilter {
+    ParamFilter::new(
+        device,
+        "filter-lut",
+        shader_src,
+        "fs_curves",
+        "fs_curves_masked",
+        true, // aux-carrying (the 256×2 LUT texture at binding 1)
+        move |device, queue, params, cache| lut_prepare(device, queue, bake, params, cache),
+    )
 }
