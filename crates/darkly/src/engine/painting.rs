@@ -314,6 +314,32 @@ impl DarklyEngine {
             .any(|n| n.type_id == crate::brush::nodes::clone_source::TYPE_ID)
     }
 
+    /// `true` when the active brush's `clone_source` node is in *anchored*
+    /// mode (every dab samples the fixed source point), `false` for
+    /// *aligned* (the source tracks the cursor) or when there is no
+    /// `clone_source` node. The frontend reads this to track the on-canvas
+    /// source marker correctly during a stroke. A structural read of the
+    /// exposed `mode` port default — the same value `mode_is_anchored`
+    /// bakes into the emitted WGSL, sharing
+    /// [`crate::brush::nodes::clone_source::mode_default_is_anchored`], so
+    /// the marker and the shader can't disagree on the mode.
+    #[handler]
+    pub fn clone_source_anchored(&self) -> bool {
+        use crate::brush::state::BrushState;
+        let tool = self.tool_session.read();
+        let Some(brush) = tool.get::<BrushState>() else {
+            return false;
+        };
+        brush
+            .graph
+            .nodes()
+            .values()
+            .find(|n| n.type_id == crate::brush::nodes::clone_source::TYPE_ID)
+            .and_then(|n| n.ports.iter().find(|p| p.name == "mode"))
+            .map(|p| crate::brush::nodes::clone_source::mode_default_is_anchored(p.default))
+            .unwrap_or(false)
+    }
+
     // --- Stroke lifecycle ---
     // The active node id directly identifies the paint target — for a mask
     // filter id, paint goes to the mask's R8 PixelBuffer; for a raster id,

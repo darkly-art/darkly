@@ -554,9 +554,88 @@ fn clone_brush_compiles_with_samples_source() {
         "clone must sample with textureSampleLevel (derivative-free), not textureSample"
     );
     assert!(!compiled.stroke_wgsl.contains("textureSample(graph_tex_0"));
-    // Preview declares the binding too (bound to the fallback tile).
+    // The stroke body *invokes* the sampler (`let clone_c_N = clone_sample_N(…)`).
+    assert!(
+        compiled.stroke_wgsl.contains("= clone_sample"),
+        "stroke body must invoke the clone sampler"
+    );
+
+    // --- Dab-preview regression (Fix A) ---
+    // Under Approach A the preview shader still *declares* the @group(3)
+    // source binding (the shared `clone_sample` decl references it, bound to
+    // the fallback tile), so the declaration is present in both shaders.
     assert!(compiled
         .cursor_preview_wgsl
         .contains("@group(3) @binding(0) var graph_smp"));
     assert!(compiled.cursor_preview_wgsl.contains("fn clone_sample"));
+    // But the preview *body* must not sample the source — it emits a neutral
+    // constant instead. The tell is the call site, not the declaration.
+    assert!(
+        !compiled.cursor_preview_wgsl.contains("= clone_sample"),
+        "preview body must not invoke the clone sampler (Fix A: neutral fill, no source at hover)"
+    );
+    assert!(
+        compiled
+            .cursor_preview_wgsl
+            .contains("vec4<f32>(0.6, 0.6, 0.6, 1.0)"),
+        "preview body must emit the neutral clone fill"
+    );
+    // Both variants are complete, valid shaders.
+    naga_validate(&compiled.stroke_wgsl, "clone stroke_wgsl");
+    naga_validate(&compiled.cursor_preview_wgsl, "clone cursor_preview_wgsl");
+}
+
+/// Parse + validate a fully assembled brush shader under naga (the same
+/// front-end wgpu uses in-app), panicking with the diagnostic on failure.
+fn naga_validate(src: &str, label: &str) {
+    let module = naga::front::wgsl::parse_str(src)
+        .unwrap_or_else(|e| panic!("{label} failed to parse under naga:\n{e}"));
+    let mut validator = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    );
+    validator
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{label} failed naga validation:\n{e:?}"));
+}
+
+/// Double-allocation regression (Fix A, critique #5): a static-texture brush
+/// (`Charcoal`, whose `image` node allocates a `@group(3)` paper texture)
+/// must declare **exactly one** graph texture in its preview shader. The
+/// preview recompile runs against throwaway allocation cells, so a
+/// non-terminal node re-emitting its body for the preview pass can't
+/// double-count a second `@group(3)` texture into the layout.
+#[test]
+fn static_texture_brush_preview_declares_single_graph_texture() {
+    let charcoal = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Charcoal")
+        .expect("Charcoal brush registered");
+    // Go through `compile_graph` — it applies the Switch rewrite the
+    // persisted graph needs before WGSL compilation, matching the in-app
+    // path — and read the compiled brush off the runner.
+    let runner = darkly::brush::compile_graph(&charcoal.metadata.graph).expect("charcoal compiles");
+    let compiled = runner
+        .compiled_brush()
+        .expect("charcoal has a compiled terminal");
+
+    assert_eq!(
+        compiled.graph_texture_names.len(),
+        1,
+        "charcoal declares one graph texture (paper)"
+    );
+    let preview_texture_decls = compiled
+        .cursor_preview_wgsl
+        .matches("var graph_tex_")
+        .count();
+    assert_eq!(
+        preview_texture_decls, 1,
+        "preview must declare exactly one @group(3) texture, not a double-allocated second"
+    );
+    // The preview shader is valid (the paper grain samples in both modes).
+    naga_validate(
+        &compiled.cursor_preview_wgsl,
+        "charcoal cursor_preview_wgsl",
+    );
+    naga_validate(&compiled.stroke_wgsl, "charcoal stroke_wgsl");
 }

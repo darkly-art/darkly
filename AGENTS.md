@@ -226,6 +226,10 @@ cargo test --workspace --exclude darkly-wasm --features darkly/testing -- --test
 # that touches `window`, stub it with `vi.stubGlobal('window', …)` and a
 # fake node — see `src/lib/__tests__/clickOutside.test.ts`.
 (cd frontend && npm test)
+# Reclaim stale build artifacts — Cargo orphans a ~300 MB static test binary on
+# every fingerprint change and never GCs it, so `target/` balloons over time.
+# `cargo install cargo-sweep` once, then periodically:
+cargo sweep --time 7
 ```
 
 Never run `git commit` — make the changes and leave staging and committing to the user.

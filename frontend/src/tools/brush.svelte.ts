@@ -13,6 +13,14 @@ import {
 } from './selection_helpers';
 import BrushOptions from '../ui/BrushOptions.svelte';
 import BrushBuilderPanel from '../ui/BrushBuilderPanel.svelte';
+import {
+    onCloneStrokeStart,
+    onCloneStrokeMove,
+    onCloneStrokeEnd,
+    onCloneHoverMove,
+    onCloneHoverLeave,
+    clearCloneSourceCursor,
+} from './clone_source_cursor';
 
 /** Brush-tool session state. Persists across strokes within the session;
  *  resets on reload. The engine-side blend-mode mirror is pushed by
@@ -220,6 +228,9 @@ export const brushTool: Tool = {
         ctx.engine.api.setBrushBlendMode({ mode: 0 });
         app.toolCursor = null;
         clearHover();
+        // Drop the on-canvas clone source marker with the tool that owns it
+        // (the engine anchor persists as session state).
+        clearCloneSourceCursor();
     },
 
     onPointerDown(ctx, e, cx, cy) {
@@ -235,6 +246,9 @@ export const brushTool: Tool = {
         const params = brushStrokeParams(e, cx, cy);
         ctx.engine.api.beginStroke({ id: layerId });
         ctx.engine.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
+        // Capture the clone dest anchor so the source marker tracks the
+        // cursor in aligned mode (no-op for non-clone brushes).
+        onCloneStrokeStart(cx, cy);
         const dims = currentCanvasDimensions();
         if (dims) strokeRecorder.beginStroke(dims[0], dims[1], params);
     },
@@ -244,15 +258,18 @@ export const brushTool: Tool = {
             const params = brushStrokeParams(e, cx, cy);
             ctx.engine.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
             strokeRecorder.addEvent(params);
+            onCloneStrokeMove(cx, cy);
             return;
         }
         // Hover: re-render the preview with live pen data + draw it.
         void pushHoverOverlay(ctx.engine, cursorPose(e), cx, cy);
+        onCloneHoverMove(cx, cy);
     },
 
     onPointerUp(ctx) {
         ctx.engine.api.endStroke();
         strokeRecorder.endStroke();
+        onCloneStrokeEnd();
     },
 
     onPointerLeave(ctx) {
@@ -261,6 +278,7 @@ export const brushTool: Tool = {
         ctx.engine.api.clearOverlay();
         ctx.engine.api.clearBrushCursorPreviewPose();
         clearHover();
+        onCloneHoverLeave();
     },
 
     restoreHover(ctx, cx, cy) {

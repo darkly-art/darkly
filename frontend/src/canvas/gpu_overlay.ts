@@ -34,6 +34,11 @@ import { app } from '../state/app.svelte';
 
 type Color = string | [number, number, number, number];
 
+/** Which engine overlay channel an `OverlayBuilder` pushes to. Mirrors the
+ *  Rust `OverlayChannel` split — `'tool'` is churned every hover move, so
+ *  persistent markers (the clone source crosshair) use `'clone'`. */
+export type OverlayChannel = 'tool' | 'clone';
+
 const colorCache = new Map<string, [number, number, number, number]>();
 
 /** Convert a hex color string to [r, g, b, a] floats in 0–1. */
@@ -79,6 +84,13 @@ export interface HandleOpts {
     strokeWidth?: number; // CSS pixels, default 1.5
 }
 
+export interface CrosshairOpts {
+    color?: Color;        // default '#fff'
+    size?: number;        // arm half-length, CSS pixels, default 8
+    thickness?: number;   // CSS pixels, default 1.5
+    gap?: number;         // half-gap left blank at the centre, CSS px, default 0
+}
+
 // ---------------------------------------------------------------------------
 // Internal storage
 // ---------------------------------------------------------------------------
@@ -101,6 +113,14 @@ interface LineEntry {
     dash: number;
 }
 
+interface CrosshairEntry {
+    canvasPos: [number, number];
+    size: number;         // CSS pixels
+    thickness: number;    // CSS pixels
+    gap: number;          // CSS pixels
+    color: [number, number, number, number];
+}
+
 // ---------------------------------------------------------------------------
 // OverlayBuilder
 // ---------------------------------------------------------------------------
@@ -109,6 +129,7 @@ export class OverlayBuilder {
     private canvasEl: HTMLCanvasElement;
     private lines: LineEntry[] = [];
     private handles: HandleEntry[] = [];
+    private crosshairs: CrosshairEntry[] = [];
 
     constructor(canvasEl: HTMLCanvasElement) {
         this.canvasEl = canvasEl;
@@ -121,6 +142,20 @@ export class OverlayBuilder {
             color: toRgba(opts?.color ?? '#fff'),
             thickness: opts?.thickness ?? 1,
             dash: opts?.dash ?? 0,
+        });
+        return this;
+    }
+
+    /** Add a screen-space crosshair (constant pixel size) at a canvas-space
+     *  position. Used for the clone-brush source marker, matching Krita /
+     *  GIMP's source-tool cross. */
+    crosshair(pos: [number, number], opts?: CrosshairOpts): this {
+        this.crosshairs.push({
+            canvasPos: pos,
+            size: opts?.size ?? 8,
+            thickness: opts?.thickness ?? 1.5,
+            gap: opts?.gap ?? 0,
+            color: toRgba(opts?.color ?? '#fff'),
         });
         return this;
     }
@@ -139,8 +174,11 @@ export class OverlayBuilder {
         return this;
     }
 
-    /** Convert to GPU primitives and push to the overlay system. */
-    push(engine: EngineRequests): void {
+    /** Convert to GPU primitives and push to the given overlay channel.
+     *  `'tool'` (default) is the transient active-tool channel, replaced
+     *  every hover move; `'clone'` is the clone-brush source marker channel,
+     *  which persists across the dab preview's `'tool'` churn. */
+    push(engine: EngineRequests, channel: OverlayChannel = 'tool'): void {
         const dpr = window.devicePixelRatio || 1;
         const prims: GpuPrim[] = [];
 
@@ -169,7 +207,29 @@ export class OverlayBuilder {
             }));
         }
 
-        engine.api.setOverlay({ primitives: prims });
+        // Crosshairs — screen space (constant pixel size), same frame as
+        // handles. Each arm is a separate line so an optional centre gap
+        // leaves the exact source pixel visible.
+        for (const c of this.crosshairs) {
+            const sp = canvasToScreen(c.canvasPos[0], c.canvasPos[1], this.canvasEl);
+            const cx = sp.x * dpr;
+            const cy = sp.y * dpr;
+            const size = c.size * dpr;
+            const gap = c.gap * dpr;
+            const thickness = c.thickness * dpr;
+            const arm = (from: [number, number], to: [number, number]) =>
+                prims.push(prim(KIND_LINE, 0, from, to, { color: c.color, thickness }));
+            arm([cx - size, cy], [cx - gap, cy]);
+            arm([cx + gap, cy], [cx + size, cy]);
+            arm([cx, cy - size], [cx, cy - gap]);
+            arm([cx, cy + gap], [cx, cy + size]);
+        }
+
+        if (channel === 'clone') {
+            engine.api.setCloneOverlay({ primitives: prims });
+        } else {
+            engine.api.setOverlay({ primitives: prims });
+        }
         // Overlay updates may originate outside a pointer event (e.g. async
         // GPU readback completion in a tool's onFrame hook). The frame loop
         // has already decided whether to continue based on render()'s return
@@ -177,9 +237,13 @@ export class OverlayBuilder {
         app.requestFrame();
     }
 
-    /** Clear the GPU overlay. */
-    clear(engine: EngineRequests): void {
-        engine.api.clearOverlay();
+    /** Clear the given overlay channel (`'tool'` default | `'clone'`). */
+    clear(engine: EngineRequests, channel: OverlayChannel = 'tool'): void {
+        if (channel === 'clone') {
+            engine.api.clearCloneOverlay();
+        } else {
+            engine.api.clearOverlay();
+        }
         app.requestFrame();
     }
 

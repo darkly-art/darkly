@@ -458,8 +458,9 @@ fn install_staging(
     engine.active_stroke_layer = None;
     engine.isolated_node = None;
     engine.floating = None;
-    engine.selection_overlay.clear();
-    engine.tool_overlay.clear();
+    for channel in &mut engine.overlays {
+        channel.clear();
+    }
     engine.undo_stack = crate::undo::UndoStack::new(50);
     engine.thumbnail_cache = super::ThumbnailCache::new();
     engine.thumbnail_version = engine.thumbnail_version.wrapping_add(1);

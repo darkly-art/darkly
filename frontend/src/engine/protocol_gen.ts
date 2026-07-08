@@ -534,6 +534,10 @@ export type SetBlendModeReq = { id: number, type_id: string, };
 
 export type SetBrushBlendModeReq = { mode: number, };
 
+export type SetOverlayReq = { primitives: Array<PrimIn>, };
+
+export type PrimIn = { kind: number, flags: number, p0: [number, number], p1: [number, number], color: [number, number, number, number], thickness: number, dashLen: number, dashOffset: number, cornerRadius: number, modeParam: number, rotation: number, };
+
 export type SetCloneSourceReq = { x: number, y: number, };
 
 export type SetDocumentNameReq = { name: string, };
@@ -551,10 +555,6 @@ export type SetLayerVisibleReq = { id: number, visible: boolean, };
 export type SetNodeLockedReq = { id: number, locked: boolean, };
 
 export type SetOpacityReq = { id: number, opacity: number, };
-
-export type SetOverlayReq = { primitives: Array<PrimIn>, };
-
-export type PrimIn = { kind: number, flags: number, p0: [number, number], p1: [number, number], color: [number, number, number, number], thickness: number, dashLen: number, dashOffset: number, cornerRadius: number, modeParam: number, rotation: number, };
 
 export type SetOverlayMaskReq = { width: number, height: number, rgba: Array<number>, };
 
@@ -694,11 +694,13 @@ export type RequestKind =
     | 'canvas_dimensions'
     | 'canvas_rect'
     | 'clear_brush_cursor_preview_pose'
+    | 'clear_clone_overlay'
     | 'clear_overlay'
     | 'clear_overlay_mask'
     | 'clear_selection'
     | 'clear_selection_contents'
     | 'clear_veils'
+    | 'clone_source_anchored'
     | 'commit_floating'
     | 'copy'
     | 'copy_layer_rich'
@@ -776,6 +778,7 @@ export type RequestKind =
     | 'selection_to_mask'
     | 'set_blend_mode'
     | 'set_brush_blend_mode'
+    | 'set_clone_overlay'
     | 'set_clone_source'
     | 'set_document_name'
     | 'set_group_collapsed'
@@ -874,11 +877,13 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'canvas_dimensions',
     'canvas_rect',
     'clear_brush_cursor_preview_pose',
+    'clear_clone_overlay',
     'clear_overlay',
     'clear_overlay_mask',
     'clear_selection',
     'clear_selection_contents',
     'clear_veils',
+    'clone_source_anchored',
     'commit_floating',
     'copy',
     'copy_layer_rich',
@@ -956,6 +961,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'selection_to_mask',
     'set_blend_mode',
     'set_brush_blend_mode',
+    'set_clone_overlay',
     'set_clone_source',
     'set_document_name',
     'set_group_collapsed',
@@ -1062,11 +1068,13 @@ export interface EngineApi {
     canvasDimensions(): Promise<CanvasDimensionsResp>;
     canvasRect(): Promise<CanvasRectResp>;
     clearBrushCursorPreviewPose(): void;
+    clearCloneOverlay(): void;
     clearOverlay(): void;
     clearOverlayMask(): void;
     clearSelection(): void;
     clearSelectionContents(req: ClearSelectionContentsReq): void;
     clearVeils(): void;
+    cloneSourceAnchored(): Promise<boolean>;
     commitFloating(): void;
     copy(req: CopyReq): Promise<ClipboardExport | null>;
     copyLayerRich(req: CopyLayerRichReq): void;
@@ -1144,6 +1152,7 @@ export interface EngineApi {
     selectionToMask(req: SelectionToMaskReq): void;
     setBlendMode(req: SetBlendModeReq): void;
     setBrushBlendMode(req: SetBrushBlendModeReq): void;
+    setCloneOverlay(req: SetOverlayReq): void;
     setCloneSource(req: SetCloneSourceReq): void;
     setDocumentName(req: SetDocumentNameReq): void;
     setGroupCollapsed(req: SetGroupCollapsedReq): void;
@@ -1244,11 +1253,13 @@ export function makeApi(t: Transport): EngineApi {
         canvasDimensions: () => t.request('canvas_dimensions'),
         canvasRect: () => t.request('canvas_rect'),
         clearBrushCursorPreviewPose: () => t.postFF('clear_brush_cursor_preview_pose'),
+        clearCloneOverlay: () => t.postFF('clear_clone_overlay'),
         clearOverlay: () => t.postFF('clear_overlay'),
         clearOverlayMask: () => t.postFF('clear_overlay_mask'),
         clearSelection: () => t.postFF('clear_selection'),
         clearSelectionContents: (req) => t.postFF('clear_selection_contents', req),
         clearVeils: () => t.postFF('clear_veils'),
+        cloneSourceAnchored: () => t.request('clone_source_anchored'),
         commitFloating: () => t.postFF('commit_floating'),
         copy: (req) => t.request('copy', req),
         copyLayerRich: (req) => t.postFF('copy_layer_rich', req),
@@ -1326,6 +1337,7 @@ export function makeApi(t: Transport): EngineApi {
         selectionToMask: (req) => t.postFF('selection_to_mask', req),
         setBlendMode: (req) => t.postFF('set_blend_mode', req),
         setBrushBlendMode: (req) => t.postFF('set_brush_blend_mode', req),
+        setCloneOverlay: (req) => t.postFF('set_clone_overlay', req),
         setCloneSource: (req) => t.postFF('set_clone_source', req),
         setDocumentName: (req) => t.postFF('set_document_name', req),
         setGroupCollapsed: (req) => t.postFF('set_group_collapsed', req),

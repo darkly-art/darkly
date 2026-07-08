@@ -100,12 +100,24 @@ pub fn register() -> BrushNodeRegistration {
     )
 }
 
+/// The exposed `mode` toggle reads anchored at or above this threshold,
+/// aligned below. The single source of truth for the 0/1 split — shared by
+/// the compile-time bake ([`mode_is_anchored`]) and the engine's structural
+/// [`crate::engine::DarklyEngine::clone_source_anchored`] query so the
+/// frontend marker and the emitted WGSL can't disagree on the mode.
+pub const MODE_ANCHORED_THRESHOLD: f32 = 0.5;
+
+/// Whether a `mode` port default selects anchored (`true`) or aligned.
+pub fn mode_default_is_anchored(mode_default: f32) -> bool {
+    mode_default >= MODE_ANCHORED_THRESHOLD
+}
+
 /// Read the exposed `mode` port default and decide aligned vs anchored.
 /// Baked at compile time (like `paint`'s flow); a wired `mode` (unusual)
 /// falls back to aligned.
 fn mode_is_anchored(cctx: &CompileWgslCtx) -> bool {
     match cctx.input("mode") {
-        InputBinding::Default(v) => v.as_f32() >= 0.5,
+        InputBinding::Default(v) => mode_default_is_anchored(v.as_f32()),
         InputBinding::Wired(_) => false,
     }
 }
@@ -185,6 +197,27 @@ impl BrushNodeEvaluator for CloneSourceEvaluator {
         let out = cctx.ident("clone_c");
         wgsl.body =
             format!("    let {out} = {fn_name}(target_pos, {center}, {angle}, {offset});\n");
+        wgsl.outputs.insert("color".into(), out);
+        Ok(wgsl)
+    }
+
+    /// Preview-mode body. At hover there is no frozen source snapshot to
+    /// sample (the preview pipeline binds the registry `_fallback` tile to
+    /// the declared source slot), so sampling it would stamp a meaningless
+    /// flat tile. Instead emit an opaque neutral constant for the `color`
+    /// output — the terminal deposits it through the brush tip, so the
+    /// cursor preview shows the tip *shape* in neutral grey (matching
+    /// Krita's `kis_duplicateop` and GIMP's source-tool outline). The
+    /// output name matches `compile_wgsl`'s so the terminal's preview body,
+    /// which resolves its `color` wire against the stroke pass's output
+    /// expressions, still finds the variable.
+    fn compile_cursor_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+        let mut wgsl = NodeWgsl::default();
+        if !cctx.consumed_outputs.contains("color") {
+            return Ok(wgsl);
+        }
+        let out = cctx.ident("clone_c");
+        wgsl.body = format!("    let {out} = vec4<f32>(0.6, 0.6, 0.6, 1.0);\n");
         wgsl.outputs.insert("color".into(), out);
         Ok(wgsl)
     }

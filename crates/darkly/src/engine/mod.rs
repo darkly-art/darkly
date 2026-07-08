@@ -317,6 +317,40 @@ impl ThumbnailCache {
     }
 }
 
+/// Logical channel an overlay primitive set belongs to. The engine keeps
+/// one primitive `Vec` per channel ([`DarklyEngine::overlays`]) and merges
+/// them in variant order before pushing to the compositor's single overlay
+/// slot — so the z-order is the declaration order here (`Selection` at the
+/// bottom, `Tool` on top). Channels are replaced wholesale and
+/// independently: a `Tool` update every hover move leaves `CloneSource` and
+/// `Selection` intact. A new channel is purely additive — extend the enum
+/// and `COUNT`/`ALL` follow; the merge never branches per variant.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum OverlayChannel {
+    /// Marching-ants selection outline, regenerated when the selection
+    /// changes. Bottom of the stack.
+    Selection,
+    /// Clone-brush source marker + "pick a source" hint. Persists across
+    /// strokes — only the clone cursor module clears it, decoupled from the
+    /// async dab that clobbers `Tool` every hover move.
+    CloneSource,
+    /// Transient active-tool overlay: the dab preview stamp, tool handles.
+    /// Set / cleared every hover move. Top of the stack.
+    Tool,
+}
+
+impl OverlayChannel {
+    /// Number of channels — the length of [`DarklyEngine::overlays`].
+    pub const COUNT: usize = 3;
+    /// Every channel in z-order (bottom to top). The merge iterates this.
+    pub const ALL: [OverlayChannel; Self::COUNT] = [Self::Selection, Self::CloneSource, Self::Tool];
+
+    /// This channel's index into [`DarklyEngine::overlays`].
+    pub(crate) const fn index(self) -> usize {
+        self as usize
+    }
+}
+
 // ---------------------------------------------------------------------------
 // DarklyEngine — platform-agnostic editor core.
 // ---------------------------------------------------------------------------
@@ -344,10 +378,12 @@ pub struct DarklyEngine {
     /// change. `rotation` here is also what the brush stack threads into
     /// `IntrinsicUniforms.view_rotation` for stamp-counteracting-view-rotation.
     pub(crate) view_params: ViewParams,
-    /// Persistent marching ants overlay (regenerated when selection changes).
-    pub(crate) selection_overlay: Vec<OverlayPrimitive>,
-    /// Transient tool overlay (set/cleared by the active tool).
-    pub(crate) tool_overlay: Vec<OverlayPrimitive>,
+    /// Overlay primitives, one `Vec` per [`OverlayChannel`]. Merged in
+    /// channel z-order by `push_merged_overlay` and pushed to the
+    /// compositor's single overlay slot. Keyed rather than a field per
+    /// channel so a new channel is additive (no merge edit) and each
+    /// channel is replaced wholesale independently of the others.
+    pub(crate) overlays: [Vec<OverlayPrimitive>; OverlayChannel::COUNT],
     /// Internal clipboard — holds typed content for copy/paste within Darkly.
     pub(crate) clipboard: Option<Clipboard>,
     /// Active floating content (paste-in-place or interactive transform).
@@ -610,8 +646,7 @@ impl DarklyEngine {
             isolated_node: None,
             view_transform: ViewTransform::identity(),
             view_params: ViewParams::default(),
-            selection_overlay: Vec::new(),
-            tool_overlay: Vec::new(),
+            overlays: Default::default(),
             clipboard: None,
             floating: None,
             region_scratch,
@@ -1052,7 +1087,16 @@ impl DarklyEngine {
     /// tracking the selection's plane bounds across a crop.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_selection_overlay(&self) -> Vec<crate::gpu::overlay::OverlayPrimitive> {
-        self.selection_overlay.clone()
+        self.overlays[OverlayChannel::Selection.index()].clone()
+    }
+
+    /// Test-only: the merged overlay primitives for one channel.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_channel_overlay(
+        &self,
+        channel: OverlayChannel,
+    ) -> Vec<crate::gpu::overlay::OverlayPrimitive> {
+        self.overlays[channel.index()].clone()
     }
 
     /// Peek at the cached thumbnail bytes for any node id without queuing a

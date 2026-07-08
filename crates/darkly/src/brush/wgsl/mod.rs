@@ -95,8 +95,11 @@ pub struct CompiledBrush {
     /// Full WGSL source for the brush's preview (hover-cursor) fragment
     /// shader. Same dab / uniform layouts as `stroke_wgsl`; differs
     /// only in the outer skeleton (single-quad vertex stage, `sel =
-    /// 1.0`, no `@group(2)` / `@group(3)` bindings). See
-    /// [`ShaderMode`].
+    /// 1.0`, no `@group(2)` selection binding) and in per-node preview
+    /// bodies (`clone_source` emits a neutral fill rather than sampling
+    /// the source). A source-sampling brush declares the same `@group(3)`
+    /// source binding here as in `stroke_wgsl`; the neutral preview body
+    /// just never samples it. See [`ShaderMode`].
     pub cursor_preview_wgsl: String,
     /// Per-dab record layout, in declaration order. The compiler
     /// includes the intrinsic header fields ([`INTRINSIC_DAB_HEADER_FIELDS`])
@@ -136,10 +139,10 @@ pub struct CompiledBrush {
     /// [`CompileWgslCtx::request_source_texture`]. Drives three
     /// consumers off one derived fact: `paint`'s `flush_dabs` binds the
     /// snapshot at `@group(3)`, the engine skips creating a stroke with
-    /// no source set, and the frontend arms the set-source gesture. The
-    /// stroke shader declares the source binding; the preview shader
-    /// omits it (the `clone_source` preview body emits a neutral fill,
-    /// with no live snapshot to sample).
+    /// no source set, and the frontend arms the set-source gesture. Both
+    /// shaders declare the source binding in both modes; the neutral
+    /// preview body never samples it (the preview pipeline binds the
+    /// registry `_fallback` tile to that unread slot).
     pub samples_source: bool,
 }
 
@@ -217,10 +220,16 @@ pub fn compile_brush_to_wgsl(
     };
 
     let mut decls = String::new();
-    // Non-terminal node bodies — shared between the stroke and preview
-    // skeletons (they're upstream of the terminal and don't depend on
-    // selection or scratch/atlas bindings).
+    // Upstream (non-terminal) node bodies, captured per-mode.
+    // `shared_body` comes from each node's `compile_wgsl`;
+    // `preview_shared_body` from `compile_cursor_preview_body`. For nodes
+    // that don't override the latter (the default delegates to
+    // `compile_wgsl`) the two are identical, so every non-clone brush's
+    // preview is unchanged. `clone_source` overrides it to emit a neutral
+    // fill instead of sampling the frozen source — the reason these are
+    // captured separately at all.
     let mut shared_body = String::new();
+    let mut preview_shared_body = String::new();
     // Terminal node bodies, captured per-mode. `stroke_terminal_body`
     // comes from the terminal's `compile_wgsl`; `preview_terminal_body`
     // comes from `compile_cursor_preview_body`. For terminals that don't
@@ -246,6 +255,19 @@ pub fn compile_brush_to_wgsl(
     // Flagged by `clone_source` through `CompileWgslCtx::request_source_texture`
     // during the walk; read out onto `CompiledBrush::samples_source` after.
     let samples_source_cell: std::cell::RefCell<bool> = std::cell::RefCell::new(false);
+
+    // Throwaway allocation cells for the preview recompile. The preview
+    // pass runs `compile_cursor_preview_body` for every step against these
+    // cells and consumes only the emitted `body`; the binding/uniform/dab
+    // layout comes solely from the stroke cells above. Walk order is
+    // identical, so a preview body that samples `graph_tex_N` resolves to
+    // the same slot the stroke pass declared. Isolating the accounting is
+    // what keeps a preview body that re-requests a texture (e.g. `image`'s
+    // default preview, which delegates to `compile_wgsl`) from
+    // double-counting into the stroke layout.
+    let preview_graph_textures_cell: std::cell::RefCell<Vec<String>> =
+        std::cell::RefCell::new(Vec::new());
+    let preview_samples_source_cell: std::cell::RefCell<bool> = std::cell::RefCell::new(false);
 
     // Track each output port's emitted expression so downstream nodes
     // can substitute.
@@ -316,11 +338,11 @@ pub fn compile_brush_to_wgsl(
             .map(|pr| pr.port.clone())
             .collect();
 
-        // For terminal steps, build the preview-mode cctx alongside the
-        // stroke-mode one so `compile_cursor_preview_body` sees the overridden
-        // port defaults. Non-terminals never have `compile_cursor_preview_body`
-        // called, so we skip the extra work.
-        let preview_cctx_parts = if step.is_terminal {
+        // Build the preview-mode cctx alongside the stroke-mode one so
+        // `compile_cursor_preview_body` sees the overridden port defaults.
+        // Done for every step (terminal and non-terminal) so a non-terminal
+        // like `clone_source` can emit a preview-specific body.
+        let preview_cctx_parts = {
             let preview_node = preview_graph
                 .nodes()
                 .get(&step.node_id)
@@ -338,9 +360,7 @@ pub fn compile_brush_to_wgsl(
                 })
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
-            Some((preview_node, preview_inputs, consumed_outputs.clone()))
-        } else {
-            None
+            (preview_node, preview_inputs, consumed_outputs.clone())
         };
 
         let cctx = CompileWgslCtx {
@@ -382,27 +402,31 @@ pub fn compile_brush_to_wgsl(
                 target.push('\n');
             }
         }
-        if is_terminal {
-            // Preview body — call the terminal's preview-mode hook. The
-            // default delegate returns the same NodeWgsl as `compile_wgsl`
-            // (paint's stroke and preview bodies share one
-            // source); watercolor/smudge/liquify override to emit a
-            // neutral-color body that doesn't reference `@group(3)`.
-            //
-            // The preview cctx wraps the cloned graph (preview overrides
-            // applied) so any `cctx.input(name).as_f32()` for a flagged
-            // port literalizes the preview constant — regardless of
-            // whether the caller pre-applied the override on the graph
-            // they handed in.
-            //
-            // Only the `body` field is consumed here — decls / dab_fields
-            // / uniform_fields / outputs / terminal_bindings are already
-            // accumulated from the stroke pass and shared across modes
-            // (helper functions a preview body references — e.g. liquify's
-            // `falloff_fn` — live in `decls` and are visible to both
-            // skeletons).
-            let (preview_node, preview_inputs, preview_consumed) =
-                preview_cctx_parts.expect("preview_cctx_parts built above for every terminal step");
+
+        // Preview body — call the node's preview-mode hook for every step.
+        // The default delegate returns the same NodeWgsl as `compile_wgsl`
+        // (paint's stroke and preview bodies share one source, and so does
+        // every upstream node), so a non-clone brush's preview body is
+        // byte-identical to its stroke body. Overrides diverge:
+        // watercolor/smudge/liquify terminals emit a neutral body that
+        // doesn't reference their `@group(3)` bindings; `clone_source`
+        // (non-terminal) emits a neutral fill instead of sampling the
+        // frozen source.
+        //
+        // The preview cctx wraps the cloned graph (preview overrides
+        // applied) so any `cctx.input(name).as_f32()` for a flagged port
+        // literalizes the preview constant — regardless of whether the
+        // caller pre-applied the override on the graph they handed in.
+        //
+        // Only the `body` field is consumed here — decls / dab_fields /
+        // uniform_fields / outputs / terminal_bindings are already
+        // accumulated from the stroke pass and shared across modes (helper
+        // functions a preview body references — e.g. liquify's `falloff_fn`
+        // — live in `decls` and are visible to both skeletons). The preview
+        // cctx points at the throwaway allocation cells so a re-request
+        // can't perturb the stroke-driven layout.
+        {
+            let (preview_node, preview_inputs, preview_consumed) = preview_cctx_parts;
             let preview_cctx = CompileWgslCtx {
                 node_id: step.node_id,
                 params: &preview_node.params,
@@ -410,8 +434,8 @@ pub fn compile_brush_to_wgsl(
                 inputs: preview_inputs,
                 lut: lut.as_ref(),
                 consumed_outputs: preview_consumed,
-                graph_textures: &graph_textures_cell,
-                samples_source: &samples_source_cell,
+                graph_textures: &preview_graph_textures_cell,
+                samples_source: &preview_samples_source_cell,
             };
             let preview_result = evaluator
                 .compile_cursor_preview_body(&preview_cctx)
@@ -419,10 +443,15 @@ pub fn compile_brush_to_wgsl(
                     type_id: step.type_id.clone(),
                     reason,
                 })?;
+            let preview_target = if is_terminal {
+                &mut preview_terminal_body
+            } else {
+                &mut preview_shared_body
+            };
             if !preview_result.body.is_empty() {
-                preview_terminal_body.push_str(&preview_result.body);
+                preview_target.push_str(&preview_result.body);
                 if !preview_result.body.ends_with('\n') {
-                    preview_terminal_body.push('\n');
+                    preview_target.push('\n');
                 }
             }
         }
@@ -473,9 +502,22 @@ pub fn compile_brush_to_wgsl(
     // (and preview drops `@group(2)` selection and `@group(3)`
     // terminal bindings).
     let stroke_body = format!("{shared_body}{stroke_terminal_body}");
-    let preview_body = format!("{shared_body}{preview_terminal_body}");
+    let preview_body = format!("{preview_shared_body}{preview_terminal_body}");
     let graph_texture_names = graph_textures_cell.into_inner();
     let samples_source = samples_source_cell.into_inner();
+    // The preview cells only exist to give preview bodies correct slot
+    // numbering during the walk; the stroke pass owns the actual layout
+    // (Approach A — the preview shader declares the same `@group(3)`
+    // bindings the stroke shader does, per `assemble_shader` below). In a
+    // correct compile they mirror the stroke cells exactly.
+    let preview_graph_texture_names = preview_graph_textures_cell.into_inner();
+    debug_assert_eq!(
+        preview_graph_texture_names.len(),
+        graph_texture_names.len(),
+        "preview graph-texture allocation diverged from the stroke pass",
+    );
+    let _ = preview_graph_texture_names;
+    let _ = preview_samples_source_cell.into_inner();
     // A source-sampling node (`clone_source`) owns `@group(3)` for the
     // frozen pre-stroke snapshot, the same slot named graph textures and
     // terminal-owned bindings use. Reject either combination now so the

@@ -371,8 +371,11 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// preview body references — e.g. liquify's `falloff_fn` — live in
     /// `decls` and are visible to both skeletons).
     ///
-    /// Non-terminal nodes never have this called — only nodes for
-    /// which `is_terminal()` returns `true` invoke the hook.
+    /// Called for every node in the graph — terminal and non-terminal.
+    /// The default delegates to `compile_wgsl`, so a node that doesn't
+    /// override this contributes an identical preview body. `clone_source`
+    /// overrides it (a non-terminal) to emit a neutral fill instead of
+    /// sampling the frozen source at hover.
     fn compile_cursor_preview_body(
         &self,
         cctx: &crate::brush::wgsl::CompileWgslCtx,
