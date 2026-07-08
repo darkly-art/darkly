@@ -706,8 +706,7 @@ impl DarklyEngine {
     ) {
         graph.apply_preview_overrides();
         let (rw, rh) = super::brush_library::BRUSH_STROKE_RENDER_SIZE;
-        let inset =
-            rw.min(rh) as f32 * super::brush_library::BRUSH_STROKE_PATH_INSET_FRACTION;
+        let inset = rw.min(rh) as f32 * super::brush_library::BRUSH_STROKE_PATH_INSET_FRACTION;
         let path =
             crate::brush::preview_renderer::synthesize_stroke_path(rw as f32, rh as f32, 30, inset);
         let fg = self.preview_theme_fg;

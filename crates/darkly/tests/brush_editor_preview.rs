@@ -567,7 +567,9 @@ fn calligraphy_stroke_preview_not_clipped_against_render_border() {
 
     // Pin a black bg / white stroke so border ink is unambiguous.
     engine.set_preview_theme([1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]);
-    engine.brush_load("Calligraphy").expect("Calligraphy built-in");
+    engine
+        .brush_load("Calligraphy")
+        .expect("Calligraphy built-in");
     squash_active_brush_to_extreme_nib(&mut engine);
 
     let (pixels, w, h) = engine.test_render_stroke_preview_canvas();
@@ -589,7 +591,9 @@ fn calligraphy_dab_preview_not_clipped_against_render_border() {
     let mut engine = DarklyEngine::new(gpu, 1024, 768);
 
     engine.set_preview_theme([1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]);
-    engine.brush_load("Calligraphy").expect("Calligraphy built-in");
+    engine
+        .brush_load("Calligraphy")
+        .expect("Calligraphy built-in");
     squash_active_brush_to_extreme_nib(&mut engine);
 
     let (pixels, w, h) = engine.test_render_dab_preview_canvas();
