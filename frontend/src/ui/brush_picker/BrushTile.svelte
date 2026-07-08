@@ -21,33 +21,33 @@
 </button>
 
 <style>
-    /* Card-style container so each brush reads as one unit even when
-     * the picker is dense. Stronger border + slightly inset bg gives
-     * each tile clear visual edges against the picker surface. */
+    /* Raised well on the black picker slab — separation is fill contrast,
+     * not a border. Hover/selected lighten the fill; no outlines, no
+     * shadows. */
     .brush-tile {
         display: flex;
         flex-direction: column;
         gap: 6px;
         padding: 8px;
-        background: var(--bg);
-        border: 1px solid var(--bg-active);
-        border-radius: 6px;
-        color: var(--text);
+        background: var(--bg-hover);
+        border: none;
+        border-radius: var(--radius-md);
+        color: var(--text-muted);
         cursor: pointer;
         text-align: left;
-        transition: background 0.1s, border-color 0.1s;
+        transition: background 0.1s, color 0.1s;
         /* Backstop for the grid `minmax(0, 1fr)` columns — children
          * (especially imgs) can't blow the tile out horizontally. */
         min-width: 0;
     }
     .brush-tile:hover {
-        background: var(--bg-hover);
-        border-color: var(--text-muted);
+        background: var(--bg-active);
+        color: var(--text);
     }
+    /* Loaded brush: a clearly lighter slab, not an outline. */
     .brush-tile.active {
-        border-color: var(--accent);
-        background: color-mix(in srgb, var(--accent) 12%, var(--bg));
-        box-shadow: 0 0 0 1px var(--accent) inset;
+        background: var(--thumb-bg);
+        color: var(--text);
     }
     .name {
         font-size: 11px;

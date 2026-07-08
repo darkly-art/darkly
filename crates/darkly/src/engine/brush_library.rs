@@ -10,26 +10,31 @@ use crate::brush::library::BrushInfo;
 /// preview so brushes look identical in the picker grid.
 pub(crate) const BRUSH_THUMBNAIL_SIZE: (u32, u32) = (320, 120);
 
-/// Render canvas for stroke previews. Sized once, statically, with
-/// enough headroom around `BRUSH_THUMBNAIL_SIZE` to fit endpoint dabs
-/// at the largest preview-time radius any port's `preview_value` allows
-/// (currently `paint.size` ≤ 0.1 → ≤ 26 px radius). The pipeline never
-/// inspects the brush graph to size this canvas — `apply_preview_overrides`
-/// has already neutralized any port that would otherwise blow it out.
-pub(crate) const BRUSH_STROKE_RENDER_SIZE: (u32, u32) = (384, 192);
+/// Render canvas for stroke previews. Generously oversized — not derived
+/// from any per-brush geometry. `apply_preview_overrides` neutralizes the
+/// preview-time size to a known cap (round base radius ≤ ~26 px), but a
+/// broad-nib tip can stretch that footprint ~10× via anisotropy (see
+/// `shape::extent`), so the canvas simply reserves enough clearance on every
+/// edge (≳ 300 px, see `BRUSH_STROKE_PATH_INSET_FRACTION`) that the
+/// neutralized preview stroke can never reach the border. The pipeline does
+/// not inspect the graph to size this; the changed-pixel crop in
+/// `frame_stroke_thumbnail` frames the actual inked region afterward.
+pub(crate) const BRUSH_STROKE_RENDER_SIZE: (u32, u32) = (1024, 768);
 
-/// Inset reserved on every edge of the stroke render canvas so endpoint
-/// dabs at the preview-time cap radius fit fully inside without
-/// touching the canvas border. Half the gap between the render canvas
-/// and the cache:  (384-320)/2 = 32  ≥  ceil(0.1 * 256) + safety.
-pub(crate) const BRUSH_STROKE_PATH_INSET: f32 = 32.0;
+/// Fraction of the smaller render-canvas edge reserved as a margin on every
+/// side when laying the synthetic S-curve. Proportional (not a hardcoded
+/// pixel count) so the clearance scales with the canvas — at
+/// `BRUSH_STROKE_RENDER_SIZE` this yields ≳ 300 px, enough for a worst-case
+/// anisotropic nib at the preview-time radius cap to stay clear of the
+/// border. The changed-pixel crop, not this value, decides the framed size.
+pub(crate) const BRUSH_STROKE_PATH_INSET_FRACTION: f32 = 0.4;
 
-/// Render canvas for dab previews. Square and oversized relative to
-/// what we cache — the readback handler bbox-crops the rendered dab and
-/// downscales to a stable cache size, so brushes with small `size`
-/// ports or with `scatter` displacement still produce a recognizable
-/// thumbnail (no truncation, auto-centered).
-pub(crate) const BRUSH_DAB_RENDER_SIZE: (u32, u32) = (256, 256);
+/// Render canvas for dab previews. Square and generously oversized for the
+/// same reason as `BRUSH_STROKE_RENDER_SIZE`: the readback handler
+/// bbox-crops the rendered dab and downscales to a stable cache size, so the
+/// canvas only needs enough headroom that no neutralized-size tip (including
+/// a broad calligraphy nib or a `scatter`-displaced dab) touches the border.
+pub(crate) const BRUSH_DAB_RENDER_SIZE: (u32, u32) = (768, 768);
 
 #[handlers]
 impl DarklyEngine {
@@ -74,35 +79,18 @@ impl DarklyEngine {
         self.snapshot_brush_defaults();
 
         // Kick off the thumbnail bake. Uses theme colors (not the active
-        // fg) so the picker grid looks consistent across brushes. Apply
-        // preview overrides so the saved brush thumbnails are size-
-        // invariant — the picker grid should show brush identity, not a
-        // snapshot of whatever scrub value the user happened to have
-        // when saving.
-        let fg = self.preview_theme_fg;
-        let bg = self.preview_theme_bg;
-        let mut graph = self.active_brush_graph();
-        graph.apply_preview_overrides();
-        let (rw, rh) = BRUSH_STROKE_RENDER_SIZE;
-        let path = crate::brush::preview_renderer::synthesize_stroke_path(
-            rw as f32,
-            rh as f32,
-            30,
-            BRUSH_STROKE_PATH_INSET,
-        );
-        self.render_preview_and_request_readback(
-            &graph,
-            &path,
-            rw,
-            rh,
-            fg,
-            bg,
+        // fg) so the picker grid looks consistent across brushes. The shared
+        // helper applies preview overrides so the saved brush thumbnails are
+        // size-invariant — the picker grid should show brush identity, not a
+        // snapshot of whatever scrub value the user happened to have when
+        // saving.
+        self.request_stroke_preview_readback(self.active_brush_graph(), |width, height| {
             ReadbackContext::BrushThumbnailForSave {
                 name: name.to_string(),
-                width: rw,
-                height: rh,
-            },
-        );
+                width,
+                height,
+            }
+        });
         Ok(())
     }
 
@@ -131,30 +119,13 @@ impl DarklyEngine {
         let Some(brush) = self.brush_library.get(name).cloned() else {
             return Vec::new();
         };
-        let fg = self.preview_theme_fg;
-        let bg = self.preview_theme_bg;
-        let mut graph = brush.metadata.graph.clone();
-        graph.apply_preview_overrides();
-        let (rw, rh) = BRUSH_STROKE_RENDER_SIZE;
-        let path = crate::brush::preview_renderer::synthesize_stroke_path(
-            rw as f32,
-            rh as f32,
-            30,
-            BRUSH_STROKE_PATH_INSET,
-        );
-        self.render_preview_and_request_readback(
-            &graph,
-            &path,
-            rw,
-            rh,
-            fg,
-            bg,
+        self.request_stroke_preview_readback(brush.metadata.graph.clone(), |width, height| {
             ReadbackContext::BrushThumbnailForSave {
                 name: name.to_string(),
-                width: rw,
-                height: rh,
-            },
-        );
+                width,
+                height,
+            }
+        });
         Vec::new()
     }
 
@@ -177,34 +148,19 @@ impl DarklyEngine {
         let Some(brush) = self.brush_library.get(name).cloned() else {
             return Vec::new();
         };
-        let (w, h) = BRUSH_DAB_RENDER_SIZE;
-        let fg = self.preview_theme_fg;
-        let bg = self.preview_theme_bg;
-        // Reset every exposed scrub (size, opacity, hardness, …) to its
-        // registration default before rendering — same treatment the
-        // active-dab preview applies. The dab thumbnail represents the
-        // brush's identity (shape, texture, dynamics), so user-facing
-        // scrubs that vary across instances of the same brush type
-        // shouldn't bias the picker icon. Keeping the two paths
-        // identical here also means `brush_dab_thumbnail(active_name)`
-        // and `brush_active_dab_preview()` produce byte-identical PNGs,
-        // so the picker tile and the BrushBar trigger always agree.
-        let mut graph = brush.metadata.graph.clone();
-        crate::brush::reset_exposed_scrubs(&mut graph);
-        let path = crate::brush::preview_renderer::synthesize_dab_path(w as f32, h as f32);
-        self.render_preview_and_request_readback(
-            &graph,
-            &path,
-            w,
-            h,
-            fg,
-            bg,
+        // The shared helper resets every exposed scrub (size, opacity,
+        // hardness, …) to its registration default before rendering — same
+        // treatment the active-dab preview applies. Keeping the two paths on
+        // one helper means `brush_dab_thumbnail(active_name)` and
+        // `brush_active_dab_preview()` produce byte-identical PNGs, so the
+        // picker tile and the BrushBar trigger always agree.
+        self.request_dab_preview_readback(brush.metadata.graph.clone(), |width, height| {
             ReadbackContext::BrushDabThumbnail {
                 name: name.to_string(),
-                width: w,
-                height: h,
-            },
-        );
+                width,
+                height,
+            }
+        });
         Vec::new()
     }
 

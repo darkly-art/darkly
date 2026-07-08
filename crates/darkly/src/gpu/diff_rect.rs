@@ -4,10 +4,12 @@
 //! canvas) and produces the tight bounding rect of all differing pixels using
 //! atomic min/max. Used at stroke end to determine the exact undo region
 //! without hand-tracking dab positions.
+//!
+//! The "differs from texture B" predicate + its two-texture bind group are all
+//! that's specific here; the atomic min/max machinery and async readback live
+//! in [`BboxReduction`](super::bbox::BboxReduction).
 
-/// Initial values for the atomic bounds buffer: min = MAX, max = 0.
-/// If min_x > max_x after dispatch, the textures are identical.
-const BOUNDS_INIT: [u32; 4] = [u32::MAX, u32::MAX, 0, 0];
+use super::bbox::{BboxReduction, PendingBbox};
 
 pub struct DiffRectPass {
     pipeline: wgpu::ComputePipeline,
@@ -16,8 +18,7 @@ pub struct DiffRectPass {
 }
 
 struct PendingDiff {
-    staging: wgpu::Buffer,
-    rx: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    bbox: PendingBbox,
     /// Canvas-space extent of the layer at the time of `request`. Used to
     /// translate the shader's layer-local bounding rect back to canvas
     /// coords on `poll` — must be captured at request time so the result
@@ -131,28 +132,7 @@ impl DiffRectPass {
     ) {
         let width = layer_canvas_extent.width;
         let height = layer_canvas_extent.height;
-        // Storage buffer for atomic results (16 bytes).
-        let storage_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("diff-rect-storage"),
-            size: 16,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: true,
-        });
-        {
-            let mut mapping = storage_buf.slice(..).get_mapped_range_mut();
-            mapping.copy_from_slice(bytemuck::bytes_of(&BOUNDS_INIT));
-        }
-        storage_buf.unmap();
 
-        // Staging buffer for CPU readback (16 bytes).
-        let staging_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("diff-rect-staging"),
-            size: 16,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Params uniform.
         let params = Params { width, height };
         let param_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("diff-rect-params"),
@@ -166,52 +146,40 @@ impl DiffRectPass {
         }
         param_buf.unmap();
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("diff-rect-bg"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(scratch_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(current_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: storage_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: param_buf.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("diff-rect-compute"),
-        });
-
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("diff-rect"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, Some(&bind_group), &[]);
-            let wg_x = width.div_ceil(16);
-            let wg_y = height.div_ceil(16);
-            pass.dispatch_workgroups(wg_x, wg_y, 1);
-        }
-
-        // Copy storage -> staging for CPU readback.
-        encoder.copy_buffer_to_buffer(&storage_buf, 0, &staging_buf, 0, 16);
-        queue.submit([encoder.finish()]);
+        let bbox = BboxReduction::dispatch(
+            device,
+            queue,
+            &self.pipeline,
+            |storage| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("diff-rect-bg"),
+                    layout: &self.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(scratch_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(current_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: storage.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: param_buf.as_entire_binding(),
+                        },
+                    ],
+                })
+            },
+            width,
+            height,
+        );
 
         self.pending = Some(PendingDiff {
-            staging: staging_buf,
-            rx: None,
+            bbox,
             layer_canvas_extent,
         });
     }
@@ -229,54 +197,15 @@ impl DiffRectPass {
     /// extent captured at [`request`](Self::request) time. The result
     /// therefore remains valid through layer growth between request and poll.
     pub fn poll(&mut self, device: &wgpu::Device) -> Option<Option<crate::coord::CanvasRect>> {
-        let pending = self.pending.as_mut()?;
-
-        // Begin mapping if not started.
-        if pending.rx.is_none() {
-            let slice = pending.staging.slice(..);
-            let (tx, rx) = std::sync::mpsc::sync_channel(1);
-            slice.map_async(wgpu::MapMode::Read, move |result| {
-                let _ = tx.send(result);
-            });
-            pending.rx = Some(rx);
-        }
-
-        let _ = device.poll(wgpu::PollType::Poll);
-
-        let ready = pending.rx.as_ref().unwrap().try_recv().ok();
-        match ready {
-            Some(Ok(())) => {
-                let p = self.pending.take().unwrap();
-                let slice = p.staging.slice(..);
-                let mapped = slice.get_mapped_range();
-                let raw: [u32; 4] = *bytemuck::from_bytes(&mapped[..16]);
-                drop(mapped);
-                p.staging.unmap();
-
-                let [min_x, min_y, max_x, max_y] = raw;
-                if min_x <= max_x && min_y <= max_y {
-                    // +1 because max is inclusive pixel coordinate.
-                    // Translate layer-local bounds to canvas coords using the
-                    // extent captured at request time.
-                    let canvas_x = p.layer_canvas_extent.origin.x + min_x as i32;
-                    let canvas_y = p.layer_canvas_extent.origin.y + min_y as i32;
-                    Some(Some(crate::coord::CanvasRect::from_xywh(
-                        canvas_x,
-                        canvas_y,
-                        max_x - min_x + 1,
-                        max_y - min_y + 1,
-                    )))
-                } else {
-                    // Textures are identical — no diff.
-                    Some(None)
-                }
-            }
-            Some(Err(e)) => {
-                log::error!("diff rect buffer mapping failed: {e}");
-                self.pending = None;
-                Some(None)
-            }
-            None => None,
-        }
+        // Still pending (no request, or the reduction hasn't landed) → None.
+        let ready = self.pending.as_mut()?.bbox.poll(device)?;
+        // The reduction landed — consume the request and map its texel-local
+        // rect into canvas coords via the extent captured at request time.
+        let pending = self.pending.take().unwrap();
+        Some(ready.map(|[x, y, w, h]| {
+            let canvas_x = pending.layer_canvas_extent.origin.x + x as i32;
+            let canvas_y = pending.layer_canvas_extent.origin.y + y as i32;
+            crate::coord::CanvasRect::from_xywh(canvas_x, canvas_y, w, h)
+        }))
     }
 }

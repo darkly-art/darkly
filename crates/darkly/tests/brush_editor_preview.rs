@@ -493,6 +493,113 @@ fn size_scrub_does_not_bump_editor_preview_version() {
     );
 }
 
+/// Assert no pixel on the outermost border row/column carries ink — i.e. the
+/// rendered content stayed clear of the render-canvas edge and nothing was
+/// clipped away before the framer's changed-pixel crop ran. `bg` is assumed
+/// near-black (the tests pin a black theme bg), so any bright border pixel is
+/// clipped stroke.
+fn assert_no_ink_on_render_border(pixels: &[u8], w: u32, h: u32, label: &str) {
+    assert_eq!(pixels.len(), (w * h * 4) as usize);
+    const TOLERANCE: u8 = 16;
+    let is_ink = |x: u32, y: u32| -> bool {
+        let i = ((y * w + x) * 4) as usize;
+        pixels[i] > TOLERANCE || pixels[i + 1] > TOLERANCE || pixels[i + 2] > TOLERANCE
+    };
+    for x in 0..w {
+        for y in [0, h - 1] {
+            assert!(
+                !is_ink(x, y),
+                "{label}: ink clipped against render border at ({x}, {y}) rgba={:?}",
+                {
+                    let i = ((y * w + x) * 4) as usize;
+                    [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+                }
+            );
+        }
+    }
+    for y in 0..h {
+        for x in [0, w - 1] {
+            assert!(
+                !is_ink(x, y),
+                "{label}: ink clipped against render border at ({x}, {y}) rgba={:?}",
+                {
+                    let i = ((y * w + x) * 4) as usize;
+                    [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+                }
+            );
+        }
+    }
+}
+
+/// Squash the active brush's tip to the extreme calligraphy nib (aspect
+/// 10% → ~10× anisotropy, the worst case the preview canvas is sized for)
+/// by scrubbing its exposed `aspect` port. Returns nothing; mutates the
+/// active graph in place.
+fn squash_active_brush_to_extreme_nib(engine: &mut darkly::engine::DarklyEngine) {
+    let aspect = engine
+        .brush_exposed_ports()
+        .into_iter()
+        .find(|p| p.port_name == "aspect")
+        .expect("Calligraphy exposes an `aspect` port");
+    // Percent unit: display 10 → port 0.1 (the port's minimum, ~10× stretch).
+    engine
+        .brush_set_exposed_port(aspect.node_id, "aspect", 10.0)
+        .expect("scrub aspect to 10%");
+}
+
+/// Regression: a broad-nib calligraphy tip must not be clipped against the
+/// stroke-preview render canvas. The tip's anisotropy stretches the dab
+/// footprint up to ~10×, so a fixed small canvas + absolute inset clipped the
+/// endpoints (and even mid-stroke edges) before the changed-pixel crop ever
+/// saw them — the user-reported "calligraphy stroke is cut off" bug.
+///
+/// The invariant is size-agnostic: whatever canvas the preview pipeline picks,
+/// the neutralized preview stroke must stay clear of its border. We assert
+/// directly on the raw render canvas (pre-crop) via the test accessor.
+#[test]
+fn calligraphy_stroke_preview_not_clipped_against_render_border() {
+    use darkly::engine::DarklyEngine;
+    use darkly::gpu::context::GpuContext;
+
+    let (device, queue) = test_device();
+    let gpu = GpuContext::new_headless(device, queue);
+    let mut engine = DarklyEngine::new(gpu, 1024, 768);
+
+    // Pin a black bg / white stroke so border ink is unambiguous.
+    engine.set_preview_theme([1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]);
+    engine
+        .brush_load("Calligraphy")
+        .expect("Calligraphy built-in");
+    squash_active_brush_to_extreme_nib(&mut engine);
+
+    let (pixels, w, h) = engine.test_render_stroke_preview_canvas();
+    assert_no_ink_on_render_border(&pixels, w, h, "calligraphy stroke preview");
+}
+
+/// Regression: the same broad-nib calligraphy tip must not be clipped against
+/// the single-dab preview render canvas either. `aspect` is
+/// `persist_in_thumbnail` and not a default-exposed scrub, so it survives the
+/// dab path's `reset_exposed_scrubs` — the nib the picker tile shows is the
+/// full ellipse, not a truncated one.
+#[test]
+fn calligraphy_dab_preview_not_clipped_against_render_border() {
+    use darkly::engine::DarklyEngine;
+    use darkly::gpu::context::GpuContext;
+
+    let (device, queue) = test_device();
+    let gpu = GpuContext::new_headless(device, queue);
+    let mut engine = DarklyEngine::new(gpu, 1024, 768);
+
+    engine.set_preview_theme([1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]);
+    engine
+        .brush_load("Calligraphy")
+        .expect("Calligraphy built-in");
+    squash_active_brush_to_extreme_nib(&mut engine);
+
+    let (pixels, w, h) = engine.test_render_dab_preview_canvas();
+    assert_no_ink_on_render_border(&pixels, w, h, "calligraphy dab preview");
+}
+
 #[test]
 fn empty_path_returns_none() {
     let (device, queue) = test_device();

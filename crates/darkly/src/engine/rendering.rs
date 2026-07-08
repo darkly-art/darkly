@@ -1173,6 +1173,54 @@ const CURSOR_PREVIEW_TARGET_COVERAGE: f32 = 130.0 / 255.0;
 /// scale that amplifies noise.
 const CURSOR_PREVIEW_MAX_BOOST: f32 = 8.0;
 
+/// Tight bounding box of the pixels a caller deems "interesting", scanning
+/// an unpadded RGBA8 buffer of `width × height`. Returns `[min_x, min_y,
+/// max_x, max_y]` (inclusive) or `None` when no pixel qualifies.
+///
+/// This is the single CPU implementation of "bounding box of the changed
+/// pixels" — the same min/max reduction the GPU [`BboxReduction`] runs, on
+/// the CPU side of an already-read-back buffer. The two thumbnail framers
+/// pass a "differs from the theme bg" predicate; the cursor-preview coverage
+/// scan passes an alpha-threshold predicate. Keeping the scan in one place
+/// means a border/empty-region convention can't drift between the callers.
+///
+/// [`BboxReduction`]: crate::gpu::bbox::BboxReduction
+pub(crate) fn changed_pixels_bbox(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    interesting: impl Fn([u8; 4]) -> bool,
+) -> Option<[u32; 4]> {
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+    let mut found = false;
+    for y in 0..height {
+        for x in 0..width {
+            let i = ((y * width + x) * 4) as usize;
+            if interesting([pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]) {
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+                found = true;
+            }
+        }
+    }
+    found.then_some([min_x, min_y, max_x, max_y])
+}
+
+/// Predicate for [`changed_pixels_bbox`]: does an RGBA8 pixel differ from the
+/// solid `bg` on any RGB channel by more than `tol`? The tolerance
+/// accommodates the GPU's premultiplied-alpha rounding and any
+/// color-management drift while still catching a pale stroke against the bg.
+fn differs_from_bg(px: [u8; 4], bg: [u8; 3], tol: i32) -> bool {
+    (px[0] as i32 - bg[0] as i32).abs() > tol
+        || (px[1] as i32 - bg[1] as i32).abs() > tol
+        || (px[2] as i32 - bg[2] as i32).abs() > tol
+}
+
 /// Frame a rendered dab into a centered, content-fitted PNG.
 ///
 /// Generic across every brush — no per-brush logic. The procedure:
@@ -1203,45 +1251,16 @@ pub fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4])
         (bg[1].clamp(0.0, 1.0) * 255.0).round() as u8,
         (bg[2].clamp(0.0, 1.0) * 255.0).round() as u8,
     ];
-    // Tolerance accommodates the GPU's premultiplied-alpha rounding
-    // and any color-management drift; tight enough to still pick up a
-    // pale stroke against the bg.
     const TOLERANCE: i32 = 12;
-
-    let mut min_x = width;
-    let mut min_y = height;
-    let mut max_x = 0u32;
-    let mut max_y = 0u32;
-    let mut found = false;
-    for y in 0..height {
-        for x in 0..width {
-            let i = ((y * width + x) * 4) as usize;
-            let dr = (pixels[i] as i32 - bg_u8[0] as i32).abs();
-            let dg = (pixels[i + 1] as i32 - bg_u8[1] as i32).abs();
-            let db = (pixels[i + 2] as i32 - bg_u8[2] as i32).abs();
-            if dr > TOLERANCE || dg > TOLERANCE || db > TOLERANCE {
-                if x < min_x {
-                    min_x = x;
-                }
-                if y < min_y {
-                    min_y = y;
-                }
-                if x > max_x {
-                    max_x = x;
-                }
-                if y > max_y {
-                    max_y = y;
-                }
-                found = true;
-            }
-        }
-    }
+    let bbox = changed_pixels_bbox(pixels, width, height, |px| {
+        differs_from_bg(px, bg_u8, TOLERANCE)
+    });
 
     let Some(src) = image::RgbaImage::from_raw(width, height, pixels.to_vec()) else {
         return Vec::new();
     };
 
-    let cropped = if found {
+    let cropped = if let Some([min_x, min_y, max_x, max_y]) = bbox {
         let bbox_w = max_x - min_x + 1;
         let bbox_h = max_y - min_y + 1;
         let raw_side = bbox_w.max(bbox_h);
@@ -1308,34 +1327,11 @@ pub(crate) fn cursor_preview_scale_from_mask(pixels: &[u8], width: u32, height: 
     // uses (matched against the bake's clear-to-zero, which makes the
     // "no content" pixel value 0 exactly).
     const TOLERANCE: u8 = 12;
-    let mut min_x = width;
-    let mut min_y = height;
-    let mut max_x = 0u32;
-    let mut max_y = 0u32;
-    let mut found = false;
-    for y in 0..height {
-        for x in 0..width {
-            let alpha = pixels[((y * width + x) * 4 + 3) as usize];
-            if alpha > TOLERANCE {
-                if x < min_x {
-                    min_x = x;
-                }
-                if y < min_y {
-                    min_y = y;
-                }
-                if x > max_x {
-                    max_x = x;
-                }
-                if y > max_y {
-                    max_y = y;
-                }
-                found = true;
-            }
-        }
-    }
-    if !found {
+    let Some([min_x, min_y, max_x, max_y]) =
+        changed_pixels_bbox(pixels, width, height, |px| px[3] > TOLERANCE)
+    else {
         return 1.0;
-    }
+    };
 
     let bbox_w = max_x - min_x + 1;
     let bbox_h = max_y - min_y + 1;
@@ -1403,41 +1399,15 @@ fn frame_stroke_thumbnail(
     // Same tolerance shape as frame_dab_thumbnail — accommodates
     // premultiplied-alpha rounding on the GPU side.
     const TOLERANCE: i32 = 12;
-
-    let mut min_x = src_w;
-    let mut min_y = src_h;
-    let mut max_x = 0u32;
-    let mut max_y = 0u32;
-    let mut found = false;
-    for y in 0..src_h {
-        for x in 0..src_w {
-            let i = ((y * src_w + x) * 4) as usize;
-            let dr = (pixels[i] as i32 - bg_u8[0] as i32).abs();
-            let dg = (pixels[i + 1] as i32 - bg_u8[1] as i32).abs();
-            let db = (pixels[i + 2] as i32 - bg_u8[2] as i32).abs();
-            if dr > TOLERANCE || dg > TOLERANCE || db > TOLERANCE {
-                if x < min_x {
-                    min_x = x;
-                }
-                if y < min_y {
-                    min_y = y;
-                }
-                if x > max_x {
-                    max_x = x;
-                }
-                if y > max_y {
-                    max_y = y;
-                }
-                found = true;
-            }
-        }
-    }
+    let bbox = changed_pixels_bbox(pixels, src_w, src_h, |px| {
+        differs_from_bg(px, bg_u8, TOLERANCE)
+    });
 
     let Some(src) = image::RgbaImage::from_raw(src_w, src_h, pixels.to_vec()) else {
         return Vec::new();
     };
 
-    let cropped = if found {
+    let cropped = if let Some([min_x, min_y, max_x, max_y]) = bbox {
         let bbox_w = max_x - min_x + 1;
         let bbox_h = max_y - min_y + 1;
         let target_aspect = dst_w as f32 / dst_h as f32;
