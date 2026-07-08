@@ -78,23 +78,29 @@
 </script>
 
 <ToolBarLayout>
-    {#snippet left()}
+    {#snippet center()}
+        <!-- The brush picker is the leading control in the same wrapping row
+             as the scrubs — a black rounded button that wraps alongside them.
+             Its dropdown menu anchors to this button. -->
         <div class="brush-picker-section">
             <button
-                class="brush-picker-button"
+                class="brush-picker-button bar-control"
                 data-keep-open="brush-picker"
                 onclick={() => { ensureInit(); brushPickerOpen = !brushPickerOpen; }}
                 title="Select brush"
             >
                 <!-- Live preview of the active graph — same component the
-                     picker's active strip uses, so preset and custom states
-                     render identically. The label below is the only thing
-                     that switches between the preset name and "Custom". -->
+                     picker's tiles use, so preset and custom states render
+                     identically. The value switches between the preset name
+                     and "Custom". The preview stands in for a scrub's icon. -->
                 <span class="trigger-preview">
-                    <LiveBrushPreviewStrip width={80} />
+                    <LiveBrushPreviewStrip width={64} />
                 </span>
-                <span class="brush-name">{brushGraph.activeBrush ?? 'Custom'}</span>
-                <svg class="chevron" width="10" height="6" viewBox="0 0 10 6">
+                <span class="bar-control-text">
+                    <span class="bar-control-label">Brush</span>
+                    <span class="bar-control-value name">{brushGraph.activeBrush ?? 'Custom'}</span>
+                </span>
+                <svg class="chevron" class:flipped={brushPickerOpen} width="10" height="6" viewBox="0 0 10 6">
                     <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/>
                 </svg>
             </button>
@@ -103,9 +109,7 @@
                 <BrushPicker onSelect={selectBrush} onClose={() => (brushPickerOpen = false)} />
             {/if}
         </div>
-    {/snippet}
 
-    {#snippet center()}
         {#each brushGraph.exposedPorts as port}
             {#if port.data.kind === 'scalar'}
                 {@const d = port.data}
@@ -170,47 +174,31 @@
 </ToolBarLayout>
 
 <style>
+    /* Anchor for the dropdown menu; the button itself sizes to content so it
+     * wraps in the scrub row like any other control. */
     .brush-picker-section {
         position: relative;
         flex-shrink: 0;
     }
 
     /* Width-bound wrapper for the embedded preview strip — the strip
-     * is `width: 100%; aspect-ratio: 11/3`, so the wrapper width
-     * picks the trigger preview's height. 80px → ~22px tall. */
+     * is `width: 100%; aspect-ratio: 11/3`, so the wrapper width picks the
+     * trigger preview's height. 64px → ~17px tall, matching the scrubs. */
     .trigger-preview {
         display: block;
-        width: 80px;
+        width: 64px;
         flex-shrink: 0;
     }
 
+    /* Shared `.bar-control` supplies the look (fill, radius, padding, gap,
+     * label/value metrics) so this matches the scrubs; only the button reset
+     * and the name's truncation are picker-specific. */
     .brush-picker-button {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        /* Gradient lives on the border, not the fill — two-layer
-         * background with `padding-box`/`border-box` clips so the
-         * border-radius is preserved (border-image flattens corners). */
-        background:
-            linear-gradient(var(--bg), var(--bg)) padding-box,
-            linear-gradient(to right, var(--thumb-bg), var(--bg)) border-box;
-        border: 3px solid transparent;
-        border-radius: 6px;
-        color: var(--text);
+        border: none;
         cursor: pointer;
-        font-size: 13px;
-        font-weight: 600;
-        padding: 2px 6px;
-        min-width: 100px;
-        transition: filter 0.1s;
     }
-    .brush-picker-button:hover {
-        filter: brightness(1.15);
-    }
-
-    .brush-name {
-        flex: 1;
-        text-align: left;
+    .brush-picker-button .name {
+        max-width: 120px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -219,6 +207,10 @@
     .chevron {
         flex-shrink: 0;
         color: var(--text-muted);
+        transition: transform 0.2s ease-out;
+    }
+    .chevron.flipped {
+        transform: rotate(180deg);
     }
 
     .error-badge {

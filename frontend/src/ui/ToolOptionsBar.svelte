@@ -49,26 +49,24 @@
         justify-content: center;
         gap: 4px;
         padding: 4px 8px;
-        background: var(--bg);
+        background: var(--canvas-bg);
         flex-shrink: 0;
-        /* Fixed height (not min-height) so the bar stays the same size
-         * across tool switches and the canvas above doesn't shift when
-         * the user swaps tools. Sized to fit the tallest tool's content
-         * — currently the brush picker (preview strip + name + chevron),
-         * which is ~32px tall; 40px total leaves a 4px breather around
-         * it. Shorter content (scrubs, dropdowns) centers within the
-         * extra space. `box-sizing: border-box` is set globally, so this
-         * height is inclusive of padding. */
-        height: 40px;
+        /* Minimum (not fixed) height: the bar is 40px at rest — sized to
+         * fit the tallest control (~32px) with a 4px breather — but grows
+         * taller when controls wrap onto extra lines in a narrow window
+         * (see ToolBarLayout `.center`). */
+        min-height: 40px;
     }
 
     .tool-name {
+        display: flex;
+        align-items: center;
         font-size: 11px;
         font-weight: 600;
         color: var(--text-muted);
         text-transform: uppercase;
         letter-spacing: 0.5px;
-        padding: 0 4px;
+        padding: 0 12px;
     }
 
     .spacer {

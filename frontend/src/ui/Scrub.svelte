@@ -69,16 +69,16 @@
 
 {#snippet body()}
     <Icon name={props.icon ?? DEFAULT_ICON} class="scrub-icon" />
-    <div class="scrub-text">
-        <span class="scrub-label">{props.label}</span>
-        <span class="scrub-value">{valueText}</span>
+    <div class="bar-control-text">
+        <span class="bar-control-label">{props.label}</span>
+        <span class="bar-control-value">{valueText}</span>
     </div>
 {/snippet}
 
 {#if props.mode === 'drag'}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-        class="scrub"
+        class="scrub bar-control"
         class:dragging
         title={props.title}
         onpointerdown={startDrag}
@@ -89,7 +89,7 @@
 {:else}
     <button
         type="button"
-        class="scrub toggle"
+        class="scrub bar-control toggle"
         class:on={props.active}
         title={props.title}
         onclick={props.onToggle}
@@ -99,20 +99,12 @@
 {/if}
 
 <style>
+    /* Base look comes from the shared `.bar-control`; the rules here are
+       scrub-specific behavior: drag cursor, the accent active/dragging
+       state, tabular value digits, and the button reset. */
     .scrub {
         flex-shrink: 0;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 10px;
-        border-radius: 6px;
         cursor: col-resize;
-        background: var(--bg-hover);
-        transition: background 0.1s;
-    }
-
-    .scrub:hover {
-        background: var(--bg-active);
     }
 
     .scrub.dragging,
@@ -121,11 +113,11 @@
     }
 
     .scrub.dragging :global(.scrub-icon),
-    .scrub.dragging .scrub-label,
-    .scrub.dragging .scrub-value,
+    .scrub.dragging .bar-control-label,
+    .scrub.dragging .bar-control-value,
     .scrub.on :global(.scrub-icon),
-    .scrub.on .scrub-label,
-    .scrub.on .scrub-value {
+    .scrub.on .bar-control-label,
+    .scrub.on .bar-control-value {
         color: #ffffff;
     }
 
@@ -140,23 +132,8 @@
         color: var(--text-muted);
     }
 
-    .scrub-text {
-        display: flex;
-        flex-direction: column;
-    }
-
-    .scrub-label {
-        font-size: 9px;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        line-height: 1;
-    }
-
-    .scrub-value {
-        font-size: 12px;
-        color: var(--text);
+    /* Values are numeric — keep digits from shifting width while scrubbing. */
+    .scrub .bar-control-value {
         font-variant-numeric: tabular-nums;
-        line-height: 1.3;
     }
 </style>
