@@ -1,12 +1,12 @@
-//! Blender void — a live Blender camera render as a layer.
+//! Blender void — a live Blender view as a layer.
 //!
 //! Sibling of the camera and screenshare voids: a thin config over the shared
 //! [`crate::gpu::video_stream_void`] machinery. Frames arrive not from a browser
 //! `MediaStream` but from an HTTP stream ([`CaptureKind::Stream`]) served by the
-//! companion Blender add-on (`blender-addon/`), which renders the active camera
-//! to an offscreen buffer, encodes WebP-with-alpha, and streams length-prefixed
-//! frames over localhost. The browser's `createImageBitmap` decodes each WebP
-//! frame (with transparency) straight into the same
+//! companion Blender add-on (`blender-addon/`), which captures the 3D viewport's
+//! own view (or a camera POV), encodes alpha-carrying PNG, and streams
+//! length-prefixed frames over localhost. The browser's `createImageBitmap`
+//! decodes each frame (with transparency) straight into the same
 //! `ImageBitmap → copy_external_image_to_texture` path camera/screenshare use, so
 //! the GPU/void/compositor side needs nothing new.
 //!

@@ -3,7 +3,7 @@
  *
  * A [`FrameSource`](./frameSource.ts) whose frames arrive over a long-lived HTTP
  * response instead of a browser `MediaStream`. The companion Blender add-on
- * (`blender-addon/`) draws the active camera's viewport to an offscreen buffer,
+ * (`blender-addon/`) captures the 3D viewport's view (or a camera POV),
  * encodes an alpha-carrying still image (PNG today), and serves frames on
  * `GET <url>` as a single chunked response. Each frame is **length-prefixed** on
  * the wire — `[4-byte big-endian length][image bytes]` — so this class
@@ -21,7 +21,7 @@
  * gesture or permission is needed for a localhost stream, so unlike
  * `MediaStreamSource` this connects immediately.
  *
- * Sink-side dedup: a static camera produces identical frames, so the add-on only
+ * Sink-side dedup: a static view produces identical frames, so the add-on only
  * pushes bytes on a real change. `hasNewFrame` flips true when a frame is parsed
  * off the stream and clears after upload, so `tick()` does zero decode + zero GPU
  * work while the scene is still.
