@@ -60,6 +60,7 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: false,
             is_terminal: false,
             supports_erase: true,
+            preview_fallback_icon: None,
         },
         || Box::new(ImageEvaluator),
     )

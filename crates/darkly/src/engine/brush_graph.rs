@@ -64,30 +64,14 @@ impl DarklyEngine {
         registry.types().map(|r| r.node.clone()).collect()
     }
 
-    /// Does the active brush graph's terminal honor erase mode?
-    ///
-    /// True iff every terminal node in the active graph's registration
-    /// has `supports_erase = true`. Type-owned dispatch — there is no
-    /// central list of which terminals don't (smudge, liquify,
-    /// watercolor today); each module's `register()` declares its own
-    /// value.
-    ///
-    /// Used by the brush-tool options bar to hide the erase button for
-    /// terminals where flipping `gpu.blend_mode` would do nothing.
-    pub fn active_brush_supports_erase(&self) -> bool {
-        let graph = self.active_brush_graph();
-        let registry = crate::brush::registry();
-        for node in graph.nodes().values() {
-            let Some(reg) = registry.get(&node.type_id) else {
-                continue;
-            };
-            if reg.node.is_terminal && !reg.node.supports_erase {
-                return false;
-            }
-        }
-        // No terminal, or every terminal supports erase → keep the
-        // toggle visible.
-        true
+    /// Capabilities the active brush graph derives from its nodes'
+    /// registrations — erase support (brush-tool options bar shows or
+    /// hides the erase toggle) and the preview fallback icon (live
+    /// brush-preview strips show it instead of the baked thumbnails).
+    /// One walk via [`crate::brush::graph_capabilities`].
+    #[handler]
+    pub fn brush_active_capabilities(&self) -> crate::brush::BrushGraphCapabilities {
+        crate::brush::graph_capabilities(&self.active_brush_graph())
     }
 
     /// Return a clone of the default brush graph.

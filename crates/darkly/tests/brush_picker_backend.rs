@@ -354,6 +354,45 @@ fn size_scrub_does_not_change_active_dab_pixels() {
     );
 }
 
+/// The active-brush capabilities drive two frontend behaviours: the
+/// erase toggle in the brush-tool options bar (`supports_erase`) and
+/// the live preview strips' iconify fallback (`preview_fallback_icon`,
+/// shown instead of the baked thumbnails for content-dependent
+/// brushes). One engine across all three loads to avoid extra wgpu
+/// devices in parallel — see
+/// `size_scrub_does_not_change_active_dab_pixels`.
+#[test]
+fn brush_active_capabilities_reflect_loaded_brush() {
+    let mut engine = fresh_engine();
+
+    engine
+        .brush_load("Clone")
+        .expect("Clone is a built-in brush");
+    let caps = engine.brush_active_capabilities();
+    assert!(caps.supports_erase, "Clone's paint terminal honours erase");
+    assert_eq!(caps.preview_fallback_icon, Some("fa6-solid:clone"));
+
+    engine
+        .brush_load("Smudge")
+        .expect("Smudge is a built-in brush");
+    let caps = engine.brush_active_capabilities();
+    assert!(
+        !caps.supports_erase,
+        "Smudge's smear terminal opts out of erase"
+    );
+    assert_eq!(caps.preview_fallback_icon, Some("mdi:gesture-swipe"));
+
+    engine
+        .brush_load("Round")
+        .expect("Round is a built-in brush");
+    let caps = engine.brush_active_capabilities();
+    assert!(caps.supports_erase, "Round honours erase");
+    assert_eq!(
+        caps.preview_fallback_icon, None,
+        "content-free brushes keep the baked previews"
+    );
+}
+
 #[test]
 fn graph_change_triggers_active_dab_rebake() {
     let mut engine = fresh_engine();

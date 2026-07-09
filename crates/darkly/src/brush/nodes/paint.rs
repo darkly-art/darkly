@@ -418,6 +418,7 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: true,
             is_terminal: true,
             supports_erase: true,
+            preview_fallback_icon: None,
         },
     }
 }

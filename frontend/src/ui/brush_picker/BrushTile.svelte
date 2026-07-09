@@ -16,7 +16,7 @@
     onclick={() => onSelect(brush)}
     title={brush.description || brush.name}
 >
-    <BrushPreviewStrip brushName={brush.name} />
+    <BrushPreviewStrip brushName={brush.name} icon={brush.icon} />
     <span class="name">{brush.name}</span>
 </button>
 

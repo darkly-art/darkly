@@ -66,6 +66,21 @@ export type BlendModeTypeInfo = { type: string, displayName: string, category: s
 
 export type BorderSelectionReq = { radius: number, };
 
+export type BrushGraphCapabilities = { 
+/**
+ * Whether the graph's terminals honour erase mode — false iff any
+ * terminal registers `supports_erase = false`. The brush-tool
+ * options bar hides the erase toggle when false.
+ */
+supports_erase: boolean, 
+/**
+ * Iconify icon to show in place of baked dab/stroke thumbnails,
+ * contributed by the first node whose registration sets
+ * `preview_fallback_icon` — content-dependent nodes (clone, blur,
+ * smudge, liquify) whose preview bake renders blank.
+ */
+preview_fallback_icon: string | null, };
+
 export type BrushDabThumbnailReq = { name: string, };
 
 export type BrushExportReq = { name: string, };
@@ -134,15 +149,22 @@ export type BrushGraphSetPortDefaultReq = { node_id: number, port_name: string, 
 
 export type BrushGraphUnexposePortReq = { node_id: number, port_name: string, };
 
-export type BrushInfo = { name: string, category: string, author: string, description: string, tags: Array<string>, };
+export type BrushInfo = { name: string, category: string, author: string, description: string, tags: Array<string>, 
+/**
+ * Iconify icon shown in place of the baked dab/stroke thumbnails —
+ * present when the graph contains a content-dependent node whose
+ * preview bake renders blank (clone, blur, smudge, liquify). See
+ * [`crate::brush::graph_capabilities`].
+ */
+icon: string | null, };
 
 export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: number, };
 
-export type PortDir = "Input" | "Output";
-
 export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
+
+export type PortDir = "Input" | "Output";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -328,7 +350,14 @@ is_terminal: boolean,
  * pixels (smudge, watercolor, liquify) override to `false` so the
  * brush-tool options bar hides the erase toggle.
  */
-supports_erase: boolean, };
+supports_erase: boolean, 
+/**
+ * Iconify icon shown in place of baked dab/stroke thumbnails for any
+ * brush whose graph contains this node. Set by nodes whose output
+ * depends on existing canvas content — stroking the flat preview
+ * background renders blank, so the picker shows this icon instead.
+ */
+preview_fallback_icon: string | null, };
 
 export type BrushSaveReq = { name: string, category: string, };
 
@@ -366,14 +395,14 @@ export type FillBackgroundReq = { id: number, };
 
 export type FillBackgroundColorReq = { id: number, rgba: [number, number, number, number], };
 
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number];
-
 export type ParamInfo = { kind: string, name: string, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
 /**
  * Enum: `["Label1", "Label2", ...]`.
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
 options: JsonValue | null, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number];
 
 export type VeilTypeInfo = { type: string, displayName: string, params: Array<ParamInfo>, };
 
@@ -653,8 +682,8 @@ export type RequestKind =
     | 'begin_transform'
     | 'blend_mode_types'
     | 'border_selection'
+    | 'brush_active_capabilities'
     | 'brush_active_dab_preview'
-    | 'brush_active_supports_erase'
     | 'brush_dab_thumbnail'
     | 'brush_export'
     | 'brush_exposed_ports'
@@ -836,8 +865,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'begin_transform',
     'blend_mode_types',
     'border_selection',
+    'brush_active_capabilities',
     'brush_active_dab_preview',
-    'brush_active_supports_erase',
     'brush_dab_thumbnail',
     'brush_export',
     'brush_exposed_ports',
@@ -1027,8 +1056,8 @@ export interface EngineApi {
     beginTransform(req: BeginTransformReq): Promise<boolean>;
     blendModeTypes(): Promise<Array<BlendModeTypeInfo>>;
     borderSelection(req: BorderSelectionReq): void;
+    brushActiveCapabilities(): Promise<BrushGraphCapabilities>;
     brushActiveDabPreview(): Promise<{ bytes: Uint8Array }>;
-    brushActiveSupportsErase(): Promise<{ value: boolean }>;
     brushDabThumbnail(req: BrushDabThumbnailReq): Promise<{ bytes: Uint8Array }>;
     brushExport(req: BrushExportReq): Promise<{ bytes: Uint8Array }>;
     brushExposedPorts(): Promise<Array<ExposedPortInfo>>;
@@ -1212,8 +1241,8 @@ export function makeApi(t: Transport): EngineApi {
         beginTransform: (req) => t.request('begin_transform', req),
         blendModeTypes: () => t.request('blend_mode_types'),
         borderSelection: (req) => t.postFF('border_selection', req),
+        brushActiveCapabilities: () => t.request('brush_active_capabilities'),
         brushActiveDabPreview: () => t.request('brush_active_dab_preview'),
-        brushActiveSupportsErase: () => t.request('brush_active_supports_erase'),
         brushDabThumbnail: (req) => t.request('brush_dab_thumbnail', req),
         brushExport: (req) => t.request('brush_export', req),
         brushExposedPorts: () => t.request('brush_exposed_ports'),

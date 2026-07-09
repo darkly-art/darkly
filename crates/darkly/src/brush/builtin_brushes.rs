@@ -79,6 +79,40 @@ mod tests {
         }
     }
 
+    /// Content-dependent brushes (their graphs sample existing canvas
+    /// pixels, so the flat preview bake renders blank) must carry a
+    /// preview fallback icon on their `BrushInfo`; content-free brushes
+    /// must not. Rough Watercolor is the discriminator that proves the
+    /// trigger is `preview_fallback_icon` and not `supports_erase` —
+    /// its terminal sets `supports_erase = false` yet its preview bake
+    /// is meaningful, so it gets no icon.
+    #[test]
+    fn content_dependent_brushes_get_preview_icons() {
+        use crate::brush::library::BrushInfo;
+
+        let expected = [
+            ("Clone", Some("fa6-solid:clone")),
+            ("Blur", Some("mdi:blur")),
+            ("Smudge", Some("mdi:gesture-swipe")),
+            ("Liquify", Some("tabler:ripple")),
+            ("Round", None),
+            ("Airbrush", None),
+            ("Rough Watercolor", None),
+        ];
+        let brushes = all();
+        for (name, icon) in expected {
+            let brush = brushes
+                .iter()
+                .find(|b| b.metadata.name == name)
+                .unwrap_or_else(|| panic!("built-in brush '{name}' must exist"));
+            assert_eq!(
+                BrushInfo::from(&brush.metadata).icon,
+                icon,
+                "brush '{name}' preview fallback icon"
+            );
+        }
+    }
+
     #[test]
     fn builtin_brushes_unique_names() {
         let brushes = all();

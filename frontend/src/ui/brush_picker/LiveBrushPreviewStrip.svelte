@@ -11,6 +11,8 @@
 <script lang="ts">
     import BrushDabView from './BrushDabView.svelte';
     import BrushStrokePreview from '../brush_builder/BrushStrokePreview.svelte';
+    import BrushPreviewFallback from './BrushPreviewFallback.svelte';
+    import { brushGraph } from '../../state/brush_graph.svelte';
 
     interface Props {
         /** Total width of the strip in CSS pixels. Height is derived from
@@ -26,12 +28,16 @@
 </script>
 
 <div class="thumbs" style="width: {width}px; height: {stripHeight}px">
-    <div class="dab">
-        <BrushDabView width={dabSize} height={dabSize} />
-    </div>
-    <div class="stroke">
-        <BrushStrokePreview width={strokeWidth} height={stripHeight} />
-    </div>
+    {#if brushGraph.previewIcon}
+        <BrushPreviewFallback icon={brushGraph.previewIcon} />
+    {:else}
+        <div class="dab">
+            <BrushDabView width={dabSize} height={dabSize} />
+        </div>
+        <div class="stroke">
+            <BrushStrokePreview width={strokeWidth} height={stripHeight} />
+        </div>
+    {/if}
 </div>
 
 <style>
