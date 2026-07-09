@@ -6,11 +6,22 @@ import { heldMods, onHeldModsChange } from '../actions/held_mods';
 import { config } from '../config/store.svelte';
 import { OverlayBuilder } from '../canvas/gpu_overlay';
 import { canvasToScreen } from '../canvas/coordinates';
+import {
+    engageModifierCursor,
+    disengageModifierCursor,
+    isPointerDown,
+    lastCanvasPos,
+    onPointerRelease,
+} from './modifier_cursor';
 
-// Clone set-source cursor + arming. Mirrors `colorpicker_cursor.ts`: the
-// arming modifier is derived at runtime from whatever `setCloneSource` is
-// bound to in the active config layer (so preset swaps + user overrides
-// flow through), and a crosshair cursor prompts / confirms the gesture.
+// Clone set-source cursor + arming. The arming modifier is derived at
+// runtime from whatever `setCloneSource` is bound to in the active config
+// layer (so preset swaps + user overrides flow through), and a crosshair
+// cursor prompts / confirms the gesture. Hover suppression, the
+// `app.toolCursor` slot, and the suspend/restore handoff to the active tool
+// are owned by the shared engagement machinery in `modifier_cursor.ts` —
+// while armed, the brush's dab preview is suspended so it can't fight the
+// crosshair, and disarming restores it immediately.
 //
 // Armed conditions (crosshair shown) when a paint tool is active and the
 // active brush needs a source (`activeBrushNeedsSource`, cached async):
@@ -20,8 +31,8 @@ import { canvasToScreen } from '../canvas/coordinates';
 //      to re-set it.
 //
 // The gesture itself is dispatched by the brush-scoped chord binding
-// through `dispatchDrag`; this module only owns the cursor + the cached
-// "needs source" flag.
+// through `dispatchDrag`; this module only owns the arming decision, the
+// cached "needs source" flag, and the on-canvas source marker.
 
 // ---------------------------------------------------------------------------
 // Engine-backed anchor + needs-source cache
@@ -72,7 +83,7 @@ export function setCloneSourceAnchor(cx: number, cy: number): void {
     app.engine?.api.setCloneSource({ x: cx, y: cy });
     hasSource = true;
     sourceAnchor = { x: cx, y: cy };
-    refreshCursor();
+    refreshEngagement();
     rebuildCloneMarker();
     app.requestFrame();
 }
@@ -93,7 +104,7 @@ function syncNeedsSource(): void {
         .then(([needs, anchored]: [boolean, boolean]) => {
             needsSource = needs;
             anchoredMode = anchored;
-            refreshCursor();
+            refreshEngagement();
             rebuildCloneMarker();
             app.requestFrame();
         })
@@ -139,7 +150,8 @@ function rebuildCloneMarker(): void {
         const pos = trackedSourcePos(sourceAnchor, destAnchor, cursorPos, anchoredMode);
         const sp = canvasToScreen(pos.x, pos.y, canvasEl);
         key = `src:${Math.round(sp.x)},${Math.round(sp.y)}`;
-        b.crosshair([pos.x, pos.y], { color: '#4af', size: 8, gap: 2, thickness: 1.5 });
+        // Snapshot-invert arms so the marker stays legible over any content.
+        b.crosshair([pos.x, pos.y], { invert: true, size: 8, gap: 2, thickness: 1.5 });
     } else if (cursorPos) {
         // No source set — an amber prompt at the cursor so a clone brush
         // never silently no-op paints (prior art: GIMP's explicit prompt).
@@ -185,71 +197,86 @@ export function onCloneStrokeEnd(): void {
     rebuildCloneMarker();
 }
 
-/** Hover moved to `(cx, cy)` (not painting) — anchors the no-source hint and
- *  keeps the cursor cache warm. */
-export function onCloneHoverMove(cx: number, cy: number): void {
-    if (!needsSource) return;
-    cursorPos = { x: cx, y: cy };
-    rebuildCloneMarker();
-}
-
-/** Pointer left the canvas — drop the cursor cache. The source crosshair
- *  stays (it's anchored to the set source, not the cursor); the no-source
- *  hint, which follows the cursor, clears. */
-export function onCloneHoverLeave(): void {
-    cursorPos = null;
-    rebuildCloneMarker();
-}
-
 // ---------------------------------------------------------------------------
 // Arming
 // ---------------------------------------------------------------------------
 
-let lastCursorKey: string | null = null;
+let engaged = false;
 
 function isPaintToolActive(): boolean {
     return toolRegistry.get(app.activeToolId)?.group === 'paint';
 }
 
-/** The crosshair is shown when the active paint brush needs a source and
- *  either no source is set (a prompt) or the held modifier resolves to
- *  `setCloneSource`. Clone's binding is the most specific, so it always wins
- *  the chord — but reading the one shared resolver means this cursor and the
- *  color picker can never disagree about who owns the modifier. */
-function isArmed(): boolean {
-    if (!needsSource || !isPaintToolActive()) return false;
+/** Pure engagement decision: the crosshair arms when the active paint brush
+ *  needs a source and either no source is set (a persistent prompt) or the
+ *  held modifier resolves to `setCloneSource`. Clone's binding is the most
+ *  specific, so it always wins the chord — but reading the one shared
+ *  resolver means this cursor and the color picker can never disagree about
+ *  who owns the modifier. `pointerDown` blocks a *first* engagement only —
+ *  suppressing the hover mid-stroke would freeze the stroke's dispatch;
+ *  staying engaged never consults it. Split out so the decision is
+ *  unit-testable without the DOM state machine. */
+export function cloneEngages(
+    resolved: Set<string>,
+    paintToolActive: boolean,
+    needsSource: boolean,
+    hasSource: boolean,
+    pointerDown: boolean,
+): boolean {
+    if (pointerDown) return false;
+    if (!needsSource || !paintToolActive) return false;
     if (!hasSource) return true;
-    return dragModifierActions('canvas', heldMods()).has('setCloneSource');
+    return resolved.has('setCloneSource');
 }
 
-function refreshCursor(): void {
-    const armed = isArmed();
-    const key = armed ? 'armed' : 'idle';
-    if (key === lastCursorKey) return;
-    lastCursorKey = key;
-    if (armed) {
-        app.toolCursor = 'crosshair';
-    } else if (app.toolCursor === 'crosshair') {
-        // Only release the cursor if we own it — don't stomp another
-        // module's override (e.g. the color picker's dropper).
-        app.toolCursor = null;
+/** Re-check engagement and drive the arm/disarm transitions through the
+ *  shared machinery: arming suspends the active tool's hover (so the dab
+ *  preview can't stomp the crosshair) and takes the cursor slot; disarming
+ *  releases both and restores the hover immediately. */
+function refreshEngagement(): void {
+    if (engaged) {
+        // Staying engaged ignores pointer state (a set-source drag in
+        // flight stays armed until the modifier lifts).
+        if (!cloneEngages(
+            dragModifierActions('canvas', heldMods()),
+            isPaintToolActive(), needsSource, hasSource, false,
+        )) {
+            engaged = false;
+            disengageModifierCursor('cloneSource');
+        }
+    } else if (cloneEngages(
+        dragModifierActions('canvas', heldMods()),
+        isPaintToolActive(), needsSource, hasSource, isPointerDown(),
+    )) {
+        engaged = true;
+        engageModifierCursor('cloneSource', 'crosshair');
     }
 }
 
 /** Per-frame tick — refreshes the needs-source cache on brush change,
- *  re-evaluates the cursor, and rebuilds the on-canvas marker so it tracks
- *  view pan/zoom. Cheap when nothing changed (memo guards on each step). */
+ *  re-evaluates engagement, and rebuilds the on-canvas marker so it tracks
+ *  view pan/zoom. While engaged the brush's hover dispatch is suppressed,
+ *  so the hint's cursor position comes from the shared window-level
+ *  tracker rather than tool pointer events (null off-canvas clears the
+ *  hint); while painting, the stroke hooks own `cursorPos`. Cheap when
+ *  nothing changed (memo guards on each step). */
 export function tickCloneSourceCursor(): void {
     syncNeedsSource();
-    refreshCursor();
+    if (destAnchor === null) cursorPos = lastCanvasPos();
+    refreshEngagement();
     rebuildCloneMarker();
 }
 
-/** Drop the on-canvas clone marker — called when the paint tool deactivates
- *  so the crosshair can't outlive the tool that owns it. The engine anchor
- *  persists (session state); only the overlay is cleared. */
+/** Drop the on-canvas clone marker and any engagement — called when the
+ *  paint tool deactivates so neither the crosshair nor the hover
+ *  suppression can outlive the tool that owns them. The engine anchor
+ *  persists (session state); only the overlay + arming are cleared. */
 export function clearCloneSourceCursor(): void {
     clearCloneMarker();
+    if (engaged) {
+        engaged = false;
+        disengageModifierCursor('cloneSource');
+    }
 }
 
 let wired = false;
@@ -263,8 +290,10 @@ export function setupCloneSourceModifierTracking(): void {
     if (wired) return;
     wired = true;
 
-    // Re-evaluate the cursor when the held set changes or a rebind changes
-    // the winner (`clickIndex` is rebuilt on config change before this runs).
-    onHeldModsChange(refreshCursor);
-    config.onChange(refreshCursor);
+    // Re-evaluate when the held set changes or a rebind changes the winner
+    // (`clickIndex` is rebuilt on config change before this runs), and on
+    // pointer release — the first-engage gate re-opens after a stroke.
+    onHeldModsChange(refreshEngagement);
+    config.onChange(refreshEngagement);
+    onPointerRelease(refreshEngagement);
 }

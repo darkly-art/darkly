@@ -1,4 +1,4 @@
-import type { Tool } from './registry';
+import type { Tool, ToolContext } from './registry';
 import type { EngineRequests } from '../engine/protocol';
 import { app } from '../state/app.svelte';
 import { brushGraph } from '../state/brush_graph.svelte';
@@ -17,8 +17,6 @@ import {
     onCloneStrokeStart,
     onCloneStrokeMove,
     onCloneStrokeEnd,
-    onCloneHoverMove,
-    onCloneHoverLeave,
     clearCloneSourceCursor,
 } from './clone_source_cursor';
 
@@ -151,13 +149,22 @@ export function refreshHoverOverlay(engine: EngineRequests) {
 }
 
 /** Drop the cached hover. Called whenever the overlay is cleared
- *  (stroke start, pointer leave, tool deactivate) so a stale position
- *  can't resurrect the preview. */
+ *  (stroke start, pointer leave, tool deactivate, modifier-cursor
+ *  engage) so a stale position can't resurrect the preview. */
 function clearHover() {
     lastHover = null;
     // Invalidate any hover preview still awaiting its async refresh so it can't
     // land after this clear.
     hoverGen++;
+}
+
+/** Tear down the hover preview: clear the on-canvas ghost, drop the engine's
+ *  cached preview pose, and invalidate any in-flight async push. Shared by
+ *  pointer-leave and the `suspendHover` hook (a modifier cursor engaging). */
+function suspendBrushHover(ctx: ToolContext) {
+    ctx.engine.api.clearOverlay();
+    ctx.engine.api.clearBrushCursorPreviewPose();
+    clearHover();
 }
 
 export const MIN_SIZE = 1;
@@ -263,7 +270,6 @@ export const brushTool: Tool = {
         }
         // Hover: re-render the preview with live pen data + draw it.
         void pushHoverOverlay(ctx.engine, cursorPose(e), cx, cy);
-        onCloneHoverMove(cx, cy);
     },
 
     onPointerUp(ctx) {
@@ -275,11 +281,10 @@ export const brushTool: Tool = {
     onPointerLeave(ctx) {
         // Pointer left the canvas: drop the hover ghost so it doesn't
         // linger at the last-seen edge position.
-        ctx.engine.api.clearOverlay();
-        ctx.engine.api.clearBrushCursorPreviewPose();
-        clearHover();
-        onCloneHoverLeave();
+        suspendBrushHover(ctx);
     },
+
+    suspendHover: suspendBrushHover,
 
     restoreHover(ctx, cx, cy) {
         // Re-establish the dab preview after an interruption (e.g. the

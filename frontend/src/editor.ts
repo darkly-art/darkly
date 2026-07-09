@@ -9,6 +9,7 @@ import { DarklyInstance, setActiveInstance, getActiveInstance } from './state/ap
 import { createHandle } from './state/session';
 import { fontLibrary } from './state/font_library.svelte';
 import type { Engine } from './engine/protocol';
+import { setupModifierCursorTracking } from './tools/modifier_cursor';
 import { setupColorPickerModifierTracking } from './tools/colorpicker_cursor';
 import { setupCloneSourceModifierTracking } from './tools/clone_source_cursor';
 import { setupHeldModsTracking } from './actions/held_mods';
@@ -42,6 +43,11 @@ export async function ensureProcessInit(): Promise<void> {
     // `onHeldModsChange`) rather than each tracking modifiers themselves.
     // Idempotent.
     setupHeldModsTracking();
+
+    // Shared modifier-cursor machinery: window-level pointer tracking
+    // (pointer-down gate + last on-canvas position) that both engagement
+    // modules below consume. Idempotent.
+    setupModifierCursorTracking();
 
     // Wire the color-picker cursor so it engages as soon as the held
     // modifier resolves to `sampleColor` with a paint tool active (not just

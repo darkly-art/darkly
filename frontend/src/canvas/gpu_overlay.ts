@@ -22,7 +22,7 @@
 import { canvasToScreen } from './coordinates';
 import {
     KIND_LINE, KIND_CIRCLE, KIND_DASHED_LINE, KIND_FILLED_CIRCLE,
-    FLAG_CANVAS_SPACE, prim,
+    FLAG_CANVAS_SPACE, FLAG_INVERT_COLOR, prim,
     type GpuPrim,
 } from '../tools/selection_helpers';
 import type { EngineRequests } from '../engine/protocol';
@@ -89,6 +89,10 @@ export interface CrosshairOpts {
     size?: number;        // arm half-length, CSS pixels, default 8
     thickness?: number;   // CSS pixels, default 1.5
     gap?: number;         // half-gap left blank at the centre, CSS px, default 0
+    /** Render via the snapshot-invert overlay path (white on dark, black on
+     *  light — same as the selection marching ants). Supersedes `color`'s
+     *  rgb; alpha still applies. Default false. */
+    invert?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +123,7 @@ interface CrosshairEntry {
     thickness: number;    // CSS pixels
     gap: number;          // CSS pixels
     color: [number, number, number, number];
+    invert: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +161,7 @@ export class OverlayBuilder {
             thickness: opts?.thickness ?? 1.5,
             gap: opts?.gap ?? 0,
             color: toRgba(opts?.color ?? '#fff'),
+            invert: opts?.invert ?? false,
         });
         return this;
     }
@@ -217,8 +223,9 @@ export class OverlayBuilder {
             const size = c.size * dpr;
             const gap = c.gap * dpr;
             const thickness = c.thickness * dpr;
+            const flags = c.invert ? FLAG_INVERT_COLOR : 0;
             const arm = (from: [number, number], to: [number, number]) =>
-                prims.push(prim(KIND_LINE, 0, from, to, { color: c.color, thickness }));
+                prims.push(prim(KIND_LINE, flags, from, to, { color: c.color, thickness }));
             arm([cx - size, cy], [cx - gap, cy]);
             arm([cx + gap, cy], [cx + size, cy]);
             arm([cx, cy - size], [cx, cy - gap]);
