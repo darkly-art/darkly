@@ -100,6 +100,7 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: true,
             is_terminal: true,
             supports_erase: false,
+            preview_fallback_icon: Some("mdi:gesture-swipe"),
         },
     }
 }

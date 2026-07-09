@@ -15,7 +15,7 @@
     import { bindingSite } from '../actions/binding_site';
     import { handleDroppedFile } from '../actions';
     import { THUMB_SIZE } from '../ui/layers/thumbnails.svelte';
-    import { isColorPickerModifierActive } from '../tools/colorpicker_cursor';
+    import { isToolHoverSuppressed } from '../tools/modifier_cursor';
     import { isEditableTarget } from '../lib/isEditableTarget';
     import TransformModeMenu from '../ui/TransformModeMenu.svelte';
 
@@ -279,14 +279,14 @@
         const ctx = getToolContext();
         if (!ctx) return;
         const pos = getCanvasCoords(e);
-        // While the color-picker chord is engaged (Ctrl/Meta + paint tool),
-        // suppress the active tool's hover updates so its overlay (e.g. the
-        // brush's dab preview) can't fight the picker cursor. Pointerdown
-        // is already short-circuited by `dispatchDrag` matching the
-        // `sampleColor` chord; this covers the hover-only case. Still
-        // request a frame — the chord's onMove may have queued a pick
-        // that needs `pollPick` to commit on the next frame.
-        if (!isColorPickerModifierActive()) {
+        // While a modifier cursor is engaged (the picker's dropper, the
+        // clone brush's set-source crosshair), suppress the active tool's
+        // hover updates so its overlay (e.g. the brush's dab preview) can't
+        // fight the engaged cursor. Pointerdown is already short-circuited
+        // by `dispatchDrag` matching the chord; this covers the hover-only
+        // case. Still request a frame — a chord's onMove may have queued
+        // work (e.g. a pick that needs `pollPick` to commit next frame).
+        if (!isToolHoverSuppressed()) {
             const tool = toolRegistry.get(inst.activeToolId);
             void runHook(tool?.onPointerMove(ctx, e, pos.x, pos.y));
         }

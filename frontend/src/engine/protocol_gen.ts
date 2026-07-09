@@ -66,6 +66,21 @@ export type BlendModeTypeInfo = { type: string, displayName: string, category: s
 
 export type BorderSelectionReq = { radius: number, };
 
+export type BrushGraphCapabilities = { 
+/**
+ * Whether the graph's terminals honour erase mode — false iff any
+ * terminal registers `supports_erase = false`. The brush-tool
+ * options bar hides the erase toggle when false.
+ */
+supports_erase: boolean, 
+/**
+ * Iconify icon to show in place of baked dab/stroke thumbnails,
+ * contributed by the first node whose registration sets
+ * `preview_fallback_icon` — content-dependent nodes (clone, blur,
+ * smudge, liquify) whose preview bake renders blank.
+ */
+preview_fallback_icon: string | null, };
+
 export type BrushDabThumbnailReq = { name: string, };
 
 export type BrushExportReq = { name: string, };
@@ -134,13 +149,24 @@ export type BrushGraphSetPortDefaultReq = { node_id: number, port_name: string, 
 
 export type BrushGraphUnexposePortReq = { node_id: number, port_name: string, };
 
-export type BrushInfo = { name: string, category: string, author: string, description: string, tags: Array<string>, };
+export type BrushInfo = { name: string, category: string, author: string, description: string, tags: Array<string>, 
+/**
+ * Iconify icon shown in place of the baked dab/stroke thumbnails —
+ * present when the graph contains a content-dependent node whose
+ * preview bake renders blank (clone, blur, smudge, liquify). See
+ * [`crate::brush::graph_capabilities`].
+ */
+icon: string | null, };
 
 export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: number, };
 
 export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "levels", name: string, default: [number, number, number, number, number], } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, };
+
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
+
+export type PortDir = "Input" | "Output";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -275,10 +301,6 @@ natural_range: [number, number] | null,
  */
 persist_in_thumbnail: boolean, };
 
-export type PortDir = "Input" | "Output";
-
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
-
 export type NodeRegistration = { 
 /**
  * Unique identifier (e.g. "pen_input", "multiply").
@@ -328,7 +350,14 @@ is_terminal: boolean,
  * pixels (smudge, watercolor, liquify) override to `false` so the
  * brush-tool options bar hides the erase toggle.
  */
-supports_erase: boolean, };
+supports_erase: boolean, 
+/**
+ * Iconify icon shown in place of baked dab/stroke thumbnails for any
+ * brush whose graph contains this node. Set by nodes whose output
+ * depends on existing canvas content — stroking the flat preview
+ * background renders blank, so the picker shows this icon instead.
+ */
+preview_fallback_icon: string | null, };
 
 export type BrushSaveReq = { name: string, category: string, };
 
@@ -368,14 +397,14 @@ export type FillBackgroundReq = { id: number, };
 
 export type FillBackgroundColorReq = { id: number, rgba: [number, number, number, number], };
 
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number];
-
 export type ParamInfo = { kind: string, name: string, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
 /**
  * Enum: `["Label1", "Label2", ...]`.
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
 options: JsonValue | null, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number];
 
 export type VeilTypeInfo = { type: string, displayName: string, params: Array<ParamInfo>, };
 
@@ -406,6 +435,13 @@ export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 export type LayerKindTypeInfo = { type: string, displayName: string, };
 
 export type LayerTransformCapabilityReq = { id: number, };
+
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
 
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
@@ -458,13 +494,6 @@ pipeline: string,
  * uses.
  */
 params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
-
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
-/**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -538,6 +567,12 @@ export type SetBlendModeReq = { id: number, type_id: string, };
 
 export type SetBrushBlendModeReq = { mode: number, };
 
+export type SetOverlayReq = { primitives: Array<PrimIn>, };
+
+export type PrimIn = { kind: number, flags: number, p0: [number, number], p1: [number, number], color: [number, number, number, number], thickness: number, dashLen: number, dashOffset: number, cornerRadius: number, modeParam: number, rotation: number, };
+
+export type SetCloneSourceReq = { x: number, y: number, layer: number | null, };
+
 export type SetDocumentNameReq = { name: string, };
 
 export type SetFilterParamsReq = { id: number, params: JsonValue, };
@@ -555,10 +590,6 @@ export type SetLayerVisibleReq = { id: number, visible: boolean, };
 export type SetNodeLockedReq = { id: number, locked: boolean, };
 
 export type SetOpacityReq = { id: number, opacity: number, };
-
-export type SetOverlayReq = { primitives: Array<PrimIn>, };
-
-export type PrimIn = { kind: number, flags: number, p0: [number, number], p1: [number, number], color: [number, number, number, number], thickness: number, dashLen: number, dashOffset: number, cornerRadius: number, modeParam: number, rotation: number, };
 
 export type SetOverlayMaskReq = { width: number, height: number, rgba: Array<number>, };
 
@@ -641,6 +672,7 @@ export type VoidTypeInfo = { type: string, displayName: string, params: Array<Pa
 captureKind: CaptureKind | null, };
 
 export type RequestKind =
+    | 'active_brush_needs_source'
     | 'add_filter'
     | 'add_group'
     | 'add_mask'
@@ -656,8 +688,8 @@ export type RequestKind =
     | 'begin_transform'
     | 'blend_mode_types'
     | 'border_selection'
+    | 'brush_active_capabilities'
     | 'brush_active_dab_preview'
-    | 'brush_active_supports_erase'
     | 'brush_dab_thumbnail'
     | 'brush_export'
     | 'brush_exposed_ports'
@@ -698,11 +730,13 @@ export type RequestKind =
     | 'canvas_dimensions'
     | 'canvas_rect'
     | 'clear_brush_cursor_preview_pose'
+    | 'clear_clone_overlay'
     | 'clear_overlay'
     | 'clear_overlay_mask'
     | 'clear_selection'
     | 'clear_selection_contents'
     | 'clear_veils'
+    | 'clone_source_anchored'
     | 'commit_filter_preview'
     | 'commit_floating'
     | 'copy'
@@ -783,6 +817,8 @@ export type RequestKind =
     | 'selection_to_mask'
     | 'set_blend_mode'
     | 'set_brush_blend_mode'
+    | 'set_clone_overlay'
+    | 'set_clone_source'
     | 'set_document_name'
     | 'set_filter_params'
     | 'set_group_collapsed'
@@ -824,6 +860,7 @@ export type RequestKind =
     ;
 
 export const REQUEST_KINDS: readonly RequestKind[] = [
+    'active_brush_needs_source',
     'add_filter',
     'add_group',
     'add_mask',
@@ -839,8 +876,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'begin_transform',
     'blend_mode_types',
     'border_selection',
+    'brush_active_capabilities',
     'brush_active_dab_preview',
-    'brush_active_supports_erase',
     'brush_dab_thumbnail',
     'brush_export',
     'brush_exposed_ports',
@@ -881,11 +918,13 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'canvas_dimensions',
     'canvas_rect',
     'clear_brush_cursor_preview_pose',
+    'clear_clone_overlay',
     'clear_overlay',
     'clear_overlay_mask',
     'clear_selection',
     'clear_selection_contents',
     'clear_veils',
+    'clone_source_anchored',
     'commit_filter_preview',
     'commit_floating',
     'copy',
@@ -966,6 +1005,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'selection_to_mask',
     'set_blend_mode',
     'set_brush_blend_mode',
+    'set_clone_overlay',
+    'set_clone_source',
     'set_document_name',
     'set_filter_params',
     'set_group_collapsed',
@@ -1015,6 +1056,7 @@ export interface Transport {
 
 /** Typed, per-kind engine surface. */
 export interface EngineApi {
+    activeBrushNeedsSource(): Promise<boolean>;
     addFilter(req: AddFilterReq): Promise<number | null>;
     addGroup(req: AddGroupReq): Promise<number>;
     addMask(req: AddMaskReq): void;
@@ -1030,8 +1072,8 @@ export interface EngineApi {
     beginTransform(req: BeginTransformReq): Promise<boolean>;
     blendModeTypes(): Promise<Array<BlendModeTypeInfo>>;
     borderSelection(req: BorderSelectionReq): void;
+    brushActiveCapabilities(): Promise<BrushGraphCapabilities>;
     brushActiveDabPreview(): Promise<{ bytes: Uint8Array }>;
-    brushActiveSupportsErase(): Promise<{ value: boolean }>;
     brushDabThumbnail(req: BrushDabThumbnailReq): Promise<{ bytes: Uint8Array }>;
     brushExport(req: BrushExportReq): Promise<{ bytes: Uint8Array }>;
     brushExposedPorts(): Promise<Array<ExposedPortInfo>>;
@@ -1072,11 +1114,13 @@ export interface EngineApi {
     canvasDimensions(): Promise<CanvasDimensionsResp>;
     canvasRect(): Promise<CanvasRectResp>;
     clearBrushCursorPreviewPose(): void;
+    clearCloneOverlay(): void;
     clearOverlay(): void;
     clearOverlayMask(): void;
     clearSelection(): void;
     clearSelectionContents(req: ClearSelectionContentsReq): void;
     clearVeils(): void;
+    cloneSourceAnchored(): Promise<boolean>;
     commitFilterPreview(req: CommitFilterPreviewReq): Promise<boolean>;
     commitFloating(): void;
     copy(req: CopyReq): Promise<ClipboardExport | null>;
@@ -1157,6 +1201,8 @@ export interface EngineApi {
     selectionToMask(req: SelectionToMaskReq): void;
     setBlendMode(req: SetBlendModeReq): void;
     setBrushBlendMode(req: SetBrushBlendModeReq): void;
+    setCloneOverlay(req: SetOverlayReq): void;
+    setCloneSource(req: SetCloneSourceReq): void;
     setDocumentName(req: SetDocumentNameReq): void;
     setFilterParams(req: SetFilterParamsReq): void;
     setGroupCollapsed(req: SetGroupCollapsedReq): void;
@@ -1200,6 +1246,7 @@ export interface EngineApi {
 /** Build the typed client over a transport (in-process today, Tauri later). */
 export function makeApi(t: Transport): EngineApi {
     return {
+        activeBrushNeedsSource: () => t.request('active_brush_needs_source'),
         addFilter: (req) => t.request('add_filter', req),
         addGroup: (req) => t.request('add_group', req),
         addMask: (req) => t.postFF('add_mask', req),
@@ -1215,8 +1262,8 @@ export function makeApi(t: Transport): EngineApi {
         beginTransform: (req) => t.request('begin_transform', req),
         blendModeTypes: () => t.request('blend_mode_types'),
         borderSelection: (req) => t.postFF('border_selection', req),
+        brushActiveCapabilities: () => t.request('brush_active_capabilities'),
         brushActiveDabPreview: () => t.request('brush_active_dab_preview'),
-        brushActiveSupportsErase: () => t.request('brush_active_supports_erase'),
         brushDabThumbnail: (req) => t.request('brush_dab_thumbnail', req),
         brushExport: (req) => t.request('brush_export', req),
         brushExposedPorts: () => t.request('brush_exposed_ports'),
@@ -1257,11 +1304,13 @@ export function makeApi(t: Transport): EngineApi {
         canvasDimensions: () => t.request('canvas_dimensions'),
         canvasRect: () => t.request('canvas_rect'),
         clearBrushCursorPreviewPose: () => t.postFF('clear_brush_cursor_preview_pose'),
+        clearCloneOverlay: () => t.postFF('clear_clone_overlay'),
         clearOverlay: () => t.postFF('clear_overlay'),
         clearOverlayMask: () => t.postFF('clear_overlay_mask'),
         clearSelection: () => t.postFF('clear_selection'),
         clearSelectionContents: (req) => t.postFF('clear_selection_contents', req),
         clearVeils: () => t.postFF('clear_veils'),
+        cloneSourceAnchored: () => t.request('clone_source_anchored'),
         commitFilterPreview: (req) => t.request('commit_filter_preview', req),
         commitFloating: () => t.postFF('commit_floating'),
         copy: (req) => t.request('copy', req),
@@ -1342,6 +1391,8 @@ export function makeApi(t: Transport): EngineApi {
         selectionToMask: (req) => t.postFF('selection_to_mask', req),
         setBlendMode: (req) => t.postFF('set_blend_mode', req),
         setBrushBlendMode: (req) => t.postFF('set_brush_blend_mode', req),
+        setCloneOverlay: (req) => t.postFF('set_clone_overlay', req),
+        setCloneSource: (req) => t.postFF('set_clone_source', req),
         setDocumentName: (req) => t.postFF('set_document_name', req),
         setFilterParams: (req) => t.postFF('set_filter_params', req),
         setGroupCollapsed: (req) => t.postFF('set_group_collapsed', req),

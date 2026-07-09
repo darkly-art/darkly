@@ -458,8 +458,14 @@ fn install_staging(
     engine.active_stroke_layer = None;
     engine.isolated_node = None;
     engine.floating = None;
-    engine.selection_overlay.clear();
-    engine.tool_overlay.clear();
+    // The clone pin MUST clear: the loaded doc's fresh slotmap can hand
+    // out a key that collides with a stale cross-document pin. The anchor
+    // clears with it — a point in the old doc's plane is meaningless here.
+    engine.clone_source_anchor = None;
+    engine.clone_source_layer = None;
+    for channel in &mut engine.overlays {
+        channel.clear();
+    }
     engine.undo_stack = crate::undo::UndoStack::new(50);
     engine.thumbnail_cache = super::ThumbnailCache::new();
     engine.thumbnail_version = engine.thumbnail_version.wrapping_add(1);

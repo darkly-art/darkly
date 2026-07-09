@@ -77,6 +77,10 @@ mouse_clicks:
   # modifier role. Darkly uses drag (continuous sample while held) instead of
   # click; `$mod` carries the platform swap.
   sampleColor: canvas@paint:$mod+drag
+  # Clone tool set-source — GIMP sets the clone origin with Ctrl+click,
+  # the same `<primary>` modifier as its colour picker. Brush-scoped so it
+  # out-ranks `sampleColor` only while the Clone brush is active.
+  setCloneSource: canvas@paint@clone:$mod+drag
   # isolateLayer mouse_click: GIMP has no thumbnail-modifier equivalent,
   # so intentionally unbound here. The hotkey form (KeyI above) is the
   # GIMP-native path.

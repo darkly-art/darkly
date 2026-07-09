@@ -16,6 +16,7 @@ import { brushGraph } from '../state/brush_graph.svelte';
 import { brushSession } from '../tools/brush.svelte';
 import { registerBrushParamActions } from './brush_params';
 import { registerSampleColorAction } from './sample_color';
+import { registerCloneSourceAction } from './clone_source_gesture';
 import { registerClipboardActions } from './clipboard';
 import { pickOpenFile, type OpenedFile } from '../storage/fileHandle';
 import { detectKind, isImageKind, type FileKind } from '../storage/detectKind';
@@ -1087,6 +1088,9 @@ export function registerActions() {
 
     // -- Modifier-held color picker (Ctrl+drag → sample color) --
     registerSampleColorAction();
+
+    // -- Clone brush set-source gesture (brush-scoped modifier+drag) --
+    registerCloneSourceAction();
 
     // -- Brush builder --
     actions.register({

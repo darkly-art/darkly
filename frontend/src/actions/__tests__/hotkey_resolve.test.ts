@@ -8,13 +8,13 @@ import {
 
 describe('parseBinding', () => {
     it('parses a bare chord as global (no site, no scope)', () => {
-        expect(parseBinding('Delete')).toEqual({ site: null, scope: null, chord: 'Delete' });
-        expect(parseBinding('$mod+Shift+KeyZ')).toEqual({ site: null, scope: null, chord: '$mod+Shift+KeyZ' });
+        expect(parseBinding('Delete')).toEqual({ site: null, scope: null, brush: null, chord: 'Delete' });
+        expect(parseBinding('$mod+Shift+KeyZ')).toEqual({ site: null, scope: null, brush: null, chord: '$mod+Shift+KeyZ' });
     });
 
     it('parses a site-prefixed chord', () => {
         expect(parseBinding('layerPanel:Delete')).toEqual({
-            site: 'layerPanel', scope: null, chord: 'Delete',
+            site: 'layerPanel', scope: null, brush: null, chord: 'Delete',
         });
     });
 
@@ -22,7 +22,7 @@ describe('parseBinding', () => {
         // Defensive: tinykeys notation has no colons today, but if a future
         // chord ever contained one, only the first should split off the site.
         expect(parseBinding('layerPanel:a:b')).toEqual({
-            site: 'layerPanel', scope: null, chord: 'a:b',
+            site: 'layerPanel', scope: null, brush: null, chord: 'a:b',
         });
     });
 
@@ -32,7 +32,7 @@ describe('parseBinding', () => {
         // only fires when a paint-group tool is active and not when selection
         // tools are using shift+drag for add-to-selection.
         expect(parseBinding('canvas@paint:shift+drag')).toEqual({
-            site: 'canvas', scope: 'paint', chord: 'shift+drag',
+            site: 'canvas', scope: 'paint', brush: null, chord: 'shift+drag',
         });
     });
 
@@ -40,16 +40,28 @@ describe('parseBinding', () => {
         // `@<toolGroup>:<chord>` — no DOM site, only tool-scope. Useful for
         // future keyboard hotkeys that should only fire under a specific tool.
         expect(parseBinding('@paint:KeyB')).toEqual({
-            site: null, scope: 'paint', chord: 'KeyB',
+            site: null, scope: 'paint', brush: null, chord: 'KeyB',
+        });
+    });
+
+    it('parses a brush dimension after the tool-scope', () => {
+        // `<site>@<toolGroup>@<brush>:<chord>` — the clone brush's set-source
+        // gesture. Brush is the third `@`-part.
+        expect(parseBinding('canvas@paint@clone:$mod+drag')).toEqual({
+            site: 'canvas', scope: 'paint', brush: 'clone', chord: '$mod+drag',
+        });
+        // Brush with no explicit site still parses (scope + brush only).
+        expect(parseBinding('@paint@clone:$mod+drag')).toEqual({
+            site: null, scope: 'paint', brush: 'clone', chord: '$mod+drag',
         });
     });
 
     it('treats `@` in the chord portion as literal', () => {
-        // Defensive: only the first `@` *before the first `:`* is the scope
-        // separator. An `@` after the colon is part of the chord (none use
-        // it today, but be explicit).
+        // Defensive: only `@` *before the first `:`* splits scope/brush.
+        // An `@` after the colon is part of the chord (none use it today,
+        // but be explicit).
         expect(parseBinding('canvas:a@b')).toEqual({
-            site: 'canvas', scope: null, chord: 'a@b',
+            site: 'canvas', scope: null, brush: null, chord: 'a@b',
         });
     });
 });
@@ -96,6 +108,18 @@ describe('buildChordIndex', () => {
         const list = idx.get('shift+drag')!;
         expect(list.map(e => e.actionId)).toEqual(['both', 'sited', 'scoped', 'global']);
     });
+
+    it('sorts a brush-scoped entry ahead of the group-scoped one it shares a chord with', () => {
+        // Clone's set-source (`canvas@paint@clone`) must out-rank the color
+        // sampler (`canvas@paint`) so the shared `$mod+drag` resolves to the
+        // brush gesture when clone is active.
+        const idx = buildChordIndex([
+            { actionId: 'sampleColor',   bindings: ['canvas@paint:$mod+drag'] },
+            { actionId: 'setCloneSource', bindings: ['canvas@paint@clone:$mod+drag'] },
+        ]);
+        const list = idx.get('$mod+drag')!;
+        expect(list.map(e => e.actionId)).toEqual(['setCloneSource', 'sampleColor']);
+    });
 });
 
 describe('resolveChord', () => {
@@ -103,13 +127,19 @@ describe('resolveChord', () => {
     // future "simplification" can't quietly drop site scoping.
 
     function entries(...es: [string | null, string][]): ChordEntry[] {
-        return es.map(([site, actionId]) => ({ site, scope: null, actionId }));
+        return es.map(([site, actionId]) => ({ site, scope: null, brush: null, actionId }));
     }
 
     function scopedEntries(
         ...es: [string | null, string | null, string][]
     ): ChordEntry[] {
-        return es.map(([site, scope, actionId]) => ({ site, scope, actionId }));
+        return es.map(([site, scope, actionId]) => ({ site, scope, brush: null, actionId }));
+    }
+
+    function brushEntries(
+        ...es: [string | null, string | null, string | null, string][]
+    ): ChordEntry[] {
+        return es.map(([site, scope, brush, actionId]) => ({ site, scope, brush, actionId }));
     }
 
     it('falls through to global when no scoped entry matches', () => {
@@ -168,5 +198,28 @@ describe('resolveChord', () => {
         // specific-first ordering is correct.
         const r = resolveChord(e, [{ name: 'canvas' }], 'paint');
         expect(r?.entry.actionId).toBe('specific');
+    });
+
+    it('brush-scoped set-source beats group-scoped sampler only when clone is active', () => {
+        // Regression pin for the clone gesture: `canvas@paint@clone` and
+        // `canvas@paint` share `$mod+drag`. The brush-scoped entry is sorted
+        // first (see buildChordIndex test). With clone active it must win;
+        // with any other brush it must fall through to the color sampler.
+        const e = brushEntries(
+            ['canvas', 'paint', 'clone', 'setCloneSource'],
+            ['canvas', 'paint', null, 'sampleColor'],
+        );
+        // Clone active → set-source wins.
+        expect(
+            resolveChord(e, [{ name: 'canvas' }], 'paint', 'clone')?.entry.actionId,
+        ).toBe('setCloneSource');
+        // A different brush → the brush-scoped entry is skipped, sampler fires.
+        expect(
+            resolveChord(e, [{ name: 'canvas' }], 'paint', 'round')?.entry.actionId,
+        ).toBe('sampleColor');
+        // No named brush (Custom) → still falls through to the sampler.
+        expect(
+            resolveChord(e, [{ name: 'canvas' }], 'paint', null)?.entry.actionId,
+        ).toBe('sampleColor');
     });
 });

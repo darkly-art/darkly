@@ -124,12 +124,18 @@ impl PerBrushPipeline {
         // The compile walk rejects graphs that combine an `image`
         // node with a terminal that also claims @group(3) (e.g.
         // watercolor's pickup atlas).
-        let graph_layout = if compiled.graph_texture_names.is_empty() {
+        // `@group(3)` texture count = named `image` textures + one for
+        // the `clone_source` frozen snapshot, when present. `samples_source`
+        // brushes carry no named textures today (the compiler rejects the
+        // combination), so the source sits at slot 0.
+        let graph_tex_count =
+            compiled.graph_texture_names.len() + usize::from(compiled.samples_source);
+        let graph_layout = if graph_tex_count == 0 {
             None
         } else {
             Some(
                 ctx.texture_registry
-                    .layout_for_count(ctx.device, compiled.graph_texture_names.len()),
+                    .layout_for_count(ctx.device, graph_tex_count),
             )
         };
         let layout = match &graph_layout {
@@ -256,14 +262,19 @@ impl PerBrushPipeline {
         // texture so the pipeline always builds — surfaces a
         // `log::warn` instead of crashing while the user types in
         // the node editor.
-        let graph_textures_bind_group = if compiled.graph_texture_names.is_empty() {
-            None
-        } else {
-            let (_layout, bg) = ctx
-                .texture_registry
-                .make_bind_group(ctx.device, &compiled.graph_texture_names);
-            Some(bg)
-        };
+        // The `clone_source` snapshot is per-stroke, so its bind group is
+        // built fresh each `flush_dabs` (from the live snapshot view) and
+        // is `None` here. Static named textures (paper grain) build once
+        // and cache.
+        let graph_textures_bind_group =
+            if compiled.samples_source || compiled.graph_texture_names.is_empty() {
+                None
+            } else {
+                let (_layout, bg) = ctx
+                    .texture_registry
+                    .make_bind_group(ctx.device, &compiled.graph_texture_names);
+                Some(bg)
+            };
 
         Self {
             paint_pipeline,
@@ -407,6 +418,7 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: true,
             is_terminal: true,
             supports_erase: true,
+            preview_fallback_icon: None,
         },
     }
 }
@@ -543,6 +555,38 @@ impl BrushNodeEvaluator for PaintEvaluator {
             .expect("paint::flush_dabs requires dab_batch.slot_outputs");
         pack_uniforms(&compiled, outputs, &mut uniform_bytes);
 
+        // `clone_source` brushes bind the stroke's frozen source snapshot
+        // at `@group(3)` — the cross-layer / merged snapshot when one was
+        // captured, else the pre-stroke snapshot (same-layer clone). A
+        // per-stroke resource, so the bind group is built here each flush
+        // rather than cached on the pipeline. The layout matches
+        // `layout_for_count(1)` (shared sampler + one texture); the
+        // compiler guarantees a source-sampling brush has no named graph
+        // textures, so the source is the sole slot-0 texture.
+        let source_bind_group = if compiled.samples_source {
+            let reg = gpu.pipelines.texture_registry();
+            let view = stroke
+                .source_texture()
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            let layout = reg.layout_for_count(gpu.device, 1);
+            Some(gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("paint-clone-source-bg"),
+                layout: &layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Sampler(reg.sampler()),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                ],
+            }))
+        } else {
+            None
+        };
+
         pipeline_ref.with_pipeline(compiled.topology_hash, |per_brush| {
             // Pad uniform bytes up to the per-brush uniform size so the
             // ring entry's binding_size matches.
@@ -588,10 +632,13 @@ impl BrushNodeEvaluator for PaintEvaluator {
             pass.set_bind_group(0, &per_brush.uniform_bind_group, &[uniform_offset]);
             pass.set_bind_group(1, &per_brush.dabs_bind_group, &[]);
             pass.set_bind_group(2, gpu.selection_bind_group, &[]);
-            // `@group(3)` holds the brush's graph textures (paper
-            // grain etc.) when any are requested. Paint never uses
+            // `@group(3)` holds the brush's graph textures (paper grain
+            // etc.) when any are requested, or the `clone_source` frozen
+            // snapshot for source-sampling brushes. Paint never uses
             // group 3 for anything else.
-            if let Some(graph_bg) = per_brush.graph_textures_bind_group.as_ref() {
+            if let Some(source_bg) = source_bind_group.as_ref() {
+                pass.set_bind_group(3, source_bg, &[]);
+            } else if let Some(graph_bg) = per_brush.graph_textures_bind_group.as_ref() {
                 pass.set_bind_group(3, graph_bg, &[]);
             }
             pass.draw(0..6, 0..total_dabs);

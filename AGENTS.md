@@ -84,6 +84,14 @@ a value carried into the wrong frame is the single most recurring class of bug
 here — invisible until the canvas is cropped. The doc covers the frames, their
 authority, how to convert between them, and the pitfalls that have bitten us.
 
+### Brush Preview & Overlays
+
+**If you're touching the brush hover preview or on-canvas overlays, read
+[`docs/brush-preview-and-overlays.md`](docs/brush-preview-and-overlays.md)
+first.** Brushes compile to two shader variants (stroke + cursor-preview),
+`setOverlay` is single-slot, and preview swaps stroke-only bindings for
+fallbacks — the model that makes hover-feedback bugs hard to see otherwise.
+
 ### Hotkey & Config Presets
 
 Darkly's settings use a three-layer resolution order: `user → overlay (krita/ps/gimp) → defaults`. Placement rule is documented in [`crates/darkly/presets/defaults.yaml`](crates/darkly/presets/defaults.yaml)'s header; host-editor reference hotkeys live in [`docs/*-default-hotkeys.md`](docs/).
@@ -224,6 +232,10 @@ cargo test --workspace --exclude darkly-wasm --features darkly/testing -- --test
 # that touches `window`, stub it with `vi.stubGlobal('window', …)` and a
 # fake node — see `src/lib/__tests__/clickOutside.test.ts`.
 (cd frontend && npm test)
+# Reclaim stale build artifacts — Cargo orphans a ~300 MB static test binary on
+# every fingerprint change and never GCs it, so `target/` balloons over time.
+# `cargo install cargo-sweep` once, then periodically:
+cargo sweep --time 7
 ```
 
 Never run `git commit` — make the changes and leave staging and committing to the user.

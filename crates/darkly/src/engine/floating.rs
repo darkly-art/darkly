@@ -402,8 +402,7 @@ impl DarklyEngine {
             self.set_selection_active(false);
             self.invalidate_selection_cpu_cache();
 
-            self.selection_overlay.clear();
-            self.push_merged_overlay();
+            self.clear_channel_overlay(crate::engine::OverlayChannel::Selection);
         }
 
         // Render the initial preview so the host's blend reads the right
