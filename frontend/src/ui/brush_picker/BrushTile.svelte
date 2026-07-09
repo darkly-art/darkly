@@ -29,6 +29,12 @@
         flex-direction: column;
         gap: 6px;
         padding: 8px;
+        /* Buttons shrink-to-fit their content by default; fill the
+         * (definite) grid track instead, so the preview strip — and
+         * any percentage inside it — has a real width to resolve
+         * against even when its content has no intrinsic size (the
+         * icon fallback is just a 1em svg). */
+        width: 100%;
         background: var(--bg-hover);
         border: none;
         border-radius: var(--radius-md);

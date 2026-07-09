@@ -28,10 +28,13 @@
         justify-content: center;
         color: var(--text-muted);
     }
-    /* Scale the icon with the strip height so it stays legible from the
-     * 80px brush-bar strip up to the ~220px picker grid tiles. */
+    /* Scale the icon with the strip. Sized via a *width* percentage:
+     * the strip's height comes from its 11:3 aspect-ratio, and
+     * percentage heights don't resolve against an aspect-ratio-derived
+     * size (the svg would collapse to its intrinsic 1em) — widths
+     * always resolve. 22% of the width ≈ 80% of the strip height. */
     .fallback :global(svg) {
-        height: 55%;
-        width: auto;
+        width: 3em;
+        height: auto;
     }
 </style>
