@@ -506,4 +506,11 @@
         object-fit: contain;
         touch-action: none;
     }
+
+    /* The canvas holds keyboard focus (tabindex via `bindingSite`) so tool
+       keys route to it, but it must never show the UA focus ring. */
+    canvas:focus,
+    canvas:focus-visible {
+        outline: none;
+    }
 </style>

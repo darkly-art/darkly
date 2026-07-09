@@ -2,14 +2,44 @@
     import { tick } from 'svelte';
     import { brushGraph } from '../../state/brush_graph.svelte';
     import type { BrushInfo } from '../../state/brush_graph.svelte';
-    import LiveBrushPreviewStrip from './LiveBrushPreviewStrip.svelte';
     import BrushTile from './BrushTile.svelte';
 
     interface Props {
         onSelect: (brush: BrushInfo) => void;
         onClose: () => void;
+        /** Trigger element the dropdown anchors to. The picker is
+         *  `position: fixed` so it escapes the panel tiles' `overflow: hidden`
+         *  clipping and paints above the docked side panels; that means it can't
+         *  ride the trigger via CSS flow, so it measures the anchor instead. */
+        anchor: HTMLElement | undefined;
     }
-    let { onSelect, onClose }: Props = $props();
+    let { onSelect, onClose, anchor }: Props = $props();
+
+    let pickerEl: HTMLElement | undefined = $state();
+    let left = $state(0);
+    let bottom = $state(0);
+
+    // Anchor the fixed dropdown above the trigger, left-aligned and clamped
+    // into the viewport. Recomputed on scroll/resize because the tool-options
+    // bar reflows (controls wrap) as the window changes.
+    function reposition() {
+        if (!anchor) return;
+        const r = anchor.getBoundingClientRect();
+        const gap = 6;
+        const width = pickerEl?.offsetWidth ?? 480;
+        left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+        bottom = window.innerHeight - r.top + gap;
+    }
+
+    $effect(() => {
+        reposition();
+        window.addEventListener('resize', reposition);
+        window.addEventListener('scroll', reposition, true);
+        return () => {
+            window.removeEventListener('resize', reposition);
+            window.removeEventListener('scroll', reposition, true);
+        };
+    });
 
     let query = $state('');
     let searchInput: HTMLInputElement | undefined = $state();
@@ -30,10 +60,6 @@
         const tokens = q.toLowerCase().trim().split(/\s+/).filter(t => t.length > 0);
         return tokens.every(t => haystack.includes(t));
     }
-
-    const activeBrush = $derived(
-        brushGraph.brushes.find(b => b.name === brushGraph.activeBrush) ?? null
-    );
 
     const filtered = $derived(
         brushGraph.brushes.filter(b => matches(b, query))
@@ -104,9 +130,16 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="brush-picker dropdown-surface" data-keep-open="brush-picker" onkeydown={handleKey}>
-    <!-- Non-scrolling header: search + active brush stay visible while
-         the user scans the grid below. -->
+<div
+    class="brush-picker"
+    bind:this={pickerEl}
+    data-keep-open="brush-picker"
+    onkeydown={handleKey}
+    style:left="{left}px"
+    style:bottom="{bottom}px"
+>
+    <!-- Non-scrolling header: the search box stays put while the grid
+         below scrolls. The active brush lives on the trigger foot. -->
     <div class="picker-header">
         <input
             bind:this={searchInput}
@@ -115,23 +148,6 @@
             class="search"
             placeholder="Search brushes…"
         />
-
-        <div class="active-strip">
-            <span class="active-preview">
-                <!-- One preview path for both preset and custom states.
-                     The live engine preview is keyed on the graph itself,
-                     so a loaded preset renders identically to its baked
-                     thumbnail and a modified graph stays in sync. -->
-                <LiveBrushPreviewStrip width={176} />
-            </span>
-            <div class="active-meta">
-                <span class="active-label">Active</span>
-                <span class="active-name">{activeBrush?.name ?? 'Custom'}</span>
-                {#if activeBrush?.category}
-                    <span class="active-category">{activeBrush.category}</span>
-                {/if}
-            </div>
-        </div>
     </div>
 
     <div class="picker-body">
@@ -146,7 +162,6 @@
                     <section class="group">
                         <div class="group-header">
                             <span class="group-label">{group.category}</span>
-                            <span class="group-fence" aria-hidden="true"></span>
                         </div>
                         <div class="grid">
                             {#each group.brushes as brush, bi (brush.name)}
@@ -170,32 +185,34 @@
 </div>
 
 <style>
+    /* A black rounded dropdown anchored to the trigger button and popping
+     * upward. No border, no shadow: it reads against the raised bar and the
+     * canvas by fill contrast, and its lighter tile wells give it body.
+     * `max-width` keeps it from pushing past the viewport edge.
+     *
+     * `position: fixed` (with `left`/`bottom` set from the trigger's rect in
+     * script) lifts it out of the panel tiles' `overflow: hidden` so it paints
+     * over the docked side panels; the overlay z-index matches ContextMenu. */
     .brush-picker {
-        position: absolute;
-        bottom: 100%;
-        left: 0;
-        margin-bottom: 4px;
-        /* Bounded so the absolute panel can't push past the viewport
-         * edge (which would surface a horizontal scrollbar on body). */
+        position: fixed;
         width: 480px;
         max-width: calc(100vw - 32px);
         max-height: 60vh;
-        z-index: 100;
-        /* Outer panel is a non-scrolling flex column so the header
-         * stays put while only `.picker-body` scrolls. */
+        z-index: 1000;
+        background: var(--bg);
+        border-radius: var(--radius-md);
+        /* Non-scrolling flex column so the header stays put while only
+         * `.picker-body` scrolls. */
         display: flex;
         flex-direction: column;
         overflow: hidden;
     }
-    /* Pinned header: search + active strip. Padding lives here so the
-     * scroll content underneath doesn't bleed through under the
-     * header — `.picker-body` provides its own padding. */
+    /* Pinned header: the search box. Padding lives here so the scroll
+     * content underneath doesn't bleed through — `.picker-body` provides
+     * its own padding. */
     .picker-header {
         flex-shrink: 0;
-        padding: 10px 10px 0;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
+        padding: 12px;
     }
     .picker-body {
         /* flex-basis stays `auto`, not the `flex: 1` shorthand's `0%`: the
@@ -206,66 +223,31 @@
         flex: 1 1 auto;
         min-height: 0;
         overflow-y: auto;
-        padding: 10px;
+        /* Let a pen/stylus pan the grid vertically — without this an
+         * ancestor's `touch-action: none` (canvas gesture guard) leaves the
+         * list unscrollable with anything but a mouse wheel. */
+        touch-action: pan-y;
+        padding: 0 12px 12px;
     }
+    /* Raised well on the black slab — lighter fill, no border. */
     .search {
         width: 100%;
-        padding: 6px 10px;
+        padding: 8px 10px;
         font-size: 12px;
         background: var(--bg-hover);
         color: var(--text);
-        border: 1px solid var(--bg-active);
-        border-radius: 6px;
+        border: none;
+        border-radius: var(--radius-md);
         outline: none;
+        transition: background var(--transition-fast);
     }
     .search:focus {
-        border-color: var(--accent);
-    }
-    /* Width-bound wrapper for the strip — strip is `width: 100%;
-     * aspect-ratio: 11/3`, so 176px wide → 48px tall, matching the
-     * previous BrushDabView size in this slot. */
-    .active-preview {
-        display: block;
-        width: 176px;
-        flex-shrink: 0;
-    }
-    .active-strip {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 8px;
-        background: var(--bg-hover);
-        border-radius: 6px;
-    }
-    .active-meta {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        min-width: 0;
-    }
-    .active-label {
-        font-size: 9px;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    .active-name {
-        font-size: 13px;
-        color: var(--text);
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-    .active-category {
-        font-size: 9px;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
+        background: var(--bg-active);
     }
     .groups {
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 16px;
     }
     .group {
         display: flex;
@@ -275,24 +257,13 @@
     .group-header {
         display: flex;
         align-items: center;
-        gap: 8px;
     }
     .group-label {
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 600;
-        color: var(--text);
-        letter-spacing: 0.2px;
-        flex-shrink: 0;
-    }
-    /* Gentle fence: a thin hairline that fades from the label outward. */
-    .group-fence {
-        flex: 1;
-        height: 1px;
-        background: linear-gradient(
-            to right,
-            var(--bg-active) 0%,
-            transparent 100%
-        );
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
     }
     .grid {
         display: grid;
@@ -302,11 +273,11 @@
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 8px;
     }
-    /* Outline rather than swap colors so it stacks cleanly with `.active`
-     * on the same tile (highlight = current keyboard cursor; active =
-     * currently loaded brush). */
+    /* Keyboard cursor: reuse the hover fill (a lighter well). `.active`
+     * (loaded brush) uses a lighter slab still, so the two remain
+     * distinguishable when they land on the same tile. */
     .grid-cell.highlight :global(.brush-tile) {
-        border-color: var(--accent);
+        background: var(--bg-active);
     }
     .empty {
         font-size: 11px;

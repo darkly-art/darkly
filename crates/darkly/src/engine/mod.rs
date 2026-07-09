@@ -88,6 +88,22 @@ pub(crate) struct PendingFlip {
 pub(crate) struct PendingFilter {
     pub node_id: LayerId,
     pub filter_type: String,
+    pub params: Vec<crate::gpu::params::ParamValue>,
+}
+
+/// A live destructive-filter preview session (the non-dimming modal). Holds the
+/// pristine "before" pixels of the affected region so each param edit can
+/// restore-then-refilter, and cancel/commit can restore the true original. See
+/// [`DarklyEngine::preview_filter`].
+pub(crate) struct FilterPreview {
+    pub node_id: LayerId,
+    pub filter_type: String,
+    /// The region being previewed (canvas coords), clipped to the node + selection.
+    pub region: crate::coord::CanvasRect,
+    /// Region-sized copy of the node's pristine pixels.
+    pub snapshot: wgpu::Texture,
+    /// Region-sized R8 selection mask, when a selection was active at begin.
+    pub mask: Option<wgpu::Texture>,
 }
 
 /// Deferred copy/cut — waiting for selection CPU cache to be populated.
@@ -532,6 +548,8 @@ pub struct DarklyEngine {
     pub(crate) pending_flip: Option<PendingFlip>,
     /// Pending destructive filter waiting for the selection CPU cache.
     pub(crate) pending_filter: Option<PendingFilter>,
+    /// Active live destructive-filter preview (the non-dimming modal), if any.
+    pub(crate) filter_preview: Option<FilterPreview>,
     /// Pending copy/cut waiting for selection CPU cache.
     pub(crate) pending_copy: Option<PendingCopy>,
 
@@ -689,6 +707,7 @@ impl DarklyEngine {
             pending_transform: None,
             pending_flip: None,
             pending_filter: None,
+            filter_preview: None,
             pending_copy: None,
             readbacks: ReadbackScheduler::new(),
             pending_copy_result: None,
@@ -1121,6 +1140,75 @@ impl DarklyEngine {
     /// next `begin_stroke` to read the just-finished stroke's count.
     pub fn test_stroke_total_dabs(&self) -> u64 {
         self.brush_perf.dabs_placed as u64
+    }
+
+    /// Blocking readback of the raw stroke-preview **render canvas** for the
+    /// active brush — the buffer *before* `frame_stroke_thumbnail` crops it.
+    /// Returns `(pixels, width, height)`. For test assertions only: lets a
+    /// test confirm the neutralized preview stroke stays clear of the render
+    /// border, i.e. no ink was clipped away before the changed-pixel crop
+    /// ever ran. Renders through the same neutralization + proportional-inset
+    /// path the async `request_stroke_preview_readback` uses.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_render_stroke_preview_canvas(&mut self) -> (Vec<u8>, u32, u32) {
+        let mut graph = self.active_brush_graph();
+        graph.apply_preview_overrides();
+        let (rw, rh) = brush_library::BRUSH_STROKE_RENDER_SIZE;
+        let inset = rw.min(rh) as f32 * brush_library::BRUSH_STROKE_PATH_INSET_FRACTION;
+        let path =
+            crate::brush::preview_renderer::synthesize_stroke_path(rw as f32, rh as f32, 30, inset);
+        self.test_render_preview_canvas(&graph, &path, rw, rh)
+    }
+
+    /// Blocking readback of the raw dab-preview **render canvas** for the
+    /// active brush — the buffer *before* `frame_dab_thumbnail` crops it.
+    /// Returns `(pixels, width, height)`. Same purpose and path as
+    /// [`Self::test_render_stroke_preview_canvas`], for the single-dab preview.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_render_dab_preview_canvas(&mut self) -> (Vec<u8>, u32, u32) {
+        let mut graph = self.active_brush_graph();
+        crate::brush::reset_exposed_scrubs(&mut graph);
+        let (rw, rh) = brush_library::BRUSH_DAB_RENDER_SIZE;
+        let path = crate::brush::preview_renderer::synthesize_dab_path(rw as f32, rh as f32);
+        self.test_render_preview_canvas(&graph, &path, rw, rh)
+    }
+
+    /// Shared body of the two preview-canvas test accessors: render the given
+    /// path with the theme colors into the preview renderer and block-read the
+    /// full render target back as unpadded RGBA8.
+    #[cfg(any(test, feature = "testing"))]
+    fn test_render_preview_canvas(
+        &mut self,
+        graph: &crate::nodegraph::Graph<BrushWireType>,
+        path: &[crate::brush::paint_info::PaintInformation],
+        rw: u32,
+        rh: u32,
+    ) -> (Vec<u8>, u32, u32) {
+        let fg = self.preview_theme_fg;
+        let bg = self.preview_theme_bg;
+        let texture = self
+            .brush_stroke_preview_renderer
+            .render_stroke(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &self.brush_pipelines,
+                graph,
+                path,
+                fg,
+                bg,
+                rw,
+                rh,
+            )
+            .expect("preview render should return a texture");
+        let pixels = crate::gpu::test_utils::readback_texture(
+            &self.gpu.device,
+            &self.gpu.queue,
+            texture,
+            wgpu::TextureFormat::Rgba8Unorm,
+            rw,
+            rh,
+        );
+        (pixels, rw, rh)
     }
 
     // -----------------------------------------------------------------

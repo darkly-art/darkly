@@ -94,6 +94,7 @@ pub fn blit_region(
 
 pub mod apply_mask;
 pub mod atlas;
+pub mod bbox;
 pub mod blend;
 pub mod blend_mode;
 pub mod blend_modes;
@@ -112,6 +113,7 @@ pub mod lut_filter;
 pub mod ortho_transform;
 pub mod overlay;
 pub mod paint_target;
+pub mod param_filter;
 pub mod params;
 pub mod preview;
 pub mod readback;

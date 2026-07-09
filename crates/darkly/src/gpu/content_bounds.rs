@@ -8,12 +8,9 @@
 //! bounds. Bounds are invalidated on [`mark_dirty`](super::compositor::Compositor::mark_dirty)
 //! and recomputed lazily when a consumer requests them.
 
+use super::bbox::{BboxReduction, PendingBbox};
 use crate::layer::LayerId;
 use std::collections::HashMap;
-
-/// Initial values for the atomic bounds buffer: min = MAX, max = 0.
-/// If min_x > max_x after dispatch, the texture is fully transparent.
-const BOUNDS_INIT: [u32; 4] = [u32::MAX, u32::MAX, 0, 0];
 
 /// GPU compute pipeline + per-layer cache for content bounds.
 pub struct ContentBoundsPass {
@@ -34,8 +31,7 @@ pub struct ContentBoundsPass {
 struct PendingBounds {
     layer_id: LayerId,
     gen: u64,
-    staging: wgpu::Buffer,
-    rx: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    bbox: PendingBbox,
 }
 
 /// Uniform buffer layout matching the shader's `Params` struct.
@@ -188,28 +184,6 @@ impl ContentBoundsPass {
             return;
         }
 
-        // Storage buffer for atomic results (16 bytes).
-        let storage_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("content-bounds-storage"),
-            size: 16,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: true,
-        });
-        // Initialize: min = MAX, max = 0.
-        {
-            let mut mapping = storage_buf.slice(..).get_mapped_range_mut();
-            mapping.copy_from_slice(bytemuck::bytes_of(&BOUNDS_INIT));
-        }
-        storage_buf.unmap();
-
-        // Staging buffer for CPU readback (16 bytes).
-        let staging_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("content-bounds-staging"),
-            size: 16,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         // Params uniform.
         let params = Params {
             width,
@@ -229,50 +203,38 @@ impl ContentBoundsPass {
         }
         param_buf.unmap();
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("content-bounds-bg"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: storage_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: param_buf.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("content-bounds-compute"),
-        });
-
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("content-bounds"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, Some(&bind_group), &[]);
-            let wg_x = width.div_ceil(16);
-            let wg_y = height.div_ceil(16);
-            pass.dispatch_workgroups(wg_x, wg_y, 1);
-        }
-
-        // Copy storage → staging for CPU readback.
-        encoder.copy_buffer_to_buffer(&storage_buf, 0, &staging_buf, 0, 16);
-        queue.submit([encoder.finish()]);
+        let bbox = BboxReduction::dispatch(
+            device,
+            queue,
+            &self.pipeline,
+            |storage| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("content-bounds-bg"),
+                    layout: &self.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(texture_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: storage.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: param_buf.as_entire_binding(),
+                        },
+                    ],
+                })
+            },
+            width,
+            height,
+        );
 
         self.pending.push(PendingBounds {
             layer_id,
             gen,
-            staging: staging_buf,
-            rx: None,
+            bbox,
         });
     }
 
@@ -280,59 +242,23 @@ impl ContentBoundsPass {
     ///
     /// Returns the list of layer IDs whose bounds just became available.
     pub fn poll(&mut self, device: &wgpu::Device) -> Vec<LayerId> {
-        // Begin mapping for newly submitted requests.
-        for p in &mut self.pending {
-            if p.rx.is_none() {
-                let slice = p.staging.slice(..);
-                let (tx, rx) = std::sync::mpsc::sync_channel(1);
-                slice.map_async(wgpu::MapMode::Read, move |result| {
-                    let _ = tx.send(result);
-                });
-                p.rx = Some(rx);
-            }
-        }
-
-        if !self.pending.is_empty() {
-            let _ = device.poll(wgpu::PollType::Poll);
-        }
-
         let mut completed = Vec::new();
         let mut i = 0;
         while i < self.pending.len() {
-            let ready = self.pending[i]
-                .rx
-                .as_ref()
-                .and_then(|rx| rx.try_recv().ok());
-
-            match ready {
-                Some(Ok(())) => {
+            match self.pending[i].bbox.poll(device) {
+                Some(result) => {
                     let p = self.pending.swap_remove(i);
                     let current_gen = self.generation.get(&p.layer_id).copied().unwrap_or(0);
-
                     if p.gen == current_gen {
-                        // Read the 4× u32 result.
-                        let slice = p.staging.slice(..);
-                        let mapped = slice.get_mapped_range();
-                        let raw: [u32; 4] = *bytemuck::from_bytes(&mapped[..16]);
-                        drop(mapped);
-                        p.staging.unmap();
-
-                        let [min_x, min_y, max_x, max_y] = raw;
-                        if min_x <= max_x && min_y <= max_y {
-                            let bounds = [min_x, min_y, max_x - min_x + 1, max_y - min_y + 1];
+                        // `result` is already origin + size, or `None` when the
+                        // texture is fully transparent (no cached entry).
+                        if let Some(bounds) = result {
                             self.cached.insert(p.layer_id, bounds);
                         }
-                        // If min_x > max_x: fully transparent — no cached entry.
-
                         completed.push(p.layer_id);
-                    } else {
-                        // Stale result — generation changed since dispatch.
-                        p.staging.unmap();
                     }
-                }
-                Some(Err(e)) => {
-                    log::error!("content bounds buffer mapping failed: {e}");
-                    self.pending.swap_remove(i);
+                    // Stale result (generation changed since dispatch) → drop it.
+                    // Don't increment i — swap_remove moved the last element here.
                 }
                 None => {
                     i += 1;
