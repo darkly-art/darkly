@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Regression tests for the clone set-source cursor's engagement machinery.
+// The crosshair is a *transient* sample-mode indicator — engaged only while
+// the set-source chord is actually held, exactly like the color picker's
+// dropper. Source presence is irrelevant to arming.
 //
-// Bug 1 ("crosshair disappears on mouse move"): arming only set a CSS cursor;
-// the brush's hover path kept running on every pointermove and its
-// `pushHoverOverlay` stomped `app.toolCursor` with 'none'. Arming must
-// suppress the tool hover, exactly as the color picker's chord does.
+// Bug 1 ("no dab preview until a source is set"): a clone brush with no
+// source used to engage as a persistent prompt — holding the cursor slot and
+// suppressing the brush hover indefinitely, so the neutral-grey dab preview
+// never rendered on a fresh load. No chord held must mean no engagement.
 //
 // Bug 2 ("crosshair fails to disappear on ctrl release"): disarming nulled
 // `app.toolCursor`, and the canvas fell back to nav's idle cursor — which is
@@ -107,10 +110,19 @@ beforeEach(async () => {
     clone.setupCloneSourceModifierTracking();
 });
 
-describe('bug 1 regression: arming suppresses the brush hover', () => {
+describe('bug 1 regression: no chord means no engagement', () => {
+    it('a clone brush with no source and nothing held leaves the hover alone', async () => {
+        await primeNeedsSource();
+        expect(mc.isToolHoverSuppressed()).toBe(false);
+        expect(fakeApp.toolCursor).toBe(null);
+        expect(paintTool.suspendHover).not.toHaveBeenCalled();
+    });
+});
+
+describe('chord engagement (sample-mode indicator)', () => {
     it('holding the set-source chord engages: hover suppressed, crosshair cursor', async () => {
         await primeNeedsSource();
-        clone.setCloneSourceAnchor(5, 5); // source set → prompt off
+        clone.setCloneSourceAnchor(5, 5);
         setHeld('');
         expect(mc.isToolHoverSuppressed()).toBe(false);
 
@@ -121,8 +133,9 @@ describe('bug 1 regression: arming suppresses the brush hover', () => {
         expect(fakeApp.toolCursor).toBe('crosshair');
     });
 
-    it('a clone brush with no source engages as a persistent prompt', async () => {
+    it('engages with no source set too — source presence is irrelevant to arming', async () => {
         await primeNeedsSource();
+        setHeld('ctrl');
         expect(mc.isToolHoverSuppressed()).toBe(true);
         expect(fakeApp.toolCursor).toBe('crosshair');
     });
@@ -161,18 +174,16 @@ describe('mid-stroke refusal', () => {
 });
 
 describe('cloneEngages decision', () => {
-    it('requires needs-source, a paint tool, no pointer down, and (no source | chord)', async () => {
+    it('requires the chord, needs-source, a paint tool, and no pointer down', () => {
         const { cloneEngages } = clone;
         const chord = new Set(['setCloneSource']);
         const none = new Set<string>();
-        // No source set → persistent prompt, regardless of held modifier.
-        expect(cloneEngages(none, true, true, false, false)).toBe(true);
-        // Source set → only the chord arms.
-        expect(cloneEngages(none, true, true, true, false)).toBe(false);
-        expect(cloneEngages(chord, true, true, true, false)).toBe(true);
+        expect(cloneEngages(chord, true, true, false)).toBe(true);
+        // No chord → no engagement; there is no persistent no-source prompt.
+        expect(cloneEngages(none, true, true, false)).toBe(false);
         // Gates: brush doesn't need a source / non-paint tool / pointer down.
-        expect(cloneEngages(chord, true, false, true, false)).toBe(false);
-        expect(cloneEngages(chord, false, true, true, false)).toBe(false);
-        expect(cloneEngages(chord, true, true, true, true)).toBe(false);
+        expect(cloneEngages(chord, true, false, false)).toBe(false);
+        expect(cloneEngages(chord, false, true, false)).toBe(false);
+        expect(cloneEngages(chord, true, true, true)).toBe(false);
     });
 });

@@ -19,6 +19,7 @@ import {
     onCloneStrokeEnd,
     clearCloneSourceCursor,
 } from './clone_source_cursor';
+import { isToolHoverSuppressed } from './modifier_cursor';
 
 /** Brush-tool session state. Persists across strokes within the session;
  *  resets on reload. The engine-side blend-mode mirror is pushed by
@@ -105,6 +106,17 @@ let hoverGen = 0;
  *  scrub, which uses `cursorPose` so the circle shows the brush's full
  *  extent) can keep the preview in sync after mutating the graph. */
 export async function pushHoverOverlay(engine: EngineRequests, pose: PenPose, cx: number, cy: number) {
+    // While a modifier cursor is engaged (picker dropper, clone crosshair),
+    // no hover entry path — CanvasView's dispatch, the shift+drag size
+    // scrub, the `[` / `]` hotkey refresh — may render a dab or write the
+    // cursor slot; gating here covers them all at the one choke point. This
+    // gate alone is not airtight: an engagement landing *during* the await
+    // below slips past it, and is caught instead by the `hoverGen` recheck
+    // (engaging runs `suspendHover` → `clearHover()` → `hoverGen++`).
+    // Suppression safety is the gate and the gen counter jointly — neither
+    // is redundant. `restoreHover` fires only after the last engager
+    // disengages, so it passes.
+    if (isToolHoverSuppressed()) return;
     const gen = hoverGen;
     const info = (await engine.api.refreshBrushCursorPreview({
         x: cx,
@@ -222,6 +234,10 @@ export const brushTool: Tool = {
         // Hide the native cursor only if a preview is available — otherwise
         // fall back to the default cursor so the user has *something* to see.
         const info = await ctx.engine.api.getBrushCursorPreviewInfo();
+        // Re-check after the await: a modifier cursor may have engaged in the
+        // meantime (hotkeying into the brush with the chord already held) and
+        // writing now would stomp its cursor.
+        if (isToolHoverSuppressed()) return;
         app.toolCursor = info ? 'none' : null;
     },
 

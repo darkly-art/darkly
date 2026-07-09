@@ -4,6 +4,7 @@ import { dragModifierActions } from '../actions/triggers';
 import { heldMods, onHeldModsChange } from '../actions/held_mods';
 import { config } from '../config/store.svelte';
 import {
+    chordCursorEngages,
     engageModifierCursor,
     updateModifierCursor,
     disengageModifierCursor,
@@ -193,7 +194,7 @@ let lastKey: string | null = null;
 export function pickerEngages(
     resolved: Set<string>, paintToolActive: boolean, pointerDown: boolean,
 ): boolean {
-    return paintToolActive && !pointerDown && resolved.has('sampleColor');
+    return chordCursorEngages(resolved, paintToolActive, pointerDown, 'sampleColor');
 }
 
 function isPaintToolActive(): boolean {

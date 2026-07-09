@@ -55,8 +55,8 @@ export async function ensureProcessInit(): Promise<void> {
     setupColorPickerModifierTracking();
 
     // Same for the Clone brush's set-source cursor — arms the crosshair
-    // when the clone brush is active and a source is needed / the held
-    // modifier resolves to `setCloneSource`. Idempotent.
+    // while the held modifier resolves to `setCloneSource` with a clone
+    // brush active. Idempotent.
     setupCloneSourceModifierTracking();
 
     // Autosave + crash recovery. `recovery.init()` registers this browser

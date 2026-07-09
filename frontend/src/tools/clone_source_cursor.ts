@@ -7,28 +7,29 @@ import { config } from '../config/store.svelte';
 import { OverlayBuilder } from '../canvas/gpu_overlay';
 import { canvasToScreen } from '../canvas/coordinates';
 import {
+    chordCursorEngages,
     engageModifierCursor,
     disengageModifierCursor,
     isPointerDown,
-    lastCanvasPos,
     onPointerRelease,
 } from './modifier_cursor';
 
 // Clone set-source cursor + arming. The arming modifier is derived at
 // runtime from whatever `setCloneSource` is bound to in the active config
 // layer (so preset swaps + user overrides flow through), and a crosshair
-// cursor prompts / confirms the gesture. Hover suppression, the
-// `app.toolCursor` slot, and the suspend/restore handoff to the active tool
-// are owned by the shared engagement machinery in `modifier_cursor.ts` —
-// while armed, the brush's dab preview is suspended so it can't fight the
+// cursor confirms sample mode while the chord is held. Hover suppression,
+// the `app.toolCursor` slot, and the suspend/restore handoff to the active
+// tool are owned by the shared engagement machinery in `modifier_cursor.ts`
+// — while armed, the brush's dab preview is suspended so it can't fight the
 // crosshair, and disarming restores it immediately.
 //
-// Armed conditions (crosshair shown) when a paint tool is active and the
-// active brush needs a source (`activeBrushNeedsSource`, cached async):
-//   1. No source anchor is set yet — a persistent prompt so a clone brush
-//      never silently no-op paints (the Rust no-op gate skips the stroke).
-//   2. A source is set AND the user holds the set-source modifier — armed
-//      to re-set it.
+// Armed condition (crosshair shown): a paint tool is active, the active
+// brush needs a source (`activeBrushNeedsSource`, cached async), and the
+// held modifier resolves to `setCloneSource` — a transient sample-mode
+// indicator, exactly like the color picker's dropper. Otherwise the dab
+// preview is the default state, source or no source (with no source set,
+// the preview renders in neutral grey and the Rust no-op gate skips the
+// stroke).
 //
 // The gesture itself is dispatched by the brush-scoped chord binding
 // through `dispatchDrag`; this module only owns the arming decision, the
@@ -55,9 +56,9 @@ let sourceAnchor: Pt | null = null;
  *  the engine's per-stroke first-dab `dest_anchor`. Non-null only while a
  *  clone stroke is in flight. */
 let destAnchor: Pt | null = null;
-/** Latest canvas cursor position — the stroke's live dab centre while
- *  painting, or the hover position otherwise. Anchors both the tracked
- *  source marker (aligned mode) and the no-source hint. */
+/** Live dab centre while a clone stroke is in flight (owned by the
+ *  `onCloneStroke*` hooks); null otherwise. Drives the aligned-mode
+ *  source-marker tracking. */
 let cursorPos: Pt | null = null;
 let lastBrush: string | null | undefined = undefined;
 let needsQueryInFlight = false;
@@ -78,7 +79,7 @@ export function trackedSourcePos(
 }
 
 /** Record the clone source anchor in the engine (plane / canvas pixels)
- *  and mark that a source now exists so the cursor stops prompting. */
+ *  and mark that a source now exists so the marker can draw at it. */
 export function setCloneSourceAnchor(cx: number, cy: number): void {
     app.engine?.api.setCloneSource({ x: cx, y: cy });
     hasSource = true;
@@ -130,8 +131,7 @@ function clearCloneMarker(): void {
 }
 
 /** Rebuild the clone marker on the persistent `'clone'` channel: a crosshair
- *  at the (tracked) source when one is set, or a "pick a source" hint near
- *  the cursor when clone is active but unset. Screen-space, so it re-pushes
+ *  at the (tracked) source when one is set. Screen-space, so it re-pushes
  *  on view pan/zoom via the per-frame tick — but only when its screen
  *  position actually changed (memoized). */
 function rebuildCloneMarker(): void {
@@ -139,33 +139,19 @@ function rebuildCloneMarker(): void {
     const canvasEl = app.canvasEl;
     if (!engine || !canvasEl) return;
 
-    if (!needsSource || !isPaintToolActive()) {
+    if (!needsSource || !isPaintToolActive() || !hasSource || !sourceAnchor) {
         clearCloneMarker();
         return;
     }
 
-    const b = new OverlayBuilder(canvasEl);
-    let key: string;
-    if (hasSource && sourceAnchor) {
-        const pos = trackedSourcePos(sourceAnchor, destAnchor, cursorPos, anchoredMode);
-        const sp = canvasToScreen(pos.x, pos.y, canvasEl);
-        key = `src:${Math.round(sp.x)},${Math.round(sp.y)}`;
-        // Snapshot-invert arms so the marker stays legible over any content.
-        b.crosshair([pos.x, pos.y], { invert: true, size: 8, gap: 2, thickness: 1.5 });
-    } else if (cursorPos) {
-        // No source set — an amber prompt at the cursor so a clone brush
-        // never silently no-op paints (prior art: GIMP's explicit prompt).
-        const sp = canvasToScreen(cursorPos.x, cursorPos.y, canvasEl);
-        key = `hint:${Math.round(sp.x)},${Math.round(sp.y)}`;
-        b.crosshair([cursorPos.x, cursorPos.y], { color: '#f80', size: 6, gap: 3, thickness: 1.5 });
-    } else {
-        // Active + unset but no cursor seen yet — nothing to anchor a hint.
-        clearCloneMarker();
-        return;
-    }
-
+    const pos = trackedSourcePos(sourceAnchor, destAnchor, cursorPos, anchoredMode);
+    const sp = canvasToScreen(pos.x, pos.y, canvasEl);
+    const key = `src:${Math.round(sp.x)},${Math.round(sp.y)}`;
     if (key === lastMarkerKey) return;
     lastMarkerKey = key;
+    const b = new OverlayBuilder(canvasEl);
+    // Snapshot-invert arms so the marker stays legible over any content.
+    b.crosshair([pos.x, pos.y], { invert: true, size: 8, gap: 2, thickness: 1.5 });
     b.push(engine, 'clone');
 }
 
@@ -190,10 +176,12 @@ export function onCloneStrokeMove(cx: number, cy: number): void {
     rebuildCloneMarker();
 }
 
-/** Clone stroke ended — drop the dest anchor so the marker snaps back to the
- *  set source (the engine re-anchors `dest` at each stroke's first dab). */
+/** Clone stroke ended — drop the dest anchor (the engine re-anchors `dest`
+ *  at each stroke's first dab) and the dab centre with it, so the marker
+ *  snaps back to the set source. */
 export function onCloneStrokeEnd(): void {
     destAnchor = null;
+    cursorPos = null;
     rebuildCloneMarker();
 }
 
@@ -207,26 +195,22 @@ function isPaintToolActive(): boolean {
     return toolRegistry.get(app.activeToolId)?.group === 'paint';
 }
 
-/** Pure engagement decision: the crosshair arms when the active paint brush
- *  needs a source and either no source is set (a persistent prompt) or the
- *  held modifier resolves to `setCloneSource`. Clone's binding is the most
- *  specific, so it always wins the chord — but reading the one shared
- *  resolver means this cursor and the color picker can never disagree about
- *  who owns the modifier. `pointerDown` blocks a *first* engagement only —
- *  suppressing the hover mid-stroke would freeze the stroke's dispatch;
- *  staying engaged never consults it. Split out so the decision is
- *  unit-testable without the DOM state machine. */
+/** Pure engagement decision: the crosshair arms while the active paint brush
+ *  needs a source and the held modifier resolves to `setCloneSource`. Clone's
+ *  binding is the most specific, so it always wins the chord — but reading
+ *  the one shared resolver means this cursor and the color picker can never
+ *  disagree about who owns the modifier. `pointerDown` blocks a *first*
+ *  engagement only — suppressing the hover mid-stroke would freeze the
+ *  stroke's dispatch; staying engaged never consults it. Split out so the
+ *  decision is unit-testable without the DOM state machine. */
 export function cloneEngages(
     resolved: Set<string>,
     paintToolActive: boolean,
     needsSource: boolean,
-    hasSource: boolean,
     pointerDown: boolean,
 ): boolean {
-    if (pointerDown) return false;
-    if (!needsSource || !paintToolActive) return false;
-    if (!hasSource) return true;
-    return resolved.has('setCloneSource');
+    return needsSource &&
+        chordCursorEngages(resolved, paintToolActive, pointerDown, 'setCloneSource');
 }
 
 /** Re-check engagement and drive the arm/disarm transitions through the
@@ -239,14 +223,14 @@ function refreshEngagement(): void {
         // flight stays armed until the modifier lifts).
         if (!cloneEngages(
             dragModifierActions('canvas', heldMods()),
-            isPaintToolActive(), needsSource, hasSource, false,
+            isPaintToolActive(), needsSource, false,
         )) {
             engaged = false;
             disengageModifierCursor('cloneSource');
         }
     } else if (cloneEngages(
         dragModifierActions('canvas', heldMods()),
-        isPaintToolActive(), needsSource, hasSource, isPointerDown(),
+        isPaintToolActive(), needsSource, isPointerDown(),
     )) {
         engaged = true;
         engageModifierCursor('cloneSource', 'crosshair');
@@ -255,14 +239,9 @@ function refreshEngagement(): void {
 
 /** Per-frame tick — refreshes the needs-source cache on brush change,
  *  re-evaluates engagement, and rebuilds the on-canvas marker so it tracks
- *  view pan/zoom. While engaged the brush's hover dispatch is suppressed,
- *  so the hint's cursor position comes from the shared window-level
- *  tracker rather than tool pointer events (null off-canvas clears the
- *  hint); while painting, the stroke hooks own `cursorPos`. Cheap when
- *  nothing changed (memo guards on each step). */
+ *  view pan/zoom. Cheap when nothing changed (memo guards on each step). */
 export function tickCloneSourceCursor(): void {
     syncNeedsSource();
-    if (destAnchor === null) cursorPos = lastCanvasPos();
     refreshEngagement();
     rebuildCloneMarker();
 }

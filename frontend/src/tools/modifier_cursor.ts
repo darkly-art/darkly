@@ -45,6 +45,20 @@ export function isToolHoverSuppressed(): boolean {
     return engagers.size > 0;
 }
 
+/** Shared arming predicate for chord-held cursors: engage while a paint tool
+ *  is active, no pointer is down (a first engagement mid-stroke would freeze
+ *  the stroke's dispatch), and the specificity-resolved winner of the held
+ *  modifier is `actionId`. Per-cursor wrappers add their own preconditions
+ *  and keep a per-module test seam. */
+export function chordCursorEngages(
+    resolved: Set<string>,
+    paintToolActive: boolean,
+    pointerDown: boolean,
+    actionId: string,
+): boolean {
+    return paintToolActive && !pointerDown && resolved.has(actionId);
+}
+
 /** Whether any pointer is currently down (window-level truth). Engagers use
  *  this to refuse a first engagement mid-stroke. */
 export function isPointerDown(): boolean {
@@ -208,8 +222,9 @@ export function setupModifierCursorTracking(): void {
     window.addEventListener('blur', notePointerUp);
     window.addEventListener('pointermove', trackPointer);
     // Leaving the window produces no further moves — drop the tracked
-    // position so a cursor-following consumer (e.g. the clone brush's
-    // no-source hint) doesn't stick at the last seen edge position.
+    // position so a disengage outside the window doesn't re-establish a
+    // hover at the last seen edge position (`restoreActiveToolHover`
+    // gates on `lastCanvas`).
     window.addEventListener('pointerout', (e) => {
         if (!e.relatedTarget) lastCanvas = null;
     });
