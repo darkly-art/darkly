@@ -402,19 +402,25 @@ pub trait BrushNodeEvaluator: Send + Sync {
     }
 }
 
-/// Stroke-constant clone anchors, seeded into a `clone_source` node's
-/// `source_anchor` / `dest_anchor` uniforms once per stroke.
+/// Stroke-constant clone uniforms, seeded into a `clone_source` node's
+/// per-node uniform fields once per stroke.
 ///
 /// `source_anchor` is the user-set clone source (the set-source gesture,
 /// persisted on the engine across strokes); `dest_anchor` is captured at
 /// the first dab of the stroke (the stabilizer offsets the first rendered
 /// dab, so this is taken from `place_dab`, not the raw engine input).
-/// Both are plane / canvas pixels. The aligned-vs-anchored choice lives
-/// in the baked WGSL — this struct carries only the two points.
+/// `source_offset` / `source_size` are the source snapshot's plane-space
+/// frame — the frozen cross-layer / merged snapshot's rect when one
+/// exists, else the paint target's current extent (refreshed per pen
+/// event so same-layer clone tracks mid-stroke layer growth). All values
+/// are plane / canvas pixels. The aligned-vs-anchored choice lives in the
+/// baked WGSL — this struct carries only points and the frame.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct CloneState {
     pub source_anchor: [f32; 2],
     pub dest_anchor: [f32; 2],
+    pub source_offset: [f32; 2],
+    pub source_size: [f32; 2],
 }
 
 // ── Graph runner ────────────────────────────────────────────────────
@@ -696,11 +702,12 @@ impl BrushGraphRunner {
                 }
             }
         }
-        // Inject the clone anchor uniforms under the `clone_source`
-        // node's keys (`n{id}_source_anchor` / `n{id}_dest_anchor`) so
-        // the terminal's uniform packer picks them up. These aren't graph
-        // output slots — they're stroke-constant engine session state,
-        // seeded the same way `paint_color` seeds its color uniform.
+        // Inject the clone uniforms under the `clone_source` node's keys
+        // (`n{id}_source_anchor`, `n{id}_dest_anchor`, `n{id}_source_offset`,
+        // `n{id}_source_size`) so the terminal's uniform packer picks them
+        // up. These aren't graph output slots — they're stroke-constant
+        // engine session state, seeded the same way `paint_color` seeds
+        // its color uniform.
         if let (Some(node), Some(cs)) = (self.clone_source_node, self.clone_state) {
             out.insert(
                 format!("n{}_source_anchor", node.0),
@@ -709,6 +716,14 @@ impl BrushGraphRunner {
             out.insert(
                 format!("n{}_dest_anchor", node.0),
                 ScalarValue::Vec2(cs.dest_anchor),
+            );
+            out.insert(
+                format!("n{}_source_offset", node.0),
+                ScalarValue::Vec2(cs.source_offset),
+            );
+            out.insert(
+                format!("n{}_source_size", node.0),
+                ScalarValue::Vec2(cs.source_size),
             );
         }
         out

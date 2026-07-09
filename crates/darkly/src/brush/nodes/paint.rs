@@ -555,16 +555,18 @@ impl BrushNodeEvaluator for PaintEvaluator {
             .expect("paint::flush_dabs requires dab_batch.slot_outputs");
         pack_uniforms(&compiled, outputs, &mut uniform_bytes);
 
-        // `clone_source` brushes bind the frozen pre-stroke snapshot at
-        // `@group(3)` — a per-stroke resource, so the bind group is built
-        // here each flush rather than cached on the pipeline. The layout
-        // matches `layout_for_count(1)` (shared sampler + one texture);
-        // the compiler guarantees a source-sampling brush has no named
-        // graph textures, so the source is the sole slot-0 texture.
+        // `clone_source` brushes bind the stroke's frozen source snapshot
+        // at `@group(3)` — the cross-layer / merged snapshot when one was
+        // captured, else the pre-stroke snapshot (same-layer clone). A
+        // per-stroke resource, so the bind group is built here each flush
+        // rather than cached on the pipeline. The layout matches
+        // `layout_for_count(1)` (shared sampler + one texture); the
+        // compiler guarantees a source-sampling brush has no named graph
+        // textures, so the source is the sole slot-0 texture.
         let source_bind_group = if compiled.samples_source {
             let reg = gpu.pipelines.texture_registry();
             let view = stroke
-                .pre_stroke_texture
+                .source_texture()
                 .create_view(&wgpu::TextureViewDescriptor::default());
             let layout = reg.layout_for_count(gpu.device, 1);
             Some(gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {

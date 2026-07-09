@@ -530,6 +530,16 @@ pub struct DarklyEngine {
     /// `brush_stroke_to`).
     pub(crate) clone_source_anchor: Option<crate::coord::CanvasPoint>,
 
+    /// Layer pinned by the clone set-source gesture, or `None` for
+    /// same-layer clone. Session state like the anchor: persists across
+    /// strokes and brush / tool switches, never serialized. Kept across
+    /// layer deletion too — `LayerId` is a generational slotmap key, so a
+    /// stale pin can't alias a new layer, and undoing the deletion
+    /// reinserts the same id (`LayerRemoveAction::undo`), reviving the
+    /// pin. Stroke start validates it: a dead or group id falls back to
+    /// the painted layer.
+    pub(crate) clone_source_layer: Option<LayerId>,
+
     // --- Diff rect (undo region computation) ---
     pub(crate) diff_rect: DiffRectPass,
     pub(crate) pending_undo_commit: Option<PendingUndoCommit>,
@@ -701,6 +711,7 @@ impl DarklyEngine {
             stabilizer_registry: StabilizerRegistry::new(),
             brush_blend_mode: 0,
             clone_source_anchor: None,
+            clone_source_layer: None,
             diff_rect,
             pending_undo_commit: None,
             selection_pipelines,

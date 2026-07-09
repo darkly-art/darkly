@@ -33,6 +33,7 @@ const { fakeApp, fakeConfig, fakeBrushGraph, fakeActions, paintTool, heldState }
     };
     const fakeApp = {
         activeToolId: 'brush',
+        activeLayerId: null as number | null,
         engine: { api },
         canvasEl: {
             getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100 }),
@@ -102,6 +103,7 @@ beforeEach(async () => {
     heldState.value = '';
     heldState.listeners.length = 0;
     fakeApp.toolCursor = null;
+    fakeApp.activeLayerId = null;
     fakeBrushGraph.activeBrush = 'Clone';
     const triggers = await import('../../actions/triggers');
     mc = await import('../modifier_cursor');
@@ -170,6 +172,24 @@ describe('mid-stroke refusal', () => {
         expect(mc.isToolHoverSuppressed()).toBe(false); // stroke keeps painting
         mc.notePointerUp(); // clone re-evaluates on release
         expect(mc.isToolHoverSuppressed()).toBe(true);
+    });
+});
+
+describe('set-source pins the active layer', () => {
+    it('sends the active layer id with the anchor', () => {
+        fakeApp.activeLayerId = 42;
+        clone.setCloneSourceAnchor(7, 9);
+        expect(fakeApp.engine.api.setCloneSource).toHaveBeenCalledWith({ x: 7, y: 9, layer: 42 });
+    });
+
+    it('sends null when no layer is active (same-layer clone)', () => {
+        fakeApp.activeLayerId = null;
+        clone.setCloneSourceAnchor(7, 9);
+        expect(fakeApp.engine.api.setCloneSource).toHaveBeenCalledWith({
+            x: 7,
+            y: 9,
+            layer: null,
+        });
     });
 });
 

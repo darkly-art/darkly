@@ -28,3 +28,4 @@ exposed_ports:
   '2.softness': {}
   '1.spacing': {}
   '3.mode': {}
+  '3.merged': {}

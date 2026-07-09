@@ -283,16 +283,19 @@ impl DarklyEngine {
     // --- Clone brush set-source ---
 
     /// Set the clone-brush source anchor from a plane / canvas-pixel
-    /// position (the set-source gesture). Persists as session state until
-    /// overwritten — surviving strokes and brush / tool switches so the
-    /// source stays put while the user paints. Rounded to whole pixels
-    /// (the snapshot is sampled at pixel resolution).
+    /// position (the set-source gesture), pinning the layer that was
+    /// active at the gesture (`None` means same-layer clone). Persists as
+    /// session state until overwritten — surviving strokes and brush /
+    /// tool switches so the source stays put while the user paints.
+    /// Rounded to whole pixels (the snapshot is sampled at pixel
+    /// resolution).
     #[handler]
-    pub fn set_clone_source(&mut self, x: f32, y: f32) {
+    pub fn set_clone_source(&mut self, x: f32, y: f32, layer: Option<LayerId>) {
         self.clone_source_anchor = Some(crate::coord::CanvasPoint::new(
             x.round() as i32,
             y.round() as i32,
         ));
+        self.clone_source_layer = layer;
     }
 
     /// `true` when the active brush graph contains a `clone_source` node
@@ -314,29 +317,48 @@ impl DarklyEngine {
             .any(|n| n.type_id == crate::brush::nodes::clone_source::TYPE_ID)
     }
 
-    /// `true` when the active brush's `clone_source` node is in *anchored*
-    /// mode (every dab samples the fixed source point), `false` for
-    /// *aligned* (the source tracks the cursor) or when there is no
-    /// `clone_source` node. The frontend reads this to track the on-canvas
-    /// source marker correctly during a stroke. A structural read of the
-    /// exposed `mode` port default — the same value `mode_is_anchored`
-    /// bakes into the emitted WGSL, sharing
-    /// [`crate::brush::nodes::clone_source::mode_default_is_anchored`], so
-    /// the marker and the shader can't disagree on the mode.
-    #[handler]
-    pub fn clone_source_anchored(&self) -> bool {
+    /// Structural read of one of the active brush's `clone_source` port
+    /// defaults — no compile, just the graph under the session read lock.
+    /// `None` when there is no `clone_source` node (or no such port).
+    /// Shared by the mode / merged queries below so they resolve the node
+    /// identically.
+    fn clone_source_port_default(&self, port: &str) -> Option<f32> {
         use crate::brush::state::BrushState;
         let tool = self.tool_session.read();
-        let Some(brush) = tool.get::<BrushState>() else {
-            return false;
-        };
+        let brush = tool.get::<BrushState>()?;
         brush
             .graph
             .nodes()
             .values()
             .find(|n| n.type_id == crate::brush::nodes::clone_source::TYPE_ID)
-            .and_then(|n| n.ports.iter().find(|p| p.name == "mode"))
-            .map(|p| crate::brush::nodes::clone_source::mode_default_is_anchored(p.default))
+            .and_then(|n| n.ports.iter().find(|p| p.name == port))
+            .map(|p| p.default)
+    }
+
+    /// `true` when the active brush's `clone_source` node is in *anchored*
+    /// mode (every dab samples the fixed source point), `false` for
+    /// *aligned* (the source tracks the cursor) or when there is no
+    /// `clone_source` node. The frontend reads this to track the on-canvas
+    /// source marker correctly during a stroke. Reads the exposed `mode`
+    /// port default — the same value `mode_is_anchored` bakes into the
+    /// emitted WGSL, sharing
+    /// [`crate::brush::nodes::clone_source::mode_default_is_anchored`], so
+    /// the marker and the shader can't disagree on the mode.
+    #[handler]
+    pub fn clone_source_anchored(&self) -> bool {
+        self.clone_source_port_default("mode")
+            .map(crate::brush::nodes::clone_source::mode_default_is_anchored)
+            .unwrap_or(false)
+    }
+
+    /// `true` when the active brush's `clone_source` node has "Sample
+    /// Merged" on — the stroke-start snapshot then freezes the root
+    /// composite instead of a layer. Engine-internal (stroke start reads
+    /// it); shares the toggle threshold with the emitted port default via
+    /// [`crate::brush::nodes::clone_source::merged_default_is_on`].
+    fn clone_sample_merged(&self) -> bool {
+        self.clone_source_port_default("merged")
+            .map(crate::brush::nodes::clone_source::merged_default_is_on)
             .unwrap_or(false)
     }
 
@@ -854,10 +876,16 @@ impl DarklyEngine {
             // anchor has nothing to copy, so don't start a stroke at all
             // (mirrors `begin_stroke`'s node-missing no-op). The frontend
             // arms the set-source gesture and shows a hint in this state.
-            if runner.samples_source() && self.clone_source_anchor.is_none() {
+            // Captured before `StrokeEngine::new` consumes the runner.
+            let samples_source = runner.samples_source();
+            if samples_source && self.clone_source_anchor.is_none() {
                 return;
             }
             let clone_source_anchor = self.clone_source_anchor.map(|p| [p.x as f32, p.y as f32]);
+            // "Sample Merged" toggle — a structural port-default read
+            // under the same session lock `clone_source_anchored` uses,
+            // not a compile.
+            let sample_merged = samples_source && self.clone_sample_merged();
 
             // Derive stabilizer from the pen_input node's "stabilize" port.
             let strength = self.pen_input_stabilize_strength();
@@ -881,6 +909,16 @@ impl DarklyEngine {
                 clone_source_anchor,
             ));
 
+            // Merged clone freezes the root composite, so make sure it's
+            // fresh (no-op when clean). Hoisted above the `node_texture`
+            // lookup: `render_offscreen` takes `&mut self.compositor`,
+            // which conflicts with the immutable texture borrows held
+            // from there on.
+            if sample_merged {
+                self.compositor
+                    .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc);
+            }
+
             // Create the stroke buffer and save the pre-stroke snapshot.
             // Inline dispatch (vs `self.paint_target(...)`) so the borrow of
             // `self.compositor.node_textures[id]` is at the field level —
@@ -893,7 +931,7 @@ impl DarklyEngine {
                 // canvas this means dabs landing on off-canvas pixels are
                 // saved/restored correctly on undo.
                 let layer_extent = layer_tex.layer_extent();
-                let stroke_buffer = StrokeBuffer::new(
+                let mut stroke_buffer = StrokeBuffer::new(
                     &self.gpu.device,
                     layer_extent.width,
                     layer_extent.height,
@@ -908,6 +946,55 @@ impl DarklyEngine {
                         &paint_target,
                     );
                 });
+
+                // Clone source resolution: merged → pinned layer →
+                // same-layer. The first two freeze a separate snapshot at
+                // stroke start (required for merged, where the destination
+                // would feed back mid-stroke; safe against per-frame
+                // procedural sources and mid-stroke disposal; deterministic
+                // under stabilizer divergence rewind). Same-layer keeps
+                // the pre-stroke snapshot as the source — self-clone
+                // freeze semantics unchanged.
+                if samples_source {
+                    let canvas_rect = self.doc.canvas_rect();
+                    let source = if sample_merged {
+                        // The composite cache is straight-alpha Rgba8Unorm
+                        // with content at the top-left, exactly
+                        // canvas-window-sized.
+                        Some(GpuPaintTarget::from_canvas_texture(
+                            self.compositor.composited_texture(),
+                            self.compositor.composited_view(),
+                            wgpu::TextureFormat::Rgba8Unorm,
+                            canvas_rect,
+                        ))
+                    } else {
+                        // Pinned layer, validated document-side first: the
+                        // document is authoritative, and layer removal is
+                        // orphan-keep (the entity parks in the slotmap for
+                        // undo, and the compositor keeps its texture until
+                        // the next sync), so only the parent link says
+                        // whether the pin is still in the tree. A detached
+                        // pin or a group (which has no `node_textures`
+                        // entry) falls back to the painted layer, matching
+                        // Krita's saved-node fallback. Cloning *from* a
+                        // group's composite is a known gap — it would need
+                        // a group-cache snapshot like merged's.
+                        self.clone_source_layer
+                            .filter(|&sid| sid != layer_id && self.doc.parent_of(sid).is_some())
+                            .and_then(|sid| self.compositor.node_texture(sid))
+                            .map(|src_tex| GpuPaintTarget::from_node(src_tex, canvas_rect))
+                    };
+                    if let Some(source) = source {
+                        self.gpu.encode("clone-source-snapshot", |encoder| {
+                            stroke_buffer.save_source_snapshot(
+                                &self.gpu.device,
+                                encoder,
+                                &self.brush_pipelines,
+                                &source,
+                            );
+                        });
+                    }
+                }
                 // Scratch initialisation is now the terminal's responsibility
                 // (via `runner.begin_stroke`). Deferred until we have the
                 // engine + buffer in hand a few lines below — see the
@@ -953,6 +1040,17 @@ impl DarklyEngine {
         };
 
         if let Some(ref mut stroke_buffer) = stroke_buffer {
+            // Refresh the clone source frame every pen event: the frozen
+            // snapshot's rect when one exists (cross-layer / merged),
+            // else the paint target's *current* extent — which re-reads
+            // mid-stroke layer growth, so same-layer clone keeps tracking
+            // `grow_preserving`'s re-anchored snapshot.
+            engine.set_clone_source_frame(
+                stroke_buffer
+                    .source_snapshot_frame()
+                    .unwrap_or_else(|| paint_target.canvas_extent()),
+            );
+
             // Stabilized path: dabs render into the scratch, then the
             // terminal's `commit` hook lands them on the layer.
             self.brush_pipelines.reset_uniform_rings();
@@ -1000,7 +1098,7 @@ impl DarklyEngine {
                     // Re-borrow per invocation: each ctx holds &mut Scratch
                     // for its own lifetime, then is consumed by `submit_final()`
                     // before the next macro expansion reborrows.
-                    let (scratch, pre_stroke_texture, pre_stroke_bind_group) =
+                    let (scratch, pre_stroke_texture, pre_stroke_bind_group, source_override) =
                         stroke_buffer.parts_for_brush_ctx();
                     BrushGpuContext {
                         encoder: self.gpu.device.create_command_encoder(
@@ -1027,6 +1125,7 @@ impl DarklyEngine {
                             paint_target,
                             pre_stroke_texture,
                             pre_stroke_bind_group,
+                            source_override,
                         }),
                         preview: None,
                         dab_batch: DabBatch::default(),

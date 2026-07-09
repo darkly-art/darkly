@@ -164,6 +164,10 @@ export type BrushNodePreviewReq = { node_id: number, };
 
 export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "levels", name: string, default: [number, number, number, number, number], } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, };
 
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
+
+export type PortDir = "Input" | "Output";
+
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
  * Slider min when the port is disconnected (UI metadata only).
@@ -297,10 +301,6 @@ natural_range: [number, number] | null,
  */
 persist_in_thumbnail: boolean, };
 
-export type PortDir = "Input" | "Output";
-
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
-
 export type NodeRegistration = { 
 /**
  * Unique identifier (e.g. "pen_input", "multiply").
@@ -397,14 +397,14 @@ export type FillBackgroundReq = { id: number, };
 
 export type FillBackgroundColorReq = { id: number, rgba: [number, number, number, number], };
 
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number];
-
 export type ParamInfo = { kind: string, name: string, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
 /**
  * Enum: `["Label1", "Label2", ...]`.
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
 options: JsonValue | null, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number];
 
 export type VeilTypeInfo = { type: string, displayName: string, params: Array<ParamInfo>, };
 
@@ -571,7 +571,7 @@ export type SetOverlayReq = { primitives: Array<PrimIn>, };
 
 export type PrimIn = { kind: number, flags: number, p0: [number, number], p1: [number, number], color: [number, number, number, number], thickness: number, dashLen: number, dashOffset: number, cornerRadius: number, modeParam: number, rotation: number, };
 
-export type SetCloneSourceReq = { x: number, y: number, };
+export type SetCloneSourceReq = { x: number, y: number, layer: number | null, };
 
 export type SetDocumentNameReq = { name: string, };
 

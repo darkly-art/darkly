@@ -3001,6 +3001,13 @@ impl Compositor {
         &self.group_state[&self.root_id].composite_cache
     }
 
+    /// View over [`Self::composited_texture`] — lets callers wrap the
+    /// root composite in a `GpuPaintTarget` (e.g. the sample-merged clone
+    /// snapshot) without creating a fresh view per use.
+    pub fn composited_view(&self) -> &wgpu::TextureView {
+        &self.group_state[&self.root_id].composite_cache_view
+    }
+
     pub fn accum_format(&self) -> wgpu::TextureFormat {
         wgpu::TextureFormat::Rgba8Unorm
     }

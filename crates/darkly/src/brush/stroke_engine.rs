@@ -80,6 +80,13 @@ pub struct StrokeEngine {
     /// dab. Captured lazily in `place_dab` (the stabilizer offsets the
     /// first dab, so raw engine input is wrong); reset on full re-render.
     clone_dest_anchor: Option<[f32; 2]>,
+    /// Plane-space frame of the clone source snapshot, refreshed by the
+    /// engine every pen event via [`Self::set_clone_source_frame`] (the
+    /// frozen cross-layer / merged snapshot's rect when one exists, else
+    /// the paint target's current extent so same-layer clone tracks
+    /// mid-stroke layer growth). Stroke-stable: NOT cleared by
+    /// [`Self::reset_render_state`] — divergence rewind reuses it.
+    clone_source_frame: Option<crate::coord::CanvasRect>,
 }
 
 impl StrokeEngine {
@@ -116,7 +123,15 @@ impl StrokeEngine {
             stroke_seed,
             clone_source_anchor,
             clone_dest_anchor: None,
+            clone_source_frame: None,
         }
+    }
+
+    /// Set the clone source snapshot's plane-space frame for the current
+    /// stroke. Called by the engine every pen event, before rendering —
+    /// see the field doc for what the frame is.
+    pub fn set_clone_source_frame(&mut self, frame: crate::coord::CanvasRect) {
+        self.clone_source_frame = Some(frame);
     }
 
     /// Default dab diameter for initial spacing (before the first dab is evaluated).
@@ -363,15 +378,32 @@ impl StrokeEngine {
         // fill it here so smudge sees the correct smear-sample offset.
         dab_info.motion = self.next_dab_motion(dab_info.pos);
 
-        // Clone anchors: capture the destination at the first rendered
+        // Clone uniforms: capture the destination at the first rendered
         // dab (post-stabilization), then seed the runner's CloneState so
-        // the `clone_source` node's uniforms carry both anchors. No-op
-        // for non-clone brushes (`clone_source_anchor` is `None`).
+        // the `clone_source` node's uniforms carry the anchors and the
+        // source frame. No-op for non-clone brushes (`clone_source_anchor`
+        // is `None`).
         if let Some(source_anchor) = self.clone_source_anchor {
             let dest_anchor = *self.clone_dest_anchor.get_or_insert(dab_info.pos);
+            // The engine refreshes the frame every pen event before any
+            // dab is placed; the fallback identity frame only guards a
+            // driver that forgot to (and would sample garbage UVs anyway).
+            debug_assert!(
+                self.clone_source_frame.is_some(),
+                "clone stroke rendered without set_clone_source_frame"
+            );
+            let (source_offset, source_size) = match self.clone_source_frame {
+                Some(f) => (
+                    [f.x0() as f32, f.y0() as f32],
+                    [f.width as f32, f.height as f32],
+                ),
+                None => ([0.0, 0.0], [1.0, 1.0]),
+            };
             self.runner.set_clone_state(Some(super::eval::CloneState {
                 source_anchor,
                 dest_anchor,
+                source_offset,
+                source_size,
             }));
         }
 

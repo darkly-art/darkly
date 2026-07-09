@@ -181,7 +181,11 @@ impl BrushStrokePreviewRenderer {
         // and submits.
         macro_rules! make_gpu_ctx {
             ($label:expr) => {{
-                let (scratch, pre_stroke_texture, pre_stroke_bind_group) =
+                // The preview stroke buffer never captures a source
+                // snapshot — a source-sampling brush previews off its own
+                // (blank) pre-stroke snapshot, so the thumbnail stays
+                // neutral.
+                let (scratch, pre_stroke_texture, pre_stroke_bind_group, source_override) =
                     target.stroke_buffer.parts_for_brush_ctx();
                 BrushGpuContext {
                     encoder: device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -206,6 +210,7 @@ impl BrushStrokePreviewRenderer {
                         paint_target,
                         pre_stroke_texture,
                         pre_stroke_bind_group,
+                        source_override,
                     }),
                     preview: None,
                     dab_batch: DabBatch::default(),

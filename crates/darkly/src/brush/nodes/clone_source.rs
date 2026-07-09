@@ -1,27 +1,34 @@
-//! Clone Source node — samples the frozen pre-stroke snapshot at an
-//! offset, turning the reused `paint` terminal into a clone-stamp brush.
+//! Clone Source node — samples a frozen source snapshot at an offset,
+//! turning the reused `paint` terminal into a clone-stamp brush.
 //!
 //! ## What it does
 //!
 //! Instead of a flat color (`paint_color`) or a bundle texture (`image`),
-//! this node's `color` output is a per-fragment sample of the **layer's
-//! frozen pre-stroke snapshot** — the same layer-local texture `paint`'s
-//! `commit` already produces (`StrokeResources::pre_stroke_texture`).
-//! Wire `clone_source.color → stamp.color → paint.rgba` and the terminal
-//! deposits copied pixels under the cursor, inheriting shape, spacing,
-//! pressure-size, flow, opacity, erase, selection, preview, and undo for
-//! free. No new terminal — see the plan in `docs`/PR for why `paint` is
-//! the right base.
+//! this node's `color` output is a per-fragment sample of a **frozen
+//! source snapshot**. Wire `clone_source.color → stamp.color →
+//! paint.rgba` and the terminal deposits copied pixels under the cursor,
+//! inheriting shape, spacing, pressure-size, flow, opacity, erase,
+//! selection, preview, and undo for free. No new terminal — see the plan
+//! in `docs`/PR for why `paint` is the right base.
 //!
 //! ## Source binding
 //!
 //! Compilation calls [`CompileWgslCtx::request_source_texture`], which
 //! sets [`crate::brush::wgsl::CompiledBrush::samples_source`] and reserves
-//! the `@group(3)` source slot. `paint`'s `flush_dabs` binds the live
-//! per-stroke snapshot there; the hover preview binds the registry
+//! the `@group(3)` source slot. `paint`'s `flush_dabs` binds the stroke's
+//! source snapshot there: the pre-stroke snapshot of the painted layer
+//! (same-layer clone), or a separate snapshot frozen at stroke start when
+//! a source layer is pinned or `merged` is on
+//! (`StrokeBuffer::save_source_snapshot`). The hover preview binds the registry
 //! `_fallback` tile (there is no snapshot at hover — the cursor thumbnail
 //! comes out neutral). The bind/sample plumbing is shared with `image`
 //! via [`crate::brush::wgsl::sample_graph_texture`].
+//!
+//! Known limits: merged sampling clips to the canvas window (the
+//! composite cache is exactly window-sized, while same-layer clone can
+//! reach layer content beyond it), and a *group* pinned as source falls
+//! back to the painted layer (groups have no node texture; their
+//! composite cache is not snapshotted).
 //!
 //! ## Two modes
 //!
@@ -39,9 +46,13 @@
 //! exposed port default and baked into the emitted WGSL.
 //!
 //! **Coordinate frame:** `target_pos`, `center`, and the anchors are all
-//! plane/canvas pixels. The snapshot is layer-local and layer-sized, so
-//! the sample UV is `(src − layer_offset) / layer_size` (from
-//! `IntrinsicUniforms`), **not** `canvas_*`. Out-of-layer UVs read
+//! plane/canvas pixels. The snapshot is local to the *source's* frame —
+//! its plane rect arrives as the per-node `source_offset` / `source_size`
+//! uniforms, seeded each pen event from
+//! [`CloneState`](crate::brush::eval::CloneState) (the frozen snapshot's
+//! frame when one exists, else the paint target's current extent, so
+//! same-layer clone keeps tracking mid-stroke layer growth). The sample
+//! UV is `(src − source_offset) / source_size`. Out-of-source UVs read
 //! transparent — see [`docs/coordinate-systems.md`].
 
 use std::sync::Arc;
@@ -79,6 +90,19 @@ pub fn register() -> BrushNodeRegistration {
                         "Off: the source tracks the cursor (aligned). On: every dab \
                          samples the fixed source point (anchored).",
                     ),
+                // Layer (0) vs merged (1). Like `mode`, an exposed Bool
+                // toggle read from the port default; the engine resolves
+                // it at stroke start to pick the snapshot source.
+                PortDef::input("merged", BrushWireType::Bool)
+                    .with_range(0.0, 1.0, 0.0)
+                    .with_step(1.0)
+                    .with_label("Sample Merged")
+                    .with_icon("fa6-solid:layer-group")
+                    .exposed()
+                    .with_description(
+                        "Off: clone from the source layer. On: clone from the merged \
+                         canvas (all layers composited).",
+                    ),
                 PortDef::output("color", BrushWireType::Vec4)
                     .with_description("RGBA sampled from the frozen source snapshot at the clone offset"),
             ],
@@ -92,16 +116,28 @@ pub fn register() -> BrushNodeRegistration {
     )
 }
 
-/// The exposed `mode` toggle reads anchored at or above this threshold,
-/// aligned below. The single source of truth for the 0/1 split — shared by
-/// the compile-time bake ([`mode_is_anchored`]) and the engine's structural
-/// [`crate::engine::DarklyEngine::clone_source_anchored`] query so the
-/// frontend marker and the emitted WGSL can't disagree on the mode.
+/// A Bool toggle port reads "on" at or above this threshold, "off" below.
+/// The single source of truth for the 0/1 split of this node's exposed
+/// toggles — shared by the compile-time bake ([`mode_is_anchored`]) and the
+/// engine's structural queries (`clone_source_anchored`,
+/// `clone_sample_merged`) so the frontend, the stroke-start resolution, and
+/// the emitted WGSL can't disagree.
 pub const MODE_ANCHORED_THRESHOLD: f32 = 0.5;
+
+/// Whether a Bool toggle port default reads as "on".
+fn toggle_default_is_on(default: f32) -> bool {
+    default >= MODE_ANCHORED_THRESHOLD
+}
 
 /// Whether a `mode` port default selects anchored (`true`) or aligned.
 pub fn mode_default_is_anchored(mode_default: f32) -> bool {
-    mode_default >= MODE_ANCHORED_THRESHOLD
+    toggle_default_is_on(mode_default)
+}
+
+/// Whether a `merged` port default selects sample-merged (`true`) or
+/// clone-from-source-layer.
+pub fn merged_default_is_on(merged_default: f32) -> bool {
+    toggle_default_is_on(merged_default)
 }
 
 /// Read the exposed `mode` port default and decide aligned vs anchored.
@@ -136,19 +172,29 @@ impl BrushNodeEvaluator for CloneSourceEvaluator {
 
         let slot = cctx.request_source_texture();
 
-        // Stroke-constant anchor uniforms, seeded per-stroke by the
-        // runner from `CloneState` (keyed `n{id}_source_anchor` /
-        // `n{id}_dest_anchor`). Default to `[0, 0]` when unseeded (the
-        // hover preview, which has no live anchors).
+        // Stroke-constant uniforms, seeded per pen event by the runner
+        // from `CloneState` (keyed `n{id}_source_anchor` etc.): the two
+        // clone anchors plus the source snapshot's plane frame. Each
+        // field carries its own unseeded default (the hover preview and
+        // non-clone paths have no live `CloneState`) — `source_size`
+        // MUST default to `[1, 1]`: a zero size NaNs the UV, and NaN
+        // passes the `uv < 0 || uv > 1` bounds check below.
         let sa_field = cctx.uniform_field_name("source_anchor");
         let da_field = cctx.uniform_field_name("dest_anchor");
-        for field in [sa_field.clone(), da_field.clone()] {
+        let so_field = cctx.uniform_field_name("source_offset");
+        let ssz_field = cctx.uniform_field_name("source_size");
+        for (field, default) in [
+            (sa_field.clone(), [0.0f32, 0.0]),
+            (da_field.clone(), [0.0, 0.0]),
+            (so_field.clone(), [0.0, 0.0]),
+            (ssz_field.clone(), [1.0, 1.0]),
+        ] {
             let key = field.clone();
             wgsl.uniform_fields.push(UniformField {
                 name: field,
                 ty: WgslType::Vec2,
                 pack: Arc::new(move |outputs, bytes| {
-                    let v = outputs.get(&key).map(|s| s.as_vec2()).unwrap_or([0.0, 0.0]);
+                    let v = outputs.get(&key).map(|s| s.as_vec2()).unwrap_or(default);
                     bytes.extend_from_slice(bytemuck::bytes_of(&v));
                 }),
             });
@@ -166,14 +212,17 @@ impl BrushNodeEvaluator for CloneSourceEvaluator {
         // Helper function so the per-fragment math is emitted once. It
         // references the module-scope `u` uniform and the `@group(3)`
         // source texture directly. `tp` is the fragment's plane-space
-        // position in canvas pixels; `off` the clone offset.
+        // position in canvas pixels; `off` the clone offset. The source
+        // frame comes from the per-node uniforms above — not
+        // `u.intrinsic.layer_*`, which is the *painted* layer's frame and
+        // diverges from the source under cross-layer / merged clone.
         let fn_name = cctx.ident("clone_sample");
         let sample = sample_graph_texture(slot, "uv");
         wgsl.decls = format!(
             "fn {fn_name}(tp: vec2<f32>, off: vec2<f32>) -> vec4<f32> {{\n\
              \x20   let src = tp + off;\n\
-             \x20   let lo = vec2<f32>(f32(u.intrinsic.layer_offset.x), f32(u.intrinsic.layer_offset.y));\n\
-             \x20   let lsz = vec2<f32>(f32(u.intrinsic.layer_size.x), f32(u.intrinsic.layer_size.y));\n\
+             \x20   let lo = u.{so_field};\n\
+             \x20   let lsz = u.{ssz_field};\n\
              \x20   let uv = (src - lo) / lsz;\n\
              \x20   if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {{\n\
              \x20       return vec4<f32>(0.0, 0.0, 0.0, 0.0);\n\
@@ -243,8 +292,8 @@ mod tests {
         let reg = register();
         assert_eq!(reg.node.type_id, "clone_source");
         assert_eq!(reg.node.category, "texture");
-        // Two inputs (center, mode) + one output (color).
-        assert_eq!(reg.node.ports.len(), 3);
+        // Three inputs (center, mode, merged) + one output (color).
+        assert_eq!(reg.node.ports.len(), 4);
         assert!(reg.node.ports.iter().any(|p| p.name == "color"));
         assert!(reg.node.ports.iter().any(|p| p.name == "center"));
         assert!(!reg.node.ports.iter().any(|p| p.name == "angle"));
@@ -260,6 +309,18 @@ mod tests {
         assert_eq!(mode.wire_type, BrushWireType::Bool);
         assert_eq!(mode.default, 0.0);
         assert!(!mode_default_is_anchored(mode.default));
+
+        // Sample-merged `merged` is a Bool toggle defaulting to off
+        // (clone from the source layer).
+        let merged = reg
+            .node
+            .ports
+            .iter()
+            .find(|p| p.name == "merged")
+            .expect("merged port");
+        assert_eq!(merged.wire_type, BrushWireType::Bool);
+        assert_eq!(merged.default, 0.0);
+        assert!(!merged_default_is_on(merged.default));
     }
 
     /// The two-mode offset formula: aligned is a stroke-constant shift

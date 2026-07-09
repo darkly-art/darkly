@@ -78,10 +78,12 @@ export function trackedSourcePos(
     return { x: anchor.x + (cursor.x - dest.x), y: anchor.y + (cursor.y - dest.y) };
 }
 
-/** Record the clone source anchor in the engine (plane / canvas pixels)
- *  and mark that a source now exists so the marker can draw at it. */
+/** Record the clone source anchor in the engine (plane / canvas pixels),
+ *  pinning the currently active layer as the clone source (null = clone
+ *  from the painted layer), and mark that a source now exists so the
+ *  marker can draw at it. */
 export function setCloneSourceAnchor(cx: number, cy: number): void {
-    app.engine?.api.setCloneSource({ x: cx, y: cy });
+    app.engine?.api.setCloneSource({ x: cx, y: cy, layer: app.activeLayerId });
     hasSource = true;
     sourceAnchor = { x: cx, y: cy };
     refreshEngagement();
