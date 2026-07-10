@@ -1,4 +1,4 @@
-import type { Tool } from './registry';
+import type { Tool, ToolContext } from './registry';
 import type { EngineRequests } from '../engine/protocol';
 import { app } from '../state/app.svelte';
 import { brushGraph } from '../state/brush_graph.svelte';
@@ -13,6 +13,13 @@ import {
 } from './selection_helpers';
 import BrushOptions from '../ui/BrushOptions.svelte';
 import BrushBuilderPanel from '../ui/BrushBuilderPanel.svelte';
+import {
+    onCloneStrokeStart,
+    onCloneStrokeMove,
+    onCloneStrokeEnd,
+    clearCloneSourceCursor,
+} from './clone_source_cursor';
+import { isToolHoverSuppressed } from './modifier_cursor';
 
 /** Brush-tool session state. Persists across strokes within the session;
  *  resets on reload. The engine-side blend-mode mirror is pushed by
@@ -99,6 +106,17 @@ let hoverGen = 0;
  *  scrub, which uses `cursorPose` so the circle shows the brush's full
  *  extent) can keep the preview in sync after mutating the graph. */
 export async function pushHoverOverlay(engine: EngineRequests, pose: PenPose, cx: number, cy: number) {
+    // While a modifier cursor is engaged (picker dropper, clone crosshair),
+    // no hover entry path — CanvasView's dispatch, the shift+drag size
+    // scrub, the `[` / `]` hotkey refresh — may render a dab or write the
+    // cursor slot; gating here covers them all at the one choke point. This
+    // gate alone is not airtight: an engagement landing *during* the await
+    // below slips past it, and is caught instead by the `hoverGen` recheck
+    // (engaging runs `suspendHover` → `clearHover()` → `hoverGen++`).
+    // Suppression safety is the gate and the gen counter jointly — neither
+    // is redundant. `restoreHover` fires only after the last engager
+    // disengages, so it passes.
+    if (isToolHoverSuppressed()) return;
     const gen = hoverGen;
     const info = (await engine.api.refreshBrushCursorPreview({
         x: cx,
@@ -143,13 +161,22 @@ export function refreshHoverOverlay(engine: EngineRequests) {
 }
 
 /** Drop the cached hover. Called whenever the overlay is cleared
- *  (stroke start, pointer leave, tool deactivate) so a stale position
- *  can't resurrect the preview. */
+ *  (stroke start, pointer leave, tool deactivate, modifier-cursor
+ *  engage) so a stale position can't resurrect the preview. */
 function clearHover() {
     lastHover = null;
     // Invalidate any hover preview still awaiting its async refresh so it can't
     // land after this clear.
     hoverGen++;
+}
+
+/** Tear down the hover preview: clear the on-canvas ghost, drop the engine's
+ *  cached preview pose, and invalidate any in-flight async push. Shared by
+ *  pointer-leave and the `suspendHover` hook (a modifier cursor engaging). */
+function suspendBrushHover(ctx: ToolContext) {
+    ctx.engine.api.clearOverlay();
+    ctx.engine.api.clearBrushCursorPreviewPose();
+    clearHover();
 }
 
 export const MIN_SIZE = 1;
@@ -207,6 +234,10 @@ export const brushTool: Tool = {
         // Hide the native cursor only if a preview is available — otherwise
         // fall back to the default cursor so the user has *something* to see.
         const info = await ctx.engine.api.getBrushCursorPreviewInfo();
+        // Re-check after the await: a modifier cursor may have engaged in the
+        // meantime (hotkeying into the brush with the chord already held) and
+        // writing now would stomp its cursor.
+        if (isToolHoverSuppressed()) return;
         app.toolCursor = info ? 'none' : null;
     },
 
@@ -220,6 +251,9 @@ export const brushTool: Tool = {
         ctx.engine.api.setBrushBlendMode({ mode: 0 });
         app.toolCursor = null;
         clearHover();
+        // Drop the on-canvas clone source marker with the tool that owns it
+        // (the engine anchor persists as session state).
+        clearCloneSourceCursor();
     },
 
     onPointerDown(ctx, e, cx, cy) {
@@ -235,6 +269,9 @@ export const brushTool: Tool = {
         const params = brushStrokeParams(e, cx, cy);
         ctx.engine.api.beginStroke({ id: layerId });
         ctx.engine.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
+        // Capture the clone dest anchor so the source marker tracks the
+        // cursor in aligned mode (no-op for non-clone brushes).
+        onCloneStrokeStart(cx, cy);
         const dims = currentCanvasDimensions();
         if (dims) strokeRecorder.beginStroke(dims[0], dims[1], params);
     },
@@ -244,6 +281,7 @@ export const brushTool: Tool = {
             const params = brushStrokeParams(e, cx, cy);
             ctx.engine.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
             strokeRecorder.addEvent(params);
+            onCloneStrokeMove(cx, cy);
             return;
         }
         // Hover: re-render the preview with live pen data + draw it.
@@ -253,15 +291,16 @@ export const brushTool: Tool = {
     onPointerUp(ctx) {
         ctx.engine.api.endStroke();
         strokeRecorder.endStroke();
+        onCloneStrokeEnd();
     },
 
     onPointerLeave(ctx) {
         // Pointer left the canvas: drop the hover ghost so it doesn't
         // linger at the last-seen edge position.
-        ctx.engine.api.clearOverlay();
-        ctx.engine.api.clearBrushCursorPreviewPose();
-        clearHover();
+        suspendBrushHover(ctx);
     },
+
+    suspendHover: suspendBrushHover,
 
     restoreHover(ctx, cx, cy) {
         // Re-establish the dab preview after an interruption (e.g. the

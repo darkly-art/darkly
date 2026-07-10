@@ -977,15 +977,26 @@ fn build_cursor_preview_pipeline(
         label: Some("brush-preview-shader"),
         source: wgpu::ShaderSource::Wgsl(compiled.cursor_preview_wgsl.clone().into()),
     });
+    // `@group(3)` texture names for the preview pipeline. A brush that
+    // samples the frozen `clone_source` snapshot (`samples_source`) has
+    // no live snapshot at hover, so the source slot is filled with the
+    // registry `_fallback` tile — the shader body samples it and the
+    // cursor thumbnail comes out neutral. Named graph textures resolve
+    // normally; the source slot sits after them (see `assemble_shader`).
+    let mut preview_texture_names = compiled.graph_texture_names.clone();
+    if compiled.samples_source {
+        preview_texture_names.push(crate::gpu::texture_registry::FALLBACK_TEXTURE.to_string());
+    }
+
     // Pipeline layout. When the brush samples graph textures, slot 3
     // holds the registry-resolved bind group; the preview shader
     // doesn't reference `@group(2)` (no selection in preview), so an
     // empty placeholder BGL fills that slot to keep `@group(3)`
     // positionally correct.
-    let graph_layout = if compiled.graph_texture_names.is_empty() {
+    let graph_layout = if preview_texture_names.is_empty() {
         None
     } else {
-        Some(texture_registry.layout_for_count(device, compiled.graph_texture_names.len()))
+        Some(texture_registry.layout_for_count(device, preview_texture_names.len()))
     };
     let layout = match &graph_layout {
         None => device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1074,10 +1085,10 @@ fn build_cursor_preview_pipeline(
         }],
     });
 
-    let graph_textures = if compiled.graph_texture_names.is_empty() {
+    let graph_textures = if preview_texture_names.is_empty() {
         None
     } else {
-        let (_layout, bg) = texture_registry.make_bind_group(device, &compiled.graph_texture_names);
+        let (_layout, bg) = texture_registry.make_bind_group(device, &preview_texture_names);
         // Per-pipeline empty bind group bound at @group(2) (matches
         // the cache's `empty_bgl`). Cheap to create — no GPU
         // resources — and keeps `render` self-contained without

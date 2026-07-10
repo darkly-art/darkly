@@ -141,8 +141,8 @@ impl DarklyEngine {
         self.add_void_layer(&void_type, pv, anchor)
     }
 
-    /// Wire entry for `add_filter` — filters carry no params today (the schema
-    /// is empty), then [`Self::add_filter_layer`].
+    /// Wire entry for `add_filter` — coerces `params` against the filter type's
+    /// schema (defaults fill any omitted values), then [`Self::add_filter_layer`].
     #[handler]
     pub fn add_filter(
         &mut self,
@@ -150,7 +150,7 @@ impl DarklyEngine {
         params: RawParams,
         anchor: Option<LayerId>,
     ) -> Option<LayerId> {
-        let pv = params_from_json(&params.0, &[]);
+        let pv = params_from_json(&params.0, self.filter_param_defs(&pipeline));
         self.add_filter_layer(&pipeline, pv, anchor)
     }
 
@@ -164,6 +164,19 @@ impl DarklyEngine {
         };
         let pv = self.coerce_void_params(&type_id, &params.0);
         self.update_void_params(id, pv);
+    }
+
+    /// Wire entry for `set_filter_params` — resolves the layer's filter type,
+    /// coerces `params` against its schema, then [`Self::update_filter_params`].
+    /// A non-filter (or stale) id is a silent no-op. The exact analog of
+    /// [`Self::set_void_params`].
+    #[handler]
+    pub fn set_filter_params(&mut self, id: LayerId, params: RawParams) {
+        let Some(type_id) = self.filter_layer_pipeline(id) else {
+            return;
+        };
+        let pv = params_from_json(&params.0, self.filter_param_defs(&type_id));
+        self.update_filter_params(id, pv);
     }
 
     // --- Vector / text layers ---

@@ -80,8 +80,15 @@ web-time = "1.1.0"
 console_error_panic_hook = "0.1"
 console_log = "1"
 
+# Full DWARF on every statically-linked test binary is what let `target/` balloon
+# to hundreds of GB (each integration test links the whole engine — ~300 MB apiece,
+# and Cargo never GCs stale fingerprints). Line tables keep panics/backtraces useful
+# while cutting each binary well over half; unpacked split-debuginfo keeps the debug
+# data in separate object files out of the linked executables.
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
 
 [profile.release]
 lto = "thin"

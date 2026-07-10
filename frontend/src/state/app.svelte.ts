@@ -6,6 +6,7 @@ import { toolRegistry } from '../tools/registry';
 import { pollPick } from '../tools/color_pick_sync';
 import { beginToolSession, killToolSession, runHook } from '../tools/tool_session';
 import { tickColorPickerCursor } from '../tools/colorpicker_cursor';
+import { tickCloneSourceCursor } from '../tools/clone_source_cursor';
 import { MediaStreamSource, describeMediaError } from '../lib/mediaStreamSource';
 import { HttpStreamSource } from '../lib/httpStreamSource';
 import type { FrameSource, CaptureKind } from '../lib/frameSource';
@@ -1042,6 +1043,11 @@ export class DarklyInstance {
             // Refresh the color-picker cursor against the latest foreground
             // committed by `pollPick`. Cheap when nothing changed.
             tickColorPickerCursor();
+
+            // Refresh the clone set-source cursor — re-queries "needs source"
+            // on brush change and shows/hides the crosshair. Cheap when
+            // nothing changed (memo guards).
+            tickCloneSourceCursor();
 
             // Check for completed async copy/cut readback.
             if (this._copyCallback) {

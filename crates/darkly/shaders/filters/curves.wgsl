@@ -46,10 +46,10 @@ fn lut_index(c: f32) -> i32 {
 // The HSV and CIELAB conversions (`rgb_to_hsv`/`hsv_to_rgb`, `rgb_to_lab`/
 // `lab_to_rgb`) are prepended from `shaders/lib/colorspace.wgsl` at load time.
 
-@fragment
-fn fs_curves(in: VsOut) -> @location(0) vec4f {
-    let p = vec2i(floor(in.pos.xy));
-    var c = textureLoad(t_src, p, 0);
+// Apply the baked LUT + gated HSV/Lab stages to one source texel. Shared by the
+// plain and masked entry points.
+fn curves_transform(c_in: vec4f) -> vec4f {
+    var c = c_in;
 
     // Per-component color curves (composite∘channel baked in row 0).
     c.r = textureLoad(t_lut, vec2i(lut_index(c.r), 0), 0).r;
@@ -74,4 +74,23 @@ fn fs_curves(in: VsOut) -> @location(0) vec4f {
     }
 
     return c;
+}
+
+@fragment
+fn fs_curves(in: VsOut) -> @location(0) vec4f {
+    let p = vec2i(floor(in.pos.xy));
+    return curves_transform(textureLoad(t_src, p, 0));
+}
+
+// Destructive selection-clipped variant: filter where the R8 mask is selected
+// (>0.5), pass the original through elsewhere (mirrors `fs_invert_masked`).
+@group(0) @binding(3) var t_mask: texture_2d<f32>;
+
+@fragment
+fn fs_curves_masked(in: VsOut) -> @location(0) vec4f {
+    let p = vec2i(floor(in.pos.xy));
+    let orig = textureLoad(t_src, p, 0);
+    let filtered = curves_transform(orig);
+    let selected = textureLoad(t_mask, p, 0).r > 0.5;
+    return select(orig, filtered, selected);
 }

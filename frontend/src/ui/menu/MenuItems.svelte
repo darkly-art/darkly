@@ -84,9 +84,9 @@
                     {#if entry.icon}
                         <Icon name={entry.icon} />
                     {:else if statusIcon(entry.actionId)}
-                        <Icon name={statusIcon(entry.actionId)} class="status" />
+                        <Icon name={statusIcon(entry.actionId)!} class="status" />
                     {:else if baseIcon(entry.actionId)}
-                        <Icon name={baseIcon(entry.actionId)} />
+                        <Icon name={baseIcon(entry.actionId)!} />
                     {/if}
                 </span>
                 <span class="label">{labelOf(entry.actionId, entry.label)}</span>

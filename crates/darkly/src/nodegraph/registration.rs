@@ -47,4 +47,9 @@ pub struct NodeRegistration<W: WireKind> {
     /// pixels (smudge, watercolor, liquify) override to `false` so the
     /// brush-tool options bar hides the erase toggle.
     pub supports_erase: bool,
+    /// Iconify icon shown in place of baked dab/stroke thumbnails for any
+    /// brush whose graph contains this node. Set by nodes whose output
+    /// depends on existing canvas content — stroking the flat preview
+    /// background renders blank, so the picker shows this icon instead.
+    pub preview_fallback_icon: Option<&'static str>,
 }

@@ -13,6 +13,23 @@
 
 use crate::brush::pipeline::BrushPipelines;
 use crate::brush::scratch::Scratch;
+use crate::coord::CanvasRect;
+
+/// A frozen texture for the brush program's sampled source slot
+/// (`@group(3)`), captured once at stroke start by
+/// [`StrokeBuffer::save_source_snapshot`] when the stroke samples
+/// something other than the painted layer — e.g. clone's cross-layer /
+/// sample-merged modes. When absent, the pre-stroke snapshot fills the
+/// slot instead. Always RGBA8 (R8 mask sources broadcast during capture,
+/// sharing `save_pre_stroke_snapshot`'s format handling).
+pub struct SourceSnapshot {
+    texture: wgpu::Texture,
+    /// Plane-space rect the snapshot covers — the *sampled* texture's
+    /// frame, which the shader needs to map plane positions to snapshot
+    /// UVs. Frozen with the pixels: destination-layer growth mid-stroke
+    /// must not move it.
+    frame: CanvasRect,
+}
 
 /// Manages the stroke-in-progress scratch (write+read pair) and pre-stroke
 /// snapshot textures.
@@ -34,6 +51,11 @@ pub struct StrokeBuffer {
     /// Bind group for the pre-stroke texture, compatible with the canvas copy BGL
     /// so the existing composite pipeline can read it as the background.
     pre_stroke_bind_group: wgpu::BindGroup,
+
+    /// Frozen texture for the brush's sampled source slot, or `None` when
+    /// the pre-stroke snapshot is the source (same-layer clone) or the
+    /// brush doesn't sample one at all. See [`SourceSnapshot`].
+    source_snapshot: Option<SourceSnapshot>,
 
     width: u32,
     height: u32,
@@ -95,6 +117,7 @@ impl StrokeBuffer {
             pre_stroke_texture,
             pre_stroke_view,
             pre_stroke_bind_group,
+            source_snapshot: None,
             width,
             height,
         }
@@ -114,14 +137,23 @@ impl StrokeBuffer {
 
     /// Split-borrow accessor for `BrushGpuContext` construction: returns
     /// a mutable reference to the scratch alongside immutable references
-    /// to the pre-stroke resources, all from one `&mut self` borrow.  The
-    /// borrow checker permits this because the function body proves the
-    /// borrows are disjoint (different fields).
-    pub fn parts_for_brush_ctx(&mut self) -> (&mut Scratch, &wgpu::Texture, &wgpu::BindGroup) {
+    /// to the pre-stroke resources and the optional source snapshot, all
+    /// from one `&mut self` borrow.  The borrow checker permits this
+    /// because the function body proves the borrows are disjoint
+    /// (different fields).
+    pub fn parts_for_brush_ctx(
+        &mut self,
+    ) -> (
+        &mut Scratch,
+        &wgpu::Texture,
+        &wgpu::BindGroup,
+        Option<&wgpu::Texture>,
+    ) {
         (
             &mut self.scratch,
             &self.pre_stroke_texture,
             &self.pre_stroke_bind_group,
+            self.source_snapshot.as_ref().map(|cs| &cs.texture),
         )
     }
 
@@ -165,6 +197,60 @@ impl StrokeBuffer {
         );
     }
 
+    /// Freeze `source` into this stroke's [`SourceSnapshot`] — the texture
+    /// the brush's sampled source slot binds instead of the pre-stroke
+    /// snapshot (e.g. clone's pinned layer or the root composite). Wrapped
+    /// as a paint target so the capture shares `save_pre_stroke_snapshot`'s
+    /// format handling (R8 mask sources broadcast to RGBA8). Records into
+    /// `encoder`; the caller submits. Strokes that sample the painted
+    /// layer itself never call this — the pre-stroke snapshot is their
+    /// source.
+    pub fn save_source_snapshot(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        brush_pipelines: &BrushPipelines,
+        source: &crate::gpu::paint_target::GpuPaintTarget<'_>,
+    ) {
+        use crate::brush::paint_target_ext::BrushPaintTargetExt;
+        let extent = source.layer_extent();
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("stroke-source-snapshot"),
+            size: wgpu::Extent3d {
+                width: extent.width,
+                height: extent.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            // RENDER_ATTACHMENT for the R8-mask broadcast pass, COPY_DST
+            // for the same-format hardware copy — mirrors the pre-stroke
+            // snapshot's dual capture path.
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        // The view only serves the R8-broadcast capture pass; sampling at
+        // flush time creates its own binding view from the texture.
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        source.save_pre_stroke_snapshot(device, encoder, brush_pipelines, &view, &texture);
+        self.source_snapshot = Some(SourceSnapshot {
+            texture,
+            frame: source.canvas_extent(),
+        });
+    }
+
+    /// Plane-space frame of the frozen source snapshot, if one was
+    /// captured for this stroke. `None` means the pre-stroke snapshot is
+    /// the source (or the brush samples none) — the caller falls back to
+    /// the paint target's live extent.
+    pub fn source_snapshot_frame(&self) -> Option<CanvasRect> {
+        self.source_snapshot.as_ref().map(|cs| cs.frame)
+    }
+
     /// Current scratch dimensions in pixels (the write side, which is layer-sized).
     pub fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
@@ -181,6 +267,9 @@ impl StrokeBuffer {
     /// growth doesn't change what footprint the next dab will request.
     /// The next `Scratch::sync_read_mirror` call will re-copy in the new
     /// write-side coordinate frame.
+    ///
+    /// `source_snapshot` is also left alone: it lives in the *sampled*
+    /// texture's frozen frame, and destination growth doesn't move it.
     pub fn grow_preserving(
         &mut self,
         device: &wgpu::Device,

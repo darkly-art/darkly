@@ -95,7 +95,7 @@
 
     .gutter {
         flex: 0 0 4px;
-        background: var(--bg-hover);
+        background: var(--bg);
         touch-action: none;
     }
 

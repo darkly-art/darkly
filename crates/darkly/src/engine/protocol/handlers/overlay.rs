@@ -7,6 +7,7 @@
 use serde::Deserialize;
 
 use crate::engine::protocol::{decode, RequestRegistration, Response};
+use crate::engine::OverlayChannel;
 use crate::gpu::overlay::OverlayPrimitive;
 
 fn white() -> [f32; 4] {
@@ -82,5 +83,25 @@ pub fn registrations() -> Vec<RequestRegistration> {
         })
         .post()
         .req::<SetOverlayReq>(),
+        // Clone-brush source marker / hint. Targets the `CloneSource`
+        // channel, which persists across the dab preview's every-hover-move
+        // replacement of the `Tool` channel.
+        RequestRegistration::new("set_clone_overlay", |engine, payload, _b| {
+            let r: SetOverlayReq = decode(payload)?;
+            let prims = r
+                .primitives
+                .into_iter()
+                .map(OverlayPrimitive::from)
+                .collect();
+            engine.set_channel_overlay(OverlayChannel::CloneSource, prims);
+            Ok(Response::empty())
+        })
+        .post()
+        .req::<SetOverlayReq>(),
+        RequestRegistration::new("clear_clone_overlay", |engine, _payload, _b| {
+            engine.clear_channel_overlay(OverlayChannel::CloneSource);
+            Ok(Response::empty())
+        })
+        .post(),
     ]
 }

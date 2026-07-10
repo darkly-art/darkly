@@ -93,7 +93,7 @@ For a feature to count, it must be:
     - [x] Smudge
     - [x] Watercolor
     - [x] Liquify
-    - [ ] Clone
+    - [x] Clone
     - [x] Blur
     - [ ] Dodge/burn
     - [x] Calligraphy
@@ -131,7 +131,7 @@ For a feature to count, it must be:
 - [x] Autosave + crash recovery
 - [x] Filter layers
     - [ ] Brightness / Contrast
-    - [ ] Hue / Saturation / Lightness
+    - [x] Hue / Saturation / Lightness
     - [x] Levels
     - [x] Curves
     - [x] Invert colors
@@ -147,6 +147,7 @@ For a feature to count, it must be:
 - [ ] Palette popup
 - [ ] Navigator / overview window
 - [ ] History panel UI
+- [ ] Process recording
 - [x] Mirror view
 - [x] Reset view
 - [x] Canvas-rotation snapping

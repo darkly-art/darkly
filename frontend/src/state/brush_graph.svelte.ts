@@ -8,7 +8,9 @@
  * change, and never travel back to Rust.
  */
 import { app } from './app.svelte';
-import type { JsonValue } from '../engine/protocol_gen';
+import type { BrushInfo, JsonValue } from '../engine/protocol_gen';
+
+export type { BrushInfo };
 
 // --- Types mirroring Rust's nodegraph structures ---
 
@@ -65,14 +67,6 @@ export interface NodeTypeInfo {
 }
 
 // --- Wire type colors ---
-
-export interface BrushInfo {
-    name: string;
-    category: string;
-    author: string;
-    description: string;
-    tags: string[];
-}
 
 export type ExposedValue =
     | { kind: 'scalar'; value: number; min: number; max: number; default: number; unitType: string }
@@ -163,13 +157,20 @@ class BrushGraphState {
     exposedPorts = $state<ExposedPortInfo[]>([]);
 
     /** Does the active brush's terminal honor erase (paint vs. erase) mode?
-     *  Refreshed from `brush_active_supports_erase` whenever
+     *  Refreshed from `brush_active_capabilities` whenever
      *  the graph topology changes. The Rust side reads each terminal
      *  node's `supports_erase` registration flag — there is no central
      *  list of which terminals opt out (it lives on each node module's
      *  `register()`). When `false`, the brush-tool options bar hides
      *  the erase toggle. */
     supportsErase = $state(true);
+
+    /** Iconify icon shown in place of the live baked previews when the
+     *  active graph contains a content-dependent node (clone, blur,
+     *  smudge, liquify) — its bake against the flat preview background
+     *  renders blank. Declared per node type via the registration's
+     *  `preview_fallback_icon`; refreshed alongside `supportsErase`. */
+    previewIcon = $state<string | null>(null);
 
     /**
      * Last topology version we observed from the engine. The engine bumps
@@ -201,17 +202,20 @@ class BrushGraphState {
                 }
             }
             await this.refreshExposedPorts();
-            await this.refreshSupportsErase();
+            await this.refreshCapabilities();
         }
     }
 
-    /** Query Rust for whether the active brush's terminal supports erase
-     *  mode. Cheap (a single WASM borrow + graph walk); we call this on
-     *  every topology change rather than per-render so the `$state` field
-     *  drives reactive consumers. */
-    private async refreshSupportsErase() {
+    /** Query Rust for the active graph's derived capabilities — erase
+     *  support and the preview fallback icon. Cheap (a single WASM
+     *  borrow + graph walk); we call this on every topology change
+     *  rather than per-render so the `$state` fields drive reactive
+     *  consumers. */
+    private async refreshCapabilities() {
         if (!app.engine) return;
-        this.supportsErase = (await app.engine.api.brushActiveSupportsErase()).value;
+        const caps = await app.engine.api.brushActiveCapabilities();
+        this.supportsErase = caps.supports_erase;
+        this.previewIcon = caps.preview_fallback_icon;
     }
 
     /**
@@ -253,7 +257,7 @@ class BrushGraphState {
         if (!app.engine) return;
         await this.fetchGraph();
         await this.refreshExposedPorts();
-        await this.refreshSupportsErase();
+        await this.refreshCapabilities();
         await this.snapshotTopologyVersion();
     }
 
@@ -277,7 +281,7 @@ class BrushGraphState {
             // default graph as a degenerate fallback.
             await this.fetchGraph();
             await this.refreshExposedPorts();
-            await this.refreshSupportsErase();
+            await this.refreshCapabilities();
             await this.snapshotTopologyVersion();
         }
     }
@@ -289,7 +293,7 @@ class BrushGraphState {
         this.nodePositions = {};
         await this.fetchGraph();
         await this.refreshExposedPorts();
-        await this.refreshSupportsErase();
+        await this.refreshCapabilities();
         this.error = null;
         this.activeBrush = null;
         await this.snapshotTopologyVersion();
@@ -317,7 +321,7 @@ class BrushGraphState {
         this.nodePositions = {};
         await this.fetchGraph();
         await this.refreshExposedPorts();
-        await this.refreshSupportsErase();
+        await this.refreshCapabilities();
         this.error = null;
         this.activeBrush = null;
         await this.snapshotTopologyVersion();
@@ -407,7 +411,7 @@ class BrushGraphState {
         this.nodePositions = {};
         await this.fetchGraph();
         await this.refreshExposedPorts();
-        await this.refreshSupportsErase();
+        await this.refreshCapabilities();
         this.error = null;
         // brush_load is a Topology change — snapshot here so the next
         // exposed-port scrub doesn't see a delta and clear `activeBrush`.

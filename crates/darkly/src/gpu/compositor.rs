@@ -717,6 +717,10 @@ pub struct Compositor {
     /// The filter layer whose input histogram is being computed (the Levels
     /// editor's selected filter), or `None` when no histogram is wanted.
     histogram_target: Option<LayerId>,
+    /// A node whose *own* texture is histogrammed on demand (the destructive
+    /// Levels modal, which has no filter arm to bin). Pumped by
+    /// [`pump_node_histogram`](Self::pump_node_histogram), not the compose walk.
+    node_histogram_target: Option<LayerId>,
 
     // --- Frame Scheduler ---
     /// Monotonic frame counter, incremented on each rAF tick.
@@ -1185,6 +1189,7 @@ impl Compositor {
             content_bounds,
             histogram,
             histogram_target: None,
+            node_histogram_target: None,
             tool_overlay,
             cached_view_transform: identity,
             viewport_bg: DEFAULT_WORKSPACE_BG,
@@ -1548,14 +1553,21 @@ impl Compositor {
         }
     }
 
-    /// Run a `MaskedFilterPipeline` over a node's `region` in place — the
-    /// destructive-filter counterpart of
+    /// Run a [`FilterEffect`](crate::gpu::filter::FilterEffect) over a node's
+    /// `region` in place — the destructive-filter counterpart of
     /// [`flip_node_region`](Self::flip_node_region), riding the same copy-out →
     /// pass → copy-back plumbing (`run_filter_region`). Where `mask_view` (a
     /// region-sized R8) is selected the texel takes the filtered value,
-    /// elsewhere it passes through; `None` filters the whole region. Node-
-    /// generic — the pipeline's format dispatch handles RGBA8 layers and R8
+    /// elsewhere it passes through; `None` filters the whole region.
+    ///
+    /// `params` drive the effect: a throwaway [`EffectCache`] is built here via
+    /// `ensure(params, …)` and handed to `render`, so parametric filters
+    /// (curves, levels, hsv) bake their LUT/uniform exactly as the filter-layer
+    /// compose path does — parameter-free filters (invert) leave the cache empty.
+    /// Node-generic: the pipeline's format dispatch handles RGBA8 layers and R8
     /// masks alike, so masks invert for free.
+    ///
+    /// [`EffectCache`]: crate::gpu::effect::EffectCache
     pub fn filter_node_region(
         &mut self,
         device: &wgpu::Device,
@@ -1565,11 +1577,12 @@ impl Compositor {
         region: CanvasRect,
         mask_view: Option<&wgpu::TextureView>,
         pipeline: &dyn crate::gpu::filter::FilterEffect,
+        params: &[crate::gpu::params::ParamValue],
     ) {
-        // The destructive path serves only parameter-free filters (parametric
-        // ones are excluded upstream in `apply_filter`), so a throwaway empty
-        // cache is all the effect's `render` needs — invert ignores it.
-        let cache = crate::gpu::effect::EffectCache::empty();
+        // Build the param-derived resources once, up front — never in the pass
+        // closure (`ensure` is the pre-compose sync phase's job elsewhere).
+        let mut cache = crate::gpu::effect::EffectCache::empty();
+        pipeline.ensure(device, queue, params, &mut cache);
         let ran = run_filter_region(
             &self.node_textures,
             device,
@@ -1586,6 +1599,111 @@ impl Compositor {
             self.mark_node_pixels_dirty(node_id);
             self.mark_dirty();
         }
+    }
+
+    /// Copy a node's `region` (canvas coords) into a fresh region-sized texture —
+    /// the pristine "before" for a live filter preview. Returns the snapshot and
+    /// the clipped region actually captured, or `None` if the node has no texture
+    /// or the region doesn't overlap it.
+    pub fn snapshot_node_region(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        node_id: LayerId,
+        region: CanvasRect,
+    ) -> Option<(wgpu::Texture, CanvasRect)> {
+        let tex = self.node_textures.get(&node_id)?;
+        let extent = tex.canvas_extent();
+        let region = extent.intersect(region)?;
+        if region.width == 0 || region.height == 0 {
+            return None;
+        }
+        let snap = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("filter-preview-snapshot"),
+            size: wgpu::Extent3d {
+                width: region.width,
+                height: region.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: tex.format(),
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let lx = (region.origin.x - extent.origin.x) as u32;
+        let ly = (region.origin.y - extent.origin.y) as u32;
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("filter-preview-save"),
+        });
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: tex.texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: lx, y: ly, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &snap,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: region.width,
+                height: region.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(Some(encoder.finish()));
+        Some((snap, region))
+    }
+
+    /// Copy a previously [snapshotted](Self::snapshot_node_region) region back
+    /// into the node — undo a live preview so a fresh set of params (or a
+    /// cancel) starts from the pristine pixels.
+    pub fn restore_node_region(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        node_id: LayerId,
+        region: CanvasRect,
+        snapshot: &wgpu::Texture,
+    ) {
+        {
+            let Some(tex) = self.node_textures.get(&node_id) else {
+                return;
+            };
+            let extent = tex.canvas_extent();
+            let lx = (region.origin.x - extent.origin.x) as u32;
+            let ly = (region.origin.y - extent.origin.y) as u32;
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("filter-preview-restore"),
+            });
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: snapshot,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: tex.texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: lx, y: ly, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: region.width,
+                    height: region.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            queue.submit(Some(encoder.finish()));
+        }
+        self.mark_node_pixels_dirty(node_id);
+        self.mark_dirty();
     }
 
     /// Ensure a non-passthrough group has GPU state allocated.
@@ -1888,6 +2006,54 @@ impl Compositor {
             self.histogram_target = target;
             self.mark_dirty();
         }
+    }
+
+    /// Select a node whose *own* texture is histogrammed (the destructive
+    /// Levels modal's backdrop — there is no filter arm in the tree to bin its
+    /// input), or `None` to stop. Unlike [`set_histogram_target`], the binning is
+    /// pumped directly off the node texture by [`pump_node_histogram`], not the
+    /// compose walk.
+    ///
+    /// [`set_histogram_target`]: Self::set_histogram_target
+    /// [`pump_node_histogram`]: Self::pump_node_histogram
+    pub fn set_node_histogram_target(&mut self, target: Option<LayerId>) {
+        if self.node_histogram_target != target {
+            if let Some(prev) = self.node_histogram_target {
+                self.histogram.remove_layer(prev);
+            }
+            self.node_histogram_target = target;
+        }
+    }
+
+    /// Dispatch a histogram over the target node's own RGBA8 texture if one is
+    /// selected and none is cached/pending. Self-contained (records + submits its
+    /// own encoder), so it runs independently of the compose gating; `needs`
+    /// guards re-dispatch, making a per-frame call cheap. The result lands in the
+    /// same cache [`histogram`](Self::histogram) reads.
+    pub fn pump_node_histogram(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let Some(id) = self.node_histogram_target else {
+            return;
+        };
+        if !self.histogram.needs(id) {
+            return;
+        }
+        let Some(tex) = self.node_textures.get(&id) else {
+            return;
+        };
+        // A per-channel colour histogram only makes sense for RGBA8 layers.
+        if tex.format() != wgpu::TextureFormat::Rgba8Unorm {
+            return;
+        }
+        let extent = tex.canvas_extent();
+        let view = tex
+            .texture()
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("node-histogram"),
+        });
+        self.histogram
+            .dispatch(device, &mut encoder, &view, extent.width, extent.height, id);
+        queue.submit(Some(encoder.finish()));
     }
 
     /// The cached 8×256 histogram (channel-major) for a layer, if available.
@@ -2833,6 +2999,13 @@ impl Compositor {
     /// Used by the color picker for readback.
     pub fn composited_texture(&self) -> &wgpu::Texture {
         &self.group_state[&self.root_id].composite_cache
+    }
+
+    /// View over [`Self::composited_texture`] — lets callers wrap the
+    /// root composite in a `GpuPaintTarget` (e.g. the sample-merged clone
+    /// snapshot) without creating a fresh view per use.
+    pub fn composited_view(&self) -> &wgpu::TextureView {
+        &self.group_state[&self.root_id].composite_cache_view
     }
 
     pub fn accum_format(&self) -> wgpu::TextureFormat {

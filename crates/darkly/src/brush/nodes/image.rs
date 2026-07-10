@@ -2,7 +2,7 @@
 //!
 //! Looks up `texture_name` in
 //! [`crate::gpu::texture_registry::TextureRegistry`] at brush-load time.
-//! The texture is bound at `@group(4)` of the compiled stroke shader
+//! The texture is bound at `@group(3)` of the compiled stroke shader
 //! (see [`crate::brush::wgsl`]); the node emits a single
 //! `textureSample` call against canvas-pixel space, divided by
 //! `scale` to control how the texture tiles across the canvas.
@@ -60,6 +60,7 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: false,
             is_terminal: false,
             supports_erase: true,
+            preview_fallback_icon: None,
         },
         || Box::new(ImageEvaluator),
     )
@@ -111,12 +112,13 @@ impl BrushNodeEvaluator for ImageEvaluator {
         // `target_pos` is canvas-pixel space in stroke mode and
         // preview-mask texels in preview mode — both wrap cleanly
         // through `fract`. The shared sampler `graph_smp` is bound at
-        // `@group(4) @binding(0)`; the texture lives at
+        // `@group(3) @binding(0)`; the texture lives at
         // `@binding(1 + slot)`.
-        wgsl.body = format!(
-            "    let {var} = textureSample(graph_tex_{slot}, graph_smp, \
-             fract(target_pos / {scale:.6}));\n"
+        let sample = crate::brush::wgsl::sample_graph_texture(
+            slot,
+            &format!("fract(target_pos / {scale:.6})"),
         );
+        wgsl.body = format!("    let {var} = {sample};\n");
         wgsl.outputs.insert("color".into(), var);
         Ok(wgsl)
     }

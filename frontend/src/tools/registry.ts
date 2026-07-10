@@ -65,6 +65,14 @@ export interface Tool {
      *  off and the user expects the preview to be there immediately. */
     restoreHover?(ctx: ToolContext, canvasX: number, canvasY: number): void;
 
+    /** Inverse of {@link restoreHover}: tear down hover-time visual feedback
+     *  and invalidate any in-flight async hover push, so a pending overlay
+     *  update can't land after the caller has taken over the pointer
+     *  pipeline (e.g. a modifier-held cursor engaging). Tools without such
+     *  feedback opt out by not implementing it — the caller falls back to a
+     *  generic overlay clear. */
+    suspendHover?(ctx: ToolContext): void;
+
     /** Handle a key event. Return true if the tool consumed it. */
     onKeyDown?(e: KeyboardEvent): boolean;
 

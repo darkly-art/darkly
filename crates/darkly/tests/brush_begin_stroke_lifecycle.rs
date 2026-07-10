@@ -137,7 +137,8 @@ fn run_begin_stroke(graph: &Graph<BrushWireType>, setup: Setup) -> Vec<u8> {
     let encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("begin-stroke"),
     });
-    let (scratch, pre_stroke_tex, pre_stroke_bg) = stroke_buffer.parts_for_brush_ctx();
+    let (scratch, pre_stroke_tex, pre_stroke_bg, source_override) =
+        stroke_buffer.parts_for_brush_ctx();
     let mut ctx = BrushGpuContext {
         encoder,
         device: &device,
@@ -160,6 +161,7 @@ fn run_begin_stroke(graph: &Graph<BrushWireType>, setup: Setup) -> Vec<u8> {
             ),
             pre_stroke_texture: pre_stroke_tex,
             pre_stroke_bind_group: pre_stroke_bg,
+            source_override,
         }),
         preview: None,
         dab_batch: DabBatch::default(),

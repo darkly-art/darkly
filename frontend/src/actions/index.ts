@@ -6,6 +6,8 @@ import { newDocument } from '../state/newDocument.svelte';
 import { resizeCanvas } from '../state/resizeCanvas.svelte';
 import { imageRescale } from '../state/imageRescale.svelte';
 import { selectionModify } from '../state/selectionModify.svelte';
+import { filterModal } from '../state/filterModal.svelte';
+import type { FilterParam } from '../ui/filters/filterParams';
 import { exportImage } from '../state/exportImage.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
 import { toast } from '../state/toast.svelte';
@@ -14,6 +16,7 @@ import { brushGraph } from '../state/brush_graph.svelte';
 import { brushSession } from '../tools/brush.svelte';
 import { registerBrushParamActions } from './brush_params';
 import { registerSampleColorAction } from './sample_color';
+import { registerCloneSourceAction } from './clone_source_gesture';
 import { registerClipboardActions } from './clipboard';
 import { pickOpenFile, type OpenedFile } from '../storage/fileHandle';
 import { detectKind, isImageKind, type FileKind } from '../storage/detectKind';
@@ -845,9 +848,14 @@ export function registerActions() {
     // is what makes "invert the mask" reachable from the same entry.
     for (const flt of app.filterTypes ?? []) {
         const filterType = flt.type;
+        // A parametric filter (curves/levels/hsv) can't apply in one click — its
+        // params must be authored first, so it opens the modal (the same
+        // `FilterParamsEditor` the layer panel uses). Param-free filters (invert)
+        // apply immediately.
+        const parametric = (flt.params?.length ?? 0) > 0;
         actions.register({
             id: `filter${filterType.charAt(0).toUpperCase()}${filterType.slice(1)}`,
-            displayName: flt.displayName,
+            displayName: parametric ? `${flt.displayName}…` : flt.displayName,
             category: 'layers',
             description: `Apply "${flt.displayName}" to the active layer or mask (respecting any selection).`,
             icon: 'fa6-solid:circle-half-stroke',
@@ -856,9 +864,19 @@ export function registerActions() {
             handler: async () => {
                 const engine = app.engine;
                 if (!engine || app.activeLayerId === null) return;
+                if (parametric) {
+                    filterModal.show(
+                        app.activeLayerId,
+                        filterType,
+                        flt.displayName,
+                        (flt.params ?? []) as unknown as FilterParam[]
+                    );
+                    return;
+                }
                 await engine.api.applyFilter({
                     node_id: app.activeLayerId,
                     filter_type: filterType,
+                    params: {},
                 });
                 app.requestFrame();
             },
@@ -1070,6 +1088,9 @@ export function registerActions() {
 
     // -- Modifier-held color picker (Ctrl+drag → sample color) --
     registerSampleColorAction();
+
+    // -- Clone brush set-source gesture (brush-scoped modifier+drag) --
+    registerCloneSourceAction();
 
     // -- Brush builder --
     actions.register({

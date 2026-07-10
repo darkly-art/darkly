@@ -165,6 +165,13 @@ pub struct StrokeResources<'a> {
     /// by `StrokeBuffer` so `color_output::commit` can bind it as the
     /// composite background without recreating bind groups every event.
     pub pre_stroke_bind_group: &'a wgpu::BindGroup,
+    /// Override for the brush program's sampled source slot (`@group(3)`):
+    /// a texture frozen at stroke start when the graph samples something
+    /// other than the painted layer (`StrokeBuffer::save_source_snapshot`
+    /// — clone's cross-layer / sample-merged modes today). `None` means
+    /// the slot binds `pre_stroke_texture`. Consumed via
+    /// [`Self::source_texture`], never directly.
+    pub source_override: Option<&'a wgpu::Texture>,
 }
 
 /// Cursor-hover preview state. Populated by `brush_graph::regenerate_brush_cursor_preview`
@@ -345,6 +352,13 @@ impl<'a> StrokeResources<'a> {
     /// the read mirror this dab actually issues a fresh copy.
     pub fn reset_per_dab_read_cache(&mut self) {
         self.scratch.reset_read_origin_cache();
+    }
+
+    /// The texture to bind to the brush's sampled source slot: the
+    /// stroke's frozen [`Self::source_override`] when one was captured,
+    /// else the pre-stroke snapshot of the painted layer.
+    pub fn source_texture(&self) -> &'a wgpu::Texture {
+        self.source_override.unwrap_or(self.pre_stroke_texture)
     }
 }
 

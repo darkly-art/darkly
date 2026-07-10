@@ -146,6 +146,56 @@ pub fn find_terminal(
     graph.find_terminal(registry.as_map())
 }
 
+/// Capabilities a brush graph derives from its nodes' registrations —
+/// facts the picker and tool options bar need without compiling the
+/// graph. Computed by [`graph_capabilities`].
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct BrushGraphCapabilities {
+    /// Whether the graph's terminals honour erase mode — false iff any
+    /// terminal registers `supports_erase = false`. The brush-tool
+    /// options bar hides the erase toggle when false.
+    pub supports_erase: bool,
+    /// Iconify icon to show in place of baked dab/stroke thumbnails,
+    /// contributed by the first node whose registration sets
+    /// `preview_fallback_icon` — content-dependent nodes (clone, blur,
+    /// smudge, liquify) whose preview bake renders blank.
+    pub preview_fallback_icon: Option<&'static str>,
+}
+
+/// Derive [`BrushGraphCapabilities`] from a graph in one registry walk.
+///
+/// Type-owned dispatch — each node's `register()` declares its own
+/// `supports_erase` / `preview_fallback_icon`; nothing here knows which
+/// node types exist. Nodes are visited terminals-first, then ascending
+/// id ([`Graph::nodes`] is a HashMap, so raw iteration order would make
+/// the "first icon wins" rule nondeterministic on multi-icon graphs).
+pub fn graph_capabilities(
+    graph: &crate::nodegraph::Graph<BrushWireType>,
+) -> BrushGraphCapabilities {
+    let registry = registry();
+    let mut nodes: Vec<_> = graph
+        .nodes()
+        .values()
+        .filter_map(|n| registry.get(&n.type_id).map(|reg| (n.id, &reg.node)))
+        .collect();
+    nodes.sort_by_key(|(id, reg)| (!reg.is_terminal, id.0));
+
+    let mut caps = BrushGraphCapabilities {
+        supports_erase: true,
+        preview_fallback_icon: None,
+    };
+    for (_, reg) in nodes {
+        if reg.is_terminal && !reg.supports_erase {
+            caps.supports_erase = false;
+        }
+        if caps.preview_fallback_icon.is_none() {
+            caps.preview_fallback_icon = reg.preview_fallback_icon;
+        }
+    }
+    caps
+}
+
 /// Build the default brush graph: pressure-sensitive disc through the
 /// compiled `paint` terminal. Same shape as Round in
 /// [`builtin_brushes`] — `pen → paint_color → shape (sine, amplitude 0)
