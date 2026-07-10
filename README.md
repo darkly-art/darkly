@@ -130,7 +130,7 @@ For a feature to count, it must be:
 - [x] Application menu
 - [x] Autosave + crash recovery
 - [x] Filter layers
-    - [ ] Brightness / Contrast
+    - [x] Brightness / Contrast
     - [x] Hue / Saturation / Lightness
     - [x] Levels
     - [x] Curves

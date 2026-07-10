@@ -833,6 +833,11 @@ fn hsv_params(model: i32, hue: f32, sat: f32, val: f32, colorize: bool) -> Vec<P
     ]
 }
 
+/// Brightness/Contrast params `[brightness, contrast]`, both −100..100 sliders.
+fn bc_params(brightness: f32, contrast: f32) -> Vec<ParamValue> {
+    vec![ParamValue::Float(brightness), ParamValue::Float(contrast)]
+}
+
 /// Assert a destructive parametric apply over a rect selection touches only the
 /// selection: an inside pixel changed, an outside pixel didn't, undo restores.
 fn assert_destructive_selection(type_id: &str, params: Vec<ParamValue>) {
@@ -892,6 +897,12 @@ fn destructive_levels_with_selection_only_touches_selection() {
 fn destructive_hsv_with_selection_only_touches_selection() {
     // Hue rotate 120° in HSV — visibly changes a coloured pixel.
     assert_destructive_selection("hsv", hsv_params(0, 120.0, 0.0, 0.0, false));
+}
+
+#[test]
+fn destructive_brightness_contrast_with_selection_only_touches_selection() {
+    // Brightness +50 — visibly lightens a coloured pixel.
+    assert_destructive_selection("brightness_contrast", bc_params(50.0, 0.0));
 }
 
 // ---- Live preview session (the non-dimming modal) --------------------------
@@ -1195,4 +1206,64 @@ fn curves_lightness_curve_darkens_neutral() {
         "lightness on L* must keep the gray neutral, got {p:?}"
     );
     assert_eq!(p[3], 255, "alpha untouched by the lightness curve");
+}
+
+// ---- Brightness/Contrast GPU correctness ------------------------------------
+//
+// Pin the GIMP mapping (`gimpoperationbrightnesscontrast.c`) on both surfaces
+// the feature promises: the destructive apply (direction, bit-exact identity,
+// byte-for-byte undo) and the non-destructive filter layer.
+
+#[test]
+fn brightness_contrast_brightens_undoes_and_defaults_are_noop() {
+    let (w, h) = (8u32, 8u32);
+    let mut e = test_engine(w, h);
+    let layer = e.paste_image(w, h, &solid_rgba(w, h, [128, 128, 128, 255]), 0, 0, None);
+    let before = e.test_readback_layer(layer);
+
+    // Default params (brightness 0, contrast 0) → bit-exact no-op.
+    assert!(e.apply_filter_typed(layer, "brightness_contrast", bc_params(0.0, 0.0)));
+    assert_eq!(
+        e.test_readback_layer(layer),
+        before,
+        "default brightness/contrast must be a bit-exact no-op"
+    );
+
+    // Positive brightness lifts every RGB channel of mid-gray; alpha untouched.
+    assert!(e.apply_filter_typed(layer, "brightness_contrast", bc_params(50.0, 0.0)));
+    let after = e.test_readback_layer(layer);
+    let (b, a) = (px(&before, w, 4, 4), px(&after, w, 4, 4));
+    assert!(
+        a[0] > b[0] && a[1] > b[1] && a[2] > b[2],
+        "brightness +50 must lift mid-gray RGB: {b:?} → {a:?}"
+    );
+    assert_eq!(a[3], b[3], "alpha untouched");
+
+    e.undo();
+    assert_eq!(
+        e.test_readback_layer(layer),
+        before,
+        "undo restores the pre-filter pixels byte-for-byte"
+    );
+}
+
+#[test]
+fn brightness_contrast_filter_layer_brightens_composite_below() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let gray = engine.add_raster_layer(None);
+    fill_layer(&mut engine, gray, 128, 128, 128);
+    engine
+        .add_filter_layer("brightness_contrast", bc_params(50.0, 0.0), None)
+        .expect("brightness_contrast is a registered filter type");
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let p = px(&engine.test_readback_canvas(), cw, cw / 2, ch / 2);
+    assert!(
+        p[0] > 128 && p[1] > 128 && p[2] > 128,
+        "brightness filter layer must lift the gray composite below it, got {p:?}"
+    );
+    assert_eq!(p[3], 255, "alpha untouched");
 }
