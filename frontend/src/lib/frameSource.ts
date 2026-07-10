@@ -40,7 +40,8 @@ export type CaptureKind = 'camera' | 'display' | 'stream';
  *  `sourceWidth`/`sourceHeight` are known the base applies the resolution cap;
  *  when they're 0/undefined (e.g. an undecoded blob) it decodes at native size.
  *  `options` are merged into the `createImageBitmap` call (e.g.
- *  `{ premultiplyAlpha: 'none' }` for straight-alpha WebP). */
+ *  `{ premultiplyAlpha: 'premultiply' }` to match the premultiplied convention
+ *  of the void's frame texture). */
 export interface PresentedFrame {
     source: CanvasImageSource | Blob;
     sourceWidth?: number;

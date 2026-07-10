@@ -46,10 +46,12 @@ function controllableReader() {
 
 function harness() {
     const uploads: number[] = [];
+    const decodeOptions: Array<ImageBitmapOptions | undefined> = [];
     let bitmapId = 0;
-    vi.stubGlobal('createImageBitmap', () =>
-        Promise.resolve({ width: 8, height: 8, close: () => {}, id: ++bitmapId }),
-    );
+    vi.stubGlobal('createImageBitmap', (_source: Blob, options?: ImageBitmapOptions) => {
+        decodeOptions.push(options);
+        return Promise.resolve({ width: 8, height: 8, close: () => {}, id: ++bitmapId });
+    });
     const engine = {
         uploadVoidExternalImage: (layerId: number) => uploads.push(layerId),
     } as unknown as Engine;
@@ -59,7 +61,7 @@ function harness() {
         fetchCalls.push(url);
         return Promise.resolve({ ok: true, body: { getReader: () => reader } });
     });
-    return { engine, uploads, push, close, fetchCalls };
+    return { engine, uploads, decodeOptions, push, close, fetchCalls };
 }
 
 const WEBP = new Uint8Array([1, 2, 3, 4, 5]); // stand-in frame payload
@@ -156,6 +158,28 @@ describe('HttpStreamSource frame parsing + upload', () => {
         src.tick(5); // 5 % 4 !== 0
         await flush();
         expect(uploads).toEqual([]);
+
+        src.stop();
+    });
+
+    it('decodes frames into the premultiplied convention the frame texture stores', async () => {
+        // Convention pin: the void's aux texture holds premultiplied texels
+        // (so GPU linear filtering doesn't darken alpha edges — see
+        // `video_stream_void.rs`); the straight-alpha frames the add-on emits
+        // must be converted at decode. Guards a drive-by revert to 'none';
+        // the behavioral regression test lives in `tests/void_layer.rs`.
+        const { engine, uploads, decodeOptions, push } = harness();
+        const src = new HttpStreamSource(6, engine);
+        await src.start('http://localhost:8765/stream');
+        await flush();
+
+        push(lenPrefixed(WEBP));
+        await flush();
+        src.tick(4);
+        await flush();
+        expect(uploads).toEqual([6]);
+        expect(decodeOptions).toHaveLength(1);
+        expect(decodeOptions[0]?.premultiplyAlpha).toBe('premultiply');
 
         src.stop();
     });

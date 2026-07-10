@@ -15,6 +15,16 @@
 //! aux texture, applies the user's transform (the generic gizmo affine), and
 //! writes to the layer's destination texture.
 //!
+//! **Alpha convention:** the aux texture stores **premultiplied** texels, so the
+//! sampler's linear filter interpolates correctly at alpha edges — filtering
+//! straight alpha darkens color toward transparent-black neighbors (dark halos;
+//! docs/lessons-learned/compositing-lessons-learned.md #2). Every writer
+//! honors it: the live upload converts during the copy
+//! (`premultiplied_alpha: true`), and save/load round-trips the raw texels
+//! unchanged. The shader un-premultiplies after sampling, so the void still
+//! emits the straight alpha the compositor expects. Camera/display frames are
+//! opaque, where premultiplication is the identity.
+//!
 //! Aspect handling is "cover": at the identity transform the source fills the
 //! layer and the short axis is cropped — the active-pixel rect overhangs the
 //! canvas on the long axis (see `content_rect`). Out-of-frame samples return
@@ -525,9 +535,10 @@ impl Void for VideoStreamVoid {
             return;
         }
         self.resize_aux_texture(device, cache, width, height);
-        // Bytes are already Rgba8Unorm-packed (the format the save flow read
-        // back). Direct queue.write_texture is the symmetric load path matching
-        // raster's `upload_node_pixels`.
+        // Bytes are already Rgba8Unorm-packed in the aux texture's
+        // premultiplied-alpha convention (the save flow read back exactly
+        // these texels). Direct queue.write_texture is the symmetric load
+        // path matching raster's `upload_node_pixels`.
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &cache.aux_textures[0],
@@ -599,7 +610,10 @@ impl Void for VideoStreamVoid {
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                     color_space: wgpu::PredefinedColorSpace::Srgb,
-                    premultiplied_alpha: false,
+                    // The aux texture stores PREMULTIPLIED texels (see the
+                    // module docs); the browser converts the source bitmap
+                    // during the copy whatever its decode state.
+                    premultiplied_alpha: true,
                 },
                 wgpu::Extent3d {
                     width: w,

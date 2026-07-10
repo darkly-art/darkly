@@ -6,6 +6,14 @@
 //   1: Source texture (the video frame, uploaded by upload_external_image)
 //   2: Sampler (linear clamp-to-edge)
 //
+// Alpha convention: the source texture stores PREMULTIPLIED texels so the
+// linear filter interpolates correctly at alpha edges — filtering straight
+// alpha darkens color toward transparent-black neighbors (dark halos;
+// docs/lessons-learned/compositing-lessons-learned.md #2). The fragment
+// un-premultiplies after sampling, returning the straight alpha the
+// compositor expects. 8-bit premultiplied storage quantizes color at very
+// low alpha — inherent to the approach, imperceptible next to halos.
+//
 // MUST stay in lockstep with the CPU mirror `VideoStreamVoid::src_uv` in
 // video_stream_void.rs — the tests pin them together. The inverse-homography
 // sample is the shared `proj_local` (lib/projective.wgsl), concatenated ahead
@@ -67,5 +75,9 @@ struct Params {
         pre.z > 0.5 &&
         src_uv.x >= 0.0 && src_uv.x <= 1.0 &&
         src_uv.y >= 0.0 && src_uv.y <= 1.0;
-    return select(vec4f(0.0), sample, in_range);
+    // Un-premultiply the filtered sample back to straight alpha. The epsilon
+    // sends α=0 texels to rgb 0; rgb ≤ α holds for filtered premultiplied
+    // texels, so no clamp is needed.
+    let straight = vec4f(sample.rgb / max(sample.a, 1e-4), sample.a);
+    return select(vec4f(0.0), straight, in_range);
 }

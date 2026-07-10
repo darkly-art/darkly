@@ -16,10 +16,12 @@
  *
  * The shared base owns the per-`tick()` gate and the off-thread
  * `createImageBitmap → uploadVoidExternalImage` upload; `presentFrame()` hands it
- * the latest blob with `{ premultiplyAlpha: 'none' }` so the browser keeps the
- * straight alpha the add-on emits (see `docs`/plan "Alpha correctness"). No user
- * gesture or permission is needed for a localhost stream, so unlike
- * `MediaStreamSource` this connects immediately.
+ * the latest blob with `{ premultiplyAlpha: 'premultiply' }`, converting the
+ * straight alpha the add-on emits into the premultiplied convention the void's
+ * frame texture stores (so its linear filter doesn't darken alpha edges — see
+ * `video_stream_void.rs` module docs). No user gesture or permission is needed
+ * for a localhost stream, so unlike `MediaStreamSource` this connects
+ * immediately.
  *
  * Sink-side dedup: a static view produces identical frames, so the add-on only
  * pushes bytes on a real change. `hasNewFrame` flips true when a frame is parsed
@@ -158,10 +160,11 @@ export class HttpStreamSource extends FrameSource {
         this.onEnded?.(this.layerId);
     }
 
-    /** The latest complete encoded frame, decoded with straight alpha preserved. */
+    /** The latest complete encoded frame, decoded into the premultiplied-alpha
+     *  convention the void's frame texture stores. */
     protected presentFrame(): PresentedFrame | null {
         if (!this.latestFrame) return null;
-        return { source: this.latestFrame, options: { premultiplyAlpha: 'none' } };
+        return { source: this.latestFrame, options: { premultiplyAlpha: 'premultiply' } };
     }
 
     /** Only decode when a genuinely new frame has arrived — a static scene sends
