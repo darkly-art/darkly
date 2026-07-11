@@ -905,6 +905,12 @@ fn destructive_brightness_contrast_with_selection_only_touches_selection() {
     assert_destructive_selection("brightness_contrast", bc_params(50.0, 0.0));
 }
 
+#[test]
+fn destructive_desaturate_with_selection_only_touches_selection() {
+    // Luminosity BT.709 — visibly grays the [200,100,50] fixture.
+    assert_destructive_selection("desaturate", vec![ParamValue::Int(1)]);
+}
+
 // ---- Live preview session (the non-dimming modal) --------------------------
 //
 // The modal previews a destructive filter non-destructively (`preview_filter`)
@@ -1206,6 +1212,38 @@ fn curves_lightness_curve_darkens_neutral() {
         "lightness on L* must keep the gray neutral, got {p:?}"
     );
     assert_eq!(p[3], 255, "alpha untouched by the lightness curve");
+}
+
+// ---- Desaturate GPU correctness ---------------------------------------------
+//
+// Pin the six gray mappings against Krita's desaturate adjustment
+// (`kis_desaturate_adjustment.cpp`): each mode produces a neutral gray
+// (R == G == B) at the value its formula predicts for the [200,100,50] fixture.
+
+#[test]
+fn desaturate_modes_produce_expected_grays() {
+    // (mode, expected gray) for opaque [200,100,50]: lightness (200+50)/2,
+    // BT.709 dot ≈ 117.7, BT.601 dot ≈ 124.2, average 350/3, min 50, max 200.
+    let expected: [(i32, u8); 6] = [(0, 125), (1, 118), (2, 124), (3, 117), (4, 50), (5, 200)];
+    for (mode, gray) in expected {
+        let (w, h) = (4u32, 4u32);
+        let mut e = test_engine(w, h);
+        let layer = e.paste_image(w, h, &solid_rgba(w, h, [200, 100, 50, 255]), 0, 0, None);
+        assert!(
+            e.apply_filter_typed(layer, "desaturate", vec![ParamValue::Int(mode)]),
+            "desaturate mode {mode} must apply"
+        );
+        let p = px(&e.test_readback_layer(layer), w, 1, 1);
+        assert!(
+            p[0] == p[1] && p[1] == p[2],
+            "mode {mode}: result must be neutral gray (R==G==B), got {p:?}"
+        );
+        assert!(
+            (p[0] as i32 - gray as i32).abs() <= 1,
+            "mode {mode}: expected gray ~{gray} (±1 unorm rounding), got {p:?}"
+        );
+        assert_eq!(p[3], 255, "mode {mode}: alpha untouched");
+    }
 }
 
 // ---- Brightness/Contrast GPU correctness ------------------------------------

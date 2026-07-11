@@ -4,6 +4,7 @@
 
 pub mod brightness_contrast;
 pub mod curves;
+pub mod desaturate;
 pub mod hsv;
 pub mod invert;
 pub mod levels;
@@ -15,6 +16,7 @@ pub fn registrations() -> Vec<FilterPipelineRegistration> {
     vec![
         brightness_contrast::register(),
         curves::register(),
+        desaturate::register(),
         hsv::register(),
         invert::register(),
         levels::register(),

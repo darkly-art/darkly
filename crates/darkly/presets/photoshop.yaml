@@ -58,6 +58,11 @@ hotkeys:
   # so this is per-overlay, not a default. The action id is `filterInvert` —
   # the dynamically-registered id for the `invert` filter (`filter` + type).
   filterInvert: $mod+KeyI
+  # Photoshop binds Shift+Ctrl+U to Image > Adjustments > Desaturate (per
+  # docs/photoshop-default-hotkeys.md, "Keys for the Image ▸ Adjustments
+  # menu"). Krita agrees (Ctrl+Shift+U → `krita_filter_desaturate`); GIMP has
+  # no default Desaturate shortcut, so this is per-overlay, not a default.
+  filterDesaturate: $mod+Shift+KeyU
 
 mouse_clicks:
   # Photoshop's eyedropper modifier is Alt+drag (not Ctrl+drag).
