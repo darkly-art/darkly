@@ -35,6 +35,13 @@ import type { Engine } from '../engine/protocol';
  *  HTTP frame stream (the Blender void). */
 export type CaptureKind = 'camera' | 'display' | 'stream';
 
+/** Connection state of a frame source, for positive UI feedback (a
+ *  change-driven stream sends no bytes while idle, so "no frames" alone can't
+ *  distinguish connected from dead). `connecting` covers both the initial
+ *  handshake and a pending permission prompt; `disconnected` is terminal for
+ *  the source instance (reconnecting builds a new one). */
+export type StreamStatus = 'connecting' | 'connected' | 'disconnected';
+
 /** A frame a subclass offers up for decoding this tick. `source` is anything
  *  `createImageBitmap` accepts (a `<video>` element, a WebP `Blob`, …). When
  *  `sourceWidth`/`sourceHeight` are known the base applies the resolution cap;
@@ -55,9 +62,14 @@ export abstract class FrameSource {
     protected readonly engine: Engine;
     /** Invoked when the feed ends *externally* (the user clicks the browser's
      *  "Stop sharing" bar, unplugs the webcam, or the HTTP stream closes). The
-     *  app uses it to prune the source and re-show the "Connect"/"Resume"
-     *  affordance. */
+     *  app uses it to stop the source — kept in the map so its error/status
+     *  stay visible — and re-show the "Connect"/"Resume" affordance. */
     protected readonly onEnded: ((layerId: number) => void) | null;
+
+    /** Invoked on every `status` transition. Class-instance field mutation is
+     *  invisible to Svelte's `$state` Map, so the app uses this to reassign
+     *  the map and trigger a re-render — mirroring `onEnded`. */
+    protected readonly onStatusChange: ((layerId: number) => void) | null;
 
     /** True once the feed has ended externally. Observable so the properties
      *  panel can distinguish "never started" from "stopped/disconnected" and
@@ -67,6 +79,28 @@ export abstract class FrameSource {
     /** Human-readable error if the feed failed (permission denied, connection
      *  refused, …). Reactive Svelte readers in VoidProperties pull this. */
     error: string | null = null;
+
+    /** Connection state, driven by subclasses via `setStatus`. Starts
+     *  `connecting`: a source is only constructed to be started immediately,
+     *  and for camera/screenshare the permission prompt is part of
+     *  connecting. */
+    status: StreamStatus = 'connecting';
+
+    /** Transition `status` and notify (deduped: repeat sets are silent). */
+    protected setStatus(status: StreamStatus): void {
+        if (status === this.status) return;
+        this.status = status;
+        this.onStatusChange?.(this.layerId);
+    }
+
+    /** Record a failure that happened outside the source's own machinery
+     *  (media acquisition is app-owned: the permission prompt runs before
+     *  `start` is ever called). Sets the user-facing error and lands the
+     *  status, without flipping `ended` — the feed never began. */
+    markFailed(message: string): void {
+        this.error = message;
+        this.setStatus('disconnected');
+    }
 
     /** Marked permanently dead by `stop()`. Gates `tick()` and the decode
      *  callback so a late-resolving bitmap from a torn-down source is dropped. */
@@ -105,11 +139,13 @@ export abstract class FrameSource {
         engine: Engine,
         captureKind: CaptureKind,
         onEnded: ((layerId: number) => void) | null = null,
+        onStatusChange: ((layerId: number) => void) | null = null,
     ) {
         this.layerId = layerId;
         this.engine = engine;
         this.captureKind = captureKind;
         this.onEnded = onEnded;
+        this.onStatusChange = onStatusChange;
     }
 
     /** Push the current frame into the void's input texture. Cheap when nothing

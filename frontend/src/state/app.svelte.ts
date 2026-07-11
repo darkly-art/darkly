@@ -578,12 +578,23 @@ export class DarklyInstance {
         acquireError?: unknown,
     ) {
         if (!this.engine) return;
-        if (this.streamSources.has(layerId)) return;
+        // A live healthy source wins — repeat gestures are no-ops. A dead one
+        // (`ended`) or one whose acquisition failed (`error` set but never
+        // ended, e.g. a denied permission prompt) yields to the retry.
+        const existing = this.streamSources.get(layerId);
+        if (existing && !existing.ended && !existing.error) return;
+        existing?.stop();
+
+        // Both callbacks reassign the map so Svelte sees a new identity —
+        // field mutation on a class instance inside a `$state` Map is
+        // invisible to reactivity.
+        const onEnded = (id: number) => this.onStreamSourceEnded(id);
+        const onStatusChange = () => {
+            this.streamSources = new Map(this.streamSources);
+        };
 
         if (captureKind === 'stream') {
-            const src = new HttpStreamSource(layerId, this.engine, (id) =>
-                this.onStreamSourceEnded(id),
-            );
+            const src = new HttpStreamSource(layerId, this.engine, onEnded, onStatusChange);
             src.setMaxSourceDimension(Math.max(this.docW, this.docH));
             this.streamSources = new Map(this.streamSources).set(layerId, src);
             // Connect to the void's configured endpoint (defaults to the add-on's
@@ -594,8 +605,12 @@ export class DarklyInstance {
             return;
         }
 
-        const src = new MediaStreamSource(layerId, this.engine, captureKind, (id) =>
-            this.onStreamSourceEnded(id),
+        const src = new MediaStreamSource(
+            layerId,
+            this.engine,
+            captureKind,
+            onEnded,
+            onStatusChange,
         );
         // Cap uploads to the document resolution up front so the very first
         // frame is already downscaled (the reconciler keeps it current after
@@ -605,14 +620,18 @@ export class DarklyInstance {
         // state even if acquisition failed. Reassign the Map so Svelte sees a
         // new identity (in-place Map mutation isn't reactive in Svelte 5).
         this.streamSources = new Map(this.streamSources).set(layerId, src);
+        // Acquisition failure drops the session opt-in like an external end
+        // does, so the error notice AND the Resume affordance both show.
         if (acquireError !== undefined) {
-            src.error = describeMediaError(acquireError, captureKind);
+            src.markFailed(describeMediaError(acquireError, captureKind));
+            this.clearStreamSessionStarted(layerId);
         } else {
             try {
                 const s = stream ?? (await this.acquireMediaStream(captureKind));
                 await src.start(s);
             } catch (err) {
-                src.error = describeMediaError(err, captureKind);
+                src.markFailed(describeMediaError(err, captureKind));
+                this.clearStreamSessionStarted(layerId);
             }
         }
         // Force a redraw — `error` may have just been set, and we want a frame
@@ -654,16 +673,26 @@ export class DarklyInstance {
     }
 
     /** React to a source ending *externally* (the browser's "Stop sharing" bar,
-     *  a webcam unplug, or a Blender stream disconnect). Tear the source down and
-     *  drop the session opt-in so VoidProperties shows "Connect"/"Resume" again. */
+     *  a webcam unplug, or a Blender stream disconnect). Stop the source but
+     *  keep it registered — the dead entry is the record of its own demise,
+     *  feeding the error notice and status row in VoidProperties (pruning here
+     *  would vanish the error before it could render). Drop the session opt-in
+     *  so "Connect"/"Resume" shows again; the next start replaces the corpse.
+     *  Pruning stays with `stopStreamSource` (delete / undo / orphan paths). */
     private onStreamSourceEnded(layerId: number) {
-        this.stopStreamSource(layerId);
-        if (this.streamSessionStarted.has(layerId)) {
-            const next = new Set(this.streamSessionStarted);
-            next.delete(layerId);
-            this.streamSessionStarted = next;
-        }
+        this.streamSources.get(layerId)?.stop();
+        this.streamSources = new Map(this.streamSources);
+        this.clearStreamSessionStarted(layerId);
         this.requestFrame();
+    }
+
+    /** Drop a layer's session opt-in (external end or failed acquisition), so
+     *  VoidProperties re-shows the "Connect"/"Resume" affordance. */
+    private clearStreamSessionStarted(layerId: number) {
+        if (!this.streamSessionStarted.has(layerId)) return;
+        const next = new Set(this.streamSessionStarted);
+        next.delete(layerId);
+        this.streamSessionStarted = next;
     }
 
     /** Surface a stream source's current state to the properties panel.

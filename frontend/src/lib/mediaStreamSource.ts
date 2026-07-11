@@ -41,8 +41,9 @@ export class MediaStreamSource extends FrameSource {
         engine: Engine,
         captureKind: CaptureKind,
         onEnded: ((layerId: number) => void) | null = null,
+        onStatusChange: ((layerId: number) => void) | null = null,
     ) {
-        super(layerId, engine, captureKind, onEnded);
+        super(layerId, engine, captureKind, onEnded, onStatusChange);
     }
 
     /** Wire up an already-acquired `MediaStream`: attach a `<video>` element,
@@ -95,6 +96,7 @@ export class MediaStreamSource extends FrameSource {
                 return;
             }
             this.video = video;
+            this.setStatus('connected');
             // Gate uploads on a real presented frame, not just readyState.
             // `requestVideoFrameCallback` fires per presented frame; we just
             // need the first one to flip the flag and then leave it alone
@@ -118,7 +120,7 @@ export class MediaStreamSource extends FrameSource {
         } catch (err: any) {
             // Translate the cryptic DOMException names into something the
             // VoidProperties notice can show without a switch on the JS side.
-            this.error = describeMediaError(err, this.captureKind);
+            this.markFailed(describeMediaError(err, this.captureKind));
             if (this.stream) {
                 this.stream.getTracks().forEach((t) => t.stop());
                 this.stream = null;
@@ -135,6 +137,7 @@ export class MediaStreamSource extends FrameSource {
     handleTrackEnded(): void {
         if (this.ended) return;
         this.ended = true;
+        this.setStatus('disconnected');
         this.stop();
         this.onEnded?.(this.layerId);
     }

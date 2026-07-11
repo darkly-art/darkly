@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { HttpStreamSource, describeStreamError } from '../httpStreamSource';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { HttpStreamSource, StreamStalledError, describeStreamError } from '../httpStreamSource';
 import type { Engine } from '../../engine/protocol';
+import { lenPrefixed, controllableReader, HEARTBEAT } from './streamTestUtils';
 
 // `HttpStreamSource` reads a length-prefixed WebP stream over `fetch` and decodes
 // each frame off-thread via the global `createImageBitmap`. Node vitest has
@@ -12,44 +13,14 @@ afterEach(() => vi.unstubAllGlobals());
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-/** `[4-byte big-endian length][payload]` — the on-wire frame format. */
-function lenPrefixed(payload: Uint8Array): Uint8Array {
-    const out = new Uint8Array(4 + payload.length);
-    new DataView(out.buffer).setUint32(0, payload.length, false);
-    out.set(payload, 4);
-    return out;
-}
-
-/** A reader whose `read()` resolves only when the test pushes a chunk or closes,
- *  so frame delivery can be interleaved with ticks. */
-function controllableReader() {
-    const waiters: Array<(r: { done: boolean; value?: Uint8Array }) => void> = [];
-    const buffered: Array<{ done: boolean; value?: Uint8Array }> = [];
-    const deliver = (r: { done: boolean; value?: Uint8Array }) => {
-        const w = waiters.shift();
-        if (w) w(r);
-        else buffered.push(r);
-    };
-    return {
-        reader: {
-            read: () =>
-                new Promise<{ done: boolean; value?: Uint8Array }>((resolve) => {
-                    const b = buffered.shift();
-                    if (b) resolve(b);
-                    else waiters.push(resolve);
-                }),
-        },
-        push: (value: Uint8Array) => deliver({ done: false, value }),
-        close: () => deliver({ done: true }),
-    };
-}
-
 function harness() {
     const uploads: number[] = [];
     const decodeOptions: Array<ImageBitmapOptions | undefined> = [];
+    const decodeSources: Blob[] = [];
     let bitmapId = 0;
-    vi.stubGlobal('createImageBitmap', (_source: Blob, options?: ImageBitmapOptions) => {
+    vi.stubGlobal('createImageBitmap', (source: Blob, options?: ImageBitmapOptions) => {
         decodeOptions.push(options);
+        decodeSources.push(source);
         return Promise.resolve({ width: 8, height: 8, close: () => {}, id: ++bitmapId });
     });
     const engine = {
@@ -61,7 +32,7 @@ function harness() {
         fetchCalls.push(url);
         return Promise.resolve({ ok: true, body: { getReader: () => reader } });
     });
-    return { engine, uploads, decodeOptions, push, close, fetchCalls };
+    return { engine, uploads, decodeOptions, decodeSources, push, close, fetchCalls };
 }
 
 const WEBP = new Uint8Array([1, 2, 3, 4, 5]); // stand-in frame payload
@@ -229,7 +200,149 @@ describe('HttpStreamSource disconnect', () => {
     });
 });
 
+// The wire protocol only sends bytes on a scene change, so liveness rests on
+// heartbeats (zero-length frames) plus a client-side stall watchdog. Fake
+// timers drive both the watchdog interval and `Date.now()`.
+describe('HttpStreamSource heartbeats + stall watchdog', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('declares a byte-silent stream dead and reports it', async () => {
+        // Regression: a dead-but-open socket used to await `reader.read()`
+        // forever — indistinguishable from an idle scene, no error surfaced.
+        const { engine } = harness();
+        const ended: number[] = [];
+        const src = new HttpStreamSource(5, engine, (id) => ended.push(id));
+        await src.start('http://localhost:8765/stream');
+
+        // Total byte silence past the stall timeout → disconnect.
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(ended).toEqual([5]);
+        expect(src.ended).toBe(true);
+        expect(src.error).toContain('stopped responding');
+        expect(src.status).toBe('disconnected');
+    });
+
+    it('heartbeats keep the stream alive and never trigger uploads', async () => {
+        const { engine, uploads, push } = harness();
+        const ended: number[] = [];
+        const src = new HttpStreamSource(6, engine, (id) => ended.push(id));
+        await src.start('http://localhost:8765/stream');
+
+        // Heartbeats-only for well past the stall timeout: still alive.
+        for (let i = 0; i < 12; i++) {
+            push(HEARTBEAT);
+            await vi.advanceTimersByTimeAsync(2000);
+        }
+        expect(ended).toEqual([]);
+        expect(src.ended).toBe(false);
+
+        // A heartbeat is not a frame — nothing to decode or upload.
+        src.tick(4);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(uploads).toEqual([]);
+
+        src.stop();
+    });
+
+    it('a heartbeat does not clobber a pending real frame', async () => {
+        const { engine, uploads, decodeSources, push } = harness();
+        const src = new HttpStreamSource(7, engine);
+        await src.start('http://localhost:8765/stream');
+
+        push(lenPrefixed(WEBP));
+        push(HEARTBEAT);
+        await vi.advanceTimersByTimeAsync(0);
+        src.tick(4);
+        await vi.advanceTimersByTimeAsync(0);
+        // Exactly one upload, and it decoded the real frame's bytes — not the
+        // heartbeat's empty payload.
+        expect(uploads).toEqual([7]);
+        expect(decodeSources).toHaveLength(1);
+        expect(decodeSources[0].size).toBe(WEBP.length);
+
+        // The heartbeat did not re-arm the new-frame flag either.
+        src.tick(8);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(uploads).toEqual([7]);
+
+        src.stop();
+    });
+
+    it('walks connecting → connected → disconnected, notifying each transition', async () => {
+        const { engine, close } = harness();
+        const statuses: string[] = [];
+        const src = new HttpStreamSource(8, engine, null, () => statuses.push(src.status));
+        // Created-for-immediate-start: connecting from the outset.
+        expect(src.status).toBe('connecting');
+
+        await src.start('http://localhost:8765/stream');
+        expect(src.status).toBe('connected');
+
+        close();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(src.status).toBe('disconnected');
+        expect(statuses).toEqual(['connected', 'disconnected']);
+    });
+
+    it('setUrl mid-stream supersedes the old pump and rearms the watchdog', async () => {
+        // Per-connection readers: each fetch gets its own, so the old and new
+        // connections can be driven independently.
+        const uploads: number[] = [];
+        vi.stubGlobal('createImageBitmap', () =>
+            Promise.resolve({ width: 8, height: 8, close: () => {} }),
+        );
+        const engine = {
+            uploadVoidExternalImage: (layerId: number) => uploads.push(layerId),
+        } as unknown as Engine;
+        const connections: Array<ReturnType<typeof controllableReader>> = [];
+        vi.stubGlobal('fetch', () => {
+            const conn = controllableReader();
+            connections.push(conn);
+            return Promise.resolve({ ok: true, body: { getReader: () => conn.reader } });
+        });
+
+        const ended: number[] = [];
+        const src = new HttpStreamSource(12, engine, (id) => ended.push(id));
+        await src.start('http://localhost:8765/stream');
+        expect(connections).toHaveLength(1);
+
+        src.setUrl('http://localhost:9999/stream');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(connections).toHaveLength(2);
+
+        // Exactly one live stall interval after the supersede — the old
+        // connect's watchdog was cleared, not orphaned.
+        expect(vi.getTimerCount()).toBe(1);
+
+        // The superseded pump bows out silently: closing it is not an end.
+        connections[0].close();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(ended).toEqual([]);
+        expect(src.ended).toBe(false);
+
+        // The new connection is the live one.
+        connections[1].push(lenPrefixed(WEBP));
+        await vi.advanceTimersByTimeAsync(0);
+        src.tick(4);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(uploads).toEqual([12]);
+
+        src.stop();
+        expect(vi.getTimerCount()).toBe(0);
+    });
+});
+
 describe('describeStreamError', () => {
+    it('words a stall', () => {
+        const msg = describeStreamError(
+            new StreamStalledError('stall'),
+            'http://localhost:8765/stream',
+        );
+        expect(msg).toContain('stopped responding');
+        expect(msg).toContain('Is Blender still running?');
+    });
+
     it('words a clean disconnect', () => {
         expect(describeStreamError(null, 'http://localhost:8765/stream')).toBe(
             'Blender stream at http://localhost:8765/stream disconnected.',

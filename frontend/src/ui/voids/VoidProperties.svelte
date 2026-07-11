@@ -63,6 +63,21 @@
         captureKind ? app.streamSourceFor(node.id)?.error ?? null : null,
     );
 
+    // Connection status for the same source, or null when none exists — a
+    // never-connected void (e.g. loaded from a `.darkly`) shows no status row;
+    // the Connect button already communicates that state. A change-driven
+    // stream sends nothing while the scene is idle, so "Connected" is the only
+    // positive signal that the feed is actually alive.
+    const streamStatus = $derived(
+        captureKind ? app.streamSourceFor(node.id)?.status ?? null : null,
+    );
+
+    const statusLabels = {
+        connecting: 'Connecting…',
+        connected: 'Connected',
+        disconnected: 'Disconnected',
+    } as const;
+
     // True for a stream-backed void whose layer exists but isn't currently
     // streaming — either loaded from a `.darkly` (showing the saved last frame)
     // or stopped externally (the browser's "Stop sharing" bar, a Blender
@@ -110,6 +125,13 @@
         <Icon name="fa6-solid:dice" />
     </button>
 </div>
+
+{#if streamStatus !== null}
+    <div class="status-row">
+        <span class="status-dot {streamStatus}"></span>
+        <span>{statusLabels[streamStatus]}</span>
+    </div>
+{/if}
 
 {#if streamError}
     <div class="notice">
@@ -240,6 +262,31 @@
         color: var(--text-dim);
         text-align: center;
         padding: 4px 0;
+    }
+
+    .status-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 22px;
+        font-size: 11px;
+        color: var(--text-muted);
+    }
+
+    .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+    .status-dot.connecting {
+        background: var(--warning, #d9a23c);
+    }
+    .status-dot.connected {
+        background: var(--success, #4caf7d);
+    }
+    .status-dot.disconnected {
+        background: var(--danger, #e35858);
     }
 
     .notice {

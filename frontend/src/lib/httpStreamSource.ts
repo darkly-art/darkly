@@ -27,10 +27,34 @@
  * pushes bytes on a real change. `hasNewFrame` flips true when a frame is parsed
  * off the stream and clears after upload, so `tick()` does zero decode + zero GPU
  * work while the scene is still.
+ *
+ * Liveness: because frames are change-driven, a dead-but-open socket would be
+ * indistinguishable from an idle scene. The add-on therefore emits a heartbeat
+ * — a zero-length frame (just the 4-byte prefix `\x00\x00\x00\x00`) — every
+ * couple of seconds of write silence (`server.py`'s `HEARTBEAT_INTERVAL`), and
+ * this class runs a stall watchdog: any received byte refreshes `lastByteAt`,
+ * and `STALL_TIMEOUT_MS` of total silence is declared a disconnect. Heartbeats
+ * are skipped by the frame parser, never decoded or uploaded. A stopping
+ * add-on ends the HTTP response with the terminating chunk, which surfaces
+ * here as the reader's clean close — no stall wait needed for a graceful stop.
  */
 
 import type { Engine } from '../engine/protocol';
 import { FrameSource, type CaptureKind, type PresentedFrame } from './frameSource';
+
+/** Max ms of byte silence (frames or heartbeats) before the stream is declared
+ *  dead. The server heartbeats every ~2 s (worst case 3 s — see `server.py`),
+ *  and the first write to a half-open socket usually succeeds into the TCP
+ *  buffer, so this tolerates roughly 2.5 effective heartbeat gaps. */
+const STALL_TIMEOUT_MS = 8000;
+/** Watchdog poll cadence. Coarse — a stall only needs to surface within a
+ *  couple of seconds, not on the exact millisecond. */
+const STALL_CHECK_INTERVAL_MS = 2000;
+
+/** A liveness stall: no bytes (frames or heartbeats) within
+ *  `STALL_TIMEOUT_MS`. Distinct type so `describeStreamError` can word it as
+ *  "stopped responding" rather than a connect failure. */
+export class StreamStalledError extends Error {}
 
 export class HttpStreamSource extends FrameSource {
     /** URL of the frame stream. Set by `start` / `setUrl`; a change reconnects. */
@@ -45,13 +69,21 @@ export class HttpStreamSource extends FrameSource {
     private latestFrame: Blob | null = null;
     /** True once a new frame has been parsed and not yet uploaded (dedup gate). */
     private hasNewFrame = false;
+    /** When the last byte (frame or heartbeat) arrived; the watchdog's clock. */
+    private lastByteAt = 0;
+    /** Stall-watchdog interval. Ownership invariant: the timer belongs to
+     *  whichever `connect()` ran last; only `handleDisconnect`, `stop`, or a
+     *  newer `connect` may clear it — superseded pumps' early-return paths
+     *  never touch it. */
+    private stallTimer: ReturnType<typeof setInterval> | null = null;
 
     constructor(
         layerId: number,
         engine: Engine,
         onEnded: ((layerId: number) => void) | null = null,
+        onStatusChange: ((layerId: number) => void) | null = null,
     ) {
-        super(layerId, engine, 'stream', onEnded);
+        super(layerId, engine, 'stream', onEnded, onStatusChange);
     }
 
     /** Connect to `url` and begin reading frames. Idempotent against `stopped`;
@@ -82,6 +114,13 @@ export class HttpStreamSource extends FrameSource {
         this.buffer = new Uint8Array(0);
         this.error = null;
         this.ended = false;
+        this.setStatus('connecting');
+        // Arm the watchdog before the fetch so a hang waiting for response
+        // headers is caught too, clearing any predecessor's interval first
+        // (see the ownership invariant on `stallTimer`).
+        if (this.stallTimer !== null) clearInterval(this.stallTimer);
+        this.lastByteAt = Date.now();
+        this.stallTimer = setInterval(() => this.checkStall(), STALL_CHECK_INTERVAL_MS);
         const url = this.url;
         let reader: ReadableStreamDefaultReader<Uint8Array>;
         try {
@@ -96,8 +135,22 @@ export class HttpStreamSource extends FrameSource {
             this.handleDisconnect(err);
             return;
         }
+        if (this.abort === controller) this.setStatus('connected');
         // Pump in the background; `connect` (and thus `start`) resolves now.
         void this.pump(reader, controller);
+    }
+
+    /** Watchdog tick: declare the stream dead after `STALL_TIMEOUT_MS` of
+     *  total byte silence. A `setInterval`, not `tick()`-driven — rendering is
+     *  demand-paced and `tick()` early-returns when frozen or hidden, but a
+     *  disconnect must surface regardless. */
+    private checkStall(): void {
+        if (Date.now() - this.lastByteAt <= STALL_TIMEOUT_MS) return;
+        this.handleDisconnect(
+            new StreamStalledError(`no bytes for ${STALL_TIMEOUT_MS} ms`),
+        );
+        // Cancel the parked read so the pump's promise doesn't linger.
+        this.abort?.abort();
     }
 
     /** Drain the response body into the frame parser until the stream ends,
@@ -113,7 +166,11 @@ export class HttpStreamSource extends FrameSource {
                 // A newer connect() (or stop) took over while we awaited — drop
                 // this loop without touching shared state or notifying.
                 if (this.stopped || this.abort !== controller) return;
-                if (value && value.length) this.ingest(value);
+                if (value && value.length) {
+                    // Any byte — frame or heartbeat — is proof of life.
+                    this.lastByteAt = Date.now();
+                    this.ingest(value);
+                }
             }
             // Server closed the response cleanly (add-on stopped / client dropped).
             if (this.abort === controller) this.handleDisconnect(null);
@@ -138,6 +195,13 @@ export class HttpStreamSource extends FrameSource {
                 this.buffer.byteOffset,
                 4,
             ).getUint32(0, false); // big-endian
+            if (len === 0) {
+                // Heartbeat: transport liveness only (already noted via
+                // `lastByteAt`). Never touches `latestFrame`/`hasNewFrame`,
+                // so a pending real frame survives interleaved heartbeats.
+                this.buffer = this.buffer.slice(4);
+                continue;
+            }
             if (this.buffer.length < 4 + len) break;
             // `.slice` copies, so the Blob owns its bytes and the DataView above
             // always sees byteOffset 0 on the next iteration.
@@ -150,14 +214,24 @@ export class HttpStreamSource extends FrameSource {
         }
     }
 
-    /** Note the disconnect, surface an error, and notify the app so it prunes the
-     *  source and re-shows "Connect" — reusing the same machinery MediaStream
-     *  voids use on external stop. Idempotent. */
+    /** Note the disconnect, surface an error, and notify the app so it stops
+     *  this source (keeping it registered as the record of the failure) and
+     *  re-shows "Connect" — the same machinery MediaStream voids use on
+     *  external stop. Idempotent. */
     private handleDisconnect(err: unknown): void {
         if (this.stopped || this.ended) return;
+        this.clearStallTimer();
         this.ended = true;
         this.error = describeStreamError(err, this.url);
+        this.setStatus('disconnected');
         this.onEnded?.(this.layerId);
+    }
+
+    private clearStallTimer(): void {
+        if (this.stallTimer !== null) {
+            clearInterval(this.stallTimer);
+            this.stallTimer = null;
+        }
     }
 
     /** The latest complete encoded frame, decoded into the premultiplied-alpha
@@ -181,6 +255,8 @@ export class HttpStreamSource extends FrameSource {
     /** Abort the stream, drop the buffered frame, and mark this source
      *  permanently dead. Safe to call multiple times. */
     stop(): void {
+        this.clearStallTimer();
+        this.setStatus('disconnected');
         this.stopped = true;
         this.abort?.abort();
         this.abort = null;
@@ -203,6 +279,11 @@ export function describeStreamError(err: unknown, url: string): string {
     // ("Failed to fetch") — the add-on almost certainly isn't running.
     if (err instanceof TypeError) {
         return `Could not connect to the Blender stream at ${url}. Is the add-on running?`;
+    }
+    // The watchdog tripped: the connection opened but bytes (frames or
+    // heartbeats) stopped arriving — Blender froze, was suspended, or died.
+    if (err instanceof StreamStalledError) {
+        return `Blender stream at ${url} stopped responding. Is Blender still running?`;
     }
     return `Blender stream error: ${message}`;
 }
