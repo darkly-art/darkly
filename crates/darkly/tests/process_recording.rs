@@ -1,6 +1,7 @@
 //! Process-recording (timelapse) integration tests: change-triggered capture,
 //! throttling with trailing capture, undo-triggered capture, aspect-fit
-//! letterboxing, mid-stroke gating, and backpressure drop semantics.
+//! letterboxing, aspect-ratio gating, mid-stroke gating, and backpressure
+//! drop semantics.
 //!
 //! These construct a real `DarklyEngine` via headless `GpuContext` and drive
 //! the recorder through `render(t)` + `test_flush_readbacks()` — the same
@@ -69,7 +70,7 @@ fn rgba_at(frame: &RecordedFrame, x: u32, y: u32) -> [u8; 4] {
 fn paint_stroke_produces_frame_at_configured_dims() {
     let mut engine = test_engine(128, 128);
     let layer = engine.add_raster_layer(None);
-    engine.set_recording_params(true, 0.0, 128, 128);
+    engine.set_recording_params(true, 0.0, 128, 128, 128, 128);
 
     stroke_at(&mut engine, layer, 64.0, 64.0);
 
@@ -90,7 +91,7 @@ fn paint_stroke_produces_frame_at_configured_dims() {
 fn throttle_defers_second_capture_until_trailing_fires() {
     let mut engine = test_engine(64, 64);
     let layer = engine.add_raster_layer(None);
-    engine.set_recording_params(true, 2.0, 64, 64);
+    engine.set_recording_params(true, 2.0, 64, 64, 64, 64);
 
     // First mutation at t=0.0 captures immediately (no prior capture).
     stroke_at(&mut engine, layer, 16.0, 16.0);
@@ -123,7 +124,7 @@ fn throttle_defers_second_capture_until_trailing_fires() {
 fn undo_triggers_capture() {
     let mut engine = test_engine(64, 64);
     let layer = engine.add_raster_layer(None);
-    engine.set_recording_params(true, 0.0, 64, 64);
+    engine.set_recording_params(true, 0.0, 64, 64, 64, 64);
 
     stroke_at(&mut engine, layer, 32.0, 32.0);
     poll_frame_within(&mut engine, 0.0, 16).expect("frame after paint stroke");
@@ -139,7 +140,7 @@ fn letterbox_pads_wide_canvas_with_black_bars() {
     // with opaque black bars above and below.
     let mut engine = test_engine(512, 256);
     let layer = engine.add_raster_layer(None);
-    engine.set_recording_params(true, 0.0, 256, 256);
+    engine.set_recording_params(true, 0.0, 256, 256, 512, 256);
 
     stroke_at(&mut engine, layer, 256.0, 128.0);
 
@@ -166,7 +167,7 @@ fn letterbox_pads_wide_canvas_with_black_bars() {
 fn no_capture_while_stroke_active() {
     let mut engine = test_engine(64, 64);
     let layer = engine.add_raster_layer(None);
-    engine.set_recording_params(true, 0.0, 64, 64);
+    engine.set_recording_params(true, 0.0, 64, 64, 64, 64);
 
     // Pending revision change (the layer add), but a stroke is in flight —
     // the tick must hold off.
@@ -199,10 +200,38 @@ fn no_capture_while_stroke_active() {
 }
 
 #[test]
+fn disable_clears_completed_queue() {
+    let mut engine = test_engine(64, 64);
+    let layer = engine.add_raster_layer(None);
+    engine.set_recording_params(true, 0.0, 64, 64, 64, 64);
+
+    stroke_at(&mut engine, layer, 32.0, 32.0);
+
+    // Queue several undrained frames, then disable capture. Frames encoded
+    // for the old parameters must not survive into the next activation —
+    // the frontend would hand them to an encoder configured for different
+    // dimensions.
+    let mut t = 0.0;
+    for _ in 0..4 {
+        engine.undo();
+        engine.redo();
+        t += 0.1;
+        step(&mut engine, t);
+    }
+    engine.set_recording_params(false, 0.0, 0, 0, 0, 0);
+    step(&mut engine, t);
+
+    assert!(
+        engine.poll_recording_frame().is_none(),
+        "disabling the recorder must drop undrained frames"
+    );
+}
+
+#[test]
 fn full_queue_skips_capture_without_consuming_revision() {
     let mut engine = test_engine(64, 64);
     let layer = engine.add_raster_layer(None);
-    engine.set_recording_params(true, 0.0, 64, 64);
+    engine.set_recording_params(true, 0.0, 64, 64, 64, 64);
 
     stroke_at(&mut engine, layer, 32.0, 32.0);
 
@@ -237,4 +266,57 @@ fn full_queue_skips_capture_without_consuming_revision() {
         frame.is_some(),
         "capture skipped on a full queue must retry after a drain"
     );
+}
+
+#[test]
+fn ar_change_gates_capture_until_reconfigured() {
+    let mut engine = test_engine(128, 128);
+    let layer = engine.add_raster_layer(None);
+    engine.set_recording_params(true, 0.0, 128, 128, 128, 128);
+
+    stroke_at(&mut engine, layer, 64.0, 64.0);
+    poll_frame_within(&mut engine, 0.0, 16).expect("frame after paint stroke");
+
+    // Resize to a different aspect ratio: the revision bump must NOT be
+    // captured — a frame at the stale aspect would bake letterbox bars into
+    // the recording.
+    let mut rect = engine.canvas_rect();
+    rect.width = 256;
+    rect.height = 128;
+    engine.resize_canvas(rect);
+    for _ in 0..8 {
+        step(&mut engine, 1.0);
+    }
+    assert!(
+        engine.poll_recording_frame().is_none(),
+        "capture must hold while the canvas aspect differs from the negotiated base"
+    );
+
+    // The frontend rolls a new segment: re-negotiated params at the new
+    // aspect. The gated revision was retained, so the capture fires without
+    // any further document change.
+    engine.set_recording_params(true, 0.0, 256, 128, 256, 128);
+    let frame =
+        poll_frame_within(&mut engine, 2.0, 16).expect("capture must resume after reconfigure");
+    assert_eq!((frame.width, frame.height), (256, 128));
+}
+
+#[test]
+fn same_ar_rescale_does_not_gate() {
+    let mut engine = test_engine(128, 128);
+    let layer = engine.add_raster_layer(None);
+    engine.set_recording_params(true, 0.0, 128, 128, 128, 128);
+
+    stroke_at(&mut engine, layer, 64.0, 64.0);
+    poll_frame_within(&mut engine, 0.0, 16).expect("frame after paint stroke");
+
+    // Same aspect ratio at a different scale: capture keeps running at the
+    // negotiated frame dims (the aspect-fit viewport absorbs the rescale).
+    let mut rect = engine.canvas_rect();
+    rect.width = 256;
+    rect.height = 256;
+    engine.resize_canvas(rect);
+    let frame =
+        poll_frame_within(&mut engine, 1.0, 16).expect("same-aspect rescale must keep capturing");
+    assert_eq!((frame.width, frame.height), (128, 128));
 }

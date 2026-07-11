@@ -42,7 +42,7 @@ export const RECORDING_FPS = 30;
 
 /** Bump when the scratch/zip layout or framing changes. Pre-release: a
  *  version mismatch means "discard the recording", never "migrate". */
-export const RECORDING_VERSION = 1;
+export const RECORDING_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -125,8 +125,14 @@ export interface SegmentMeta {
     n: number;
     /** WebCodecs codec string, e.g. `avc1.640028` or `vp09.00.10.08`. */
     codec: string;
+    /** Encoder frame dimensions (even-aligned fit of the canvas). */
     width: number;
     height: number;
+    /** Document canvas dimensions during this segment — the exact aspect
+     *  ratio export groups by (the encoder fit perturbs the ratio at small
+     *  sizes). */
+    canvasWidth: number;
+    canvasHeight: number;
     frameCount: number;
     /** Base64-encoded `VideoDecoderConfig.description` (avcC / vpcC bytes),
      *  absent when the codec carries its config in-band. */

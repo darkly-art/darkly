@@ -274,3 +274,18 @@ fn binary_side_channel_round_trips() {
     assert_eq!(resp.bytes, Some(payload));
     assert_eq!(resp.value.get("len").and_then(|v| v.as_u64()), Some(5));
 }
+
+#[test]
+fn poll_recording_frame_reports_canvas_dims_when_empty() {
+    let reg = RequestRegistry::new();
+    let mut engine = test_engine(64, 64);
+    let resp = reg
+        .dispatch(&mut engine, "poll_recording_frame", json!(null), &[])
+        .expect("poll_recording_frame dispatch");
+    // No frame pending, but the envelope still carries the live canvas
+    // dimensions — the poll doubles as the frontend's resize signal.
+    assert_eq!(resp.value["canvasWidth"], json!(64));
+    assert_eq!(resp.value["canvasHeight"], json!(64));
+    assert!(resp.value["frame"].is_null());
+    assert!(resp.bytes.is_none());
+}

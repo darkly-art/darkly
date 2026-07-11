@@ -36,6 +36,10 @@ export interface InitMsg {
     codec: string;
     width: number;
     height: number;
+    /** Document canvas dims the encoder dims were negotiated against —
+     *  persisted per segment for export's aspect-ratio grouping. */
+    canvasWidth: number;
+    canvasHeight: number;
     bitrate: number;
     fps: number;
 }
@@ -223,6 +227,8 @@ function writeSegmentMeta(seg: Segment): void {
         codec: cfg.codec,
         width: cfg.width,
         height: cfg.height,
+        canvasWidth: cfg.canvasWidth,
+        canvasHeight: cfg.canvasHeight,
         frameCount: seg.frameCount,
         ...(seg.description ? { description: base64Encode(seg.description) } : {}),
     };

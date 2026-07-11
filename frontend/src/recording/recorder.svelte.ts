@@ -107,6 +107,12 @@ class TabRecorder {
     sessionDisabled = false;
     negotiated: NegotiatedCodec | null = null;
     applied: AppliedConfig | null = null;
+    /** Document canvas dims the codec was negotiated against. A poll
+     *  reporting a different canvas *aspect ratio* rolls a new segment. */
+    baseDims: { width: number; height: number } | null = null;
+    /** True while an aspect-change roll is queued on the busy chain, so a
+     *  burst of polls schedules it once. */
+    rollQueued = false;
     pollInFlight = false;
     /** Serializes activate/deactivate/roll so a config-change burst can't
      *  interleave two worker lifecycles. */
@@ -157,19 +163,32 @@ class TabRecorder {
             codec: negotiated.codec,
             width: negotiated.width,
             height: negotiated.height,
+            canvasWidth: dims.width,
+            canvasHeight: dims.height,
             bitrate: negotiated.bitrate,
             fps: negotiated.fps,
         });
 
         this.negotiated = negotiated;
         this.applied = cfg;
+        this.baseDims = dims;
         this.active = true;
         engine.api.setRecordingParams({
             enabled: true,
             minIntervalSecs: cfg.minIntervalSeconds,
             width: negotiated.width,
             height: negotiated.height,
+            baseWidth: dims.width,
+            baseHeight: dims.height,
         });
+    }
+
+    /** Finalize the current segment and start a fresh one — a re-negotiation
+     *  against the live document (resolution setting change, canvas
+     *  aspect-ratio change). */
+    async roll(cfg: AppliedConfig): Promise<void> {
+        await this.deactivate(true);
+        await this.activate(cfg);
     }
 
     /** Stop capture and finalize the current segment. `engineAlive` is
@@ -182,11 +201,14 @@ class TabRecorder {
                 minIntervalSecs: 0,
                 width: 0,
                 height: 0,
+                baseWidth: 0,
+                baseHeight: 0,
             });
         }
         this.active = false;
         this.workerReady = false;
         this.negotiated = null;
+        this.baseDims = null;
         const worker = this.worker;
         this.worker = null;
         if (worker) {
@@ -315,17 +337,18 @@ class ProcessRecordingService {
             }
             if (rec.active && rec.applied) {
                 if (rec.applied.maxLongEdge !== cfg.maxLongEdge) {
-                    await rec.deactivate(true);
-                    await rec.activate(cfg);
+                    await rec.roll(cfg);
                 } else if (rec.applied.minIntervalSeconds !== cfg.minIntervalSeconds) {
                     rec.applied = cfg;
                     const n = rec.negotiated;
-                    if (n) {
+                    if (n && rec.baseDims) {
                         rec.inst.engine?.api.setRecordingParams({
                             enabled: true,
                             minIntervalSecs: cfg.minIntervalSeconds,
                             width: n.width,
                             height: n.height,
+                            baseWidth: rec.baseDims.width,
+                            baseHeight: rec.baseDims.height,
                         });
                     }
                 }
@@ -341,6 +364,12 @@ class ProcessRecordingService {
      * flight. Frame bytes are copied out of the WASM heap (`ImageData`/
      * worker transfer reject SharedArrayBuffer-backed views) and moved to
      * the worker with zero further copies.
+     *
+     * Every response also carries the live canvas dims — the poll doubles
+     * as the resize signal: a canvas whose aspect ratio has diverged from
+     * the negotiated base rolls a new segment at the new aspect (the
+     * engine holds capture in the meantime, so no letterboxed frames are
+     * ever encoded).
      */
     pollFrame(inst: DarklyInstance): void {
         const rec = this.tabs.get(inst);
@@ -350,23 +379,46 @@ class ProcessRecordingService {
         rec.pollInFlight = true;
         engine.api
             .pollRecordingFrame()
-            .then((frame) => {
+            .then((res) => {
                 rec.pollInFlight = false;
-                if (!frame || !rec.active || !rec.worker) return;
-                const copy = new Uint8Array(frame.bytes.length);
-                copy.set(frame.bytes);
-                rec.post(
-                    {
-                        type: 'frame',
-                        data: copy.buffer,
-                        frameIndex: frame.frameIndex,
-                        timestampUs: Date.now() * 1000,
-                    },
-                    [copy.buffer],
-                );
-                if (!firstCaptureToastShown) {
-                    firstCaptureToastShown = true;
-                    toast.show('info', 'Process recording is on — Settings → Recording');
+                if (!rec.active || !rec.worker) return;
+                const frame = res.frame;
+                // Drop frames captured for a previous configuration (queued
+                // before a roll) — the live encoder expects its own dims.
+                if (
+                    frame &&
+                    res.bytes &&
+                    rec.negotiated &&
+                    frame.width === rec.negotiated.width &&
+                    frame.height === rec.negotiated.height
+                ) {
+                    const copy = new Uint8Array(res.bytes.length);
+                    copy.set(res.bytes);
+                    rec.post(
+                        {
+                            type: 'frame',
+                            data: copy.buffer,
+                            frameIndex: frame.frameIndex,
+                            timestampUs: Date.now() * 1000,
+                        },
+                        [copy.buffer],
+                    );
+                    if (!firstCaptureToastShown) {
+                        firstCaptureToastShown = true;
+                        toast.show('info', 'Process recording is on — Settings → Recording');
+                    }
+                }
+                const base = rec.baseDims;
+                if (
+                    base &&
+                    !rec.rollQueued &&
+                    res.canvasWidth * base.height !== res.canvasHeight * base.width
+                ) {
+                    rec.rollQueued = true;
+                    void rec.run(async () => {
+                        rec.rollQueued = false;
+                        if (rec.active) await rec.roll(rec.applied ?? readConfig());
+                    });
                 }
             })
             .catch(() => {
@@ -500,7 +552,12 @@ class ProcessRecordingService {
                 if (!metaBytes || !bin) continue;
                 try {
                     const meta = JSON.parse(new TextDecoder().decode(metaBytes)) as SegmentMeta;
-                    if (meta.frameCount > 0) out.push({ meta, bin });
+                    // Canvas dims are required (aspect grouping); a segment
+                    // without them predates the current format and is skipped
+                    // (pre-release: discard, never migrate).
+                    if (meta.frameCount > 0 && meta.canvasWidth > 0 && meta.canvasHeight > 0) {
+                        out.push({ meta, bin });
+                    }
                 } catch {
                     // Torn meta — skip the segment, keep the rest.
                 }

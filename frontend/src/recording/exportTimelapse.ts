@@ -1,15 +1,19 @@
 /**
- * Timelapse export — turn a tab's recorded segments into an MP4 or GIF.
+ * Timelapse export — turn a tab's recorded segments into an MP4 or GIF at
+ * user-chosen options (playback rate, output resolution, target aspect
+ * ratio + stretch/fit/fill conversion for segments of other aspects — see
+ * `exportOptions.ts`).
  *
- * MP4 (primary): when every segment shares a decoder config, the encoded
- * packets pass straight through into the MP4 container via Mediabunny's
- * `EncodedVideoPacketSource` — a near-free re-mux, no decode. Mismatched
- * configs (a mid-recording resolution change) fall back to decode →
- * uniform re-encode via `VideoSampleSource`, letterboxing every frame to
- * the largest segment's dimensions.
+ * MP4 (primary): when every segment shares a decoder config AND the
+ * requested resolution is exactly the packets' ({@link canPassthrough}),
+ * the encoded packets pass straight through into the MP4 container via
+ * Mediabunny's `EncodedVideoPacketSource` — a near-free re-mux, no decode,
+ * at any playback rate. Anything else (mixed aspects, non-native
+ * resolution) decodes and re-encodes at a probed encoder config for the
+ * requested dims, drawing each frame per the conversion method.
  *
- * GIF (secondary): decode → downscale (long edge ~480) → gifenc, striding
- * frames down to ~15 fps.
+ * GIF (secondary): decode → draw per the conversion method at the
+ * requested dims → gifenc, one GIF frame per recorded frame.
  *
  * All timestamps are synthetic — frame N plays at N/fps — regardless of
  * the (possibly non-monotonic) wall-clock stamps in the chunk framing.
@@ -28,28 +32,39 @@ import {
 } from 'mediabunny';
 import type { DarklyInstance } from '../state/app.svelte';
 import { processRecording } from './recorder.svelte';
-import { bitrateFor } from './codec';
+import { negotiateCodec } from './codec';
 import {
-    decodeChunkRecords,
-    decoderConfigsCompatible,
-    RECORDING_FPS,
-    segmentDecoderConfig,
-    type SegmentMeta,
-} from './segments';
-
-const GIF_LONG_EDGE = 480;
-const GIF_FPS = 15;
+    canPassthrough,
+    computeDrawRect,
+    gifDelayMs,
+    groupSegmentsByAspect,
+    type AspectGroup,
+    type ConversionMethod,
+} from './exportOptions';
+import { decodeChunkRecords, segmentDecoderConfig, type SegmentMeta } from './segments';
 
 /** One tab's recording, summarized for the export modal. */
 export interface RecordingInfo {
     frameCount: number;
-    /** Playback duration at the recording's fixed fps, in seconds. */
-    durationSecs: number;
     /** On-disk size of the encoded segments, in bytes. */
     byteSize: number;
+    segmentCount: number;
+    /** Segments grouped by document aspect ratio — more than one group
+     *  means the canvas aspect changed mid-recording and the modal offers
+     *  the target-aspect + conversion choice. */
+    groups: AspectGroup[];
+    /** The last segment's group: the document's final shape. */
+    defaultGroupIndex: number;
+}
+
+/** User-chosen export parameters, sanitized by the modal
+ *  (`clampFps` / `lockedDims`). */
+export interface TimelapseExportOptions {
+    fps: number;
     width: number;
     height: number;
-    segmentCount: number;
+    /** How segments whose aspect differs from the output's are drawn. */
+    method: ConversionMethod;
 }
 
 type Segment = { meta: SegmentMeta; bin: Uint8Array };
@@ -58,53 +73,35 @@ type Segment = { meta: SegmentMeta; bin: Uint8Array };
 export async function readRecordingInfo(inst: DarklyInstance): Promise<RecordingInfo | null> {
     const segments = await processRecording.readRecording(inst);
     if (segments.length === 0) return null;
-    const frameCount = segments.reduce((s, seg) => s + seg.meta.frameCount, 0);
-    const { width, height } = outputDims(segments);
+    const { groups, defaultIndex } = groupSegmentsByAspect(segments.map((s) => s.meta));
     return {
-        frameCount,
-        durationSecs: frameCount / RECORDING_FPS,
+        frameCount: segments.reduce((s, seg) => s + seg.meta.frameCount, 0),
         byteSize: segments.reduce((s, seg) => s + seg.bin.length, 0),
-        width,
-        height,
         segmentCount: segments.length,
+        groups,
+        defaultGroupIndex: defaultIndex,
     };
-}
-
-/** The export canvas: the largest segment's dimensions (segments differ
- *  only after a mid-recording resolution change). */
-function outputDims(segments: Segment[]): { width: number; height: number } {
-    let width = 2;
-    let height = 2;
-    for (const { meta } of segments) {
-        if (meta.width * meta.height > width * height) {
-            width = meta.width;
-            height = meta.height;
-        }
-    }
-    return { width, height };
 }
 
 function mediabunnyCodec(codec: string): VideoCodec {
     return codec.startsWith('avc1') ? 'avc' : 'vp9';
 }
 
-/** Export the tab's recording as an MP4 blob. `fps` is the playback rate
- *  (defaults to the recording's native fps — higher is a faster lapse). */
+/** Export the tab's recording as an MP4 blob. */
 export async function exportTimelapseMp4(
     inst: DarklyInstance,
-    fps: number = RECORDING_FPS,
+    opts: TimelapseExportOptions,
 ): Promise<Blob> {
     const segments = await processRecording.readRecording(inst);
     if (segments.length === 0) throw new Error('no recording to export');
 
-    const compatible = segments.every((s) => decoderConfigsCompatible(segments[0].meta, s.meta));
     const target = new BufferTarget();
     const output = new Output({ format: new Mp4OutputFormat(), target });
 
-    if (compatible) {
-        await muxPassthrough(output, segments, fps);
+    if (canPassthrough(segments.map((s) => s.meta), opts.width, opts.height)) {
+        await muxPassthrough(output, segments, opts.fps);
     } else {
-        await transcode(output, segments, fps);
+        await transcode(output, segments, opts);
     }
     if (!target.buffer) throw new Error('mux produced no output');
     return new Blob([target.buffer], { type: 'video/mp4' });
@@ -139,15 +136,28 @@ async function muxPassthrough(output: Output, segments: Segment[], fps: number):
     await output.finalize();
 }
 
-/** Decode → uniform re-encode fallback for mixed-config recordings.
- *  Frames are letterboxed onto black at the largest segment's dims. */
-async function transcode(output: Output, segments: Segment[], fps: number): Promise<void> {
-    const { width, height } = outputDims(segments);
-    const source = new VideoSampleSource({
-        codec: mediabunnyCodec(segments[0].meta.codec),
-        bitrate: bitrateFor(width, height, fps),
+/** Decode → uniform re-encode at the requested resolution, drawing each
+ *  frame per the conversion method. The encoder config is probed for the
+ *  requested dims (`negotiateCodec` steps the resolution ladder down on
+ *  rejection, so unsupported sizes shrink rather than fail). */
+async function transcode(
+    output: Output,
+    segments: Segment[],
+    opts: TimelapseExportOptions,
+): Promise<void> {
+    const negotiated = await negotiateCodec({
+        docWidth: opts.width,
+        docHeight: opts.height,
+        maxLongEdge: Math.max(opts.width, opts.height),
+        fps: opts.fps,
     });
-    output.addVideoTrack(source, { frameRate: fps });
+    if (!negotiated) throw new Error('no supported encoder config for the requested resolution');
+    const { width, height } = negotiated;
+    const source = new VideoSampleSource({
+        codec: mediabunnyCodec(negotiated.codec),
+        bitrate: negotiated.bitrate,
+    });
+    output.addVideoTrack(source, { frameRate: opts.fps });
     await output.start();
 
     const canvas = new OffscreenCanvas(width, height);
@@ -159,14 +169,18 @@ async function transcode(output: Output, segments: Segment[], fps: number): Prom
         await decodeSegmentFrames(seg, async (frame) => {
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, width, height);
-            const scale = Math.min(width / frame.displayWidth, height / frame.displayHeight);
-            const dw = frame.displayWidth * scale;
-            const dh = frame.displayHeight * scale;
-            ctx.drawImage(frame, (width - dw) / 2, (height - dh) / 2, dw, dh);
+            const r = computeDrawRect(
+                opts.method,
+                frame.displayWidth,
+                frame.displayHeight,
+                width,
+                height,
+            );
+            ctx.drawImage(frame, r.x, r.y, r.w, r.h);
             frame.close();
             const sample = new VideoSample(canvas, {
-                timestamp: frameN / fps,
-                duration: 1 / fps,
+                timestamp: frameN / opts.fps,
+                duration: 1 / opts.fps,
             });
             frameN++;
             await source.add(sample);
@@ -179,45 +193,36 @@ async function transcode(output: Output, segments: Segment[], fps: number): Prom
 /** Export the tab's recording as a looping GIF blob. */
 export async function exportTimelapseGif(
     inst: DarklyInstance,
-    fps: number = RECORDING_FPS,
+    opts: TimelapseExportOptions,
 ): Promise<Blob> {
     const segments = await processRecording.readRecording(inst);
     if (segments.length === 0) throw new Error('no recording to export');
 
-    const { width, height } = outputDims(segments);
-    const scale = Math.min(1, GIF_LONG_EDGE / Math.max(width, height));
-    const gw = Math.max(1, Math.round(width * scale));
-    const gh = Math.max(1, Math.round(height * scale));
+    const { width, height } = opts;
+    const delayMs = gifDelayMs(opts.fps);
 
-    // Stride source frames down to ~GIF_FPS: keep every `stride`-th frame.
-    const stride = Math.max(1, Math.round(fps / GIF_FPS));
-    const delayMs = Math.round((1000 * stride) / fps);
-
-    const canvas = new OffscreenCanvas(gw, gh);
+    const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) throw new Error('2d context unavailable');
 
     const gif = GIFEncoder();
-    let frameN = 0;
     for (const seg of segments) {
         await decodeSegmentFrames(seg, async (frame) => {
-            const keep = frameN % stride === 0;
-            frameN++;
-            if (!keep) {
-                frame.close();
-                return;
-            }
             ctx.fillStyle = '#000';
-            ctx.fillRect(0, 0, gw, gh);
-            const s = Math.min(gw / frame.displayWidth, gh / frame.displayHeight);
-            const dw = frame.displayWidth * s;
-            const dh = frame.displayHeight * s;
-            ctx.drawImage(frame, (gw - dw) / 2, (gh - dh) / 2, dw, dh);
+            ctx.fillRect(0, 0, width, height);
+            const r = computeDrawRect(
+                opts.method,
+                frame.displayWidth,
+                frame.displayHeight,
+                width,
+                height,
+            );
+            ctx.drawImage(frame, r.x, r.y, r.w, r.h);
             frame.close();
-            const { data } = ctx.getImageData(0, 0, gw, gh);
+            const { data } = ctx.getImageData(0, 0, width, height);
             const palette = quantize(data, 256);
             const indexed = applyPalette(data, palette);
-            gif.writeFrame(indexed, gw, gh, { palette, delay: delayMs });
+            gif.writeFrame(indexed, width, height, { palette, delay: delayMs });
         });
     }
     gif.finish();

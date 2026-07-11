@@ -82,6 +82,8 @@ describe('segment metadata', () => {
         codec: 'avc1.640028',
         width: 1920,
         height: 1080,
+        canvasWidth: 1920,
+        canvasHeight: 1080,
         frameCount: 42,
         description: base64Encode(new Uint8Array([1, 100, 0, 40])),
     };

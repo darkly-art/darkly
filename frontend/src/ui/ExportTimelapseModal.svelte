@@ -1,9 +1,20 @@
 <script lang="ts">
     import Modal from './Modal.svelte';
     import { exportTimelapse } from '../state/exportTimelapse.svelte';
-    import { app, getActiveInstance } from '../state/app.svelte';
+    import { getActiveInstance } from '../state/app.svelte';
     import { downloadBlob, sanitizeFilename } from '../storage';
     import { processRecording } from '../recording/recorder.svelte';
+    import { fitToLongEdge } from '../recording/codec';
+    import {
+        EXPORT_MAX_DIM,
+        EXPORT_MAX_FPS,
+        EXPORT_MIN_DIM,
+        EXPORT_MIN_FPS,
+        GIF_LONG_EDGE,
+        clampFps,
+        lockedDims,
+        type ConversionMethod,
+    } from '../recording/exportOptions';
     import {
         exportTimelapseGif,
         exportTimelapseMp4,
@@ -18,7 +29,11 @@
         { id: 'gif', label: 'GIF', ext: 'gif' },
     ];
 
-    const FPS_CHOICES = [10, 15, 24, 30, 60];
+    const METHODS: Array<{ id: ConversionMethod; label: string }> = [
+        { id: 'fit', label: 'Fit (letterbox)' },
+        { id: 'fill', label: 'Fill (crop)' },
+        { id: 'stretch', label: 'Stretch' },
+    ];
 
     let format = $state<Format>('mp4');
     let fps = $state(30);
@@ -26,6 +41,13 @@
     let exporting = $state(false);
     let info = $state<RecordingInfo | null>(null);
     let loading = $state(false);
+    /** Index into `info.groups` — the target aspect ratio. */
+    let groupIndex = $state(0);
+    let method = $state<ConversionMethod>('fit');
+    let width = $state(0);
+    let height = $state(0);
+
+    const group = $derived(info?.groups[groupIndex] ?? null);
 
     // Re-read the recording summary each time the modal opens — the
     // recording grows while the user paints.
@@ -39,12 +61,38 @@
         loading = true;
         try {
             info = await readRecordingInfo(inst);
+            groupIndex = info?.defaultGroupIndex ?? 0;
+            method = 'fit';
+            applyDimDefaults();
         } catch (e) {
             console.error('[export-timelapse] failed to read recording', e);
             info = null;
         } finally {
             loading = false;
         }
+    }
+
+    /** Seed the resolution from the chosen group's native size (GIF: fitted
+     *  to a small default long edge). Re-run when the format or target
+     *  aspect changes. */
+    function applyDimDefaults() {
+        const g = info?.groups[groupIndex];
+        if (!g) return;
+        ({ width, height } =
+            format === 'gif'
+                ? fitToLongEdge(g.nativeWidth, g.nativeHeight, GIF_LONG_EDGE)
+                : { width: g.nativeWidth, height: g.nativeHeight });
+    }
+
+    /** Derive the other axis from the edited one, locked to the target
+     *  aspect. On input only the derived axis is written (so typing isn't
+     *  clobbered); on change (commit/blur) both are sanitized. */
+    function onDimInput(axis: 'w' | 'h', commit: boolean) {
+        if (!group) return;
+        const d = lockedDims(axis, axis === 'w' ? width : height, group.arW, group.arH);
+        if (commit) ({ width, height } = d);
+        else if (axis === 'w') height = d.height;
+        else width = d.width;
     }
 
     function close() {
@@ -66,13 +114,16 @@
 
     async function confirm() {
         const inst = getActiveInstance();
-        if (!inst || exporting || !info) return;
+        if (!inst || exporting || !info || !group) return;
         exporting = true;
         try {
+            const rate = clampFps(Number(fps));
+            const dims = lockedDims('w', width, group.arW, group.arH);
+            const opts = { fps: rate, width: dims.width, height: dims.height, method };
             const blob =
                 format === 'mp4'
-                    ? await exportTimelapseMp4(inst, fps)
-                    : await exportTimelapseGif(inst, fps);
+                    ? await exportTimelapseMp4(inst, opts)
+                    : await exportTimelapseGif(inst, opts);
             const ext = FORMATS.find((f) => f.id === format)!.ext;
             const filename = `${sanitizeFilename(baseName) || 'darkly-timelapse'}.${ext}`;
             downloadBlob(blob, filename);
@@ -107,8 +158,8 @@
             </p>
         {:else}
             <p class="info">
-                {info.frameCount} frames · {formatDuration(info.frameCount / fps)} at
-                {fps} fps · {info.width}×{info.height} · {formatBytes(info.byteSize)} recorded
+                {info.frameCount} frames · {formatDuration(info.frameCount / clampFps(Number(fps)))} at
+                {clampFps(Number(fps))} fps · {group?.label} · {formatBytes(info.byteSize)} recorded
             </p>
 
             <label class="row">
@@ -126,20 +177,77 @@
 
             <label class="row">
                 <span class="label">Format</span>
-                <select bind:value={format} disabled={exporting}>
+                <select bind:value={format} onchange={applyDimDefaults} disabled={exporting}>
                     {#each FORMATS as f (f.id)}
                         <option value={f.id}>{f.label}</option>
                     {/each}
                 </select>
             </label>
 
+            {#if info.groups.length > 1}
+                <!-- The canvas aspect changed mid-recording: pick the target
+                     aspect and how other-aspect segments are converted. -->
+                <label class="row">
+                    <span class="label">Aspect ratio</span>
+                    <select bind:value={groupIndex} onchange={applyDimDefaults} disabled={exporting}>
+                        {#each info.groups as g, i (i)}
+                            <option value={i}>{g.label} ({g.frameCount} frames)</option>
+                        {/each}
+                    </select>
+                </label>
+
+                <label class="row">
+                    <span class="label">Size mismatch</span>
+                    <select bind:value={method} disabled={exporting}>
+                        {#each METHODS as m (m.id)}
+                            <option value={m.id}>{m.label}</option>
+                        {/each}
+                    </select>
+                </label>
+            {/if}
+
+            <div class="row">
+                <span class="label">Resolution</span>
+                <div class="dims">
+                    <div class="num">
+                        <input
+                            type="number"
+                            min={EXPORT_MIN_DIM}
+                            max={EXPORT_MAX_DIM}
+                            bind:value={width}
+                            oninput={() => onDimInput('w', false)}
+                            onchange={() => onDimInput('w', true)}
+                            disabled={exporting}
+                        />
+                        <span class="unit">px</span>
+                    </div>
+                    <span class="times">×</span>
+                    <div class="num">
+                        <input
+                            type="number"
+                            min={EXPORT_MIN_DIM}
+                            max={EXPORT_MAX_DIM}
+                            bind:value={height}
+                            oninput={() => onDimInput('h', false)}
+                            onchange={() => onDimInput('h', true)}
+                            disabled={exporting}
+                        />
+                        <span class="unit">px</span>
+                    </div>
+                </div>
+            </div>
+
             <label class="row">
                 <span class="label">Playback speed (fps)</span>
-                <select bind:value={fps} disabled={exporting}>
-                    {#each FPS_CHOICES as v (v)}
-                        <option value={v}>{v}</option>
-                    {/each}
-                </select>
+                <input
+                    class="fps"
+                    type="number"
+                    min={EXPORT_MIN_FPS}
+                    max={EXPORT_MAX_FPS}
+                    bind:value={fps}
+                    onchange={() => (fps = clampFps(Number(fps)))}
+                    disabled={exporting}
+                />
             </label>
         {/if}
 
@@ -230,6 +338,53 @@
         border-radius: 4px;
         padding: 6px 8px;
         font: inherit;
+    }
+
+    .dims {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .dims .times {
+        color: var(--text-muted);
+    }
+
+    .num {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex: 1;
+        background: var(--bg);
+        border: 1px solid var(--bg-hover);
+        border-radius: 4px;
+        padding: 0 8px;
+    }
+
+    .num input {
+        flex: 1;
+        width: 100%;
+        background: transparent;
+        border: none;
+        color: var(--text);
+        padding: 6px 0;
+        font: inherit;
+        outline: none;
+    }
+
+    .num .unit {
+        color: var(--text-muted);
+        font-size: 12px;
+    }
+
+    input.fps {
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--bg-hover);
+        border-radius: 4px;
+        padding: 6px 8px;
+        font: inherit;
+        outline: none;
     }
 
     .actions {

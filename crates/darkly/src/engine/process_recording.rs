@@ -2,11 +2,19 @@
 //!
 //! The recorder samples [`crate::document::Document::revision`] each frame
 //! and, when the document changed, downscales the composited canvas into a
-//! fixed-size RGBA target (aspect-fit letterboxed so canvas resizes never
-//! change the encoder frame size) and reads it back asynchronously. The
-//! frontend drains completed frames via `poll_recording_frame` and feeds
-//! them to a WebCodecs `VideoEncoder`; the engine knows nothing about
-//! encoding or persistence.
+//! fixed-size RGBA target and reads it back asynchronously. The frontend
+//! drains completed frames via `poll_recording_frame` and feeds them to a
+//! WebCodecs `VideoEncoder`; the engine knows nothing about encoding or
+//! persistence.
+//!
+//! Frame dimensions match the aspect ratio of the canvas the frontend
+//! negotiated against (`base_w`/`base_h`). When the canvas aspect ratio
+//! diverges — resize, crop, undo — capture holds (without consuming the
+//! pending revision) until the frontend notices via the canvas dims in
+//! every `poll_recording_frame` response and re-negotiates a new segment
+//! at the new aspect ratio. The aspect-fit viewport in the capture pass
+//! therefore only absorbs same-aspect rescales and even-align rounding;
+//! real letterbox bars are never encoded.
 //!
 //! All state here is **session** state per the document-authority taxonomy:
 //! none of it survives reload, and frames flow strictly downhill
@@ -49,6 +57,10 @@ pub struct ProcessRecorder {
     /// Encoder frame dimensions, negotiated by the frontend (even-aligned).
     frame_w: u32,
     frame_h: u32,
+    /// Document canvas dimensions the frontend negotiated against. Capture
+    /// holds while the live canvas aspect ratio differs from theirs.
+    base_w: u32,
+    base_h: u32,
     target: Option<RecordingTarget>,
     downscale: Option<EffectPipeline>,
     sampler: Option<wgpu::Sampler>,
@@ -72,6 +84,8 @@ impl ProcessRecorder {
             min_interval_secs: 1.5,
             frame_w: 0,
             frame_h: 0,
+            base_w: 0,
+            base_h: 0,
             target: None,
             downscale: None,
             sampler: None,
@@ -83,16 +97,31 @@ impl ProcessRecorder {
         }
     }
 
-    /// Apply frontend-negotiated parameters. Dimensions are forced even
-    /// (encoder requirement); the render target reallocates lazily on the
-    /// next capture if they changed.
-    pub fn configure(&mut self, enabled: bool, min_interval_secs: f32, width: u32, height: u32) {
+    /// Apply frontend-negotiated parameters. Frame dimensions are forced
+    /// even (encoder requirement); the render target reallocates lazily on
+    /// the next capture if they changed. `base_w`/`base_h` are the canvas
+    /// dimensions the negotiation was based on.
+    pub fn configure(
+        &mut self,
+        enabled: bool,
+        min_interval_secs: f32,
+        width: u32,
+        height: u32,
+        base_w: u32,
+        base_h: u32,
+    ) {
         self.enabled = enabled;
         self.min_interval_secs = min_interval_secs.max(0.0);
         self.frame_w = width & !1;
         self.frame_h = height & !1;
+        self.base_w = base_w;
+        self.base_h = base_h;
         if !enabled {
             self.trailing_due = None;
+            // Undrained frames were encoded for these parameters; they must
+            // not leak into the next activation's (differently-configured)
+            // encoder.
+            self.completed.clear();
         }
     }
 
@@ -128,9 +157,11 @@ impl DarklyEngine {
         min_interval_secs: f32,
         width: u32,
         height: u32,
+        base_w: u32,
+        base_h: u32,
     ) {
         self.recorder
-            .configure(enabled, min_interval_secs, width, height);
+            .configure(enabled, min_interval_secs, width, height, base_w, base_h);
     }
 
     /// Drain the oldest completed recording frame, if any.
@@ -174,9 +205,17 @@ impl DarklyEngine {
             return;
         }
 
-        // Backpressure: at most one readback in flight, and never overwrite
-        // a full completed queue. Neither skip consumes the revision or
-        // disarms the trailing capture — the tick retries next frame.
+        // Backpressure: hold while the canvas aspect ratio has diverged from
+        // the negotiated base (the frontend rolls a new segment once it sees
+        // the new dims in a poll response), at most one readback in flight,
+        // and never overwrite a full completed queue. No skip consumes the
+        // revision or disarms the trailing capture — the tick retries next
+        // frame. (Trailing stays armed so `needs_frames()` keeps the demand-
+        // driven frame loop, and thus frontend polling, alive.)
+        let (cw, ch) = (self.doc.width, self.doc.height);
+        if rec.base_w != 0 && cw * rec.base_h != ch * rec.base_w {
+            return;
+        }
         if rec.completed.len() >= MAX_COMPLETED_FRAMES {
             return;
         }
@@ -261,8 +300,10 @@ impl DarklyEngine {
             "process-recording-source-bg",
         );
 
-        // Aspect-fit the canvas into the fixed frame; the uncovered bars
-        // keep the clear color (opaque black).
+        // Aspect-fit the canvas into the fixed frame; any uncovered edge
+        // keeps the clear color (opaque black). The tick's aspect gate
+        // means this only absorbs same-aspect rescales and even-align
+        // rounding — at most a hairline, never real letterbox bars.
         let (cw, ch) = (
             self.compositor.canvas_width() as f32,
             self.compositor.canvas_height() as f32,
