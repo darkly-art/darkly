@@ -6,7 +6,7 @@
 
     let { workspaceId }: { workspaceId: number } = $props();
 
-    const isMain = workspaceId === 0;
+    let isMain = $derived(workspaceId === 0);
     let rootEl: HTMLDivElement | undefined;
 
     let ws = $derived(workspaces.getWorkspace(workspaceId));

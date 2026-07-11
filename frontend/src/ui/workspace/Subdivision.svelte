@@ -19,7 +19,7 @@
     // Axis is implicit from depth (Graphite's trick): even depth = row.
     let horizontal = $derived(depth % 2 === 0);
 
-    let containerEl: HTMLDivElement | undefined;
+    let containerEl: HTMLDivElement | undefined = $state();
     // Snapshot of the two adjacent slots' sizes captured at gutter-drag start,
     // so movement deltas apply against a stable baseline.
     let dragStartSizes: [number, number] | null = null;
