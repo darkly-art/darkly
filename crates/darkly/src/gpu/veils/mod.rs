@@ -2,6 +2,7 @@
 // To add a new module, create a .rs file in this directory
 // that exports `pub fn register() -> crate::gpu::veil::VeilRegistration`.
 
+pub mod chromatic_aberration;
 pub mod frozen;
 pub mod grain;
 pub mod lens_blur;
@@ -17,6 +18,7 @@ use crate::gpu::veil::VeilRegistration;
 #[rustfmt::skip]
 pub fn registrations() -> Vec<VeilRegistration> {
     vec![
+        chromatic_aberration::register(),
         frozen::register(),
         grain::register(),
         lens_blur::register(),

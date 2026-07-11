@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use crate::gpu::effect::EffectCache;
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
-use crate::gpu::param_filter::ParamFilter;
+use crate::gpu::param_filter::{ParamFilter, SrcSampling};
 use crate::gpu::params::{ParamDef, ParamValue};
 
 pub const PARAMS: &[ParamDef] = &[ParamDef::Enum {
@@ -77,6 +77,7 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
         "fs_desaturate",
         "fs_desaturate_masked",
         false, // no aux texture — packed uniform only
+        SrcSampling::Load,
         desaturate_prepare,
     ))
 }
