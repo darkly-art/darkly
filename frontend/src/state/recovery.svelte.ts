@@ -10,6 +10,7 @@ import { app } from './app.svelte';
 import { loadError, parseLoadErrorMessage } from './loadError.svelte';
 import { readSnapshot, removeSnapshot, type RecoveryEntry } from '../storage/recovery';
 import { collectRecovery, initRecoverySession } from './recoverySession';
+import { processRecording } from '../recording/recorder.svelte';
 
 class RecoveryState {
     /** True while the recovery modal is mounted. */
@@ -20,6 +21,10 @@ class RecoveryState {
     /** Boot the recovery session and prompt if a crash left snapshots. */
     async init(): Promise<void> {
         const { crashed, live } = initRecoverySession();
+        // Recording scratch dirs share the snapshots' orphan rule: dirs
+        // owned by a cleanly-exited session are garbage, crashed sessions'
+        // dirs are kept for adoption by a restore below.
+        void processRecording.gcOrphans(crashed, live);
         const offered = await collectRecovery(crashed, live);
         if (offered.length > 0) {
             this.entries = offered;
@@ -39,6 +44,10 @@ class RecoveryState {
         if (!bytes) return;
 
         const inst = shell.open(entry.name);
+        // The crashed tab's recording scratch survives the crash (that's
+        // the point of OPFS scratch) — move it onto the restored tab's
+        // identity before its recorder scans for the next segment number.
+        void processRecording.adoptScratch(entry, inst);
         inst.onHandleReady = async (engine) => {
             try {
                 await engine.api.openDocument(bytes);
@@ -63,6 +72,7 @@ class RecoveryState {
     async discard(entry: RecoveryEntry): Promise<void> {
         this.drop(entry);
         await removeSnapshot(entry.sessionId, entry.recoveryId).catch(() => {});
+        await processRecording.discardScratch(entry).catch(() => {});
     }
 
     async restoreAll(): Promise<void> {

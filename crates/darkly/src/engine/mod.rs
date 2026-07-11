@@ -15,6 +15,7 @@ mod layers;
 mod load;
 mod merge;
 mod painting;
+pub mod process_recording;
 pub mod protocol;
 pub mod rendering;
 pub mod save;
@@ -26,6 +27,7 @@ mod voids;
 
 pub use export::ExportImageResult;
 pub use load::LoadDocument;
+pub use process_recording::{ProcessRecorder, RecordedFrame};
 pub use rendering::{PickSource, DEFAULT_THUMB_SIZE};
 pub use save::{SaveError, SaveJob, SavePurpose, SaveReadbackKind};
 pub use types::{
@@ -288,6 +290,15 @@ pub(crate) enum ReadbackContext {
         type_id: &'static str,
         frame_idx: u32,
         total: u32,
+    },
+    /// Async readback of one process-recording capture (the downscaled,
+    /// letterboxed composite). Completion pushes a
+    /// [`process_recording::RecordedFrame`] onto the recorder's completed
+    /// queue, drained by `poll_recording_frame`.
+    RecordingFrame {
+        width: u32,
+        height: u32,
+        frame_index: u64,
     },
 }
 
@@ -620,6 +631,10 @@ pub struct DarklyEngine {
     /// Most recent `render()` sub-phase timings. Overwritten every frame;
     /// read by the WASM bridge when it logs a slow frame.
     pub(crate) last_frame_phases: FrameRenderPhases,
+
+    /// Passive process-recording (timelapse) capture state. Session-only;
+    /// the persistent recording is a frontend-owned artifact.
+    pub(crate) recorder: ProcessRecorder,
 }
 
 impl DarklyEngine {
@@ -734,6 +749,7 @@ impl DarklyEngine {
             brush_full_rerender_events: 0,
             last_brush_perf: BrushPerfCounters::default(),
             last_frame_phases: FrameRenderPhases::default(),
+            recorder: ProcessRecorder::new(),
         };
 
         // Snapshot the default graph's port defaults so reset-to-default

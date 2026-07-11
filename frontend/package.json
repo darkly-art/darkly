@@ -37,6 +37,8 @@
     "dependencies": {
         "defu": "^6.1.4",
         "fflate": "^0.8.3",
+        "gifenc": "^1.0.3",
+        "mediabunny": "^1.50.8",
         "tinykeys": "^4.0.0",
         "woff2-encoder": "^2.0.0"
     }

@@ -147,7 +147,7 @@ For a feature to count, it must be:
 - [ ] Palette popup
 - [ ] Navigator / overview window
 - [ ] History panel UI
-- [ ] Process recording
+- [x] Process recording
 - [x] Mirror view
 - [x] Reset view
 - [x] Canvas-rotation snapping

@@ -533,6 +533,19 @@ impl DarklyEngine {
                 // buffer.
                 *cell.borrow_mut() = EntryPixels::Ready(pixels);
             }
+            ReadbackContext::RecordingFrame {
+                width,
+                height,
+                frame_index,
+            } => {
+                self.recorder
+                    .push_completed(super::process_recording::RecordedFrame {
+                        width,
+                        height,
+                        frame_index,
+                        rgba: pixels,
+                    });
+            }
             ReadbackContext::ActiveBrushDab { topology_version } => {
                 // Drop stale results — but key off topology, not graph
                 // version: scrub-only changes don't affect the rendered
@@ -624,6 +637,11 @@ impl DarklyEngine {
         }
         let poll_us = t_poll.elapsed().as_micros() as u64;
 
+        // Recorder tick runs after poll_pending so deferred stroke
+        // undo-commits (which bump the document revision) are visible, and
+        // before the headless early-return so tests exercise the same path.
+        self.tick_process_recording(time_secs);
+
         let t_thumb = web_time::Instant::now();
         // Auto-queue thumbnail readbacks for layers whose pixels were
         // modified since the last frame. Must run *before* the headless
@@ -651,7 +669,8 @@ impl DarklyEngine {
                 return self.readbacks.has_pending()
                     || self.compositor.has_pending_content_bounds()
                     || self.compositor.has_pending_histogram()
-                    || self.diff_rect.is_pending();
+                    || self.diff_rect.is_pending()
+                    || self.recorder.needs_frames();
             }
         };
 
@@ -667,7 +686,8 @@ impl DarklyEngine {
             };
             return self.readbacks.has_pending()
                 || self.compositor.has_pending_content_bounds()
-                || self.compositor.has_pending_histogram();
+                || self.compositor.has_pending_histogram()
+                || self.recorder.needs_frames();
         }
 
         let t_anim = web_time::Instant::now();
@@ -698,6 +718,7 @@ impl DarklyEngine {
             || self.compositor.has_pending_content_bounds()
             || self.compositor.has_pending_histogram()
             || self.diff_rect.is_pending()
+            || self.recorder.needs_frames()
     }
 
     #[handler]
@@ -897,6 +918,10 @@ impl DarklyEngine {
             UndoDirection::Undo => self.undo_stack.complete_undo(action),
             UndoDirection::Redo => self.undo_stack.complete_redo(action),
         }
+        // Undo/redo mutate the document without passing through the
+        // `UndoStack::push` chokepoint, so the revision counter is bumped
+        // here — the single point covering both directions.
+        self.doc.revision += 1;
         self.compositor.mark_dirty();
     }
 

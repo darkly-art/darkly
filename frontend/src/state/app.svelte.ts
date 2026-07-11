@@ -8,6 +8,7 @@ import { beginToolSession, killToolSession, runHook } from '../tools/tool_sessio
 import { tickColorPickerCursor } from '../tools/colorpicker_cursor';
 import { tickCloneSourceCursor } from '../tools/clone_source_cursor';
 import { MediaStreamSource, describeMediaError, type CaptureKind } from '../lib/mediaStreamSource';
+import { processRecording } from '../recording/recorder.svelte';
 
 export interface Color {
     r: number; g: number; b: number; a: number;
@@ -981,6 +982,10 @@ export class DarklyInstance {
             // the modifier-held `sampleColor` chord. Runs regardless of active
             // tool so a Ctrl-drag started in (e.g.) the brush tool completes.
             pollPick();
+
+            // Drain completed process-recording captures to the encoder
+            // worker. No-op unless this tab's recorder is live.
+            processRecording.pollFrame(this);
 
             // Refresh the color-picker cursor against the latest foreground
             // committed by `pollPick`. Cheap when nothing changed.
