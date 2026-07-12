@@ -108,6 +108,47 @@ fn round_trip_every_veil() {
     }
 }
 
+/// The `round_trip_every_veil` sweep covers CA at its defaults; this pins a veil
+/// carrying **non-default** `List` params (edited offsets/scales/colors/blur)
+/// through the same wire envelope, exercising the composite Vec2/Color/List
+/// kinds with real values.
+#[test]
+fn chromatic_aberration_veil_round_trips_non_default_list() {
+    use std::collections::BTreeMap;
+
+    let (device, queue) = test_device();
+    let gpu = GpuContext::new_headless(device, queue);
+    let format = gpu.surface_format();
+    let mut registry = VeilRegistry::new();
+
+    let params = vec![ParamValue::List(vec![
+        BTreeMap::from([
+            ("offset".to_string(), ParamValue::Vec2([6.0, -2.0])),
+            ("scale".to_string(), ParamValue::Float(1.02)),
+            ("color".to_string(), ParamValue::Color([1.0, 0.3, 0.1])),
+            ("blur".to_string(), ParamValue::Float(2.0)),
+        ]),
+        BTreeMap::from([
+            ("offset".to_string(), ParamValue::Vec2([0.0, 0.0])),
+            ("scale".to_string(), ParamValue::Float(0.98)),
+            ("color".to_string(), ParamValue::Color([0.1, 0.4, 1.0])),
+            ("blur".to_string(), ParamValue::Float(0.0)),
+        ]),
+    ])];
+
+    let veil = registry.create_veil("chromatic_aberration", &params, &gpu.device, format);
+    let json =
+        serialize_instance(veil.type_id(), veil.param_values()).expect("serialize CA veil failed");
+    let payload = deserialize_instance(&json).expect("deserialize CA veil failed");
+    assert_eq!(payload.type_id, "chromatic_aberration");
+    let restored = registry.create_veil(&payload.type_id, &payload.params, &gpu.device, format);
+    assert_eq!(
+        restored.param_values(),
+        params,
+        "non-default CA veil list params must round-trip byte-for-byte"
+    );
+}
+
 // ----------------------------------------------------------------------------
 // 2. Stabilizers — round-trip (type_id, defaults) for every registered
 //    algorithm.
@@ -312,15 +353,9 @@ fn round_trip_param_value_variants() {
 /// equality — the regression in `gpu/params.rs` was exactly an
 /// `Int(1) == Float(1.0)` false-positive after coercion.
 fn assert_param_eq(a: &ParamValue, b: &ParamValue, context: &str) {
-    let ok = match (a, b) {
-        (ParamValue::Bool(x), ParamValue::Bool(y)) => x == y,
-        (ParamValue::Int(x), ParamValue::Int(y)) => x == y,
-        (ParamValue::Float(x), ParamValue::Float(y)) => x == y,
-        (ParamValue::String(x), ParamValue::String(y)) => x == y,
-        (ParamValue::Curve(x), ParamValue::Curve(y)) => x == y,
-        _ => false,
-    };
-    assert!(ok, "[{context}] param mismatch: {a:?} vs {b:?}");
+    // `ParamValue` derives `PartialEq`, so equality covers every variant
+    // (including the composite `Color`/`Vec2`/`List` kinds) uniformly.
+    assert_eq!(a, b, "[{context}] param mismatch");
 }
 
 // ----------------------------------------------------------------------------

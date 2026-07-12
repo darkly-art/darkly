@@ -3,6 +3,7 @@
 // that exports `pub fn register() -> crate::gpu::filter::FilterPipelineRegistration`.
 
 pub mod brightness_contrast;
+pub mod chromatic_aberration;
 pub mod curves;
 pub mod desaturate;
 pub mod hsv;
@@ -15,6 +16,7 @@ use crate::gpu::filter::FilterPipelineRegistration;
 pub fn registrations() -> Vec<FilterPipelineRegistration> {
     vec![
         brightness_contrast::register(),
+        chromatic_aberration::register(),
         curves::register(),
         desaturate::register(),
         hsv::register(),

@@ -135,7 +135,8 @@ For a feature to count, it must be:
     - [x] Levels
     - [x] Curves
     - [x] Invert colors
-    - [x] Desaturate
+    - [ ] Desaturate
+    - [x] Chromatic aberration
 - [ ] Clipping mask
 - [x] Feather + antialias
 - [x] Grow / Shrink / Border / Smooth

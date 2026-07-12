@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::gpu::effect::EffectCache;
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
-use crate::gpu::param_filter::ParamFilter;
+use crate::gpu::param_filter::{ParamFilter, SrcSampling};
 use crate::gpu::params::{ParamDef, ParamValue};
 
 /// Parameter schema. `model` is an enum dropdown; the three scalars are plain
@@ -128,6 +128,7 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
         "fs_hsv",
         "fs_hsv_masked",
         false, // no aux texture — packed uniform only
+        SrcSampling::Load,
         hsv_prepare,
     ))
 }

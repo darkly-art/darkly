@@ -30,6 +30,18 @@ use crate::gpu::params::ParamValue;
 type Prepare =
     Box<dyn Fn(&wgpu::Device, &wgpu::Queue, &[ParamValue], &mut EffectCache) + Send + Sync>;
 
+/// How the shared substrate reads its `src` texel: `Load` is a coordinate-exact
+/// `textureLoad` (no sampler); `Bilinear` binds `src` filterable plus a linear
+/// `Filtering` sampler, so a filter can read fractional offsets — the capability
+/// chromatic aberration's ghost sampling and blur need. The bind-group order is
+/// `[src(0), sampler(1)?, aux(2)?, uniform, mask?]`, each optional binding
+/// shifting the following numbers up.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SrcSampling {
+    Load,
+    Bilinear,
+}
+
 /// A `textureLoad` source binding (no sampler / hardware filtering).
 fn load_tex_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
@@ -40,6 +52,30 @@ fn load_tex_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
             view_dimension: wgpu::TextureViewDimension::D2,
             multisampled: false,
         },
+        count: None,
+    }
+}
+
+/// A filterable `textureSample` source binding (paired with a `Filtering`
+/// sampler) — the `Bilinear` source mode.
+fn filterable_tex_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
         count: None,
     }
 }
@@ -70,6 +106,11 @@ pub struct ParamFilter {
     /// Whether the shader binds an aux texture between `src` and the uniform,
     /// which shifts every following binding number by one.
     has_aux: bool,
+    /// How `src` is read; `Bilinear` also owns a `Filtering` sampler bound at
+    /// binding 1 (created once here — the compositor's reusable sampler lives on
+    /// `VeilChain`, the wrong layer to reach from a filter).
+    sampling: SrcSampling,
+    sampler: Option<wgpu::Sampler>,
     prepare: Prepare,
 }
 
@@ -77,6 +118,7 @@ impl std::fmt::Debug for ParamFilter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ParamFilter")
             .field("has_aux", &self.has_aux)
+            .field("sampling", &self.sampling)
             .finish_non_exhaustive()
     }
 }
@@ -94,21 +136,62 @@ impl ParamFilter {
         plain_entry: &str,
         masked_entry: &str,
         has_aux: bool,
+        sampling: SrcSampling,
         prepare: impl Fn(&wgpu::Device, &wgpu::Queue, &[ParamValue], &mut EffectCache)
             + Send
             + Sync
             + 'static,
     ) -> ParamFilter {
-        // Binding layout: src is always 0; the aux texture (when present) is 1,
-        // shifting the uniform (and the masked variant's mask texture) up by one.
-        let (uniform_binding, mask_binding) = if has_aux { (2, 3) } else { (1, 2) };
-        let mut plain_entries = vec![load_tex_entry(0)];
-        if has_aux {
-            plain_entries.push(load_tex_entry(1));
+        // Binding layout: `src` is always 0; then, in order, an optional sampler
+        // (Bilinear source mode), an optional aux texture, the uniform, and — in
+        // the masked variant — the mask. Each optional binding shifts the
+        // following numbers up by one.
+        let bilinear = sampling == SrcSampling::Bilinear;
+        let mut next = 1u32;
+        let sampler_binding = bilinear.then(|| {
+            let b = next;
+            next += 1;
+            b
+        });
+        let aux_binding = has_aux.then(|| {
+            let b = next;
+            next += 1;
+            b
+        });
+        let uniform_binding = next;
+        next += 1;
+        let mask_binding = next;
+
+        let mut plain_entries = vec![if bilinear {
+            filterable_tex_entry(0)
+        } else {
+            load_tex_entry(0)
+        }];
+        if let Some(sb) = sampler_binding {
+            plain_entries.push(sampler_entry(sb));
+        }
+        if let Some(ab) = aux_binding {
+            plain_entries.push(load_tex_entry(ab));
         }
         plain_entries.push(uniform_entry(uniform_binding));
         let mut masked_entries = plain_entries.clone();
         masked_entries.push(load_tex_entry(mask_binding));
+
+        // Linear, ClampToEdge sampler for the Bilinear mode. The lib's sample
+        // helper returns transparent for out-of-bounds UV, so the address mode
+        // only matters at the sub-texel edge, where ClampToEdge is correct.
+        let sampler = bilinear.then(|| {
+            device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some(&format!("{label}-sampler")),
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                ..Default::default()
+            })
+        });
 
         let plain_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some(&format!("{label}-plain-bgl")),
@@ -169,6 +252,8 @@ impl ParamFilter {
             plain_bgl,
             masked_bgl,
             has_aux,
+            sampling,
+            sampler,
             prepare: Box::new(prepare),
         }
     }
@@ -221,17 +306,30 @@ impl FilterEffect for ParamFilter {
             None => (&self.plain, &self.plain_bgl),
         };
 
+        // `ensure` runs before render; the Bilinear sampler is built in `new`.
+        // Guard rather than panic if the mode/sampler ever disagree.
+        if self.sampling == SrcSampling::Bilinear && self.sampler.is_none() {
+            return;
+        }
+
         let mut entries = vec![wgpu::BindGroupEntry {
             binding: 0,
             resource: wgpu::BindingResource::TextureView(src),
         }];
         let mut next = 1u32;
+        if let Some(s) = &self.sampler {
+            entries.push(wgpu::BindGroupEntry {
+                binding: next,
+                resource: wgpu::BindingResource::Sampler(s),
+            });
+            next += 1;
+        }
         if let Some(a) = aux {
             entries.push(wgpu::BindGroupEntry {
-                binding: 1,
+                binding: next,
                 resource: wgpu::BindingResource::TextureView(a),
             });
-            next = 2;
+            next += 1;
         }
         entries.push(wgpu::BindGroupEntry {
             binding: next,

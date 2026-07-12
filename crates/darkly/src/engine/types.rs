@@ -403,6 +403,49 @@ impl ParamInfo {
                 value: value.cloned(),
                 options: Some(serde_json::json!(options)),
             },
+            ParamDef::Color { name, default } => ParamInfo {
+                kind: "color",
+                name,
+                min: None,
+                max: None,
+                default: ParamValue::Color(*default),
+                value: value.cloned(),
+                options: None,
+            },
+            ParamDef::Vec2 { name, max, default } => ParamInfo {
+                kind: "vec2",
+                name,
+                min: None,
+                // For a vec2 the flat `max` field carries the magnitude clamp
+                // (the offset pad's edge radius).
+                max: Some(*max as f64),
+                default: ParamValue::Vec2(*default),
+                value: value.cloned(),
+                options: None,
+            },
+            ParamDef::List {
+                name,
+                item,
+                max_len,
+                ..
+            } => ParamInfo {
+                kind: "list",
+                name,
+                min: None,
+                // For a list the flat `max` field carries the entry cap so the
+                // editor disables "Add" at the limit without an effect-specific
+                // constant.
+                max: Some(*max_len as f64),
+                default: def.default_value(),
+                value: value.cloned(),
+                // The item schema rides the same kind-discriminated `options`
+                // channel Enum/Icon use — here a `Vec<ParamInfo>` of the item
+                // defs so the list editor can render each entry's fields.
+                options: Some(serde_json::json!(item
+                    .iter()
+                    .map(|d| ParamInfo::from_def(d, None))
+                    .collect::<Vec<_>>())),
+            },
         }
     }
 }
