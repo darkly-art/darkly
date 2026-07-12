@@ -127,6 +127,18 @@ pub struct RegionScratch {
     scratch_height: u32,
 }
 
+/// Preserved-content copy request for a scratch reallocation. Carries the
+/// encoder plus the *live* copy geometry — `copy_w × copy_h` sized by the old
+/// layer extent, not the full old capacity — so a grow copies exactly the
+/// pre-stroke pixels worth keeping and leaves the rest at the format default.
+struct ScratchCopy<'a> {
+    encoder: &'a mut wgpu::CommandEncoder,
+    dst_offset_x: u32,
+    dst_offset_y: u32,
+    copy_w: u32,
+    copy_h: u32,
+}
+
 impl RegionScratch {
     pub fn new(device: &wgpu::Device, canvas_width: u32, canvas_height: u32) -> Self {
         let scratch_rgba = Self::create_scratch(
@@ -171,52 +183,92 @@ impl RegionScratch {
         self.realloc_scratch_pair(device, new_w, new_h, None);
     }
 
-    /// Reallocate the scratch textures to `(new_w, new_h)` and copy the
-    /// existing scratch contents into the new textures at
-    /// `(dst_offset_x, dst_offset_y)`. Used during mid-stroke layer
-    /// growth: the scratch holds the pre-stroke snapshot, which must
-    /// remain anchored to the same canvas-space pixels even though the
-    /// layer's local-coord origin has shifted.
+    /// Rebase the scratch snapshot from `old_extent` to `new_extent` during a
+    /// mid-stroke layer grow, upholding this post-condition:
     ///
-    /// The newly-allocated regions outside the copied rect start at the
-    /// GPU default (0 = transparent for RGBA, 0 = full transparency for R8).
+    /// > After the call, the scratch holds valid pre-stroke state over the
+    /// > **entire new extent**: the old extent's snapshot rebased to the new
+    /// > frame, and the format default (transparent for RGBA, **white** for an
+    /// > R8 mask — see [`scratch_default_clear`](Self::scratch_default_clear))
+    /// > everywhere else.
+    ///
+    /// The scratch is texture-aligned to the layer (see
+    /// [`save_region`](Self::save_region)), so the layer's local origin sits at
+    /// the old extent's canvas origin; the live pre-stroke pixels of
+    /// `old_extent` occupy scratch-local `(0, 0)..(old_extent.width,
+    /// old_extent.height)`. Growing shifts the layer's local origin to
+    /// `new_extent.origin`, so that content must move to
+    /// `old_extent.origin - new_extent.origin` in the new frame.
+    ///
+    /// **Contract:** `new_extent ⊇ old_extent` — asserted in debug; in release,
+    /// the offset and copy dims saturate/clamp so a violating caller degrades to
+    /// a clipped copy (that caller's undo may already be wrong) rather than a
+    /// poisoned command buffer. Callers pass `old_extent` equal to the current
+    /// layer extent, whose format matches the in-flight snapshot; the sibling
+    /// scratch (R8 when painting RGBA, and vice versa) is wholly stale, and the
+    /// grow knowingly copies its stale bytes — harmless, since any future
+    /// `save_region` overwrites the sibling before any commit reads it.
+    ///
+    /// Every actual growth reallocates: equal extents are the only true no-op.
+    /// A within-capacity right/down grow reallocs too — clearing sub-rect bands
+    /// in place would need a scissored draw (a render-pass `LoadOp::Clear` hits
+    /// the whole attachment and `clear_texture` zeroes, wrong for R8's white
+    /// default), i.e. new pipeline machinery here; one occasionally-redundant
+    /// allocation on a rare, chunked mid-stroke grow is the cheaper price.
     pub fn grow_scratch_preserving(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        new_w: u32,
-        new_h: u32,
-        dst_offset_x: u32,
-        dst_offset_y: u32,
+        old_extent: CanvasRect,
+        new_extent: CanvasRect,
     ) {
-        if new_w <= self.scratch_width
-            && new_h <= self.scratch_height
-            && dst_offset_x == 0
-            && dst_offset_y == 0
-        {
+        debug_assert!(
+            new_extent.contains(old_extent),
+            "grow_scratch_preserving: new extent {new_extent:?} must contain old extent {old_extent:?}",
+        );
+        // With containment, equal extents are the only case where nothing is
+        // newly live — the sole true no-op. Any other difference means the new
+        // extent has area that must be cleared to the format default, which only
+        // a realloc's whole-texture clear provides.
+        if new_extent == old_extent {
             return;
         }
-        let target_w = new_w.max(self.scratch_width);
-        let target_h = new_h.max(self.scratch_height);
+        // Capacity stays monotonic: grow to at least the new extent, never below
+        // the current capacity.
+        let target_w = new_extent.width.max(self.scratch_width);
+        let target_h = new_extent.height.max(self.scratch_height);
+        // The old extent's origin lands at (old.origin - new.origin) in the new
+        // layer-local frame. `.max(0)` guards a contract-violating caller against
+        // a negative-wrap to ~4 billion (debug-asserted above).
+        let dst_offset_x = (old_extent.x0() - new_extent.x0()).max(0) as u32;
+        let dst_offset_y = (old_extent.y0() - new_extent.y0()).max(0) as u32;
         self.realloc_scratch_pair(
             device,
             target_w,
             target_h,
-            Some((encoder, dst_offset_x, dst_offset_y)),
+            Some(ScratchCopy {
+                encoder,
+                dst_offset_x,
+                dst_offset_y,
+                copy_w: old_extent.width,
+                copy_h: old_extent.height,
+            }),
         );
     }
 
     /// Reallocate both scratch textures (RGBA8 + R8) to `(new_w, new_h)`.
-    /// When `copy` is `Some((encoder, dst_x, dst_y))`, the existing
-    /// scratch contents are copied into the new textures at the given
-    /// offset before the old textures are dropped. `(scratch_width,
-    /// scratch_height)` is updated to `(new_w, new_h)` regardless of copy.
+    /// When `copy` is `Some(ScratchCopy { .. })`, the preserved region — sized
+    /// by the caller's `copy_w × copy_h` (the *live old extent*, not the full
+    /// capacity) — is copied from the old scratch origin into the new textures
+    /// at `(dst_offset_x, dst_offset_y)` before the old textures are dropped.
+    /// `(scratch_width, scratch_height)` is updated to `(new_w, new_h)`
+    /// regardless of copy.
     fn realloc_scratch_pair(
         &mut self,
         device: &wgpu::Device,
         new_w: u32,
         new_h: u32,
-        copy: Option<(&mut wgpu::CommandEncoder, u32, u32)>,
+        copy: Option<ScratchCopy>,
     ) {
         let pairs = [
             (
@@ -230,25 +282,55 @@ impl RegionScratch {
                 "scratch-r8",
             ),
         ];
-        let (encoder_opt, dst_offset_x, dst_offset_y) = match copy {
-            Some((enc, x, y)) => (Some(enc), x, y),
-            None => (None, 0, 0),
+        // Decompose the copy request into the encoder plus the clamped copy
+        // geometry. The copy reads the old scratch from its origin and lands at
+        // (dst_offset_x, dst_offset_y). The caller's copy dims must fit both the
+        // old capacity (source) and the new texture at the offset (destination);
+        // debug-assert the contract, then saturating-clamp in release so a
+        // violation degrades to a clipped copy rather than an overrun-poisoned
+        // command buffer.
+        let (mut encoder_opt, dst_offset_x, dst_offset_y, copy_w, copy_h) = match copy {
+            Some(c) => {
+                debug_assert!(
+                    c.copy_w <= self.scratch_width && c.copy_h <= self.scratch_height,
+                    "scratch grow copy {}x{} exceeds old capacity {}x{}",
+                    c.copy_w,
+                    c.copy_h,
+                    self.scratch_width,
+                    self.scratch_height,
+                );
+                debug_assert!(
+                    c.dst_offset_x + c.copy_w <= new_w && c.dst_offset_y + c.copy_h <= new_h,
+                    "scratch grow copy {}x{} at ({}, {}) escapes new texture {}x{}",
+                    c.copy_w,
+                    c.copy_h,
+                    c.dst_offset_x,
+                    c.dst_offset_y,
+                    new_w,
+                    new_h,
+                );
+                let copy_w = c
+                    .copy_w
+                    .min(self.scratch_width)
+                    .min(new_w.saturating_sub(c.dst_offset_x));
+                let copy_h = c
+                    .copy_h
+                    .min(self.scratch_height)
+                    .min(new_h.saturating_sub(c.dst_offset_y));
+                (
+                    Some(c.encoder),
+                    c.dst_offset_x,
+                    c.dst_offset_y,
+                    copy_w,
+                    copy_h,
+                )
+            }
+            None => (None, 0, 0, 0, 0),
         };
-        // The preserved region lands at (dst_offset_x, dst_offset_y) in the new
-        // texture. The old scratch capacity can exceed the new extent — scratch
-        // grows monotonically and is sized by capacity, not by the live layer
-        // extent — so a nonzero destination offset can push the shifted copy
-        // past the new texture bounds. Clamp the copied region to what fits;
-        // the clipped tail is stale capacity beyond the old layer extent (which
-        // is itself contained in the new extent), so it holds no pre-stroke
-        // data worth preserving.
-        let copy_w = self.scratch_width.min(new_w.saturating_sub(dst_offset_x));
-        let copy_h = self.scratch_height.min(new_h.saturating_sub(dst_offset_y));
         let do_copy = encoder_opt.is_some() && copy_w > 0 && copy_h > 0;
         // The encoder borrow has to be threaded through the loop body; an
         // `Option<&mut _>` doesn't `Copy`, so reborrow via `as_deref_mut`
         // each iteration.
-        let mut encoder_opt = encoder_opt;
         for (field, format, label) in pairs {
             let new_tex = Self::create_scratch(device, new_w, new_h, format, label);
             if do_copy {
@@ -811,6 +893,12 @@ impl RegionScratch {
         (self.scratch_width, self.scratch_height)
     }
 
+    /// The scratch texture for `format`, for test readback of its contents.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn scratch_texture(&self, format: wgpu::TextureFormat) -> &wgpu::Texture {
+        self.scratch_for(format)
+    }
+
     // --- Internal ---
 
     fn scratch_for(&self, format: wgpu::TextureFormat) -> &wgpu::Texture {
@@ -827,8 +915,11 @@ impl RegionScratch {
         format: wgpu::TextureFormat,
         label: &str,
     ) -> wgpu::Texture {
+        // Encode the generation's dimensions into the label so that if two
+        // scratch generations collide in a future wgpu validation error, the
+        // message names the right one (the AAR lesson: shared labels lie).
         device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
+            label: Some(&format!("{label}-{width}x{height}")),
             size: wgpu::Extent3d {
                 width,
                 height,

@@ -646,20 +646,18 @@ impl DarklyEngine {
                 self.region_scratch.grow_scratch_preserving(
                     &self.gpu.device,
                     encoder,
-                    new_extent.width,
-                    new_extent.height,
-                    dx,
-                    dy,
+                    current_extent,
+                    new_extent,
                 );
             });
-            // After grow_scratch_preserving, the new scratch holds:
-            //   - old layer contents at (dx, dy) (translated from old origin)
-            //   - zero-init in the newly-grown canvas regions
-            // Both are correct pre-stroke state — the newly-grown pixels
-            // didn't exist before the grow, so "zero / transparent" IS
-            // their pre-stroke value. Widen `saved` to cover the full
-            // new canvas extent so a diff_rect that spills into the
-            // newly-grown area is still contained at commit time.
+            // After grow_scratch_preserving, the new scratch holds valid
+            // pre-stroke state over the full new extent: the old extent's
+            // snapshot rebased to the new frame, and the format default —
+            // transparent for a raster layer, white for an R8 mask —
+            // everywhere else. The newly-grown pixels didn't exist before the
+            // grow, so that default IS their pre-stroke value. Widen `saved`
+            // to cover the full new canvas extent so a diff_rect that spills
+            // into the newly-grown area is still contained at commit time.
             snap.saved = new_extent;
         } else {
             // Lazy init will allocate the scratch at the new dimensions

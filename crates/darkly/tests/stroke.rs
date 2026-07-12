@@ -1158,8 +1158,14 @@ fn negative_direction_grow_crosses_zero() {
             depth_or_array_layers: 1,
         },
     );
-    // Rebase the region_store scratch alongside the layer.
-    store.grow_scratch_preserving(&device, &mut enc, new_w, new_h, 256, 256);
+    // Rebase the region_store scratch alongside the layer: old extent at
+    // canvas (0, 0), new extent at (-256, -256) — the layer grew up-left.
+    store.grow_scratch_preserving(
+        &device,
+        &mut enc,
+        cr(0, 0, init_w, init_h),
+        cr(-256, -256, new_w, new_h),
+    );
     submit(&queue, enc);
 
     // After grow the engine widens snap.saved to the new canvas extent so
