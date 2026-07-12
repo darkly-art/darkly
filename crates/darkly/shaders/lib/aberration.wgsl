@@ -17,20 +17,24 @@ const CA_EPS: f32 = 1e-4;
 const CA_GA_COS: f32 = -0.7373688;
 const CA_GA_SIN: f32 = 0.6754904;
 
-// One aberration entry. Layout mirrors `GpuAberration` (32 B): a vec2 offset,
-// two scalars, then a vec3 color at offset 16 (aligned) + a trailing scalar.
+// One aberration entry. Layout mirrors `GpuAberration` (48 B): a vec2 offset,
+// two scalars, then a vec3 `axis` at offset 16 (aligned) with `k1`, then `k2`
+// (+ trailing pad). `axis` is the entry color's hue direction — the red axis
+// rotated about the gray diagonal so the color's hue lands on it (see the CPU
+// packing in gpu/filters/chromatic_aberration.rs); `k1`/`k2` split the entry's
+// strength between an achromatic full-pixel shift and a chromatic axis shift.
 struct Aberration {
     offset_px: vec2f,
     scale: f32,
     blur_px: f32,
-    color: vec3f,
-    alpha_weight: f32,
+    axis: vec3f,
+    k1: f32,
+    k2: f32,
 }
 
-// The whole effect: a channel-wise `inv_sum` normalizer, a live entry count,
-// and the fixed-size entry array. Mirrors `GpuAberrationParams` (528 B).
+// The whole effect: a live entry count and the fixed-size entry array. Mirrors
+// `GpuAberrationParams` (784 B).
 struct AberrationParams {
-    inv_sum: vec3f,
     count: u32,
     entries: array<Aberration, 16>,
 }
@@ -80,33 +84,51 @@ fn aberration_blurred(
     return vec4f(acc_rgb / max(acc_a, CA_EPS), acc_a / f32(taps));
 }
 
-// The full effect at `uv`. For each entry the sample position is
-// `center + (uv − center)·scale + offset` (offset px → UV via `dims`); its
-// blurred sample is accumulated premultiplied and color-weighted, and
-// un-premultiplied by the accumulated (weighted-average) alpha at the end. A
-// zero count is an exact passthrough. `inv_sum` normalizes the color weights so
-// entries whose colors sum to white at identity transforms pass through exactly.
+// The full effect at `uv`. The base image passes through untouched; each entry
+// then *displaces its own hue's content* on top of it. For entry *i* the sample
+// position is `center + (uv − center)·scale + offset` (offset px → UV via
+// `dims`), and `d_p` is that displaced sample's premultiplied delta from the
+// base. The delta splits two ways: `k1` shifts the whole pixel (the achromatic
+// share — a white entry has k1=1, moving everything), and `k2·axis·dot(axis,d_p)`
+// shifts only the component along the entry's hue axis (a primary entry has
+// k2=1 and an exact channel axis, giving a classic channel split). Alpha tracks
+// the same displacement so shifted content becomes/leaves coverage.
+//
+// Identity (offset 0, scale 1, blur 0) ⇒ d_p = 0 ⇒ bit-exact passthrough for any
+// entry colors; a flat image is unchanged except at gradients/edges where the
+// displaced sample differs — the physical CA signature.
 fn aberration_apply(
     tex: texture_2d<f32>,
     samp: sampler,
     uv: vec2f,
     params: AberrationParams,
 ) -> vec4f {
+    let base = aberration_sample_uv(tex, samp, uv);
     if (params.count == 0u) {
-        return aberration_sample_uv(tex, samp, uv);
+        return base;
     }
     let dims = vec2f(textureDimensions(tex));
     let center = vec2f(0.5, 0.5);
-    var acc_rgb = vec3f(0.0); // premultiplied, color-weighted
-    var acc_a = 0.0;          // weighted-average alpha (Σ alpha_weight = 1)
+    let b_p = base.rgb * base.a;     // premultiplied base
+    var out_p = b_p;                 // premultiplied accumulator
+    var acc_a = base.a;
     let n = min(params.count, CA_MAX);
     for (var i = 0u; i < n; i = i + 1u) {
         let ab = params.entries[i];
         let src_uv = center + (uv - center) * ab.scale + ab.offset_px / dims;
         let s = aberration_blurred(tex, samp, src_uv, ab.blur_px, dims);
-        acc_rgb = acc_rgb + ab.color * (s.rgb * s.a);
-        acc_a = acc_a + ab.alpha_weight * s.a;
+        let d_p = s.rgb * s.a - b_p;            // premultiplied content delta
+        let proj = dot(ab.axis, d_p);
+        out_p = out_p + ab.k1 * d_p + ab.k2 * ab.axis * proj;
+        acc_a = acc_a + ab.k1 * (s.a - base.a) + ab.k2 * proj;
     }
-    let rgb = acc_rgb * params.inv_sum / max(acc_a, CA_EPS);
-    return vec4f(rgb, acc_a);
+    // Negative fringes (hue-opposite content) and multi-entry overshoot can push
+    // a premultiplied channel below zero; clamp before un-premultiplying.
+    out_p = max(out_p, vec3f(0.0));
+    // Representability floor: a channel that survives while another departs off
+    // an alpha edge must stay visible — alpha can't drop below the largest
+    // premultiplied channel (opaque yellow losing its red stays opaque green).
+    var out_a = clamp(acc_a, 0.0, 1.0);
+    out_a = max(out_a, min(max(out_p.r, max(out_p.g, out_p.b)), 1.0));
+    return vec4f(out_p / max(out_a, CA_EPS), out_a);
 }

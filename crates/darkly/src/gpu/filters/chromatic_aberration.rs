@@ -1,15 +1,20 @@
-//! Chromatic aberration filter — a dynamic list of per-channel offset/scale/
-//! color/blur "aberrations" summed into an RGB fringe. One registration serves
-//! both effect surfaces the filter subsystem drives (destructive apply + filter
+//! Chromatic aberration filter — a dynamic list of offset/scale/color/blur
+//! "aberrations", each displacing the component of the image along its color's
+//! hue axis over an otherwise-untouched base. One registration serves both
+//! effect surfaces the filter subsystem drives (destructive apply + filter
 //! layer); the veil (`gpu/veils/chromatic_aberration.rs`) reuses this module's
 //! [`PARAMS`], [`pack_uniform`], and [`GpuAberrationParams`].
 //!
-//! Per-pixel: the sample position for entry *i* is
-//! `center + (p − center)·scale_i + offset_i`; the output rgb is the
-//! color-weighted, `inv_sum`-normalized sum of the entries' blurred samples,
-//! premultiplied to respect straight-alpha layers. The transform itself lives in
+//! Per entry the sample position for pixel *p* is
+//! `center + (p − center)·scale_i + offset_i`; the displaced sample's
+//! premultiplied delta from the base is split by [`analyze_color`] into an
+//! achromatic full-pixel shift (`k1`) and a chromatic shift along the color's
+//! hue `axis` (`k2`). "How much of the entry's hue is in this pixel" is answered
+//! by rotating RGB about the gray diagonal so the hue lands on the red axis —
+//! a smooth perceptual falloff with hue distance, not per-channel masking. The
+//! transform itself lives in
 //! [`lib/aberration.wgsl`](../../../shaders/lib/aberration.wgsl); this module
-//! declares the schema and packs the params into the shader's 528-byte uniform.
+//! declares the schema and packs the params into the shader's 784-byte uniform.
 //!
 //! Unlike the other parametric filters this one reads its source with
 //! [`SrcSampling::Bilinear`] — the ghost/blur taps land on fractional offsets.
@@ -27,8 +32,6 @@ use crate::gpu::params::{ConstParamValue, ParamDef, ParamValue};
 /// Uniform-array size (and the schema's entry cap). The UI disables "Add" at the
 /// limit; [`pack_uniform`] still clamps defensively.
 pub const MAX_ABERRATIONS: usize = 16;
-
-const EPS: f32 = 1e-4;
 
 /// Schema for a single aberration entry.
 const ABERRATION_ITEM: &[ParamDef] = &[
@@ -57,49 +60,56 @@ const ABERRATION_ITEM: &[ParamDef] = &[
 ];
 
 /// One `aberrations` list param with the photographic 3-entry default: red
-/// scaled out (1.004), green identity, blue scaled in (0.996), each softened a
-/// touch — the classic lens-fringe look out of the box.
+/// holds at unit magnification while green and blue shrink progressively inward
+/// (1.00 / 0.99 / 0.98), a 1% step per channel — the wavelength-dependent focus
+/// of a real lens fringing the shorter wavelengths inward. Each is softened a
+/// touch.
 pub const PARAMS: &[ParamDef] = &[ParamDef::List {
     name: "aberrations",
     item: ABERRATION_ITEM,
     max_len: MAX_ABERRATIONS,
     default: &[
         &[
-            ("scale", ConstParamValue::Float(1.004)),
+            ("scale", ConstParamValue::Float(1.0)),
             ("color", ConstParamValue::Color([1.0, 0.0, 0.0])),
             ("blur", ConstParamValue::Float(0.6)),
         ],
         &[
+            ("scale", ConstParamValue::Float(0.99)),
             ("color", ConstParamValue::Color([0.0, 1.0, 0.0])),
             ("blur", ConstParamValue::Float(0.6)),
         ],
         &[
-            ("scale", ConstParamValue::Float(0.996)),
+            ("scale", ConstParamValue::Float(0.98)),
             ("color", ConstParamValue::Color([0.0, 0.0, 1.0])),
             ("blur", ConstParamValue::Float(0.6)),
         ],
     ],
 }];
 
-/// One aberration in the shader's uniform (32 B). Field offsets match
-/// `struct Aberration` in `lib/aberration.wgsl` (vec3 color at offset 16).
+/// One aberration in the shader's uniform (48 B). Field offsets match
+/// `struct Aberration` in `lib/aberration.wgsl` (vec3 `axis` at offset 16). The
+/// `_pad` rounds the struct to the vec3's 16-byte alignment for bytemuck.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuAberration {
     pub offset_px: [f32; 2],
     pub scale: f32,
     pub blur_px: f32,
-    pub color: [f32; 3],
-    pub alpha_weight: f32,
+    pub axis: [f32; 3],
+    pub k1: f32,
+    pub k2: f32,
+    pub _pad: [f32; 3],
 }
 
-/// The whole effect uniform (528 B): the channel-wise color normalizer, the live
-/// entry count, and the fixed entry array. Matches `struct AberrationParams`.
+/// The whole effect uniform (784 B): the live entry count (padded to the entry
+/// array's 16-byte alignment) and the fixed entry array. Matches
+/// `struct AberrationParams`.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuAberrationParams {
-    pub inv_sum: [f32; 3],
     pub count: u32,
+    pub _pad: [u32; 3],
     pub entries: [GpuAberration; MAX_ABERRATIONS],
 }
 
@@ -127,10 +137,48 @@ fn entry_color(entry: &BTreeMap<String, ParamValue>, key: &str) -> [f32; 3] {
     }
 }
 
-/// Pack the `aberrations` list into the shader uniform. Offsets pass through
-/// (already vectors); `inv_sum` is the channel-wise `1/max(Σ color, ε)` so
-/// colors summing to white at identity transforms are exact passthroughs;
-/// `alpha_weight` is each entry's mean color weight normalized to sum to 1.
+/// Analyze an entry color into its hue-rotation `axis` and the achromatic/
+/// chromatic strength split (`k1`, `k2`) the shader applies to the displaced
+/// content delta. Strength is `m = max(color)`; HSV saturation `s` splits it
+/// into `k1 = m·(1−s)` (achromatic — a full-pixel shift) and `k2 = m·s`
+/// (chromatic — a shift along the hue axis), so `k1 + k2 = m` always.
+///
+/// The axis is the red axis rotated by the color's hue `θ` about the gray
+/// diagonal (Rodrigues): `cosθ·(1,0,0) + (sinθ/√3)·(0,1,−1) + ((1−cosθ)/3)·(1,1,1)`.
+/// Its components sum to 1 (white analyzes to a full unit of any hue); at θ = 0,
+/// ±120°, ±240° it lands on an exact channel unit vector (classic channel split).
+/// A near-black color is a no-op (both scalars zero).
+fn analyze_color(color: [f32; 3]) -> ([f32; 3], f32, f32) {
+    let m = color[0].max(color[1]).max(color[2]);
+    if m < 1e-3 {
+        return ([1.0, 0.0, 0.0], 0.0, 0.0);
+    }
+    let min_c = color[0].min(color[1]).min(color[2]);
+    let delta = m - min_c;
+    let s = delta / m;
+
+    // HSV hue in radians: 0 at red, 2π/3 at green, 4π/3 at blue.
+    let theta = if delta < 1e-6 {
+        0.0
+    } else if m == color[0] {
+        (((color[1] - color[2]) / delta).rem_euclid(6.0)) * std::f32::consts::FRAC_PI_3
+    } else if m == color[1] {
+        ((color[2] - color[0]) / delta + 2.0) * std::f32::consts::FRAC_PI_3
+    } else {
+        ((color[0] - color[1]) / delta + 4.0) * std::f32::consts::FRAC_PI_3
+    };
+
+    let (sin, cos) = theta.sin_cos();
+    let a = sin / 3.0f32.sqrt();
+    let b = (1.0 - cos) / 3.0;
+    let axis = [cos + b, a + b, -a + b];
+    (axis, m * (1.0 - s), m * s)
+}
+
+/// Pack the `aberrations` list into the shader uniform. Offsets/scale/blur pass
+/// through; each entry's color is analyzed by [`analyze_color`] into the hue
+/// `axis` and the `k1`/`k2` strength split the shader applies to the displaced
+/// content delta.
 ///
 /// Tolerant by design (the untagged-degradation posture): any non-`List` value
 /// packs as the empty list (`count = 0` → shader passthrough), and `Int` is
@@ -143,38 +191,23 @@ pub fn pack_uniform(params: &[ParamValue]) -> GpuAberrationParams {
 
     let mut entries = [GpuAberration::zeroed(); MAX_ABERRATIONS];
     let count = list.len().min(MAX_ABERRATIONS);
-    let mut color_sum = [0.0f32; 3];
-    let mut mean_sum = 0.0f32;
 
     for (slot, entry) in entries.iter_mut().zip(list.iter()).take(MAX_ABERRATIONS) {
-        let color = entry_color(entry, "color");
-        let mean = (color[0] + color[1] + color[2]) / 3.0;
-        color_sum[0] += color[0];
-        color_sum[1] += color[1];
-        color_sum[2] += color[2];
-        mean_sum += mean;
+        let (axis, k1, k2) = analyze_color(entry_color(entry, "color"));
         *slot = GpuAberration {
             offset_px: entry_vec2(entry, "offset"),
             scale: entry_float(entry, "scale", 1.0),
             blur_px: entry_float(entry, "blur", 0.0).max(0.0),
-            color,
-            alpha_weight: mean,
+            axis,
+            k1,
+            k2,
+            _pad: [0.0; 3],
         };
     }
 
-    // Normalize alpha weights so the output alpha is a proper weighted average.
-    let inv_mean = 1.0 / mean_sum.max(EPS);
-    for slot in entries.iter_mut().take(count) {
-        slot.alpha_weight *= inv_mean;
-    }
-
     GpuAberrationParams {
-        inv_sum: [
-            1.0 / color_sum[0].max(EPS),
-            1.0 / color_sum[1].max(EPS),
-            1.0 / color_sum[2].max(EPS),
-        ],
         count: count as u32,
+        _pad: [0; 3],
         entries,
     }
 }
@@ -189,7 +222,7 @@ fn ca_shader_source() -> String {
     )
 }
 
-/// Allocate (once) and refresh the 528-byte params uniform — the [`ParamFilter`]
+/// Allocate (once) and refresh the 784-byte params uniform — the [`ParamFilter`]
 /// `prepare` half.
 fn ca_prepare(
     device: &wgpu::Device,
@@ -242,39 +275,76 @@ mod tests {
         pack_uniform(&params)
     }
 
-    /// The photographic default packs three entries with the red/green/blue
-    /// scale spread and a channel-wise `inv_sum` of 1 (colors sum to white).
+    fn approx(a: [f32; 3], b: [f32; 3]) -> bool {
+        (0..3).all(|i| (a[i] - b[i]).abs() < 1e-6)
+    }
+
+    /// The photographic R/G/B default packs three fully-saturated primaries:
+    /// each is a pure chromatic shift (`k1 = 0`, `k2 = 1`) along its channel's
+    /// exact unit axis — the classic channel split.
     #[test]
     fn photographic_defaults_pack() {
         let u = packed_default();
         assert_eq!(u.count, 3);
-        assert_eq!(u.entries[0].scale, 1.004);
-        assert_eq!(u.entries[1].scale, 1.0);
-        assert_eq!(u.entries[2].scale, 0.996);
-        assert_eq!(u.entries[0].color, [1.0, 0.0, 0.0]);
-        assert_eq!(u.entries[1].color, [0.0, 1.0, 0.0]);
-        assert_eq!(u.entries[2].color, [0.0, 0.0, 1.0]);
-        // Colors sum to white → inv_sum is 1 per channel (exact passthrough).
-        assert_eq!(u.inv_sum, [1.0, 1.0, 1.0]);
-        // Mean weights (1/3 each) normalize to sum to 1.
-        let a: f32 = u.entries[..3].iter().map(|e| e.alpha_weight).sum();
-        assert!((a - 1.0).abs() < 1e-6, "alpha weights sum to 1, got {a}");
+        assert_eq!(u.entries[0].scale, 1.0);
+        assert_eq!(u.entries[1].scale, 0.99);
+        assert_eq!(u.entries[2].scale, 0.98);
+        for (i, axis) in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+            .into_iter()
+            .enumerate()
+        {
+            assert!(
+                approx(u.entries[i].axis, axis),
+                "entry {i} axis {:?}",
+                u.entries[i].axis
+            );
+            assert_eq!(
+                u.entries[i].k1, 0.0,
+                "primary entry {i} is purely chromatic"
+            );
+            assert!(
+                (u.entries[i].k2 - 1.0).abs() < 1e-6,
+                "entry {i} k2 {}",
+                u.entries[i].k2
+            );
+        }
     }
 
-    /// A single white, zero-offset, identity-scale entry → `inv_sum` exactly 1
-    /// and `alpha_weight` exactly 1 (defends the ε-normalization identity path).
+    /// A white entry is purely achromatic: `k1 = 1`, `k2 = 0` (it shifts the
+    /// whole pixel — the full-image-shift behavior).
     #[test]
-    fn white_identity_entry_is_exact() {
-        let params = vec![ParamValue::List(vec![BTreeMap::from([
-            ("offset".to_string(), ParamValue::Vec2([0.0, 0.0])),
-            ("scale".to_string(), ParamValue::Float(1.0)),
-            ("color".to_string(), ParamValue::Color([1.0, 1.0, 1.0])),
-            ("blur".to_string(), ParamValue::Float(0.0)),
-        ])])];
-        let u = pack_uniform(&params);
-        assert_eq!(u.count, 1);
-        assert_eq!(u.inv_sum, [1.0, 1.0, 1.0]);
-        assert_eq!(u.entries[0].alpha_weight, 1.0);
+    fn white_entry_is_full_shift() {
+        let (axis, k1, k2) = analyze_color([1.0, 1.0, 1.0]);
+        assert_eq!(k1, 1.0);
+        assert_eq!(k2, 0.0);
+        // Axis is unused when k2 = 0, but must stay finite.
+        assert!(axis.iter().all(|c| c.is_finite()));
+    }
+
+    /// A dim (unsaturated-value) color scales the strength split by `m = max`:
+    /// `k1 + k2 == m`, and the hue axis matches the same color at full value.
+    #[test]
+    fn dim_color_scales_strength_by_max() {
+        let (dim_axis, k1, k2) = analyze_color([0.5, 0.0, 0.0]);
+        assert!(
+            (k1 + k2 - 0.5).abs() < 1e-6,
+            "k1+k2 == max, got {}",
+            k1 + k2
+        );
+        // Dim red is fully saturated → all chromatic.
+        assert_eq!(k1, 0.0);
+        assert!((k2 - 0.5).abs() < 1e-6);
+        let (full_axis, _, _) = analyze_color([1.0, 0.0, 0.0]);
+        assert!(approx(dim_axis, full_axis), "hue axis is value-independent");
+    }
+
+    /// A near-black color is a no-op: both strength scalars are zero, so the
+    /// entry contributes nothing.
+    #[test]
+    fn near_black_color_is_no_op() {
+        let (_, k1, k2) = analyze_color([0.0005, 0.0002, 0.0]);
+        assert_eq!(k1, 0.0);
+        assert_eq!(k2, 0.0);
     }
 
     /// Offsets pass through unchanged (they're already vectors).
@@ -304,17 +374,6 @@ mod tests {
         assert_eq!(u.count, 0);
     }
 
-    /// A zero color sum is ε-guarded — `inv_sum` is finite, never a divide-by-0.
-    #[test]
-    fn zero_color_sum_is_guarded() {
-        let params = vec![ParamValue::List(vec![BTreeMap::from([(
-            "color".to_string(),
-            ParamValue::Color([0.0, 0.0, 0.0]),
-        )])])];
-        let u = pack_uniform(&params);
-        assert!(u.inv_sum.iter().all(|c| c.is_finite()));
-    }
-
     /// Tolerant reads: a non-`List` value packs as the empty list (count 0), and
     /// an `Int` in a `Float` slot is accepted.
     #[test]
@@ -335,7 +394,7 @@ mod tests {
     /// The uniform structs have the sizes the WGSL layout expects.
     #[test]
     fn uniform_sizes() {
-        assert_eq!(std::mem::size_of::<GpuAberration>(), 32);
-        assert_eq!(std::mem::size_of::<GpuAberrationParams>(), 528);
+        assert_eq!(std::mem::size_of::<GpuAberration>(), 48);
+        assert_eq!(std::mem::size_of::<GpuAberrationParams>(), 784);
     }
 }

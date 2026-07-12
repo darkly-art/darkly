@@ -4,7 +4,14 @@
     import ColorInput from '../settings/widgets/ColorInput.svelte';
     import OffsetPad from '../settings/widgets/OffsetPad.svelte';
     import { hexToRgb01, rgb01ToHex } from '../../lib/color';
-    import type { FilterParam, FilterParamValue, ColorValue, Vec2Value } from './filterParams';
+    import {
+        cloneParamValue,
+        paramIsResettable,
+        type FilterParam,
+        type FilterParamValue,
+        type ColorValue,
+        type Vec2Value,
+    } from './filterParams';
 
     // A single generic scalar/atom param row (label + control). Shared by the
     // filter params editor and each list entry's fields. Mutates `param.value`
@@ -25,6 +32,13 @@
     function live(v: FilterParamValue) {
         param.value = v;
         oninput?.();
+    }
+    // A reset-to-default button for params with a neutral center (the offset pad
+    // and the scale slider) — see `paramIsResettable`. Always shown for those so
+    // it's discoverable even at the default; a no-op click when already there.
+    const showReset = $derived(!disabled && paramIsResettable(param));
+    function resetToDefault() {
+        commit(cloneParamValue(param.default));
     }
 </script>
 
@@ -68,6 +82,16 @@
             onchange={commit}
         />
     {/if}
+    {#if showReset}
+        <button
+            class="reset"
+            title="Reset {param.name}"
+            aria-label="Reset {param.name}"
+            onclick={resetToDefault}
+        >
+            ↺
+        </button>
+    {/if}
 </div>
 
 <style>
@@ -88,5 +112,26 @@
     }
     .checkbox {
         accent-color: var(--accent);
+    }
+    .reset {
+        flex: none;
+        margin-left: auto;
+        width: 22px;
+        height: 22px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        background: var(--bg-hover);
+        border: 1px solid transparent;
+        border-radius: var(--radius-sm);
+        color: var(--text);
+        cursor: pointer;
+        font-size: 15px;
+        line-height: 1;
+    }
+    .reset:hover {
+        border-color: var(--accent);
+        color: var(--accent);
     }
 </style>

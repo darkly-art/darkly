@@ -136,7 +136,7 @@ For a feature to count, it must be:
     - [x] Curves
     - [x] Invert colors
     - [ ] Desaturate
-    - [x] Chromatic aberration (also available as a veil)
+    - [x] Chromatic aberration
 - [ ] Clipping mask
 - [x] Feather + antialias
 - [x] Grow / Shrink / Border / Smooth

@@ -66,6 +66,27 @@ export function cloneParamValue<T extends FilterParamValue>(v: T): T {
     }) as T;
 }
 
+/** True when a param has a meaningful neutral center to snap back to, and so
+ *  earns a reset-to-default button: a 2D offset pad (recenters), or a numeric
+ *  slider whose default sits in the *interior* of its range — a value you nudge
+ *  away from in both directions, like scale's 1.0 between 0.9 and 1.1. Sliders
+ *  whose default is a range endpoint (blur, which rests at 0) and deliberate
+ *  picks (color) get none. */
+export function paramIsResettable(param: FilterParam): boolean {
+    if (param.kind === 'vec2') return true;
+    if (param.kind === 'float' || param.kind === 'int') {
+        const { min, max, default: d } = param;
+        return (
+            typeof min === 'number' &&
+            typeof max === 'number' &&
+            typeof d === 'number' &&
+            d > min &&
+            d < max
+        );
+    }
+    return false;
+}
+
 /** The item schema of a `list` param — one `FilterParam` per entry field.
  *  Empty for non-list params (whose `options` is enum labels, not a schema). */
 export function listItemSchema(param: FilterParam): FilterParam[] {

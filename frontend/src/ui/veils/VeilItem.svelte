@@ -115,7 +115,7 @@
         class:thumb-active={isActive}
         title="Veil"
     >
-        <Icon name="tabler:circle-half-2" />
+        <Icon name="material-symbols:curtains-rounded" />
     </span>
 
     <span class="veil-name">{app.veilDisplayName(veil.type)}</span>

@@ -6,6 +6,7 @@ import {
     seedScratchParams,
     filterParamMap,
     cloneParamValue,
+    paramIsResettable,
     listItemSchema,
     newListEntry,
     type FilterParam,
@@ -190,6 +191,22 @@ describe('list param helpers', () => {
         const { channels, scalars } = partitionFilterParams([listParam()]);
         expect(channels).toHaveLength(0);
         expect(scalars.map((s) => s.kind)).toEqual(['list']);
+    });
+});
+
+describe('paramIsResettable', () => {
+    it('is true for the offset pad and the interior-default scale slider', () => {
+        const offset: FilterParam = { kind: 'vec2', name: 'offset', max: 64, default: [0, 0] };
+        const scale: FilterParam = { kind: 'float', name: 'scale', min: 0.9, max: 1.1, default: 1 };
+        expect(paramIsResettable(offset)).toBe(true);
+        expect(paramIsResettable(scale)).toBe(true);
+    });
+
+    it('is false for an endpoint-default slider (blur) and a deliberate pick (color)', () => {
+        const blur: FilterParam = { kind: 'float', name: 'blur', min: 0, max: 6, default: 0 };
+        const color: FilterParam = { kind: 'color', name: 'color', default: [1, 1, 1] };
+        expect(paramIsResettable(blur)).toBe(false);
+        expect(paramIsResettable(color)).toBe(false);
     });
 });
 
