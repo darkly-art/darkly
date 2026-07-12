@@ -137,7 +137,7 @@ async function dispatch(msg: WorkerInMsg): Promise<void> {
             case 'flush': {
                 if (segment) {
                     await segment.encoder.flush();
-                    writeSegmentMeta(segment);
+                    await writeSegmentMeta(segment);
                 }
                 ctx.postMessage({ type: 'flushed' });
                 break;
@@ -219,8 +219,11 @@ function onChunk(
 }
 
 /** Persist `segment-<n>.json`. Runs on flush / close / roll so the meta on
- *  disk always describes the chunks that made it into the `.bin`. */
-function writeSegmentMeta(seg: Segment): void {
+ *  disk always describes the chunks that made it into the `.bin`. Awaited by
+ *  its callers so the `.json` has landed before `'flushed'`/`'closed'` is
+ *  posted — otherwise the write suspends on its first `await` and is
+ *  guillotined when the worker tears down. */
+async function writeSegmentMeta(seg: Segment): Promise<void> {
     if (!cfg || !dir) return;
     const meta: SegmentMeta = {
         n: seg.n,
@@ -232,7 +235,7 @@ function writeSegmentMeta(seg: Segment): void {
         frameCount: seg.frameCount,
         ...(seg.description ? { description: base64Encode(seg.description) } : {}),
     };
-    void writeSmallFile(segmentJsonName(seg.n), new TextEncoder().encode(JSON.stringify(meta)));
+    await writeSmallFile(segmentJsonName(seg.n), new TextEncoder().encode(JSON.stringify(meta)));
 }
 
 async function writeSmallFile(name: string, bytes: Uint8Array): Promise<void> {
@@ -261,7 +264,7 @@ async function teardown(): Promise<void> {
         // Encoder already errored — persist what reached the bin.
     }
     try {
-        writeSegmentMeta(seg);
+        await writeSegmentMeta(seg);
     } catch {
         /* best-effort */
     }

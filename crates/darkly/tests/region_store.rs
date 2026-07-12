@@ -335,6 +335,38 @@ fn region_store_save_full_commit_subrect() {
     );
 }
 
+/// Regression: growing the scratch with a nonzero destination offset must not
+/// copy past the new texture bounds. When the old scratch capacity exceeds the
+/// grown extent (e.g. the canvas was rescaled large, then the layer grows in
+/// only one direction while painting outside the canvas), the shifted copy of
+/// the full old scratch spills out of the new texture — a wgpu validation error
+/// ("copy range touches outside of scratch-rgba") that invalidates the whole
+/// submission. The copy region must be clamped to what fits.
+#[test]
+fn region_store_grow_offset_does_not_overflow_scratch() {
+    let (device, queue) = test_device();
+
+    // Old scratch sized to a rescaled canvas.
+    let mut store = RegionScratch::new(&device, 1920, 1080);
+
+    // Layer grows up-and-left by (256, 256) but only taller (1280), not wider.
+    // Copying the full 1920×1080 old scratch at offset (256, 256) would reach
+    // (2176, 1336) — past the new 1920×1280 texture on both axes.
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let mut enc = encoder(&device);
+    store.grow_scratch_preserving(&device, &mut enc, 1920, 1280, 256, 256);
+    submit(&queue, enc);
+    let _ = device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: None,
+    });
+    let err = pollster::block_on(scope.pop());
+    assert!(
+        err.is_none(),
+        "grow_scratch_preserving overflowed the scratch texture: {err:?}"
+    );
+}
+
 /// Lock in the new debug-mode contract: `commit_region` must reject a rect
 /// that escapes the saved snapshot. Caller bug, not RegionScratch bug — but
 /// the assert turns "silent corruption from reading uninitialised scratch"

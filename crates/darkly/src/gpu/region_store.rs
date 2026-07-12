@@ -230,12 +230,20 @@ impl RegionScratch {
                 "scratch-r8",
             ),
         ];
-        let copy_w = self.scratch_width;
-        let copy_h = self.scratch_height;
         let (encoder_opt, dst_offset_x, dst_offset_y) = match copy {
             Some((enc, x, y)) => (Some(enc), x, y),
             None => (None, 0, 0),
         };
+        // The preserved region lands at (dst_offset_x, dst_offset_y) in the new
+        // texture. The old scratch capacity can exceed the new extent — scratch
+        // grows monotonically and is sized by capacity, not by the live layer
+        // extent — so a nonzero destination offset can push the shifted copy
+        // past the new texture bounds. Clamp the copied region to what fits;
+        // the clipped tail is stale capacity beyond the old layer extent (which
+        // is itself contained in the new extent), so it holds no pre-stroke
+        // data worth preserving.
+        let copy_w = self.scratch_width.min(new_w.saturating_sub(dst_offset_x));
+        let copy_h = self.scratch_height.min(new_h.saturating_sub(dst_offset_y));
         let do_copy = encoder_opt.is_some() && copy_w > 0 && copy_h > 0;
         // The encoder borrow has to be threaded through the loop body; an
         // `Option<&mut _>` doesn't `Copy`, so reborrow via `as_deref_mut`
