@@ -30,6 +30,8 @@ const { fakeApp } = vi.hoisted(() => {
     return {
         fakeApp: {
             engine,
+            session: null as unknown,
+            canvasEl: {} as unknown,
             requestFrame: vi.fn(),
             toolCursor: null as string | null,
             activeLayerId: 7 as number | null,
@@ -48,16 +50,21 @@ vi.mock('../../canvas/gpu_overlay', () => ({
 }));
 
 import { transformTool } from '../transform.svelte';
-import {
-    transformModes,
-    transformActiveMode,
-    setTransformMode,
-} from '../transform.svelte';
-import { beginToolSession } from '../tool_session';
+import { SessionEngine } from '../tool_session';
 
 withApi(fakeApp.engine);
 
-const ctx = { canvasEl: {} as HTMLCanvasElement } as never;
+/** The transform tool exposes mode queries as instance methods (not on the base
+ *  `Tool` type); widen the created tool so the menu-facing methods are visible. */
+type TransformToolLike = {
+    onActivate?(): void;
+    onPointerDown(e: PointerEvent, cx: number, cy: number): Promise<void> | void;
+    onPointerUp?(e?: PointerEvent): void;
+    availableModes(): { tag: number; label: string }[];
+    activeModeTag(): number | null;
+    setMode(tag: number): void;
+};
+const tool = transformTool.create(fakeApp as never) as unknown as TransformToolLike;
 
 /** Drain all pending microtasks (one macrotask hop). `onActivate` fires a
  *  detached `void activate()` whose async `read()`→bbox rebuild outlives the
@@ -67,10 +74,10 @@ const ctx = { canvasEl: {} as HTMLCanvasElement } as never;
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
 async function activeTool() {
-    transformTool.onActivate?.(ctx);
+    tool.onActivate?.();
     // A left-click on an inactive gizmo runs activate() then claims the pointer.
-    await transformTool.onPointerDown(ctx, { button: 0 } as PointerEvent, 50, 40);
-    transformTool.onPointerUp?.(ctx, {} as PointerEvent);
+    await tool.onPointerDown!({ button: 0 } as PointerEvent, 50, 40);
+    tool.onPointerUp?.({} as PointerEvent);
     await settle();
 }
 
@@ -78,15 +85,15 @@ describe('transform right-click mode menu', () => {
     beforeEach(() => {
         fakeApp.transformModeMenu = null;
         fakeApp.engine.post.mockClear();
-        // Tool code reaches the engine through the live session (see
-        // tool_session.ts); begin one over the fake engine.
-        beginToolSession(fakeApp.engine as never);
+        // Tool code reaches the engine through the instance's live session;
+        // begin one over the fake engine.
+        (fakeApp.session as SessionEngine | null)?.kill();
+        fakeApp.session = new SessionEngine(fakeApp.engine as never);
     });
 
     it('right-click inside the bbox opens the mode menu at the cursor', async () => {
         await activeTool();
-        await transformTool.onPointerDown(
-            ctx,
+        await tool.onPointerDown!(
             { button: 2, clientX: 12, clientY: 34 } as PointerEvent,
             50,
             40,
@@ -96,8 +103,7 @@ describe('transform right-click mode menu', () => {
 
     it('right-click outside the bbox does not open the menu', async () => {
         await activeTool();
-        await transformTool.onPointerDown(
-            ctx,
+        await tool.onPointerDown!(
             { button: 2, clientX: 12, clientY: 34 } as PointerEvent,
             5000,
             5000,
@@ -107,14 +113,14 @@ describe('transform right-click mode menu', () => {
 
     it('exposes the available modes and the active one to the menu', async () => {
         await activeTool();
-        expect(transformModes().map((m) => m.label)).toEqual(['Free transform', 'Perspective']);
-        expect(transformActiveMode()).toBe(0);
+        expect(tool.availableModes().map((m) => m.label)).toEqual(['Free transform', 'Perspective']);
+        expect(tool.activeModeTag()).toBe(0);
     });
 
     it('selecting a mode pushes that mode tag through the void binding', async () => {
         await activeTool();
-        setTransformMode(1);
-        expect(transformActiveMode()).toBe(1);
+        tool.setMode(1);
+        expect(tool.activeModeTag()).toBe(1);
         const persp = fakeApp.engine.post.mock.calls.find(
             (c) => c[0] === 'update_void_transform' && c[1]?.transform?.mode === 'Perspective',
         );

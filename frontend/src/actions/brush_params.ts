@@ -1,7 +1,7 @@
 import { actions } from './registry';
-import { app } from '../state/app.svelte';
 import { brushGraph, exposedDragSpeed } from '../state/brush_graph.svelte';
-import { pushHoverOverlay, cursorPose, refreshHoverOverlay } from '../tools/brush.svelte';
+import { cursorPose, focusedBrushTool } from '../tools/brush.svelte';
+import { runHook } from '../tools/tool_session';
 
 /** Map of semantic role → which exposed port adjusts it.
  *
@@ -55,7 +55,7 @@ function adjustBrushParam(role: Role, dir: 1 | -1): void {
             ? data.value * Math.pow(spec.step, dir)
             : data.value + spec.step * dir;
     commit(port.nodeId, port.portName, clamp(next, data.min, data.max));
-    if (app.engine) refreshHoverOverlay(app.engine);
+    focusedBrushTool()?.refreshHoverOverlay();
 }
 
 /** Set an absolute value (used by drag scrubs). */
@@ -122,15 +122,15 @@ export function registerBrushParamActions() {
             // grows/shrinks live during the drag. Anchored at the start
             // position; pose comes from the live event, matching the
             // normal hover preview (pressure forced to 1 by `cursorPose`
-            // so both paths show the same brush extent).
-            if (app.engine) {
-                void pushHoverOverlay(
-                    app.engine,
+            // so both paths show the same brush extent). Routed through the
+            // focused instance's brush tool (own session, own hover state).
+            void runHook(
+                focusedBrushTool()?.pushHoverOverlay(
                     cursorPose(e),
                     sizeDrag.anchorX,
                     sizeDrag.anchorY,
-                );
-            }
+                ),
+            );
         },
         deactivate: () => {
             sizeDrag = null;

@@ -1,28 +1,24 @@
-import type { Tool, ToolContext } from './registry';
-import { app } from '../state/app.svelte';
+import { ToolBase, type ToolDescriptor } from './registry';
+import type { DarklyInstance } from '../state/app.svelte';
 
-/** Fill-tool session state. Persists within the session; resets on reload. */
+/** Fill-tool session state — an app-global user preference. Persists within the
+ *  session; resets on reload. */
 class FillSession {
     /** Color-distance threshold for the flood fill (0 = exact match, 255 = anything). */
     tolerance = $state(32);
 }
 export const fillSession = new FillSession();
 
-export const fillTool: Tool = {
-    id: 'fill',
-    icon: 'fa6-solid:fill-drip',
-    group: 'paint',
-    cluster: 'fill',
-    hotkeyAction: 'fillTool',
+class FillTool extends ToolBase {
+    onPointerDown(_e: PointerEvent, cx: number, cy: number): void {
+        const engine = this.engine;
+        const layerId = this.inst.activeLayerId;
+        if (!layerId || !engine) return;
 
-    onPointerDown(ctx, e, cx, cy) {
-        const layerId = app.activeLayerId;
-        if (!layerId) return;
+        const c = this.inst.foreground;
 
-        const c = app.foreground;
-
-        ctx.engine.api.beginStroke({ id: layerId });
-        ctx.engine.api.strokeTo({
+        engine.api.beginStroke({ id: layerId });
+        engine.api.strokeTo({
             op: {
                 op: 'flood_fill',
                 x: cx, y: cy,
@@ -30,10 +26,15 @@ export const fillTool: Tool = {
                 tolerance: fillSession.tolerance,
             },
         });
-        ctx.engine.api.endStroke();
-    },
+        engine.api.endStroke();
+    }
+}
 
-    onPointerMove() {},
-
-    onPointerUp() {},
+export const fillTool: ToolDescriptor = {
+    id: 'fill',
+    icon: 'fa6-solid:fill-drip',
+    group: 'paint',
+    cluster: 'fill',
+    hotkeyAction: 'fillTool',
+    create: (inst: DarklyInstance) => new FillTool(inst),
 };

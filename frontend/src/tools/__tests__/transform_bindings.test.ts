@@ -17,23 +17,25 @@ const { engine, fakeApp } = vi.hoisted(() => {
 vi.mock('../../state/app.svelte', () => ({ app: fakeApp }));
 
 import { vectorObjectTransformBinding } from '../transform_bindings';
-import { beginToolSession } from '../tool_session';
+import { SessionEngine } from '../tool_session';
 import type { Mat3 } from '../transform_projective';
 
 withApi(engine);
 
-// The bindings reach the engine through the live tool session; establish one
-// over the fake engine so `toolEngine()` resolves (its api delegates to the
+// The bindings reach the engine through a session accessor supplied at
+// construction; establish one over the fake engine (its api delegates to the
 // fake's spies).
+let session: SessionEngine | null = null;
+const sess = () => session;
 beforeEach(() => {
     engine.send.mockClear();
     engine.post.mockClear();
-    beginToolSession(engine as never);
+    session = new SessionEngine(engine as never);
 });
 
 describe('vectorObjectTransformBinding', () => {
     it('reads via vector_object_info and posts updates with id + object + payload', async () => {
-        const binding = vectorObjectTransformBinding(42, 3);
+        const binding = vectorObjectTransformBinding(sess, 42, 3);
         const geo = await binding.read();
         const [readKind, readPayload] = engine.send.mock.calls[0];
         expect(readKind).toBe('vector_object_info');
@@ -52,7 +54,7 @@ describe('vectorObjectTransformBinding', () => {
     });
 
     it('cancel re-posts the affine captured on first read', async () => {
-        const binding = vectorObjectTransformBinding(42, 3);
+        const binding = vectorObjectTransformBinding(sess, 42, 3);
         await binding.read(); // captures [1,0,5,0,1,7,0,0,1] as the original
         binding.update([2, 0, 9, 0, 2, 11, 0, 0, 1], 0);
         engine.post.mockClear();

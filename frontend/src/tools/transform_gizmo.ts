@@ -13,7 +13,7 @@
  * live updates are fire-and-forget through the binding.
  */
 import { app } from '../state/app.svelte';
-import { toolEngine } from './tool_session';
+import type { SessionEngine } from './tool_session';
 import { OverlayBuilder } from '../canvas/gpu_overlay';
 import { MAT3_IDENTITY, type Mat3 } from './transform_projective';
 import {
@@ -54,6 +54,11 @@ export interface TransformBinding {
 
 export class TransformGizmo {
     private canvasEl: HTMLCanvasElement;
+    /** Live accessor for the owning instance's current tool session. Read on
+     *  every overlay push/clear so the gizmo always targets the *instance's*
+     *  fresh session (which survives a layer rebind), never a stale capture —
+     *  the per-instance replacement for the old global `toolEngine()`. */
+    private session: () => SessionEngine | null;
     private binding: TransformBinding | null = null;
     private mode: TransformMode = modeForTag(0);
     private geo: GizmoGeometry = { matrix: [...MAT3_IDENTITY], origin: [0, 0], srcW: 0, srcH: 0 };
@@ -61,8 +66,9 @@ export class TransformGizmo {
     private overlay: OverlayBuilder | null = null;
     private bbox: BBoxPolygon | null = null;
 
-    constructor(canvasEl: HTMLCanvasElement) {
+    constructor(canvasEl: HTMLCanvasElement, session: () => SessionEngine | null) {
         this.canvasEl = canvasEl;
+        this.session = session;
     }
 
     get active(): boolean {
@@ -201,7 +207,7 @@ export class TransformGizmo {
     }
 
     private rebuildOverlay(): void {
-        const engine = toolEngine();
+        const engine = this.session();
         if (!engine) return;
         const o = new OverlayBuilder(this.canvasEl);
         this.bbox = this.mode.buildOverlay(this.geo, o);
@@ -214,7 +220,7 @@ export class TransformGizmo {
         this.drag = null;
         this.bbox = null;
         this.overlay = null;
-        toolEngine()?.api.clearOverlay();
+        this.session()?.api.clearOverlay();
         app.toolCursor = null;
     }
 }

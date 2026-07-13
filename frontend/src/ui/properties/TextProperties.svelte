@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { app } from '../../state/app.svelte';
-    import { textSession } from '../../tools/text.svelte';
+    import { textSession, focusedTextTool, type TextPlacement } from '../../tools/text.svelte';
     import {
         createTextFromPending,
         queueTextContent,
@@ -25,6 +25,12 @@
     // The active vector layer, or null when no vector layer is active (a
     // placement that will become a fresh layer).
     let { node }: { node: { id: number; type: string } | null } = $props();
+
+    // The focused instance's text tool holds the per-document edit state
+    // (editing / placement / focusObject). Reactive: re-resolves on a tab swap
+    // and tracks each field's `$state`. The creation-default style fields stay
+    // in the app-global `textSession`.
+    let textTool = $derived(focusedTextTool());
 
     const ALIGN_OPTIONS: [string, string][] = [
         ['start', 'Left'],
@@ -164,7 +170,7 @@
     /** Which object to show: the selected (`editing`) one on this layer, else the
      *  topmost — so a freshly-selected layer still shows something to edit. */
     function selectedObject(objs: any[]): any | null {
-        const e = textSession.editing;
+        const e = textTool?.editing ?? null;
         if (e && node && e.layerId === node.id) {
             const hit = objs.find((o) => o.object === e.objectId);
             if (hit) return hit;
@@ -177,7 +183,7 @@
     $effect(() => {
         const n = node;
         void app.layerTree; // refetch on undo/redo
-        void textSession.editing; // re-resolve when the selected object changes
+        void textTool?.editing; // re-resolve when the selected object changes
         if (!(n && n.type === 'vector' && app.engine)) {
             block = null;
             return;
@@ -200,12 +206,12 @@
     // seeded with "text" and selected — so the word appears on the canvas at
     // once and the first keystroke replaces it.
     $effect(() => {
-        const placement = textSession.placement;
+        const placement = textTool?.placement;
         if (!placement || creating || !app.engine) return;
         void createFromPlacement(placement);
     });
 
-    async function createFromPlacement(placement: NonNullable<typeof textSession.placement>) {
+    async function createFromPlacement(placement: TextPlacement) {
         creating = true;
         try {
             // A vector layer already active → add the object to it (many objects
@@ -221,14 +227,16 @@
                 target,
                 (layerId, objectId) => {
                     // Select the new object (drives this panel and the box gizmo).
-                    textSession.editing = { layerId, objectId };
+                    if (textTool) textTool.editing = { layerId, objectId };
                 },
             );
             if (!r) return;
             lastSent.set(r.objectId, r.latest);
             selectAllOnFocus = true;
-            textSession.focusObject = r.objectId;
-            textSession.placement = null;
+            if (textTool) {
+                textTool.focusObject = r.objectId;
+                textTool.placement = null;
+            }
         } finally {
             creating = false;
         }
@@ -248,7 +256,7 @@
     // Focus the selected object's editor once it has rendered. Select-all for a
     // fresh create (typing replaces the seed); caret to end for an existing one.
     $effect(() => {
-        const target = textSession.focusObject;
+        const target = textTool?.focusObject ?? null;
         if (target === null || !block || block.objectId !== target || !textareaEl) return;
         textareaEl.focus();
         if (selectAllOnFocus) {
@@ -258,7 +266,7 @@
             const len = textareaEl.value.length;
             textareaEl.setSelectionRange(len, len);
         }
-        textSession.focusObject = null;
+        if (textTool) textTool.focusObject = null;
     });
 
     function bindTextarea(el: HTMLTextAreaElement) {

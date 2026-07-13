@@ -2,9 +2,9 @@ import type { Engine, EngineState } from '../engine/protocol';
 import type { JsonValue } from '../engine/protocol_gen';
 import type { SaveBundle } from '../storage/saveDocument';
 import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
-import { toolRegistry } from '../tools/registry';
+import { toolRegistry, type Tool } from '../tools/registry';
 import { pollPick } from '../tools/color_pick_sync';
-import { beginToolSession, killToolSession, runHook } from '../tools/tool_session';
+import { SessionEngine, runHook } from '../tools/tool_session';
 import { tickColorPickerCursor } from '../tools/colorpicker_cursor';
 import { tickCloneSourceCursor } from '../tools/clone_source_cursor';
 import { MediaStreamSource, describeMediaError, type CaptureKind } from '../lib/mediaStreamSource';
@@ -122,6 +122,60 @@ export class DarklyInstance {
 
     // Active tool
     activeToolId = $state<string>('brush');
+
+    /** This instance's live tool session — the cancellation-aware engine handle
+     *  every tool op routes through. Owned here (not module-global) so each tab
+     *  keeps its own session: a background tab finishing async init can't steal
+     *  the focused tab's session. Plain field — read imperatively inside hooks,
+     *  never reactively. Begun / severed by the `CanvasView` transition effect
+     *  via {@link beginToolSession} / {@link killToolSession}. See
+     *  `tools/tool_session.ts`. */
+    session: SessionEngine | null = null;
+
+    /** Per-instance tool objects, constructed lazily from the registry
+     *  descriptors and bound to this instance. Each tab owns its own set, so
+     *  tool state (gizmo, placement, hover) never aliases across tabs. */
+    #tools = new Map<string, Tool>();
+
+    /** The per-instance {@link Tool} for `id`, constructed on first use (bound
+     *  to this instance) and cached. Undefined for an unregistered id. */
+    tool(id: string): Tool | undefined {
+        const existing = this.#tools.get(id);
+        if (existing) return existing;
+        const descriptor = toolRegistry.get(id);
+        if (!descriptor) return undefined;
+        const t = descriptor.create(this);
+        this.#tools.set(id, t);
+        return t;
+    }
+
+    /** Begin a fresh tool session over this instance's engine, killing any prior
+     *  one (its parked ops reject on resume). Returns the new session, or null
+     *  when there's no engine yet. */
+    beginToolSession(): SessionEngine | null {
+        this.session?.kill();
+        this.session = this.engine ? new SessionEngine(this.engine) : null;
+        return this.session;
+    }
+
+    /** Sever this instance's tool session and leave none — parked ops reject on
+     *  resume. Called on tab close so a hook can't land on a torn-down tab. */
+    killToolSession(): void {
+        this.session?.kill();
+        this.session = null;
+    }
+
+    /** Monotonic counter the `CanvasView` transition effect watches to re-run a
+     *  same-tool activation (paste-into-active-transform: re-pick the floating
+     *  without deactivating). Bumped by {@link requestToolReactivation}. */
+    toolReactivations = $state(0);
+
+    /** Ask the transition effect to reactivate the current tool (rebind + fresh
+     *  `onActivate`, no deactivate). Used by the paste flow when transform is
+     *  already active. */
+    requestToolReactivation() {
+        this.toolReactivations++;
+    }
 
     /** Last activated sub-tool per cluster id. Lets a cluster button restore
      *  the user's previous choice on click (e.g. "the last selection tool I
@@ -328,10 +382,9 @@ export class DarklyInstance {
     // `toolCursor` flows tool → reactive UI).
     transformModeMenu = $state<{ x: number; y: number } | null>(null);
 
-    // Canvas element reference, set by CanvasView on mount. Tools that
-    // are activated outside the canvas's pointer event flow (e.g. paste
-    // actions that auto-enter transform mode) read this to build a
-    // proper ToolContext.
+    // Canvas element reference, set by CanvasView on mount. Tools reach it
+    // through their instance (the `ToolBase.canvasEl` getter); paste actions
+    // that auto-enter transform mode check it before requesting activation.
     canvasEl = $state<HTMLCanvasElement | null>(null);
 
     selectLayer(id: number | null) {
@@ -974,27 +1027,33 @@ export class DarklyInstance {
             if (frame.state) this.engineState = frame.state;
 
             // Per-frame tool hook — async state sync (e.g. GPU readback
-            // completion). Wrapped so a hook whose engine op was cancelled by a
-            // session change mid-await settles cleanly (see tool_session.ts).
-            void runHook(toolRegistry.get(this.activeToolId)?.onFrame?.());
-
-            // Global color-pick poll — drives both the color-picker tool and
-            // the modifier-held `sampleColor` chord. Runs regardless of active
-            // tool so a Ctrl-drag started in (e.g.) the brush tool completes.
-            pollPick();
+            // completion). The instance's OWN tool runs against its OWN session,
+            // so a background tab's frame drives its own tool, never the focused
+            // one. Wrapped so a hook whose engine op was cancelled by a session
+            // change mid-await settles cleanly (see tool_session.ts).
+            void runHook(this.tool(this.activeToolId)?.onFrame?.());
 
             // Drain completed process-recording captures to the encoder
             // worker. No-op unless this tab's recorder is live.
             processRecording.pollFrame(this);
 
-            // Refresh the color-picker cursor against the latest foreground
-            // committed by `pollPick`. Cheap when nothing changed.
-            tickColorPickerCursor();
-
-            // Refresh the clone set-source cursor — re-queries "needs source"
-            // on brush change and shows/hides the crosshair. Cheap when
-            // nothing changed (memo guards).
-            tickCloneSourceCursor();
+            // Pointer singletons tick with the focused canvas's frame — there is
+            // one pointer, and these read/write the global `app` (the focused
+            // instance). A background tab's frame must not drive them.
+            if (getActiveInstance() === this) {
+                // Global color-pick poll — drives both the color-picker tool and
+                // the modifier-held `sampleColor` chord. Runs regardless of
+                // active tool so a Ctrl-drag started in (e.g.) the brush tool
+                // completes.
+                pollPick();
+                // Refresh the color-picker cursor against the latest foreground
+                // committed by `pollPick`. Cheap when nothing changed.
+                tickColorPickerCursor();
+                // Refresh the clone set-source cursor — re-queries "needs source"
+                // on brush change and shows/hides the crosshair. Cheap when
+                // nothing changed (memo guards).
+                tickCloneSourceCursor();
+            }
 
             // Check for completed async copy/cut readback.
             if (this._copyCallback) {
@@ -1063,19 +1122,13 @@ let activeInstance = $state<DarklyInstance | null>(null);
 /** Replace the underlying instance that the global `app` proxy resolves to.
  *  Calling this triggers Svelte reactivity on every consumer that reads
  *  `app.<x>` (because the proxy's getter reads the `$state` `activeInstance`,
- *  threading the dependency through). */
+ *  threading the dependency through).
+ *
+ *  Focus no longer touches sessions: each instance owns its own live session
+ *  and tool state, so a focus switch simply changes which instance `app`
+ *  resolves to. Every tab's tool state (transform floating, text edit, gradient
+ *  placement) stays live and resumes exactly where it left off. */
 export function setActiveInstance(inst: DarklyInstance | null) {
-    // Rebind the tool session to the newly-focused instance. This kills the
-    // outgoing session (any tool op parked on an await now rejects on resume
-    // instead of landing on the wrong tab) and starts a fresh one over the new
-    // tab's engine — necessary because every tab's `<CanvasView>` stays mounted
-    // across a focus switch, so the tool/layer effects that normally begin a
-    // session don't re-fire. When the new instance has no engine yet (the
-    // single-instance boot call, before `initEditor` sets it), leave the session
-    // severed; the tool effect begins it once the engine is ready.
-    // See tool_session.ts.
-    if (inst?.engine) beginToolSession(inst.engine);
-    else killToolSession();
     activeInstance = inst;
 }
 

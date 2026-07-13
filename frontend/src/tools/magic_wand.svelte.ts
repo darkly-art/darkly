@@ -9,45 +9,47 @@
  *   - Shift+Alt: intersect with selection
  * Escape clears the selection.
  */
-import type { Tool, ToolContext } from './registry';
-import { app } from '../state/app.svelte';
+import { ToolBase, type ToolDescriptor } from './registry';
+import type { DarklyInstance } from '../state/app.svelte';
 import { selectionMode } from './selection_helpers';
 import MagicWandOptions from '../ui/MagicWandOptions.svelte';
 
-/** Magic-wand session state. Persists within the session; resets on reload. */
+/** Magic-wand session state — an app-global user preference. Persists within
+ *  the session; resets on reload. */
 class MagicWandSession {
     /** Color-distance threshold for the flood fill (0 = exact match, 255 = anything). */
     tolerance = $state(15);
 }
 export const magicWandSession = new MagicWandSession();
 
-export const magicWandTool: Tool = {
+class MagicWandTool extends ToolBase {
+    onPointerDown(e: PointerEvent, cx: number, cy: number): void {
+        if (this.inst.activeLayerId == null) return;
+
+        const mode = selectionMode(e);
+        this.engine?.api.selectMagicWand({
+            id: this.inst.activeLayerId,
+            seed_canvas: { x: Math.round(cx), y: Math.round(cy) },
+            tolerance: magicWandSession.tolerance,
+            mode,
+        });
+    }
+
+    onKeyDown(e: KeyboardEvent): boolean {
+        if (e.key === 'Escape') {
+            this.engine?.api.clearSelection();
+            return true;
+        }
+        return false;
+    }
+}
+
+export const magicWandTool: ToolDescriptor = {
     id: 'magic_wand',
     icon: 'fa6-solid:wand-magic-sparkles',
     group: 'select',
     cluster: 'select',
     hotkeyAction: 'magicWandTool',
     optionsComponent: MagicWandOptions,
-
-    onPointerDown(ctx, e, cx, cy) {
-        if (app.activeLayerId == null) return;
-
-        const mode = selectionMode(e);
-        ctx.engine.api.selectMagicWand({
-            id: app.activeLayerId,
-            seed_canvas: { x: Math.round(cx), y: Math.round(cy) },
-            tolerance: magicWandSession.tolerance,
-            mode,
-        });
-    },
-    onPointerMove() {},
-    onPointerUp() {},
-
-    onKeyDown(e) {
-        if (e.key === 'Escape') {
-            app.engine?.api.clearSelection();
-            return true;
-        }
-        return false;
-    },
+    create: (inst: DarklyInstance) => new MagicWandTool(inst),
 };

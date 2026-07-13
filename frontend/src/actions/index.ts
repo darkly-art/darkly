@@ -12,7 +12,7 @@ import { exportImage } from '../state/exportImage.svelte';
 import { exportTimelapse } from '../state/exportTimelapse.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
 import { toast } from '../state/toast.svelte';
-import { toolRegistry, type Tool } from '../tools/registry';
+import { toolRegistry, type ToolDescriptor } from '../tools/registry';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { brushSession } from '../tools/brush.svelte';
 import { registerBrushParamActions } from './brush_params';
@@ -63,7 +63,7 @@ function tabNameFromFile(fileName: string): string {
 /** The Iconify icon name for a tool-switch action — the tool's own `icon`,
  *  falling back to a generic glyph for the (now hypothetical) tool that ships
  *  none. Every tool currently declares one. */
-function glyphFromTool(tool: Tool): string {
+function glyphFromTool(tool: ToolDescriptor): string {
     return tool.icon ?? 'fa6-solid:wrench';
 }
 

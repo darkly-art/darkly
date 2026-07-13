@@ -1,6 +1,6 @@
 <script lang="ts">
     import { app } from '../state/app.svelte';
-    import { toolRegistry, type Tool, type ToolCluster } from '../tools/registry';
+    import { toolRegistry, type ToolDescriptor, type ToolCluster } from '../tools/registry';
     import { tooltipForAction } from '../config/store.svelte';
     import Icon from '../icons/Icon.svelte';
 
@@ -14,7 +14,7 @@
     const members = $derived(
         cluster.toolIds
             .map(id => toolRegistry.get(id))
-            .filter((t): t is Tool => !!t)
+            .filter((t): t is ToolDescriptor => !!t)
     );
 
     const activeMember = $derived(
@@ -65,7 +65,7 @@
         return () => window.removeEventListener('pointerdown', onPointerDown, true);
     });
 
-    function toolTitle(t: Tool): string {
+    function toolTitle(t: ToolDescriptor): string {
         return tooltipForAction(app.toolDisplayName(t.id), t.hotkeyAction);
     }
 

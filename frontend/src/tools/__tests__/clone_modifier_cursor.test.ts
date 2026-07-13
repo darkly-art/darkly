@@ -35,6 +35,10 @@ const { fakeApp, fakeConfig, fakeBrushGraph, fakeActions, paintTool, heldState }
         activeToolId: 'brush',
         activeLayerId: null as number | null,
         engine: { api },
+        // The focused instance's tool, looked up by the modifier-cursor
+        // machinery. `paintTool` is defined later in this scope; the arrow
+        // defers the reference until call time (past its TDZ).
+        tool: (_id: string) => paintTool,
         canvasEl: {
             getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100 }),
         } as unknown as HTMLCanvasElement | null,
@@ -60,7 +64,7 @@ const { fakeApp, fakeConfig, fakeBrushGraph, fakeActions, paintTool, heldState }
     const heldState = { value: '', listeners: [] as Array<() => void> };
     return { fakeApp, fakeConfig, fakeBrushGraph, fakeActions, paintTool, heldState };
 });
-vi.mock('../../state/app.svelte', () => ({ app: fakeApp }));
+vi.mock('../../state/app.svelte', () => ({ app: fakeApp, getActiveInstance: () => fakeApp }));
 vi.mock('../../config/store.svelte', () => ({ config: fakeConfig }));
 vi.mock('../../state/brush_graph.svelte', () => ({ brushGraph: fakeBrushGraph }));
 vi.mock('../registry', () => ({ toolRegistry: { get: () => paintTool } }));
@@ -156,7 +160,7 @@ describe('bug 2 regression: disarming restores the brush hover', () => {
         expect(mc.isToolHoverSuppressed()).toBe(false);
         expect(fakeApp.toolCursor).toBe(null);
         expect(paintTool.restoreHover).toHaveBeenCalledTimes(1);
-        const [, cx, cy] = paintTool.restoreHover.mock.calls[0];
+        const [cx, cy] = paintTool.restoreHover.mock.calls[0];
         expect(cx).toBe(30);
         expect(cy).toBe(40);
     });

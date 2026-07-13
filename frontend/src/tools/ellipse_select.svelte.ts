@@ -8,72 +8,67 @@
  *   - Shift+Alt: intersect with selection
  * Escape clears the selection.
  */
-import type { Tool, ToolContext } from './registry';
-import { app } from '../state/app.svelte';
+import { ToolBase, type ToolDescriptor } from './registry';
+import type { DarklyInstance } from '../state/app.svelte';
 import { KIND_ELLIPSE, FLAG_CANVAS_SPACE, FLAG_INVERT_COLOR, prim, selectionMode } from './selection_helpers';
 
-let dragStart: [number, number] | null = null;
-let dragEnd: [number, number] | null = null;
+class EllipseSelectTool extends ToolBase {
+    private dragStart: [number, number] | null = null;
+    private dragEnd: [number, number] | null = null;
 
-// Krita-style integer-pixel snapping of the bounding rect (see
-// `kis_tool_select_elliptical.cc`). The ellipse boundary itself is curved,
-// so antialiasing stays on at commit time — only the bbox is snapped.
-function pushPreviewOverlay() {
-    if (!app.engine || !dragStart || !dragEnd) return;
-    const [x0, y0] = dragStart;
-    const [x1, y1] = dragEnd;
-    const sx0 = Math.round(x0);
-    const sy0 = Math.round(y0);
-    const sx1 = Math.round(x1);
-    const sy1 = Math.round(y1);
-    const cx = (sx0 + sx1) / 2;
-    const cy = (sy0 + sy1) / 2;
-    const rx = Math.abs(sx1 - sx0) / 2;
-    const ry = Math.abs(sy1 - sy0) / 2;
-    app.engine.api.setOverlay({
-        primitives: [
-            prim(KIND_ELLIPSE, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR, [cx, cy], [rx, ry], { dashLen: 6, thickness: 1 }),
-        ],
-    });
-}
+    // Krita-style integer-pixel snapping of the bounding rect (see
+    // `kis_tool_select_elliptical.cc`). The ellipse boundary itself is curved,
+    // so antialiasing stays on at commit time — only the bbox is snapped.
+    private pushPreviewOverlay(): void {
+        const engine = this.engine;
+        if (!engine || !this.dragStart || !this.dragEnd) return;
+        const [x0, y0] = this.dragStart;
+        const [x1, y1] = this.dragEnd;
+        const sx0 = Math.round(x0);
+        const sy0 = Math.round(y0);
+        const sx1 = Math.round(x1);
+        const sy1 = Math.round(y1);
+        const cx = (sx0 + sx1) / 2;
+        const cy = (sy0 + sy1) / 2;
+        const rx = Math.abs(sx1 - sx0) / 2;
+        const ry = Math.abs(sy1 - sy0) / 2;
+        engine.api.setOverlay({
+            primitives: [
+                prim(KIND_ELLIPSE, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR, [cx, cy], [rx, ry], { dashLen: 6, thickness: 1 }),
+            ],
+        });
+    }
 
-function clearPreviewOverlay() {
-    dragStart = null;
-    dragEnd = null;
-    app.engine?.api.clearOverlay();
-}
+    private clearPreviewOverlay(): void {
+        this.dragStart = null;
+        this.dragEnd = null;
+        this.engine?.api.clearOverlay();
+    }
 
-export const ellipseSelectTool: Tool = {
-    id: 'ellipse_select',
-    icon: 'lucide:circle-dashed',
-    group: 'select',
-    cluster: 'select',
-    hotkeyAction: 'ellipseSelectTool',
+    onDeactivate(): void {
+        this.clearPreviewOverlay();
+    }
 
-    onDeactivate() {
-        clearPreviewOverlay();
-    },
+    onPointerDown(_e: PointerEvent, cx: number, cy: number): void {
+        this.dragStart = [cx, cy];
+        this.dragEnd = [cx, cy];
+        this.pushPreviewOverlay();
+    }
 
-    onPointerDown(_ctx, _e, cx, cy) {
-        dragStart = [cx, cy];
-        dragEnd = [cx, cy];
-        pushPreviewOverlay();
-    },
+    onPointerMove(_e: PointerEvent, cx: number, cy: number): void {
+        if (!this.dragStart) return;
+        this.dragEnd = [cx, cy];
+        this.pushPreviewOverlay();
+    }
 
-    onPointerMove(_ctx, _e, cx, cy) {
-        if (!dragStart) return;
-        dragEnd = [cx, cy];
-        pushPreviewOverlay();
-    },
-
-    onPointerUp(ctx, e) {
-        if (!dragStart || !dragEnd) {
-            clearPreviewOverlay();
+    onPointerUp(e: PointerEvent): void {
+        if (!this.dragStart || !this.dragEnd) {
+            this.clearPreviewOverlay();
             return;
         }
 
-        const [x0, y0] = dragStart;
-        const [x1, y1] = dragEnd;
+        const [x0, y0] = this.dragStart;
+        const [x1, y1] = this.dragEnd;
         const sx0 = Math.round(x0);
         const sy0 = Math.round(y0);
         const sx1 = Math.round(x1);
@@ -86,20 +81,29 @@ export const ellipseSelectTool: Tool = {
         // Only commit if the snapped bbox has meaningful size.
         if (w > 0 && h > 0) {
             const mode = selectionMode(e);
-            ctx.engine.api.selectEllipse({ x, y, w, h, mode, antialias: true, feather: 0 });
+            this.engine?.api.selectEllipse({ x, y, w, h, mode, antialias: true, feather: 0 });
         } else if (selectionMode(e) === 'replace') {
             // Click without drag = deselect (only in replace mode)
-            ctx.engine.api.clearSelection();
+            this.engine?.api.clearSelection();
         }
 
-        clearPreviewOverlay();
-    },
+        this.clearPreviewOverlay();
+    }
 
-    onKeyDown(e) {
+    onKeyDown(e: KeyboardEvent): boolean {
         if (e.key === 'Escape') {
-            app.engine?.api.clearSelection();
+            this.engine?.api.clearSelection();
             return true;
         }
         return false;
-    },
+    }
+}
+
+export const ellipseSelectTool: ToolDescriptor = {
+    id: 'ellipse_select',
+    icon: 'lucide:circle-dashed',
+    group: 'select',
+    cluster: 'select',
+    hotkeyAction: 'ellipseSelectTool',
+    create: (inst: DarklyInstance) => new EllipseSelectTool(inst),
 };
