@@ -1,5 +1,6 @@
 <script lang="ts">
     import ParamRow from './ParamRow.svelte';
+    import Icon from '../../icons/Icon.svelte';
     import {
         listItemSchema,
         newListEntry,
@@ -16,6 +17,10 @@
     // effect-specific constant here). Every mutation fires the standard
     // `oninput`/`onchange` contract, so the destructive preview, filter-layer,
     // and veil surfaces need no changes.
+    //
+    // Each entry is independently collapsible (collapsed by default) and can be
+    // drag-reordered by its header. Collapse is ephemeral UI state kept in a
+    // parallel array that moves/splices in lockstep with the entries.
     type Props = {
         param: FilterParam;
         oninput?: () => void;
@@ -27,6 +32,13 @@
     const maxLen = $derived(param.max ?? Infinity);
     const entries = $derived((param.value ?? param.default ?? []) as ListValue);
 
+    // Parallel to `entries`; a missing/false slot means collapsed (the default).
+    let expanded = $state<boolean[]>([]);
+
+    let dragIndex = $state<number | null>(null);
+    let dropIndex = $state<number | null>(null);
+    let dropPos = $state<'above' | 'below'>('above');
+
     // Ensure `param.value` is an editable array we own (deep-cloned from the
     // shared schema default on first edit), then return it for mutation.
     function owned(): ListValue {
@@ -34,6 +46,12 @@
             param.value = cloneParamValue((param.default ?? []) as ListValue);
         }
         return param.value as ListValue;
+    }
+
+    function toggle(i: number) {
+        const next = [...expanded];
+        next[i] = !(next[i] ?? false);
+        expanded = next;
     }
 
     function writeField(i: number, name: string, value: FilterParamValue, commit: boolean) {
@@ -48,6 +66,7 @@
         const arr = owned();
         if (arr.length >= maxLen) return;
         param.value = [...arr, newListEntry(schema)];
+        expanded = [...expanded.slice(0, arr.length), true];
         onchange?.();
     }
 
@@ -55,7 +74,46 @@
         const arr = owned();
         arr.splice(i, 1);
         param.value = [...arr];
+        const e = [...expanded];
+        e.splice(i, 1);
+        expanded = e;
         onchange?.();
+    }
+
+    // Move the entry (and its collapse state) from `from` to `to`.
+    function move(from: number, to: number) {
+        if (from === to) return;
+        const arr = owned();
+        const [item] = arr.splice(from, 1);
+        arr.splice(to, 0, item);
+        param.value = [...arr];
+        const e = [...expanded];
+        const [ev] = e.splice(from, 1);
+        e.splice(to, 0, ev ?? false);
+        expanded = e;
+        onchange?.();
+    }
+
+    function onDragOver(i: number, e: DragEvent) {
+        if (dragIndex === null) return;
+        e.preventDefault();
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        dropPos = (e.clientY - rect.top) / rect.height < 0.5 ? 'above' : 'below';
+        dropIndex = i;
+    }
+
+    function onDrop(i: number) {
+        if (dragIndex === null) return;
+        let to = dropPos === 'above' ? i : i + 1;
+        if (dragIndex < to) to -= 1;
+        move(dragIndex, to);
+        dragIndex = null;
+        dropIndex = null;
+    }
+
+    function endDrag() {
+        dragIndex = null;
+        dropIndex = null;
     }
 </script>
 
@@ -66,21 +124,55 @@
     </div>
 
     {#each entries as entry, i (i)}
-        <div class="entry">
-            <div class="entry-head">
+        {@const isOpen = expanded[i] ?? false}
+        <div
+            class="entry"
+            class:drop-above={dropIndex === i && dropPos === 'above'}
+            class:drop-below={dropIndex === i && dropPos === 'below'}
+            class:dragging={dragIndex === i}
+            ondragover={(e) => onDragOver(i, e)}
+            ondrop={() => onDrop(i)}
+            role="listitem"
+        >
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+                class="entry-head"
+                draggable="true"
+                ondragstart={() => (dragIndex = i)}
+                ondragend={endDrag}
+                onclick={() => toggle(i)}
+                title={isOpen ? 'Collapse' : 'Expand'}
+            >
+                <span class="grip" title="Drag to reorder">
+                    <Icon name="fa6-solid:grip-vertical" />
+                </span>
+                <button
+                    class="chevron"
+                    onclick={(e) => { e.stopPropagation(); toggle(i); }}
+                    title={isOpen ? 'Collapse' : 'Expand'}
+                >
+                    <Icon name={isOpen ? 'fa6-solid:chevron-down' : 'fa6-solid:chevron-right'} />
+                </button>
                 <span class="entry-title">#{i + 1}</span>
-                <button class="remove" title="Remove entry" onclick={() => removeEntry(i)}>
+                <button
+                    class="remove"
+                    title="Remove entry"
+                    onclick={(e) => { e.stopPropagation(); removeEntry(i); }}
+                >
                     ✕
                 </button>
             </div>
-            {#each schema as def (def.name)}
-                {@const field = { ...def, value: entry[def.name] ?? def.default }}
-                <ParamRow
-                    param={field}
-                    oninput={() => writeField(i, def.name, field.value as FilterParamValue, false)}
-                    onchange={() => writeField(i, def.name, field.value as FilterParamValue, true)}
-                />
-            {/each}
+            {#if isOpen}
+                {#each schema as def (def.name)}
+                    {@const field = { ...def, value: entry[def.name] ?? def.default }}
+                    <ParamRow
+                        param={field}
+                        oninput={() => writeField(i, def.name, field.value as FilterParamValue, false)}
+                        onchange={() => writeField(i, def.name, field.value as FilterParamValue, true)}
+                    />
+                {/each}
+            {/if}
         </div>
     {/each}
 
@@ -117,13 +209,61 @@
         padding: 8px;
         border: 1px solid var(--bg-hover);
         border-radius: var(--radius-sm);
+        position: relative;
+    }
+    .entry.dragging {
+        opacity: 0.5;
+    }
+    /* Drop indicator lines drawn on the hovered entry's edges. */
+    .entry.drop-above::before,
+    .entry.drop-below::after {
+        content: '';
+        position: absolute;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background: var(--accent);
+        pointer-events: none;
+    }
+    .entry.drop-above::before {
+        top: -3px;
+    }
+    .entry.drop-below::after {
+        bottom: -3px;
     }
     .entry-head {
         display: flex;
         align-items: center;
-        justify-content: space-between;
+        gap: 4px;
+        cursor: pointer;
+    }
+    .grip {
+        display: flex;
+        align-items: center;
+        color: var(--text-dim);
+        cursor: grab;
+        font-size: 10px;
+    }
+    .grip:hover {
+        color: var(--text-muted);
+    }
+    .chevron {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 14px;
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 9px;
+        padding: 0;
+    }
+    .chevron:hover {
+        color: var(--text);
     }
     .entry-title {
+        flex: 1;
         font-size: 11px;
         color: var(--text-dim);
     }
