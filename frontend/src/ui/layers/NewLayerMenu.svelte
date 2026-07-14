@@ -24,21 +24,21 @@
         <Icon name="fa6-solid:image" />
         <span>Normal Layer</span>
     </button>
+    <button class="item" role="menuitem" onclick={() => onpick('filter')}>
+        <Icon name="fa6-solid:circle-half-stroke" />
+        <span>Filter Layer</span>
+    </button>
     <button class="item" role="menuitem" onclick={() => onpick('group')}>
         <Icon name="fa6-solid:folder" />
         <span>Layer Group</span>
     </button>
     <button class="item" role="menuitem" onclick={() => onpick('veil')}>
-        <Icon name="tabler:circle-half-2" />
+        <Icon name="material-symbols:curtains-rounded" />
         <span>Veil</span>
     </button>
     <button class="item" role="menuitem" onclick={() => onpick('void')}>
         <Icon name="tabler:galaxy" />
         <span>Void</span>
-    </button>
-    <button class="item" role="menuitem" onclick={() => onpick('filter')}>
-        <Icon name="fa6-solid:circle-half-stroke" />
-        <span>Filter Layer</span>
     </button>
 </div>
 

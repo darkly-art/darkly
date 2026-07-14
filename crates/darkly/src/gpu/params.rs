@@ -1,3 +1,34 @@
+use std::collections::BTreeMap;
+
+/// A `const`-constructible parameter value, used only for schema-level defaults
+/// (a [`ParamDef::List`]'s per-entry overrides). [`ParamValue`] owns `String`s
+/// and `Vec`s that can't be built in a `const`, so the schema carries this
+/// `'static`-friendly mirror and lifts it to a `ParamValue` at registry build.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[serde(untagged)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub enum ConstParamValue {
+    Bool(bool),
+    Int(i32),
+    Float(f32),
+    Str(&'static str),
+    Color([f32; 3]),
+    Vec2([f32; 2]),
+}
+
+impl ConstParamValue {
+    fn to_value(self) -> ParamValue {
+        match self {
+            ConstParamValue::Bool(b) => ParamValue::Bool(b),
+            ConstParamValue::Int(i) => ParamValue::Int(i),
+            ConstParamValue::Float(f) => ParamValue::Float(f),
+            ConstParamValue::Str(s) => ParamValue::String(s.to_string()),
+            ConstParamValue::Color(c) => ParamValue::Color(c),
+            ConstParamValue::Vec2(v) => ParamValue::Vec2(v),
+        }
+    }
+}
+
 /// Schema definition for a single effect parameter (filter or veil).
 /// Each module defines a `const` array of these describing its parameters.
 #[derive(Clone, Debug, serde::Serialize)]
@@ -57,6 +88,34 @@ pub enum ParamDef {
         options: &'static [(&'static str, &'static str)],
         default: &'static str,
     },
+    /// RGB color picked as normalized sRGB `[0,1]` — stored *as picked*, with
+    /// **no `srgbToLinear` conversion**. That conversion is for paint colors
+    /// composited in linear space; filter/veil params operate on already-stored
+    /// texel values (like the Curves LUT), so they carry the sRGB triple raw.
+    /// See `frontend/src/lib/color.ts`'s `hexToRgb01`/`rgb01ToHex`.
+    Color {
+        name: &'static str,
+        default: [f32; 3],
+    },
+    /// A 2D vector — direction + magnitude, edited via the draggable offset pad.
+    /// `max` is the magnitude clamp (the pad's edge radius); values are stored
+    /// with magnitude ≤ `max`.
+    Vec2 {
+        name: &'static str,
+        max: f32,
+        default: [f32; 2],
+    },
+    /// A dynamic list of homogeneous entries — each entry is a named group of
+    /// values matching `item`. `max_len` caps the entry count (surfaced in the
+    /// schema so the list editor never hardcodes an effect-specific limit).
+    /// `default` supplies per-entry named overrides layered on top of `item`'s
+    /// own defaults; entries not overridden fall back to the item schema.
+    List {
+        name: &'static str,
+        item: &'static [ParamDef],
+        max_len: usize,
+        default: &'static [&'static [(&'static str, ConstParamValue)]],
+    },
 }
 
 /// A concrete runtime parameter value, read from an effect instance.
@@ -68,6 +127,20 @@ pub enum ParamDef {
 /// fall through to `Float`. Putting `Float` first would silently coerce
 /// every `Int(n)` into `Float(n as f32)` on round-trip and break enum
 /// param matching (`match Some(ParamValue::Int(v))` would fall through).
+///
+/// The array-shaped variants are disjoint by *length* under untagged serde,
+/// which enforces exact-length fixed arrays: `Curve` is an array of `[x, y]`
+/// *pairs*, `Levels` is 5 flat numbers, `Color` is 3, `Vec2` is 2. `List` is
+/// an array of *objects*, matching nothing else. Order follows length-specificity
+/// after `Curve`: `Levels`, `Color`, `Vec2`, then `List` last.
+///
+/// **Known-benign collision:** `List(vec![])` serializes as `[]`, which
+/// deserializes back as `Curve(vec![])` (an empty `Vec<[f32;2]>` also matches
+/// `[]`, and `Curve` is tried first — reordering only moves the ambiguity).
+/// The def-less document path (`layer_kinds/filter.rs`) hits this. It is
+/// behaviorally invisible because every consumer of a `List` param treats any
+/// non-`List` variant as the empty list (→ passthrough); pinned by
+/// `paramvalue_round_trips_preserve_variant`.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -81,6 +154,14 @@ pub enum ParamValue {
     /// A flat 5-number array; disjoint from `Curve` (an array of `[x, y]`
     /// pairs) under `#[serde(untagged)]`, so it follows `Curve` here.
     Levels([f32; 5]),
+    /// RGB color, normalized sRGB `[0,1]` (see [`ParamDef::Color`]).
+    Color([f32; 3]),
+    /// A 2D vector — 2 flat numbers (see [`ParamDef::Vec2`]).
+    Vec2([f32; 2]),
+    /// A dynamic list of named-value entries. `BTreeMap` keeps serialization
+    /// deterministic and `PartialEq` stable, which the compositor's
+    /// `filter_caches` change detection relies on.
+    List(Vec<BTreeMap<String, ParamValue>>),
 }
 
 /// Convert a JSON object of `{ "name": value, ... }` into `Vec<ParamValue>`
@@ -95,69 +176,43 @@ pub fn param_values_from_json(obj: &serde_json::Value, defs: &[ParamDef]) -> Vec
         None => return defs.iter().map(|d| d.default_value()).collect(),
     };
     defs.iter()
-        .map(|def| match def {
-            ParamDef::Float { name, default, .. } => {
-                let v = map
-                    .get(*name)
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(*default as f64) as f32;
-                ParamValue::Float(v)
-            }
-            ParamDef::Int { name, default, .. } => {
-                let v = map
-                    .get(*name)
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(*default as f64) as i32;
-                ParamValue::Int(v)
-            }
-            ParamDef::Bool { name, default } => {
-                let v = map.get(*name).and_then(|v| v.as_bool()).unwrap_or(*default);
-                ParamValue::Bool(v)
-            }
-            ParamDef::String { name, default } => {
-                let v = map
-                    .get(*name)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(default)
-                    .to_string();
-                ParamValue::String(v)
-            }
-            ParamDef::Curve { name, default } => {
-                let points = map
-                    .get(*name)
-                    .and_then(|v| serde_json::from_value::<Vec<[f32; 2]>>(v.clone()).ok())
-                    .unwrap_or_else(|| default.to_vec());
-                ParamValue::Curve(points)
-            }
-            ParamDef::Levels { name, default } => {
-                let arr = map
-                    .get(*name)
-                    .and_then(|v| serde_json::from_value::<[f32; 5]>(v.clone()).ok())
-                    .unwrap_or(*default);
-                ParamValue::Levels(arr)
-            }
-            ParamDef::Enum { name, default, .. } => {
-                let v = map
-                    .get(*name)
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(*default as f64) as i32;
-                ParamValue::Int(v)
-            }
-            ParamDef::FloatInput { name, default, .. } => {
-                let v = map
-                    .get(*name)
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(*default as f64) as f32;
-                ParamValue::Float(v)
-            }
-            ParamDef::Icon { name, default, .. } => {
-                let v = map
-                    .get(*name)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(default)
-                    .to_string();
-                ParamValue::String(v)
-            }
+        .map(|def| def.value_from_json(map.get(def.name())))
+        .collect()
+}
+
+/// Clamp a 2D vector's magnitude to `max` (the [`ParamDef::Vec2`] radius),
+/// preserving direction. Zero and sub-`max` vectors pass through unchanged.
+fn clamp_magnitude(v: [f32; 2], max: f32) -> [f32; 2] {
+    let mag = (v[0] * v[0] + v[1] * v[1]).sqrt();
+    if mag > max && mag > 0.0 {
+        let s = max / mag;
+        [v[0] * s, v[1] * s]
+    } else {
+        v
+    }
+}
+
+/// Expand a [`ParamDef::List`]'s schema defaults into concrete entries: each
+/// default entry starts from the `item` schema's own per-field defaults, then
+/// applies that entry's named overrides on top.
+fn list_default(
+    item: &[ParamDef],
+    entries: &[&[(&'static str, ConstParamValue)]],
+) -> Vec<BTreeMap<String, ParamValue>> {
+    entries
+        .iter()
+        .map(|overrides| {
+            item.iter()
+                .map(|d| {
+                    let key = d.name();
+                    let val = overrides
+                        .iter()
+                        .find(|(k, _)| *k == key)
+                        .map(|(_, v)| v.to_value())
+                        .unwrap_or_else(|| d.default_value());
+                    (key.to_string(), val)
+                })
+                .collect()
         })
         .collect()
 }
@@ -174,6 +229,87 @@ impl ParamDef {
             ParamDef::Enum { default, .. } => ParamValue::Int(*default),
             ParamDef::FloatInput { default, .. } => ParamValue::Float(*default),
             ParamDef::Icon { default, .. } => ParamValue::String(default.to_string()),
+            ParamDef::Color { default, .. } => ParamValue::Color(*default),
+            ParamDef::Vec2 { default, .. } => ParamValue::Vec2(*default),
+            ParamDef::List { item, default, .. } => ParamValue::List(list_default(item, default)),
+        }
+    }
+
+    /// Read one param from an optional JSON value (missing → schema default),
+    /// coercing to this def's concrete [`ParamValue`] variant. The `List` arm
+    /// recurses over its `item` defs per entry, so no arm is duplicated.
+    pub fn value_from_json(&self, raw: Option<&serde_json::Value>) -> ParamValue {
+        match self {
+            ParamDef::Float { default, .. } => {
+                ParamValue::Float(raw.and_then(|v| v.as_f64()).unwrap_or(*default as f64) as f32)
+            }
+            ParamDef::Int { default, .. } => {
+                ParamValue::Int(raw.and_then(|v| v.as_f64()).unwrap_or(*default as f64) as i32)
+            }
+            ParamDef::Bool { default, .. } => {
+                ParamValue::Bool(raw.and_then(|v| v.as_bool()).unwrap_or(*default))
+            }
+            ParamDef::String { default, .. } => {
+                ParamValue::String(raw.and_then(|v| v.as_str()).unwrap_or(default).to_string())
+            }
+            ParamDef::Curve { default, .. } => {
+                let points = raw
+                    .and_then(|v| serde_json::from_value::<Vec<[f32; 2]>>(v.clone()).ok())
+                    .unwrap_or_else(|| default.to_vec());
+                ParamValue::Curve(points)
+            }
+            ParamDef::Levels { default, .. } => {
+                let arr = raw
+                    .and_then(|v| serde_json::from_value::<[f32; 5]>(v.clone()).ok())
+                    .unwrap_or(*default);
+                ParamValue::Levels(arr)
+            }
+            ParamDef::Enum { default, .. } => {
+                ParamValue::Int(raw.and_then(|v| v.as_f64()).unwrap_or(*default as f64) as i32)
+            }
+            ParamDef::FloatInput { default, .. } => {
+                ParamValue::Float(raw.and_then(|v| v.as_f64()).unwrap_or(*default as f64) as f32)
+            }
+            ParamDef::Icon { default, .. } => {
+                ParamValue::String(raw.and_then(|v| v.as_str()).unwrap_or(default).to_string())
+            }
+            ParamDef::Color { default, .. } => {
+                let c = raw
+                    .and_then(|v| serde_json::from_value::<[f32; 3]>(v.clone()).ok())
+                    .unwrap_or(*default);
+                ParamValue::Color(c)
+            }
+            ParamDef::Vec2 { default, max, .. } => {
+                let v = raw
+                    .and_then(|v| serde_json::from_value::<[f32; 2]>(v.clone()).ok())
+                    .unwrap_or(*default);
+                ParamValue::Vec2(clamp_magnitude(v, *max))
+            }
+            ParamDef::List {
+                item,
+                max_len,
+                default,
+                ..
+            } => {
+                let entries = match raw.and_then(|v| v.as_array()) {
+                    Some(arr) => arr
+                        .iter()
+                        .take(*max_len)
+                        .map(|entry| {
+                            let obj = entry.as_object();
+                            item.iter()
+                                .map(|d| {
+                                    let key = d.name();
+                                    let child = obj.and_then(|o| o.get(key));
+                                    (key.to_string(), d.value_from_json(child))
+                                })
+                                .collect::<BTreeMap<String, ParamValue>>()
+                        })
+                        .collect(),
+                    None => list_default(item, default),
+                };
+                ParamValue::List(entries)
+            }
         }
     }
 
@@ -187,7 +323,10 @@ impl ParamDef {
             | ParamDef::Curve { name, .. }
             | ParamDef::Levels { name, .. }
             | ParamDef::Enum { name, .. }
-            | ParamDef::Icon { name, .. } => name,
+            | ParamDef::Icon { name, .. }
+            | ParamDef::Color { name, .. }
+            | ParamDef::Vec2 { name, .. }
+            | ParamDef::List { name, .. } => name,
         }
     }
 
@@ -224,6 +363,35 @@ impl ParamDef {
                 PortableValue::Levels(a) => Ok(ParamValue::Levels(a)),
                 _ => mismatch("levels (5 numbers)"),
             },
+            ParamDef::Color { .. } => match v {
+                PortableValue::Color(c) => Ok(ParamValue::Color(c)),
+                _ => mismatch("color (3 numbers)"),
+            },
+            ParamDef::Vec2 { max, .. } => match v {
+                PortableValue::Vec2(a) => Ok(ParamValue::Vec2(clamp_magnitude(a, *max))),
+                _ => mismatch("vec2 (2 numbers)"),
+            },
+            ParamDef::List { item, .. } => match v {
+                PortableValue::List(entries) => {
+                    let out = entries
+                        .into_iter()
+                        .map(|entry| {
+                            item.iter()
+                                .map(|d| {
+                                    let key = d.name();
+                                    let val = match entry.get(key) {
+                                        Some(pv) => d.coerce_portable(pv.clone())?,
+                                        None => d.default_value(),
+                                    };
+                                    Ok((key.to_string(), val))
+                                })
+                                .collect::<Result<BTreeMap<_, _>, ParamTypeMismatch>>()
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(ParamValue::List(out))
+                }
+                _ => mismatch("list (array of entries)"),
+            },
         }
     }
 }
@@ -254,6 +422,9 @@ pub enum PortableValue {
     String(String),
     Curve(Vec<[f32; 2]>),
     Levels([f32; 5]),
+    Color([f32; 3]),
+    Vec2([f32; 2]),
+    List(Vec<BTreeMap<String, PortableValue>>),
 }
 
 impl PortableValue {
@@ -265,6 +436,18 @@ impl PortableValue {
             ParamValue::String(s) => Self::String(s.clone()),
             ParamValue::Curve(c) => Self::Curve(c.clone()),
             ParamValue::Levels(a) => Self::Levels(*a),
+            ParamValue::Color(c) => Self::Color(*c),
+            ParamValue::Vec2(v) => Self::Vec2(*v),
+            ParamValue::List(entries) => Self::List(
+                entries
+                    .iter()
+                    .map(|e| {
+                        e.iter()
+                            .map(|(k, v)| (k.clone(), Self::from_param(v)))
+                            .collect()
+                    })
+                    .collect(),
+            ),
         }
     }
 
@@ -276,6 +459,9 @@ impl PortableValue {
             Self::String(_) => "string",
             Self::Curve(_) => "curve",
             Self::Levels(_) => "levels",
+            Self::Color(_) => "color",
+            Self::Vec2(_) => "vec2",
+            Self::List(_) => "list",
         }
     }
 }
@@ -283,6 +469,40 @@ impl PortableValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
+    // A small list schema used across the List/Vec2/Color tests: one entry is a
+    // named group of `{ offset: Vec2, scale: Float, color: Color }`, with two
+    // default entries exercising per-entry overrides on top of item defaults.
+    const ITEM: &[ParamDef] = &[
+        ParamDef::Vec2 {
+            name: "offset",
+            max: 64.0,
+            default: [0.0, 0.0],
+        },
+        ParamDef::Float {
+            name: "scale",
+            min: 0.9,
+            max: 1.1,
+            default: 1.0,
+        },
+        ParamDef::Color {
+            name: "color",
+            default: [1.0, 1.0, 1.0],
+        },
+    ];
+    const LIST: ParamDef = ParamDef::List {
+        name: "aberrations",
+        item: ITEM,
+        max_len: 4,
+        default: &[
+            &[("scale", ConstParamValue::Float(1.004))],
+            &[
+                ("offset", ConstParamValue::Vec2([2.0, 0.0])),
+                ("color", ConstParamValue::Color([0.0, 1.0, 0.0])),
+            ],
+        ],
+    };
 
     /// Regression: `ParamValue::Int(n)` must round-trip through JSON without
     /// degrading to `ParamValue::Float`. The bug: Rough Watercolor's shape
@@ -308,8 +528,32 @@ mod tests {
             ParamValue::Float(-2.25),
             ParamValue::String("hello".into()),
             ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]]),
+            // 3-point curve stays a Curve (not mistaken for Levels' 5 numbers).
+            ParamValue::Curve(vec![[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]]),
+            // Single-point curve `[[a, b]]` (array of ONE pair) must stay Curve
+            // and never be read as a 2-number `Vec2`.
+            ParamValue::Curve(vec![[3.0, 5.0]]),
             ParamValue::Levels([0.0, 1.0, 1.0, 0.0, 1.0]),
             ParamValue::Levels([0.1, 0.9, 2.2, 0.05, 0.95]),
+            // Color/Vec2 with whole-number components (adversarial: whole floats
+            // serialize as `1.0`, not `1`, so they don't degrade to Int).
+            ParamValue::Color([1.0, 0.0, 0.0]),
+            ParamValue::Color([0.25, 0.5, 0.75]),
+            ParamValue::Vec2([1.0, 2.0]),
+            ParamValue::Vec2([-4.0, 0.0]),
+            // A list entry mixing every value kind, including a Curve nested
+            // inside an entry (array-of-objects matches nothing but List).
+            ParamValue::List(vec![BTreeMap::from([
+                ("offset".to_string(), ParamValue::Vec2([4.0, 0.0])),
+                ("scale".to_string(), ParamValue::Float(1.004)),
+                ("color".to_string(), ParamValue::Color([1.0, 0.0, 0.0])),
+                (
+                    "curve".to_string(),
+                    ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]]),
+                ),
+                ("count".to_string(), ParamValue::Int(3)),
+                ("on".to_string(), ParamValue::Bool(true)),
+            ])]),
         ] {
             let json = serde_json::to_string(&v).unwrap();
             let back: ParamValue = serde_json::from_str(&json).unwrap();
@@ -320,9 +564,88 @@ mod tests {
                 (ParamValue::String(a), ParamValue::String(b)) => a == b,
                 (ParamValue::Curve(a), ParamValue::Curve(b)) => a == b,
                 (ParamValue::Levels(a), ParamValue::Levels(b)) => a == b,
+                (ParamValue::Color(a), ParamValue::Color(b)) => a == b,
+                (ParamValue::Vec2(a), ParamValue::Vec2(b)) => a == b,
+                (ParamValue::List(a), ParamValue::List(b)) => a == b,
                 _ => false,
             };
             assert!(ok, "round-trip changed variant: {v:?} → {json} → {back:?}");
         }
+    }
+
+    /// Pinned benign collision: `List(vec![])` serializes as `[]`, which
+    /// deserializes back as `Curve(vec![])` (empty vec matches Curve, tried
+    /// first). Behaviorally invisible — every List consumer treats a non-List
+    /// as the empty list. This test documents the degradation so a future
+    /// reorder that changes it is a deliberate, reviewed choice.
+    #[test]
+    fn empty_list_degrades_to_empty_curve() {
+        let v = ParamValue::List(vec![]);
+        let json = serde_json::to_string(&v).unwrap();
+        assert_eq!(json, "[]");
+        let back: ParamValue = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, ParamValue::Curve(vec![]));
+    }
+
+    /// A `List` def's schema defaults expand into concrete entries: each entry
+    /// starts from the item schema's own defaults, with the per-entry overrides
+    /// layered on top.
+    #[test]
+    fn list_default_expands_entries_with_overrides() {
+        let ParamValue::List(entries) = LIST.default_value() else {
+            panic!("List default must be a List value");
+        };
+        assert_eq!(entries.len(), 2);
+        // Entry 0: `scale` overridden, offset/color from item defaults.
+        assert_eq!(entries[0]["scale"], ParamValue::Float(1.004));
+        assert_eq!(entries[0]["offset"], ParamValue::Vec2([0.0, 0.0]));
+        assert_eq!(entries[0]["color"], ParamValue::Color([1.0, 1.0, 1.0]));
+        // Entry 1: offset + color overridden, scale falls back to item default.
+        assert_eq!(entries[1]["offset"], ParamValue::Vec2([2.0, 0.0]));
+        assert_eq!(entries[1]["color"], ParamValue::Color([0.0, 1.0, 0.0]));
+        assert_eq!(entries[1]["scale"], ParamValue::Float(1.0));
+    }
+
+    /// `param_values_from_json` fills missing entry fields from item defaults and
+    /// clamps an over-range Vec2 to the def's `max` magnitude.
+    #[test]
+    fn list_from_json_fills_missing_fields_and_clamps_vec2() {
+        let obj = serde_json::json!({
+            "aberrations": [
+                { "offset": [100.0, 0.0] }, // magnitude 100 > max 64 → clamped
+                { "scale": 0.95 },
+            ]
+        });
+        let vals = param_values_from_json(&obj, std::slice::from_ref(&LIST));
+        let ParamValue::List(entries) = &vals[0] else {
+            panic!("expected a List value");
+        };
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["offset"], ParamValue::Vec2([64.0, 0.0]));
+        assert_eq!(entries[0]["scale"], ParamValue::Float(1.0));
+        assert_eq!(entries[0]["color"], ParamValue::Color([1.0, 1.0, 1.0]));
+        assert_eq!(entries[1]["scale"], ParamValue::Float(0.95));
+        assert_eq!(entries[1]["offset"], ParamValue::Vec2([0.0, 0.0]));
+    }
+
+    /// Portable coercion (the YAML/def-driven path) round-trips the new kinds,
+    /// including a nested List.
+    #[test]
+    fn portable_coercion_round_trips_new_kinds() {
+        let color_def = ParamDef::Color {
+            name: "c",
+            default: [0.0; 3],
+        };
+        let color = ParamValue::Color([0.5, 0.25, 0.75]);
+        let back = color_def
+            .coerce_portable(PortableValue::from_param(&color))
+            .unwrap();
+        assert_eq!(back, color);
+
+        let list = LIST.default_value();
+        let back = LIST
+            .coerce_portable(PortableValue::from_param(&list))
+            .unwrap();
+        assert_eq!(back, list);
     }
 }
