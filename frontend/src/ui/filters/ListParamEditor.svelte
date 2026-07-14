@@ -1,6 +1,7 @@
 <script lang="ts">
     import ParamRow from './ParamRow.svelte';
     import Icon from '../../icons/Icon.svelte';
+    import { rgb01ToHex } from '../../lib/color';
     import {
         listItemSchema,
         newListEntry,
@@ -8,6 +9,7 @@
         type FilterParam,
         type FilterParamValue,
         type ListValue,
+        type ColorValue,
     } from './filterParams';
 
     // Generic editor for a `list` param — a dynamic list of homogeneous entries,
@@ -34,6 +36,18 @@
 
     // Parallel to `entries`; a missing/false slot means collapsed (the default).
     let expanded = $state<boolean[]>([]);
+
+    // The first `color`-kind field in the schema, if any — its per-entry value
+    // becomes the header swatch (falls back to the entry index when absent).
+    const colorField = $derived(schema.find((d) => d.kind === 'color')?.name);
+
+    function entryHex(entry: Record<string, FilterParamValue>): string | null {
+        if (!colorField) return null;
+        const c = (entry[colorField] ?? schema.find((d) => d.name === colorField)?.default) as
+            | ColorValue
+            | undefined;
+        return Array.isArray(c) ? rgb01ToHex(c) : null;
+    }
 
     let dragIndex = $state<number | null>(null);
     let dropIndex = $state<number | null>(null);
@@ -125,6 +139,7 @@
 
     {#each entries as entry, i (i)}
         {@const isOpen = expanded[i] ?? false}
+        {@const hex = entryHex(entry)}
         <div
             class="entry"
             class:drop-above={dropIndex === i && dropPos === 'above'}
@@ -154,7 +169,12 @@
                 >
                     <Icon name={isOpen ? 'fa6-solid:chevron-down' : 'fa6-solid:chevron-right'} />
                 </button>
-                <span class="entry-title">#{i + 1}</span>
+                {#if hex}
+                    <span class="swatch" style="background: {hex}"></span>
+                    <span class="entry-title"></span>
+                {:else}
+                    <span class="entry-title">#{i + 1}</span>
+                {/if}
                 <button
                     class="remove"
                     title="Remove entry"
@@ -262,10 +282,19 @@
     .chevron:hover {
         color: var(--text);
     }
+    .swatch {
+        width: 12px;
+        height: 12px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--bg-hover);
+        flex-shrink: 0;
+    }
     .entry-title {
         flex: 1;
         font-size: 11px;
         color: var(--text-dim);
+        font-variant-numeric: tabular-nums;
+        text-transform: uppercase;
     }
     .remove {
         background: transparent;
