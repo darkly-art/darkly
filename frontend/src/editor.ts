@@ -6,6 +6,7 @@ import { rebuildClickIndex } from './actions/triggers';
 import { theme } from './state/theme.svelte';
 import { pixelFilter } from './state/pixelFilter.svelte';
 import { DarklyInstance, setActiveInstance, getActiveInstance } from './state/app.svelte';
+import { freshDocument } from './state/freshDocument';
 import { createHandle } from './state/session';
 import { fontLibrary } from './state/font_library.svelte';
 import type { Engine } from './engine/protocol';
@@ -71,8 +72,9 @@ export async function ensureProcessInit(): Promise<void> {
 
 /** Options for {@link createInstance}. */
 export interface CreateInstanceOptions {
-    /** Seed a fresh document with a single white background layer (the
-     *  default for "new tab" flows). Done **before** the engine is
+    /** Seed a fresh document with its default background layer (the
+     *  deploy-flavor's {@link freshDocument} initial layer — the demo
+     *  background image or the app's black fill). Done **before** the engine is
      *  published to `instance.engine`, so any `$effect` that watches
      *  `app.engine` sees a fully-bootstrapped engine — no
      *  refresh-after-mutation race for consumers like `LayerPanel`. */
@@ -137,7 +139,7 @@ export async function createInstance(
     // LayerPanel would otherwise hit.
     if (options.seedBackground) {
         const bg = await engine.api.addRaster({ anchor: null });
-        engine.api.fillBackground({ id: bg });
+        freshDocument.fillInitialLayer(engine, bg);
         instance.selectLayer(bg);
     }
 
@@ -157,24 +159,15 @@ export async function createInstance(
     return instance;
 }
 
-/** Populate a freshly-booted instance with the default starter content:
- *  the 4 hidden veils new users discover the feature through. Caller
- *  decides when to invoke (skipped for tabs that load existing
- *  documents). Living as a free function (not a `DarklyInstance` method)
- *  keeps "what's in a fresh tab" at the application layer — the engine
- *  itself stays opinion-free. */
+/** Populate a freshly-booted instance with the deploy-flavor's default
+ *  starter content (the demo build's hidden veils, or nothing for the app
+ *  build) — see {@link freshDocument}. Caller decides when to invoke
+ *  (skipped for tabs that load existing documents). Living as a free
+ *  function (not a `DarklyInstance` method) keeps "what's in a fresh tab"
+ *  at the application layer — the engine itself stays opinion-free. */
 export function seedFreshDocument(instance: DarklyInstance, docW: number, docH: number): void {
     if (!instance.engine) return;
-    // The veil chain needs a non-zero viewport before `add_veil` will
-    // allocate textures; without this `ensure_textures` no-ops and the
-    // next call would unwrap on `views`. CanvasView issues its own
-    // resize to the surface dims right after, so the only cost is one
-    // GPU realloc that's immediately replaced.
-    instance.engine.api.resize({ width: docW, height: docH });
-    instance.addVeil('rainy_glass', { direction: 135, visible: false });
-    instance.addVeil('grain',       { speed: 0.05,    visible: false });
-    instance.addVeil('lens_blur',   { radius: 0.25,   visible: false });
-    instance.addVeil('vhs',         { visible: false });
+    freshDocument.seedVeils(instance, docW, docH);
 }
 
 /** Single-instance boot path used by the standalone (non-multi-tab) host.

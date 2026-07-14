@@ -28,12 +28,16 @@ function gitVersion(): string {
     }
 }
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
     // Relative asset paths so the same dist/ works when served from a web root
     // ("/") and when loaded via file:// from a packaged desktop bundle.
     base: './',
     define: {
         __DARKLY_VERSION__: JSON.stringify(gitVersion()),
+        // Deploy flavor: 'app' only for an explicit `vite build --mode app`.
+        // Every other mode (production default, dev server, --mode demo) stays
+        // 'demo', so `npm run dev` keeps the decorative demo experience.
+        __DARKLY_APP_MODE__: JSON.stringify(mode === 'app' ? 'app' : 'demo'),
     },
     plugins: [
         // Regenerates src/icons/bundle.generated.ts from the icon names found in
@@ -97,4 +101,4 @@ export default defineConfig({
             allow: ['..'],
         },
     },
-});
+}));
