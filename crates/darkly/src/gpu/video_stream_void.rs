@@ -15,6 +15,16 @@
 //! aux texture, applies the user's transform (the generic gizmo affine), and
 //! writes to the layer's destination texture.
 //!
+//! **Alpha convention:** the aux texture stores **premultiplied** texels, so the
+//! sampler's linear filter interpolates correctly at alpha edges — filtering
+//! straight alpha darkens color toward transparent-black neighbors (dark halos;
+//! docs/lessons-learned/compositing-lessons-learned.md #2). Every writer
+//! honors it: the live upload converts during the copy
+//! (`premultiplied_alpha: true`), and save/load round-trips the raw texels
+//! unchanged. The shader un-premultiplies after sampling, so the void still
+//! emits the straight alpha the compositor expects. Camera/display frames are
+//! opaque, where premultiplication is the identity.
+//!
 //! Aspect handling is "cover": at the identity transform the source fills the
 //! layer and the short axis is cropped — the active-pixel rect overhangs the
 //! canvas on the long axis (see `content_rect`). Out-of-frame samples return
@@ -111,6 +121,24 @@ fn read_frame_divisor(config: &VideoStreamConfig, params: &[ParamValue]) -> u32 
     }
 }
 
+/// Normalize an incoming param slice to exactly the config's schema length,
+/// filling missing/short entries with each def's declared default. Backs
+/// `param_snapshot`, so passthrough params (e.g. `url`) always have a value to
+/// echo back even if a caller supplied a shorter slice.
+fn normalize_params(config: &VideoStreamConfig, params: &[ParamValue]) -> Vec<ParamValue> {
+    config
+        .params
+        .iter()
+        .enumerate()
+        .map(|(i, def)| {
+            params
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| def.default_value())
+        })
+        .collect()
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct VideoStreamUniforms {
@@ -154,6 +182,15 @@ pub struct VideoStreamVoid {
     /// and gates its uploads accordingly. Never read at render time on the
     /// Rust side.
     frame_divisor: u32,
+    /// Snapshot of every param value in the config's schema order, kept in sync
+    /// with the document by `from_params` / `update_params`. `freeze` and
+    /// `frame_divisor` are modeled by the typed fields above and read from them;
+    /// any *other* param a config declares (e.g. the Blender void's `url`) is
+    /// opaque passthrough — never interpreted here, but stored so `param_values`
+    /// echoes the user's edits back for save/load and the frontend reconciler.
+    /// This keeps the shared machinery generic: a config can add a
+    /// frontend-only param without a bespoke field.
+    param_snapshot: Vec<ParamValue>,
     /// Current source dimensions (updated on each frame upload). 1×1 until
     /// the first frame arrives — matching the placeholder aux texture.
     src_w: u32,
@@ -177,6 +214,7 @@ impl Clone for VideoStreamVoid {
             transform: self.transform,
             freeze: self.freeze,
             frame_divisor: self.frame_divisor,
+            param_snapshot: self.param_snapshot.clone(),
             src_w: self.src_w,
             src_h: self.src_h,
             canvas_w: Cell::new(self.canvas_w.get()),
@@ -202,6 +240,7 @@ impl VideoStreamVoid {
             transform: crate::transform::Transform::identity(),
             freeze: read_freeze(config, params),
             frame_divisor: read_frame_divisor(config, params),
+            param_snapshot: normalize_params(config, params),
             src_w: 1,
             src_h: 1,
             canvas_w: Cell::new(1),
@@ -387,12 +426,19 @@ impl Void for VideoStreamVoid {
         self.config
             .params
             .iter()
-            .map(|def| match def.name() {
+            .enumerate()
+            .map(|(i, def)| match def.name() {
                 "freeze" => ParamValue::Bool(self.freeze),
                 "frame_divisor" => ParamValue::Int(self.frame_divisor as i32),
-                // Unknown param: fall back to its declared default so the slice
-                // length always matches the schema.
-                _ => def.default_value(),
+                // Passthrough param (e.g. `url`): echo the stored value so the
+                // user's edits round-trip through save/load and reach the
+                // frontend reconciler. Falls back to the schema default if the
+                // snapshot is somehow short.
+                _ => self
+                    .param_snapshot
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| def.default_value()),
             })
             .collect()
     }
@@ -425,6 +471,7 @@ impl Void for VideoStreamVoid {
         // encode samples whatever was last uploaded.
         self.freeze = read_freeze(self.config, params);
         self.frame_divisor = read_frame_divisor(self.config, params);
+        self.param_snapshot = normalize_params(self.config, params);
         if let Some(buf) = cache.uniform_bufs.first() {
             queue.write_buffer(buf, 0, bytemuck::bytes_of(&self.uniforms()));
         }
@@ -488,9 +535,10 @@ impl Void for VideoStreamVoid {
             return;
         }
         self.resize_aux_texture(device, cache, width, height);
-        // Bytes are already Rgba8Unorm-packed (the format the save flow read
-        // back). Direct queue.write_texture is the symmetric load path matching
-        // raster's `upload_node_pixels`.
+        // Bytes are already Rgba8Unorm-packed in the aux texture's
+        // premultiplied-alpha convention (the save flow read back exactly
+        // these texels). Direct queue.write_texture is the symmetric load
+        // path matching raster's `upload_node_pixels`.
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &cache.aux_textures[0],
@@ -562,7 +610,10 @@ impl Void for VideoStreamVoid {
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                     color_space: wgpu::PredefinedColorSpace::Srgb,
-                    premultiplied_alpha: false,
+                    // The aux texture stores PREMULTIPLIED texels (see the
+                    // module docs); the browser converts the source bitmap
+                    // during the copy whatever its decode state.
+                    premultiplied_alpha: true,
                 },
                 wgpu::Extent3d {
                     width: w,
@@ -794,6 +845,89 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0], ParamValue::Bool(false), "freeze defaults off");
         assert_eq!(out[1], ParamValue::Int(4), "frame_divisor defaults to 4");
+    }
+
+    // A config with a passthrough `url` param on top of the shared two, standing
+    // in for the Blender void — exercises that params the machinery doesn't model
+    // still round-trip.
+    const URL_PARAMS: &[ParamDef] = &[
+        ParamDef::Bool {
+            name: "freeze",
+            default: false,
+        },
+        ParamDef::Int {
+            name: "frame_divisor",
+            min: 1,
+            max: 60,
+            default: 4,
+        },
+        ParamDef::String {
+            name: "url",
+            default: "http://localhost:8765/stream",
+        },
+    ];
+
+    static URL_CONFIG: VideoStreamConfig = VideoStreamConfig {
+        type_id: "test_url_stream",
+        display_name: "Test URL",
+        icon: "tabler:test",
+        params: URL_PARAMS,
+        capture_kind: CaptureKind::Stream,
+        default_transform: |_, _| crate::transform::Transform::identity(),
+    };
+
+    /// A passthrough param (`url`) the machinery never interprets must still
+    /// round-trip: its user-edited value has to survive `from_params` →
+    /// `param_values` (save/load) and `update_params` (the properties panel),
+    /// or the frontend would always reconnect to the default endpoint. Before
+    /// `param_snapshot`, `param_values` regenerated non-modeled params from
+    /// their default and silently discarded edits.
+    #[test]
+    fn passthrough_param_round_trips() {
+        let (_device, queue) = crate::gpu::test_utils::test_device();
+        let mut v = VideoStreamVoid::from_params(
+            &URL_CONFIG,
+            &[
+                ParamValue::Bool(false),
+                ParamValue::Int(4),
+                ParamValue::String("http://example.test/a".into()),
+            ],
+            fake_pipeline(),
+        );
+        assert_eq!(
+            v.param_values()[2],
+            ParamValue::String("http://example.test/a".into()),
+            "the created url must echo back, not the schema default",
+        );
+
+        let uniform_buf = _device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: std::mem::size_of::<VideoStreamUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let cache = EffectCache {
+            uniform_bufs: vec![uniform_buf],
+            bind_groups: Vec::new(),
+            aux_textures: Vec::new(),
+            aux_views: Vec::new(),
+            aux_pipelines: Vec::new(),
+        };
+
+        v.update_params(
+            &queue,
+            &cache,
+            &[
+                ParamValue::Bool(false),
+                ParamValue::Int(4),
+                ParamValue::String("http://example.test/b".into()),
+            ],
+        );
+        assert_eq!(
+            v.param_values()[2],
+            ParamValue::String("http://example.test/b".into()),
+            "editing the url must persist through update_params",
+        );
     }
 
     #[test]

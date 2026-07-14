@@ -2,8 +2,8 @@
     import { setContext } from 'svelte';
     import CurveEditor from '../CurveEditor.svelte';
     import LevelsEditor from './LevelsEditor.svelte';
-    import EnumDropdown from '../settings/widgets/EnumDropdown.svelte';
-    import Slider from '../settings/widgets/Slider.svelte';
+    import ParamRow from './ParamRow.svelte';
+    import ListParamEditor from './ListParamEditor.svelte';
     import { createGraphCoords } from '../brush_builder/coords';
     import type { NodeCanvasContext } from '../brush_builder/NodeCanvas.svelte';
     import {
@@ -79,18 +79,6 @@
         return Array.from(histogramBins.subarray(idx * HIST_BINS, (idx + 1) * HIST_BINS));
     });
 
-    function onSliderChange(param: FilterParam, v: number) {
-        param.value = v;
-        onchange?.();
-    }
-    function onBoolChange(param: FilterParam, e: Event) {
-        param.value = (e.target as HTMLInputElement).checked;
-        onchange?.();
-    }
-    function onEnumChange(param: FilterParam, key: string) {
-        param.value = Number(key);
-        onchange?.();
-    }
     // Live edit (mid-drag) — reports without committing. Works for both editors.
     function onChannelInput(value: CurvePoints | LevelsValues) {
         if (!selectedParam) return;
@@ -156,33 +144,16 @@
     {/if}
 
     {#each scalars as param (param.name)}
-        <div class="row">
-            <span class="label">{param.name}</span>
-            {#if param.kind === 'float' || param.kind === 'int'}
-                <Slider
-                    value={(param.value ?? param.default) as number}
-                    min={(param.min ?? 0) as number}
-                    max={(param.max ?? 1) as number}
-                    integer={param.kind === 'int'}
-                    onchange={(v) => onSliderChange(param, v)}
-                    format={(v) => (param.kind === 'int' ? String(v) : v.toFixed(2))}
-                />
-            {:else if param.kind === 'enum'}
-                <EnumDropdown
-                    value={String((param.value ?? param.default) as number)}
-                    options={(param.options ?? []).map((label, i) => [String(i), label])}
-                    disabled={param.name === 'model' && colorizeOn}
-                    onchange={(k) => onEnumChange(param, k)}
-                />
-            {:else if param.kind === 'bool'}
-                <input
-                    type="checkbox"
-                    class="checkbox"
-                    checked={(param.value ?? param.default) as boolean}
-                    onchange={(e) => onBoolChange(param, e)}
-                />
-            {/if}
-        </div>
+        {#if param.kind === 'list'}
+            <ListParamEditor {param} {oninput} {onchange} />
+        {:else}
+            <ParamRow
+                {param}
+                disabled={param.name === 'model' && colorizeOn}
+                {oninput}
+                {onchange}
+            />
+        {/if}
     {/each}
 
     {#if (params ?? []).length === 0}
@@ -238,10 +209,6 @@
         border-radius: var(--radius-sm);
         font-size: 11px;
         padding: 2px 4px;
-    }
-
-    .checkbox {
-        accent-color: var(--accent);
     }
 
     .empty {

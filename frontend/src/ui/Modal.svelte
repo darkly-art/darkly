@@ -154,6 +154,13 @@
         cursor: grab;
         touch-action: none;
         user-select: none;
+        /* Extend the hit area over the header's own padding so the whole
+         * title bar drags, not just the title text. The negative margins
+         * cancel the padding exactly, so layout is unchanged; the close
+         * button (to the right) stays outside the handle. */
+        margin: calc(-1 * var(--header-pad-y)) 0 calc(-1 * var(--header-pad-y))
+            calc(-1 * var(--header-pad-x));
+        padding: var(--header-pad-y) 0 var(--header-pad-y) var(--header-pad-x);
     }
     .drag-handle:active {
         cursor: grabbing;
@@ -164,10 +171,12 @@
     dialog.modal.size-lg { width: min(92vw, 960px); height: min(82vh, 720px); }
 
     header {
+        --header-pad-y: 14px;
+        --header-pad-x: 18px;
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 14px 18px;
+        padding: var(--header-pad-y) var(--header-pad-x);
         border-bottom: 1px solid var(--bg-hover);
         flex-shrink: 0;
     }

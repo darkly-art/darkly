@@ -130,12 +130,13 @@ For a feature to count, it must be:
 - [x] Application menu
 - [x] Autosave + crash recovery
 - [x] Filter layers
-    - [ ] Brightness / Contrast
+    - [x] Brightness / Contrast
     - [x] Hue / Saturation / Lightness
     - [x] Levels
     - [x] Curves
     - [x] Invert colors
     - [ ] Desaturate
+    - [x] Chromatic aberration
 - [ ] Clipping mask
 - [x] Feather + antialias
 - [x] Grow / Shrink / Border / Smooth
@@ -167,6 +168,7 @@ For a feature to count, it must be:
 - [x] Void layers
 - [x] Camera void
 - [x] Screenshare void
+- [x] Blender void
 - [x] Group blend mode / opacity
 - [x] Dockable / tiled panels (drag to reorder, tab, split-dock)
 - [x] Pop out panels into separate OS windows (cross-window drag)

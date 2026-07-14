@@ -782,11 +782,11 @@ export function registerActions() {
                 : app.activeLayerId !== null ? [app.activeLayerId] : [];
             if (targets.length === 0) return;
             try {
-                // Stop any associated MediaStreams (camera / screenshare)
-                // before the layers go away. `refreshLayerTree` reaps as a
-                // safety net, but stopping eagerly turns off the OS capture
-                // indicator immediately.
-                for (const id of targets) app.stopMediaStreamVoid(id);
+                // Stop any associated frame sources (camera / screenshare /
+                // Blender stream) before the layers go away. `refreshLayerTree`
+                // reaps as a safety net, but stopping eagerly turns off the OS
+                // capture indicator / drops the HTTP connection immediately.
+                for (const id of targets) app.stopStreamSource(id);
                 if (targets.length === 1) {
                     await engine.api.removeLayer({ id: targets[0] });
                     app.clearSelection();

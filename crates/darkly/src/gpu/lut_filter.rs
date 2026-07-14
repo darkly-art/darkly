@@ -13,7 +13,7 @@
 //! so each filter is a thin "give me eight per-channel evaluators" provider.
 
 use crate::gpu::effect::EffectCache;
-use crate::gpu::param_filter::ParamFilter;
+use crate::gpu::param_filter::{ParamFilter, SrcSampling};
 use crate::gpu::params::ParamValue;
 
 /// The LUT fragment-shader source shared by every LUT filter (Curves, Levels):
@@ -206,6 +206,7 @@ pub fn lut_param_filter(
         "fs_curves",
         "fs_curves_masked",
         true, // aux-carrying (the 256×2 LUT texture at binding 1)
+        SrcSampling::Load,
         move |device, queue, params, cache| lut_prepare(device, queue, bake, params, cache),
     )
 }

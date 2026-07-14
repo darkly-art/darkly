@@ -346,9 +346,6 @@
     .port-right .port-dot {
         right: -5px;
     }
-    .port-dot.connected {
-        /* filled by inline style */
-    }
     .port-dot:hover {
         transform: translateY(-50%) scale(1.3);
     }

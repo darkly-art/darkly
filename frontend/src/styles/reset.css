@@ -4,6 +4,20 @@
     box-sizing: border-box;
 }
 
+/* Darkly owns focus indication; the UA default ring is never welcome.
+   Buttons are stripped from keyboard focus entirely
+   (suppressButtonKeyboardFocus.ts), and every control that wants a ring
+   paints its own accent outline in component styles — those rules
+   out-specify this one, so opt-in focus styles are unaffected. Suppressing
+   the UA ring per-element is unwinnable: the browser invents focus targets
+   on its own (e.g. `showModal()` delegates focus to the first focusable
+   descendant and forces `:focus-visible` on it), so each new widget becomes
+   the next thing wearing the ring. */
+:focus,
+:focus-visible {
+    outline: none;
+}
+
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
     background: var(--bg);

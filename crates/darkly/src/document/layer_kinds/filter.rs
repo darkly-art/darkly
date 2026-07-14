@@ -186,6 +186,64 @@ mod tests {
         );
     }
 
+    /// A chromatic-aberration filter layer round-trips its `List` params (the
+    /// new list-of-groups kind), and an emptied list survives the benign
+    /// `List([]) → Curve([])` degradation as a passthrough (`count == 0`).
+    #[test]
+    fn chromatic_aberration_list_params_round_trip() {
+        use crate::gpu::filters::chromatic_aberration::{pack_uniform, PARAMS};
+
+        let mut doc = Document::new(64, 64);
+        let params: Vec<ParamValue> = PARAMS.iter().map(|d| d.default_value()).collect();
+        let id = doc.add_filter_layer(
+            "chromatic_aberration".to_string(),
+            "CA",
+            params.clone(),
+            None,
+        );
+
+        let reg = register();
+        let node = doc.find_node(id).expect("filter exists");
+        let serialized = (reg.serialize)(node);
+        let restored = (reg.deserialize)(&serialized.body, id).expect("deserialize must succeed");
+        let f = match &restored {
+            LayerNode::Layer(Layer::Filter(f)) => f,
+            _ => panic!("deserialize must yield a Filter layer"),
+        };
+        assert_eq!(f.pipeline, "chromatic_aberration");
+        assert_eq!(
+            f.params, params,
+            "CA list params must survive the round-trip"
+        );
+
+        // Emptied list: serializes as `[]`, degrades to `Curve([])` on reload,
+        // but `pack_uniform` treats any non-List as empty → passthrough.
+        let empty = doc.add_filter_layer(
+            "chromatic_aberration".to_string(),
+            "CA2",
+            vec![ParamValue::List(vec![])],
+            None,
+        );
+        let node = doc.find_node(empty).expect("filter exists");
+        let serialized = (reg.serialize)(node);
+        let restored =
+            (reg.deserialize)(&serialized.body, empty).expect("deserialize must succeed");
+        let f = match &restored {
+            LayerNode::Layer(Layer::Filter(f)) => f,
+            _ => panic!("deserialize must yield a Filter layer"),
+        };
+        assert_eq!(
+            f.params,
+            vec![ParamValue::Curve(vec![])],
+            "an emptied list degrades to an empty curve on the def-less document path"
+        );
+        assert_eq!(
+            pack_uniform(&f.params).count,
+            0,
+            "the degraded param still packs as a passthrough"
+        );
+    }
+
     /// A corrupt blend_mode in the saved body must surface as
     /// `CorruptManifest`, not a silent fallback — the same contract every
     /// other layer kind holds.

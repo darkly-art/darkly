@@ -40,6 +40,7 @@ A comprehensive reference of the default keyboard shortcuts shipped with Adobe P
   - [Keys for Vanishing Point](#keys-for-vanishing-point)
   - [Keys for Extract and Pattern Maker (optional plug-ins)](#keys-for-extract-and-pattern-maker-optional-plug-ins)
 - **Camera Raw & Adjustments**
+  - [Keys for the Image ▸ Adjustments menu](#keys-for-the-image--adjustments-menu)
   - [Keys for the Camera Raw dialog box](#keys-for-the-camera-raw-dialog-box)
   - [Keys for the Black-and-White dialog box](#keys-for-the-black-and-white-dialog-box)
   - [Keys for Curves](#keys-for-curves)
@@ -510,6 +511,25 @@ A comprehensive reference of the default keyboard shortcuts shipped with Adobe P
 | Increase selection nudging when viewing the original | Shift + Right Arrow, Left Arrow, Up Arrow, or Down Arrow | Shift + Right Arrow, Left Arrow, Up Arrow, or Down Arrow |
 
 ## Camera Raw & Adjustments
+
+### Keys for the Image ▸ Adjustments menu
+
+The menu-command bindings themselves — absent from the HelpX page (whose tables cover dialogs and workspaces, not menus), recovered from [NYIM's Photoshop CS6 shortcut sheet](https://training-nyc.com/legacy/photoshop_cs6_all_keyboard_shortcuts_sheet.pdf); these bindings are unchanged in current Photoshop.
+
+| Result | Windows | macOS |
+| --- | --- | --- |
+| Levels | Ctrl + L | Command + L |
+| Curves | Ctrl + M | Command + M |
+| Hue/Saturation | Ctrl + U | Command + U |
+| Color Balance | Ctrl + B | Command + B |
+| Black & White | Alt + Shift + Ctrl + B | Option + Shift + Command + B |
+| Invert | Ctrl + I | Command + I |
+| Desaturate | Shift + Ctrl + U | Shift + Command + U |
+| Auto Tone | Shift + Ctrl + L | Shift + Command + L |
+| Auto Contrast | Alt + Shift + Ctrl + L | Option + Shift + Command + L |
+| Auto Color | Shift + Ctrl + B | Shift + Command + B |
+| Image Size | Alt + Ctrl + I | Option + Command + I |
+| Canvas Size | Alt + Ctrl + C | Option + Command + C |
 
 ### Keys for the Camera Raw dialog box
 
