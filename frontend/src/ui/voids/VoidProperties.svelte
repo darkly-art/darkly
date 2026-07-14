@@ -4,12 +4,12 @@
     import Slider from '../settings/widgets/Slider.svelte';
 
     interface VoidParam {
-        kind: 'float' | 'int' | 'bool';
+        kind: 'float' | 'int' | 'bool' | 'string';
         name: string;
         min?: number;
         max?: number;
-        default: number | boolean;
-        value?: number | boolean;
+        default: number | boolean | string;
+        value?: number | boolean | string;
     }
 
     let { node }: {
@@ -18,7 +18,7 @@
 
     function pushParams() {
         if (!app.engine) return;
-        const params: Record<string, number | boolean> = {};
+        const params: Record<string, number | boolean | string> = {};
         for (const p of node.params) {
             params[p.name] = p.value ?? p.default;
         }
@@ -37,6 +37,11 @@
         pushParams();
     }
 
+    function onStringChange(param: VoidParam, e: Event) {
+        param.value = (e.target as HTMLInputElement).value;
+        pushParams();
+    }
+
     function randomizeSeed() {
         const seedParam = node.params.find((p) => p.name === 'seed');
         if (!seedParam) return;
@@ -46,32 +51,51 @@
 
     const voidLabel = $derived(app.voidDisplayName(node.voidType));
 
-    // Capture kind (camera / screenshare) for this void, or undefined for
-    // procedural voids — the single signal that gates every stream-related
-    // affordance below.
+    // Capture kind (camera / screenshare / Blender stream) for this void, or
+    // undefined for procedural voids — the single signal that gates every
+    // stream-related affordance below.
     const captureKind = $derived(app.voidCaptureKind.get(node.voidType));
 
-    // Stream-backed voids surface MediaStream-level errors here so the user
-    // sees a human-readable reason ("Camera access was denied", "Screen share
-    // was denied or cancelled", …) instead of a silently-transparent layer.
+    // Stream-backed voids surface source-level errors here so the user sees a
+    // human-readable reason ("Camera access was denied", "Could not connect to
+    // the Blender stream…", …) instead of a silently-transparent layer.
     const streamError = $derived(
-        captureKind ? app.mediaStreamSourceFor(node.id)?.error ?? null : null,
+        captureKind ? app.streamSourceFor(node.id)?.error ?? null : null,
     );
+
+    // Connection status for the same source, or null when none exists — a
+    // never-connected void (e.g. loaded from a `.darkly`) shows no status row;
+    // the Connect button already communicates that state. A change-driven
+    // stream sends nothing while the scene is idle, so "Connected" is the only
+    // positive signal that the feed is actually alive.
+    const streamStatus = $derived(
+        captureKind ? app.streamSourceFor(node.id)?.status ?? null : null,
+    );
+
+    const statusLabels = {
+        connecting: 'Connecting…',
+        connected: 'Connected',
+        disconnected: 'Disconnected',
+    } as const;
 
     // True for a stream-backed void whose layer exists but isn't currently
     // streaming — either loaded from a `.darkly` (showing the saved last frame)
-    // or stopped externally (the browser's "Stop sharing" bar). Showing a
-    // "Resume" button is how the user explicitly re-grants the capture. The
-    // session opt-in is cleared on external stop, so this re-appears then too.
+    // or stopped externally (the browser's "Stop sharing" bar, a Blender
+    // disconnect). The button lets the user explicitly (re)connect. The session
+    // opt-in is cleared on external stop, so this re-appears then too.
     const showResume = $derived(
         !!captureKind
             && !isFrozen(node.params)
-            && !app.mediaStreamSessionStarted.has(node.id),
+            && !app.streamSessionStarted.has(node.id),
     );
 
-    // Per-kind verbs for the button + resume label.
+    // Per-kind verb for the (re)connect button.
     const resumeLabel = $derived(
-        captureKind === 'display' ? 'Resume screen share' : 'Resume camera',
+        captureKind === 'stream'
+            ? 'Connect to Blender'
+            : captureKind === 'display'
+              ? 'Resume screen share'
+              : 'Resume camera',
     );
 
     function isFrozen(params: VoidParam[]): boolean {
@@ -81,10 +105,12 @@
 
     function resumeStream() {
         if (!captureKind) return;
-        // Resume is a user gesture — acquire + start in-gesture so
-        // getDisplayMedia's activation requirement holds.
-        app.markMediaStreamVoidStarted(node.id);
-        app.startMediaStreamVoid(node.id, captureKind);
+        // For camera / screenshare this is a user gesture — acquire + start
+        // in-gesture so getDisplayMedia's activation requirement holds. For a
+        // Blender `stream` void there's no permission gate; `startStreamSource`
+        // connects over localhost HTTP immediately.
+        app.markStreamVoidStarted(node.id);
+        app.startStreamSource(node.id, captureKind);
     }
 </script>
 
@@ -99,6 +125,13 @@
         <Icon name="fa6-solid:dice" />
     </button>
 </div>
+
+{#if streamStatus !== null}
+    <div class="status-row">
+        <span class="status-dot {streamStatus}"></span>
+        <span>{statusLabels[streamStatus]}</span>
+    </div>
+{/if}
 
 {#if streamError}
     <div class="notice">
@@ -135,6 +168,13 @@
                     class="checkbox"
                     checked={(param.value ?? param.default) as boolean}
                     onchange={(e) => onBoolChange(param, e)}
+                />
+            {:else if param.kind === 'string'}
+                <input
+                    type="text"
+                    class="text-input"
+                    value={(param.value ?? param.default) as string}
+                    onchange={(e) => onStringChange(param, e)}
                 />
             {/if}
         </div>
@@ -202,11 +242,51 @@
         accent-color: var(--accent);
     }
 
+    .text-input {
+        flex: 1;
+        min-width: 0;
+        padding: 3px 6px;
+        background: var(--bg);
+        border: 1px solid var(--bg-hover);
+        border-radius: var(--radius-sm);
+        color: var(--text);
+        font-size: 11px;
+    }
+    .text-input:focus {
+        outline: none;
+        border-color: var(--accent);
+    }
+
     .empty {
         font-size: 12px;
         color: var(--text-dim);
         text-align: center;
         padding: 4px 0;
+    }
+
+    .status-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 22px;
+        font-size: 11px;
+        color: var(--text-muted);
+    }
+
+    .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+    .status-dot.connecting {
+        background: var(--warning, #d9a23c);
+    }
+    .status-dot.connected {
+        background: var(--success, #4caf7d);
+    }
+    .status-dot.disconnected {
+        background: var(--danger, #e35858);
     }
 
     .notice {
