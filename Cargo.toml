@@ -32,7 +32,7 @@ wgpu = { version = "29.0", features = ["webgpu"] }
 vello = "0.9"
 kurbo = { version = "0.13", features = ["serde"] }
 peniko = { version = "0.6", features = ["serde"] }
-parley = "0.7"
+parley = "0.11"
 
 # Data
 bytemuck = { version = "1.13", features = ["derive"] }
