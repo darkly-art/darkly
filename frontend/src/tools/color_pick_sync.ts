@@ -1,4 +1,4 @@
-import type { Engine } from '../engine/protocol';
+import type { EngineRequests } from '../engine/protocol';
 import { app } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
 
@@ -19,11 +19,11 @@ let pollInFlight = false;
  *  and current-layer sampling. The Rust side falls back to the merged
  *  composite when the current-layer source can't resolve (group, mask, point
  *  outside layer extent), so this never silently no-ops. */
-export function startPick(engine: Engine, cx: number, cy: number): void {
+export function startPick(engine: EngineRequests, cx: number, cy: number): void {
     const mode = config.get('tools.colorPickerSampleSource');
     const layerId =
         mode === 'currentLayer' && app.activeLayerId != null ? app.activeLayerId : -1;
-    engine.post('pick_color', { x: cx, y: cy, id: layerId });
+    engine.api.pickColor({ x: cx, y: cy, id: layerId });
     waitingForPick = true;
 }
 
@@ -37,14 +37,14 @@ export function pollPick(): void {
     if (!engine) return;
     pollInFlight = true;
     engine
-        .send<{ value: boolean }>('has_pending_color_pick')
+        .api.hasPendingColorPick()
         .then((pending) => {
-            if (pending.value) {
+            if (pending) {
                 pollInFlight = false;
                 return; // still in flight; retry next frame
             }
             return engine
-                .send<{ bytes: Uint8Array }>('last_picked_color')
+                .api.lastPickedColor()
                 .then(({ bytes }) => {
                     waitingForPick = false;
                     pollInFlight = false;

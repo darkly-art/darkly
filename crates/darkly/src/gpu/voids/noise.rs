@@ -125,10 +125,13 @@ struct NoiseUniforms {
     // struct, so every uniform write rebuilds the whole struct from state.
     canvas_scale: f32,
     _pad0: f32,
-    // Inverse of the user transform's affine — applied to the canvas-space
-    // sampling coordinate so the field pans / scales / rotates with the gizmo.
+    // Inverse of the user transform's homography (packed rows [m, _], see
+    // gpu::transform::pack_inv_rows) — applied to the canvas-space sampling
+    // coordinate so the field pans / scales / rotates / warps with the gizmo.
+    // Affine carries inv_row2 = [0,0,1,_], collapsing the perspective divide.
     inv_row0: [f32; 4],
     inv_row1: [f32; 4],
+    inv_row2: [f32; 4],
 }
 
 #[derive(Debug)]
@@ -216,8 +219,8 @@ impl Noise {
     }
 
     fn uniforms(&self) -> NoiseUniforms {
-        let fwd = self.transform.to_affine();
-        let inv = crate::transform::affine_inverse(&fwd).unwrap_or(crate::transform::IDENTITY);
+        let [inv_row0, inv_row1, inv_row2] =
+            crate::gpu::transform::pack_inv_rows(&self.transform.to_projective());
         NoiseUniforms {
             seed: self.seed as u32,
             octaves: self.octaves,
@@ -227,8 +230,9 @@ impl Noise {
             time: self.time,
             canvas_scale: self.canvas_scale.get(),
             _pad0: 0.0,
-            inv_row0: [inv[0], inv[1], inv[2], 0.0],
-            inv_row1: [inv[3], inv[4], inv[5], 0.0],
+            inv_row0,
+            inv_row1,
+            inv_row2,
         }
     }
 }
@@ -536,11 +540,14 @@ fn create_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> Effec
         immediate_size: 0,
     });
 
-    // WGSL has no native #include — concatenate the shared FBM helper ahead
-    // of this void's shader. A future warp veil will assemble the same way.
+    // WGSL has no native #include — concatenate the shared helpers ahead of
+    // this void's shader: the inverse-homography sampler (so the field warps
+    // with perspective, sharing one impl with the floating path) and the FBM
+    // primitive. A future warp veil will assemble the same way.
+    let proj_src = include_str!("../../../shaders/lib/projective.wgsl");
     let fbm_src = include_str!("../../../shaders/lib/fbm.wgsl");
     let void_src = include_str!("../../../shaders/voids/noise.wgsl");
-    let full_src = format!("{fbm_src}\n{void_src}");
+    let full_src = format!("{proj_src}\n{fbm_src}\n{void_src}");
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("void-noise-shader"),

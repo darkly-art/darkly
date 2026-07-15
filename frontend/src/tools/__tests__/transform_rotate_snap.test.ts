@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { basicMode } from '../transform_modes/basic';
 import type { GizmoGeometry } from '../transform_modes/types';
-import { affineRotate, type Affine2D } from '../transform_affine';
+import { affineRotate } from '../transform_affine';
+import { affineToMat3, type Mat3 } from '../transform_projective';
 
 /**
  * Regression test: Shift-snapping while rotating floating content must snap the
@@ -15,8 +16,9 @@ import { affineRotate, type Affine2D } from '../transform_affine';
 const ROTATE_HANDLE = 8;
 const SNAP = Math.PI / 12; // 15°
 
-/** Orientation baked into an affine's linear part, per `[a,b,tx,c,d,ty]`. */
-function orientation(m: Affine2D): number {
+/** Orientation baked into the matrix's linear part (row-major `m[3]=c`,
+ *  `m[0]=a`; same indices for the affine-as-Mat3 the basic mode carries). */
+function orientation(m: Mat3): number {
     return Math.atan2(m[3], m[0]);
 }
 
@@ -29,7 +31,7 @@ function distanceToSnapGrid(angle: number): number {
 /** Geometry whose matrix already carries a non-snapped base rotation. */
 function geometryAt(baseDeg: number): GizmoGeometry {
     return {
-        matrix: affineRotate((baseDeg * Math.PI) / 180) as Affine2D,
+        matrix: affineToMat3(affineRotate((baseDeg * Math.PI) / 180)),
         origin: [0, 0],
         srcW: 100,
         srcH: 100,

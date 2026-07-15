@@ -8,6 +8,9 @@
  * change, and never travel back to Rust.
  */
 import { app } from './app.svelte';
+import type { BrushInfo, JsonValue } from '../engine/protocol_gen';
+
+export type { BrushInfo };
 
 // --- Types mirroring Rust's nodegraph structures ---
 
@@ -65,14 +68,6 @@ export interface NodeTypeInfo {
 
 // --- Wire type colors ---
 
-export interface BrushInfo {
-    name: string;
-    category: string;
-    author: string;
-    description: string;
-    tags: string[];
-}
-
 export type ExposedValue =
     | { kind: 'scalar'; value: number; min: number; max: number; default: number; unitType: string }
     | { kind: 'bool'; value: boolean }
@@ -111,12 +106,10 @@ export const WIRE_COLORS: Record<string, string> = {
 
 // --- State ---
 
-/** Result type returned by WASM graph commands. The `graph` is a parsed
- *  object (the engine returns it pre-deserialized over the protocol). */
-interface GraphCommandResult {
-    graph?: BrushGraph;
-    error?: string;
-}
+/** Result of a WASM graph command — the `returns = graph` wire shape: the
+ *  serialized graph on success or `{ error }` on failure. The `graph` is
+ *  dynamic (`JsonValue`) at the boundary and cast to [`BrushGraph`] here. */
+type GraphCommandResult = { graph: JsonValue } | { error: string };
 
 class BrushGraphState {
     /** Local view of the graph (snapshot from Rust). */
@@ -164,13 +157,20 @@ class BrushGraphState {
     exposedPorts = $state<ExposedPortInfo[]>([]);
 
     /** Does the active brush's terminal honor erase (paint vs. erase) mode?
-     *  Refreshed from `brush_active_supports_erase` whenever
+     *  Refreshed from `brush_active_capabilities` whenever
      *  the graph topology changes. The Rust side reads each terminal
      *  node's `supports_erase` registration flag — there is no central
      *  list of which terminals opt out (it lives on each node module's
      *  `register()`). When `false`, the brush-tool options bar hides
      *  the erase toggle. */
     supportsErase = $state(true);
+
+    /** Iconify icon shown in place of the live baked previews when the
+     *  active graph contains a content-dependent node (clone, blur,
+     *  smudge, liquify) — its bake against the flat preview background
+     *  renders blank. Declared per node type via the registration's
+     *  `preview_fallback_icon`; refreshed alongside `supportsErase`. */
+    previewIcon = $state<string | null>(null);
 
     /**
      * Last topology version we observed from the engine. The engine bumps
@@ -186,32 +186,36 @@ class BrushGraphState {
 
     /** Apply a WASM command result: update graph snapshot and error state. */
     private async applyResult(result: GraphCommandResult) {
-        if (result.error) {
+        if ('error' in result) {
             this.error = result.error;
             return;
         }
-        if (result.graph && result.graph.nodes) {
-            this.graph = result.graph;
+        const graph = result.graph as unknown as BrushGraph;
+        if (graph && graph.nodes) {
+            this.graph = graph;
             this.error = null;
             if (app.engine) {
-                const topo = (await app.engine.send('brush_topology_version')).value;
+                const topo = (await app.engine.api.brushTopologyVersion()).value;
                 if (topo !== this.lastTopologyVersion) {
                     this.activeBrush = null;
                     this.lastTopologyVersion = topo;
                 }
             }
             await this.refreshExposedPorts();
-            await this.refreshSupportsErase();
+            await this.refreshCapabilities();
         }
     }
 
-    /** Query Rust for whether the active brush's terminal supports erase
-     *  mode. Cheap (a single WASM borrow + graph walk); we call this on
-     *  every topology change rather than per-render so the `$state` field
-     *  drives reactive consumers. */
-    private async refreshSupportsErase() {
+    /** Query Rust for the active graph's derived capabilities — erase
+     *  support and the preview fallback icon. Cheap (a single WASM
+     *  borrow + graph walk); we call this on every topology change
+     *  rather than per-render so the `$state` fields drive reactive
+     *  consumers. */
+    private async refreshCapabilities() {
         if (!app.engine) return;
-        this.supportsErase = (await app.engine.send('brush_active_supports_erase')).value;
+        const caps = await app.engine.api.brushActiveCapabilities();
+        this.supportsErase = caps.supports_erase;
+        this.previewIcon = caps.preview_fallback_icon;
     }
 
     /**
@@ -222,15 +226,15 @@ class BrushGraphState {
      */
     private async snapshotTopologyVersion() {
         if (!app.engine) return;
-        this.lastTopologyVersion = (await app.engine.send('brush_topology_version')).value;
+        this.lastTopologyVersion = (await app.engine.api.brushTopologyVersion()).value;
     }
 
     /** Fetch the current graph snapshot from Rust. */
     private async fetchGraph() {
         if (!app.engine) return;
-        const graph = await app.engine.send('brush_graph_active');
+        const graph = (await app.engine.api.brushGraphActive()) as unknown as BrushGraph;
         if (graph && graph.nodes) {
-            this.graph = graph as BrushGraph;
+            this.graph = graph;
         }
     }
 
@@ -253,15 +257,15 @@ class BrushGraphState {
         if (!app.engine) return;
         await this.fetchGraph();
         await this.refreshExposedPorts();
-        await this.refreshSupportsErase();
+        await this.refreshCapabilities();
         await this.snapshotTopologyVersion();
     }
 
     /** Initialize from WASM — load node types, brushes, and default graph. */
     async init() {
         if (!app.engine) return;
-        const types = await app.engine.send('brush_node_types');
-        this.nodeTypes = Array.isArray(types) ? types : [];
+        const types = await app.engine.api.brushNodeTypes();
+        this.nodeTypes = (Array.isArray(types) ? types : []) as unknown as NodeTypeInfo[];
         await this.refreshBrushes();
 
         // Boot with a real library brush selected so the brush picker
@@ -277,7 +281,7 @@ class BrushGraphState {
             // default graph as a degenerate fallback.
             await this.fetchGraph();
             await this.refreshExposedPorts();
-            await this.refreshSupportsErase();
+            await this.refreshCapabilities();
             await this.snapshotTopologyVersion();
         }
     }
@@ -285,11 +289,11 @@ class BrushGraphState {
     /** Reset to the default brush graph. */
     async resetToDefault() {
         if (!app.engine) return;
-        app.engine.post('brush_graph_reset');
+        app.engine.api.brushGraphReset();
         this.nodePositions = {};
         await this.fetchGraph();
         await this.refreshExposedPorts();
-        await this.refreshSupportsErase();
+        await this.refreshCapabilities();
         this.error = null;
         this.activeBrush = null;
         await this.snapshotTopologyVersion();
@@ -299,7 +303,7 @@ class BrushGraphState {
      *  string on serialization failure (treated as "nothing to copy"). */
     async exportYaml(): Promise<string> {
         if (!app.engine) return '';
-        return (await app.engine.send('brush_graph_export_yaml')).yaml;
+        return (await app.engine.api.brushGraphExportYaml()).yaml;
     }
 
     /** Replace the active brush graph from a portable YAML string.
@@ -307,7 +311,7 @@ class BrushGraphState {
      *  failure — same convention as `loadBrush`. */
     async importYaml(yaml: string): Promise<string | null> {
         if (!app.engine) return 'engine not ready';
-        const result = await app.engine.send('brush_graph_import_yaml', { yaml });
+        const result = await app.engine.api.brushGraphImportYaml({ yaml });
         if (result !== null) {
             const err = String(result.error ?? result);
             this.error = err;
@@ -317,7 +321,7 @@ class BrushGraphState {
         this.nodePositions = {};
         await this.fetchGraph();
         await this.refreshExposedPorts();
-        await this.refreshSupportsErase();
+        await this.refreshCapabilities();
         this.error = null;
         this.activeBrush = null;
         await this.snapshotTopologyVersion();
@@ -327,21 +331,21 @@ class BrushGraphState {
     /** Refresh the brush list from WASM. */
     async refreshBrushes() {
         if (!app.engine) return;
-        const list = await app.engine.send('brush_list');
+        const list = await app.engine.api.brushList();
         this.brushes = Array.isArray(list) ? list : [];
     }
 
     /** Refresh exposed ports from the active brush graph. */
     async refreshExposedPorts() {
         if (!app.engine) return;
-        const ports = await app.engine.send('brush_exposed_ports');
+        const ports = await app.engine.api.brushExposedPorts();
         this.exposedPorts = Array.isArray(ports) ? ports : [];
     }
 
     /** Set an exposed port's value (display-space) via Rust. */
     async setExposedPortValue(nodeId: number, portName: string, displayValue: number) {
         if (!app.engine) return;
-        await this.applyResult(await app.engine.send('brush_set_exposed_port', { node_id: nodeId, port_name: portName, display_value: displayValue }));
+        await this.applyResult(await app.engine.api.brushSetExposedPort({ node_id: nodeId, port_name: portName, display_value: displayValue }));
     }
 
     /** Optimistic local update for an exposed port's display value. */
@@ -357,13 +361,13 @@ class BrushGraphState {
     /** Append a brush-bar entry for an input port. Idempotent. */
     async exposePort(nodeId: number, portName: string) {
         if (!app.engine) return;
-        await this.applyResult(await app.engine.send('brush_graph_expose_port', { node_id: nodeId, port_name: portName }));
+        await this.applyResult(await app.engine.api.brushGraphExposePort({ node_id: nodeId, port_name: portName }));
     }
 
     /** Drop a brush-bar entry. Idempotent. */
     async unexposePort(nodeId: number, portName: string) {
         if (!app.engine) return;
-        await this.applyResult(await app.engine.send('brush_graph_unexpose_port', { node_id: nodeId, port_name: portName }));
+        await this.applyResult(await app.engine.api.brushGraphUnexposePort({ node_id: nodeId, port_name: portName }));
     }
 
     /** Returns true when the named input port has a live brush-bar entry. */
@@ -382,14 +386,14 @@ class BrushGraphState {
     ) {
         if (!app.engine) return;
         await this.applyResult(
-            await app.engine.send('brush_graph_set_exposed_port_meta', { key, label, description, icon }),
+            await app.engine.api.brushGraphSetExposedPortMeta({ key, label, description, icon }),
         );
     }
 
     /** Move a brush-bar entry to a target index in the display order. */
     async reorderExposedPort(key: string, newIndex: number) {
         if (!app.engine) return;
-        await this.applyResult(await app.engine.send('brush_graph_reorder_exposed_port', { key, new_index: newIndex }));
+        await this.applyResult(await app.engine.api.brushGraphReorderExposedPort({ key, new_index: newIndex }));
     }
 
     /** Load a brush by name. */
@@ -397,7 +401,7 @@ class BrushGraphState {
         if (!app.engine) return;
         // brush_load rejects on error (old Result throw path).
         try {
-            await app.engine.send('brush_load', { name });
+            await app.engine.api.brushLoad({ name });
         } catch (e) {
             this.error = String(e instanceof Error ? e.message : e);
             return;
@@ -407,7 +411,7 @@ class BrushGraphState {
         this.nodePositions = {};
         await this.fetchGraph();
         await this.refreshExposedPorts();
-        await this.refreshSupportsErase();
+        await this.refreshCapabilities();
         this.error = null;
         // brush_load is a Topology change — snapshot here so the next
         // exposed-port scrub doesn't see a delta and clear `activeBrush`.
@@ -431,7 +435,7 @@ class BrushGraphState {
      */
     async autoLayout(sizes?: Record<string, [number, number]>) {
         if (!app.engine) return;
-        const layout = await app.engine.send('brush_graph_auto_layout', { sizes: sizes ?? {} }) as Record<string, [number, number]>;
+        const layout = await app.engine.api.brushGraphAutoLayout({ sizes: sizes ?? {} }) as Record<string, [number, number]>;
         if (layout && typeof layout === 'object') {
             const next: Record<number, [number, number]> = {};
             for (const [idStr, pos] of Object.entries(layout)) {
@@ -449,7 +453,7 @@ class BrushGraphState {
      *  add failed (e.g. the Rust compile step rejected the new graph). */
     async addNode(typeId: string, x: number, y: number): Promise<number | null> {
         if (!app.engine) return null;
-        await this.applyResult(await app.engine.send('brush_graph_add_node', { type_id: typeId }));
+        await this.applyResult(await app.engine.api.brushGraphAddNode({ type_id: typeId }));
         // applyResult records the error and leaves `this.graph` unchanged
         // on failure. If we didn't bail here, the code below would write
         // `(x, y)` into nodePositions[next_id - 1] — and that id still
@@ -468,7 +472,7 @@ class BrushGraphState {
     async removeNode(nodeId: number) {
         if (!app.engine) return;
         if (this.selectedNode === nodeId) this.selectedNode = null;
-        await this.applyResult(await app.engine.send('brush_graph_remove_node', { node_id: nodeId }));
+        await this.applyResult(await app.engine.api.brushGraphRemoveNode({ node_id: nodeId }));
         delete this.nodePositions[nodeId];
     }
 
@@ -481,13 +485,13 @@ class BrushGraphState {
     /** Connect two ports. */
     async connect(fromNode: number, fromPort: string, toNode: number, toPort: string) {
         if (!app.engine) return;
-        await this.applyResult(await app.engine.send('brush_graph_connect', { from_node: fromNode, from_port: fromPort, to_node: toNode, to_port: toPort }));
+        await this.applyResult(await app.engine.api.brushGraphConnect({ from_node: fromNode, from_port: fromPort, to_node: toNode, to_port: toPort }));
     }
 
     /** Disconnect a specific wire. */
     async disconnect(fromNode: number, fromPort: string, toNode: number, toPort: string) {
         if (!app.engine) return;
-        await this.applyResult(await app.engine.send('brush_graph_disconnect', { from_node: fromNode, from_port: fromPort, to_node: toNode, to_port: toPort }));
+        await this.applyResult(await app.engine.api.brushGraphDisconnect({ from_node: fromNode, from_port: fromPort, to_node: toNode, to_port: toPort }));
     }
 
     /** Update a node's parameter value locally (for responsive slider feedback). */
@@ -503,7 +507,7 @@ class BrushGraphState {
     /** Update a node's parameter value via Rust (compiles the graph). */
     async setParam(nodeId: number, paramIndex: number, kind: string, value: any) {
         if (!app.engine) return;
-        await this.applyResult(await app.engine.send('brush_graph_set_param', { node_id: nodeId, param_index: paramIndex, kind, value }));
+        await this.applyResult(await app.engine.api.brushGraphSetParam({ node_id: nodeId, param_index: paramIndex, kind, value }));
     }
 
     /** Update a port's default value locally (for responsive slider feedback). */
@@ -518,7 +522,7 @@ class BrushGraphState {
     /** Update a port's default value via Rust (compiles the graph). */
     async setPortDefault(nodeId: number, portName: string, value: number) {
         if (!app.engine) return;
-        await this.applyResult(await app.engine.send('brush_graph_set_port_default', { node_id: nodeId, port_name: portName, value }));
+        await this.applyResult(await app.engine.api.brushGraphSetPortDefault({ node_id: nodeId, port_name: portName, value }));
     }
 
     /** Get a flat array of all node instances. */
@@ -555,14 +559,14 @@ class BrushGraphState {
         if (!app.engine) return;
 
         // Upload to GPU via WASM.
-        const err = await app.engine.send('brush_upload_image', { resource_name: resourceName, width, height }, rgba);
+        const err = await app.engine.api.brushUploadImage({ resource_name: resourceName, width, height }, rgba);
         if (err !== null) {
             console.warn('brush_upload_image failed:', err);
             return;
         }
 
         // Set the resource_name param (index 0) on the Image node.
-        await this.applyResult(await app.engine.send('brush_graph_set_param', { node_id: nodeId, param_index: 0, kind: 'string', value: resourceName }));
+        await this.applyResult(await app.engine.api.brushGraphSetParam({ node_id: nodeId, param_index: 0, kind: 'string', value: resourceName }));
 
         // Cache a thumbnail for canvas rendering.
         const clamped = new Uint8ClampedArray(rgba.length);

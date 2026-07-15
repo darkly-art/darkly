@@ -1,12 +1,17 @@
 //! Liquify terminal — per-dab fragment-pass warp with a per-brush
 //! compiled WGSL shader.
 //!
-//! Same overall outline as [`smudge`](super::smudge).
+//! Rides the shared [read-mirror terminal](crate::brush::read_mirror_terminal)
+//! infrastructure (the per-brush pipeline, dab-meta queue, flush loop,
+//! and `copy_origin` plumbing it shares with `smudge` and `blur`). This
+//! file owns only what's liquify-specific: the read half-extent and the
+//! variant WGSL (including the softness falloff helper).
+//!
 //! Per dab the fragment shader samples the scratch read mirror at a
 //! *displaced* UV inside a circular brush disc and writes the warped
 //! sample back into the scratch. Successive dabs compound because each
-//! reads the cumulatively-warped scratch — the per-dab serialization
-//! is semantically required, not a perf bug.
+//! reads the cumulatively-warped scratch — the per-dab serialization is
+//! semantically required, not a perf bug.
 //!
 //! Displacement magnitude is `strength × |pen.motion|` — the cursor's
 //! per-dab travel scaled by strength. With the Liquify brush's fixed
@@ -19,21 +24,9 @@
 //!     the *intensity*.
 //!
 //! Pen speed enters only via dab density along the path; the per-dab
-//! push is identical for slow and fast drags.
-//!
-//! ## Stroke lifecycle
-//!
-//! - `begin_stroke` — copies `pre_stroke_texture` → scratch so warps
-//!   start against a stable layer snapshot.
-//! - `evaluate_gpu` (per dab) — queues a record + meta; skipped dabs
-//!   (`radius < 1`, `strength < 1e-4`, `distance < 0.5`) never reach
-//!   the queue, so the flush loop doesn't iterate them.
-//! - `flush_dabs` — for each queued dab, `prepare_dab_canvas_copy`
-//!   syncs the read mirror over a symmetric `radius + displacement`
-//!   half-extent (bilinear sampler reaches into the padding); then
-//!   one render pass with instance index `i..i+1`.
-//! - `commit` — `commit_scratch_blit(scratch → layer)`; `blend_mode`
-//!   ignored — warping isn't paint.
+//! push is identical for slow and fast drags. **Liquify is deliberately
+//! size-invariant** — the size slider scales the warped extent, not the
+//! push strength.
 //!
 //! ## Softness waveshape
 //!
@@ -48,29 +41,17 @@
 //!   0.6  → linear saw            (helper input `0.4`)
 //!   1    → spike (`pow(1-d, 8)`) (helper input `0.0`)
 
-use std::any::Any;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
-use crate::brush::gpu_context::{BrushGpuContext, MAX_DABS_PER_PHASE};
+use crate::brush::gpu_context::BrushGpuContext;
 use crate::brush::node::BrushNodeRegistration;
-use crate::brush::paint_target_ext::BrushPaintTargetExt;
-use crate::brush::pipeline::{
-    BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
+use crate::brush::read_mirror_terminal::{
+    self as rmt, read_mirror_pipeline_reg, ReadMirrorTerminal,
 };
-use crate::brush::wgsl::{
-    pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, DabField, NodeWgsl,
-    WgslType, INTRINSIC_UNIFORMS_SIZE,
-};
+use crate::brush::wgsl::{CompileWgslCtx, NodeWgsl};
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 // ── Constants ───────────────────────────────────────────────────────────
-
-const SIZE_REFERENCE_PX: f32 = crate::brush::DAB_REFERENCE_SIZE as f32;
-const MAX_UNIFORM_BYTES: usize = 1024;
 
 /// Dab spacing for the Liquify brush, in canvas pixels. The brush
 /// pins `pen_input.spacing_min_px` to this value (and sets ratio to
@@ -101,202 +82,11 @@ const MIN_RADIUS_PX: f32 = 1.0;
 /// (default `drawing_angle = 0`).
 const MIN_DISTANCE_PX: f32 = 0.5;
 
-// ── Per-dab CPU meta ────────────────────────────────────────────────────
-
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct LiquifyDabMeta {
-    position: [f32; 2],
-    /// Symmetric half-extent of the read region (`radius + displacement`).
-    half: [f32; 2],
-}
-
-const LIQUIFY_DAB_META_SIZE: usize = std::mem::size_of::<LiquifyDabMeta>();
-
-// ── Per-brush pipeline ──────────────────────────────────────────────────
-
-struct PerBrushPipeline {
-    pipeline: wgpu::RenderPipeline,
-    uniform_ring: DynamicUniformRing,
-    uniform_bind_group: wgpu::BindGroup,
-    dabs_buffer: wgpu::Buffer,
-    dabs_bind_group: wgpu::BindGroup,
-    uniform_size: usize,
-}
-
-impl PerBrushPipeline {
-    fn build(ctx: &BuildContext, compiled: &CompiledBrush) -> Self {
-        let shader = ctx
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("liquify-brush"),
-                source: wgpu::ShaderSource::Wgsl(compiled.stroke_wgsl.clone().into()),
-            });
-
-        let dabs_bgl = ctx
-            .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("liquify-dabs-bgl"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
-
-        let layout = ctx
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("liquify-layout"),
-                bind_group_layouts: &[
-                    Some(ctx.uniform_bgl),
-                    Some(&dabs_bgl),
-                    Some(ctx.selection_bgl),
-                    Some(ctx.canvas_copy_bgl),
-                ],
-                immediate_size: 0,
-            });
-
-        let pipeline = ctx
-            .device
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("liquify"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            });
-
-        let uniform_size =
-            (INTRINSIC_UNIFORMS_SIZE + compiled.uniform_size).max(INTRINSIC_UNIFORMS_SIZE);
-        let uniform_ring = DynamicUniformRing::new(
-            ctx.device,
-            "liquify-uniforms",
-            uniform_size as u64,
-            ctx.min_uniform_align,
-        );
-        let uniform_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("liquify-uniform-bg"),
-            layout: ctx.uniform_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &uniform_ring.buffer,
-                    offset: 0,
-                    size: Some(uniform_ring.binding_size()),
-                }),
-            }],
-        });
-
-        let dab_record_size = compiled.dab_record_size.max(16);
-        let dabs_buffer_size = (MAX_DABS_PER_PHASE as u64) * (dab_record_size as u64);
-        let dabs_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("liquify-dabs-buffer"),
-            size: dabs_buffer_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let dabs_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("liquify-dabs-bg"),
-            layout: &dabs_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: dabs_buffer.as_entire_binding(),
-            }],
-        });
-
-        Self {
-            pipeline,
-            uniform_ring,
-            uniform_bind_group,
-            dabs_buffer,
-            dabs_bind_group,
-            uniform_size,
-        }
-    }
-}
-
-// ── Pipeline registry entry ─────────────────────────────────────────────
-
-pub struct LiquifyPipeline {
-    cache: RefCell<HashMap<u64, PerBrushPipeline>>,
-}
-
-impl LiquifyPipeline {
-    fn build(_ctx: &BuildContext) -> Self {
-        Self {
-            cache: RefCell::new(HashMap::new()),
-        }
-    }
-
-    fn ensure_pipeline(&self, ctx: &BuildContext, compiled: &CompiledBrush) {
-        let mut cache = self.cache.borrow_mut();
-        cache
-            .entry(compiled.topology_hash)
-            .or_insert_with(|| PerBrushPipeline::build(ctx, compiled));
-    }
-
-    fn with_pipeline<R>(&self, hash: u64, f: impl FnOnce(&PerBrushPipeline) -> R) -> R {
-        let cache = self.cache.borrow();
-        let p = cache
-            .get(&hash)
-            .expect("ensure_pipeline must run before with_pipeline");
-        f(p)
-    }
-}
-
-impl BrushPipelineEntry for LiquifyPipeline {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn ring(&self) -> Option<&DynamicUniformRing> {
-        None
-    }
-    fn rings(&self) -> Vec<&DynamicUniformRing> {
-        Vec::new()
-    }
-}
-
-fn liquify_pipeline_reg() -> BrushPipelineRegistration {
-    BrushPipelineRegistration {
-        id: "liquify",
-        build: |ctx| Box::new(LiquifyPipeline::build(ctx)),
-    }
-}
-
-// ── Node ────────────────────────────────────────────────────────────────
-
 pub const TYPE_ID: &str = "liquify";
 
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
-        pipelines: vec![liquify_pipeline_reg()],
+        pipelines: vec![read_mirror_pipeline_reg("liquify")],
         evaluator: || Box::new(LiquifyEvaluator),
         lifecycle: crate::brush::node::Lifecycle::SeedScratchFromPreStroke,
         node: NodeRegistration {
@@ -377,278 +167,49 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: true,
             is_terminal: true,
             supports_erase: false,
+            preview_fallback_icon: Some("tabler:ripple"),
         },
     }
 }
 
 pub struct LiquifyEvaluator;
 
-impl LiquifyEvaluator {
-    fn effective_radius(ctx: &EvalContext) -> f32 {
-        let size_input = ctx.input_f32("size_input").max(0.0);
-        let size = ctx.input_f32("size").max(0.0);
-        let effective_size = size_input * size;
-        (effective_size * SIZE_REFERENCE_PX * 0.5).max(0.5)
-    }
+impl ReadMirrorTerminal for LiquifyEvaluator {
+    const PIPELINE_ID: &'static str = "liquify";
+    const LABEL: &'static str = "liquify";
 
-    fn insert_copy_origin(gpu: &mut BrushGpuContext, node_id: u32, value: [f32; 2]) {
-        if let Some(outputs) = gpu.dab_batch.slot_outputs.as_mut() {
-            outputs.insert(
-                format!("n{}_copy_origin", node_id),
-                ScalarValue::Vec2(value),
-            );
-        }
-    }
-}
-
-impl BrushNodeEvaluator for LiquifyEvaluator {
-    fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
-        vec![]
-    }
-
-    fn evaluate_gpu(
-        &self,
-        ctx: &EvalContext,
-        gpu: &mut BrushGpuContext,
-    ) -> Vec<(String, ScalarValue)> {
-        let Some(compiled) = gpu.dab_batch.compiled_brush.clone() else {
-            debug_assert!(false, "liquify requires compiled_brush on gpu_context");
-            return vec![];
-        };
-        let Some(stroke) = gpu.stroke.as_ref() else {
-            return vec![];
-        };
-        let paint_target = &stroke.paint_target;
-        let position = ctx.input("position").as_vec2();
+    fn read_half(&self, ctx: &EvalContext, radius: f32, _bbox_radius: f32) -> Option<[f32; 2]> {
         let strength = ctx.input_f32("strength").clamp(0.0, 1.0);
         let distance = ctx.input_f32("distance");
         let motion = ctx.input("motion").as_vec2();
         let motion_mag = (motion[0] * motion[0] + motion[1] * motion[1]).sqrt();
-        let radius = Self::effective_radius(ctx);
-        let diameter = radius * 2.0;
 
-        // Three early-outs — skip stationary or sub-pixel dabs whose
-        // warp would be a no-op.
-        if radius < MIN_RADIUS_PX {
-            return vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))];
-        }
-        if strength < STRENGTH_EPSILON {
-            return vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))];
-        }
-        if distance < MIN_DISTANCE_PX {
-            return vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))];
+        // Three early-outs — skip stationary or sub-pixel dabs whose warp
+        // would be a no-op.
+        if radius < MIN_RADIUS_PX || strength < STRENGTH_EPSILON || distance < MIN_DISTANCE_PX {
+            return None;
         }
 
-        // Per-dab displacement magnitude — the cursor's per-dab
-        // motion scaled by strength. `strength = 1` pushes pixels by
-        // the full cursor step (lock), `strength = 0.5` pushes them
-        // by half (drag), regardless of brush size. CPU and shader
-        // compute the same value (the shader reads motion + strength
-        // from the dab record).
+        // Symmetric read region — disc inflated by `displacement` per axis
+        // so the warped sample at
+        // `target_pos - direction × displacement × falloff(d)` always lies
+        // inside the mirror snapshot (the bilinear sampler reaches into
+        // the inflation margin too). `displacement = strength × |motion|`,
+        // recomputed identically by the shader from motion + strength.
         let displacement = motion_mag * strength;
-
-        let bbox_radius = radius * compiled.brush_extent_factor + compiled.brush_extent_extra_px;
-        let canvas_ext = paint_target.canvas_extent();
-        // Near-edge of the layer extent — reused below for the read-region copy
-        // origin (a one-sided clamp, distinct from the dab footprint clamp).
-        let layer_x0 = canvas_ext.x0() as f32;
-        let layer_y0 = canvas_ext.y0() as f32;
-        // Clamp the dab footprint to the layer extent; a dab entirely
-        // off-extent has no pixels to draw and is skipped.
-        let canvas_bbox = match canvas_ext.clamp_f32(
-            position[0] - bbox_radius,
-            position[1] - bbox_radius,
-            position[0] + bbox_radius,
-            position[1] + bbox_radius,
-        ) {
-            Some(r) => r,
-            None => return vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))],
-        };
-        let local = paint_target
-            .canvas_frame()
-            .canvas_to_layer_rect(canvas_bbox)
-            .expect("canvas_bbox came from canvas_ext.clamp_f32, so it overlaps the extent");
-        gpu.dab_batch.push_write_bbox(canvas_bbox);
-        gpu.dab_batch.bbox = Some(match gpu.dab_batch.bbox {
-            Some([x0, y0, x1, y1]) => [
-                x0.min(local.x0()),
-                y0.min(local.y0()),
-                x1.max(local.x1()),
-                y1.max(local.y1()),
-            ],
-            None => [local.x0(), local.y0(), local.x1(), local.y1()],
-        });
-
-        // Symmetric read region — disc inflated by `displacement` per
-        // axis so the warped sample at
-        // `target_pos - direction × displacement × falloff(d)` always
-        // lies inside the mirror snapshot (bilinear sampler reaches
-        // into the inflation margin too).
         let read_half = radius + displacement;
-
-        let read_x0 = (position[0] - read_half).max(layer_x0);
-        let read_y0 = (position[1] - read_half).max(layer_y0);
-        let copy_canvas_x = read_x0.floor();
-        let copy_canvas_y = read_y0.floor();
-        Self::insert_copy_origin(gpu, ctx.node_id.0 as u32, [copy_canvas_x, copy_canvas_y]);
-
-        gpu.dab_batch
-            .queue_dab(&compiled, position, bbox_radius, radius);
-
-        let meta = LiquifyDabMeta {
-            position,
-            half: [read_half, read_half],
-        };
-        gpu.dab_batch
-            .meta_bytes
-            .extend_from_slice(bytemuck::bytes_of(&meta));
-
-        vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))]
+        Some([read_half, read_half])
     }
 
-    fn flush_dabs(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        if gpu.dab_batch.count == 0 {
-            return;
-        }
-        let Some(compiled) = gpu.dab_batch.compiled_brush.clone() else {
-            debug_assert!(false, "liquify::flush_dabs requires compiled_brush");
-            return;
-        };
-
-        let bbox = gpu.dab_batch.bbox.unwrap_or([0, 0, 0, 0]);
-        let union_w = bbox[2].saturating_sub(bbox[0]);
-        let union_h = bbox[3].saturating_sub(bbox[1]);
-        let (dab_bytes, total_dabs) = gpu.dab_batch.take();
-        let meta_bytes = gpu.dab_batch.take_meta();
-        if total_dabs == 0 {
-            return;
-        }
-        debug_assert_eq!(
-            meta_bytes.len(),
-            (total_dabs as usize) * LIQUIFY_DAB_META_SIZE,
-            "liquify meta queue out of sync with dab queue"
-        );
-        let metas: Vec<LiquifyDabMeta> = bytemuck::cast_slice(&meta_bytes).to_vec();
-        gpu.perf
-            .record_dab_flush_workload(total_dabs, union_w, union_h);
-
-        let pipeline_ref = gpu.pipelines.get::<LiquifyPipeline>("liquify");
-        ensure_per_brush_pipeline(gpu, pipeline_ref, &compiled);
-
-        let stroke = gpu
-            .stroke
-            .as_ref()
-            .expect("liquify::flush_dabs requires stroke resources");
-        let paint_target = &stroke.paint_target;
-        let canvas_ext = paint_target.canvas_extent();
-        let layer_offset = [canvas_ext.x0(), canvas_ext.y0()];
-        let layer_size = [canvas_ext.width, canvas_ext.height];
-
-        let mut uniform_bytes: Vec<u8> = Vec::with_capacity(MAX_UNIFORM_BYTES);
-        pack_intrinsic_uniforms(
-            &mut uniform_bytes,
-            gpu.intrinsic_header(layer_offset, layer_size),
-        );
-        let outputs = gpu
-            .dab_batch
-            .slot_outputs
-            .as_ref()
-            .expect("liquify::flush_dabs requires dab_batch.slot_outputs");
-        pack_uniforms(&compiled, outputs, &mut uniform_bytes);
-
-        pipeline_ref.with_pipeline(compiled.topology_hash, |per_brush| {
-            if uniform_bytes.len() < per_brush.uniform_size {
-                uniform_bytes.resize(per_brush.uniform_size, 0);
-            }
-            per_brush.uniform_ring.reset();
-            let uniform_offset = per_brush.uniform_ring.write(gpu.queue, &uniform_bytes);
-            gpu.queue
-                .write_buffer(&per_brush.dabs_buffer, 0, &dab_bytes);
-
-            for (i, meta) in metas.iter().enumerate() {
-                let _ = gpu.prepare_dab_canvas_copy(
-                    meta.position,
-                    meta.half[0],
-                    meta.half[1],
-                    meta.half[0],
-                    meta.half[1],
-                );
-
-                let scratch_ref = &*gpu
-                    .stroke
-                    .as_ref()
-                    .expect("liquify::flush_dabs requires stroke resources")
-                    .scratch;
-                let read_bg = scratch_ref.read_mirror_bind_group();
-                let write_view = scratch_ref.write_view();
-
-                let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("liquify-flush"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: write_view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    ..Default::default()
-                });
-                pass.set_viewport(
-                    0.0,
-                    0.0,
-                    layer_size[0] as f32,
-                    layer_size[1] as f32,
-                    0.0,
-                    1.0,
-                );
-                pass.set_pipeline(&per_brush.pipeline);
-                pass.set_bind_group(0, &per_brush.uniform_bind_group, &[uniform_offset]);
-                pass.set_bind_group(1, &per_brush.dabs_bind_group, &[]);
-                pass.set_bind_group(2, gpu.selection_bind_group, &[]);
-                pass.set_bind_group(3, read_bg, &[]);
-                let ii = i as u32;
-                pass.draw(0..6, ii..ii + 1);
-            }
-        });
-
-        gpu.perf.record_dab_flush(total_dabs);
-    }
-
-    fn commit(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        let Some(stroke) = gpu.stroke.as_ref() else {
-            return;
-        };
-        stroke.paint_target.commit_scratch_blit(
-            gpu.device,
-            &mut gpu.encoder,
-            gpu.pipelines,
-            stroke.scratch.write_view(),
-            stroke.scratch.write_texture(),
-        );
-    }
-
-    /// Hover-cursor preview. Routes through the shared preview helper.
-    /// Liquify's preview is a soft disc with the same softness
-    /// falloff the stroke applies — scrubbing the softness slider
-    /// visibly reshapes the cursor. Rotation is 0 (the preview is
-    /// radially symmetric).
-    fn render_cursor_preview(
+    fn compile_body(
         &self,
-        ctx: &EvalContext,
-        gpu: &mut BrushGpuContext,
-    ) -> Vec<(String, ScalarValue)> {
-        let radius = Self::effective_radius(ctx);
-        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius);
-        vec![]
-    }
-
-    fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+        cctx: &CompileWgslCtx,
+        copy_origin_field: &str,
+    ) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
 
-        // `mask` defaults to 1.0 when unwired — uniform warp inside
-        // the disc.
+        // `mask` defaults to 1.0 when unwired — uniform warp inside the
+        // disc.
         let mask_expr = if cctx.input_is_wired("mask") {
             cctx.input("mask").as_f32()
         } else {
@@ -658,21 +219,6 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         let softness_expr = cctx.input("softness").as_f32();
         let direction_expr = cctx.input("direction").as_f32();
         let motion_expr = cctx.input("motion").as_vec2();
-
-        let copy_origin_field = cctx.dab_field_name("copy_origin");
-        let key = copy_origin_field.clone();
-        wgsl.dab_fields.push(DabField {
-            name: copy_origin_field.clone(),
-            ty: WgslType::Vec2,
-            pack: Arc::new(move |outputs, bytes| {
-                let v = outputs.get(&key).map(|s| s.as_vec2()).unwrap_or([0.0; 2]);
-                bytes.extend_from_slice(bytemuck::bytes_of(&v));
-            }),
-        });
-
-        wgsl.terminal_bindings = "@group(3) @binding(0) var scratch_mirror_tex: texture_2d<f32>;\n\
-             @group(3) @binding(1) var scratch_mirror_smp: sampler;\n"
-            .to_string();
 
         // Per-node falloff fn — suffixed by node id so two liquify
         // terminals (hypothetical) in the same brush don't collide.
@@ -701,16 +247,11 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         // Fragment body: `local_dist` and `target_pos` come from the
         // framework wrapper; the framework already discards past
         // `d.bbox_target_px`. We additionally discard past
-        // `local_dist >= 1.0` so the warp stays inside the disc (the
-        // framework's discard kicks in for `bbox_target_px < radius`
-        // cases too, but when extent contribution lands at 1.0 the
-        // two conditions coincide).
+        // `local_dist >= 1.0` so the warp stays inside the disc.
         // The falloff helper takes `0 = spike` / `1 = square`. The
         // user-facing slider is labelled "Softness" with the opposite
-        // intuition — `1 = soft / feathery` (only the brush centre
-        // pushes, edges fade to nothing), `0 = hard / sharp` (uniform
-        // displacement, square step at the disc edge). Invert before
-        // passing to the helper so the slider matches the label.
+        // intuition — `1 = soft / feathery`, `0 = hard / sharp`. Invert
+        // before passing to the helper so the slider matches the label.
         wgsl.body = format!(
             "    if (local_dist >= 1.0) {{ discard; }}\n\
              \x20   let warp_mask = clamp({mask_expr}, 0.0, 1.0);\n\
@@ -729,26 +270,21 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
              \x20   let original_uv = (target_pos  - d.{copy_origin_field}) / mirror_dims;\n\
              \x20   let original   = textureSampleLevel(scratch_mirror_tex, scratch_mirror_smp, original_uv, 0.0);\n\
              \x20   return mix(original, warped, sel * warp_mask);\n",
-            copy_origin_field = copy_origin_field,
         );
 
         Ok(wgsl)
     }
 
-    /// Preview-mode body. The stroke body samples `scratch_mirror`
-    /// (bound at `@group(3)` in stroke mode, omitted in preview);
-    /// preview emits the falloff disc so scrubbing the softness slider
-    /// visibly reshapes the cursor — helpful side-effect of reusing
-    /// the same `falloff_fn` the stroke decls emit.
+    /// Preview body — emit the falloff disc so scrubbing the softness
+    /// slider visibly reshapes the cursor (a side-effect of reusing the
+    /// same `falloff_fn` the stroke decls emit). The stroke body's
+    /// `scratch_mirror` bindings are omitted in preview mode.
     ///
-    /// The overlay's `KIND_MASKED_STAMP` reads only the `.r` channel
-    /// of this mask as coverage; the displayed colour comes from
-    /// `fs_snapshot`'s background-shift math, not from anything we
-    /// write here. So `.r = f` puts liquify's peak coverage on par
-    /// with paint's at the centre. An earlier version multiplied by
-    /// `0.6` thinking that emitted "neutral gray", which actually
-    /// just capped peak coverage at 60% — visibly fainter than other
-    /// brushes.
+    /// The overlay's `KIND_MASKED_STAMP` reads only the `.r` channel of
+    /// this mask as coverage; the displayed colour comes from
+    /// `fs_snapshot`'s background-shift math, not anything written here.
+    /// So `.r = f` puts liquify's peak coverage on par with paint's at
+    /// the centre.
     fn compile_cursor_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
         let softness_expr = cctx.input("softness").as_f32();
@@ -763,25 +299,40 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
     }
 }
 
-// ── Per-brush pipeline build helper ─────────────────────────────────────
-
-fn ensure_per_brush_pipeline(
-    gpu: &BrushGpuContext,
-    pipe: &LiquifyPipeline,
-    compiled: &CompiledBrush,
-) {
-    if pipe.cache.borrow().contains_key(&compiled.topology_hash) {
-        return;
+impl BrushNodeEvaluator for LiquifyEvaluator {
+    fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
+        vec![]
     }
-    let ctx = BuildContext {
-        device: gpu.device,
-        queue: gpu.queue,
-        uniform_bgl: gpu.pipelines.uniform_bind_group_layout(),
-        selection_bgl: gpu.pipelines.selection_bind_group_layout(),
-        canvas_copy_bgl: gpu.pipelines.canvas_copy_bind_group_layout(),
-        canvas_copy_sampler: gpu.pipelines.canvas_copy_sampler(),
-        min_uniform_align: gpu.device.limits().min_uniform_buffer_offset_alignment,
-        texture_registry: gpu.pipelines.texture_registry(),
-    };
-    pipe.ensure_pipeline(&ctx, compiled);
+
+    fn evaluate_gpu(
+        &self,
+        ctx: &EvalContext,
+        gpu: &mut BrushGpuContext,
+    ) -> Vec<(String, ScalarValue)> {
+        rmt::evaluate_gpu(self, ctx, gpu)
+    }
+
+    fn flush_dabs(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
+        rmt::flush_dabs::<Self>(gpu)
+    }
+
+    fn commit(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
+        rmt::commit(gpu)
+    }
+
+    fn render_cursor_preview(
+        &self,
+        ctx: &EvalContext,
+        gpu: &mut BrushGpuContext,
+    ) -> Vec<(String, ScalarValue)> {
+        rmt::render_cursor_preview(ctx, gpu)
+    }
+
+    fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+        rmt::compile_wgsl(self, cctx)
+    }
+
+    fn compile_cursor_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+        ReadMirrorTerminal::compile_cursor_preview_body(self, cctx)
+    }
 }

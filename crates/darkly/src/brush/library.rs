@@ -11,12 +11,18 @@ use crate::nodegraph::Graph;
 
 /// Summary info for listing brushes without loading the full graph.
 #[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct BrushInfo {
     pub name: String,
     pub category: String,
     pub author: String,
     pub description: String,
     pub tags: Vec<String>,
+    /// Iconify icon shown in place of the baked dab/stroke thumbnails —
+    /// present when the graph contains a content-dependent node whose
+    /// preview bake renders blank (clone, blur, smudge, liquify). See
+    /// [`crate::brush::graph_capabilities`].
+    pub icon: Option<&'static str>,
 }
 
 impl From<&BrushMetadata> for BrushInfo {
@@ -27,6 +33,7 @@ impl From<&BrushMetadata> for BrushInfo {
             author: p.author.clone(),
             description: p.description.clone(),
             tags: p.tags.clone(),
+            icon: crate::brush::graph_capabilities(&p.graph).preview_fallback_icon,
         }
     }
 }

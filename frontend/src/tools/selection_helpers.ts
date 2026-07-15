@@ -3,6 +3,8 @@
  * and modifier-key → selection mode mapping.
  */
 
+import type { SelectionMode } from '../engine/protocol_gen';
+
 // GPU overlay constants (must match Rust/WGSL)
 export const KIND_LINE           = 0;
 export const KIND_CIRCLE         = 1;
@@ -51,8 +53,8 @@ export function prim(
     };
 }
 
-/** Map modifier keys to selection boolean mode string. */
-export function selectionMode(e: PointerEvent | MouseEvent): string {
+/** Map modifier keys to the selection boolean mode. */
+export function selectionMode(e: PointerEvent | MouseEvent): SelectionMode {
     if (e.shiftKey && e.altKey) return 'intersect';
     if (e.shiftKey) return 'add';
     if (e.altKey) return 'subtract';

@@ -3,6 +3,8 @@
 //! but reads `compositor.composited_texture()` and surfaces raw RGBA8
 //! bytes for the JS side to encode via `OffscreenCanvas`.
 
+use darkly_macros::handlers;
+
 use super::{DarklyEngine, ReadbackContext};
 use crate::gpu::readback;
 
@@ -13,10 +15,12 @@ pub struct ExportImageResult {
     pub rgba: Vec<u8>,
 }
 
+#[handlers]
 impl DarklyEngine {
     /// Start an async readback of the full composited canvas. Returns
     /// immediately; the result lands on `pending_export_result` once the
     /// readback completes (typically the next frame).
+    #[handler]
     pub fn start_export(&mut self) {
         if self
             .readbacks

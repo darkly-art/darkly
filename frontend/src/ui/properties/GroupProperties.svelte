@@ -9,7 +9,7 @@
 
     function onPassthroughChange(e: Event) {
         const checked = (e.target as HTMLInputElement).checked;
-        app.engine?.post('set_group_passthrough', { id: group.id, passthrough: checked });
+        app.engine?.api.setGroupPassthrough({ id: group.id, passthrough: checked });
         app.refreshLayerTree();
         app.requestFrame();
     }

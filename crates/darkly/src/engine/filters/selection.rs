@@ -14,8 +14,10 @@
 //!   helpers consumers reach for (`selection_active`, `selection_cpu_cache`,
 //!   `selection_pixel_bounds`, …).
 
+use darkly_macros::handlers;
+
 use super::super::rendering::commit_undo_region;
-use super::super::{DarklyEngine, ReadbackContext};
+use super::super::{DarklyEngine, OverlayChannel, ReadbackContext};
 use crate::coord::{CanvasRect, WindowRect};
 use crate::document::SelectionMode;
 use crate::gpu::flood_fill::{self, LayerFloodFillExtent};
@@ -25,6 +27,21 @@ use crate::gpu::selection::{CombineMode, MorphOp};
 use crate::layer::LayerId;
 use crate::mask::RasterizedMask;
 use crate::undo::SelectionAction;
+
+/// Concatenate every overlay channel bottom-to-top in [`OverlayChannel::ALL`]
+/// order (`Selection`, `CloneSource`, `Tool`). Pure — the z-order is the one
+/// behaviour worth pinning down in a test, decoupled from the GPU push in
+/// [`DarklyEngine::push_merged_overlay`].
+pub(crate) fn merge_overlay_channels(
+    channels: &[Vec<OverlayPrimitive>; OverlayChannel::COUNT],
+) -> Vec<OverlayPrimitive> {
+    let total: usize = channels.iter().map(|c| c.len()).sum();
+    let mut merged = Vec::with_capacity(total);
+    for channel in OverlayChannel::ALL {
+        merged.extend_from_slice(&channels[channel.index()]);
+    }
+    merged
+}
 
 /// Emit marching-ants overlay primitives from contour polylines. Each edge
 /// produces a pair of dashed-line primitives — black backing + white dashes —
@@ -89,6 +106,7 @@ fn selection_undo_frame_rect(b: WindowRect) -> CanvasRect {
     CanvasRect::from_xywh(b.x0(), b.y0(), b.width, b.height)
 }
 
+#[handlers]
 impl DarklyEngine {
     // ========================================================================
     // Bridge helpers — read/write the selection's split state through one
@@ -98,6 +116,7 @@ impl DarklyEngine {
 
     /// True when the selection filter is allocated AND its visibility flag
     /// is set. Equivalent to the old `gpu_selection.active`.
+    #[handler]
     pub fn has_selection(&self) -> bool {
         self.doc.selection_active()
     }
@@ -192,6 +211,7 @@ impl DarklyEngine {
     // Selection ops — the user-facing shape fills, booleans, invert, clear.
     // ========================================================================
 
+    #[handler]
     pub fn select_rect(
         &mut self,
         x: f32,
@@ -222,6 +242,7 @@ impl DarklyEngine {
         self.apply_selection_mask(mask, mode);
     }
 
+    #[handler]
     pub fn select_ellipse(
         &mut self,
         x: f32,
@@ -282,14 +303,15 @@ impl DarklyEngine {
         (x - o.x as f32, y - o.y as f32)
     }
 
+    #[handler]
     pub fn select_magic_wand(
         &mut self,
-        layer_id: LayerId,
+        id: LayerId,
         seed_canvas: crate::coord::CanvasPoint,
         tolerance: u8,
         mode: SelectionMode,
     ) {
-        if self.paint_target(layer_id).is_none() {
+        if self.paint_target(id).is_none() {
             return;
         }
 
@@ -298,7 +320,7 @@ impl DarklyEngine {
         let rect = self.selection_full_canvas_rect();
         self.save_selection_for_undo(rect);
 
-        let pt = self.paint_target(layer_id).unwrap();
+        let pt = self.paint_target(id).unwrap();
         let mut encoder = self
             .gpu
             .device
@@ -312,7 +334,7 @@ impl DarklyEngine {
             request,
             ReadbackContext::MagicWand {
                 was_active,
-                node_id: layer_id,
+                node_id: id,
                 seed_canvas,
                 tolerance,
                 mode,
@@ -335,6 +357,7 @@ impl DarklyEngine {
         self.apply_selection_full(fill_mask, mode, was_active);
     }
 
+    #[handler]
     pub fn clear_selection(&mut self) {
         if let Some((was_active, entry)) = self.clear_selection_collecting_undo() {
             self.push_undo(Box::new(SelectionAction::new(was_active, entry)));
@@ -369,11 +392,11 @@ impl DarklyEngine {
         self.invalidate_selection_cpu_cache();
 
         let entry = self.commit_selection_undo_entry(rect)?;
-        self.selection_overlay.clear();
-        self.push_merged_overlay();
+        self.clear_channel_overlay(OverlayChannel::Selection);
         Some((was_active, entry))
     }
 
+    #[handler]
     pub fn select_all(&mut self) {
         let rect = self.selection_full_canvas_rect();
         self.save_selection_for_undo(rect);
@@ -394,6 +417,7 @@ impl DarklyEngine {
         self.generate_contours_from_mask(&mask);
     }
 
+    #[handler]
     pub fn invert_selection(&mut self) {
         if !self.has_selection() {
             return;
@@ -416,17 +440,20 @@ impl DarklyEngine {
 
     /// Grow (dilate) the active selection by `radius` pixels. No-op without an
     /// active selection or for `radius == 0`.
+    #[handler]
     pub fn grow_selection(&mut self, radius: u32) {
         self.morph_selection(MorphOp::Dilate, radius);
     }
 
     /// Shrink (erode) the active selection by `radius` pixels.
+    #[handler]
     pub fn shrink_selection(&mut self, radius: u32) {
         self.morph_selection(MorphOp::Erode, radius);
     }
 
     /// Replace the active selection with a band of width `radius` straddling
     /// its edge (`dilate − erode`).
+    #[handler]
     pub fn border_selection(&mut self, radius: u32) {
         if radius == 0 || !self.has_selection() {
             return;
@@ -443,6 +470,7 @@ impl DarklyEngine {
     /// Smooth the active selection: a morphological open then close (`erode N →
     /// dilate 2N → erode N`), removing specks and pinholes and rounding jagged
     /// edges.
+    #[handler]
     pub fn smooth_selection(&mut self, radius: u32) {
         if radius == 0 || !self.has_selection() {
             return;
@@ -457,6 +485,7 @@ impl DarklyEngine {
     }
 
     /// Feather (Gaussian-blur) the active selection edge by `radius` pixels.
+    #[handler]
     pub fn feather_selection(&mut self, radius: f32) {
         if radius <= 0.0 || !self.has_selection() {
             return;
@@ -466,6 +495,7 @@ impl DarklyEngine {
 
     /// Antialias the active selection — a fixed small-radius Gaussian blur that
     /// softens the staircase of a hard-edged selection.
+    #[handler]
     pub fn antialias_selection(&mut self) {
         if !self.has_selection() {
             return;
@@ -546,12 +576,13 @@ impl DarklyEngine {
         self.kick_selection_readback();
     }
 
-    pub fn clear_selection_contents(&mut self, layer_id: LayerId) {
+    #[handler]
+    pub fn clear_selection_contents(&mut self, id: LayerId) {
         self.auto_commit_floating();
         if !self.has_selection() {
             return;
         }
-        self.gpu_clear_selection(layer_id);
+        self.gpu_clear_selection(id);
     }
 
     // --- Core selection application ---
@@ -587,7 +618,7 @@ impl DarklyEngine {
 
     /// Generate marching ants contours directly from a RasterizedMask (no readback).
     fn generate_contours_from_mask(&mut self, mask: &RasterizedMask) {
-        self.selection_overlay.clear();
+        self.overlays[OverlayChannel::Selection.index()].clear();
 
         if mask.width == 0 || mask.height == 0 {
             self.push_merged_overlay();
@@ -610,7 +641,13 @@ impl DarklyEngine {
         let ox = mask.x as f32 - pad as f32;
         let oy = mask.y as f32 - pad as f32;
         let origin = self.doc.canvas_origin;
-        emit_marching_ants(&polylines, ox, oy, origin, &mut self.selection_overlay);
+        emit_marching_ants(
+            &polylines,
+            ox,
+            oy,
+            origin,
+            &mut self.overlays[OverlayChannel::Selection.index()],
+        );
 
         self.push_merged_overlay();
     }
@@ -824,7 +861,7 @@ impl DarklyEngine {
 
     /// Regenerate marching ants from readback data and update CPU cache.
     pub(crate) fn update_selection_overlay_from_readback(&mut self, pixels: Vec<u8>) {
-        self.selection_overlay.clear();
+        self.overlays[OverlayChannel::Selection.index()].clear();
 
         if !self.has_selection() {
             self.push_merged_overlay();
@@ -842,16 +879,24 @@ impl DarklyEngine {
         let polylines =
             crate::mask::contour_polylines_r8(&pixels, self.doc.width, self.doc.height, 127);
         let origin = self.doc.canvas_origin;
-        emit_marching_ants(&polylines, 0.0, 0.0, origin, &mut self.selection_overlay);
+        emit_marching_ants(
+            &polylines,
+            0.0,
+            0.0,
+            origin,
+            &mut self.overlays[OverlayChannel::Selection.index()],
+        );
 
         self.push_merged_overlay();
     }
 
-    /// Merge selection_overlay + tool_overlay and push to compositor.
+    /// Merge every overlay channel in z-order and push to the compositor's
+    /// single overlay slot. Channels render bottom-to-top in
+    /// [`OverlayChannel::ALL`] order (`Selection`, `CloneSource`, `Tool`),
+    /// so the dab preview lands on top. A new channel is additive — extend
+    /// the enum and it folds in here with no edit.
     pub(crate) fn push_merged_overlay(&mut self) {
-        let mut merged = Vec::with_capacity(self.selection_overlay.len() + self.tool_overlay.len());
-        merged.extend_from_slice(&self.selection_overlay);
-        merged.extend_from_slice(&self.tool_overlay);
+        let merged = merge_overlay_channels(&self.overlays);
         if merged.is_empty() {
             self.compositor.tool_overlay_mut().clear_primitives();
         } else {
@@ -860,23 +905,44 @@ impl DarklyEngine {
         self.compositor.mark_needs_present();
     }
 
+    // --- Channel overlays ---
+
+    /// Replace one channel's primitives wholesale and re-merge. Other
+    /// channels are untouched, so the clone source marker survives the dab
+    /// preview's every-hover-move `Tool` replacement.
+    pub(crate) fn set_channel_overlay(
+        &mut self,
+        channel: OverlayChannel,
+        prims: Vec<OverlayPrimitive>,
+    ) {
+        self.overlays[channel.index()] = prims;
+        self.push_merged_overlay();
+    }
+
+    /// Clear one channel's primitives and re-merge.
+    pub(crate) fn clear_channel_overlay(&mut self, channel: OverlayChannel) {
+        self.overlays[channel.index()].clear();
+        self.push_merged_overlay();
+    }
+
     // --- Tool Overlay ---
 
     pub fn set_overlay_primitives(&mut self, prims: Vec<OverlayPrimitive>) {
-        self.tool_overlay = prims;
-        self.push_merged_overlay();
+        self.set_channel_overlay(OverlayChannel::Tool, prims);
     }
 
+    #[handler]
     pub fn clear_overlay(&mut self) {
-        self.tool_overlay.clear();
-        self.push_merged_overlay();
+        self.clear_channel_overlay(OverlayChannel::Tool);
     }
 
+    #[handler]
     pub fn overlay_hit_test(&self, screen_x: f32, screen_y: f32) -> Option<usize> {
         self.compositor.tool_overlay().hit_test(screen_x, screen_y)
     }
 
     /// Upload the mask texture sampled by KIND_MASKED_STAMP overlay primitives.
+    #[handler]
     pub fn set_overlay_mask(&mut self, width: u32, height: u32, rgba: &[u8]) {
         self.compositor.tool_overlay_mut().set_mask_texture(
             &self.gpu.device,
@@ -888,8 +954,63 @@ impl DarklyEngine {
         self.compositor.mark_needs_present();
     }
 
+    #[handler]
     pub fn clear_overlay_mask(&mut self) {
         self.compositor.tool_overlay_mut().clear_mask_texture();
         self.compositor.mark_needs_present();
+    }
+}
+
+#[cfg(test)]
+mod overlay_channel_tests {
+    use super::*;
+    use crate::gpu::overlay::KIND_LINE;
+
+    /// Tag a primitive by channel via its `p0.x` so the merged order is
+    /// checkable without a GPU.
+    fn tagged(tag: f32) -> OverlayPrimitive {
+        OverlayPrimitive::new(KIND_LINE, 0, [tag, 0.0], [0.0, 0.0])
+    }
+
+    fn channels_with(
+        sel: &[f32],
+        clone: &[f32],
+        tool: &[f32],
+    ) -> [Vec<OverlayPrimitive>; OverlayChannel::COUNT] {
+        let mut ch: [Vec<OverlayPrimitive>; OverlayChannel::COUNT] = Default::default();
+        ch[OverlayChannel::Selection.index()] = sel.iter().map(|&t| tagged(t)).collect();
+        ch[OverlayChannel::CloneSource.index()] = clone.iter().map(|&t| tagged(t)).collect();
+        ch[OverlayChannel::Tool.index()] = tool.iter().map(|&t| tagged(t)).collect();
+        ch
+    }
+
+    /// The merge concatenates Selection, then CloneSource, then Tool — the
+    /// dab (`Tool`) lands on top.
+    #[test]
+    fn merges_in_z_order() {
+        let ch = channels_with(&[1.0], &[2.0, 3.0], &[4.0]);
+        let merged: Vec<f32> = merge_overlay_channels(&ch)
+            .iter()
+            .map(|p| p.p0[0])
+            .collect();
+        assert_eq!(merged, vec![1.0, 2.0, 3.0, 4.0]);
+    }
+
+    /// Clearing the `Tool` channel leaves the `CloneSource` marker intact —
+    /// the property that lets the source crosshair survive the dab preview's
+    /// every-hover-move replacement.
+    #[test]
+    fn clone_source_survives_tool_clear() {
+        let mut ch = channels_with(&[1.0], &[2.0], &[4.0]);
+        ch[OverlayChannel::Tool.index()].clear();
+        let merged: Vec<f32> = merge_overlay_channels(&ch)
+            .iter()
+            .map(|p| p.p0[0])
+            .collect();
+        assert_eq!(
+            merged,
+            vec![1.0, 2.0],
+            "CloneSource must persist after a Tool-channel clear"
+        );
     }
 }

@@ -8,18 +8,21 @@ import { ellipseSelectTool } from './ellipse_select.svelte';
 import { lassoSelectTool } from './lasso_select.svelte';
 import { polygonSelectTool } from './polygon_select.svelte';
 import { magicWandTool } from './magic_wand.svelte';
-import { transformTool } from './transform.svelte';
+import { transformTool, transformPerspectiveTool } from './transform.svelte';
+import { textTool } from './text.svelte';
 
 toolRegistry.register(brushTool);
 toolRegistry.register(fillTool);
 toolRegistry.register(gradientTool);
 toolRegistry.register(colorPickerTool);
+toolRegistry.register(textTool);
 toolRegistry.register(rectSelectTool);
 toolRegistry.register(ellipseSelectTool);
 toolRegistry.register(lassoSelectTool);
 toolRegistry.register(polygonSelectTool);
 toolRegistry.register(magicWandTool);
 toolRegistry.register(transformTool);
+toolRegistry.register(transformPerspectiveTool);
 
 // Cluster buttons mirror their default tool's icon (rect_select's dashed
 // square for selection; fill's bucket for fill) — the cluster owns no
@@ -36,4 +39,11 @@ toolClusterRegistry.register({
     toolIds: ['fill', 'gradient'],
     defaultToolId: 'fill',
     displayName: 'Fill',
+});
+
+toolClusterRegistry.register({
+    id: 'transform',
+    toolIds: ['transform', 'transform_perspective'],
+    defaultToolId: 'transform',
+    displayName: 'Transform',
 });

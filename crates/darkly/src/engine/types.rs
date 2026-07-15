@@ -44,6 +44,7 @@ pub struct EngineState {
 /// own registration and the UI follows with no consumer-side edit.
 #[derive(serde::Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum LayerInfo {
     #[serde(rename_all = "camelCase")]
     Raster {
@@ -119,6 +120,29 @@ pub enum LayerInfo {
         /// Stable filter `type_id` (e.g. `"invert"`) — UI resolves to a
         /// display label via `filter_types()`.
         pipeline: String,
+        /// Param schema + current values, in the order the filter's `ParamDef`
+        /// slice declares them. Empty for parameter-free filters (invert);
+        /// carries the five tone curves for `curves`. Same shape the void panel
+        /// uses.
+        params: Vec<ParamInfo>,
+    },
+    /// Vector-object layer (text today). Carries no pixel buffer — the texture
+    /// is realized from its `objects`.
+    #[serde(rename_all = "camelCase")]
+    Vector {
+        id: f64,
+        name: String,
+        visible: bool,
+        locked: bool,
+        editable: bool,
+        can_have_mask: bool,
+        can_rename: bool,
+        has_thumbnail: bool,
+        icon: &'static str,
+        kind_name: &'static str,
+        opacity: f32,
+        blend_mode: &'static str,
+        modifiers: Vec<ModifierInfo>,
     },
     #[serde(rename_all = "camelCase")]
     Group {
@@ -147,6 +171,7 @@ pub enum LayerInfo {
 /// resolve to a display label via `modifier_types()`.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct ModifierInfo {
     pub id: f64,
     pub kind: &'static str,
@@ -160,6 +185,7 @@ pub struct ModifierInfo {
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct VeilTypeInfo {
     #[serde(rename = "type")]
     pub type_id: &'static str,
@@ -174,6 +200,7 @@ pub struct VeilTypeInfo {
 /// void-only and intentionally not symmetrized onto [`VeilTypeInfo`].
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct VoidTypeInfo {
     #[serde(rename = "type")]
     pub type_id: &'static str,
@@ -193,6 +220,7 @@ pub struct VoidTypeInfo {
 /// Mirrors `VeilTypeInfo` so the UI consumes both in the same shape.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct ToolTypeInfo {
     #[serde(rename = "type")]
     pub type_id: &'static str,
@@ -204,6 +232,7 @@ pub struct ToolTypeInfo {
 /// `category` drives the `<optgroup>` grouping (Darken / Lighten / etc.).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct BlendModeTypeInfo {
     #[serde(rename = "type")]
     pub type_id: &'static str,
@@ -215,6 +244,7 @@ pub struct BlendModeTypeInfo {
 /// "Add modifier" menu and to look up display labels for `ModifierInfo.kind`.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct ModifierTypeInfo {
     #[serde(rename = "type")]
     pub type_id: &'static str,
@@ -225,6 +255,7 @@ pub struct ModifierTypeInfo {
 /// like "Raster Layer" / "Group" for the layer's own `type` discriminator.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct LayerKindTypeInfo {
     #[serde(rename = "type")]
     pub type_id: &'static str,
@@ -235,6 +266,7 @@ pub struct LayerKindTypeInfo {
 /// resolve to a display label via `veil_types()` — never duplicate it here.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct VeilInfo {
     #[serde(rename = "type")]
     pub type_id: String,
@@ -246,6 +278,7 @@ pub struct VeilInfo {
 /// Flat serialization-friendly view of a parameter definition + current value.
 /// Avoids nesting a tagged enum (ParamDef) which serde_wasm_bindgen can't handle.
 #[derive(serde::Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct ParamInfo {
     pub kind: &'static str,
     pub name: &'static str,
@@ -259,6 +292,7 @@ pub struct ParamInfo {
     /// Enum: `["Label1", "Label2", ...]`.
     /// Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(type = "JsonValue | null"))]
     pub options: Option<serde_json::Value>,
 }
 
@@ -320,6 +354,15 @@ impl ParamInfo {
                 value: value.cloned(),
                 options: None,
             },
+            ParamDef::Levels { name, default } => ParamInfo {
+                kind: "levels",
+                name,
+                min: None,
+                max: None,
+                default: ParamValue::Levels(*default),
+                value: value.cloned(),
+                options: None,
+            },
             ParamDef::Enum {
                 name,
                 options,
@@ -360,12 +403,56 @@ impl ParamInfo {
                 value: value.cloned(),
                 options: Some(serde_json::json!(options)),
             },
+            ParamDef::Color { name, default } => ParamInfo {
+                kind: "color",
+                name,
+                min: None,
+                max: None,
+                default: ParamValue::Color(*default),
+                value: value.cloned(),
+                options: None,
+            },
+            ParamDef::Vec2 { name, max, default } => ParamInfo {
+                kind: "vec2",
+                name,
+                min: None,
+                // For a vec2 the flat `max` field carries the magnitude clamp
+                // (the offset pad's edge radius).
+                max: Some(*max as f64),
+                default: ParamValue::Vec2(*default),
+                value: value.cloned(),
+                options: None,
+            },
+            ParamDef::List {
+                name,
+                item,
+                max_len,
+                ..
+            } => ParamInfo {
+                kind: "list",
+                name,
+                min: None,
+                // For a list the flat `max` field carries the entry cap so the
+                // editor disables "Add" at the limit without an effect-specific
+                // constant.
+                max: Some(*max_len as f64),
+                default: def.default_value(),
+                value: value.cloned(),
+                // The item schema rides the same kind-discriminated `options`
+                // channel Enum/Icon use — here a `Vec<ParamInfo>` of the item
+                // defs so the list editor can render each entry's fields.
+                options: Some(serde_json::json!(item
+                    .iter()
+                    .map(|d| ParamInfo::from_def(d, None))
+                    .collect::<Vec<_>>())),
+            },
         }
     }
 }
 
 #[derive(serde::Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum StrokeOp {
     FloodFill {
         x: f32,
@@ -411,6 +498,7 @@ pub enum StrokeOp {
 /// Data returned to the WASM bridge on copy/cut — always RGBA pixels regardless
 /// of the internal clipboard variant.
 #[derive(serde::Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct ClipboardExport {
     pub rgba: Vec<u8>,
     pub width: u32,
@@ -422,6 +510,7 @@ pub struct ClipboardExport {
 pub(crate) fn node_to_layer_info(
     doc: &crate::document::Document,
     void_registry: &crate::gpu::void::VoidRegistry,
+    filter_registry: &crate::gpu::filter::FilterPipelineRegistry,
     node_id: crate::layer::LayerId,
 ) -> Option<LayerInfo> {
     use crate::layer::{Layer, LayerNode};
@@ -484,25 +573,53 @@ pub(crate) fn node_to_layer_info(
                     params,
                 }
             }
-            Layer::Filter(f) => LayerInfo::Filter {
-                id: f.id.to_ffi() as f64,
-                name: f.common.name.clone(),
-                visible: f.common.visible,
-                locked: f.common.locked,
+            Layer::Filter(f) => {
+                let param_defs = filter_registry.params(&f.pipeline);
+                let params = param_defs
+                    .iter()
+                    .enumerate()
+                    .map(|(j, def)| ParamInfo::from_def(def, f.params.get(j)))
+                    .collect();
+                LayerInfo::Filter {
+                    id: f.id.to_ffi() as f64,
+                    name: f.common.name.clone(),
+                    visible: f.common.visible,
+                    locked: f.common.locked,
+                    editable,
+                    can_have_mask: kind.can_have_mask,
+                    can_rename: kind.can_rename,
+                    has_thumbnail: kind.has_thumbnail,
+                    icon: kind.icon,
+                    kind_name: kind.display_name,
+                    opacity: f.blend.opacity,
+                    blend_mode: f.blend.blend_mode.type_id,
+                    modifiers: f
+                        .filters
+                        .iter()
+                        .filter_map(|mid| doc.find_filter(*mid).map(|m| modifier_to_info(doc, m)))
+                        .collect(),
+                    pipeline: f.pipeline.clone(),
+                    params,
+                }
+            }
+            Layer::Vector(v) => LayerInfo::Vector {
+                id: v.id.to_ffi() as f64,
+                name: v.common.name.clone(),
+                visible: v.common.visible,
+                locked: v.common.locked,
                 editable,
                 can_have_mask: kind.can_have_mask,
                 can_rename: kind.can_rename,
                 has_thumbnail: kind.has_thumbnail,
                 icon: kind.icon,
                 kind_name: kind.display_name,
-                opacity: f.blend.opacity,
-                blend_mode: f.blend.blend_mode.type_id,
-                modifiers: f
+                opacity: v.blend.opacity,
+                blend_mode: v.blend.blend_mode.type_id,
+                modifiers: v
                     .filters
                     .iter()
                     .filter_map(|mid| doc.find_filter(*mid).map(|m| modifier_to_info(doc, m)))
                     .collect(),
-                pipeline: f.pipeline.clone(),
             },
         },
         LayerNode::Group(g) => LayerInfo::Group {
@@ -529,7 +646,7 @@ pub(crate) fn node_to_layer_info(
                 .children
                 .iter()
                 .rev()
-                .filter_map(|cid| node_to_layer_info(doc, void_registry, *cid))
+                .filter_map(|cid| node_to_layer_info(doc, void_registry, filter_registry, *cid))
                 .collect(),
         },
     };

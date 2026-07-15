@@ -500,6 +500,41 @@ fn update_void_transform_stores_and_renders() {
     assert_eq!(stored, t, "the stored transform reflects the update");
 }
 
+/// Perspective (homography) transforms reach voids now — not just affine. Set a
+/// `Perspective` transform via the same `update_void_transform` path, render
+/// (the shared `proj_local` sampler runs in the void shader), and read the mode
+/// back as 1. Regression for the void path being pinned to affine.
+#[test]
+fn update_void_transform_supports_perspective() {
+    use darkly::transform::{homography_from_corners, Transform};
+    let mut engine = test_engine(64, 64);
+    let id = engine
+        .add_void_layer("noise", noise_defaults(&engine), None)
+        .expect("noise void should be addable");
+
+    // A trapezoid (narrowed top edge) over the 64×64 field — a genuine
+    // vanishing-point warp, not an affine parallelogram.
+    let corners = [(16.0, 0.0), (48.0, 0.0), (64.0, 64.0), (0.0, 64.0)];
+    let m = homography_from_corners(64.0, 64.0, corners).expect("non-degenerate");
+    let t = Transform::Perspective(m);
+
+    let frame_identity = engine.test_readback_canvas();
+    engine.update_void_transform(id, t);
+    let frame_persp = engine.test_readback_canvas();
+
+    let (.., stored) = engine.void_transform_info(id).expect("info");
+    assert_eq!(
+        stored.mode_tag(),
+        1,
+        "the void stores a Perspective transform"
+    );
+    assert_eq!(stored, t, "the stored homography round-trips");
+    assert_ne!(
+        frame_identity, frame_persp,
+        "a perspective warp must change the void's rendered output",
+    );
+}
+
 /// Undo restores the layer's PRE-EDIT transform, not identity. A non-coalescing
 /// boundary (a param edit, different `Property` kind) sits between two transform
 /// edits so the second is its own undo step whose `old_value` must be the first
@@ -583,6 +618,105 @@ fn noise_void_transform_changes_output() {
     assert_ne!(
         frame_a, frame_b,
         "transforming a noise void must scale/pan the field in the output",
+    );
+}
+
+/// Regression: straight-alpha storage + linear filtering darkened every alpha
+/// edge in video-stream voids (docs/lessons-learned/compositing-lessons-learned.md
+/// #2 — the dark-halo bug reported on the Blender void). The aux frame texture
+/// must hold **premultiplied** texels so the hardware bilinear filter
+/// interpolates correctly, and the shader must un-premultiply after sampling so
+/// the void still emits the straight alpha the compositor expects.
+///
+/// A 4×4 frame is planted through the load path (`restore_void_pixels`), whose
+/// bytes follow the aux texture's premultiplied convention. Cover-fit stretches
+/// it over the 64×64 canvas (16× per axis), so nearly every output pixel is a
+/// filtered blend of adjacent texels:
+///
+/// - Columns 0–1 opaque red `(255,0,0,255)`, columns 2–3 transparent
+///   `(0,0,0,0)` — byte-identical in both alpha conventions, so the fringe
+///   assertion pins filtering behavior regardless of injection convention.
+/// - Texel (1,1) is premultiplied half-alpha red `(128,0,0,128)` (straight
+///   `(255,0,0)` at α=128). Output pixels near its center sample only
+///   columns 0–1, away from the transparent boundary.
+#[test]
+fn video_stream_void_filtering_keeps_straight_color_at_alpha_edges() {
+    let mut engine = test_engine(64, 64);
+    let defaults: Vec<ParamValue> = engine
+        .void_param_defs("blender")
+        .iter()
+        .map(darkly::gpu::params::ParamDef::default_value)
+        .collect();
+    let id = engine
+        .add_void_layer("blender", defaults, None)
+        .expect("blender void should be addable");
+
+    let (w, h) = (4u32, 4u32);
+    let mut frame = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w / 2 {
+            let i = ((y * w + x) * 4) as usize;
+            frame[i..i + 4].copy_from_slice(&[255, 0, 0, 255]);
+        }
+    }
+    let semi = ((w + 1) * 4) as usize; // texel (1,1)
+    frame[semi..semi + 4].copy_from_slice(&[128, 0, 0, 128]);
+    engine.test_plant_void_frame(id, w, h, &frame);
+
+    // Force a render so the void encodes the planted frame, then read the
+    // void's canvas-sized straight-alpha output.
+    let _ = engine.test_readback_canvas();
+    let out = engine.test_readback_layer(id);
+    assert_eq!(
+        out.len(),
+        64 * 64 * 4,
+        "layer readback should be canvas-sized"
+    );
+    let px = |x: usize, y: usize| -> [u8; 4] {
+        let i = (y * 64 + x) * 4;
+        [out[i], out[i + 1], out[i + 2], out[i + 3]]
+    };
+
+    // Sanity: deep inside each half the output is exact.
+    assert_eq!(
+        px(8, 8),
+        [255, 0, 0, 255],
+        "opaque interior stays solid red"
+    );
+    assert_eq!(px(55, 8), [0, 0, 0, 0], "transparent interior stays empty");
+
+    // Assertion A (edge fringe): pixel (31, 55) maps to source texel coords
+    // (~1.47, ~2.97) — a near-even filter blend of opaque-red column 1 and
+    // transparent column 2, in plain rows away from the semi texel. The
+    // straight color must stay full-brightness red; unfixed straight-alpha
+    // filtering yields r ≈ a (a dark halo).
+    let edge = px(31, 55);
+    assert!(
+        edge[3] > 64 && edge[3] < 192,
+        "edge pixel should have mid-range alpha, got {edge:?}",
+    );
+    assert!(
+        edge[0] >= 240,
+        "filtered alpha edge must keep straight red at full brightness \
+         (premultiplied filtering); got {edge:?} — a dark fringe",
+    );
+
+    // Assertion B (storage convention): pixel (23, 23) maps to (~0.97, ~0.97)
+    // — dominated by the semi texel with the remainder from its opaque-red
+    // neighbors (transparent columns contribute nothing). The premultiplied
+    // bytes `(128,0,0,128)` must read back as straight `(255,0,0)` at α≈136.
+    // This pins the premultiplied-storage half of the fix: with straight
+    // storage plus an un-premultiply divide, assertion A alone would still
+    // pass while semi-transparent content breaks.
+    let semi_px = px(23, 23);
+    assert!(
+        semi_px[3] > 110 && semi_px[3] < 160,
+        "semi-transparent texel should read back α≈136, got {semi_px:?}",
+    );
+    assert!(
+        semi_px[0] >= 240,
+        "premultiplied semi-transparent red must un-premultiply to full \
+         brightness; got {semi_px:?}",
     );
 }
 

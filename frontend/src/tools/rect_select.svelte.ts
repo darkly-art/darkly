@@ -28,7 +28,7 @@ function pushPreviewOverlay() {
     const sy1 = Math.round(y1);
     const tl: [number, number] = [Math.min(sx0, sx1), Math.min(sy0, sy1)];
     const br: [number, number] = [Math.max(sx0, sx1), Math.max(sy0, sy1)];
-    app.engine.post('set_overlay', {
+    app.engine.api.setOverlay({
         primitives: [
             prim(KIND_RECT, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR, tl, br, { dashLen: 6, thickness: 1 }),
         ],
@@ -38,12 +38,12 @@ function pushPreviewOverlay() {
 function clearPreviewOverlay() {
     dragStart = null;
     dragEnd = null;
-    app.engine?.post('clear_overlay');
+    app.engine?.api.clearOverlay();
 }
 
 export const rectSelectTool: Tool = {
     id: 'rect_select',
-    icon: 'tabler:square-dashed',
+    icon: 'boxicons:square-dashed',
     group: 'select',
     cluster: 'select',
     hotkeyAction: 'rectSelectTool',
@@ -86,10 +86,10 @@ export const rectSelectTool: Tool = {
         // is a crisp 1-bit mask.
         if (w > 0 && h > 0) {
             const mode = selectionMode(e);
-            ctx.engine.post('select_rect', { x, y, w, h, mode, antialias: false, feather: 0 });
+            ctx.engine.api.selectRect({ x, y, w, h, mode, antialias: false, feather: 0 });
         } else if (selectionMode(e) === 'replace') {
             // Click without drag = deselect (only in replace mode)
-            ctx.engine.post('clear_selection');
+            ctx.engine.api.clearSelection();
         }
 
         clearPreviewOverlay();
@@ -97,7 +97,7 @@ export const rectSelectTool: Tool = {
 
     onKeyDown(e) {
         if (e.key === 'Escape') {
-            app.engine?.post('clear_selection');
+            app.engine?.api.clearSelection();
             return true;
         }
         return false;

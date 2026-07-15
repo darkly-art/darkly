@@ -1,3 +1,9 @@
+use std::collections::BTreeMap;
+
+use kurbo::{Affine, BezPath, Stroke};
+use peniko::Brush;
+use serde::{Deserialize, Serialize};
+
 use crate::coord::CanvasRect;
 use crate::gpu::blend_mode::{self, BlendModeRegistration};
 use crate::gpu::params::ParamValue;
@@ -28,6 +34,39 @@ impl LayerId {
     /// [`Document`]: crate::document::Document
     pub fn from_ffi(v: u64) -> Self {
         slotmap::KeyData::from_ffi(v).into()
+    }
+}
+
+// A `LayerId` crosses the wire as the same packed `u64` it uses at the WASM/JS
+// boundary. The slotmap key's internal repr is index+version, so this can't be
+// a derive — it serializes *through* `to_ffi`/`from_ffi`, transparent as a
+// single JSON number. This is the protocol's `LayerId` coercion (see the typed
+// engine bridge): with it, handlers carry `LayerId` directly instead of
+// shimming `u64` at every call site.
+impl serde::Serialize for LayerId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u64(self.to_ffi())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for LayerId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(LayerId::from_ffi(u64::deserialize(deserializer)?))
+    }
+}
+
+// On the wire a `LayerId` is just its packed `u64`, so to the typed TS client it
+// is a `number` — mirroring the serde impls above. The slotmap key has no fields
+// to derive `TS` from, so this maps it to the same primitive `u64` exports as.
+#[cfg(feature = "ts-export")]
+impl ts_rs::TS for LayerId {
+    type WithoutGenerics = Self;
+    type OptionInnerType = Self;
+    fn name(cfg: &ts_rs::Config) -> String {
+        u64::name(cfg)
+    }
+    fn inline(cfg: &ts_rs::Config) -> String {
+        u64::inline(cfg)
     }
 }
 
@@ -223,6 +262,227 @@ impl FilterLayer {
     }
 }
 
+/// Horizontal text alignment within a [`TextProps`] block. Maps onto parley's
+/// `Alignment` at shape time and is the only alignment authority — the renderer
+/// never re-derives it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TextAlign {
+    Start,
+    Center,
+    End,
+    Justified,
+}
+
+/// Optional slant for a [`TextProps`] block. Kept as a small enum (rather than
+/// parley's `FontStyle`, which carries an oblique angle we don't expose yet) so
+/// the document model owns a stable, serializable vocabulary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TextStyle {
+    Normal,
+    Italic,
+}
+
+/// How a [`TextProps`] block lays out on the canvas. Modular by design so new
+/// layout modes slot in additively: `Point` (auto width, grows with content)
+/// and `Area` (fixed box, wraps + aligns within) today; a `Path` variant that
+/// maps glyphs onto a `kurbo` curve is the designed-for future addition — one
+/// new variant plus one shape/render arm, no rework of the readers here.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum TextLayout {
+    /// Auto-width point text: lines break only at explicit newlines, alignment
+    /// resolves within the block's own natural width.
+    Point,
+    /// Fixed area box in canvas pixels: lines wrap to `width`, `align` resolves
+    /// within `width`, and the on-canvas frame is `width × height`.
+    Area { width: f32, height: f32 },
+}
+
+impl TextLayout {
+    /// The fixed area-box size in canvas pixels, or `None` for point text. The
+    /// one accessor box readers use — no consumer matches the enum inline, so a
+    /// future `Path` variant (which is also `None`-sized) needs no edits here.
+    pub fn area_size(&self) -> Option<(f32, f32)> {
+        match self {
+            TextLayout::Area { width, height } => Some((*width, *height)),
+            TextLayout::Point => None,
+        }
+    }
+}
+
+/// Editable text — the one bespoke vector source Darkly adds. Its persistent
+/// state is a string plus a font selection, **not** glyph outlines: the layer
+/// re-shapes (parley) and re-rasterizes (vello) whenever any field changes.
+/// Everything else about a vector object is generic kurbo/peniko geometry.
+///
+/// Style is font-driven and open-ended: `variations` carries arbitrary
+/// variable-font axes (weight is just the `wght` axis), `features` carries
+/// OpenType features, and spacing/line-height are genuine fields — so a new
+/// font capability is additive data, never a new hard-coded knob.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TextProps {
+    pub content: String,
+    /// Family name resolved against the engine's font collection at shape time
+    /// (e.g. `"Inter"`). A family the binary doesn't ship falls back to the
+    /// collection default — see the font-portability open risk in the plan.
+    pub font_family: String,
+    /// Italic is a *face selection* (upright vs italic face), not a variation
+    /// axis, so it stays a distinct field rather than living in `variations`.
+    pub style: TextStyle,
+    /// Variable-font axis values, keyed by the 4-char fvar tag (`"wght"`,
+    /// `"wdth"`, `"opsz"`, …). An absent axis takes the font's default, so this
+    /// stays empty for untouched/static fonts (clean serde, partial merges).
+    pub variations: BTreeMap<String, f32>,
+    /// OpenType feature values, keyed by the 4-char feature tag (`"liga"`,
+    /// `"smcp"`, …). Modelled + shaped now; no UI yet.
+    pub features: BTreeMap<String, u32>,
+    /// Font size in canvas pixels (raster-first: this is the rasterization
+    /// size, not a resolution-independent point size).
+    pub size: f32,
+    /// Multiplier on the font's natural line height (1.0 = natural).
+    pub line_height: f32,
+    /// Extra horizontal space between letters, in canvas pixels (0 = natural).
+    pub letter_spacing: f32,
+    /// Extra horizontal space between words, in canvas pixels (0 = natural).
+    pub word_spacing: f32,
+    pub align: TextAlign,
+    /// Point vs fixed-area layout — see [`TextLayout`].
+    pub layout: TextLayout,
+}
+
+impl TextProps {
+    pub fn new(content: String) -> Self {
+        TextProps {
+            content,
+            font_family: "sans-serif".to_string(),
+            style: TextStyle::Normal,
+            variations: BTreeMap::new(),
+            features: BTreeMap::new(),
+            size: 48.0,
+            line_height: 1.2,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
+            align: TextAlign::Start,
+            layout: TextLayout::Point,
+        }
+    }
+}
+
+/// What a [`VectorObject`] draws. Two variants and no growth axis: shapes are
+/// plain [`BezPath`]s (rectangles/ellipses convert into one), and the only
+/// editable, non-path source is [`TextProps`]. No trait, no registry — a third
+/// kind would only ever be another bespoke editable source, added here.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ObjectSource {
+    Path(BezPath),
+    Text(TextProps),
+}
+
+/// Stable identity of a [`VectorObject`] within its owning [`VectorLayer`].
+/// Scoped per layer (not globally) and minted monotonically by
+/// [`VectorLayer::push_object`] — never reused, so a delete-then-add can't
+/// alias a stale reference. Object addressing uses this rather than a list
+/// index, which would shift under reorder/insert/delete.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ObjectId(pub u64);
+
+impl ObjectId {
+    /// The id stamped on an object that hasn't been pushed onto a layer yet
+    /// (constructors leave this placeholder; [`VectorLayer::push_object`]
+    /// overwrites it with the layer's next monotonic id).
+    pub const UNASSIGNED: ObjectId = ObjectId(0);
+}
+
+/// One drawable object on a [`VectorLayer`]: geometry/text plus its local
+/// transform and fill/stroke style. Geometry and style speak the standard
+/// kurbo/peniko vocabulary every renderer in this space consumes, so objects
+/// persist through their derived `serde` impls almost for free.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VectorObject {
+    /// Stable per-layer identity. Stamped by [`VectorLayer::push_object`];
+    /// constructors leave [`ObjectId::UNASSIGNED`] until then.
+    pub id: ObjectId,
+    /// Object-local affine, applied on top of the layer transform. For text
+    /// this carries the placement (the caret position the tool clicked).
+    pub transform: Affine,
+    pub fill: Option<Brush>,
+    pub stroke: Option<(Stroke, Brush)>,
+    pub source: ObjectSource,
+}
+
+impl VectorObject {
+    /// A text object filled with a solid color, placed by `transform`. The id
+    /// is left [`ObjectId::UNASSIGNED`] — the owning layer stamps it on push.
+    pub fn text(text: TextProps, transform: Affine, fill: Brush) -> Self {
+        VectorObject {
+            id: ObjectId::UNASSIGNED,
+            transform,
+            fill: Some(fill),
+            stroke: None,
+            source: ObjectSource::Text(text),
+        }
+    }
+}
+
+/// A vector-object layer — a layer owning an ordered list of [`VectorObject`]s
+/// (text today; paths/shapes later, reusing this layer and renderer). The
+/// objects are the authoritative, editable, serializable description; the GPU
+/// texture is a rebuildable realization. Darkly is raster-first: the texture
+/// regenerates only when objects/style/transform change, never on view zoom.
+pub struct VectorLayer {
+    pub id: LayerId,
+    pub common: NodeCommon,
+    pub blend: BlendProps,
+    pub objects: Vec<VectorObject>,
+    /// Next [`ObjectId`] to mint. Monotonic, never reused — survives
+    /// serialization so reload can't re-issue a live id.
+    pub next_object_id: u64,
+    /// Layer-level user transform (gizmo-edited). Baked into the realized
+    /// texture at rasterization — a change is an object change and re-rasters
+    /// on commit, never a shader-time affine on a stale texture.
+    pub transform: crate::transform::Transform,
+    pub filters: Vec<LayerId>,
+}
+
+impl VectorLayer {
+    pub fn new(id: LayerId, name: String) -> Self {
+        VectorLayer {
+            id,
+            common: NodeCommon::new(name),
+            blend: BlendProps::new(),
+            objects: Vec::new(),
+            next_object_id: 0,
+            transform: crate::transform::Transform::identity(),
+            filters: Vec::new(),
+        }
+    }
+
+    /// Append `obj`, stamping it with a fresh monotonic [`ObjectId`] and
+    /// returning that id. The single entry point for adding objects — direct
+    /// `objects.push` would leave the id unassigned.
+    pub fn push_object(&mut self, mut obj: VectorObject) -> ObjectId {
+        let id = ObjectId(self.next_object_id);
+        self.next_object_id += 1;
+        obj.id = id;
+        self.objects.push(obj);
+        id
+    }
+
+    /// Borrow the object with `id`, if present.
+    pub fn object(&self, id: ObjectId) -> Option<&VectorObject> {
+        self.objects.iter().find(|o| o.id == id)
+    }
+
+    /// Mutably borrow the object with `id`, if present.
+    pub fn object_mut(&mut self, id: ObjectId) -> Option<&mut VectorObject> {
+        self.objects.iter_mut().find(|o| o.id == id)
+    }
+
+    /// Index of the object with `id` in the draw-order list, if present.
+    pub fn index_of(&self, id: ObjectId) -> Option<usize> {
+        self.objects.iter().position(|o| o.id == id)
+    }
+}
+
 pub struct LayerGroup {
     pub id: LayerId,
     pub common: NodeCommon,
@@ -344,11 +604,12 @@ impl LayerNode {
     /// keep in sync with the registration files.
     pub fn kind(&self) -> &'static crate::document::LayerKindRegistration {
         use crate::document::layer_kind::registry;
-        use crate::document::layer_kinds::{filter, group, raster, void};
+        use crate::document::layer_kinds::{filter, group, raster, vector, void};
         match self {
             LayerNode::Layer(Layer::Raster(_)) => registry().get(raster::TYPE_ID).unwrap(),
             LayerNode::Layer(Layer::Void(_)) => registry().get(void::TYPE_ID).unwrap(),
             LayerNode::Layer(Layer::Filter(_)) => registry().get(filter::TYPE_ID).unwrap(),
+            LayerNode::Layer(Layer::Vector(_)) => registry().get(vector::TYPE_ID).unwrap(),
             LayerNode::Group(_) => registry().get(group::TYPE_ID).unwrap(),
         }
     }
@@ -409,6 +670,7 @@ pub enum Layer {
     Raster(RasterLayer),
     Void(VoidLayer),
     Filter(FilterLayer),
+    Vector(VectorLayer),
 }
 
 impl Layer {
@@ -433,6 +695,12 @@ impl Layer {
             // A full-frame filter has no meaningful transform — there are no
             // pixels of its own to move.
             Layer::Filter(_) => TransformCapability::None,
+            // Whole-layer vector transform is `None`: the transform gizmo drives
+            // individual objects, not the layer as a unit. Per-object transform
+            // is a different axis, routed by the object transform binding (see
+            // `frontend/src/tools/transform.svelte.ts`) rather than this
+            // layer-level capability — so a vector layer reports `None` here.
+            Layer::Vector(_) => TransformCapability::None,
         }
     }
 
@@ -450,6 +718,7 @@ impl Layer {
             Layer::Raster(r) => r.id,
             Layer::Void(v) => v.id,
             Layer::Filter(f) => f.id,
+            Layer::Vector(v) => v.id,
         }
     }
 
@@ -458,6 +727,7 @@ impl Layer {
             Layer::Raster(r) => &r.common,
             Layer::Void(v) => &v.common,
             Layer::Filter(f) => &f.common,
+            Layer::Vector(v) => &v.common,
         }
     }
 
@@ -466,6 +736,7 @@ impl Layer {
             Layer::Raster(r) => &mut r.common,
             Layer::Void(v) => &mut v.common,
             Layer::Filter(f) => &mut f.common,
+            Layer::Vector(v) => &mut v.common,
         }
     }
 
@@ -474,6 +745,7 @@ impl Layer {
             Layer::Raster(r) => &r.blend,
             Layer::Void(v) => &v.blend,
             Layer::Filter(f) => &f.blend,
+            Layer::Vector(v) => &v.blend,
         }
     }
 
@@ -482,6 +754,7 @@ impl Layer {
             Layer::Raster(r) => &mut r.blend,
             Layer::Void(v) => &mut v.blend,
             Layer::Filter(f) => &mut f.blend,
+            Layer::Vector(v) => &mut v.blend,
         }
     }
 
@@ -490,6 +763,7 @@ impl Layer {
             Layer::Raster(r) => &r.filters,
             Layer::Void(v) => &v.filters,
             Layer::Filter(f) => &f.filters,
+            Layer::Vector(v) => &v.filters,
         }
     }
 
@@ -498,23 +772,25 @@ impl Layer {
             Layer::Raster(r) => &mut r.filters,
             Layer::Void(v) => &mut v.filters,
             Layer::Filter(f) => &mut f.filters,
+            Layer::Vector(v) => &mut v.filters,
         }
     }
 
-    /// Pixel buffer for this layer, if any. Void and filter layers have no
-    /// pixels — a void regenerates from `params`, a filter transforms the
-    /// accumulator below it.
+    /// Pixel buffer for this layer, if any. Void, filter, and vector layers
+    /// have no authoritative pixels — a void regenerates from `params`, a
+    /// filter transforms the accumulator below it, and a vector layer's texture
+    /// is a realization of its `objects`.
     pub fn pixels(&self) -> Option<&PixelBuffer> {
         match self {
             Layer::Raster(r) => Some(&r.pixels),
-            Layer::Void(_) | Layer::Filter(_) => None,
+            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) => None,
         }
     }
 
     pub fn pixels_mut(&mut self) -> Option<&mut PixelBuffer> {
         match self {
             Layer::Raster(r) => Some(&mut r.pixels),
-            Layer::Void(_) | Layer::Filter(_) => None,
+            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) => None,
         }
     }
 
@@ -534,7 +810,7 @@ impl Layer {
     pub fn void_state(&self) -> Option<(&[ParamValue], &crate::transform::Transform)> {
         match self {
             Layer::Void(v) => Some((&v.params, &v.transform)),
-            Layer::Raster(_) | Layer::Filter(_) => None,
+            Layer::Raster(_) | Layer::Filter(_) | Layer::Vector(_) => None,
         }
     }
 }

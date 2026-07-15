@@ -3,12 +3,18 @@
     import { app } from '../../state/app.svelte';
     import { theme } from '../../state/theme.svelte';
     import { SignalCompressor } from '../../lib/signal_compressor';
+    import BrushPreviewFallback from './BrushPreviewFallback.svelte';
 
     interface Props {
         /** Library brush name to look up in the engine's baked PNG cache. */
         brushName: string;
+        /** Iconify icon rendered in place of the baked thumbnails — set
+         *  for content-dependent brushes whose bake renders blank (see
+         *  `BrushInfo.icon`). When present, the thumbnail fetches never
+         *  fire, so no bake is triggered for the brush. */
+        icon?: string | null;
     }
-    let { brushName }: Props = $props();
+    let { brushName, icon = null }: Props = $props();
 
     /** Same throttle cadence as the dab and editor previews. */
     const REFRESH_MS = 100;
@@ -46,7 +52,7 @@
         const engine = app.engine;
         if (!engine) return;
         const stroke = loadPng(
-            (await engine.send('brush_thumbnail', { name: brushName })).bytes,
+            (await engine.api.brushThumbnail({ name: brushName })).bytes,
             strokeUrl,
             lastStrokeLen,
         );
@@ -55,7 +61,7 @@
             lastStrokeLen = stroke.len;
         }
         const dab = loadPng(
-            (await engine.send('brush_dab_thumbnail', { name: brushName })).bytes,
+            (await engine.api.brushDabThumbnail({ name: brushName })).bytes,
             dabUrl,
             lastDabLen,
         );
@@ -86,11 +92,14 @@
     }
 
     // Reactive trigger: WASM handle becoming available, theme swaps,
-    // and the brush name changing all require fresh thumbnails.
+    // and the brush name changing all require fresh thumbnails. The
+    // icon fallback replaces the whole strip, so with an icon there is
+    // nothing to fetch — and skipping the fetch skips the lazy bake.
     $effect(() => {
         void app.engine;
         void theme.current;
         void brushName;
+        if (icon) return;
         untrack(() => compressor.request());
     });
 
@@ -107,16 +116,20 @@
      parent — square dab plus 320:120 stroke at equal height gives
      `(stroke_h + stroke_w) / stroke_h = 1 + 320/120 = 11/3`. -->
 <div class="thumbs">
-    <div class="dab">
-        {#if dabUrl}
-            <img src={dabUrl} alt="" />
-        {/if}
-    </div>
-    <div class="stroke">
-        {#if strokeUrl}
-            <img src={strokeUrl} alt="" />
-        {/if}
-    </div>
+    {#if icon}
+        <BrushPreviewFallback {icon} />
+    {:else}
+        <div class="dab">
+            {#if dabUrl}
+                <img src={dabUrl} alt="" />
+            {/if}
+        </div>
+        <div class="stroke">
+            {#if strokeUrl}
+                <img src={strokeUrl} alt="" />
+            {/if}
+        </div>
+    {/if}
 </div>
 
 <style>

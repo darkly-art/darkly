@@ -1,5 +1,7 @@
 //! Rendering, view transform, thumbnails, undo/redo, and async readback polling.
 
+use darkly_macros::handlers;
+
 use super::{DarklyEngine, ReadbackContext};
 use crate::coord::{CanvasPoint, CanvasRect, LayerRect};
 use crate::gpu::atlas::CanvasFrame;
@@ -67,9 +69,11 @@ impl PickSource {
 /// the panel renders. Don't drift the literal in `thumbnails.ts`.
 pub const DEFAULT_THUMB_SIZE: u32 = 36;
 
+#[handlers]
 impl DarklyEngine {
     // --- View transform ---
 
+    #[handler]
     pub fn set_view_transform(
         &mut self,
         pan_x: f32,
@@ -141,6 +145,7 @@ impl DarklyEngine {
     /// Push the workspace background color (the area shown outside the
     /// canvas rectangle by the present shader). Frontend calls this on
     /// theme change with the resolved `--canvas-bg` CSS value.
+    #[handler]
     pub fn set_viewport_bg(&mut self, bg: [f32; 4]) {
         self.compositor.set_viewport_bg(&self.gpu.queue, bg);
     }
@@ -148,6 +153,7 @@ impl DarklyEngine {
     /// Set the canvas-to-screen pixel filter mode: `"linear"`, `"nearest"`,
     /// or `"auto"`. Frontend calls this when `display.pixelFilter` changes
     /// so the new mode takes effect without waiting for a zoom/pan.
+    #[handler]
     pub fn set_pixel_filter(&mut self, mode: &str) {
         self.compositor.set_pixel_filter(&self.gpu.queue, mode);
     }
@@ -202,11 +208,12 @@ impl DarklyEngine {
     /// `drain_dirty_thumbnail_readbacks` (driven by `mark_node_pixels_dirty`
     /// at every pixel-write site). Auto-queueing from this getter would
     /// create a feedback loop with the JS-side `thumbnailEpoch` sync.
-    pub fn node_thumbnail(&self, node_id: LayerId, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
+    #[handler(returns = bytes)]
+    pub fn node_thumbnail(&self, node_id: LayerId, width: u32, height: u32) -> Vec<u8> {
         self.thumbnail_cache
             .get(node_id)
             .cloned()
-            .unwrap_or_else(|| vec![0u8; (thumb_w * thumb_h * 4) as usize])
+            .unwrap_or_else(|| vec![0u8; (width * height * 4) as usize])
     }
 
     /// Kick off an async GPU readback for a thumbnail of any node by id,
@@ -287,6 +294,13 @@ impl DarklyEngine {
 
         // Poll content bounds compute readbacks.
         let bounds_completed = self.compositor.poll_content_bounds(&self.gpu.device);
+        // Poll histogram compute readbacks (the Levels editor's input histogram).
+        // Deliberately not folded into the return value below: completion must
+        // not trigger `mark_dirty`, which would re-invalidate the histogram and
+        // recompute it every frame. The result just lands in the cache; the
+        // frontend polls `histogram_result` for it, and `has_pending_histogram`
+        // keeps the frame loop alive until the dispatch resolves.
+        self.compositor.poll_histogram(&self.gpu.device);
         let mut any_completed = false;
 
         // Complete pending transform if content bounds just arrived.
@@ -402,7 +416,7 @@ impl DarklyEngine {
                         self.flip_node(pf.node_id, pf.xform);
                     }
                     if let Some(pa) = self.pending_filter.take() {
-                        self.apply_filter(pa.node_id, &pa.filter_type);
+                        self.apply_filter_typed(pa.node_id, &pa.filter_type, pa.params);
                     }
                 }
             }
@@ -536,14 +550,46 @@ impl DarklyEngine {
     }
 
     /// Get the most recently picked color (updated asynchronously).
+    #[handler(returns = bytes)]
     pub fn last_picked_color(&self) -> [u8; 4] {
         self.last_picked_color
     }
 
     /// True if a color pick readback is still in flight.
+    #[handler]
     pub fn has_pending_color_pick(&self) -> bool {
         self.readbacks
             .any(|c| matches!(c, ReadbackContext::ColorPick))
+    }
+
+    /// Select the filter layer whose input histogram the compositor computes
+    /// (the Levels editor's target), or `None` to stop. Requests a frame so the
+    /// dispatch runs.
+    pub fn set_histogram_target(&mut self, target: Option<LayerId>) {
+        self.compositor.set_histogram_target(target);
+    }
+
+    /// Select a node whose own texture is histogrammed (the destructive Levels
+    /// modal's backdrop), or `None` to stop. The dispatch is pumped in
+    /// [`render`](Self::render); the result reads back via [`histogram`](Self::histogram)
+    /// under the same node id.
+    pub fn set_node_histogram_target(&mut self, target: Option<LayerId>) {
+        self.compositor.set_node_histogram_target(target);
+    }
+
+    /// The cached 8×256 histogram bytes (channel-major `u32` LE) for a layer, or
+    /// an empty vec while the readback is pending.
+    pub fn histogram(&self, layer_id: LayerId) -> Vec<u8> {
+        self.compositor
+            .histogram(layer_id)
+            .map(bytemuck::cast_slice::<u32, u8>)
+            .map(|s| s.to_vec())
+            .unwrap_or_default()
+    }
+
+    /// True if a histogram computation is in flight.
+    pub fn has_pending_histogram(&self) -> bool {
+        self.compositor.has_pending_histogram()
     }
 
     /// Monotonic counter bumped each time a thumbnail readback lands in
@@ -586,6 +632,12 @@ impl DarklyEngine {
         self.drain_dirty_thumbnail_readbacks();
         let thumb_us = t_thumb.elapsed().as_micros() as u64;
 
+        // Dispatch the node-histogram (destructive Levels modal) if one is
+        // wanted. Self-submitting and `needs`-guarded, so it runs regardless of
+        // compose gating and re-dispatches only when the cache is empty.
+        self.compositor
+            .pump_node_histogram(&self.gpu.device, &self.gpu.queue);
+
         // Headless mode (tests): poll pending ops but skip presentation.
         let (surface, surface_config) = match (&self.gpu.surface, &self.gpu.surface_config) {
             (Some(s), Some(c)) => (s, c),
@@ -598,6 +650,7 @@ impl DarklyEngine {
                 };
                 return self.readbacks.has_pending()
                     || self.compositor.has_pending_content_bounds()
+                    || self.compositor.has_pending_histogram()
                     || self.diff_rect.is_pending();
             }
         };
@@ -612,7 +665,9 @@ impl DarklyEngine {
                 anim_us: 0,
                 compositor_us: 0,
             };
-            return self.readbacks.has_pending() || self.compositor.has_pending_content_bounds();
+            return self.readbacks.has_pending()
+                || self.compositor.has_pending_content_bounds()
+                || self.compositor.has_pending_histogram();
         }
 
         let t_anim = web_time::Instant::now();
@@ -641,9 +696,11 @@ impl DarklyEngine {
         self.compositor.needs_animation(&self.doc)
             || self.readbacks.has_pending()
             || self.compositor.has_pending_content_bounds()
+            || self.compositor.has_pending_histogram()
             || self.diff_rect.is_pending()
     }
 
+    #[handler]
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 || self.gpu.is_headless() {
             return;
@@ -657,11 +714,13 @@ impl DarklyEngine {
 
     // --- Undo / Redo ---
 
+    #[handler]
     pub fn undo(&mut self) {
         self.auto_commit_floating();
         self.apply_undo(UndoDirection::Undo);
     }
 
+    #[handler]
     pub fn redo(&mut self) {
         self.auto_commit_floating();
         self.apply_undo(UndoDirection::Redo);
@@ -968,6 +1027,16 @@ impl DarklyEngine {
                 isolated_flag,
             );
         }
+
+        // Push each vector layer's authoritative objects downhill: rebuild its
+        // `vello::Scene` and re-realize. Like the void re-sync above, this keeps
+        // the GPU realization current after an undo/redo or load. Runs after the
+        // `isolated_host` closure's last use so the `&mut self` calls don't
+        // clash with its `self.doc` borrow.
+        let vector_ids: Vec<LayerId> = self.doc.all_vector_layers().iter().map(|v| v.id).collect();
+        for id in vector_ids {
+            self.sync_vector_layer(id);
+        }
     }
 }
 
@@ -1104,6 +1173,54 @@ const CURSOR_PREVIEW_TARGET_COVERAGE: f32 = 130.0 / 255.0;
 /// scale that amplifies noise.
 const CURSOR_PREVIEW_MAX_BOOST: f32 = 8.0;
 
+/// Tight bounding box of the pixels a caller deems "interesting", scanning
+/// an unpadded RGBA8 buffer of `width × height`. Returns `[min_x, min_y,
+/// max_x, max_y]` (inclusive) or `None` when no pixel qualifies.
+///
+/// This is the single CPU implementation of "bounding box of the changed
+/// pixels" — the same min/max reduction the GPU [`BboxReduction`] runs, on
+/// the CPU side of an already-read-back buffer. The two thumbnail framers
+/// pass a "differs from the theme bg" predicate; the cursor-preview coverage
+/// scan passes an alpha-threshold predicate. Keeping the scan in one place
+/// means a border/empty-region convention can't drift between the callers.
+///
+/// [`BboxReduction`]: crate::gpu::bbox::BboxReduction
+pub(crate) fn changed_pixels_bbox(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    interesting: impl Fn([u8; 4]) -> bool,
+) -> Option<[u32; 4]> {
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+    let mut found = false;
+    for y in 0..height {
+        for x in 0..width {
+            let i = ((y * width + x) * 4) as usize;
+            if interesting([pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]) {
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+                found = true;
+            }
+        }
+    }
+    found.then_some([min_x, min_y, max_x, max_y])
+}
+
+/// Predicate for [`changed_pixels_bbox`]: does an RGBA8 pixel differ from the
+/// solid `bg` on any RGB channel by more than `tol`? The tolerance
+/// accommodates the GPU's premultiplied-alpha rounding and any
+/// color-management drift while still catching a pale stroke against the bg.
+fn differs_from_bg(px: [u8; 4], bg: [u8; 3], tol: i32) -> bool {
+    (px[0] as i32 - bg[0] as i32).abs() > tol
+        || (px[1] as i32 - bg[1] as i32).abs() > tol
+        || (px[2] as i32 - bg[2] as i32).abs() > tol
+}
+
 /// Frame a rendered dab into a centered, content-fitted PNG.
 ///
 /// Generic across every brush — no per-brush logic. The procedure:
@@ -1134,45 +1251,16 @@ pub fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4])
         (bg[1].clamp(0.0, 1.0) * 255.0).round() as u8,
         (bg[2].clamp(0.0, 1.0) * 255.0).round() as u8,
     ];
-    // Tolerance accommodates the GPU's premultiplied-alpha rounding
-    // and any color-management drift; tight enough to still pick up a
-    // pale stroke against the bg.
     const TOLERANCE: i32 = 12;
-
-    let mut min_x = width;
-    let mut min_y = height;
-    let mut max_x = 0u32;
-    let mut max_y = 0u32;
-    let mut found = false;
-    for y in 0..height {
-        for x in 0..width {
-            let i = ((y * width + x) * 4) as usize;
-            let dr = (pixels[i] as i32 - bg_u8[0] as i32).abs();
-            let dg = (pixels[i + 1] as i32 - bg_u8[1] as i32).abs();
-            let db = (pixels[i + 2] as i32 - bg_u8[2] as i32).abs();
-            if dr > TOLERANCE || dg > TOLERANCE || db > TOLERANCE {
-                if x < min_x {
-                    min_x = x;
-                }
-                if y < min_y {
-                    min_y = y;
-                }
-                if x > max_x {
-                    max_x = x;
-                }
-                if y > max_y {
-                    max_y = y;
-                }
-                found = true;
-            }
-        }
-    }
+    let bbox = changed_pixels_bbox(pixels, width, height, |px| {
+        differs_from_bg(px, bg_u8, TOLERANCE)
+    });
 
     let Some(src) = image::RgbaImage::from_raw(width, height, pixels.to_vec()) else {
         return Vec::new();
     };
 
-    let cropped = if found {
+    let cropped = if let Some([min_x, min_y, max_x, max_y]) = bbox {
         let bbox_w = max_x - min_x + 1;
         let bbox_h = max_y - min_y + 1;
         let raw_side = bbox_w.max(bbox_h);
@@ -1239,34 +1327,11 @@ pub(crate) fn cursor_preview_scale_from_mask(pixels: &[u8], width: u32, height: 
     // uses (matched against the bake's clear-to-zero, which makes the
     // "no content" pixel value 0 exactly).
     const TOLERANCE: u8 = 12;
-    let mut min_x = width;
-    let mut min_y = height;
-    let mut max_x = 0u32;
-    let mut max_y = 0u32;
-    let mut found = false;
-    for y in 0..height {
-        for x in 0..width {
-            let alpha = pixels[((y * width + x) * 4 + 3) as usize];
-            if alpha > TOLERANCE {
-                if x < min_x {
-                    min_x = x;
-                }
-                if y < min_y {
-                    min_y = y;
-                }
-                if x > max_x {
-                    max_x = x;
-                }
-                if y > max_y {
-                    max_y = y;
-                }
-                found = true;
-            }
-        }
-    }
-    if !found {
+    let Some([min_x, min_y, max_x, max_y]) =
+        changed_pixels_bbox(pixels, width, height, |px| px[3] > TOLERANCE)
+    else {
         return 1.0;
-    }
+    };
 
     let bbox_w = max_x - min_x + 1;
     let bbox_h = max_y - min_y + 1;
@@ -1334,41 +1399,15 @@ fn frame_stroke_thumbnail(
     // Same tolerance shape as frame_dab_thumbnail — accommodates
     // premultiplied-alpha rounding on the GPU side.
     const TOLERANCE: i32 = 12;
-
-    let mut min_x = src_w;
-    let mut min_y = src_h;
-    let mut max_x = 0u32;
-    let mut max_y = 0u32;
-    let mut found = false;
-    for y in 0..src_h {
-        for x in 0..src_w {
-            let i = ((y * src_w + x) * 4) as usize;
-            let dr = (pixels[i] as i32 - bg_u8[0] as i32).abs();
-            let dg = (pixels[i + 1] as i32 - bg_u8[1] as i32).abs();
-            let db = (pixels[i + 2] as i32 - bg_u8[2] as i32).abs();
-            if dr > TOLERANCE || dg > TOLERANCE || db > TOLERANCE {
-                if x < min_x {
-                    min_x = x;
-                }
-                if y < min_y {
-                    min_y = y;
-                }
-                if x > max_x {
-                    max_x = x;
-                }
-                if y > max_y {
-                    max_y = y;
-                }
-                found = true;
-            }
-        }
-    }
+    let bbox = changed_pixels_bbox(pixels, src_w, src_h, |px| {
+        differs_from_bg(px, bg_u8, TOLERANCE)
+    });
 
     let Some(src) = image::RgbaImage::from_raw(src_w, src_h, pixels.to_vec()) else {
         return Vec::new();
     };
 
-    let cropped = if found {
+    let cropped = if let Some([min_x, min_y, max_x, max_y]) = bbox {
         let bbox_w = max_x - min_x + 1;
         let bbox_h = max_y - min_y + 1;
         let target_aspect = dst_w as f32 / dst_h as f32;

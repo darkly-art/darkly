@@ -2,13 +2,17 @@
 //! discarding the rest. Photoshop-style — hidden layers are lost; visible
 //! ones are baked into a single "Background" layer at the root.
 
+use darkly_macros::handlers;
+
 use super::DarklyEngine;
 use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::{BakeLayersAction, BakeSourceSlot};
 
+#[handlers]
 impl DarklyEngine {
     /// Flatten the entire document into a single raster layer at root.
     /// Returns the id of the resulting raster.
+    #[handler]
     pub fn flatten_image(&mut self) -> Result<LayerId, String> {
         let root_id = self.doc.root_id();
         let top_level: Vec<LayerId> = self.doc.children_of(root_id).to_vec();
@@ -101,6 +105,7 @@ impl DarklyEngine {
 
     /// True when the document has at least one layer at root. Used by
     /// frontend predicates to enable/disable Flatten Image.
+    #[handler]
     pub fn can_flatten(&self) -> bool {
         let root_id = self.doc.root_id();
         !self.doc.children_of(root_id).is_empty()
@@ -120,6 +125,7 @@ impl DarklyEngine {
     ///
     /// Errors when the source isn't a flattenable shape (e.g. a raster with
     /// no filters — flattening would be a no-op).
+    #[handler]
     pub fn flatten_node(&mut self, node_id: LayerId) -> Result<LayerId, String> {
         if !self.doc.is_node_editable(node_id) {
             return Err("Layer is locked".into());
@@ -140,6 +146,7 @@ impl DarklyEngine {
 
     /// Per-node flatten predicate used by the frontend right-click menu.
     /// Layers are flattenable iff they own filters; groups always.
+    #[handler]
     pub fn can_flatten_node(&self, node_id: LayerId) -> bool {
         match self.doc.find_node(node_id) {
             Some(LayerNode::Layer(_)) => self.doc.mask_filter_id(node_id).is_some(),

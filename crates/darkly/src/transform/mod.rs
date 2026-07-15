@@ -12,6 +12,12 @@
 //! `frontend/src/tools/transform_gizmo.ts`). The gizmo takes a bounding box +
 //! the current transform + pointer input and outputs an updated [`Transform`].
 
+pub mod mat3;
+pub use mat3::{
+    affine_to_mat3, homography_from_corners, mat3_apply, mat3_inverse, mat3_multiply, Mat3,
+    MAT3_IDENTITY,
+};
+
 // ---------------------------------------------------------------------------
 // Affine math  ([a, b, tx, c, d, ty], row-major)
 // ---------------------------------------------------------------------------
@@ -102,9 +108,13 @@ pub fn affine_rotate(angle: f32) -> Affine2D {
 /// the frontend mode strategy.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "mode", content = "data")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum Transform {
     /// Affine: pan / scale / rotate. Stored as [`Affine2D`].
     Basic(Affine2D),
+    /// Projective: true perspective / vanishing-point warp, the user dragging
+    /// four corners independently. Stored as a 3×3 homography [`Mat3`].
+    Perspective(Mat3),
 }
 
 impl Default for Transform {
@@ -124,10 +134,22 @@ impl Transform {
         Transform::Basic(m)
     }
 
-    /// Bake to a single affine matrix. For `Basic` this is the stored matrix.
+    /// Bake to a single affine matrix. For `Basic` this is the stored matrix;
+    /// for `Perspective` it drops the projective bottom row (lossy — used only
+    /// by the affine-only void path, which never stores `Perspective`).
     pub fn to_affine(&self) -> Affine2D {
         match self {
             Transform::Basic(m) => *m,
+            Transform::Perspective(m) => [m[0], m[1], m[2], m[3], m[4], m[5]],
+        }
+    }
+
+    /// Widen to a 3×3 projective matrix — what the GPU commit path consumes.
+    /// `Basic` widens via [`affine_to_mat3`]; `Perspective` returns its matrix.
+    pub fn to_projective(&self) -> Mat3 {
+        match self {
+            Transform::Basic(m) => affine_to_mat3(m),
+            Transform::Perspective(m) => *m,
         }
     }
 
@@ -135,6 +157,34 @@ impl Transform {
     pub fn mode_tag(&self) -> u32 {
         match self {
             Transform::Basic(_) => 0,
+            Transform::Perspective(_) => 1,
+        }
+    }
+
+    /// The float payload crossing the WASM boundary for this transform: 6
+    /// affine components for `Basic`, 9 homography components for
+    /// `Perspective`. Paired with [`Self::mode_tag`] it round-trips through
+    /// [`Self::from_tag_payload`].
+    pub fn wire_payload(&self) -> Vec<f32> {
+        match self {
+            Transform::Basic(m) => m.to_vec(),
+            Transform::Perspective(m) => m.to_vec(),
+        }
+    }
+
+    /// Decode a `(mode_tag, payload)` pair from the wire into a [`Transform`].
+    /// Tag `0` → 6 floats `Basic`; tag `1` → 9 floats `Perspective`. Unknown
+    /// tags or short payloads yield `None`. One shared decoder for both the
+    /// floating and void update handlers.
+    pub fn from_tag_payload(tag: u32, data: &[f32]) -> Option<Transform> {
+        match tag {
+            0 if data.len() >= 6 => Some(Transform::Basic([
+                data[0], data[1], data[2], data[3], data[4], data[5],
+            ])),
+            1 if data.len() >= 9 => Some(Transform::Perspective([
+                data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
+            ])),
+            _ => None,
         }
     }
 
@@ -229,6 +279,41 @@ mod tests {
         assert!(json.contains("Basic"), "tagged enum: {json}");
         let back: Transform = serde_json::from_str(&json).unwrap();
         assert_eq!(t, back);
+    }
+
+    #[test]
+    fn perspective_serde_and_projective() {
+        let m: Mat3 = [1.0, 0.1, 4.0, 0.2, 1.0, -3.0, 0.001, 0.002, 1.0];
+        let t = Transform::Perspective(m);
+        assert_eq!(t.mode_tag(), 1);
+        assert_eq!(t.to_projective(), m);
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(json.contains("Perspective"), "tagged enum: {json}");
+        let back: Transform = serde_json::from_str(&json).unwrap();
+        assert_eq!(t, back);
+    }
+
+    #[test]
+    fn basic_widens_to_projective() {
+        let aff: Affine2D = [2.0, 0.0, 10.0, 0.0, 3.0, 20.0];
+        let proj = Transform::from_affine(aff).to_projective();
+        assert_eq!(proj, mat3::affine_to_mat3(&aff));
+    }
+
+    #[test]
+    fn from_tag_payload_round_trips_both_modes() {
+        let basic = Transform::from_affine([1.0, 0.0, 5.0, 0.0, 1.0, 6.0]);
+        let p = basic.wire_payload();
+        assert_eq!(Transform::from_tag_payload(0, &p), Some(basic));
+
+        let persp = Transform::Perspective([1.0, 0.1, 4.0, 0.2, 1.0, -3.0, 0.001, 0.002, 1.0]);
+        let p = persp.wire_payload();
+        assert_eq!(Transform::from_tag_payload(1, &p), Some(persp));
+
+        // Short payloads / unknown tags decode to None.
+        assert_eq!(Transform::from_tag_payload(0, &[1.0, 2.0]), None);
+        assert_eq!(Transform::from_tag_payload(1, &[1.0, 2.0, 3.0]), None);
+        assert_eq!(Transform::from_tag_payload(7, &[0.0; 9]), None);
     }
 
     #[test]

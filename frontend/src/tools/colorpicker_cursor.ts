@@ -1,32 +1,42 @@
 import { app, type Color } from '../state/app.svelte';
 import { toolRegistry } from './registry';
-import { screenToCanvas } from '../canvas/coordinates';
-import { effectiveMouseClicks } from '../actions/triggers';
-import { parseBinding } from '../actions/hotkey_resolve';
-import { canonicalModsFromEvent, substituteMod, MOD_ORDER } from '../actions/mods';
+import { dragModifierActions } from '../actions/triggers';
+import { heldMods, onHeldModsChange } from '../actions/held_mods';
 import { config } from '../config/store.svelte';
+import {
+    chordCursorEngages,
+    engageModifierCursor,
+    updateModifierCursor,
+    disengageModifierCursor,
+    isPointerDown,
+    onPointerRelease,
+} from './modifier_cursor';
 // `?raw` is a Vite import suffix: bundles the file's text content at build
 // time. The SVG file is the single source of truth — we extract the
 // `<path d="..."/>` data from it and compose it with the dynamic color
 // indicator below. Swap the file to change the icon; no code edit needed.
 import colorPickerSvg from '../assets/color-picker.svg?raw';
 
-// Color-picker cursor — SVG builder + armed-state tracking + modifier chord
-// derived from whatever `sampleColor` is bound to in the active config layer
-// (Krita/GIMP ship `ctrl+drag`, Photoshop ships `alt+drag`; user overrides
-// are honored too).
+// Color-picker cursor — SVG builder + armed-state tracking. Whether a held
+// modifier arms the picker is decided by the shared specificity resolver
+// (`dragModifierActions`): the picker engages only when the held modifier's
+// winning drag action is `sampleColor`. A brush that claims the same chord
+// with a more specific binding (clone's `setCloneSource`) therefore wins and
+// the picker yields — no separate modifier bookkeeping to disagree with the
+// dispatcher.
 //
 // Armed conditions:
 //   1. The color-picker tool is the active tool.
-//   2. A paint-group tool is active AND the user holds exactly the
-//      modifier set of one of `sampleColor`'s drag bindings. The
-//      chord-bound `sampleColor` action does the actual pick on
-//      pointerdown; this module just owns the cursor.
+//   2. A paint-group tool is active AND the held modifier resolves to
+//      `sampleColor` (see `pickerEngages`). The chord-bound `sampleColor`
+//      action does the actual pick on pointerdown; this module just owns
+//      the cursor.
 //
 // Holding the modifier does *not* swap `activeToolId` — the toolbar
-// stays put. CanvasView consults `isColorPickerModifierActive()` to
-// gate the active tool's hover overlay while the modifier is held, so
-// e.g. the brush's dab preview doesn't fight the cursor.
+// stays put. Hover suppression, the `app.toolCursor` slot, and the
+// suspend/restore handoff to the active tool are owned by the shared
+// engagement machinery in `modifier_cursor.ts`; this module only owns
+// the picker's arming decision and its SVG cursor.
 
 // ---------------------------------------------------------------------------
 // SVG cursor builder
@@ -170,79 +180,21 @@ export function colorPickerCursor(
 }
 
 // ---------------------------------------------------------------------------
-// Armed-state machine + chord-derived modifier tracking
+// Armed-state machine
 // ---------------------------------------------------------------------------
 
 let pressed = false;
-let currentMods: string = '';
-let engagementMods: Set<string> = new Set();
-let pointerDown = false;
 let engaged = false;
 let lastKey: string | null = null;
 
-// Latest pointer position in canvas coordinates while the cursor is
-// over the canvas; null when off-canvas. Used to re-establish the
-// active tool's hover overlay on disengage so the dab preview reappears
-// without waiting for the next genuine pointermove.
-let lastCanvas: { x: number; y: number } | null = null;
-
-// Drag verbs the picker arms over. Click/doubleClick chords are excluded
-// because they imply a press (there's no pre-press "armed" phase to
-// preview). Bare-drag chords (no modifiers) would arm on hover with
-// nothing held, which would steal the cursor from the active tool — so
-// `''` is filtered out below.
-const DRAG_VERBS = ['drag', 'rightDrag', 'middleDrag'];
-
-function canonicalMods(parts: string[]): string {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const m of MOD_ORDER) {
-        if (parts.includes(m) && !seen.has(m)) {
-            seen.add(m);
-            out.push(m);
-        }
-    }
-    return out.join('+');
-}
-
-/** Modifier prefix of a chord, or `null` if the chord isn't a drag chord.
- *  `"ctrl+drag"` → `"ctrl"`, `"ctrl+alt+rightDrag"` → `"ctrl+alt"`,
- *  `"drag"` → `""`, `"click"` → `null`. Re-canonicalises modifier order so
- *  YAML authored as `alt+ctrl+drag` still compares equal. */
-export function modPrefixOfChord(chord: string): string | null {
-    for (const verb of DRAG_VERBS) {
-        if (chord === verb) return '';
-        if (chord.endsWith('+' + verb)) {
-            const prefix = chord.slice(0, -verb.length - 1);
-            return canonicalMods(prefix.split('+'));
-        }
-    }
-    return null;
-}
-
-/** The set of modifier prefixes (e.g. `{"ctrl"}`, `{"alt"}`, or `{"ctrl","alt"}`)
- *  that, when held alone, should arm the picker cursor over a paint tool.
- *  Derived from the effective `sampleColor` mouseclick bindings — preset
- *  swaps and user overrides flow through automatically. */
-export function colorPickerEngagementMods(): Set<string> {
-    const out = new Set<string>();
-    for (const raw of effectiveMouseClicks('sampleColor')) {
-        const { site, scope, chord } = parseBinding(raw);
-        if (site !== null && site !== 'canvas') continue;
-        if (scope !== null && scope !== 'paint') continue;
-        // `$mod` → platform primitive (`ctrl`/`meta`) so the result matches
-        // what `modsFromEvent` reports off a real KeyboardEvent.
-        const prefix = modPrefixOfChord(substituteMod(chord));
-        // Skip bare-drag bindings — arming on hover with no modifier
-        // held would fight every paint stroke.
-        if (prefix === null || prefix === '') continue;
-        out.add(prefix);
-    }
-    return out;
-}
-
-function modsFromEvent(e: { ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }): string {
-    return canonicalModsFromEvent(e).join('+');
+/** Pure engagement decision: the picker arms over a paint tool when the
+ *  specificity-resolved winner of the held modifier is `sampleColor` and no
+ *  pointer is already down (a stroke in flight stays in flight). Split out so
+ *  the decision is unit-testable without the DOM state machine. */
+export function pickerEngages(
+    resolved: Set<string>, paintToolActive: boolean, pointerDown: boolean,
+): boolean {
+    return chordCursorEngages(resolved, paintToolActive, pointerDown, 'sampleColor');
 }
 
 function isPaintToolActive(): boolean {
@@ -254,13 +206,6 @@ function isArmed(): boolean {
         app.activeToolId === 'colorpicker' ||
         (engaged && isPaintToolActive())
     );
-}
-
-/** True while the modifier-held chord is engaging the picker over a paint
- *  tool. CanvasView reads this to suppress the active tool's hover
- *  pointer events so the cursor isn't fighting a stale dab preview. */
-export function isColorPickerModifierActive(): boolean {
-    return engaged && isPaintToolActive();
 }
 
 function colorKey(): string {
@@ -277,7 +222,15 @@ function refreshCursor(): void {
     const key = colorKey();
     if (key === lastKey) return;
     lastKey = key;
-    app.toolCursor = colorPickerCursor(app.foreground, app.background, pressed);
+    const cursor = colorPickerCursor(app.foreground, app.background, pressed);
+    if (engaged) {
+        // Route through the shared slot so a concurrent engager (e.g. the
+        // clone crosshair) is re-asserted, not stomped, when we yield.
+        updateModifierCursor('colorpicker', cursor);
+    } else {
+        // Picker-as-active-tool: the tool owns the cursor directly.
+        app.toolCursor = cursor;
+    }
 }
 
 /** Mark a sample-in-progress (mouse button held during pick). Same call
@@ -296,31 +249,32 @@ export function tickColorPickerCursor(): void {
 }
 
 /** Engage the picker chord. Refuses while a pointer is already down so
- *  we don't tear an in-flight brush stroke; re-evaluated on pointerup
- *  so a "start stroke, press the modifier, release pointer" sequence
- *  still arms for the next click. */
+ *  we don't tear an in-flight brush stroke; re-evaluated on pointer
+ *  release so a "start stroke, press the modifier, release pointer"
+ *  sequence still arms for the next click. Engaging suspends the active
+ *  tool's hover feedback (the shared machinery calls `suspendHover`). */
 function tryEngage(): void {
-    if (engaged || pointerDown) return;
-    if (!engagementMods.has(currentMods)) return;
-    if (!isPaintToolActive()) return;
+    const resolved = dragModifierActions('canvas', heldMods());
+    if (!pickerEngages(resolved, isPaintToolActive(), isPointerDown())) return;
     engaged = true;
-    // Clear any in-flight hover overlay (the brush's dab preview, a
-    // tool's placement gizmo, etc.) so the canvas shows only the picker
-    // cursor while the modifier is held. `clear_overlay` is a generic
-    // engine API — the picker doesn't know which tool drew the overlay.
-    app.engine?.post('clear_overlay');
-    refreshCursor();
-    app.requestFrame();
+    lastKey = colorKey();
+    engageModifierCursor(
+        'colorpicker',
+        colorPickerCursor(app.foreground, app.background, pressed),
+    );
 }
 
-/** Re-check engagement against the currently-held modifier set. Called
+/** Re-check engagement against the currently-resolved winner. Called
  *  whenever the held set changes, the binding set changes, or a pointer
- *  release unblocks engagement. */
+ *  release unblocks engagement. Once engaged, pointer-down state is
+ *  irrelevant to *staying* engaged (only to first engaging), so disengage
+ *  keys purely on the picker no longer winning the chord. */
 function reevaluate(): void {
     if (engaged) {
-        if (!engagementMods.has(currentMods)) disengage();
+        const resolved = dragModifierActions('canvas', heldMods());
+        if (!isPaintToolActive() || !resolved.has('sampleColor')) disengage();
     } else {
-        if (engagementMods.has(currentMods)) tryEngage();
+        tryEngage();
     }
 }
 
@@ -329,107 +283,37 @@ function disengage(): void {
     engaged = false;
     pressed = false;
     lastKey = null;
-    // When the picker isn't the active tool, drop the cursor override
-    // so the active tool's own onPointerMove can re-establish its
-    // native cursor (the brush, for example, sets `'none'` and draws
-    // an on-canvas dab preview).
-    if (app.activeToolId !== 'colorpicker') {
-        app.toolCursor = null;
-        // Re-push the active tool's hover overlay at the current pointer
-        // position so its preview reappears immediately — without this,
-        // the dab preview would be missing until the user wiggled the
-        // mouse. Tools without hover-time feedback simply opt out by
-        // not implementing `restoreHover`.
-        const tool = toolRegistry.get(app.activeToolId);
-        const canvasEl = app.canvasEl;
-        if (tool?.restoreHover && app.engine && canvasEl && lastCanvas) {
-            tool.restoreHover(
-                {
-                    engine: app.engine,
-                    canvasEl,
-                    screenToCanvas: (sx, sy) => screenToCanvas(sx, sy, canvasEl),
-                },
-                lastCanvas.x, lastCanvas.y,
-            );
-        }
-    }
-    app.requestFrame();
+    // The shared machinery releases the cursor slot and restores the active
+    // tool's hover. Exception: when the colorpicker *tool* itself has just
+    // become active, it owns the cursor directly (its `refreshCursor` set
+    // it) — skip the release/restore handoff so we don't stomp it.
+    disengageModifierCursor('colorpicker', {
+        release: app.activeToolId !== 'colorpicker',
+    });
 }
 
 let wired = false;
 
-/** Wire global modifier + pointer tracking. Idempotent. The set of
- *  modifier combinations that arm the picker is sourced from the
- *  `sampleColor` action's effective mouseclick bindings — so swapping
- *  the Photoshop preset (alt+drag) for the Krita preset (ctrl+drag) or
- *  user-overriding the chord flows through automatically. */
+/** Wire the picker's engagement re-evaluation. Idempotent. Which modifier
+ *  arms the picker is decided entirely by the shared specificity resolver
+ *  (`dragModifierActions` over `heldMods()`), so preset swaps (Photoshop
+ *  alt+drag ↔ Krita ctrl+drag), user overrides, and brush-scoped bindings
+ *  that out-rank `sampleColor` (clone's set-source) all flow through without
+ *  this module knowing the binding grammar. The held modifier set is owned
+ *  by `held_mods.ts` and pointer state by `modifier_cursor.ts`; here we only
+ *  own the picker's arming decision and cursor. */
 export function setupColorPickerModifierTracking(): void {
     if (wired) return;
     wired = true;
 
-    engagementMods = colorPickerEngagementMods();
-    config.onChange(() => {
-        engagementMods = colorPickerEngagementMods();
-        reevaluate();
-    });
+    // The held set changes (keydown/keyup/blur) → re-evaluate. A rebind can
+    // change the winner while a modifier is held; `clickIndex` is rebuilt by
+    // `rebuildClickIndex` (registered on config change before this) so
+    // re-evaluating here reads the fresh resolution.
+    onHeldModsChange(reevaluate);
+    config.onChange(reevaluate);
 
-    // Any key event (not just the modifier keys themselves) carries the
-    // full modifier state. Read it off the event so we never have to
-    // know which physical keys map to which chord modifier.
-    const onKey = (e: KeyboardEvent) => {
-        const next = modsFromEvent(e);
-        if (next === currentMods) return;
-        currentMods = next;
-        reevaluate();
-    };
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('keyup', onKey);
-
-    // Window blur (alt-tab, OS focus change) can strand modifier state
-    // at "held" when the OS swallows the corresponding up event. Reset.
-    window.addEventListener('blur', () => {
-        if (currentMods !== '') {
-            currentMods = '';
-            reevaluate();
-        }
-        pointerDown = false;
-    });
-
-    // Pointer-down tracking gates `tryEngage` — a stroke already in
-    // flight stays in flight until the user lifts the pointer.
-    window.addEventListener('pointerdown', () => { pointerDown = true; });
-    window.addEventListener('pointerup', () => {
-        pointerDown = false;
-        reevaluate();
-    });
-    window.addEventListener('pointercancel', () => { pointerDown = false; });
-
-    // Track the latest canvas-relative pointer position. Window-level so
-    // we keep getting moves while CanvasView suppresses the active tool's
-    // dispatch (during modifier-held). Off-canvas → null, so a release
-    // outside the canvas doesn't spuriously re-establish an overlay.
-    // Pointer events also expose modifier state, so we use them to pick
-    // up drift if a keydown/keyup was swallowed (focus changes can lose
-    // them).
-    window.addEventListener('pointermove', (e) => {
-        const next = modsFromEvent(e);
-        if (next !== currentMods) {
-            currentMods = next;
-            reevaluate();
-        }
-        const canvasEl = app.canvasEl;
-        if (!canvasEl) {
-            lastCanvas = null;
-            return;
-        }
-        const rect = canvasEl.getBoundingClientRect();
-        if (
-            e.clientX < rect.left || e.clientX > rect.right ||
-            e.clientY < rect.top || e.clientY > rect.bottom
-        ) {
-            lastCanvas = null;
-            return;
-        }
-        lastCanvas = screenToCanvas(e.clientX, e.clientY, canvasEl);
-    });
+    // A pointer release re-opens the engagement gate — a "start stroke,
+    // press the modifier, release pointer" sequence arms for the next click.
+    onPointerRelease(reevaluate);
 }

@@ -303,6 +303,143 @@ fn extent_protocol_composes_along_chain() {
 }
 
 #[test]
+fn extent_grows_with_shape_aspect_anisotropy() {
+    // The `aspect` knob squashes the tip into an ellipse; a thinner nib
+    // (smaller aspect) has a longer perpendicular axis, so the dab bbox must
+    // grow by the worst-case anisotropy factor `1 / aspect_min`. Build
+    // pen + shape(sine, amplitude unwired ⇒ base radius 1) + stamp + paint
+    // with a wire on `aspect` so its natural-range minimum (0.1) counts:
+    // factor must reach 1/0.1 = 10. Without folding `aspect` into the extent,
+    // the tall nib would be clipped to the round bbox on save-point rewind.
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node(
+        "pen_input",
+        reg.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let paint_color = graph.add_node(
+        "paint_color",
+        reg.get("paint_color").unwrap().ports.clone(),
+        vec![],
+    );
+    let rand_aspect = graph.add_node(
+        "random",
+        reg.get("random").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(0)],
+    );
+    let shape = graph.add_node(
+        "shape",
+        reg.get("shape").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(0)], // Sine, amplitude default 0
+    );
+    let stamp = graph.add_node(
+        "stamp",
+        reg.get("stamp").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(0)],
+    );
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let wires = [
+        (rand_aspect, "value", shape, "aspect"),
+        (shape, "mask", stamp, "tip"),
+        (paint_color, "color", stamp, "color"),
+        (stamp, "dab", term, "rgba"),
+        (pen, "position", term, "position"),
+    ];
+    for (fnode, fport, tnode, tport) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: fnode,
+                    port: fport.into(),
+                },
+                PortRef {
+                    node: tnode,
+                    port: tport.into(),
+                },
+            )
+            .unwrap();
+    }
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
+    // base = 1 (sine, amplitude 0); aniso_max = 1/aspect_min = 1/0.1 = 10.
+    assert!(
+        (compiled.brush_extent_factor - 10.0).abs() < 1e-3,
+        "wired aspect (min 0.1) must inflate the bbox ×10, got {}",
+        compiled.brush_extent_factor,
+    );
+    // The compiled silhouette must carry the aspect argument into ShapeParams.
+    assert!(
+        compiled.stroke_wgsl.contains("ShapeParams"),
+        "shape brush must emit a ShapeParams constructor",
+    );
+}
+
+#[test]
+fn extent_neutral_when_aspect_unwired() {
+    // Regression: the default `aspect` (1.0) must leave the bbox unchanged so
+    // every existing round brush keeps its footprint. pen + shape(sine,
+    // amplitude wired ⇒ 1.5) + stamp + paint with `aspect` left unwired: the
+    // factor must stay at the pre-anisotropy 1.5, not grow.
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node(
+        "pen_input",
+        reg.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let paint_color = graph.add_node(
+        "paint_color",
+        reg.get("paint_color").unwrap().ports.clone(),
+        vec![],
+    );
+    let rand_amp = graph.add_node(
+        "random",
+        reg.get("random").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(0)],
+    );
+    let shape = graph.add_node(
+        "shape",
+        reg.get("shape").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(0)], // Sine
+    );
+    let stamp = graph.add_node(
+        "stamp",
+        reg.get("stamp").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(0)],
+    );
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let wires = [
+        (rand_amp, "value", shape, "amplitude"),
+        (shape, "mask", stamp, "tip"),
+        (paint_color, "color", stamp, "color"),
+        (stamp, "dab", term, "rgba"),
+        (pen, "position", term, "position"),
+    ];
+    for (fnode, fport, tnode, tport) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: fnode,
+                    port: fport.into(),
+                },
+                PortRef {
+                    node: tnode,
+                    port: tport.into(),
+                },
+            )
+            .unwrap();
+    }
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
+    assert!(
+        (compiled.brush_extent_factor - 1.5).abs() < 1e-4,
+        "unwired aspect (default 1.0) must leave factor at 1.5, got {}",
+        compiled.brush_extent_factor,
+    );
+}
+
+#[test]
 fn extent_default_identity_when_no_shape() {
     // pen → paint with no upstream shape node — every node
     // returns the trait-default `Identity`, so the brush extent
@@ -375,4 +512,130 @@ fn paint_only_graph_falls_through_to_disc() {
     assert!(compiled
         .stroke_wgsl
         .contains("vec4<f32>(1.0, 1.0, 1.0, 1.0)"));
+}
+
+/// The Clone builtin compiles to WGSL with `samples_source` set, the
+/// stroke shader declares the `@group(3)` source binding and calls the
+/// clone-sample helper, and the preview variant compiles too (it binds a
+/// fallback so it must still declare the source). Naga validation of the
+/// assembled shader happens when the pipeline builds — see `tests/clone.rs`.
+#[test]
+fn clone_brush_compiles_with_samples_source() {
+    let clone = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Clone")
+        .expect("Clone brush registered");
+    let reg = registry();
+    let plan = compile(&clone.metadata.graph, reg.as_map()).unwrap();
+    let compiled =
+        compile_brush_to_wgsl(&clone.metadata.graph, &plan, &evals()).expect("clone compiles");
+
+    assert!(compiled.samples_source, "clone must set samples_source");
+    assert!(
+        compiled.graph_texture_names.is_empty(),
+        "clone source is not a named registry texture"
+    );
+    // Stroke shader declares the @group(3) source texture and samples it.
+    assert!(compiled
+        .stroke_wgsl
+        .contains("@group(3) @binding(0) var graph_smp"));
+    assert!(compiled.stroke_wgsl.contains("graph_tex_0"));
+    assert!(compiled.stroke_wgsl.contains("fn clone_sample"));
+    // Regression: the source sample sits behind a `uv`-dependent in-bounds
+    // branch (non-uniform control flow), so it must use derivative-free
+    // `textureSampleLevel`. `textureSample` computes implicit derivatives
+    // and is illegal in non-uniform control flow — native naga is lenient,
+    // but the browser's WGSL validator rejects it and the brush fails at
+    // pipeline-build time in-app.
+    assert!(
+        compiled
+            .stroke_wgsl
+            .contains("textureSampleLevel(graph_tex_0"),
+        "clone must sample with textureSampleLevel (derivative-free), not textureSample"
+    );
+    assert!(!compiled.stroke_wgsl.contains("textureSample(graph_tex_0"));
+    // The stroke body *invokes* the sampler (`let clone_c_N = clone_sample_N(…)`).
+    assert!(
+        compiled.stroke_wgsl.contains("= clone_sample"),
+        "stroke body must invoke the clone sampler"
+    );
+
+    // --- Dab-preview regression (Fix A) ---
+    // Under Approach A the preview shader still *declares* the @group(3)
+    // source binding (the shared `clone_sample` decl references it, bound to
+    // the fallback tile), so the declaration is present in both shaders.
+    assert!(compiled
+        .cursor_preview_wgsl
+        .contains("@group(3) @binding(0) var graph_smp"));
+    assert!(compiled.cursor_preview_wgsl.contains("fn clone_sample"));
+    // But the preview *body* must not sample the source — it emits a neutral
+    // constant instead. The tell is the call site, not the declaration.
+    assert!(
+        !compiled.cursor_preview_wgsl.contains("= clone_sample"),
+        "preview body must not invoke the clone sampler (Fix A: neutral fill, no source at hover)"
+    );
+    assert!(
+        compiled
+            .cursor_preview_wgsl
+            .contains("vec4<f32>(0.6, 0.6, 0.6, 1.0)"),
+        "preview body must emit the neutral clone fill"
+    );
+    // Both variants are complete, valid shaders.
+    naga_validate(&compiled.stroke_wgsl, "clone stroke_wgsl");
+    naga_validate(&compiled.cursor_preview_wgsl, "clone cursor_preview_wgsl");
+}
+
+/// Parse + validate a fully assembled brush shader under naga (the same
+/// front-end wgpu uses in-app), panicking with the diagnostic on failure.
+fn naga_validate(src: &str, label: &str) {
+    let module = naga::front::wgsl::parse_str(src)
+        .unwrap_or_else(|e| panic!("{label} failed to parse under naga:\n{e}"));
+    let mut validator = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    );
+    validator
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{label} failed naga validation:\n{e:?}"));
+}
+
+/// Double-allocation regression (Fix A, critique #5): a static-texture brush
+/// (`Charcoal`, whose `image` node allocates a `@group(3)` paper texture)
+/// must declare **exactly one** graph texture in its preview shader. The
+/// preview recompile runs against throwaway allocation cells, so a
+/// non-terminal node re-emitting its body for the preview pass can't
+/// double-count a second `@group(3)` texture into the layout.
+#[test]
+fn static_texture_brush_preview_declares_single_graph_texture() {
+    let charcoal = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Charcoal")
+        .expect("Charcoal brush registered");
+    // Go through `compile_graph` — it applies the Switch rewrite the
+    // persisted graph needs before WGSL compilation, matching the in-app
+    // path — and read the compiled brush off the runner.
+    let runner = darkly::brush::compile_graph(&charcoal.metadata.graph).expect("charcoal compiles");
+    let compiled = runner
+        .compiled_brush()
+        .expect("charcoal has a compiled terminal");
+
+    assert_eq!(
+        compiled.graph_texture_names.len(),
+        1,
+        "charcoal declares one graph texture (paper)"
+    );
+    let preview_texture_decls = compiled
+        .cursor_preview_wgsl
+        .matches("var graph_tex_")
+        .count();
+    assert_eq!(
+        preview_texture_decls, 1,
+        "preview must declare exactly one @group(3) texture, not a double-allocated second"
+    );
+    // The preview shader is valid (the paper grain samples in both modes).
+    naga_validate(
+        &compiled.cursor_preview_wgsl,
+        "charcoal cursor_preview_wgsl",
+    );
+    naga_validate(&compiled.stroke_wgsl, "charcoal stroke_wgsl");
 }

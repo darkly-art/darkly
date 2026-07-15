@@ -73,7 +73,7 @@ function pushPreviewOverlay() {
         prims.push(prim(KIND_CIRCLE, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR,
                         points[0], [r, 0], { thickness: 1 }));
     }
-    app.engine.post('set_overlay', { primitives: prims });
+    app.engine.api.setOverlay({ primitives: prims });
 }
 
 function isDoubleClick(cx: number, cy: number, now: number): boolean {
@@ -90,7 +90,7 @@ function clearState() {
     cursor = null;
     lastClickTime = 0;
     lastClickPos = null;
-    app.engine?.post('clear_overlay');
+    app.engine?.api.clearOverlay();
 }
 
 function commit(e: MouseEvent | PointerEvent | KeyboardEvent) {
@@ -98,7 +98,7 @@ function commit(e: MouseEvent | PointerEvent | KeyboardEvent) {
         clearState();
         return;
     }
-    app.engine.post('select_lasso', {
+    app.engine.api.selectLasso({
         verts: points,
         mode: selectionMode(e as PointerEvent),
         antialias: true,
@@ -109,7 +109,7 @@ function commit(e: MouseEvent | PointerEvent | KeyboardEvent) {
 
 export const polygonSelectTool: Tool = {
     id: 'polygon_select',
-    icon: 'fa6-solid:draw-polygon',
+    icon: 'lucide:triangle-dashed',
     group: 'select',
     cluster: 'select',
     hotkeyAction: 'polygonSelectTool',
@@ -180,7 +180,7 @@ export const polygonSelectTool: Tool = {
             if (points.length > 0) {
                 clearState();
             } else {
-                app.engine?.post('clear_selection');
+                app.engine?.api.clearSelection();
             }
             return true;
         }

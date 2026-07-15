@@ -6,6 +6,7 @@
     import { nav } from './navigation.svelte';
     import { toolRegistry } from '../tools/registry';
     import type { ToolContext } from '../tools/registry';
+    import { beginToolSession, toolEngine, runHook } from '../tools/tool_session';
     import { screenToCanvas } from './coordinates';
     import { toast } from '../state/toast.svelte';
     import { theme } from '../state/theme.svelte';
@@ -14,7 +15,9 @@
     import { bindingSite } from '../actions/binding_site';
     import { handleDroppedFile } from '../actions';
     import { THUMB_SIZE } from '../ui/layers/thumbnails.svelte';
-    import { isColorPickerModifierActive } from '../tools/colorpicker_cursor';
+    import { isToolHoverSuppressed } from '../tools/modifier_cursor';
+    import { isEditableTarget } from '../lib/isEditableTarget';
+    import TransformModeMenu from '../ui/TransformModeMenu.svelte';
 
     /** Optional pre-built instance. When provided, CanvasView skips the
      *  single-instance bootstrap (`initEditor`) and just wires the canvas
@@ -54,11 +57,11 @@
                 canvas.height = h;
                 inst.viewportW = w;
                 inst.viewportH = h;
-                inst.engine?.post('resize', { width: w, height: h });
+                inst.engine?.api.resize({ width: w, height: h });
                 // Re-sync the Rust view transform with the new screen dimensions
                 // so the compositor and JS coordinate conversion agree.
                 const dpr2 = dpr;
-                inst.engine?.post('set_view_transform', {
+                inst.engine?.api.setViewTransform({
                     pan_x: inst.panX * dpr2, pan_y: inst.panY * dpr2,
                     zoom: inst.zoom, rotation: inst.rotation,
                     mirror_h: inst.mirrorH,
@@ -122,7 +125,7 @@
                 await initEditor(canvas);
             }
             const engine = inst.engine!;
-            engine.post('resize', { width: canvas.width, height: canvas.height });
+            engine.api.resize({ width: canvas.width, height: canvas.height });
 
             // Drift guard: the engine auto-queues thumbnail readbacks
             // at `DEFAULT_THUMB_SIZE`; the panel renders <img> at the
@@ -145,12 +148,10 @@
             ro.observe(canvas);
 
             // Fit canvas to view: scale down if needed, but never scale up.
-            // Uses the just-set per-instance dims so a tab opened from a
-            // non-default-sized image fits to its own canvas, not the
-            // global config default.
-            const dprRect = { w: canvas.width, h: canvas.height };
-            const fitZoom = Math.min(dprRect.w / inst.docW, dprRect.h / inst.docH, 1);
-            inst.zoom = fitZoom;
+            // Uses the just-set per-instance dims (viewportW/H from canvas.width/
+            // height above) so a tab opened from a non-default-sized image fits to
+            // its own canvas, not the global config default.
+            inst.zoom = inst.fitZoom();
 
             // Kick the first frame
             inst.requestFrame();
@@ -162,9 +163,14 @@
 
 
     function getToolContext(): ToolContext | null {
-        if (!inst.engine) return null;
+        // Tool code reaches the engine only through the live tool session, never
+        // `inst.engine` directly — so a request that resolves after the session
+        // dies (tool switch, layer change, tab swap) rejects instead of touching
+        // stale state. See `tools/tool_session.ts`.
+        const engine = toolEngine();
+        if (!engine) return null;
         return {
-            engine: inst.engine,
+            engine,
             canvasEl: canvas,
             screenToCanvas(sx: number, sy: number) {
                 return screenToCanvas(sx, sy, canvas);
@@ -187,6 +193,16 @@
         // input — touch-action:none only covers touch, not pen (Chromium bug).
         e.preventDefault();
 
+        // Pull keyboard focus onto the canvas. `bindingSite` normally does this
+        // via a synthetic `mousedown`, but the `preventDefault()` above
+        // suppresses pointer→mouse compatibility events, so it never fires here.
+        // Without this, a focused properties-panel field (text editor textarea,
+        // an align/font `<select>`) keeps focus and swallows tool keys —
+        // Enter/Escape to a transform gizmo, for one. A canvas interaction
+        // means the canvas owns the keyboard; tools that want a field focused
+        // (the text editor) re-focus it explicitly afterwards.
+        canvas?.focus();
+
         // Touch: always capture and track for gesture detection
         if (e.pointerType === 'touch') {
             canvas.setPointerCapture(e.pointerId);
@@ -195,7 +211,7 @@
                 const ctx = getToolContext();
                 if (ctx) {
                     const tool = toolRegistry.get(inst.activeToolId);
-                    tool?.onPointerUp(ctx, e);
+                    void runHook(tool?.onPointerUp(ctx, e));
                 }
                 return;
             }
@@ -220,7 +236,7 @@
         canvas.setPointerCapture(e.pointerId);
 
         if (!ctx) return;
-        tool?.onPointerDown(ctx, e, pos.x, pos.y);
+        void runHook(tool?.onPointerDown(ctx, e, pos.x, pos.y));
         // Mark a tool interaction in flight so autosave doesn't snapshot
         // mid-stroke. Released in onPointerUp / onPointerCancel (pointer
         // capture guarantees one of them fires on this element).
@@ -263,16 +279,16 @@
         const ctx = getToolContext();
         if (!ctx) return;
         const pos = getCanvasCoords(e);
-        // While the color-picker chord is engaged (Ctrl/Meta + paint tool),
-        // suppress the active tool's hover updates so its overlay (e.g. the
-        // brush's dab preview) can't fight the picker cursor. Pointerdown
-        // is already short-circuited by `dispatchDrag` matching the
-        // `sampleColor` chord; this covers the hover-only case. Still
-        // request a frame — the chord's onMove may have queued a pick
-        // that needs `pollPick` to commit on the next frame.
-        if (!isColorPickerModifierActive()) {
+        // While a modifier cursor is engaged (the picker's dropper, the
+        // clone brush's set-source crosshair), suppress the active tool's
+        // hover updates so its overlay (e.g. the brush's dab preview) can't
+        // fight the engaged cursor. Pointerdown is already short-circuited
+        // by `dispatchDrag` matching the chord; this covers the hover-only
+        // case. Still request a frame — a chord's onMove may have queued
+        // work (e.g. a pick that needs `pollPick` to commit next frame).
+        if (!isToolHoverSuppressed()) {
             const tool = toolRegistry.get(inst.activeToolId);
-            tool?.onPointerMove(ctx, e, pos.x, pos.y);
+            void runHook(tool?.onPointerMove(ctx, e, pos.x, pos.y));
         }
         inst.requestFrame();
     }
@@ -296,7 +312,7 @@
         const ctx = getToolContext();
         if (!ctx) return;
         const tool = toolRegistry.get(inst.activeToolId);
-        tool?.onPointerUp(ctx, e);
+        void runHook(tool?.onPointerUp(ctx, e));
         inst.requestFrame();
     }
 
@@ -317,7 +333,7 @@
         const ctx = getToolContext();
         if (!ctx) return;
         const tool = toolRegistry.get(inst.activeToolId);
-        tool?.onPointerUp(ctx, e);
+        void runHook(tool?.onPointerUp(ctx, e));
         inst.requestFrame();
     }
 
@@ -325,7 +341,7 @@
         const ctx = getToolContext();
         if (!ctx) return;
         const tool = toolRegistry.get(inst.activeToolId);
-        tool?.onPointerLeave?.(ctx);
+        void runHook(tool?.onPointerLeave?.(ctx));
         inst.requestFrame();
     }
 
@@ -352,40 +368,65 @@
     const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta']);
 
     function onKeyDown(e: KeyboardEvent) {
+        // Keys typed into a text field (the text-properties editor, a rename
+        // box, etc.) are content, not canvas shortcuts — they must never pan,
+        // trigger a tool keybind, or dismiss a tool overlay. This is a window
+        // listener, so a textarea keystroke would otherwise bubble up to here.
+        if (isEditableTarget(e.target)) return;
         nav.onKeyDown(e);
         // Don't dismiss overlay for navigation or bare modifier keys
         if (nav.spaceHeld || MODIFIER_KEYS.has(e.key)) return;
         const tool = toolRegistry.get(inst.activeToolId);
         if (tool?.onKeyDown?.(e)) return;
-        tool?.dismissOverlay?.();
+        void runHook(tool?.dismissOverlay?.());
         inst.requestFrame();
     }
 
-    // Call onDeactivate/onActivate when the active tool changes.
+    // Call onDeactivate/onActivate when the active tool changes. This is one of
+    // the ~3 sites that own the tool session's lifecycle (see tool_session.ts):
+    // the outgoing tool is deactivated through its still-alive session, then a
+    // fresh session is begun for the incoming tool. `inst.engine` is read
+    // directly so the effect re-runs once the engine finishes async init.
     let prevToolId = '';
     $effect(() => {
         const id = inst.activeToolId;
-        if (id !== prevToolId) {
-            const ctx = getToolContext();
-            if (ctx) {
-                // Reset before deactivate so a tool's onDeactivate can still
-                // override; whatever the new tool's onActivate sets wins.
-                inst.toolCursor = null;
-                toolRegistry.get(prevToolId)?.onDeactivate?.(ctx);
-                toolRegistry.get(id)?.onActivate?.(ctx);
-                prevToolId = id;
-            }
-        }
+        const engine = inst.engine;
+        if (id === prevToolId || !engine) return;
+        // Reset before deactivate so a tool's onDeactivate can still override;
+        // whatever the new tool's onActivate sets wins.
+        inst.toolCursor = null;
+        // Deactivate through the outgoing session (its synchronous commit/detach
+        // posts must land on the session that's still alive).
+        const prevCtx = getToolContext();
+        if (prevCtx) toolRegistry.get(prevToolId)?.onDeactivate?.(prevCtx);
+        // Begin a fresh session for the incoming tool, killing the old one — any
+        // op parked on an await from the previous tool now rejects on resume.
+        beginToolSession(engine);
+        const nextCtx = getToolContext();
+        // `onActivate` is async and awaits engine round-trips through the live
+        // session, so wrap it like every other hook call site: if the session
+        // dies mid-activate (the initial-load race where the active-layer effect
+        // rebinds the session while a fresh tool's onActivate is parked on an
+        // await), the resumed op rejects with ToolSessionCancelled — a no-op to
+        // swallow, not an unhandled rejection.
+        if (nextCtx) void runHook(toolRegistry.get(id)?.onActivate?.(nextCtx));
+        prevToolId = id;
     });
 
-    // Dismiss tool overlay when the active layer changes.
+    // Dismiss tool overlay when the active layer changes. Rebinding the session
+    // first kills the outgoing one, so an op parked on an await from before the
+    // change rejects instead of resuming against the new layer; dismissOverlay
+    // then runs on the fresh (alive) session and can still finalize in-flight
+    // work (e.g. commit a floating being moved). This is what makes wrong-layer
+    // resumption unrepresentable too.
     let prevLayerId: number | null = null;
     $effect(() => {
         const id = inst.activeLayerId;
         if (id !== prevLayerId) {
             prevLayerId = id;
+            if (inst.engine) beginToolSession(inst.engine);
             const tool = toolRegistry.get(inst.activeToolId);
-            tool?.dismissOverlay?.();
+            void runHook(tool?.dismissOverlay?.());
         }
     });
 
@@ -395,7 +436,7 @@
     $effect(() => {
         if (inst.engine && canvas) {
             const dpr = window.devicePixelRatio || 1;
-            inst.engine.post('set_view_transform', {
+            inst.engine.api.setViewTransform({
                 pan_x: inst.panX * dpr, pan_y: inst.panY * dpr,
                 zoom: inst.zoom, rotation: inst.rotation,
                 mirror_h: inst.mirrorH,
@@ -424,12 +465,13 @@
          duplicating that dispatch. -->
     <canvas
         bind:this={canvas}
-        style:cursor={inst.toolCursor ?? nav.cursor}
+        style:cursor={nav.canvasCursor}
         use:bindingSite={{
             name: 'canvas',
             ctx: () => ({ x: 0, y: 0 }),
             mouse: false,
         }}
+        oncontextmenu={(e: MouseEvent) => e.preventDefault()}
         onpointerdown={onPointerDown}
         onpointermove={onPointerMove}
         onpointerup={onPointerUp}
@@ -439,6 +481,10 @@
         ondrop={onCanvasDrop}
         onwheel={(e: WheelEvent) => { nav.onWheel(e, canvas); inst.requestFrame(); }}
     ></canvas>
+
+    <!-- Right-click mode-switch menu for the transform tool. The tool sets
+         `app.transformModeMenu`; this renders against it. -->
+    <TransformModeMenu />
 </div>
 
 <style>
@@ -459,5 +505,12 @@
         height: 100%;
         object-fit: contain;
         touch-action: none;
+    }
+
+    /* The canvas holds keyboard focus (tabindex via `bindingSite`) so tool
+       keys route to it, but it must never show the UA focus ring. */
+    canvas:focus,
+    canvas:focus-visible {
+        outline: none;
     }
 </style>

@@ -58,7 +58,7 @@ export async function pollPreview(
     kind: PreviewKind,
     type: string,
 ): Promise<PreviewData | null> {
-    const raw = (await engine.send('poll_preview', { kind, type })) as
+    const raw = (await engine.api.pollPreview({ kind, type })) as
         | RawPreview
         | null
         | undefined;

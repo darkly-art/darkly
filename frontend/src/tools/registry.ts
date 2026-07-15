@@ -1,8 +1,12 @@
-import type { Engine } from '../engine/protocol';
+import type { SessionEngine } from './tool_session';
 import type { Component } from 'svelte';
 
 export interface ToolContext {
-    engine: Engine;
+    /** The engine bound to the current tool session — not the raw `Engine`. A
+     *  request that resolves after the session dies rejects with
+     *  `ToolSessionCancelled`, so tool code never resumes into a changed world.
+     *  See `tool_session.ts`. */
+    engine: SessionEngine;
     canvasEl: HTMLCanvasElement;
     screenToCanvas: (screenX: number, screenY: number) => { x: number; y: number };
 }
@@ -60,6 +64,14 @@ export interface Tool {
      *  picker releasing, where the next genuine pointermove may be far
      *  off and the user expects the preview to be there immediately. */
     restoreHover?(ctx: ToolContext, canvasX: number, canvasY: number): void;
+
+    /** Inverse of {@link restoreHover}: tear down hover-time visual feedback
+     *  and invalidate any in-flight async hover push, so a pending overlay
+     *  update can't land after the caller has taken over the pointer
+     *  pipeline (e.g. a modifier-held cursor engaging). Tools without such
+     *  feedback opt out by not implementing it — the caller falls back to a
+     *  generic overlay clear. */
+    suspendHover?(ctx: ToolContext): void;
 
     /** Handle a key event. Return true if the tool consumed it. */
     onKeyDown?(e: KeyboardEvent): boolean;

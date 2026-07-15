@@ -6,10 +6,13 @@
 //! everything intact; on redo, the engine recomposes the result from the
 //! restored sources via [`crate::gpu::compositor::Compositor::bake_subtree_to_layer`].
 
+use darkly_macros::handlers;
+
 use super::DarklyEngine;
 use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::{BakeLayersAction, BakeSourceSlot};
 
+#[handlers]
 impl DarklyEngine {
     /// Merge the layer at `source_id` into the sibling directly below it in
     /// the same parent. Returns the id of the resulting raster layer.
@@ -17,6 +20,7 @@ impl DarklyEngine {
     /// Errors when `source_id` has no sibling below it, or when the target
     /// (the layer below) is locked. Either side may be a group; both are
     /// flattened into the result.
+    #[handler]
     pub fn merge_down(&mut self, source_id: LayerId) -> Result<LayerId, String> {
         // Source itself is consumed (tombstoned) by the merge — locking it
         // protects it from being destroyed. Target is overwritten with the
@@ -140,6 +144,7 @@ impl DarklyEngine {
 
     /// True when `source_id` has a same-parent sibling immediately below
     /// it. Used by frontend predicates to enable/disable Merge Down.
+    #[handler]
     pub fn can_merge_down(&self, source_id: LayerId) -> bool {
         let Some(pos) = self.doc.position_in_parent(source_id) else {
             return false;
@@ -156,6 +161,7 @@ impl DarklyEngine {
     /// Errors when fewer than two distinct sources are provided, when any
     /// source is locked (a partial bake is destructive), or when a source
     /// id isn't in the tree.
+    #[handler]
     pub fn merge_layers(&mut self, ids: Vec<LayerId>) -> Result<LayerId, String> {
         // De-dup while preserving caller order — important for the error
         // path that names the input set in messages.

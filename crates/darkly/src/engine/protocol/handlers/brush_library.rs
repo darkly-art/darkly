@@ -1,67 +1,31 @@
-//! Brush library — list, export, save, load, and import of brush bundles.
+//! Brush-bundle export. The rest of the brush library (list / save / load /
+//! import / thumbnails) is `#[handler]`-generated on `engine/brush_library.rs`;
+//! `brush_export` stays hand-written because it's a *fallible* binary response
+//! (`Result<Vec<u8>, String>`) — the `returns = bytes` mode is infallible, and
+//! the engine error must reject rather than ride the side-channel.
 
 use serde::Deserialize;
-use serde_json::json;
 
-use crate::engine::protocol::{bad_payload, decode, ProtocolError, RequestRegistration, Response};
+use crate::engine::protocol::{decode, ProtocolError, RequestRegistration, Response};
+
+/// `{ name }` — the brush to export as a bundle.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct BrushExportReq {
+    pub name: String,
+}
 
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
-        RequestRegistration {
-            kind: "brush_list",
-            handle: |engine, _payload, _b| {
-                Ok(Response::json(
-                    serde_json::to_value(engine.brush_list()).map_err(bad_payload)?,
-                ))
-            },
-        },
-        RequestRegistration {
-            kind: "brush_export",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    name: String,
-                }
-                let r: Req = decode(payload)?;
-                let bytes = engine
-                    .brush_export(&r.name)
-                    .map_err(ProtocolError::engine)?;
-                Ok(Response::binary(serde_json::Value::Null, bytes))
-            },
-        },
-        RequestRegistration {
-            kind: "brush_save",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    name: String,
-                    category: String,
-                }
-                let r: Req = decode(payload)?;
-                engine
-                    .brush_save(&r.name, &r.category)
-                    .map_err(ProtocolError::engine)?;
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "brush_load",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    name: String,
-                }
-                let r: Req = decode(payload)?;
-                engine.brush_load(&r.name).map_err(ProtocolError::engine)?;
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "brush_import",
-            handle: |engine, _payload, bytes| {
-                let name = engine.brush_import(bytes).map_err(ProtocolError::engine)?;
-                Ok(Response::json(json!({ "name": name })))
-            },
-        },
+        RequestRegistration::new("brush_export", |engine, payload, _b| {
+            let r: BrushExportReq = decode(payload)?;
+            let bytes = engine
+                .brush_export(&r.name)
+                .map_err(ProtocolError::engine)?;
+            Ok(Response::binary(serde_json::Value::Null, bytes))
+        })
+        .send()
+        .req::<BrushExportReq>()
+        .resp_literal("{ bytes: Uint8Array }"),
     ]
 }

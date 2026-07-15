@@ -60,7 +60,7 @@
                 exportImage.open = false;
             }
         });
-        engine.post('start_export');
+        engine.api.startExport();
     }
 </script>
 

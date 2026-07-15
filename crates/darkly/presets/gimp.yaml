@@ -21,6 +21,14 @@ hotkeys:
   # mirrorViewH: intentionally unbound. GIMP has no native mirror-view
   # hotkey, and Krita's M would set no established GIMP-user expectation
   # — leave it for explicit user binding rather than invent a default.
+  # View framing. GIMP binds View > "Fit Image in Window" to
+  # <primary><shift>J and "Center Image in Window" to <shift>J (see
+  # gimp/app/actions/view-actions.c — `view-fit-in-window` /
+  # `view-center`). Per-overlay because the editors disagree: Photoshop
+  # puts fit-on-screen on Ctrl+0 and has no center action; Krita's
+  # zoom_to_fit ships no default key.
+  fitToScreen: $mod+Shift+KeyJ
+  centerView: Shift+KeyJ
   # Tools.
   brushTool: KeyP
   fillTool: Shift+KeyB
@@ -57,7 +65,7 @@ hotkeys:
   mergeDown: $mod+KeyE
   # Selection.
   clearSelection: $mod+Shift+KeyA
-  # GIMP binds Select > Invert to Ctrl+I. This is why `adjustInvert` (Colors >
+  # GIMP binds Select > Invert to Ctrl+I. This is why `filterInvert` (Colors >
   # Invert) is intentionally left unbound for GIMP: Colors > Invert ships no
   # default key, and Ctrl+I is taken here. Krita/PS put invert-colors on Ctrl+I;
   # GIMP keeps Ctrl+I for invert-selection.
@@ -69,6 +77,10 @@ mouse_clicks:
   # modifier role. Darkly uses drag (continuous sample while held) instead of
   # click; `$mod` carries the platform swap.
   sampleColor: canvas@paint:$mod+drag
+  # Clone tool set-source — GIMP sets the clone origin with Ctrl+click,
+  # the same `<primary>` modifier as its colour picker. Brush-scoped so it
+  # out-ranks `sampleColor` only while the Clone brush is active.
+  setCloneSource: canvas@paint@clone:$mod+drag
   # isolateLayer mouse_click: GIMP has no thumbnail-modifier equivalent,
   # so intentionally unbound here. The hotkey form (KeyI above) is the
   # GIMP-native path.

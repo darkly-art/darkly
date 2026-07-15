@@ -4,12 +4,13 @@ use crate::gpu::atlas::LayerTexture;
 use crate::gpu::blend::BlendPipelines;
 use crate::gpu::content_bounds::ContentBoundsPass;
 use crate::gpu::effect::EffectCache;
+use crate::gpu::histogram::HistogramPass;
 use crate::gpu::overlay::ToolOverlay;
 use crate::gpu::params::ParamValue;
 use crate::gpu::veil_chain::VeilChain;
 use crate::gpu::view::{ViewTransform, DEFAULT_WORKSPACE_BG};
 use crate::gpu::void::{Void, VoidRegistry};
-use crate::layer::{FilterLayer, Layer, LayerId, RasterLayer, VoidLayer};
+use crate::layer::{FilterLayer, Layer, LayerId, RasterLayer, VectorLayer, VoidLayer};
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 
@@ -384,7 +385,17 @@ impl LayerKindGpu for Layer {
             // are excluded from the content walk (`Layer::is_blend_content`),
             // so this is never reached, but the arm keeps the match total.
             Layer::Filter(_) => {}
+            Layer::Vector(v) => v.realize_in(compositor, device, queue),
         }
+    }
+}
+
+impl LayerKindGpu for VectorLayer {
+    fn realize_in(&self, compositor: &mut Compositor, device: &wgpu::Device, queue: &wgpu::Queue) {
+        // Allocate the storage texture + blend cache. The scene itself is
+        // pushed separately by the engine (it owns fonts + shaping); this only
+        // guarantees the GPU slot exists.
+        compositor.ensure_vector_layer(device, queue, self.id);
     }
 }
 
@@ -423,6 +434,18 @@ struct ProceduralContent {
     /// Per-instance GPU resources for the void's own pipeline (uniform
     /// buffer + bind groups built off the registry's shared pipeline).
     cache: EffectCache,
+}
+
+/// Realization input for a vector-object layer: the `vello::Scene` the engine
+/// built from the document's objects, plus a "needs re-rasterize" flag. Held in
+/// a separate map (not `LayerContent`) because vector layers reuse the raster
+/// blend path verbatim — only their texture source differs. `dirty` flips when
+/// the engine pushes a new scene (object/style/transform change) and clears
+/// after [`Compositor::realize_dirty_vector_layers`] rasterizes it — never on
+/// view zoom/pan (raster-first).
+struct VectorContent {
+    scene: vello::Scene,
+    dirty: bool,
 }
 
 /// Uniforms for raster layer compositing. The shader samples the layer
@@ -635,6 +658,15 @@ pub struct Compositor {
     /// resource, exactly like `void_registry`'s pipelines.
     filter_pipeline_registry: crate::gpu::filter::FilterPipelineRegistry,
 
+    /// Per-filter-layer GPU state for *parametric* filters (curves, …). The
+    /// stored `Vec<ParamValue>` is the change-detection fingerprint — when a
+    /// layer's params differ from it, the effect rebuilds its resources (the
+    /// LUT) into the paired [`EffectCache`] during the pre-compose ensure phase
+    /// (`sync_projection_states`). Compose then merely binds the cache. Entries
+    /// for removed filter layers are pruned there too. Parameter-free filters
+    /// (invert) never populate this — their `ensure` is a no-op.
+    filter_caches: HashMap<LayerId, (Vec<ParamValue>, crate::gpu::effect::EffectCache)>,
+
     // --- Floating Content Transform ---
     pub(super) transform_pass: crate::gpu::transform::TransformPass,
 
@@ -680,6 +712,16 @@ pub struct Compositor {
     // --- Content Bounds (GPU compute) ---
     content_bounds: ContentBoundsPass,
 
+    // --- Histogram (GPU compute) ---
+    histogram: HistogramPass,
+    /// The filter layer whose input histogram is being computed (the Levels
+    /// editor's selected filter), or `None` when no histogram is wanted.
+    histogram_target: Option<LayerId>,
+    /// A node whose *own* texture is histogrammed on demand (the destructive
+    /// Levels modal, which has no filter arm to bin). Pumped by
+    /// [`pump_node_histogram`](Self::pump_node_histogram), not the compose walk.
+    node_histogram_target: Option<LayerId>,
+
     // --- Frame Scheduler ---
     /// Monotonic frame counter, incremented on each rAF tick.
     /// Systems fire when `frame_count % divisor == 0`.
@@ -692,6 +734,15 @@ pub struct Compositor {
     /// drained before returning, so the only retained allocation is the
     /// `Vec` capacity itself.
     dirty_procedural_scratch: Vec<LayerId>,
+
+    /// One Vello renderer shared by every vector layer, created lazily on the
+    /// first vector-layer realization so projects with none never pay its
+    /// shader-compile cost.
+    vector_renderer: Option<crate::gpu::vector_renderer::VectorRenderer>,
+    /// Per-vector-layer realization input (the `vello::Scene` + dirty flag).
+    /// Keyed by layer id; entries are created by [`Self::ensure_vector_layer`]
+    /// and removed alongside the layer's other GPU resources on dispose.
+    vector_scenes: HashMap<LayerId, VectorContent>,
 }
 
 impl Compositor {
@@ -1095,6 +1146,7 @@ impl Compositor {
         let rescale_pass = crate::gpu::rescale::RescalePass::new(device);
         let ortho_pass = crate::gpu::ortho_transform::OrthoTransformPass::new(device);
         let content_bounds = ContentBoundsPass::new(device);
+        let histogram = HistogramPass::new(device);
 
         Compositor {
             group_state,
@@ -1128,12 +1180,16 @@ impl Compositor {
             veil_chain,
             void_registry: VoidRegistry::new(),
             filter_pipeline_registry: crate::gpu::filter::FilterPipelineRegistry::new(),
+            filter_caches: HashMap::new(),
             transform_pass,
             rescale_pass,
             ortho_pass,
             isolated_node: None,
             selection_state: None,
             content_bounds,
+            histogram,
+            histogram_target: None,
+            node_histogram_target: None,
             tool_overlay,
             cached_view_transform: identity,
             viewport_bg: DEFAULT_WORKSPACE_BG,
@@ -1141,6 +1197,8 @@ impl Compositor {
             frame_count: 0,
             last_wall_time: 0.0,
             dirty_procedural_scratch: Vec::new(),
+            vector_renderer: None,
+            vector_scenes: HashMap::new(),
         }
     }
 
@@ -1495,14 +1553,21 @@ impl Compositor {
         }
     }
 
-    /// Run a `MaskedFilterPipeline` over a node's `region` in place — the
-    /// destructive-filter counterpart of
+    /// Run a [`FilterEffect`](crate::gpu::filter::FilterEffect) over a node's
+    /// `region` in place — the destructive-filter counterpart of
     /// [`flip_node_region`](Self::flip_node_region), riding the same copy-out →
     /// pass → copy-back plumbing (`run_filter_region`). Where `mask_view` (a
     /// region-sized R8) is selected the texel takes the filtered value,
-    /// elsewhere it passes through; `None` filters the whole region. Node-
-    /// generic — the pipeline's format dispatch handles RGBA8 layers and R8
+    /// elsewhere it passes through; `None` filters the whole region.
+    ///
+    /// `params` drive the effect: a throwaway [`EffectCache`] is built here via
+    /// `ensure(params, …)` and handed to `render`, so parametric filters
+    /// (curves, levels, hsv) bake their LUT/uniform exactly as the filter-layer
+    /// compose path does — parameter-free filters (invert) leave the cache empty.
+    /// Node-generic: the pipeline's format dispatch handles RGBA8 layers and R8
     /// masks alike, so masks invert for free.
+    ///
+    /// [`EffectCache`]: crate::gpu::effect::EffectCache
     pub fn filter_node_region(
         &mut self,
         device: &wgpu::Device,
@@ -1511,8 +1576,13 @@ impl Compositor {
         node_id: LayerId,
         region: CanvasRect,
         mask_view: Option<&wgpu::TextureView>,
-        pipeline: &crate::gpu::effect::MaskedFilterPipeline,
+        pipeline: &dyn crate::gpu::filter::FilterEffect,
+        params: &[crate::gpu::params::ParamValue],
     ) {
+        // Build the param-derived resources once, up front — never in the pass
+        // closure (`ensure` is the pre-compose sync phase's job elsewhere).
+        let mut cache = crate::gpu::effect::EffectCache::empty();
+        pipeline.ensure(device, queue, params, &mut cache);
         let ran = run_filter_region(
             &self.node_textures,
             device,
@@ -1522,13 +1592,118 @@ impl Compositor {
             region,
             mask_view,
             |dev, _q, enc, src, mask, out, _w, _h, fmt| {
-                pipeline.render(dev, enc, src, mask, out, fmt)
+                pipeline.render(dev, enc, src, mask, out, fmt, &cache)
             },
         );
         if ran {
             self.mark_node_pixels_dirty(node_id);
             self.mark_dirty();
         }
+    }
+
+    /// Copy a node's `region` (canvas coords) into a fresh region-sized texture —
+    /// the pristine "before" for a live filter preview. Returns the snapshot and
+    /// the clipped region actually captured, or `None` if the node has no texture
+    /// or the region doesn't overlap it.
+    pub fn snapshot_node_region(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        node_id: LayerId,
+        region: CanvasRect,
+    ) -> Option<(wgpu::Texture, CanvasRect)> {
+        let tex = self.node_textures.get(&node_id)?;
+        let extent = tex.canvas_extent();
+        let region = extent.intersect(region)?;
+        if region.width == 0 || region.height == 0 {
+            return None;
+        }
+        let snap = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("filter-preview-snapshot"),
+            size: wgpu::Extent3d {
+                width: region.width,
+                height: region.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: tex.format(),
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let lx = (region.origin.x - extent.origin.x) as u32;
+        let ly = (region.origin.y - extent.origin.y) as u32;
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("filter-preview-save"),
+        });
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: tex.texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: lx, y: ly, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &snap,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: region.width,
+                height: region.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(Some(encoder.finish()));
+        Some((snap, region))
+    }
+
+    /// Copy a previously [snapshotted](Self::snapshot_node_region) region back
+    /// into the node — undo a live preview so a fresh set of params (or a
+    /// cancel) starts from the pristine pixels.
+    pub fn restore_node_region(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        node_id: LayerId,
+        region: CanvasRect,
+        snapshot: &wgpu::Texture,
+    ) {
+        {
+            let Some(tex) = self.node_textures.get(&node_id) else {
+                return;
+            };
+            let extent = tex.canvas_extent();
+            let lx = (region.origin.x - extent.origin.x) as u32;
+            let ly = (region.origin.y - extent.origin.y) as u32;
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("filter-preview-restore"),
+            });
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: snapshot,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: tex.texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: lx, y: ly, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: region.width,
+                    height: region.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            queue.submit(Some(encoder.finish()));
+        }
+        self.mark_node_pixels_dirty(node_id);
+        self.mark_dirty();
     }
 
     /// Ensure a non-passthrough group has GPU state allocated.
@@ -1747,6 +1922,10 @@ impl Compositor {
     /// invariant is "if your signature carries a LayerId, you mark it".
     pub fn mark_node_pixels_dirty(&mut self, node_id: LayerId) {
         self.dirty_node_pixels.insert(node_id);
+        // Cached histograms are keyed off a filter's *input* pixels — only an
+        // actual pixel write can change them. Filter param edits (a Levels drag)
+        // call `mark_dirty` but not this, so the histogram stays put mid-drag.
+        self.histogram.invalidate_all();
         self.mark_dirty();
     }
 
@@ -1812,6 +1991,84 @@ impl Compositor {
     /// True if a content bounds computation is in flight for a specific layer.
     pub fn is_content_bounds_pending(&self, layer_id: LayerId) -> bool {
         self.content_bounds.is_pending(layer_id)
+    }
+
+    // --- Histogram (GPU compute) ---
+
+    /// Select the filter layer whose input histogram is computed each compose
+    /// (the Levels editor's target), or `None` to stop computing. Forces a
+    /// recomposite so the histogram dispatches for the new target.
+    pub fn set_histogram_target(&mut self, target: Option<LayerId>) {
+        if self.histogram_target != target {
+            if let Some(prev) = self.histogram_target {
+                self.histogram.remove_layer(prev);
+            }
+            self.histogram_target = target;
+            self.mark_dirty();
+        }
+    }
+
+    /// Select a node whose *own* texture is histogrammed (the destructive
+    /// Levels modal's backdrop — there is no filter arm in the tree to bin its
+    /// input), or `None` to stop. Unlike [`set_histogram_target`], the binning is
+    /// pumped directly off the node texture by [`pump_node_histogram`], not the
+    /// compose walk.
+    ///
+    /// [`set_histogram_target`]: Self::set_histogram_target
+    /// [`pump_node_histogram`]: Self::pump_node_histogram
+    pub fn set_node_histogram_target(&mut self, target: Option<LayerId>) {
+        if self.node_histogram_target != target {
+            if let Some(prev) = self.node_histogram_target {
+                self.histogram.remove_layer(prev);
+            }
+            self.node_histogram_target = target;
+        }
+    }
+
+    /// Dispatch a histogram over the target node's own RGBA8 texture if one is
+    /// selected and none is cached/pending. Self-contained (records + submits its
+    /// own encoder), so it runs independently of the compose gating; `needs`
+    /// guards re-dispatch, making a per-frame call cheap. The result lands in the
+    /// same cache [`histogram`](Self::histogram) reads.
+    pub fn pump_node_histogram(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let Some(id) = self.node_histogram_target else {
+            return;
+        };
+        if !self.histogram.needs(id) {
+            return;
+        }
+        let Some(tex) = self.node_textures.get(&id) else {
+            return;
+        };
+        // A per-channel colour histogram only makes sense for RGBA8 layers.
+        if tex.format() != wgpu::TextureFormat::Rgba8Unorm {
+            return;
+        }
+        let extent = tex.canvas_extent();
+        let view = tex
+            .texture()
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("node-histogram"),
+        });
+        self.histogram
+            .dispatch(device, &mut encoder, &view, extent.width, extent.height, id);
+        queue.submit(Some(encoder.finish()));
+    }
+
+    /// The cached 8×256 histogram (channel-major) for a layer, if available.
+    pub fn histogram(&self, layer_id: LayerId) -> Option<&[u32]> {
+        self.histogram.get(layer_id)
+    }
+
+    /// Poll pending histogram computations. Call once per frame.
+    pub fn poll_histogram(&mut self, device: &wgpu::Device) -> Vec<LayerId> {
+        self.histogram.poll(device)
+    }
+
+    /// True if any histogram computation is in flight.
+    pub fn has_pending_histogram(&self) -> bool {
+        self.histogram.has_pending()
     }
 
     // --- Paint Target Accessors ---
@@ -2132,6 +2389,8 @@ impl Compositor {
         self.blend_bind_groups
             .retain(|(parent, child, _), _| *parent != node_id && *child != node_id);
         self.layer_cache.remove(&node_id);
+        // Drop any vector-layer realization input; no-op for other kinds.
+        self.vector_scenes.remove(&node_id);
         // A deleted host's projection is released immediately; a deleted mask
         // is caught by the next `sync_projection_states` stale sweep.
         self.projection_states.remove(&node_id);
@@ -2253,6 +2512,118 @@ impl Compositor {
             },
         );
         self.mark_dirty();
+    }
+
+    /// Allocate the per-instance GPU state for a new vector-object layer:
+    /// a canvas-sized `Rgba8Unorm` + `STORAGE_BINDING` texture (Vello renders
+    /// into it as a storage image) and a [`LayerCache`] with blend uniforms.
+    ///
+    /// Unlike a void, a vector layer carries no procedural sidecar — its
+    /// `LayerContent` is `Raster` so the void animation/dirty machinery skips
+    /// it. The realization is driven separately: the engine builds a
+    /// `vello::Scene` from the document objects and pushes it via
+    /// [`Self::set_vector_scene`], and [`Self::realize_dirty_vector_layers`]
+    /// rasterizes dirty scenes before each composite. Idempotent.
+    pub fn ensure_vector_layer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layer_id: LayerId,
+    ) {
+        if self.layer_cache.contains_key(&layer_id) {
+            return;
+        }
+        let bounds = self.canvas_rect();
+        let layer_tex = LayerTexture::with_bounds_storage(device, bounds);
+
+        let normal = crate::gpu::blend_mode::registry().default().gpu_value;
+        let uniforms = BlendUniforms {
+            opacity: 1.0,
+            blend_mode: normal,
+            isolated: 0,
+            _pad1: 0.0,
+            layer_offset: [bounds.origin.x as f32, bounds.origin.y as f32],
+            layer_size: [bounds.width as f32, bounds.height as f32],
+        };
+        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(&format!("blend-uniforms-{layer_id:?}")),
+            size: std::mem::size_of::<BlendUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+
+        self.node_textures.insert(layer_id, layer_tex);
+        self.layer_cache.insert(
+            layer_id,
+            LayerCache {
+                uniform_buf,
+                opacity: 1.0,
+                blend_mode: normal,
+                isolated: false,
+                content: LayerContent::Raster,
+            },
+        );
+        // Empty scene, dirty so the first composite produces a fresh texture.
+        self.vector_scenes.insert(
+            layer_id,
+            VectorContent {
+                scene: vello::Scene::new(),
+                dirty: true,
+            },
+        );
+        self.mark_dirty();
+    }
+
+    /// Replace the realized `vello::Scene` for a vector layer and mark it dirty
+    /// so the next composite re-rasterizes. The engine builds the scene from
+    /// the document's authoritative objects (text shaped by parley, paths from
+    /// kurbo) — the compositor stays ignorant of fonts and geometry. No-op if
+    /// the layer wasn't ensured.
+    pub fn set_vector_scene(&mut self, layer_id: LayerId, scene: vello::Scene) {
+        if let Some(vc) = self.vector_scenes.get_mut(&layer_id) {
+            vc.scene = scene;
+            vc.dirty = true;
+            self.mark_dirty();
+        }
+    }
+
+    /// Rasterize every dirty vector layer's scene into its storage texture.
+    /// Runs before the composite pass (in `render_offscreen`) so the blend
+    /// walk samples up-to-date pixels. Lazily constructs the shared
+    /// [`VectorRenderer`] on first use. Vello submits its own command buffer
+    /// per layer; those submits are ordered before the compositor's, so GPU
+    /// ordering is preserved.
+    fn realize_dirty_vector_layers(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let dirty: Vec<LayerId> = self
+            .vector_scenes
+            .iter()
+            .filter_map(|(id, vc)| vc.dirty.then_some(*id))
+            .collect();
+        if dirty.is_empty() {
+            return;
+        }
+        let renderer = self
+            .vector_renderer
+            .get_or_insert_with(|| crate::gpu::vector_renderer::VectorRenderer::new(device));
+        for id in dirty {
+            let Some(tex) = self.node_textures.get(&id) else {
+                continue;
+            };
+            let extent = tex.layer_extent();
+            let Some(vc) = self.vector_scenes.get_mut(&id) else {
+                continue;
+            };
+            renderer.render(
+                device,
+                queue,
+                &vc.scene,
+                tex.view(),
+                extent.width,
+                extent.height,
+            );
+            vc.dirty = false;
+        }
     }
 
     /// Update a void's procedural inputs in place. The void mutates its
@@ -2630,6 +3001,13 @@ impl Compositor {
         &self.group_state[&self.root_id].composite_cache
     }
 
+    /// View over [`Self::composited_texture`] — lets callers wrap the
+    /// root composite in a `GpuPaintTarget` (e.g. the sample-merged clone
+    /// snapshot) without creating a fresh view per use.
+    pub fn composited_view(&self) -> &wgpu::TextureView {
+        &self.group_state[&self.root_id].composite_cache_view
+    }
+
     pub fn accum_format(&self) -> wgpu::TextureFormat {
         wgpu::TextureFormat::Rgba8Unorm
     }
@@ -2890,6 +3268,11 @@ impl Compositor {
         }
 
         let scissor = (0, 0, self.canvas_width, self.canvas_height);
+
+        // Rasterize any dirty vector-layer scenes (Vello submits its own
+        // command buffer) before building the composite encoder, so the blend
+        // walk below samples up-to-date pixels.
+        self.realize_dirty_vector_layers(device, queue);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("composite"),
@@ -3462,6 +3845,38 @@ impl Compositor {
             let pms = &self.mask_snapshot_state[&host_id];
             queue.write_buffer(&pms.uniform_buf, 0, bytemuck::bytes_of(&lu));
         }
+
+        // Build/refresh parametric-filter GPU resources (the curves LUT). This
+        // is the one place with both `device` and `queue`; the compose walk that
+        // follows only *binds* the cache. Walk every filter layer — the loops
+        // above (`layer_cache.keys()`, `masked_in_place_hosts()`) miss an
+        // unmasked filter layer. Rebuild only when the param fingerprint changes,
+        // and prune caches for filter layers that no longer exist.
+        let filters: Vec<(LayerId, String, Vec<ParamValue>)> = doc
+            .all_filter_layers()
+            .iter()
+            .map(|f| (f.id, f.pipeline.clone(), f.params.clone()))
+            .collect();
+        let live: HashSet<LayerId> = filters.iter().map(|(id, ..)| *id).collect();
+        self.filter_caches.retain(|id, _| live.contains(id));
+        for (id, pipeline_id, params) in filters {
+            let unchanged = self
+                .filter_caches
+                .get(&id)
+                .is_some_and(|(stored, _)| *stored == params);
+            if unchanged {
+                continue;
+            }
+            let Some(effect) = self.filter_pipeline_registry.pipeline(&pipeline_id, device) else {
+                continue;
+            };
+            let entry = self
+                .filter_caches
+                .entry(id)
+                .or_insert_with(|| (Vec::new(), crate::gpu::effect::EffectCache::empty()));
+            effect.ensure(device, queue, &params, &mut entry.1);
+            entry.0 = params;
+        }
     }
 
     /// De-fused leaf-mask compose: host content → projection, mask modulates
@@ -3840,8 +4255,35 @@ impl Compositor {
             (src, dst)
         };
 
+        // Bin the filter's *input* (the composite of everything below it, in
+        // `src`) into the per-channel histogram when this is the target filter.
+        // `src` is only valid mid-composite, so this records into the compose
+        // encoder rather than a self-submitted one. Disjoint field borrows keep
+        // `group_state` and `histogram` independent.
+        if self.histogram_target == Some(filter.id) && self.histogram.needs(filter.id) {
+            if let Some(gs) = self.group_state.get(&parent_group) {
+                let view = &gs.accum.views[src];
+                let tex = &gs.accum.textures[src];
+                let (w, h) = (tex.width(), tex.height());
+                self.histogram
+                    .dispatch(device, encoder, view, w, h, filter.id);
+            }
+        }
+
         {
             let gs = &self.group_state[&parent_group];
+            // The LUT (for parametric filters) is built in `sync_projection_states`
+            // before this walk, keyed by `filter.id`. Parameter-free filters have
+            // an empty cache; an absent entry (should not happen post-sync) falls
+            // back to a transient empty one.
+            let empty;
+            let cache = match self.filter_caches.get(&filter.id) {
+                Some((_, c)) => c,
+                None => {
+                    empty = crate::gpu::effect::EffectCache::empty();
+                    &empty
+                }
+            };
             pipeline.render(
                 device,
                 encoder,
@@ -3849,6 +4291,7 @@ impl Compositor {
                 None,
                 &gs.accum.views[dst],
                 wgpu::TextureFormat::Rgba8Unorm,
+                cache,
             );
         }
 

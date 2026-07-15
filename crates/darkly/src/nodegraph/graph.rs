@@ -31,6 +31,7 @@ pub struct Connection {
 
 /// Direction of data flow through a port.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum PortDir {
     Input,
     Output,
@@ -43,6 +44,7 @@ pub enum PortDir {
 /// Int) can round-trip through them.  Non-numeric types (Bool, Color)
 /// ignore this field.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum UnitType {
     /// Identity — display and internal are both raw values (shown as `0.50`).
     #[default]
@@ -91,6 +93,8 @@ impl UnitType {
 /// Schema for a single port on a node type.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound = "")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(concrete(W = crate::brush::wire::BrushWireType), bound = "W: ts_rs::TS"))]
 pub struct PortDef<W: WireKind> {
     pub name: String,
     pub dir: PortDir,

@@ -239,16 +239,23 @@ pub trait Void: std::fmt::Debug {
     }
 }
 
-/// How a void's per-frame external image is captured on the browser side.
-/// Carried on [`VoidRegistration`] and surfaced to the frontend (serialized as
-/// `"camera"` / `"display"`) so the app knows which `MediaDevices` API to call
-/// for each void kind — `getUserMedia` for [`Self::Camera`], `getDisplayMedia`
-/// for [`Self::Display`]. Purely procedural voids (noise) declare `None`.
+/// How the frontend acquires a void's per-frame external image. Carried on
+/// [`VoidRegistration`] and surfaced to the frontend (serialized as `"camera"` /
+/// `"display"` / `"stream"`) so the app knows how to source each void kind's
+/// frames — `getUserMedia` for [`Self::Camera`], `getDisplayMedia` for
+/// [`Self::Display`], and an HTTP frame stream for [`Self::Stream`] (the Blender
+/// void connects to a localhost server serving length-prefixed WebP frames).
+/// Purely procedural voids (noise) declare `None`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum CaptureKind {
     Camera,
     Display,
+    /// Frames pulled from an HTTP stream the frontend `fetch`es (see the
+    /// `blender` void). The stream URL is a document-persisted `url` param the
+    /// frontend reads; the Rust void treats it like any browser-supplied frame.
+    Stream,
 }
 
 /// What each void module returns from its `register()` function.

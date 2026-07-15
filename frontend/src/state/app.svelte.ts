@@ -1,10 +1,15 @@
 import type { Engine, EngineState } from '../engine/protocol';
+import type { JsonValue } from '../engine/protocol_gen';
 import type { SaveBundle } from '../storage/saveDocument';
 import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry } from '../tools/registry';
 import { pollPick } from '../tools/color_pick_sync';
+import { beginToolSession, killToolSession, runHook } from '../tools/tool_session';
 import { tickColorPickerCursor } from '../tools/colorpicker_cursor';
-import { MediaStreamSource, describeMediaError, type CaptureKind } from '../lib/mediaStreamSource';
+import { tickCloneSourceCursor } from '../tools/clone_source_cursor';
+import { MediaStreamSource, describeMediaError } from '../lib/mediaStreamSource';
+import { HttpStreamSource } from '../lib/httpStreamSource';
+import type { FrameSource, CaptureKind } from '../lib/frameSource';
 
 export interface Color {
     r: number; g: number; b: number; a: number;
@@ -147,7 +152,7 @@ export class DarklyInstance {
      *  at startup. Drives the dynamic, auto-discovered Colors-menu actions in
      *  `registerActions` — a new filter in the Rust core surfaces a menu
      *  entry with zero frontend edits. */
-    filterTypes = $state<Array<{ type: string; displayName: string }>>([]);
+    filterTypes = $state<Array<{ type: string; displayName: string; params?: unknown[] }>>([]);
 
     toolDisplayName(id: string): string {
         return this.toolDisplayNames[id] ?? id;
@@ -167,6 +172,11 @@ export class DarklyInstance {
     layerKindDisplayName(id: string): string {
         return this.layerKindDisplayNames[id] ?? id;
     }
+    /** Display label for a filter `type_id` (e.g. `"curves"` → `"Curves"`),
+     *  resolved from the `filterTypes` registry list. */
+    filterDisplayName(id: string): string {
+        return this.filterTypes.find((f) => f.type === id)?.displayName ?? id;
+    }
 
     /** Populate every registry-backed display-name map from the Rust core in
      *  one pass. Called once during editor init, before action registration
@@ -181,13 +191,13 @@ export class DarklyInstance {
             return m;
         };
         const [tools, veils, voids, blends, modifiers, layerKinds, filters] = await Promise.all([
-            engine.send('tool_types'),
-            engine.send('veil_types'),
-            engine.send('void_types'),
-            engine.send('blend_mode_types'),
-            engine.send('modifier_types'),
-            engine.send('layer_kind_types'),
-            engine.send('filter_types'),
+            engine.api.toolTypes(),
+            engine.api.veilTypes(),
+            engine.api.voidTypes(),
+            engine.api.blendModeTypes(),
+            engine.api.modifierTypes(),
+            engine.api.layerKindTypes(),
+            engine.api.filterTypes(),
         ]);
         this.toolDisplayNames = buildMap(tools);
         this.veilDisplayNames = buildMap(veils);
@@ -216,14 +226,14 @@ export class DarklyInstance {
         const engine = this.engine;
         if (!engine) return;
         const { visible, ...params } = options;
-        engine.post('add_veil', { veil_type: type, params });
+        engine.api.addVeil({ veil_type: type, params: params as JsonValue });
         if (visible === false) {
             // `veil_list` returns highest-index first, so the just-added veil
             // sits at index 0 of the array. The list send is enqueued after the
             // add above, so FIFO ordering guarantees it sees the new veil.
-            const list = (await engine.send('veil_list')) as Array<{ index: number }>;
+            const list = (await engine.api.veilList()) as Array<{ index: number }>;
             const added = list[0];
-            if (added) engine.post('set_veil_visible', { index: added.index, visible: false });
+            if (added) engine.api.setVeilVisible({ index: added.index, visible: false });
         }
         await this.refreshVeilList();
         this.requestFrame();
@@ -313,6 +323,12 @@ export class DarklyInstance {
     // Tool cursor — when non-null, overrides nav cursor on the canvas element.
     toolCursor = $state<string | null>(null);
 
+    // Transform-mode context menu: viewport coords where the user right-clicked
+    // inside the active transform gizmo, or null when closed. The transform
+    // tool sets it; `TransformModeMenu` renders against it (mirrors how
+    // `toolCursor` flows tool → reactive UI).
+    transformModeMenu = $state<{ x: number; y: number } | null>(null);
+
     // Canvas element reference, set by CanvasView on mount. Tools that
     // are activated outside the canvas's pointer event flow (e.g. paste
     // actions that auto-enter transform mode) read this to build a
@@ -328,7 +344,7 @@ export class DarklyInstance {
         // nothing if the new layer is hidden by isolation). Selecting the
         // same isolated node is a no-op.
         if (this.isolatedNodeId !== null && id !== this.isolatedNodeId) {
-            this.engine?.post('set_isolated_node', { id: 0 });
+            this.engine?.api.setIsolatedNode({ id: null });
             this.isolatedNodeId = null;
             this.requestFrame();
         }
@@ -391,7 +407,7 @@ export class DarklyInstance {
             return;
         }
         if (this.isolatedNodeId !== null) {
-            this.engine?.post('set_isolated_node', { id: 0 });
+            this.engine?.api.setIsolatedNode({ id: null });
             this.isolatedNodeId = null;
             this.requestFrame();
         }
@@ -455,7 +471,7 @@ export class DarklyInstance {
      *  so this code path stays write-only on `layerTree` — reading it here
      *  would tie the LayerPanel's `$effect` to the very state the method
      *  just wrote, looping Svelte's update guard. Same pattern as
-     *  `reconcileMediaStreamSources(next)`. */
+     *  `reconcileStreamSources(next)`. */
     private pruneSelectionAgainstTree(tree: any[]) {
         const alive = new Set<number>();
         const visibleOrder: number[] = [];
@@ -505,30 +521,31 @@ export class DarklyInstance {
         this.activeVeilIndex = null;
     }
 
-    /** Active MediaStream-backed void inputs (camera + screenshare), keyed by
-     *  the void layer's id. Each entry holds a `<video>` element, a live
-     *  `MediaStream`, and per-frame upload logic. `refreshLayerTree` reaps
-     *  entries whose layer no longer exists (covers undo / explicit delete /
-     *  document close). Reactive `$state` so the properties panel re-renders
-     *  when an entry's `error` string changes. */
-    mediaStreamSources = $state<Map<number, MediaStreamSource>>(new Map());
+    /** Active external-frame void inputs, keyed by the void layer's id. Each
+     *  entry is a `FrameSource` — a `MediaStreamSource` (camera / screenshare)
+     *  or an `HttpStreamSource` (Blender feed) — owning its per-frame upload
+     *  logic. `refreshLayerTree` reaps entries whose layer no longer exists
+     *  (covers undo / explicit delete / document close). Reactive `$state` so
+     *  the properties panel re-renders when an entry's `error` string changes. */
+    streamSources = $state<Map<number, FrameSource>>(new Map());
 
     /** Set of stream-backed void layer IDs the user has explicitly authorized
      *  for this session. The picker adds the id when a new layer is created;
-     *  the "Resume" button in VoidProperties adds it for layers loaded from a
-     *  `.darkly` (or after an external stop). Reopening a document does NOT add
-     *  to this set, so the saved last frame is shown until the user opts back
-     *  in — no surprise permission prompt or capture indicator. Session-only:
-     *  never persisted, cleared on document open / page reload. */
-    mediaStreamSessionStarted = $state<Set<number>>(new Set());
+     *  the "Connect"/"Resume" button in VoidProperties adds it for layers loaded
+     *  from a `.darkly` (or after an external stop / disconnect). Reopening a
+     *  document does NOT add to this set, so the saved last frame is shown until
+     *  the user opts back in — no surprise permission prompt or capture
+     *  indicator. Session-only: never persisted, cleared on document open /
+     *  page reload. */
+    streamSessionStarted = $state<Set<number>>(new Set());
 
     /** Mark a stream-backed void as explicitly user-started for this session.
      *  Idempotent. Triggers a layer-tree refresh so the reconciler picks the
-     *  new state up (drives `showResume` in VoidProperties). The actual stream
-     *  is started by the gesture via `startMediaStreamVoid`, not here. */
-    markMediaStreamVoidStarted(layerId: number) {
-        if (this.mediaStreamSessionStarted.has(layerId)) return;
-        this.mediaStreamSessionStarted = new Set(this.mediaStreamSessionStarted).add(layerId);
+     *  new state up (drives `showResume` in VoidProperties). The actual source
+     *  is started by the gesture via `startStreamSource`, not here. */
+    markStreamVoidStarted(layerId: number) {
+        if (this.streamSessionStarted.has(layerId)) return;
+        this.streamSessionStarted = new Set(this.streamSessionStarted).add(layerId);
         this.refreshLayerTree();
     }
 
@@ -544,23 +561,56 @@ export class DarklyInstance {
         return navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     }
 
-    /** Start (or adopt) a MediaStream for a stream-backed void. The reconciler
-     *  no longer starts sources — only gestures do (the picker and the Resume
-     *  button), which keeps every start inside a user activation regardless of
-     *  capture kind. The picker, which has already `await`ed `add_void`, passes
-     *  its in-gesture pre-acquired `stream` (or `acquireError` if the user
-     *  cancelled); Resume passes neither and acquires in-gesture here.
-     *  Idempotent. */
-    async startMediaStreamVoid(
+    /** Start a frame source for a stream-backed void, dispatching on capture
+     *  kind. `camera` / `display` build a `MediaStreamSource` and adopt (or
+     *  acquire) a `MediaStream` — the reconciler no longer starts these; only
+     *  gestures do (the picker and the Resume button), which keeps every start
+     *  inside a user activation. The picker, which has already `await`ed
+     *  `add_void`, passes its in-gesture pre-acquired `stream` (or `acquireError`
+     *  if the user cancelled); Resume passes neither and acquires in-gesture
+     *  here. `stream` voids (Blender) build an `HttpStreamSource` and connect to
+     *  the layer's `url` param immediately — no gesture or permission needed for
+     *  a localhost HTTP stream. Idempotent. */
+    async startStreamSource(
         layerId: number,
         captureKind: CaptureKind,
         stream?: MediaStream,
         acquireError?: unknown,
     ) {
         if (!this.engine) return;
-        if (this.mediaStreamSources.has(layerId)) return;
-        const src = new MediaStreamSource(layerId, this.engine, captureKind, (id) =>
-            this.onMediaStreamEnded(id),
+        // A live healthy source wins — repeat gestures are no-ops. A dead one
+        // (`ended`) or one whose acquisition failed (`error` set but never
+        // ended, e.g. a denied permission prompt) yields to the retry.
+        const existing = this.streamSources.get(layerId);
+        if (existing && !existing.ended && !existing.error) return;
+        existing?.stop();
+
+        // Both callbacks reassign the map so Svelte sees a new identity —
+        // field mutation on a class instance inside a `$state` Map is
+        // invisible to reactivity.
+        const onEnded = (id: number) => this.onStreamSourceEnded(id);
+        const onStatusChange = () => {
+            this.streamSources = new Map(this.streamSources);
+        };
+
+        if (captureKind === 'stream') {
+            const src = new HttpStreamSource(layerId, this.engine, onEnded, onStatusChange);
+            src.setMaxSourceDimension(Math.max(this.docW, this.docH));
+            this.streamSources = new Map(this.streamSources).set(layerId, src);
+            // Connect to the void's configured endpoint (defaults to the add-on's
+            // localhost URL). No gesture/permission gate for a localhost stream.
+            void src.start(this.streamVoidUrl(layerId));
+            this.streamSources = new Map(this.streamSources);
+            this.requestFrame();
+            return;
+        }
+
+        const src = new MediaStreamSource(
+            layerId,
+            this.engine,
+            captureKind,
+            onEnded,
+            onStatusChange,
         );
         // Cap uploads to the document resolution up front so the very first
         // frame is already downscaled (the reconciler keeps it current after
@@ -569,56 +619,91 @@ export class DarklyInstance {
         // Register immediately so the properties panel can surface error/Resume
         // state even if acquisition failed. Reassign the Map so Svelte sees a
         // new identity (in-place Map mutation isn't reactive in Svelte 5).
-        this.mediaStreamSources = new Map(this.mediaStreamSources).set(layerId, src);
+        this.streamSources = new Map(this.streamSources).set(layerId, src);
+        // Acquisition failure drops the session opt-in like an external end
+        // does, so the error notice AND the Resume affordance both show.
         if (acquireError !== undefined) {
-            src.error = describeMediaError(acquireError, captureKind);
+            src.markFailed(describeMediaError(acquireError, captureKind));
+            this.clearStreamSessionStarted(layerId);
         } else {
             try {
                 const s = stream ?? (await this.acquireMediaStream(captureKind));
                 await src.start(s);
             } catch (err) {
-                src.error = describeMediaError(err, captureKind);
+                src.markFailed(describeMediaError(err, captureKind));
+                this.clearStreamSessionStarted(layerId);
             }
         }
         // Force a redraw — `error` may have just been set, and we want a frame
         // so the void either starts presenting frames or the notice appears.
-        this.mediaStreamSources = new Map(this.mediaStreamSources);
+        this.streamSources = new Map(this.streamSources);
         this.requestFrame();
     }
 
-    /** Stop and unregister a stream-backed void's MediaStream. Called by the
+    /** Current `url` param value for a `stream` void, or the empty string if the
+     *  layer / param can't be found (the source then reports a connect error).
+     *  Read from the layer tree, where void params live post-reconcile. */
+    private streamVoidUrl(layerId: number): string {
+        const findUrl = (nodes: any[]): string | null => {
+            for (const n of nodes) {
+                if (n?.id === layerId && n?.type === 'void') {
+                    const p = (n.params ?? []).find((q: any) => q?.name === 'url');
+                    const v = p?.value ?? p?.default;
+                    return typeof v === 'string' ? v : null;
+                }
+                if (Array.isArray(n?.children)) {
+                    const hit = findUrl(n.children);
+                    if (hit !== null) return hit;
+                }
+            }
+            return null;
+        };
+        return findUrl(this.layerTree) ?? '';
+    }
+
+    /** Stop and unregister a stream-backed void's frame source. Called by the
      *  delete action and by `refreshLayerTree` for orphaned entries. */
-    stopMediaStreamVoid(layerId: number) {
-        const src = this.mediaStreamSources.get(layerId);
+    stopStreamSource(layerId: number) {
+        const src = this.streamSources.get(layerId);
         if (!src) return;
         src.stop();
-        const next = new Map(this.mediaStreamSources);
+        const next = new Map(this.streamSources);
         next.delete(layerId);
-        this.mediaStreamSources = next;
+        this.streamSources = next;
     }
 
-    /** React to a stream ending *externally* (the browser's "Stop sharing" bar,
-     *  a webcam unplug). Tear the source down and drop the session opt-in so
-     *  VoidProperties shows "Resume" again. */
-    private onMediaStreamEnded(layerId: number) {
-        this.stopMediaStreamVoid(layerId);
-        if (this.mediaStreamSessionStarted.has(layerId)) {
-            const next = new Set(this.mediaStreamSessionStarted);
-            next.delete(layerId);
-            this.mediaStreamSessionStarted = next;
-        }
+    /** React to a source ending *externally* (the browser's "Stop sharing" bar,
+     *  a webcam unplug, or a Blender stream disconnect). Stop the source but
+     *  keep it registered — the dead entry is the record of its own demise,
+     *  feeding the error notice and status row in VoidProperties (pruning here
+     *  would vanish the error before it could render). Drop the session opt-in
+     *  so "Connect"/"Resume" shows again; the next start replaces the corpse.
+     *  Pruning stays with `stopStreamSource` (delete / undo / orphan paths). */
+    private onStreamSourceEnded(layerId: number) {
+        this.streamSources.get(layerId)?.stop();
+        this.streamSources = new Map(this.streamSources);
+        this.clearStreamSessionStarted(layerId);
         this.requestFrame();
+    }
+
+    /** Drop a layer's session opt-in (external end or failed acquisition), so
+     *  VoidProperties re-shows the "Connect"/"Resume" affordance. */
+    private clearStreamSessionStarted(layerId: number) {
+        if (!this.streamSessionStarted.has(layerId)) return;
+        const next = new Set(this.streamSessionStarted);
+        next.delete(layerId);
+        this.streamSessionStarted = next;
     }
 
     /** Surface a stream source's current state to the properties panel.
      *  Returns null when there's no source registered for the id (i.e. the
      *  layer isn't a stream-backed void or the source hasn't been created
      *  yet). */
-    mediaStreamSourceFor(layerId: number): MediaStreamSource | null {
-        return this.mediaStreamSources.get(layerId) ?? null;
+    streamSourceFor(layerId: number): FrameSource | null {
+        return this.streamSources.get(layerId) ?? null;
     }
 
-    /** Reconcile the live `mediaStreamSources` map against the latest layer
+    /** Reconcile the live `streamSources` map against the latest layer
      *  tree. Responsibilities: tear down sources whose void was deleted /
      *  undone, push the latest `freeze` + `frame_divisor` + effective-visibility
      *  into each live source, and prune the session-opt-in set. It does NOT
@@ -634,10 +719,10 @@ export class DarklyInstance {
      *  the caller — `refreshLayerTree` — doesn't accidentally read the same
      *  reactive store it's about to write, which would loop Svelte's
      *  infinite-update guard. */
-    private reconcileMediaStreamSources(tree: any[]) {
+    private reconcileStreamSources(tree: any[]) {
         const desired = new Map<
             number,
-            { frozen: boolean; frameDivisor: number; visible: boolean }
+            { frozen: boolean; frameDivisor: number; visible: boolean; url: string | null }
         >();
         // Thread `parentVisible` through the walk: a stream void is effectively
         // visible only if every ancestor up to the root is visible, matching
@@ -670,7 +755,18 @@ export class DarklyInstance {
                               ? divisorParam.default
                               : 4;
                     const frameDivisor = Math.max(1, Math.floor(rawDivisor));
-                    desired.set(n.id, { frozen, frameDivisor, visible: effectiveVisible });
+                    // `url` only exists on `stream` voids (Blender); the
+                    // reconciler pushes it into the `HttpStreamSource` so an edit
+                    // in the properties panel reconnects. Absent for camera /
+                    // screenshare, where it stays null and is never applied.
+                    const urlParam = params.find((p) => p?.name === 'url');
+                    const url =
+                        typeof urlParam?.value === 'string'
+                            ? urlParam.value
+                            : typeof urlParam?.default === 'string'
+                              ? urlParam.default
+                              : null;
+                    desired.set(n.id, { frozen, frameDivisor, visible: effectiveVisible, url });
                 }
                 if (Array.isArray(n?.children)) walk(n.children, effectiveVisible);
             }
@@ -680,9 +776,9 @@ export class DarklyInstance {
         // Tear down sources only for layers that actually disappeared (deleted
         // / undone). Freezing is handled by `setFrozen` below — it must keep
         // the stream open.
-        for (const id of [...this.mediaStreamSources.keys()]) {
+        for (const id of [...this.streamSources.keys()]) {
             if (!desired.has(id)) {
-                this.stopMediaStreamVoid(id);
+                this.stopStreamSource(id);
             }
         }
 
@@ -690,33 +786,37 @@ export class DarklyInstance {
         // upload resolution cap into every live source. Freeze suppresses
         // uploads (holding the last GPU frame) without closing the stream;
         // slider / eye-toggle / parent-hide / canvas-resize changes take effect
-        // on the next rAF.
+        // on the next rAF. For `stream` voids, a changed `url` reconnects the
+        // `HttpStreamSource` (a no-op when unchanged).
         const maxSourceDimension = Math.max(this.docW, this.docH);
-        for (const [id, { frozen, frameDivisor, visible }] of desired) {
-            const src = this.mediaStreamSources.get(id);
+        for (const [id, { frozen, frameDivisor, visible, url }] of desired) {
+            const src = this.streamSources.get(id);
             if (!src) continue;
             src.setFrozen(frozen);
             src.setFrameDivisor(frameDivisor);
             src.setVisible(visible);
             src.setMaxSourceDimension(maxSourceDimension);
+            if (url !== null && src instanceof HttpStreamSource) {
+                src.setUrl(url);
+            }
         }
 
         // Drop session-started ids whose layer is gone so a future undo that
         // re-adds a different layer at the same id doesn't carry a stale opt-in.
         let pruned: Set<number> | null = null;
-        for (const id of this.mediaStreamSessionStarted) {
+        for (const id of this.streamSessionStarted) {
             if (!desired.has(id)) {
-                pruned ??= new Set(this.mediaStreamSessionStarted);
+                pruned ??= new Set(this.streamSessionStarted);
                 pruned.delete(id);
             }
         }
-        if (pruned) this.mediaStreamSessionStarted = pruned;
+        if (pruned) this.streamSessionStarted = pruned;
     }
 
     /** Remove a veil and keep `activeVeilIndex` consistent with the new list. */
     removeVeil(index: number) {
         if (!this.engine) return;
-        this.engine.post('remove_veil', { index });
+        this.engine.api.removeVeil({ index });
         if (this.activeVeilIndex === index) {
             this.activeVeilIndex = null;
         } else if (this.activeVeilIndex !== null && this.activeVeilIndex > index) {
@@ -729,7 +829,7 @@ export class DarklyInstance {
     /** Reorder a veil and adjust `activeVeilIndex` so the selection follows the move. */
     moveVeil(from: number, to: number) {
         if (!this.engine || from === to) return;
-        this.engine.post('move_veil', { from, to });
+        this.engine.api.moveVeil({ from, to });
         const a = this.activeVeilIndex;
         if (a !== null) {
             if (a === from) {
@@ -762,7 +862,7 @@ export class DarklyInstance {
      *  window. Returns the `[ox, oy, w, h]` rect for callers that need it. */
     async syncCanvasRect(): Promise<[number, number, number, number] | null> {
         if (!this.engine) return null;
-        const r = (await this.engine.send('canvas_rect')) as {
+        const r = (await this.engine.api.canvasRect()) as {
             origin_x: number;
             origin_y: number;
             width: number;
@@ -777,7 +877,7 @@ export class DarklyInstance {
 
     async refreshLayerTree(): Promise<void> {
         if (!this.engine) return;
-        const parsed = await this.engine.send('layer_tree');
+        const parsed = await this.engine.api.layerTree();
         const next: any[] = Array.isArray(parsed) ? parsed : [];
         // Stream-backed voids (camera / screenshare) own a MediaStream +
         // <video>; reconcile the live set against the new tree so deleted /
@@ -786,7 +886,7 @@ export class DarklyInstance {
         // assignment so this method only *writes* `layerTree` (never reads it),
         // keeping it out of any enclosing effect's dependency set — otherwise
         // the write loops back through it.
-        this.reconcileMediaStreamSources(next);
+        this.reconcileStreamSources(next);
         this.pruneSelectionAgainstTree(next);
         this.layerTree = next;
         // Schedule a render frame: callers invoke this after layer mutations
@@ -799,7 +899,7 @@ export class DarklyInstance {
 
     async refreshVeilList(): Promise<void> {
         if (!this.engine) return;
-        const list = await this.engine.send('veil_list');
+        const list = await this.engine.api.veilList();
         this.veilList = Array.isArray(list) ? list : [];
     }
 
@@ -873,6 +973,50 @@ export class DarklyInstance {
         return !this.pointerActive && this._interactionCount === 0;
     }
 
+    /** Zoom that frames the (possibly rotated) document inside the viewport.
+     *  The rotated axis-aligned bounding box is what must fit, so a tilted
+     *  canvas never clips its corners. `allowUpscale` lets a document smaller
+     *  than the viewport enlarge past 1:1 to fill it (Fit to Screen); the
+     *  default caps at 1:1, so Reset View never blows up a tiny document. */
+    fitZoom(allowUpscale = false): number {
+        const cos = Math.abs(Math.cos(this.rotation));
+        const sin = Math.abs(Math.sin(this.rotation));
+        const boxW = this.docW * cos + this.docH * sin;
+        const boxH = this.docW * sin + this.docH * cos;
+        const fit = Math.min(this.viewportW / boxW, this.viewportH / boxH);
+        return allowUpscale ? fit : Math.min(fit, 1);
+    }
+
+    /** Reset rotation/mirror/pan and zoom-to-fit (Krita "Reset Display"). pan=0
+     *  restores the document's default on-open framing. */
+    resetView() {
+        this.panX = 0;
+        this.panY = 0;
+        this.rotation = 0;
+        this.mirrorH = false;
+        this.zoom = this.fitZoom();
+        this.requestFrame();
+    }
+
+    /** Frame the document in the viewport: zoom-to-fit (enlarging a document
+     *  smaller than the viewport past 1:1 to fill it) and recenter, preserving
+     *  the current rotation and mirror. The orientation-agnostic counterpart to
+     *  {@link resetView} — GIMP "Fit Image in Window". */
+    fitToScreen() {
+        this.panX = 0;
+        this.panY = 0;
+        this.zoom = this.fitZoom(true);
+        this.requestFrame();
+    }
+
+    /** Recenter the canvas in the viewport, leaving zoom, rotation, and mirror
+     *  untouched — GIMP "Center Image in Window". */
+    centerView() {
+        this.panX = 0;
+        this.panY = 0;
+        this.requestFrame();
+    }
+
     /** Schedule a render frame if one isn't already pending. */
     requestFrame() {
         if (this._framePending) return;
@@ -881,9 +1025,10 @@ export class DarklyInstance {
             this._framePending = false;
             const engine = this.engine;
             if (!engine) return;
-            // Push the latest webcam / screenshare frames into their void
-            // input textures BEFORE render — render reads from those textures
-            // during composite, so a later upload would lag by a frame.
+            // Push the latest external frames (webcam / screenshare / Blender
+            // stream) into their void input textures BEFORE render — render
+            // reads from those textures during composite, so a later upload
+            // would lag by a frame.
             //
             // The frame count we pass to `tick` is the value the compositor's
             // master counter *will* hold once render increments it (inside
@@ -895,7 +1040,7 @@ export class DarklyInstance {
             // can't read `frame_count` directly anymore — it would be a third
             // competing engine borrow; render returns it on the state mirror.)
             const nextFrameCount = (this.engineState?.frameCount ?? 0) + 1;
-            for (const src of this.mediaStreamSources.values()) {
+            for (const src of this.streamSources.values()) {
                 src.tick(nextFrameCount);
             }
 
@@ -914,8 +1059,10 @@ export class DarklyInstance {
             // changes) and document bools.
             if (frame.state) this.engineState = frame.state;
 
-            // Per-frame tool hook — async state sync (e.g. GPU readback completion).
-            toolRegistry.get(this.activeToolId)?.onFrame?.();
+            // Per-frame tool hook — async state sync (e.g. GPU readback
+            // completion). Wrapped so a hook whose engine op was cancelled by a
+            // session change mid-await settles cleanly (see tool_session.ts).
+            void runHook(toolRegistry.get(this.activeToolId)?.onFrame?.());
 
             // Global color-pick poll — drives both the color-picker tool and
             // the modifier-held `sampleColor` chord. Runs regardless of active
@@ -926,9 +1073,14 @@ export class DarklyInstance {
             // committed by `pollPick`. Cheap when nothing changed.
             tickColorPickerCursor();
 
+            // Refresh the clone set-source cursor — re-queries "needs source"
+            // on brush change and shows/hides the crosshair. Cheap when
+            // nothing changed (memo guards).
+            tickCloneSourceCursor();
+
             // Check for completed async copy/cut readback.
             if (this._copyCallback) {
-                engine.send('poll_copy_result').then((result) => {
+                engine.api.pollCopyResult().then((result) => {
                     if (result && this._copyCallback) {
                         const cb = this._copyCallback;
                         this._copyCallback = null;
@@ -940,7 +1092,7 @@ export class DarklyInstance {
             // Check for completed async export readback.
             if (this._exportCallback) {
                 engine
-                    .send<{ width: number; height: number; bytes: Uint8Array }>('poll_export_result')
+                    .api.pollExportResult()
                     .then((result) => {
                         if (result && this._exportCallback) {
                             const cb = this._exportCallback;
@@ -954,7 +1106,7 @@ export class DarklyInstance {
             // byte blobs arrive concatenated in `bytes`; slice them back out
             // into the per-blob shape `saveDocument.ts` expects.
             if (this._saveCallback) {
-                engine.send<PackedSaveResult>('poll_save_result').then((packed) => {
+                engine.api.pollSaveResult().then((packed) => {
                     if (!packed || !this._saveCallback) return;
                     const cb = this._saveCallback;
                     this._saveCallback = null;
@@ -995,6 +1147,17 @@ let activeInstance = $state<DarklyInstance | null>(null);
  *  `app.<x>` (because the proxy's getter reads the `$state` `activeInstance`,
  *  threading the dependency through). */
 export function setActiveInstance(inst: DarklyInstance | null) {
+    // Rebind the tool session to the newly-focused instance. This kills the
+    // outgoing session (any tool op parked on an await now rejects on resume
+    // instead of landing on the wrong tab) and starts a fresh one over the new
+    // tab's engine — necessary because every tab's `<CanvasView>` stays mounted
+    // across a focus switch, so the tool/layer effects that normally begin a
+    // session don't re-fire. When the new instance has no engine yet (the
+    // single-instance boot call, before `initEditor` sets it), leave the session
+    // severed; the tool effect begins it once the engine is ready.
+    // See tool_session.ts.
+    if (inst?.engine) beginToolSession(inst.engine);
+    else killToolSession();
     activeInstance = inst;
 }
 

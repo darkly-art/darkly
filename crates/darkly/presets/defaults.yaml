@@ -109,8 +109,8 @@ settings:
   animation.veil_divisor: 2
   animation.overlay_divisor: 4
   animation.void_divisor: 2
-  # Rendering.
-  rendering.veil_scale: 1.0
+  # Rendering - default scale = sqrt(.5) = 0.7071 = roughly half the processing power compared to 1.0
+  rendering.veil_scale: 0.7071
   # Display.
   display.pixelFilter: auto
   # Navigation.
@@ -118,6 +118,10 @@ settings:
   hotkeys.nav.trigger: Space
   hotkeys.nav.rotate: Shift
   hotkeys.nav.zoom: Ctrl
+  # Krita: Discrete Rotate = Alt (DISCRETE_ANGLE_STEP 15°); cardinal detent
+  # (45° within ±2°) is Krita's hardwired free-rotation snap, toggleable here.
+  hotkeys.nav.rotateSnap: Alt
+  nav.rotateDetent: true
   # UI.
   ui.theme: dark
   ui.brushBuilder.previewVisible: true

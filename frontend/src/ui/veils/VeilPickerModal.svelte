@@ -19,7 +19,7 @@
         if (!engine) return;
         (async () => {
             try {
-                const list = await engine.send('veil_types');
+                const list = await engine.api.veilTypes();
                 veilTypes = Array.isArray(list) ? list : [];
             } catch {
                 veilTypes = [];

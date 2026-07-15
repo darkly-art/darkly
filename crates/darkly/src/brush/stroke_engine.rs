@@ -70,6 +70,23 @@ pub struct StrokeEngine {
     /// Stroke seed for deterministic per-dab randomness.  Passed to
     /// the runner so random nodes can generate independent sequences.
     stroke_seed: u32,
+
+    /// Clone set-source anchor (plane / canvas pixels), or `None` for a
+    /// non-clone brush. Combined with `clone_dest_anchor` into the
+    /// runner's [`CloneState`] each dab so the `clone_source` node's
+    /// anchor uniforms are seeded.
+    clone_source_anchor: Option<[f32; 2]>,
+    /// Destination anchor — the position of the stroke's first rendered
+    /// dab. Captured lazily in `place_dab` (the stabilizer offsets the
+    /// first dab, so raw engine input is wrong); reset on full re-render.
+    clone_dest_anchor: Option<[f32; 2]>,
+    /// Plane-space frame of the clone source snapshot, refreshed by the
+    /// engine every pen event via [`Self::set_clone_source_frame`] (the
+    /// frozen cross-layer / merged snapshot's rect when one exists, else
+    /// the paint target's current extent so same-layer clone tracks
+    /// mid-stroke layer growth). Stroke-stable: NOT cleared by
+    /// [`Self::reset_render_state`] — divergence rewind reuses it.
+    clone_source_frame: Option<crate::coord::CanvasRect>,
 }
 
 impl StrokeEngine {
@@ -83,6 +100,7 @@ impl StrokeEngine {
         color: [f32; 4],
         spacing: SpacingConfig,
         stabilizer: Box<dyn StabilizerAlgorithm>,
+        clone_source_anchor: Option<[f32; 2]>,
     ) -> Self {
         let stroke_seed = web_time::SystemTime::now()
             .duration_since(web_time::SystemTime::UNIX_EPOCH)
@@ -103,7 +121,17 @@ impl StrokeEngine {
             last_dab_pos: None,
             dab_count: 0,
             stroke_seed,
+            clone_source_anchor,
+            clone_dest_anchor: None,
+            clone_source_frame: None,
         }
+    }
+
+    /// Set the clone source snapshot's plane-space frame for the current
+    /// stroke. Called by the engine every pen event, before rendering —
+    /// see the field doc for what the frame is.
+    pub fn set_clone_source_frame(&mut self, frame: crate::coord::CanvasRect) {
+        self.clone_source_frame = Some(frame);
     }
 
     /// Default dab diameter for initial spacing (before the first dab is evaluated).
@@ -169,6 +197,9 @@ impl StrokeEngine {
         self.last_dab_size = [d, d];
         self.last_dab_pos = None;
         self.dab_count = 0;
+        // Recapture the destination anchor from the re-stabilized first
+        // dab on the next `place_dab`.
+        self.clone_dest_anchor = None;
         self.save_points.clear();
     }
 
@@ -346,6 +377,35 @@ impl StrokeEngine {
         // Interpolators leave it zero (they have no view of dab order); we
         // fill it here so smudge sees the correct smear-sample offset.
         dab_info.motion = self.next_dab_motion(dab_info.pos);
+
+        // Clone uniforms: capture the destination at the first rendered
+        // dab (post-stabilization), then seed the runner's CloneState so
+        // the `clone_source` node's uniforms carry the anchors and the
+        // source frame. No-op for non-clone brushes (`clone_source_anchor`
+        // is `None`).
+        if let Some(source_anchor) = self.clone_source_anchor {
+            let dest_anchor = *self.clone_dest_anchor.get_or_insert(dab_info.pos);
+            // The engine refreshes the frame every pen event before any
+            // dab is placed; the fallback identity frame only guards a
+            // driver that forgot to (and would sample garbage UVs anyway).
+            debug_assert!(
+                self.clone_source_frame.is_some(),
+                "clone stroke rendered without set_clone_source_frame"
+            );
+            let (source_offset, source_size) = match self.clone_source_frame {
+                Some(f) => (
+                    [f.x0() as f32, f.y0() as f32],
+                    [f.width as f32, f.height as f32],
+                ),
+                None => ([0.0, 0.0], [1.0, 1.0]),
+            };
+            self.runner.set_clone_state(Some(super::eval::CloneState {
+                source_anchor,
+                dest_anchor,
+                source_offset,
+                source_size,
+            }));
+        }
 
         self.runner.clear_slots();
         self.runner.seed_sensors(

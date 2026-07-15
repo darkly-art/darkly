@@ -1,7 +1,7 @@
 import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
-import type { RequestKind } from './protocol_gen';
+import { makeApi, type EngineApi, type RequestKind, type Transport } from './protocol_gen';
 
-export type { RequestKind };
+export type { RequestKind, EngineApi };
 
 /** A protocol-level rejection envelope (`{ kind, message }`) thrown when a
  *  request can't be routed or decoded, or when a handler surfaces a domain
@@ -16,6 +16,20 @@ export interface EngineError {
 export function reportEngineError(e: unknown): void {
     const err = e as Partial<EngineError> | undefined;
     console.error('[engine] request failed:', err?.kind ?? 'error', err?.message ?? e);
+}
+
+/** The request surface of the engine: `send` (awaited) and `post`
+ *  (fire-and-forget). Both {@link Engine} and the tool-session wrapper
+ *  `SessionEngine` (`tools/tool_session.ts`) satisfy this shape. Helpers that
+ *  only issue requests should accept this rather than the concrete `Engine`, so
+ *  a session-scoped caller can hand in its cancellation-aware wrapper without a
+ *  type mismatch. */
+/** The minimal typed-request contract a tool/consumer needs: the generated
+ *  per-kind {@link EngineApi}. Both the real {@link Engine} and a
+ *  cancellation-scoped `SessionEngine` satisfy it, so consumers stay ignorant
+ *  of which one drives them. */
+export interface EngineRequests {
+    readonly api: EngineApi;
 }
 
 interface Pending {
@@ -75,16 +89,31 @@ export class Engine {
     private drainScheduled = false;
     private readonly channel: MessageChannel;
 
+    /** The typed, per-kind request surface — the only public request API.
+     *  Generated from the engine's method signatures (`protocol_gen.ts`);
+     *  closes over this transport's private request/postFF hop. */
+    readonly api: EngineApi;
+
+    /** The private request/postFF hop, surfaced so a session wrapper can layer
+     *  cancellation over the same transport (see `SessionEngine`). */
+    readonly transport: Transport;
+
     constructor(handle: DarklyHandle) {
         this.handle = handle;
         this.channel = new MessageChannel();
         this.channel.port1.onmessage = () => this.runScheduledDrain();
+        this.transport = {
+            request: (kind, payload, bytes) => this.#request(kind, payload ?? {}, bytes),
+            postFF: (kind, payload, bytes) => this.#postFF(kind, payload ?? {}, bytes),
+        };
+        this.api = makeApi(this.transport);
     }
 
     /** Awaited path — resolves with the response value (a binary response
      *  resolves with the JSON value plus a `bytes: Uint8Array` field). Rejects
-     *  with an {@link EngineError} on protocol/handler failure. */
-    send<T = any>(kind: RequestKind, payload: object = {}, bytes?: Uint8Array): Promise<T> {
+     *  with an {@link EngineError} on protocol/handler failure. Private: the
+     *  only public request surface is the typed {@link api}. */
+    #request<T = any>(kind: RequestKind, payload: object = {}, bytes?: Uint8Array): Promise<T> {
         const id = this.nextId++;
         const promise = new Promise<T>((resolve, reject) => {
             this.pending.set(id, { resolve, reject });
@@ -97,9 +126,9 @@ export class Engine {
     /** Fire-and-forget path — for pointer-frequency mutations. Routes rejections
      *  to {@link reportEngineError} instead of a bare `void`, so a failed
      *  enqueue is logged rather than silently dropped. Submission order is
-     *  preserved regardless of `post`/`send` interleaving (single FIFO). */
-    post(kind: RequestKind, payload: object = {}, bytes?: Uint8Array): void {
-        this.send(kind, payload, bytes).catch(reportEngineError);
+     *  preserved regardless of `postFF`/`request` interleaving (single FIFO). */
+    #postFF(kind: RequestKind, payload: object = {}, bytes?: Uint8Array): void {
+        this.#request(kind, payload, bytes).catch(reportEngineError);
     }
 
     /** Render a frame. Drains the FIFO under render's borrow, resolves those

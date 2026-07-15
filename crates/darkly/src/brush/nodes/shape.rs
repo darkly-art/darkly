@@ -102,6 +102,20 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description(
                     "Spin the shape around its centre. Wire a changing signal into Rotation Input instead if you want it to move as you draw.",
                 ),
+            // Anisotropy is universal across every algorithm — it squashes the
+            // whole silhouette into an ellipse, the basis of a calligraphic nib.
+            PortDef::input("aspect", BrushWireType::Scalar)
+                .with_range(0.1, 1.0, 1.0)
+                .with_natural_range(0.1, 1.0)
+                .with_label("Aspect")
+                .with_unit(UnitType::Percent)
+                .with_icon("fa6-solid:pen-nib")
+                // Squash is part of shape identity, like rotation; the dab
+                // thumbnail should show the ellipse.
+                .persist_in_thumbnail()
+                .with_description(
+                    "Squash the tip into an ellipse: 100% = round, lower = thinner. Rotates with the shape — set Rotation for a fixed-angle calligraphy nib.",
+                ),
             PortDef::input("persistence", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
                 .with_natural_range(0.0, 1.0)
@@ -156,6 +170,7 @@ pub fn register() -> BrushNodeRegistration {
         is_gpu: true,
         is_terminal: false,
         supports_erase: true,
+        preview_fallback_icon: None,
         },
     }
 }
@@ -213,6 +228,7 @@ impl BrushNodeEvaluator for ShapeEvaluator {
         let n1 = cctx.input("n1").as_f32();
         let n2 = cctx.input("n2").as_f32();
         let n3 = cctx.input("n3").as_f32();
+        let aspect = cctx.input("aspect").as_f32();
         let softness = cctx.input("softness").as_f32();
 
         // Emit the shape evaluation as an inline block inside
@@ -247,6 +263,7 @@ impl BrushNodeEvaluator for ShapeEvaluator {
              \x20       max(({n1}), 0.05),\n\
              \x20       max(({n2}), 0.05),\n\
              \x20       max(({n3}), 0.05),\n\
+             \x20       max(({aspect}), 0.01),\n\
              \x20   );\n\
              \x20   let {shape_ident}_r_at: f32 = shape_r_theta({params_ident}, theta);\n\
              \x20   let {shape_ident}_band: f32 = max(clamp(({softness}), 0.0, 1.0), 0.004);\n\
@@ -270,7 +287,7 @@ impl BrushNodeEvaluator for ShapeEvaluator {
             Some(crate::gpu::params::ParamValue::Int(v)) => (*v as u32).min(2),
             _ => 0,
         };
-        let factor = match algorithm {
+        let base = match algorithm {
             // r(θ) = 1 + A·sin(...) for sine, and 1 + A·(2·fbm - 1)
             // for perlin (fbm ∈ [0, 1] → swing in [-1, 1]) — both
             // peak at 1 + amplitude_max.
@@ -294,6 +311,14 @@ impl BrushNodeEvaluator for ShapeEvaluator {
             }
             _ => 1.0,
         };
-        ExtentContribution::Multiply(factor)
+        // Anisotropy is a multiplicative ellipse factor in `shape_r_theta`
+        // peaking at `max(1/aspect, aspect)` (the long semi-axis). The dab
+        // bbox is a circle, so the silhouette's worst-case radius grows by
+        // that peak. Smaller `aspect` ⇒ a longer nib ⇒ a bigger bbox, so the
+        // worst case uses the *minimum* aspect a wire can deliver.
+        let aspect_min = ctx.port_min_value("aspect").max(0.01);
+        let aspect_max = ctx.port_max_value("aspect").max(0.01);
+        let aniso_max = (1.0 / aspect_min).max(aspect_max).max(1.0);
+        ExtentContribution::Multiply(base * aniso_max)
     }
 }

@@ -47,7 +47,7 @@ export function getNodeThumbnail(nodeId: number): string {
     if (fetchedEpoch.get(nodeId) !== epoch) {
         fetchedEpoch.set(nodeId, epoch);
         engine
-            .send<{ bytes: Uint8Array }>('node_thumbnail', {
+            .api.nodeThumbnail({
                 node_id: nodeId,
                 width: THUMB_SIZE,
                 height: THUMB_SIZE,

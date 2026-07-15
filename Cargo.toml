@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/darkly",
+    "crates/darkly-macros",
     "frontend/wasm",
 ]
 default-members = [
@@ -14,14 +15,32 @@ license = "AGPL-3.0-or-later"
 [workspace.dependencies]
 # Local crates
 darkly = { path = "crates/darkly" }
+darkly-macros = { path = "crates/darkly-macros" }
+
+# Proc-macro toolchain (the `#[handlers]` engine-bridge macro + build.rs scan)
+syn = { version = "2", features = ["full", "visit"] }
+quote = "1"
+proc-macro2 = "1"
 
 # GPU
 wgpu = { version = "29.0", features = ["webgpu"] }
+
+# Vector / text — the Vello family shares one geometry/style vocabulary
+# (kurbo/peniko), so the renderer is a swappable backend behind one data model.
+# vello 0.9 pins wgpu 29.0.3, matching the workspace resolution above; keep the
+# two bumped together (vello's pipelines and our compositor share one device).
+vello = "0.9"
+kurbo = { version = "0.13", features = ["serde"] }
+peniko = { version = "0.6", features = ["serde"] }
+parley = "0.7"
 
 # Data
 bytemuck = { version = "1.13", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# Typed-bridge TS codegen only (the `ts-export` feature on `darkly`); never
+# compiled into the wasm/production build — see that feature's comment.
+ts-rs = { version = "12", features = ["serde-json-impl"] }
 # serde_yaml_ng, not serde_yml: the original `serde_yaml` (dtolnay) is archived,
 # and the `serde_yml` fork is unmaintained — its 0.0.13 release swapped to a
 # `noyalib` backend that can't round-trip integer-keyed maps (`BTreeMap<u64,_>`),
@@ -32,10 +51,14 @@ log = "0.4"
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 png = "0.18"
-quick-xml = "0.40"
+quick-xml = "0.41"
 base64 = "0.22"
 thiserror = "2.0"
-slotmap = { version = "1.0", features = ["serde"] }
+# `serde` feature intentionally off: slotmap's derived key serde encodes the
+# generational key as a `{ idx, version }` struct, but `LayerId` crosses the
+# wire as a single packed `u64` (see its hand-written serde impl in `layer.rs`).
+# The two would conflict, and nothing serializes a `SlotMap` directly.
+slotmap = { version = "1.0" }
 smallvec = "1"
 
 # WASM
@@ -57,8 +80,15 @@ web-time = "1.1.0"
 console_error_panic_hook = "0.1"
 console_log = "1"
 
+# Full DWARF on every statically-linked test binary is what let `target/` balloon
+# to hundreds of GB (each integration test links the whole engine — ~300 MB apiece,
+# and Cargo never GCs stale fingerprints). Line tables keep panics/backtraces useful
+# while cutting each binary well over half; unpacked split-debuginfo keeps the debug
+# data in separate object files out of the linked executables.
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
 
 [profile.release]
 lto = "thin"

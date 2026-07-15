@@ -29,18 +29,18 @@
         min-width: 0;
     }
 
-    /* Center is the only scrollable region. `min-width: 0` is required
-     * for a flex child to be allowed to shrink below its content size —
-     * without it the parent grows and the bar overflows its column
-     * instead of letting this region scroll. */
+    /* When the bar is too narrow to hold every control on one line, the
+     * controls wrap onto additional lines (growing the bar's height)
+     * rather than falling back to a horizontal scrollbar. `min-width: 0`
+     * lets this flex child shrink below its content width so the wrap
+     * point tracks the available space. */
     .center {
         flex: 1;
         min-width: 0;
         display: flex;
         align-items: center;
+        justify-content: flex-start;
+        flex-wrap: wrap;
         gap: 4px;
-        overflow-x: auto;
-        overflow-y: hidden;
-        scrollbar-width: thin;
     }
 </style>

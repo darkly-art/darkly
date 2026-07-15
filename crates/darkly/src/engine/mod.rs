@@ -88,6 +88,22 @@ pub(crate) struct PendingFlip {
 pub(crate) struct PendingFilter {
     pub node_id: LayerId,
     pub filter_type: String,
+    pub params: Vec<crate::gpu::params::ParamValue>,
+}
+
+/// A live destructive-filter preview session (the non-dimming modal). Holds the
+/// pristine "before" pixels of the affected region so each param edit can
+/// restore-then-refilter, and cancel/commit can restore the true original. See
+/// [`DarklyEngine::preview_filter`].
+pub(crate) struct FilterPreview {
+    pub node_id: LayerId,
+    pub filter_type: String,
+    /// The region being previewed (canvas coords), clipped to the node + selection.
+    pub region: crate::coord::CanvasRect,
+    /// Region-sized copy of the node's pristine pixels.
+    pub snapshot: wgpu::Texture,
+    /// Region-sized R8 selection mask, when a selection was active at begin.
+    pub mask: Option<wgpu::Texture>,
 }
 
 /// Deferred copy/cut — waiting for selection CPU cache to be populated.
@@ -317,6 +333,40 @@ impl ThumbnailCache {
     }
 }
 
+/// Logical channel an overlay primitive set belongs to. The engine keeps
+/// one primitive `Vec` per channel ([`DarklyEngine::overlays`]) and merges
+/// them in variant order before pushing to the compositor's single overlay
+/// slot — so the z-order is the declaration order here (`Selection` at the
+/// bottom, `Tool` on top). Channels are replaced wholesale and
+/// independently: a `Tool` update every hover move leaves `CloneSource` and
+/// `Selection` intact. A new channel is purely additive — extend the enum
+/// and `COUNT`/`ALL` follow; the merge never branches per variant.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum OverlayChannel {
+    /// Marching-ants selection outline, regenerated when the selection
+    /// changes. Bottom of the stack.
+    Selection,
+    /// Clone-brush source marker + "pick a source" hint. Persists across
+    /// strokes — only the clone cursor module clears it, decoupled from the
+    /// async dab that clobbers `Tool` every hover move.
+    CloneSource,
+    /// Transient active-tool overlay: the dab preview stamp, tool handles.
+    /// Set / cleared every hover move. Top of the stack.
+    Tool,
+}
+
+impl OverlayChannel {
+    /// Number of channels — the length of [`DarklyEngine::overlays`].
+    pub const COUNT: usize = 3;
+    /// Every channel in z-order (bottom to top). The merge iterates this.
+    pub const ALL: [OverlayChannel; Self::COUNT] = [Self::Selection, Self::CloneSource, Self::Tool];
+
+    /// This channel's index into [`DarklyEngine::overlays`].
+    pub(crate) const fn index(self) -> usize {
+        self as usize
+    }
+}
+
 // ---------------------------------------------------------------------------
 // DarklyEngine — platform-agnostic editor core.
 // ---------------------------------------------------------------------------
@@ -325,6 +375,10 @@ pub struct DarklyEngine {
     pub(crate) doc: Document,
     pub(crate) compositor: Compositor,
     pub(crate) gpu: GpuContext,
+    /// Font collection + parley shaping state, used to realize vector (text)
+    /// layers. Platform-agnostic: bundled fonts now; the platform layer feeds
+    /// OS fonts later through [`crate::text::FontRegistry::register_font`].
+    pub(crate) fonts: crate::text::FontRegistry,
     pub(crate) undo_stack: UndoStack,
     pub(crate) active_stroke_layer: Option<LayerId>,
     /// Session-level "isolate this node" flag. When set, the renderer shows
@@ -340,10 +394,12 @@ pub struct DarklyEngine {
     /// change. `rotation` here is also what the brush stack threads into
     /// `IntrinsicUniforms.view_rotation` for stamp-counteracting-view-rotation.
     pub(crate) view_params: ViewParams,
-    /// Persistent marching ants overlay (regenerated when selection changes).
-    pub(crate) selection_overlay: Vec<OverlayPrimitive>,
-    /// Transient tool overlay (set/cleared by the active tool).
-    pub(crate) tool_overlay: Vec<OverlayPrimitive>,
+    /// Overlay primitives, one `Vec` per [`OverlayChannel`]. Merged in
+    /// channel z-order by `push_merged_overlay` and pushed to the
+    /// compositor's single overlay slot. Keyed rather than a field per
+    /// channel so a new channel is additive (no merge edit) and each
+    /// channel is replaced wholesale independently of the others.
+    pub(crate) overlays: [Vec<OverlayPrimitive>; OverlayChannel::COUNT],
     /// Internal clipboard — holds typed content for copy/paste within Darkly.
     pub(crate) clipboard: Option<Clipboard>,
     /// Active floating content (paste-in-place or interactive transform).
@@ -466,6 +522,24 @@ pub struct DarklyEngine {
     /// Composite blend mode for the current stroke: 0 = paint, 1 = erase.
     pub(crate) brush_blend_mode: u32,
 
+    /// Clone-brush set-source anchor in plane / canvas pixels, or `None`
+    /// until the user sets it via the set-source gesture. Session state:
+    /// persists across strokes and across brush / tool switches (so the
+    /// source survives lifting the pen), but not across reload. A clone
+    /// brush with no anchor set paints nothing (the no-op gate in
+    /// `brush_stroke_to`).
+    pub(crate) clone_source_anchor: Option<crate::coord::CanvasPoint>,
+
+    /// Layer pinned by the clone set-source gesture, or `None` for
+    /// same-layer clone. Session state like the anchor: persists across
+    /// strokes and brush / tool switches, never serialized. Kept across
+    /// layer deletion too — `LayerId` is a generational slotmap key, so a
+    /// stale pin can't alias a new layer, and undoing the deletion
+    /// reinserts the same id (`LayerRemoveAction::undo`), reviving the
+    /// pin. Stroke start validates it: a dead or group id falls back to
+    /// the painted layer.
+    pub(crate) clone_source_layer: Option<LayerId>,
+
     // --- Diff rect (undo region computation) ---
     pub(crate) diff_rect: DiffRectPass,
     pub(crate) pending_undo_commit: Option<PendingUndoCommit>,
@@ -484,6 +558,8 @@ pub struct DarklyEngine {
     pub(crate) pending_flip: Option<PendingFlip>,
     /// Pending destructive filter waiting for the selection CPU cache.
     pub(crate) pending_filter: Option<PendingFilter>,
+    /// Active live destructive-filter preview (the non-dimming modal), if any.
+    pub(crate) filter_preview: Option<FilterPreview>,
     /// Pending copy/cut waiting for selection CPU cache.
     pub(crate) pending_copy: Option<PendingCopy>,
 
@@ -592,13 +668,13 @@ impl DarklyEngine {
             doc,
             compositor,
             gpu,
+            fonts: crate::text::FontRegistry::new(),
             undo_stack,
             active_stroke_layer: None,
             isolated_node: None,
             view_transform: ViewTransform::identity(),
             view_params: ViewParams::default(),
-            selection_overlay: Vec::new(),
-            tool_overlay: Vec::new(),
+            overlays: Default::default(),
             clipboard: None,
             floating: None,
             region_scratch,
@@ -634,12 +710,15 @@ impl DarklyEngine {
             checkpoint_ring: CheckpointRing::new(),
             stabilizer_registry: StabilizerRegistry::new(),
             brush_blend_mode: 0,
+            clone_source_anchor: None,
+            clone_source_layer: None,
             diff_rect,
             pending_undo_commit: None,
             selection_pipelines,
             pending_transform: None,
             pending_flip: None,
             pending_filter: None,
+            filter_preview: None,
             pending_copy: None,
             readbacks: ReadbackScheduler::new(),
             pending_copy_result: None,
@@ -1038,7 +1117,16 @@ impl DarklyEngine {
     /// tracking the selection's plane bounds across a crop.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_selection_overlay(&self) -> Vec<crate::gpu::overlay::OverlayPrimitive> {
-        self.selection_overlay.clone()
+        self.overlays[OverlayChannel::Selection.index()].clone()
+    }
+
+    /// Test-only: the merged overlay primitives for one channel.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_channel_overlay(
+        &self,
+        channel: OverlayChannel,
+    ) -> Vec<crate::gpu::overlay::OverlayPrimitive> {
+        self.overlays[channel.index()].clone()
     }
 
     /// Peek at the cached thumbnail bytes for any node id without queuing a
@@ -1063,6 +1151,75 @@ impl DarklyEngine {
     /// next `begin_stroke` to read the just-finished stroke's count.
     pub fn test_stroke_total_dabs(&self) -> u64 {
         self.brush_perf.dabs_placed as u64
+    }
+
+    /// Blocking readback of the raw stroke-preview **render canvas** for the
+    /// active brush — the buffer *before* `frame_stroke_thumbnail` crops it.
+    /// Returns `(pixels, width, height)`. For test assertions only: lets a
+    /// test confirm the neutralized preview stroke stays clear of the render
+    /// border, i.e. no ink was clipped away before the changed-pixel crop
+    /// ever ran. Renders through the same neutralization + proportional-inset
+    /// path the async `request_stroke_preview_readback` uses.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_render_stroke_preview_canvas(&mut self) -> (Vec<u8>, u32, u32) {
+        let mut graph = self.active_brush_graph();
+        graph.apply_preview_overrides();
+        let (rw, rh) = brush_library::BRUSH_STROKE_RENDER_SIZE;
+        let inset = rw.min(rh) as f32 * brush_library::BRUSH_STROKE_PATH_INSET_FRACTION;
+        let path =
+            crate::brush::preview_renderer::synthesize_stroke_path(rw as f32, rh as f32, 30, inset);
+        self.test_render_preview_canvas(&graph, &path, rw, rh)
+    }
+
+    /// Blocking readback of the raw dab-preview **render canvas** for the
+    /// active brush — the buffer *before* `frame_dab_thumbnail` crops it.
+    /// Returns `(pixels, width, height)`. Same purpose and path as
+    /// [`Self::test_render_stroke_preview_canvas`], for the single-dab preview.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_render_dab_preview_canvas(&mut self) -> (Vec<u8>, u32, u32) {
+        let mut graph = self.active_brush_graph();
+        crate::brush::reset_exposed_scrubs(&mut graph);
+        let (rw, rh) = brush_library::BRUSH_DAB_RENDER_SIZE;
+        let path = crate::brush::preview_renderer::synthesize_dab_path(rw as f32, rh as f32);
+        self.test_render_preview_canvas(&graph, &path, rw, rh)
+    }
+
+    /// Shared body of the two preview-canvas test accessors: render the given
+    /// path with the theme colors into the preview renderer and block-read the
+    /// full render target back as unpadded RGBA8.
+    #[cfg(any(test, feature = "testing"))]
+    fn test_render_preview_canvas(
+        &mut self,
+        graph: &crate::nodegraph::Graph<BrushWireType>,
+        path: &[crate::brush::paint_info::PaintInformation],
+        rw: u32,
+        rh: u32,
+    ) -> (Vec<u8>, u32, u32) {
+        let fg = self.preview_theme_fg;
+        let bg = self.preview_theme_bg;
+        let texture = self
+            .brush_stroke_preview_renderer
+            .render_stroke(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &self.brush_pipelines,
+                graph,
+                path,
+                fg,
+                bg,
+                rw,
+                rh,
+            )
+            .expect("preview render should return a texture");
+        let pixels = crate::gpu::test_utils::readback_texture(
+            &self.gpu.device,
+            &self.gpu.queue,
+            texture,
+            wgpu::TextureFormat::Rgba8Unorm,
+            rw,
+            rh,
+        );
+        (pixels, rw, rh)
     }
 
     // -----------------------------------------------------------------

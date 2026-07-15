@@ -28,12 +28,16 @@ function gitVersion(): string {
     }
 }
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
     // Relative asset paths so the same dist/ works when served from a web root
     // ("/") and when loaded via file:// from a packaged desktop bundle.
     base: './',
     define: {
         __DARKLY_VERSION__: JSON.stringify(gitVersion()),
+        // Deploy flavor: 'app' only for an explicit `vite build --mode app`.
+        // Every other mode (production default, dev server, --mode demo) stays
+        // 'demo', so `npm run dev` keeps the decorative demo experience.
+        __DARKLY_APP_MODE__: JSON.stringify(mode === 'app' ? 'app' : 'demo'),
     },
     plugins: [
         // Regenerates src/icons/bundle.generated.ts from the icon names found in
@@ -75,11 +79,12 @@ export default defineConfig({
                 ],
             },
             workbox: {
-                // The 6.2 MB WASM blob is the whole app — precache it (and the
-                // shell, fonts, icons) so the editor boots fully offline.
+                // The ~12 MB WASM blob is the whole app (now including Vello +
+                // parley + a bundled font for the text tool) — precache it (and
+                // the shell, fonts, icons) so the editor boots fully offline.
                 globPatterns: ['**/*.{js,css,html,wasm,woff2,png,svg}'],
                 // Default cap is ~2 MB, which would silently skip the WASM.
-                maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+                maximumFileSizeToCacheInBytes: 16 * 1024 * 1024,
                 // SPA: serve the precached index.html for navigations. The
                 // relative `base: './'` emits the entry as `index.html`.
                 navigateFallback: 'index.html',
@@ -96,4 +101,4 @@ export default defineConfig({
             allow: ['..'],
         },
     },
-});
+}));

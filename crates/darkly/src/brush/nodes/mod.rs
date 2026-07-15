@@ -2,6 +2,8 @@
 // To add a new module, create a .rs file in this directory
 // that exports `pub fn register() -> crate::brush::BrushNodeRegistration`.
 
+pub mod blur;
+pub mod clone_source;
 pub mod curve;
 pub mod image;
 pub mod levels;
@@ -24,6 +26,8 @@ use crate::brush::BrushNodeRegistration;
 #[rustfmt::skip]
 pub fn registrations() -> Vec<BrushNodeRegistration> {
     vec![
+        blur::register(),
+        clone_source::register(),
         curve::register(),
         image::register(),
         levels::register(),

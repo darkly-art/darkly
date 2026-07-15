@@ -4,6 +4,7 @@ import { config } from '../config/store.svelte';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { copyToSystemClipboard, readImageFromClipboard, readLayerFromClipboard } from '../clipboard';
 import { toolRegistry, type ToolContext } from '../tools/registry';
+import { beginToolSession } from '../tools/tool_session';
 import { screenToCanvas } from '../canvas/coordinates';
 
 /** Switch to the transform tool after a paste so the freshly-floated layer is
@@ -16,8 +17,13 @@ function enterTransformTool() {
     app.activeToolId = 'transform';
     if (wasTransform && app.engine && app.canvasEl) {
         const canvasEl = app.canvasEl;
+        // The CanvasView tool-change effect no-ops on a same-tool switch, so it
+        // won't begin a fresh session for us. Begin one here so transform's
+        // onActivate → activate() runs against a live session and picks up the
+        // just-pasted floating (see tool_session.ts).
+        const engine = beginToolSession(app.engine);
         const ctx: ToolContext = {
-            engine: app.engine,
+            engine,
             canvasEl,
             screenToCanvas: (sx: number, sy: number) => screenToCanvas(sx, sy, canvasEl),
         };
@@ -43,13 +49,13 @@ export function registerClipboardActions(): void {
             // `copy_layer_rich` snapshots metadata up front and then drives
             // the same async pixel readback that `copy` does — it's a
             // superset, so we don't need to call both.
-            engine.post('copy_layer_rich', { id: app.activeLayerId });
+            engine.api.copyLayerRich({ id: app.activeLayerId });
             app.onCopyResult(async (result) => {
                 if (!result?.rgba) return;
                 // The rich JSON lands one frame later, on the same readback
                 // completion path. Polling here is safe because we got the
                 // pixel result; the rich result is set before this callback.
-                const richJson = (await engine.send('poll_copy_rich_result')) ?? undefined;
+                const richJson = (await engine.api.pollCopyRichResult()) ?? undefined;
                 copyToSystemClipboard(result.rgba, result.width, result.height, richJson);
             });
         },
@@ -68,7 +74,7 @@ export function registerClipboardActions(): void {
             // for cut. Cross-tab paste of a cut layer still works (PNG
             // fallback restores the bitmap) but loses blend mode/opacity.
             // Worth a follow-up.
-            await engine.send('cut', { id: app.activeLayerId });
+            await engine.api.cut({ id: app.activeLayerId });
             app.onCopyResult((result) => {
                 if (result?.rgba) {
                     copyToSystemClipboard(result.rgba, result.width, result.height);
@@ -96,7 +102,7 @@ export function registerClipboardActions(): void {
                 const rich = await readLayerFromClipboard();
                 if (rich) {
                     const activeId = app.activeLayerId ?? -1;
-                    const { id: layerId } = await engine.send('paste_layer_rich', { json: rich, active_layer_id: activeId });
+                    const { id: layerId } = await engine.api.pasteLayerRich({ json: rich, active_layer_id: activeId });
                     if (layerId >= 0) {
                         app.selectLayer(layerId);
                         const activateTransform =
@@ -147,17 +153,13 @@ export function registerClipboardActions(): void {
             const activeId = app.activeLayerId ?? -1;
             const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
             if (activateTransform) {
-                const { id: layerId } = await engine.send(
-                    'paste_image_floating',
-                    { width: clip.width, height: clip.height, offset_x: ox, offset_y: oy, active_layer_id: activeId },
+                const { id: layerId } = await engine.api.pasteImageFloating({ width: clip.width, height: clip.height, offset_x: ox, offset_y: oy, active_layer_id: activeId },
                     clip.rgba,
                 );
                 app.selectLayer(layerId);
                 enterTransformTool();
             } else {
-                const { id: layerId } = await engine.send(
-                    'paste_image',
-                    { width: clip.width, height: clip.height, offset_x: ox, offset_y: oy, active_layer_id: activeId },
+                const { id: layerId } = await engine.api.pasteImage({ width: clip.width, height: clip.height, offset_x: ox, offset_y: oy, active_layer_id: activeId },
                     clip.rgba,
                 );
                 app.selectLayer(layerId);
@@ -178,13 +180,13 @@ export function registerClipboardActions(): void {
             if (!engine || app.activeLayerId == null) return;
             const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
             if (activateTransform) {
-                const { ok } = await engine.send('paste_in_place_floating', { id: app.activeLayerId });
+                const ok = await engine.api.pasteInPlaceFloating({ id: app.activeLayerId });
                 if (ok) {
                     enterTransformTool();
                     app.requestFrame();
                 }
             } else {
-                const { id: layerId } = await engine.send('paste_in_place', { active_layer_id: app.activeLayerId });
+                const { id: layerId } = await engine.api.pasteInPlace({ active_layer_id: app.activeLayerId });
                 if (layerId >= 0) {
                     app.selectLayer(layerId);
                     await app.refreshLayerTree();

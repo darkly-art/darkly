@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { withApi } from '../../engine/testApi';
 
 // Mock the app module before importing the tool, so the tool's
 // `import { app } from '../state/app.svelte'` resolves to our fake.
@@ -52,6 +53,9 @@ function reset() {
     engine.post.mockClear();
     clock = 0;
 }
+
+// Give the fake engine a real typed `api` over its send/post spies.
+withApi(engine);
 
 describe('polygonSelectTool', () => {
     beforeEach(reset);

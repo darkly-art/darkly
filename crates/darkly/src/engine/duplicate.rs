@@ -4,15 +4,19 @@
 //! that tombstones every duplicated texture so its GPU resources are released
 //! when the action eventually leaves the undo stack.
 
+use darkly_macros::handlers;
+
 use super::DarklyEngine;
 use crate::document::MoveTarget;
 use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::{CompoundAction, DuplicateAction, UndoAction};
 
+#[handlers]
 impl DarklyEngine {
     /// Duplicate `source_id` and place the copy directly above it in the
     /// same parent. Returns the id of the new top-level node (the duplicated
     /// raster or group). Returns `None` if the source isn't a layer / group.
+    #[handler]
     pub fn duplicate_node(&mut self, source_id: LayerId) -> Option<LayerId> {
         let (new_id, action) = self.duplicate_node_inner(source_id)?;
         self.compositor.mark_dirty();
@@ -26,6 +30,7 @@ impl DarklyEngine {
     /// with it, so a second pass would produce a redundant copy. Cross-
     /// parent selections are supported: each duplicate lands above its own
     /// source, no matter which parent group that source lives in.
+    #[handler]
     pub fn duplicate_nodes(&mut self, ids: Vec<LayerId>) -> Vec<LayerId> {
         let mut filtered: Vec<LayerId> = ids
             .iter()
@@ -271,6 +276,36 @@ impl DarklyEngine {
                 // `layer_cache` entry), so it's skipped.
 
                 // Filter layers can carry mask filters like any other host.
+                self.clone_modifiers(source_id, new_id);
+
+                Some(new_id)
+            }
+            LayerNode::Layer(Layer::Vector(v)) => {
+                // Vector state is fully procedural: copy the object list and
+                // layer transform, then re-realize on the copy. No pixels to
+                // clone — the texture rebuilds from the objects.
+                let objects = v.objects.clone();
+                let transform = v.transform;
+                let new_id = self.doc.add_vector_layer(anchor);
+
+                let new_name = if is_root {
+                    format!("{common_name} copy")
+                } else {
+                    common_name
+                };
+                if let Some(LayerNode::Layer(Layer::Vector(nv))) = self.doc.find_node_mut(new_id) {
+                    nv.common.name = new_name;
+                    nv.common.visible = common_visible;
+                    nv.common.locked = common_locked;
+                    nv.blend.opacity = blend_opacity;
+                    nv.blend.blend_mode = blend_mode_reg;
+                    nv.objects = objects;
+                    nv.transform = transform;
+                }
+                self.sync_vector_layer(new_id);
+                self.refresh_blend_uniforms(new_id);
+
+                // Vector layers can carry mask filters like any other host.
                 self.clone_modifiers(source_id, new_id);
 
                 Some(new_id)

@@ -8,6 +8,7 @@
     import LayerItem from './LayerItem.svelte';
     import LayerGroup from './LayerGroup.svelte';
     import Icon from '../../icons/Icon.svelte';
+    import ContextMenu, { type ContextMenuItem } from '../ContextMenu.svelte';
 
     interface Modifier {
         id: number; kind: string; name: string; visible: boolean; locked: boolean;
@@ -106,7 +107,7 @@
     function toggleCollapsed(e: MouseEvent) {
         e.stopPropagation();
         if (app.engine) {
-            app.engine.post('set_group_collapsed', { id: group.id, collapsed: !group.collapsed });
+            app.engine.api.setGroupCollapsed({ id: group.id, collapsed: !group.collapsed });
             onupdate();
         }
     }
@@ -127,7 +128,7 @@
     function finishRename() {
         editing = false;
         if (app.engine && editInput) {
-            app.engine.post('set_layer_name', { id: group.id, name: editInput.value });
+            app.engine.api.setLayerName({ id: group.id, name: editInput.value });
             onupdate();
         }
     }
@@ -146,8 +147,6 @@
         maskMenuX = e.clientX;
         maskMenuY = e.clientY;
         showMaskMenu = true;
-        const close = () => { showMaskMenu = false; document.removeEventListener('click', close); };
-        requestAnimationFrame(() => document.addEventListener('click', close));
     }
 
     function onLayerContextMenu(e: MouseEvent) {
@@ -162,9 +161,37 @@
         layerMenuX = e.clientX;
         layerMenuY = e.clientY;
         showLayerMenu = true;
-        const close = () => { showLayerMenu = false; document.removeEventListener('click', close); };
-        requestAnimationFrame(() => document.addEventListener('click', close));
     }
+
+    let maskMenuItems = $derived<ContextMenuItem[]>([
+        { label: maskEnabled ? 'Disable mask' : 'Enable mask', onclick: toggleMaskEnabled },
+        { label: isMaskIsolated ? 'Hide mask' : 'Show mask', onclick: toggleShowMask },
+        { label: 'Delete mask', disabled: !editable, onclick: removeMask },
+    ]);
+
+    let layerMenuItems = $derived.by<ContextMenuItem[]>(() => {
+        const items: ContextMenuItem[] = [
+            { label: dupLabel, onclick: menuDuplicate },
+        ];
+        if (!isMulti) {
+            items.push({ label: 'Add mask', disabled: !canAddMask, onclick: menuAddMask });
+        }
+        items.push({
+            label: mergeLabel,
+            disabled: !isMulti && (!canMergeDownForThis || !editable),
+            onclick: menuMerge,
+        });
+        if (!isMulti) {
+            items.push({ label: 'Flatten', disabled: !editable, onclick: menuFlatten });
+        }
+        items.push({ separator: true });
+        items.push({
+            label: deleteLabel,
+            disabled: !isMulti && !editable,
+            onclick: menuDelete,
+        });
+        return items;
+    });
 
     // Structural menu items dispatch WITHOUT `ctx.layerId` — the action
     // handler reads `app.selectedLayerIds` directly. See LayerItem.svelte
@@ -201,23 +228,23 @@
 
     function toggleMaskEnabled() {
         if (app.engine && maskModifier !== null) {
-            app.engine.post('set_layer_visible', { id: maskModifier.id, visible: !maskEnabled });
+            app.engine.api.setLayerVisible({ id: maskModifier.id, visible: !maskEnabled });
             onupdate();
         }
     }
 
     function toggleShowMask() {
         if (app.engine && maskModifier !== null) {
-            const next = isMaskIsolated ? 0 : maskModifier.id;
-            app.engine.post('set_isolated_node', { id: next });
-            app.isolatedNodeId = next === 0 ? null : next;
+            const next = isMaskIsolated ? null : maskModifier.id;
+            app.engine.api.setIsolatedNode({ id: next });
+            app.isolatedNodeId = next;
             onupdate();
         }
     }
 
     function removeMask() {
         if (app.engine) {
-            app.engine.post('remove_mask', { id: group.id });
+            app.engine.api.removeMask({ id: group.id });
             onupdate();
         }
     }
@@ -278,8 +305,8 @@
             : 'into_top';
 
         try {
-            const { skipped } = await engine.send('move_layers', {
-                ids, target_type: where, target_id: group.id,
+            const skipped = await engine.api.moveLayers({
+                ids, target: { target_type: where, target_id: group.id },
             });
             if (skipped > 0) {
                 toast.show('info', `${skipped} locked layer${skipped === 1 ? '' : 's'} skipped`);
@@ -372,38 +399,23 @@
         </button>
     </div>
 
+<!-- Duplicate stays enabled when locked: it reads the source, not mutates it. -->
 {#if showMaskMenu}
-    <div class="mask-menu" style:left="{maskMenuX}px" style:top="{maskMenuY}px">
-        <button onclick={toggleMaskEnabled}>
-            {maskEnabled ? 'Disable mask' : 'Enable mask'}
-        </button>
-        <button onclick={toggleShowMask}>
-            {isMaskIsolated ? 'Hide mask' : 'Show mask'}
-        </button>
-        <button onclick={removeMask} disabled={!editable}>Delete mask</button>
-    </div>
+    <ContextMenu
+        x={maskMenuX}
+        y={maskMenuY}
+        items={maskMenuItems}
+        onclose={() => (showMaskMenu = false)}
+    />
 {/if}
 
 {#if showLayerMenu}
-    <div class="layer-menu" style:left="{layerMenuX}px" style:top="{layerMenuY}px">
-        <!-- Duplicate doesn't mutate the locked node — allowed. -->
-        <button onclick={menuDuplicate}>{dupLabel}</button>
-        {#if !isMulti}
-            <button onclick={menuAddMask} disabled={!canAddMask}>
-                Add mask
-            </button>
-        {/if}
-        <button onclick={menuMerge} disabled={!isMulti && (!canMergeDownForThis || !editable)}>
-            {mergeLabel}
-        </button>
-        {#if !isMulti}
-            <button onclick={menuFlatten} disabled={!editable}>Flatten</button>
-        {/if}
-        <div class="layer-menu-sep"></div>
-        <button onclick={menuDelete} disabled={!isMulti && !editable}>
-            {deleteLabel}
-        </button>
-    </div>
+    <ContextMenu
+        x={layerMenuX}
+        y={layerMenuY}
+        items={layerMenuItems}
+        onclose={() => (showLayerMenu = false)}
+    />
 {/if}
 
     {#if !group.collapsed}
@@ -568,61 +580,4 @@
     }
     .thumb-active { border-color: var(--accent); }
     .mask-disabled { opacity: 0.4; }
-
-    .mask-menu {
-        position: fixed;
-        z-index: 1000;
-        background: var(--bg-active);
-        border: 1px solid var(--bg-hover);
-        border-radius: 6px;
-        padding: 4px 0;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-    }
-    .mask-menu button {
-        display: block;
-        width: 100%;
-        background: none;
-        border: none;
-        color: var(--text);
-        padding: 4px 12px;
-        text-align: left;
-        cursor: pointer;
-        font-size: 12px;
-        white-space: nowrap;
-    }
-    .mask-menu button:hover { background: var(--bg-hover); }
-
-    .layer-menu {
-        position: fixed;
-        z-index: 1000;
-        background: var(--bg-active);
-        border: 1px solid var(--bg-hover);
-        border-radius: 6px;
-        padding: 4px 0;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-        min-width: 160px;
-    }
-    .layer-menu button {
-        display: block;
-        width: 100%;
-        background: none;
-        border: none;
-        color: var(--text);
-        font-size: 12px;
-        padding: 6px 16px;
-        text-align: left;
-        cursor: pointer;
-        white-space: nowrap;
-    }
-    .layer-menu button:hover:not(:disabled) { background: var(--bg-hover); }
-    .layer-menu button:disabled {
-        color: var(--text-dim);
-        cursor: default;
-    }
-
-    .layer-menu-sep {
-        height: 1px;
-        background: var(--bg-hover);
-        margin: 4px 0;
-    }
 </style>

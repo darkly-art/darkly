@@ -6,9 +6,14 @@ import { rebuildClickIndex } from './actions/triggers';
 import { theme } from './state/theme.svelte';
 import { pixelFilter } from './state/pixelFilter.svelte';
 import { DarklyInstance, setActiveInstance, getActiveInstance } from './state/app.svelte';
+import { freshDocument } from './state/freshDocument';
 import { createHandle } from './state/session';
+import { fontLibrary } from './state/font_library.svelte';
 import type { Engine } from './engine/protocol';
+import { setupModifierCursorTracking } from './tools/modifier_cursor';
 import { setupColorPickerModifierTracking } from './tools/colorpicker_cursor';
+import { setupCloneSourceModifierTracking } from './tools/clone_source_cursor';
+import { setupHeldModsTracking } from './actions/held_mods';
 import { autosave } from './state/autosave.svelte';
 import { recovery } from './state/recovery.svelte';
 
@@ -34,10 +39,26 @@ export async function ensureProcessInit(): Promise<void> {
         rebuildClickIndex();
     });
 
-    // Wire global Ctrl/Meta tracking so the color-picker cursor engages
-    // as soon as the user holds the modifier with a paint tool active
-    // (not just on pointerdown). Idempotent.
+    // Own the canonical held-modifier string once, window-level. The
+    // picker + clone set-source cursors subscribe to it (via
+    // `onHeldModsChange`) rather than each tracking modifiers themselves.
+    // Idempotent.
+    setupHeldModsTracking();
+
+    // Shared modifier-cursor machinery: window-level pointer tracking
+    // (pointer-down gate + last on-canvas position) that both engagement
+    // modules below consume. Idempotent.
+    setupModifierCursorTracking();
+
+    // Wire the color-picker cursor so it engages as soon as the held
+    // modifier resolves to `sampleColor` with a paint tool active (not just
+    // on pointerdown). Idempotent.
     setupColorPickerModifierTracking();
+
+    // Same for the Clone brush's set-source cursor — arms the crosshair
+    // while the held modifier resolves to `setCloneSource` with a clone
+    // brush active. Idempotent.
+    setupCloneSourceModifierTracking();
 
     // Autosave + crash recovery. `recovery.init()` registers this browser
     // session (heartbeat + clean-exit handler) and, if a prior session
@@ -51,8 +72,9 @@ export async function ensureProcessInit(): Promise<void> {
 
 /** Options for {@link createInstance}. */
 export interface CreateInstanceOptions {
-    /** Seed a fresh document with a single white background layer (the
-     *  default for "new tab" flows). Done **before** the engine is
+    /** Seed a fresh document with its default background layer (the
+     *  deploy-flavor's {@link freshDocument} initial layer — the demo
+     *  background image or the app's black fill). Done **before** the engine is
      *  published to `instance.engine`, so any `$effect` that watches
      *  `app.engine` sees a fully-bootstrapped engine — no
      *  refresh-after-mutation race for consumers like `LayerPanel`. */
@@ -90,6 +112,11 @@ export async function createInstance(
     // instance self-contained (no shell-level "registry source" coupling).
     await instance.loadRegistries(engine);
 
+    // Replay the personal font library into this fresh handle so its engine's
+    // font collection matches every other tab's before the first frame — the
+    // single chokepoint every new handle passes through.
+    await fontLibrary.registerIntoHandle(engine);
+
     // Action/hotkey registration is process-wide but reads the active
     // instance via the `app` proxy. Calling it here is idempotent.
     registerActions();
@@ -101,7 +128,7 @@ export async function createInstance(
     // plain "Untitled" — without this the first tab-strip read would
     // race the rename.
     if (instance.pendingName !== null) {
-        engine.post('set_document_name', { name: instance.pendingName });
+        engine.api.setDocumentName({ name: instance.pendingName });
         instance.pendingName = null;
     }
 
@@ -111,8 +138,8 @@ export async function createInstance(
     // bg layer — eliminates the "refresh after mutation" race the
     // LayerPanel would otherwise hit.
     if (options.seedBackground) {
-        const { id: bg } = await engine.send('add_raster', { anchor: -1 });
-        engine.post('fill_background', { id: bg });
+        const bg = await engine.api.addRaster({ anchor: null });
+        freshDocument.fillInitialLayer(engine, bg);
         instance.selectLayer(bg);
     }
 
@@ -132,24 +159,15 @@ export async function createInstance(
     return instance;
 }
 
-/** Populate a freshly-booted instance with the default starter content:
- *  the 4 hidden veils new users discover the feature through. Caller
- *  decides when to invoke (skipped for tabs that load existing
- *  documents). Living as a free function (not a `DarklyInstance` method)
- *  keeps "what's in a fresh tab" at the application layer — the engine
- *  itself stays opinion-free. */
+/** Populate a freshly-booted instance with the deploy-flavor's default
+ *  starter content (the demo build's hidden veils, or nothing for the app
+ *  build) — see {@link freshDocument}. Caller decides when to invoke
+ *  (skipped for tabs that load existing documents). Living as a free
+ *  function (not a `DarklyInstance` method) keeps "what's in a fresh tab"
+ *  at the application layer — the engine itself stays opinion-free. */
 export function seedFreshDocument(instance: DarklyInstance, docW: number, docH: number): void {
     if (!instance.engine) return;
-    // The veil chain needs a non-zero viewport before `add_veil` will
-    // allocate textures; without this `ensure_textures` no-ops and the
-    // next call would unwrap on `views`. CanvasView issues its own
-    // resize to the surface dims right after, so the only cost is one
-    // GPU realloc that's immediately replaced.
-    instance.engine.post('resize', { width: docW, height: docH });
-    instance.addVeil('rainy_glass', { direction: 135, visible: false });
-    instance.addVeil('grain',       { speed: 0.05,    visible: false });
-    instance.addVeil('lens_blur',   { radius: 0.25,   visible: false });
-    instance.addVeil('vhs',         { visible: false });
+    freshDocument.seedVeils(instance, docW, docH);
 }
 
 /** Single-instance boot path used by the standalone (non-multi-tab) host.

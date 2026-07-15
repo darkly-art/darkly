@@ -14,7 +14,7 @@ use crate::nodegraph::{
 };
 
 use super::curve_math::CurveLut;
-use super::nodes::{paint_color, pen_input};
+use super::nodes::{clone_source, paint_color, pen_input};
 
 use super::gpu_context::BrushGpuContext;
 use super::wgsl::CompiledBrush;
@@ -371,8 +371,11 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// preview body references — e.g. liquify's `falloff_fn` — live in
     /// `decls` and are visible to both skeletons).
     ///
-    /// Non-terminal nodes never have this called — only nodes for
-    /// which `is_terminal()` returns `true` invoke the hook.
+    /// Called for every node in the graph — terminal and non-terminal.
+    /// The default delegates to `compile_wgsl`, so a node that doesn't
+    /// override this contributes an identical preview body. `clone_source`
+    /// overrides it (a non-terminal) to emit a neutral fill instead of
+    /// sampling the frozen source at hover.
     fn compile_cursor_preview_body(
         &self,
         cctx: &crate::brush::wgsl::CompileWgslCtx,
@@ -397,6 +400,27 @@ pub trait BrushNodeEvaluator: Send + Sync {
     ) -> crate::brush::wgsl::ExtentContribution {
         crate::brush::wgsl::ExtentContribution::Identity
     }
+}
+
+/// Stroke-constant clone uniforms, seeded into a `clone_source` node's
+/// per-node uniform fields once per stroke.
+///
+/// `source_anchor` is the user-set clone source (the set-source gesture,
+/// persisted on the engine across strokes); `dest_anchor` is captured at
+/// the first dab of the stroke (the stabilizer offsets the first rendered
+/// dab, so this is taken from `place_dab`, not the raw engine input).
+/// `source_offset` / `source_size` are the source snapshot's plane-space
+/// frame — the frozen cross-layer / merged snapshot's rect when one
+/// exists, else the paint target's current extent (refreshed per pen
+/// event so same-layer clone tracks mid-stroke layer growth). All values
+/// are plane / canvas pixels. The aligned-vs-anchored choice lives in the
+/// baked WGSL — this struct carries only points and the frame.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct CloneState {
+    pub source_anchor: [f32; 2],
+    pub dest_anchor: [f32; 2],
+    pub source_offset: [f32; 2],
+    pub source_size: [f32; 2],
 }
 
 // ── Graph runner ────────────────────────────────────────────────────
@@ -452,6 +476,15 @@ pub struct BrushGraphRunner {
     /// Pre-resolved slot index for paint_color's output.  Same rationale
     /// as `pen_input_slots` — avoid plan traversal on the hot path.
     paint_color_slot: Option<usize>,
+    /// Node id of the (first) `clone_source` node, resolved at build.
+    /// When set alongside [`Self::clone_state`], `build_slot_outputs`
+    /// injects the stroke's anchor uniforms under this node's keys so the
+    /// compiled terminal packs them — same channel `paint_color` uses,
+    /// but seeded from engine session state rather than a graph output.
+    clone_source_node: Option<NodeId>,
+    /// Clone anchors for the current stroke, set via
+    /// [`Self::set_clone_state`]. `None` for non-clone brushes.
+    clone_state: Option<CloneState>,
     /// Pre-resolved slot index of the terminal `dab_size` output, used
     /// by the stroke engine to size spacing and save-point bboxes.
     /// Resolved by walking `plan.steps` once for any step where
@@ -570,6 +603,13 @@ impl BrushGraphRunner {
             .and_then(|s| s.output_slots.iter().find(|(name, _)| name == "color"))
             .map(|(_, slot)| *slot);
 
+        // Find the (first) clone_source node for anchor-uniform seeding.
+        let clone_source_node = plan
+            .steps
+            .iter()
+            .find(|s| s.type_id == clone_source::TYPE_ID)
+            .map(|s| s.node_id);
+
         // Find the terminal's `dab_size` output slot. Whichever
         // terminal the graph uses owns the spacing unit; the first
         // terminal in plan order wins (every built-in terminal is
@@ -599,6 +639,8 @@ impl BrushGraphRunner {
             node_data,
             pen_input_slots,
             paint_color_slot,
+            clone_source_node,
+            clone_state: None,
             dab_size_slot,
             stroke_seed: 0,
             dab_index: 0,
@@ -617,6 +659,22 @@ impl BrushGraphRunner {
     /// terminates in `paint`.
     pub fn compiled_brush(&self) -> Option<Arc<CompiledBrush>> {
         self.compiled.clone()
+    }
+
+    /// Set (or clear) the clone anchors for the current stroke. Seeded
+    /// once at stroke start / first dab by the stroke engine; read by
+    /// [`Self::build_slot_outputs`] to feed the `clone_source` node's
+    /// `source_anchor` / `dest_anchor` uniforms. No-op for brushes
+    /// without a `clone_source` node.
+    pub fn set_clone_state(&mut self, state: Option<CloneState>) {
+        self.clone_state = state;
+    }
+
+    /// `true` if this runner's compiled brush samples a clone source
+    /// (has a `clone_source` node requesting the `@group(3)` snapshot).
+    /// Drives the engine's no-op gate and the frontend's gesture arming.
+    pub fn samples_source(&self) -> bool {
+        self.compiled.as_ref().is_some_and(|c| c.samples_source)
     }
 
     /// Returns `true` if the graph terminates in a compiled-WGSL
@@ -643,6 +701,30 @@ impl BrushGraphRunner {
                     out.insert(format!("n{}_{}", step.node_id.0, port_name), val);
                 }
             }
+        }
+        // Inject the clone uniforms under the `clone_source` node's keys
+        // (`n{id}_source_anchor`, `n{id}_dest_anchor`, `n{id}_source_offset`,
+        // `n{id}_source_size`) so the terminal's uniform packer picks them
+        // up. These aren't graph output slots — they're stroke-constant
+        // engine session state, seeded the same way `paint_color` seeds
+        // its color uniform.
+        if let (Some(node), Some(cs)) = (self.clone_source_node, self.clone_state) {
+            out.insert(
+                format!("n{}_source_anchor", node.0),
+                ScalarValue::Vec2(cs.source_anchor),
+            );
+            out.insert(
+                format!("n{}_dest_anchor", node.0),
+                ScalarValue::Vec2(cs.dest_anchor),
+            );
+            out.insert(
+                format!("n{}_source_offset", node.0),
+                ScalarValue::Vec2(cs.source_offset),
+            );
+            out.insert(
+                format!("n{}_source_size", node.0),
+                ScalarValue::Vec2(cs.source_size),
+            );
         }
         out
     }

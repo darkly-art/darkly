@@ -25,6 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getIcons } from '@iconify/utils';
+import { Resvg } from '@resvg/resvg-js';
 
 const FRONTEND = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = path.join(FRONTEND, 'src');
@@ -77,6 +78,94 @@ function buildLocal(names) {
     return { prefix: 'local', icons };
 }
 
+// Icons ship as inline SVGs forced to a 1em square (see Icon.svelte +
+// ToolCluster's `.tool svg` rule). An icon's on-screen size is therefore how
+// much of its viewBox the artwork covers — and icon sets bake in wildly
+// different margins (Font Awesome solids touch all four edges; Boxicons/Lucide
+// dashed marquees sit inside a 4–12% margin). The result: select-tool icons
+// render visibly smaller than the fill/eyedropper tools beside them.
+//
+// We normalize optical size by shrink-wrapping every icon's viewBox to its
+// inked bounds at BUILD time. The measurement rasterizes each icon and reads
+// the alpha bounding box (exact for curves and strokes, no geometry math); the
+// SHIPPED icon stays a vector — only its `viewBox`/`left/top/width/height` are
+// rewritten to hug the artwork. resvg is a devDependency; nothing renders at
+// runtime. Bodies are identical across runs, so results are memoized to keep
+// dev/HMR regeneration cheap.
+const MEASURE_PX = 512; // render size on the icon's longest axis
+const tightBoxCache = new Map(); // body -> [left, top, width, height]
+const round3 = (n) => Math.round(n * 1000) / 1000;
+
+/** Rasterize one icon and return the tight [left, top, width, height] of its
+ *  inked pixels, expressed back in the icon's own viewBox units. Returns the
+ *  input box unchanged if the icon renders empty. */
+function tightBox(body, left, top, width, height) {
+    const cached = tightBoxCache.get(body);
+    if (cached) return cached;
+
+    const ppu = MEASURE_PX / Math.max(width, height); // pixels per viewBox unit
+    const pxW = Math.round(width * ppu);
+    const pxH = Math.round(height * ppu);
+    // currentColor has no resolution context here — pin it opaque so both
+    // fills and strokes register in the alpha channel we scan.
+    const painted = body.replaceAll('currentColor', '#000');
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${left} ${top} ${width} ${height}" width="${pxW}" height="${pxH}">${painted}</svg>`;
+
+    const img = new Resvg(svg).render();
+    const { width: w, height: h, pixels } = img;
+    let minX = w, minY = h, maxX = -1, maxY = -1;
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            if (pixels[(y * w + x) * 4 + 3] > 0) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
+        }
+    }
+    let box;
+    if (maxX < 0) {
+        box = [left, top, width, height]; // nothing inked — leave as-is
+    } else {
+        // Grow the pixel box by 1px each side so anti-aliased stroke edges are
+        // never clipped, then clamp to the render and map px → viewBox units.
+        minX = Math.max(0, minX - 1);
+        minY = Math.max(0, minY - 1);
+        maxX = Math.min(w - 1, maxX + 1);
+        maxY = Math.min(h - 1, maxY + 1);
+        box = [
+            round3(left + minX / ppu),
+            round3(top + minY / ppu),
+            round3((maxX - minX + 1) / ppu),
+            round3((maxY - minY + 1) / ppu),
+        ];
+    }
+    tightBoxCache.set(body, box);
+    return box;
+}
+
+/** Shrink-wrap every icon in a collection to its inked bounds, writing explicit
+ *  left/top/width/height onto each icon (overriding the collection defaults). */
+function tightenCollection(data) {
+    const dw = data.width ?? 16;
+    const dh = data.height ?? 16;
+    for (const icon of Object.values(data.icons)) {
+        const [l, t, w, h] = tightBox(
+            icon.body,
+            icon.left ?? 0,
+            icon.top ?? 0,
+            icon.width ?? dw,
+            icon.height ?? dh,
+        );
+        icon.left = l;
+        icon.top = t;
+        icon.width = w;
+        icon.height = h;
+    }
+    return data;
+}
+
 /** Scan the source roots and produce the bundle module text. Throws on an
  *  unknown icon name within a known set. */
 function renderBundle() {
@@ -97,7 +186,7 @@ function renderBundle() {
         const names = [...set].sort();
         total += names.length;
         if (prefix === 'local') {
-            collections.push(buildLocal(names));
+            collections.push(tightenCollection(buildLocal(names)));
             continue;
         }
         const full = JSON.parse(fs.readFileSync(path.join(JSON_DIR, `${prefix}.json`), 'utf8'));
@@ -108,7 +197,7 @@ function renderBundle() {
                 `[gen-icons] unknown icon(s) in "${prefix}": ${subset.not_found.join(', ')} — fix the name or pick a valid id`,
             );
         }
-        collections.push(subset);
+        collections.push(tightenCollection(subset));
     }
 
     const banner = `// AUTO-GENERATED by scripts/gen-icon-bundle.mjs — DO NOT EDIT BY HAND.

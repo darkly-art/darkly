@@ -4,7 +4,7 @@
     import EffectPreview from '../EffectPreview.svelte';
     import Icon from '../../icons/Icon.svelte';
     import { voidShowsPreview } from '../preview_frames';
-    import type { CaptureKind } from '../../lib/mediaStreamSource';
+    import type { CaptureKind } from '../../lib/frameSource';
 
     let { onclose }: { onclose: () => void } = $props();
 
@@ -22,7 +22,7 @@
         if (!engine) return;
         (async () => {
             try {
-                const list = await engine.send('void_types');
+                const list = await engine.api.voidTypes();
                 voidTypes = Array.isArray(list) ? list : [];
             } catch {
                 voidTypes = [];
@@ -32,16 +32,18 @@
 
     async function pick(vt: any) {
         if (!app.engine) return;
-        // For stream-backed voids (camera / screenshare), acquire the
+        // For MediaStream-backed voids (camera / screenshare), acquire the
         // MediaStream IN this click gesture, BEFORE the awaitable `add_void`
         // round-trip. `getDisplayMedia` requires transient user activation,
         // which would expire if we acquired only after awaiting add_void. If
         // the user cancels / denies, we still create the layer and record the
-        // error so the properties panel can offer Resume.
+        // error so the properties panel can offer Resume. A `stream` void
+        // (Blender) needs no gesture or permission — it connects over localhost
+        // HTTP after the layer exists — so skip acquisition entirely.
         const captureKind: CaptureKind | undefined = vt.captureKind;
         let stream: MediaStream | undefined;
         let acquireError: unknown;
-        if (captureKind) {
+        if (captureKind === 'camera' || captureKind === 'display') {
             try {
                 stream = await app.acquireMediaStream(captureKind);
             } catch (err) {
@@ -53,12 +55,12 @@
         for (const p of vt.params) {
             defaults[p.name] = p.default;
         }
-        const id = (await app.engine.send('add_void', {
+        const id = await app.engine.api.addVoid({
             void_type: vt.type,
             params: defaults,
-            anchor: app.activeLayerId ?? -1,
-        })).id;
-        if (id >= 0) {
+            anchor: app.activeLayerId,
+        });
+        if (id != null) {
             app.selectLayer(id);
             // Adding a stream-backed void via the picker is an explicit user
             // gesture — opt the new layer into this session's allow-list and
@@ -66,8 +68,8 @@
             // a saved doc does NOT add to this set, which is why loaded
             // stream voids hold their saved frame until the user clicks Resume.
             if (captureKind) {
-                app.markMediaStreamVoidStarted(id);
-                await app.startMediaStreamVoid(id, captureKind, stream, acquireError);
+                app.markStreamVoidStarted(id);
+                await app.startStreamSource(id, captureKind, stream, acquireError);
             }
         } else if (stream) {
             // Layer creation failed but we acquired a stream — release it so the

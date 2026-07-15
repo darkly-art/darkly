@@ -121,6 +121,7 @@
 
     /** Normalized position (0–1) from a pointer event relative to the slider bar. */
     function sliderFraction(e: PointerEvent): number {
+        if (!sliderEl) return 0;
         const local = coords.clientToElementLocal(sliderEl, e.clientX, e.clientY);
         return Math.max(0, Math.min(1, local.x / sliderEl.clientWidth));
     }
@@ -141,6 +142,7 @@
     }
 
     function onSliderDown(e: PointerEvent) {
+        if (!sliderEl) return;
         // Stop propagation so the node doesn't start dragging.
         e.stopPropagation();
         e.preventDefault();
@@ -158,7 +160,7 @@
     }
 
     function onSliderUp(e: PointerEvent) {
-        if (!sliding) return;
+        if (!sliding || !sliderEl) return;
         sliding = false;
         sliderEl.releasePointerCapture(e.pointerId);
         brushGraph.setPortDefault(nodeId, port.name, port.default);
@@ -343,9 +345,6 @@
     }
     .port-right .port-dot {
         right: -5px;
-    }
-    .port-dot.connected {
-        /* filled by inline style */
     }
     .port-dot:hover {
         transform: translateY(-50%) scale(1.3);

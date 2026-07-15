@@ -252,10 +252,4 @@
     .split-main + .split-chevron {
         margin-left: 0;
     }
-
-    .mask-glyph {
-        width: 18px;
-        height: 11px;
-        display: block;
-    }
 </style>

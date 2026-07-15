@@ -76,7 +76,7 @@
         const r = parseInt(h.slice(0, 2), 16);
         const g = parseInt(h.slice(2, 4), 16);
         const b = parseInt(h.slice(4, 6), 16);
-        return [r, g, b, 255];
+        return [r, g, b, 255] as [number, number, number, number];
     }
 
     function create() {
@@ -88,9 +88,9 @@
         // suppresses the default white-image bg seed in CanvasView, leaving
         // us free to seed our own raster layer in the chosen color.
         const inst = shell.open(undefined, { width: w, height: h });
-        inst.onHandleReady = (handle) => {
-            const bg = handle.add_raster_layer(-1);
-            handle.fill_background_color(bg, new Uint8Array(rgba));
+        inst.onHandleReady = async (handle) => {
+            const bg = await handle.api.addRaster({ anchor: null });
+            handle.api.fillBackgroundColor({ id: bg, rgba });
             inst.selectLayer(bg);
             app.refreshLayerTree();
             app.requestFrame();
@@ -112,8 +112,11 @@
             const w = Math.max(1, Math.min(16384, clip.width));
             const h = Math.max(1, Math.min(16384, clip.height));
             const inst = shell.open(undefined, { width: w, height: h });
-            inst.onHandleReady = (handle) => {
-                const bg = handle.paste_image(w, h, clip.rgba, 0, 0, -1);
+            inst.onHandleReady = async (handle) => {
+                const { id: bg } = await handle.api.pasteImage(
+                    { width: w, height: h, offset_x: 0, offset_y: 0, active_layer_id: -1 },
+                    clip.rgba
+                );
                 inst.selectLayer(bg);
                 app.refreshLayerTree();
                 app.requestFrame();

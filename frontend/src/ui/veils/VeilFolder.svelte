@@ -18,7 +18,7 @@
         if (!app.engine) return;
         const target = !anyVisible;
         for (const v of app.veilList) {
-            app.engine.post('set_veil_visible', { index: v.index, visible: target });
+            app.engine.api.setVeilVisible({ index: v.index, visible: target });
         }
         onupdate();
     }
@@ -64,7 +64,6 @@
 <style>
     .veil-folder {
         background: color-mix(in srgb, var(--accent) 8%, transparent);
-        border-left: 3px solid var(--accent);
     }
 
     .folder-header {

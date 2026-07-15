@@ -4,6 +4,8 @@ import { actions } from '../actions/registry';
 import { app } from '../state/app.svelte';
 import { activeSiteChain } from '../actions/active_site';
 import { toolRegistry } from '../tools/registry';
+import { brushGraph } from '../state/brush_graph.svelte';
+import { isEditableTarget } from '../lib/isEditableTarget';
 import {
     parseBinding,
     buildChordIndex,
@@ -70,15 +72,14 @@ export function registerHotkeys() {
             // dialog's own keys (Esc to close, etc.) work and modal-scoped
             // shortcuts don't leak to the canvas.
             if (document.querySelector('dialog[open]')) return;
-            const el = e.target as HTMLElement;
-            const tag = el?.tagName;
-            // Allow hotkeys through range sliders — they don't need text input.
-            if (tag === 'INPUT' && (el as HTMLInputElement).type !== 'range') return;
-            if (tag === 'TEXTAREA' || tag === 'SELECT') return;
+            // Keys typed into a text field are content, not shortcuts (range
+            // sliders excepted — see `isEditableTarget`).
+            if (isEditableTarget(e.target)) return;
 
             const chain = activeSiteChain();
             const toolGroup = toolRegistry.get(app.activeToolId)?.group ?? null;
-            const resolved = resolveChord(entries, chain, toolGroup);
+            const activeBrush = brushGraph.activeBrush?.toLowerCase() ?? null;
+            const resolved = resolveChord(entries, chain, toolGroup, activeBrush);
             if (!resolved) return;
             e.preventDefault();
             const ctx = resolved.site

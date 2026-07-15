@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { withApi } from '../../engine/testApi';
 
 // Stand-ins for the Svelte-runic state proxy, the GPU overlay builder, and the
 // transform-mode strategy, so the gizmo's async lifecycle can be driven without
@@ -28,6 +29,7 @@ vi.mock('../transform_modes', () => ({
 }));
 
 import { TransformGizmo } from '../transform_gizmo';
+import { beginToolSession } from '../tool_session';
 
 function deferred<T>() {
     let resolve!: (v: T) => void;
@@ -35,11 +37,20 @@ function deferred<T>() {
     return { promise, resolve };
 }
 
-const INFO = { origin: [0, 0] as [number, number], w: 10, h: 10, mode: 0, affine: [1, 0, 0, 1, 0, 0] };
+const INFO = {
+    origin: [0, 0] as [number, number],
+    w: 10,
+    h: 10,
+    mode: 0,
+    matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+};
 
 beforeEach(() => {
     pushSpy.mockClear();
     engine.post.mockClear();
+    // The gizmo pushes/clears its overlay through the live tool session; begin
+    // one over the fake engine so `toolEngine()` resolves.
+    beginToolSession(engine as never);
 });
 
 /**
@@ -50,6 +61,9 @@ beforeEach(() => {
  * resolves — and its continuation must NOT rebuild the overlay. If it does, the
  * gizmo handles reappear and the user has to press Enter a second time.
  */
+// Give the fake engine a real typed `api` over its send/post spies.
+withApi(engine);
+
 describe('transform gizmo commit during in-flight frame read', () => {
     it('does not resurrect the overlay when committed mid-read', async () => {
         const gizmo = new TransformGizmo({} as never);
@@ -77,7 +91,8 @@ describe('transform gizmo commit during in-flight frame read', () => {
         // ...the user presses Enter mid-read: commit clears the gizmo.
         gizmo.commit();
         expect(gizmo.active).toBe(false);
-        expect(engine.post).toHaveBeenCalledWith('clear_overlay');
+        // Routed through the session wrapper, so trailing payload/bytes ride along.
+        expect(engine.post.mock.calls.some((c) => c[0] === 'clear_overlay')).toBe(true);
 
         // The stale read resolves. The overlay must stay cleared.
         gate.resolve(INFO);

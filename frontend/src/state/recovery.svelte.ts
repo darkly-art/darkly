@@ -41,12 +41,12 @@ class RecoveryState {
         const inst = shell.open(entry.name);
         inst.onHandleReady = async (engine) => {
             try {
-                await engine.send('open_document', {}, bytes);
-                const { name } = await engine.send('document_name');
+                await engine.api.openDocument(bytes);
+                const name = await engine.api.documentName();
                 shell.setName(inst.id, name);
                 // Recovered work has no backing file — keep it dirty so
                 // closing the tab still prompts and autosave re-snapshots it.
-                engine.post('mark_dirty');
+                engine.api.markDirty();
                 await inst.syncCanvasRect();
                 await app.refreshLayerTree();
                 await app.refreshVeilList();

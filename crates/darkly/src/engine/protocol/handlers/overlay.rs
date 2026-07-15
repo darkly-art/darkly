@@ -1,9 +1,13 @@
-//! Overlay primitives + the masked-stamp overlay texture.
+//! Tool-overlay primitive upload. The wire carries a camelCase `PrimIn`
+//! that maps onto the `#[repr(C)]` GPU [`OverlayPrimitive`] (which is not
+//! itself `Deserialize`), so this conversion can't be macro-derived and the
+//! handler stays hand-written. The mask-texture and hit-test ops are
+//! `#[handler]`-generated on `engine/filters/selection.rs`.
 
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::engine::protocol::{decode, RequestRegistration, Response};
+use crate::engine::OverlayChannel;
 use crate::gpu::overlay::OverlayPrimitive;
 
 fn white() -> [f32; 4] {
@@ -16,8 +20,9 @@ fn one() -> f32 {
 /// JSON-side overlay primitive (camelCase to match the frontend). Maps onto the
 /// `#[repr(C)]` GPU [`OverlayPrimitive`], which is not itself `Deserialize`.
 #[derive(Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
-struct PrimIn {
+pub struct PrimIn {
     kind: u32,
     #[serde(default)]
     flags: u32,
@@ -57,69 +62,46 @@ impl From<PrimIn> for OverlayPrimitive {
     }
 }
 
+/// `{ primitives }` — the full overlay primitive list to upload.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct SetOverlayReq {
+    pub primitives: Vec<PrimIn>,
+}
+
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
-        RequestRegistration {
-            kind: "set_overlay",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    primitives: Vec<PrimIn>,
-                }
-                let r: Req = decode(payload)?;
-                let prims = r
-                    .primitives
-                    .into_iter()
-                    .map(OverlayPrimitive::from)
-                    .collect();
-                engine.set_overlay_primitives(prims);
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "clear_overlay",
-            handle: |engine, _payload, _b| {
-                engine.clear_overlay();
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "set_overlay_mask",
-            handle: |engine, payload, bytes| {
-                // RGBA8 mask uploaded via the binary side-channel; the red
-                // channel is used as grayscale coverage.
-                #[derive(Deserialize)]
-                struct Req {
-                    width: u32,
-                    height: u32,
-                }
-                let r: Req = decode(payload)?;
-                engine.set_overlay_mask(r.width, r.height, bytes);
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "clear_overlay_mask",
-            handle: |engine, _payload, _b| {
-                engine.clear_overlay_mask();
-                Ok(Response::empty())
-            },
-        },
-        RequestRegistration {
-            kind: "overlay_hit_test",
-            handle: |engine, payload, _b| {
-                #[derive(Deserialize)]
-                struct Req {
-                    screen_x: f32,
-                    screen_y: f32,
-                }
-                let r: Req = decode(payload)?;
-                let v = engine
-                    .overlay_hit_test(r.screen_x, r.screen_y)
-                    .map(|i| i as i64)
-                    .unwrap_or(-1);
-                Ok(Response::json(json!({ "value": v })))
-            },
-        },
+        RequestRegistration::new("set_overlay", |engine, payload, _b| {
+            let r: SetOverlayReq = decode(payload)?;
+            let prims = r
+                .primitives
+                .into_iter()
+                .map(OverlayPrimitive::from)
+                .collect();
+            engine.set_overlay_primitives(prims);
+            Ok(Response::empty())
+        })
+        .post()
+        .req::<SetOverlayReq>(),
+        // Clone-brush source marker / hint. Targets the `CloneSource`
+        // channel, which persists across the dab preview's every-hover-move
+        // replacement of the `Tool` channel.
+        RequestRegistration::new("set_clone_overlay", |engine, payload, _b| {
+            let r: SetOverlayReq = decode(payload)?;
+            let prims = r
+                .primitives
+                .into_iter()
+                .map(OverlayPrimitive::from)
+                .collect();
+            engine.set_channel_overlay(OverlayChannel::CloneSource, prims);
+            Ok(Response::empty())
+        })
+        .post()
+        .req::<SetOverlayReq>(),
+        RequestRegistration::new("clear_clone_overlay", |engine, _payload, _b| {
+            engine.clear_channel_overlay(OverlayChannel::CloneSource);
+            Ok(Response::empty())
+        })
+        .post(),
     ]
 }

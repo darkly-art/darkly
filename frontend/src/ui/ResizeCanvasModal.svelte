@@ -80,7 +80,7 @@
     // 1:1 onto the content rect.
     function requestComposite() {
         if (!app.engine) return;
-        app.engine.post('start_export');
+        app.engine.api.startExport();
         app.onExportResult((result) => {
             if (!resizeCanvas.open) return; // modal closed before it landed
             const cv = document.createElement('canvas');
@@ -237,7 +237,7 @@
     function apply() {
         const w = clampDim(rect.w);
         const h = clampDim(rect.h);
-        app.engine?.post('resize_canvas_rect', {
+        app.engine?.api.resizeCanvasRect({
             origin_x: originX0 + rect.x,
             origin_y: originY0 + rect.y,
             w,

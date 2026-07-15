@@ -11,9 +11,10 @@
 
 use darkly::coord::{CanvasPoint, CanvasRect};
 use darkly::document::SelectionMode;
-use darkly::engine::types::StrokeOp;
+use darkly::engine::types::{LayerInfo, StrokeOp};
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
+use darkly::gpu::params::ParamValue;
 use darkly::gpu::test_utils::*;
 use darkly::layer::LayerId;
 
@@ -82,7 +83,7 @@ fn invert_layer_negates_every_channel() {
     let layer = e.paste_image(w, h, &distinct_rgba(w, h), 0, 0, None);
     let before = e.test_readback_layer(layer);
 
-    assert!(e.apply_filter(layer, "invert"));
+    assert!(e.apply_filter_typed(layer, "invert", vec![]));
     let after = e.test_readback_layer(layer);
     for y in 0..h {
         for x in 0..w {
@@ -102,8 +103,8 @@ fn invert_layer_twice_is_identity() {
     let layer = e.paste_image(w, h, &distinct_rgba(w, h), 0, 0, None);
     let before = e.test_readback_layer(layer);
 
-    assert!(e.apply_filter(layer, "invert"));
-    assert!(e.apply_filter(layer, "invert"));
+    assert!(e.apply_filter_typed(layer, "invert", vec![]));
+    assert!(e.apply_filter_typed(layer, "invert", vec![]));
     assert_eq!(
         e.test_readback_layer(layer),
         before,
@@ -118,7 +119,7 @@ fn invert_layer_undo_redo_round_trips() {
     let layer = e.paste_image(w, h, &distinct_rgba(w, h), 0, 0, None);
     let before = e.test_readback_layer(layer);
 
-    assert!(e.apply_filter(layer, "invert"));
+    assert!(e.apply_filter_typed(layer, "invert", vec![]));
     let inverted = e.test_readback_layer(layer);
 
     e.undo();
@@ -140,7 +141,7 @@ fn invert_unknown_type_is_a_noop() {
     let before = e.test_readback_layer(layer);
 
     assert!(
-        !e.apply_filter(layer, "no_such_adjustment"),
+        !e.apply_filter_typed(layer, "no_such_adjustment", vec![]),
         "an unregistered type must return false"
     );
     assert_eq!(
@@ -161,7 +162,7 @@ fn invert_layer_with_rect_selection_only_inverts_selection() {
 
     // Rect x,y ∈ [3,8).
     e.select_rect(3.0, 3.0, 5.0, 5.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_filter(layer, "invert"));
+    assert!(e.apply_filter_typed(layer, "invert", vec![]));
     let after = e.test_readback_layer(layer);
 
     // Inside the selection: inverted.
@@ -188,7 +189,7 @@ fn invert_layer_with_ellipse_selection_clips_to_shape() {
 
     // Ellipse in bbox x,y ∈ [2,10): centre (6,6).
     e.select_ellipse(2.0, 2.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_filter(layer, "invert"));
+    assert!(e.apply_filter_typed(layer, "invert", vec![]));
     let after = e.test_readback_layer(layer);
 
     // A bbox corner is outside the ellipse → untouched (shape-masked, not bbox).
@@ -223,13 +224,13 @@ fn invert_mask_negates_r8_and_round_trips() {
         "mask is R8 — one byte/pixel"
     );
 
-    assert!(e.apply_filter(mask, "invert"));
+    assert!(e.apply_filter_typed(mask, "invert", vec![]));
     let after = e.test_readback_layer(mask);
     for i in 0..before.len() {
         assert_eq!(after[i], 255 - before[i], "mask byte {i} should be 1-r");
     }
 
-    assert!(e.apply_filter(mask, "invert"));
+    assert!(e.apply_filter_typed(mask, "invert", vec![]));
     assert_eq!(
         e.test_readback_layer(mask),
         before,
@@ -248,7 +249,7 @@ fn invert_mask_with_selection_only_inverts_selected_region() {
 
     // Rect x,y ∈ [3,8) — only this region of the mask inverts.
     e.select_rect(3.0, 3.0, 5.0, 5.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_filter(mask, "invert"));
+    assert!(e.apply_filter_typed(mask, "invert", vec![]));
     let after = e.test_readback_layer(mask);
 
     let at = |buf: &[u8], x: u32, y: u32| buf[(y * w + x) as usize];
@@ -292,7 +293,7 @@ fn invert_layer_with_selection_after_crop_uses_plane_coords() {
     // shifts it to window-local [2,10)²; `apply_filter` must shift it back
     // to plane [10,18)² via `canvas_origin` before touching pixels.
     e.select_rect(10.0, 10.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_filter(layer, "invert"));
+    assert!(e.apply_filter_typed(layer, "invert", vec![]));
     let after = e.test_readback_layer(layer);
 
     // Inside the selected PLANE region — inverted.
@@ -333,7 +334,7 @@ fn invert_layer_with_selection_after_rescale() {
 
     // Select a plane rect in the rescaled (origin-(0,0)) doc: plane [8,24)².
     e.select_rect(8.0, 8.0, 16.0, 16.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_filter(layer, "invert"));
+    assert!(e.apply_filter_typed(layer, "invert", vec![]));
     let after = e.test_readback_layer(layer);
 
     // Inside the selection — inverted; outside — untouched. Confirms the bbox
@@ -376,7 +377,7 @@ fn invert_mask_with_selection_after_crop() {
 
     // Plane selection [10,18)² — same plane region a layer would invert.
     e.select_rect(10.0, 10.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
-    assert!(e.apply_filter(mask, "invert"));
+    assert!(e.apply_filter_typed(mask, "invert", vec![]));
     let after = e.test_readback_layer(mask);
 
     let at = |buf: &[u8], x: u32, y: u32| buf[(y * w + x) as usize];
@@ -692,4 +693,615 @@ fn filter_layer_is_non_destructive() {
         original,
         "deleting the filter must restore the original composite exactly"
     );
+}
+
+// ---- Curves (parametric) filter layer --------------------------------------
+//
+// Curves is the first parametric filter: Krita's eight "Color Adjustment
+// Curves" channels (RGB, Red, Green, Blue, Alpha, Hue, Saturation, Lightness)
+// baked into a GPU LUT. These pin the schema (eight identity curves on add),
+// the param-edit + undo path, the destructive-path exclusion, and the GPU
+// promises (identity ⇒ bit-unchanged; a composite curve shifts pixels as baked;
+// a hue curve rotates hue).
+
+/// Positional channel indices into a curves layer's param vector (Krita order).
+const CH_RGB: usize = 0;
+const CH_HUE: usize = 5;
+const CH_LIGHTNESS: usize = 7;
+
+/// An identity curve — a straight diagonal.
+fn identity_curve() -> ParamValue {
+    ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]])
+}
+
+/// The default param vector for a filter type, straight from its schema.
+fn filter_defaults(e: &DarklyEngine, type_id: &str) -> Vec<ParamValue> {
+    e.filter_param_defs(type_id)
+        .iter()
+        .map(|d| d.default_value())
+        .collect()
+}
+
+/// Pull a root filter layer's effective param values (`value`, else `default`)
+/// from the engine's layer-tree query.
+fn filter_layer_params(e: &DarklyEngine, id: LayerId) -> Vec<ParamValue> {
+    let ffi = id.to_ffi() as f64;
+    for node in e.layer_tree() {
+        if let LayerInfo::Filter {
+            id: nid, params, ..
+        } = &node
+        {
+            if *nid == ffi {
+                return params
+                    .iter()
+                    .map(|p| p.value.clone().unwrap_or_else(|| p.default.clone()))
+                    .collect();
+            }
+        }
+    }
+    panic!("filter layer {ffi} not found in layer tree");
+}
+
+#[test]
+fn add_curves_layer_yields_eight_identity_curves() {
+    let mut e = test_engine(8, 8);
+    let params = filter_defaults(&e, "curves");
+    let id = e
+        .add_filter_layer("curves", params, None)
+        .expect("curves is a registered filter type");
+
+    let got = filter_layer_params(&e, id);
+    assert_eq!(
+        got.len(),
+        8,
+        "curves exposes RGB/Red/Green/Blue/Alpha/Hue/Saturation/Lightness"
+    );
+    for (i, p) in got.iter().enumerate() {
+        assert_eq!(
+            p,
+            &identity_curve(),
+            "default curve param {i} must be identity"
+        );
+    }
+}
+
+#[test]
+fn update_filter_params_mutates_and_undo_restores() {
+    let mut e = test_engine(8, 8);
+    let id = e
+        .add_filter_layer("curves", filter_defaults(&e, "curves"), None)
+        .unwrap();
+
+    // Edit the composite RGB curve to a non-identity darkening ramp.
+    let edited = {
+        let mut p = filter_defaults(&e, "curves");
+        p[CH_RGB] = ParamValue::Curve(vec![[0.0, 0.0], [1.0, 0.5]]);
+        p
+    };
+    e.update_filter_params(id, edited.clone());
+    assert_eq!(
+        filter_layer_params(&e, id),
+        edited,
+        "update_filter_params must set the new curves"
+    );
+
+    e.undo();
+    let restored = filter_layer_params(&e, id);
+    for (i, p) in restored.iter().enumerate() {
+        assert_eq!(
+            p,
+            &identity_curve(),
+            "undo must restore curve {i} to identity"
+        );
+    }
+}
+
+// ---- Destructive parametric apply (Curves / Levels / HSV) ------------------
+//
+// Regression for two bugs the generic destructive path fixes together: (1) the
+// `params.is_empty()` guard that rejected every parametric filter, and (2)
+// `filter_node_region` handing `render` an *empty* cache — so a parametric
+// destructive apply ignored both its params and the selection shape. Each test
+// applies a non-identity parametric filter over a rect selection and pins that
+// only the selected region changed (params honored) and the rest is untouched
+// (selection honored), with undo restoring the original.
+
+/// A `w`×`h` buffer filled with one opaque RGBA colour.
+fn solid_rgba(w: u32, h: u32, c: [u8; 4]) -> Vec<u8> {
+    let mut v = vec![0u8; (w * h * 4) as usize];
+    for px in v.chunks_exact_mut(4) {
+        px.copy_from_slice(&c);
+    }
+    v
+}
+
+/// Darkening RGB curve over otherwise-identity curves — halves every channel.
+fn darkening_curves() -> Vec<ParamValue> {
+    let mut p = vec![identity_curve(); 8];
+    p[CH_RGB] = ParamValue::Curve(vec![[0.0, 0.0], [1.0, 0.5]]);
+    p
+}
+
+/// HSV params `[model, hue°, sat, value, colorize]`.
+fn hsv_params(model: i32, hue: f32, sat: f32, val: f32, colorize: bool) -> Vec<ParamValue> {
+    vec![
+        ParamValue::Int(model),
+        ParamValue::Float(hue),
+        ParamValue::Float(sat),
+        ParamValue::Float(val),
+        ParamValue::Bool(colorize),
+    ]
+}
+
+/// Brightness/Contrast params `[brightness, contrast]`, both −100..100 sliders.
+fn bc_params(brightness: f32, contrast: f32) -> Vec<ParamValue> {
+    vec![ParamValue::Float(brightness), ParamValue::Float(contrast)]
+}
+
+/// Assert a destructive parametric apply over a rect selection touches only the
+/// selection: an inside pixel changed, an outside pixel didn't, undo restores.
+fn assert_destructive_selection(type_id: &str, params: Vec<ParamValue>) {
+    let (w, h) = (12u32, 12u32);
+    let mut e = test_engine(w, h);
+    let layer = e.paste_image(w, h, &solid_rgba(w, h, [200, 100, 50, 255]), 0, 0, None);
+    let before = e.test_readback_layer(layer);
+
+    // Rect x,y ∈ [3,8).
+    e.select_rect(3.0, 3.0, 5.0, 5.0, SelectionMode::Replace, false, 0.0);
+    assert!(
+        e.apply_filter_typed(layer, type_id, params),
+        "destructive {type_id} over a selection must apply"
+    );
+    let after = e.test_readback_layer(layer);
+
+    // Inside the selection: changed (params were honored, not baked as no-op).
+    assert_ne!(
+        px(&after, w, 5, 5),
+        px(&before, w, 5, 5),
+        "{type_id}: a selected pixel must change"
+    );
+    // Outside the selection: untouched (selection shape honored, not empty-cache).
+    assert_eq!(
+        px(&after, w, 0, 0),
+        px(&before, w, 0, 0),
+        "{type_id}: an unselected pixel must be untouched"
+    );
+    assert_eq!(
+        px(&after, w, 10, 10),
+        px(&before, w, 10, 10),
+        "{type_id}: a far unselected pixel must be untouched"
+    );
+
+    e.undo();
+    assert_eq!(
+        e.test_readback_layer(layer),
+        before,
+        "{type_id}: undo restores the layer"
+    );
+}
+
+#[test]
+fn destructive_curves_with_selection_only_touches_selection() {
+    assert_destructive_selection("curves", darkening_curves());
+}
+
+#[test]
+fn destructive_levels_with_selection_only_touches_selection() {
+    // Gamma 0.5 (darken) on the composite RGB channel; other channels identity.
+    let mut p = vec![ParamValue::Levels([0.0, 1.0, 1.0, 0.0, 1.0]); 8];
+    p[CH_RGB] = ParamValue::Levels([0.0, 1.0, 0.5, 0.0, 1.0]);
+    assert_destructive_selection("levels", p);
+}
+
+#[test]
+fn destructive_hsv_with_selection_only_touches_selection() {
+    // Hue rotate 120° in HSV — visibly changes a coloured pixel.
+    assert_destructive_selection("hsv", hsv_params(0, 120.0, 0.0, 0.0, false));
+}
+
+#[test]
+fn destructive_brightness_contrast_with_selection_only_touches_selection() {
+    // Brightness +50 — visibly lightens a coloured pixel.
+    assert_destructive_selection("brightness_contrast", bc_params(50.0, 0.0));
+}
+
+#[test]
+fn destructive_desaturate_with_selection_only_touches_selection() {
+    // Luminosity BT.709 — visibly grays the [200,100,50] fixture.
+    assert_destructive_selection("desaturate", vec![ParamValue::Int(1)]);
+}
+
+// ---- Live preview session (the non-dimming modal) --------------------------
+//
+// The modal previews a destructive filter non-destructively (`preview_filter`)
+// before committing (`commit_filter_preview`) or discarding (`cancel_filter_preview`).
+// These pin: a committed preview equals a direct apply; a cancelled preview
+// restores the pristine pixels exactly; and preview honors the selection shape.
+
+#[test]
+fn preview_then_commit_matches_direct_apply() {
+    let (w, h) = (8u32, 8u32);
+    let params = hsv_params(0, 120.0, 30.0, 0.0, false);
+
+    // Direct one-shot apply.
+    let mut e1 = test_engine(w, h);
+    let l1 = e1.paste_image(w, h, &solid_rgba(w, h, [200, 100, 50, 255]), 0, 0, None);
+    assert!(e1.apply_filter_typed(l1, "hsv", params.clone()));
+    let direct = e1.test_readback_layer(l1);
+
+    // Preview (twice, to exercise restore-then-refilter) then commit.
+    let mut e2 = test_engine(w, h);
+    let l2 = e2.paste_image(w, h, &solid_rgba(w, h, [200, 100, 50, 255]), 0, 0, None);
+    assert!(e2.preview_filter_typed(l2, "hsv", hsv_params(0, 40.0, 0.0, 0.0, false)));
+    assert!(e2.preview_filter_typed(l2, "hsv", params.clone()));
+    assert!(e2.commit_filter_preview_typed(l2, "hsv", params));
+    assert_eq!(
+        e2.test_readback_layer(l2),
+        direct,
+        "a committed preview must equal a direct apply"
+    );
+}
+
+#[test]
+fn preview_then_cancel_restores_pristine() {
+    let (w, h) = (8u32, 8u32);
+    let mut e = test_engine(w, h);
+    let layer = e.paste_image(w, h, &solid_rgba(w, h, [200, 100, 50, 255]), 0, 0, None);
+    let before = e.test_readback_layer(layer);
+
+    assert!(e.preview_filter_typed(layer, "hsv", hsv_params(0, 120.0, -40.0, 20.0, false)));
+    assert_ne!(
+        e.test_readback_layer(layer),
+        before,
+        "an active preview must change the pixels"
+    );
+
+    e.cancel_filter_preview();
+    assert_eq!(
+        e.test_readback_layer(layer),
+        before,
+        "cancelling the preview must restore the pristine pixels exactly"
+    );
+}
+
+#[test]
+fn preview_with_selection_only_touches_selection() {
+    let (w, h) = (12u32, 12u32);
+    let mut e = test_engine(w, h);
+    let layer = e.paste_image(w, h, &solid_rgba(w, h, [200, 100, 50, 255]), 0, 0, None);
+    let before = e.test_readback_layer(layer);
+
+    e.select_rect(3.0, 3.0, 5.0, 5.0, SelectionMode::Replace, false, 0.0);
+    assert!(e.preview_filter_typed(layer, "hsv", hsv_params(0, 120.0, 0.0, 0.0, false)));
+    let previewed = e.test_readback_layer(layer);
+
+    // Selected pixel changed; unselected pixels untouched — preview clips too.
+    assert_ne!(px(&previewed, w, 5, 5), px(&before, w, 5, 5));
+    assert_eq!(px(&previewed, w, 0, 0), px(&before, w, 0, 0));
+    assert_eq!(px(&previewed, w, 10, 10), px(&before, w, 10, 10));
+
+    e.cancel_filter_preview();
+    assert_eq!(
+        e.test_readback_layer(layer),
+        before,
+        "cancel restores the layer"
+    );
+}
+
+// ---- HSV GPU correctness ---------------------------------------------------
+//
+// Pin the four HSV modes against Krita's `hsvadjustment`: identity is a no-op,
+// a 120° hue rotation of red is exact green in HSV/HSL but luma-preserving (so
+// *not* pure green) in HSY, full desaturation is achromatic, and colorize
+// preserves luma and ignores the model selector.
+
+/// Apply an HSV filter with `params` to a `w`×`h` layer of one colour, return
+/// the single resulting texel `[r,g,b,a]`.
+fn hsv_result(color: [u8; 4], params: Vec<ParamValue>) -> [u8; 4] {
+    let (w, h) = (4u32, 4u32);
+    let mut e = test_engine(w, h);
+    let layer = e.paste_image(w, h, &solid_rgba(w, h, color), 0, 0, None);
+    assert!(e.apply_filter_typed(layer, "hsv", params), "hsv must apply");
+    px(&e.test_readback_layer(layer), w, 1, 1)
+}
+
+/// Rec.601 luma of an RGBA texel (0..255 scale).
+fn luma601(p: [u8; 4]) -> f32 {
+    0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32
+}
+
+fn close(a: [u8; 4], b: [u8; 4], tol: i32) -> bool {
+    (0..4).all(|i| (a[i] as i32 - b[i] as i32).abs() <= tol)
+}
+
+#[test]
+fn hsv_identity_is_a_noop() {
+    let red = [200, 100, 50, 255];
+    assert!(
+        close(hsv_result(red, hsv_params(0, 0.0, 0.0, 0.0, false)), red, 1),
+        "identity HSV must leave the colour unchanged"
+    );
+}
+
+#[test]
+fn hsv_hue_rotate_red_to_green_hsv_and_hsl() {
+    let red = [255, 0, 0, 255];
+    let green = [0, 255, 0, 255];
+    assert!(
+        close(
+            hsv_result(red, hsv_params(0, 120.0, 0.0, 0.0, false)),
+            green,
+            2
+        ),
+        "HSV: red + 120° = exact green"
+    );
+    assert!(
+        close(
+            hsv_result(red, hsv_params(1, 120.0, 0.0, 0.0, false)),
+            green,
+            2
+        ),
+        "HSL: red + 120° = exact green"
+    );
+}
+
+#[test]
+fn hsv_hue_rotate_red_hsy_preserves_luma() {
+    let red = [255, 0, 0, 255];
+    let out = hsv_result(red, hsv_params(2, 120.0, 0.0, 0.0, false));
+    // Luma-preserving: not pure green, but the Rec.601 luma of red survives.
+    assert!(
+        !close(out, [0, 255, 0, 255], 20),
+        "HSY hue rotation must NOT produce pure green (it preserves luma)"
+    );
+    assert!(
+        (luma601(out) - luma601(red)).abs() < 4.0,
+        "HSY must preserve luma: got {} vs {}",
+        luma601(out),
+        luma601(red)
+    );
+    assert!(out[1] > out[0] && out[1] > out[2], "result is green-ish");
+}
+
+#[test]
+fn hsv_full_desaturation_is_achromatic() {
+    for model in 0..3 {
+        let out = hsv_result(
+            [200, 100, 50, 255],
+            hsv_params(model, 0.0, -100.0, 0.0, false),
+        );
+        assert!(
+            (out[0] as i32 - out[1] as i32).abs() <= 2
+                && (out[1] as i32 - out[2] as i32).abs() <= 2,
+            "model {model}: saturation −100 must be achromatic (R≈G≈B), got {out:?}"
+        );
+    }
+}
+
+#[test]
+fn hsv_colorize_preserves_luma_and_ignores_model() {
+    let src = [200, 100, 50, 255];
+    let out_hsv = hsv_result(src, hsv_params(0, 60.0, 50.0, 0.0, true));
+    let out_hsy = hsv_result(src, hsv_params(2, 60.0, 50.0, 0.0, true));
+    assert!(
+        (luma601(out_hsv) - luma601(src)).abs() < 4.0,
+        "colorize must preserve luma: got {} vs {}",
+        luma601(out_hsv),
+        luma601(src)
+    );
+    assert!(
+        close(out_hsv, out_hsy, 1),
+        "colorize must ignore the model selector: {out_hsv:?} vs {out_hsy:?}"
+    );
+}
+
+/// Identity curves ⇒ the composite is bit-unchanged. Validates the
+/// `textureLoad(round(v*255))` index convention: LUT[i] == i, so every byte
+/// maps to itself.
+#[test]
+fn curves_identity_leaves_composite_unchanged() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let base = engine.add_raster_layer(None);
+    fill_layer(&mut engine, base, 200, 64, 128);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+    let before = engine.test_readback_canvas();
+
+    engine
+        .add_filter_layer("curves", filter_defaults(&engine, "curves"), None)
+        .unwrap();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    assert_eq!(
+        engine.test_readback_canvas(),
+        before,
+        "an identity curves layer must not change any pixel"
+    );
+}
+
+/// A non-identity composite RGB curve shifts pixels as baked: `rgb(x) = x/2`
+/// halves every color channel while leaving alpha untouched (the composite curve
+/// is not applied to alpha).
+#[test]
+fn curves_composite_curve_shifts_pixels() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let base = engine.add_raster_layer(None);
+    fill_layer(&mut engine, base, 255, 0, 0); // opaque red
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    // Composite RGB curve halves the input; all other channels identity.
+    let mut params = vec![identity_curve(); 8];
+    params[CH_RGB] = ParamValue::Curve(vec![[0.0, 0.0], [1.0, 0.5]]);
+    engine.add_filter_layer("curves", params, None).unwrap();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let p = px(&engine.test_readback_canvas(), cw, cw / 2, ch / 2);
+    // rgb(1.0) = 0.5 → ~128; g/b stay 0; alpha stays 255.
+    assert!(
+        (p[0] as i32 - 128).abs() <= 2,
+        "composite curve should halve red to ~128, got {p:?}"
+    );
+    assert_eq!(p[1], 0, "green stays 0");
+    assert_eq!(p[2], 0, "blue stays 0");
+    assert_eq!(p[3], 255, "alpha untouched by the composite curve");
+}
+
+/// A Hue curve rotates hue in HSV space (Krita's `hsv_curve_adjustment`,
+/// non-relative): mapping input hue `2/3` (pure blue, 240°) to output `1/3`
+/// (120°, green) turns an opaque blue layer green, with saturation/value intact.
+/// This exercises the RGB→HSV→RGB path and the shader's `hsv_active` gate.
+#[test]
+fn curves_hue_curve_rotates_hue() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let base = engine.add_raster_layer(None);
+    fill_layer(&mut engine, base, 0, 0, 255); // opaque blue (hue 240° = 2/3)
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    // Hue curve maps normalized hue 2/3 → 1/3 (240° → 120°, green). A ramp with
+    // an interior control point pinned so hue(2/3) = 1/3.
+    let mut params = vec![identity_curve(); 8];
+    params[CH_HUE] = ParamValue::Curve(vec![[0.0, 0.0], [2.0 / 3.0, 1.0 / 3.0], [1.0, 1.0]]);
+    engine.add_filter_layer("curves", params, None).unwrap();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let p = px(&engine.test_readback_canvas(), cw, cw / 2, ch / 2);
+    // Pure blue rotated to ~120° at full saturation/value is pure green.
+    assert!(
+        p[1] > 200 && p[0] < 60 && p[2] < 60,
+        "hue curve should rotate blue → green, got {p:?}"
+    );
+    assert_eq!(p[3], 255, "alpha untouched by the hue curve");
+}
+
+/// A Lightness curve darkens on CIELAB L* (Krita's "Lightness L*a*b*"): halving
+/// L on a neutral gray yields a darker — but still neutral — gray. Exercises the
+/// sRGB→Lab→sRGB round trip and the `lightness_active` gate.
+#[test]
+fn curves_lightness_curve_darkens_neutral() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let base = engine.add_raster_layer(None);
+    fill_layer(&mut engine, base, 128, 128, 128); // neutral mid gray
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    // Lightness curve halves L*; every other channel identity.
+    let mut params = vec![identity_curve(); 8];
+    params[CH_LIGHTNESS] = ParamValue::Curve(vec![[0.0, 0.0], [1.0, 0.5]]);
+    engine.add_filter_layer("curves", params, None).unwrap();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let p = px(&engine.test_readback_canvas(), cw, cw / 2, ch / 2);
+    // Darker than the input gray, and still neutral (channels stay together).
+    assert!(p[0] < 120, "halving L* must darken the gray, got {p:?}");
+    assert!(
+        (p[0] as i32 - p[1] as i32).abs() <= 3 && (p[1] as i32 - p[2] as i32).abs() <= 3,
+        "lightness on L* must keep the gray neutral, got {p:?}"
+    );
+    assert_eq!(p[3], 255, "alpha untouched by the lightness curve");
+}
+
+// ---- Desaturate GPU correctness ---------------------------------------------
+//
+// Pin the six gray mappings against Krita's desaturate adjustment
+// (`kis_desaturate_adjustment.cpp`): each mode produces a neutral gray
+// (R == G == B) at the value its formula predicts for the [200,100,50] fixture.
+
+#[test]
+fn desaturate_modes_produce_expected_grays() {
+    // (mode, expected gray) for opaque [200,100,50]: lightness (200+50)/2,
+    // BT.709 dot ≈ 117.7, BT.601 dot ≈ 124.2, average 350/3, min 50, max 200.
+    let expected: [(i32, u8); 6] = [(0, 125), (1, 118), (2, 124), (3, 117), (4, 50), (5, 200)];
+    for (mode, gray) in expected {
+        let (w, h) = (4u32, 4u32);
+        let mut e = test_engine(w, h);
+        let layer = e.paste_image(w, h, &solid_rgba(w, h, [200, 100, 50, 255]), 0, 0, None);
+        assert!(
+            e.apply_filter_typed(layer, "desaturate", vec![ParamValue::Int(mode)]),
+            "desaturate mode {mode} must apply"
+        );
+        let p = px(&e.test_readback_layer(layer), w, 1, 1);
+        assert!(
+            p[0] == p[1] && p[1] == p[2],
+            "mode {mode}: result must be neutral gray (R==G==B), got {p:?}"
+        );
+        assert!(
+            (p[0] as i32 - gray as i32).abs() <= 1,
+            "mode {mode}: expected gray ~{gray} (±1 unorm rounding), got {p:?}"
+        );
+        assert_eq!(p[3], 255, "mode {mode}: alpha untouched");
+    }
+}
+
+// ---- Brightness/Contrast GPU correctness ------------------------------------
+//
+// Pin the GIMP mapping (`gimpoperationbrightnesscontrast.c`) on both surfaces
+// the feature promises: the destructive apply (direction, bit-exact identity,
+// byte-for-byte undo) and the non-destructive filter layer.
+
+#[test]
+fn brightness_contrast_brightens_undoes_and_defaults_are_noop() {
+    let (w, h) = (8u32, 8u32);
+    let mut e = test_engine(w, h);
+    let layer = e.paste_image(w, h, &solid_rgba(w, h, [128, 128, 128, 255]), 0, 0, None);
+    let before = e.test_readback_layer(layer);
+
+    // Default params (brightness 0, contrast 0) → bit-exact no-op.
+    assert!(e.apply_filter_typed(layer, "brightness_contrast", bc_params(0.0, 0.0)));
+    assert_eq!(
+        e.test_readback_layer(layer),
+        before,
+        "default brightness/contrast must be a bit-exact no-op"
+    );
+
+    // Positive brightness lifts every RGB channel of mid-gray; alpha untouched.
+    assert!(e.apply_filter_typed(layer, "brightness_contrast", bc_params(50.0, 0.0)));
+    let after = e.test_readback_layer(layer);
+    let (b, a) = (px(&before, w, 4, 4), px(&after, w, 4, 4));
+    assert!(
+        a[0] > b[0] && a[1] > b[1] && a[2] > b[2],
+        "brightness +50 must lift mid-gray RGB: {b:?} → {a:?}"
+    );
+    assert_eq!(a[3], b[3], "alpha untouched");
+
+    e.undo();
+    assert_eq!(
+        e.test_readback_layer(layer),
+        before,
+        "undo restores the pre-filter pixels byte-for-byte"
+    );
+}
+
+#[test]
+fn brightness_contrast_filter_layer_brightens_composite_below() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let gray = engine.add_raster_layer(None);
+    fill_layer(&mut engine, gray, 128, 128, 128);
+    engine
+        .add_filter_layer("brightness_contrast", bc_params(50.0, 0.0), None)
+        .expect("brightness_contrast is a registered filter type");
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let p = px(&engine.test_readback_canvas(), cw, cw / 2, ch / 2);
+    assert!(
+        p[0] > 128 && p[1] > 128 && p[2] > 128,
+        "brightness filter layer must lift the gray composite below it, got {p:?}"
+    );
+    assert_eq!(p[3], 255, "alpha untouched");
 }

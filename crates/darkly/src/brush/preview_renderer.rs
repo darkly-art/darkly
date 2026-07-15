@@ -158,7 +158,15 @@ impl BrushStrokePreviewRenderer {
         // real stroke uses — so scrubbing the spacing slider actually moves
         // the dabs in the preview.
         let spacing = pen_input::spacing_config(graph);
-        let mut engine = StrokeEngine::new(runner, fg_color, spacing, Box::new(PassThrough::new()));
+        // No clone source in the editor preview — a clone brush renders
+        // its synthetic preview stroke without a set-source anchor.
+        let mut engine = StrokeEngine::new(
+            runner,
+            fg_color,
+            spacing,
+            Box::new(PassThrough::new()),
+            None,
+        );
 
         // Pre-cooked points: pass them through a pass-through stabilizer so
         // `render_from_stabilized_range_to` walks them verbatim. No
@@ -173,7 +181,11 @@ impl BrushStrokePreviewRenderer {
         // and submits.
         macro_rules! make_gpu_ctx {
             ($label:expr) => {{
-                let (scratch, pre_stroke_texture, pre_stroke_bind_group) =
+                // The preview stroke buffer never captures a source
+                // snapshot — a source-sampling brush previews off its own
+                // (blank) pre-stroke snapshot, so the thumbnail stays
+                // neutral.
+                let (scratch, pre_stroke_texture, pre_stroke_bind_group, source_override) =
                     target.stroke_buffer.parts_for_brush_ctx();
                 BrushGpuContext {
                     encoder: device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -198,6 +210,7 @@ impl BrushStrokePreviewRenderer {
                         paint_target,
                         pre_stroke_texture,
                         pre_stroke_bind_group,
+                        source_override,
                     }),
                     preview: None,
                     dab_batch: DabBatch::default(),

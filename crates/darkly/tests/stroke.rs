@@ -961,6 +961,122 @@ fn diff_rect_undo_restores_offset_paint() {
     }
 }
 
+/// Build an `w × h` RGBA8 buffer, transparent everywhere except a solid
+/// `color` rectangle at `(rx, ry)` of size `(rw, rh)`. Used by the bbox
+/// exactness tests to plant a precisely-known changed region.
+fn rgba_with_rect(w: u32, h: u32, rx: u32, ry: u32, rw: u32, rh: u32, color: [u8; 4]) -> Vec<u8> {
+    let mut buf = vec![0u8; (w * h * 4) as usize];
+    for y in ry..ry + rh {
+        for x in rx..rx + rw {
+            let i = ((y * w + x) * 4) as usize;
+            buf[i..i + 4].copy_from_slice(&color);
+        }
+    }
+    buf
+}
+
+/// Blocking-poll a `DiffRectPass` to completion (native/test only).
+fn poll_diff_blocking(diff: &mut DiffRectPass, device: &wgpu::Device) -> Option<CanvasRect> {
+    loop {
+        if let Some(result) = diff.poll(device) {
+            return result;
+        }
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+    }
+}
+
+/// Parity regression for the shared `BboxReduction` extraction: the diff
+/// predicate must report the *exact* changed rect (not merely a superset), and
+/// identical textures must report no diff. Guards against the reduction/decode
+/// or the empty-convention drifting when the machinery moved out of
+/// `DiffRectPass` into `gpu::bbox`.
+#[test]
+fn diff_rect_returns_exact_changed_rect() {
+    let (device, queue) = test_device();
+    let (w, h) = (64u32, 64u32);
+    let blank = vec![0u8; (w * h * 4) as usize];
+    let (_a_tex, a_view) = create_test_texture(&device, &queue, w, h, &blank);
+
+    // B differs from A in exactly x∈[10,15), y∈[20,27).
+    let b = rgba_with_rect(w, h, 10, 20, 5, 7, [255, 0, 0, 255]);
+    let (_b_tex, b_view) = create_test_texture(&device, &queue, w, h, &b);
+
+    let mut diff = DiffRectPass::new(&device);
+    diff.request(&device, &queue, &a_view, &b_view, cr(0, 0, w, h));
+    let rect = poll_diff_blocking(&mut diff, &device).expect("should find the changed rect");
+    assert_eq!(
+        (rect.x0(), rect.y0(), rect.width, rect.height),
+        (10, 20, 5, 7),
+        "diff rect must be exact, not a superset"
+    );
+
+    // Identical textures → no diff.
+    let mut diff_same = DiffRectPass::new(&device);
+    diff_same.request(&device, &queue, &a_view, &a_view, cr(0, 0, w, h));
+    assert!(
+        poll_diff_blocking(&mut diff_same, &device).is_none(),
+        "identical textures must report no diff (empty convention)"
+    );
+}
+
+/// Parity regression for the shared `BboxReduction` extraction, content-bounds
+/// predicate: the alpha-threshold scan must report the *exact* non-transparent
+/// rect, and a fully-transparent texture must yield no cached bounds.
+#[test]
+fn content_bounds_returns_exact_content_rect() {
+    use darkly::gpu::content_bounds::ContentBoundsPass;
+    use darkly::layer::LayerId;
+
+    let (device, queue) = test_device();
+    let (w, h) = (64u32, 64u32);
+
+    // Non-transparent content in exactly x∈[8,14), y∈[12,21).
+    let buf = rgba_with_rect(w, h, 8, 12, 6, 9, [10, 20, 30, 255]);
+    let (_tex, view) = create_test_texture(&device, &queue, w, h, &buf);
+
+    let mut pass = ContentBoundsPass::new(&device);
+    let lid = LayerId::from_ffi(1);
+    pass.request(&device, &queue, &view, w, h, false, lid);
+    loop {
+        if pass.poll(&device).contains(&lid) {
+            break;
+        }
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+    }
+    assert_eq!(
+        pass.get(lid),
+        Some([8, 12, 6, 9]),
+        "content bounds must be the exact non-transparent rect"
+    );
+
+    // Fully-transparent texture → completes with no cached bounds.
+    let blank = vec![0u8; (w * h * 4) as usize];
+    let (_t2, v2) = create_test_texture(&device, &queue, w, h, &blank);
+    let mut pass_empty = ContentBoundsPass::new(&device);
+    let lid2 = LayerId::from_ffi(2);
+    pass_empty.request(&device, &queue, &v2, w, h, false, lid2);
+    loop {
+        if pass_empty.poll(&device).contains(&lid2) {
+            break;
+        }
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+    }
+    assert_eq!(
+        pass_empty.get(lid2),
+        None,
+        "a fully-transparent texture must yield no cached bounds (empty convention)"
+    );
+}
+
 /// Regression for canvas-coord snapshot storage: a `Snapshot` saved on a
 /// 256×256 layer at canvas (0, 0) survives a negative-direction grow that
 /// shifts the layer's local-coord origin by (256, 256). Commit at canvas

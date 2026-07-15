@@ -15,6 +15,9 @@ use slotmap::{SecondaryMap, SlotMap};
 use crate::coord::{CanvasPoint, CanvasRect};
 use crate::layer::*;
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum SelectionMode {
     Replace,
     Add,
@@ -22,11 +25,22 @@ pub enum SelectionMode {
     Intersect,
 }
 
-#[derive(Clone, Copy)]
+/// Where a move/group operation drops its payload, relative to an anchor node.
+///
+/// Wire-native: an adjacently-tagged enum deserializes straight from the
+/// `{ target_type, target_id }` request shape, so move handlers forward the
+/// decoded value without a hand-written `&str → variant` map.
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "target_type", content = "target_id")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum MoveTarget {
+    #[serde(rename = "before")]
     Before(LayerId),
+    #[serde(rename = "after")]
     After(LayerId),
+    #[serde(rename = "into_top")]
     IntoGroupTop(LayerId),
+    #[serde(rename = "into_bottom")]
     IntoGroupBottom(LayerId),
 }
 
@@ -642,6 +656,20 @@ impl Document {
         id
     }
 
+    /// Add a new vector-object layer. Carries no pixel buffer — the compositor
+    /// realizes a texture from its `objects` (text/paths) on the next frame and
+    /// re-realizes only when the objects/style/transform change. Starts empty;
+    /// the engine seeds the first object (e.g. a text block) atomically.
+    pub fn add_vector_layer(&mut self, anchor: Option<LayerId>) -> LayerId {
+        let name = self.next_name("Text");
+        let id = self.entities.insert_with_key(|key| {
+            Entity::Node(LayerNode::Layer(Layer::Vector(VectorLayer::new(key, name))))
+        });
+        let target = self.resolve_anchor_target(anchor);
+        self.attach_at_target(id, target);
+        id
+    }
+
     /// Add a new void (procedural) layer. Carries no pixel buffer — the
     /// compositor regenerates content each frame from `void_type` + `params`.
     /// Caller is responsible for ensuring `void_type` is a registered void
@@ -722,6 +750,54 @@ impl Document {
             match self.find_node(child_id) {
                 Some(LayerNode::Layer(Layer::Void(v))) => out.push(v),
                 Some(LayerNode::Group(_)) => self.collect_void_layers(child_id, out),
+                _ => {}
+            }
+        }
+    }
+
+    /// Iterate every vector layer in the tree, regardless of visibility. Used
+    /// for GPU sync — same shape as [`Self::all_void_layers`].
+    pub fn all_vector_layers(&self) -> Vec<&VectorLayer> {
+        let mut out = Vec::new();
+        self.collect_vector_layers(self.root, &mut out);
+        out
+    }
+
+    fn collect_vector_layers<'a>(&'a self, group_id: LayerId, out: &mut Vec<&'a VectorLayer>) {
+        let Some(LayerNode::Group(g)) = self.find_node(group_id) else {
+            return;
+        };
+        for &child_id in &g.children {
+            match self.find_node(child_id) {
+                Some(LayerNode::Layer(Layer::Vector(v))) => out.push(v),
+                Some(LayerNode::Group(_)) => self.collect_vector_layers(child_id, out),
+                _ => {}
+            }
+        }
+    }
+
+    /// Iterate every filter layer in the tree, regardless of visibility or
+    /// nesting depth. The compositor uses this to build/refresh each parametric
+    /// filter's GPU resources (curves LUT) in the pre-compose ensure phase.
+    /// Same shape as [`Self::all_void_layers`].
+    pub fn all_filter_layers(&self) -> Vec<&crate::layer::FilterLayer> {
+        let mut out = Vec::new();
+        self.collect_filter_layers(self.root, &mut out);
+        out
+    }
+
+    fn collect_filter_layers<'a>(
+        &'a self,
+        group_id: LayerId,
+        out: &mut Vec<&'a crate::layer::FilterLayer>,
+    ) {
+        let Some(LayerNode::Group(g)) = self.find_node(group_id) else {
+            return;
+        };
+        for &child_id in &g.children {
+            match self.find_node(child_id) {
+                Some(LayerNode::Layer(Layer::Filter(f))) => out.push(f),
+                Some(LayerNode::Group(_)) => self.collect_filter_layers(child_id, out),
                 _ => {}
             }
         }

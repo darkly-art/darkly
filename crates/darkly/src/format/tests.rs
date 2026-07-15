@@ -108,6 +108,47 @@ fn round_trip_every_veil() {
     }
 }
 
+/// The `round_trip_every_veil` sweep covers CA at its defaults; this pins a veil
+/// carrying **non-default** `List` params (edited offsets/scales/colors/blur)
+/// through the same wire envelope, exercising the composite Vec2/Color/List
+/// kinds with real values.
+#[test]
+fn chromatic_aberration_veil_round_trips_non_default_list() {
+    use std::collections::BTreeMap;
+
+    let (device, queue) = test_device();
+    let gpu = GpuContext::new_headless(device, queue);
+    let format = gpu.surface_format();
+    let mut registry = VeilRegistry::new();
+
+    let params = vec![ParamValue::List(vec![
+        BTreeMap::from([
+            ("offset".to_string(), ParamValue::Vec2([6.0, -2.0])),
+            ("scale".to_string(), ParamValue::Float(1.02)),
+            ("color".to_string(), ParamValue::Color([1.0, 0.3, 0.1])),
+            ("blur".to_string(), ParamValue::Float(2.0)),
+        ]),
+        BTreeMap::from([
+            ("offset".to_string(), ParamValue::Vec2([0.0, 0.0])),
+            ("scale".to_string(), ParamValue::Float(0.98)),
+            ("color".to_string(), ParamValue::Color([0.1, 0.4, 1.0])),
+            ("blur".to_string(), ParamValue::Float(0.0)),
+        ]),
+    ])];
+
+    let veil = registry.create_veil("chromatic_aberration", &params, &gpu.device, format);
+    let json =
+        serialize_instance(veil.type_id(), veil.param_values()).expect("serialize CA veil failed");
+    let payload = deserialize_instance(&json).expect("deserialize CA veil failed");
+    assert_eq!(payload.type_id, "chromatic_aberration");
+    let restored = registry.create_veil(&payload.type_id, &payload.params, &gpu.device, format);
+    assert_eq!(
+        restored.param_values(),
+        params,
+        "non-default CA veil list params must round-trip byte-for-byte"
+    );
+}
+
 // ----------------------------------------------------------------------------
 // 2. Stabilizers — round-trip (type_id, defaults) for every registered
 //    algorithm.
@@ -312,15 +353,9 @@ fn round_trip_param_value_variants() {
 /// equality — the regression in `gpu/params.rs` was exactly an
 /// `Int(1) == Float(1.0)` false-positive after coercion.
 fn assert_param_eq(a: &ParamValue, b: &ParamValue, context: &str) {
-    let ok = match (a, b) {
-        (ParamValue::Bool(x), ParamValue::Bool(y)) => x == y,
-        (ParamValue::Int(x), ParamValue::Int(y)) => x == y,
-        (ParamValue::Float(x), ParamValue::Float(y)) => x == y,
-        (ParamValue::String(x), ParamValue::String(y)) => x == y,
-        (ParamValue::Curve(x), ParamValue::Curve(y)) => x == y,
-        _ => false,
-    };
-    assert!(ok, "[{context}] param mismatch: {a:?} vs {b:?}");
+    // `ParamValue` derives `PartialEq`, so equality covers every variant
+    // (including the composite `Color`/`Vec2`/`List` kinds) uniformly.
+    assert_eq!(a, b, "[{context}] param mismatch");
 }
 
 // ----------------------------------------------------------------------------
@@ -424,7 +459,7 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
         .collect();
     for (type_id, schema) in veil_types {
         let defaults = defaults_of(schema);
-        engine.add_veil(type_id, &defaults);
+        engine.add_veil_layer(type_id, &defaults);
     }
 
     // One of every void type — adds a void layer at root for each
@@ -457,6 +492,16 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
     for pipeline in filter_types {
         engine.add_filter_layer(&pipeline, Vec::new(), None);
     }
+
+    // A vector (text) layer so `layer_kind/vector` participates in the save
+    // round-trip — its objects round-trip through the manifest body (no pixels).
+    engine.add_text_layer(
+        crate::layer::TextProps::new("kitchen sink".to_string()),
+        4.0,
+        4.0,
+        [0, 0, 0, 255],
+        None,
+    );
 }
 
 /// Pump the engine until a save completes. Caps iterations so a stuck
@@ -544,6 +589,124 @@ fn round_trip_kitchen_sink_document() {
     assert_eq!(
         composite_a, composite_b,
         "kitchen-sink composite bytes must match across save/reload"
+    );
+}
+
+/// Reproducibility: a non-fallback font applied to a text object embeds in the
+/// saved `.darkly` and re-registers when the file is opened in a **fresh**
+/// engine that never saw the upload — the document is self-contained without the
+/// personal library. Uses Cantarell-VF (a real variable font) as the fixture.
+#[test]
+fn embedded_font_round_trips() {
+    const CANTARELL_VF: &[u8] = include_bytes!("../../tests/fixtures/fonts/Cantarell-VF.otf");
+
+    let mut engine = kitchen_sink_engine(64, 64);
+    let family = engine
+        .register_font(CANTARELL_VF.to_vec())
+        .first()
+        .expect("Cantarell-VF contributes a family")
+        .clone();
+
+    let mut text = crate::layer::TextProps::new("Ag".to_string());
+    text.font_family = family.clone();
+    text.size = 32.0;
+    engine.add_text_layer(text, 8.0, 8.0, [255, 255, 255, 255], None);
+
+    let bundle = drive_save_to_completion(&mut engine);
+    let manifest: crate::format::manifest::Manifest =
+        serde_json::from_slice(&bundle.manifest_json).unwrap();
+    assert!(
+        manifest.fonts.iter().any(|f| f.family == family),
+        "the used font is listed in manifest.fonts (got {:?})",
+        manifest.fonts
+    );
+
+    let zip_bytes = assemble_zip(&bundle);
+    let mut reloaded = kitchen_sink_engine(1, 1);
+    assert!(
+        !reloaded.list_fonts().contains(&family),
+        "the fresh engine has not seen this font yet"
+    );
+    reloaded
+        .open_document(&zip_bytes)
+        .expect("reload happy path");
+    assert!(
+        reloaded.list_fonts().contains(&family),
+        "opening the document registers its embedded font"
+    );
+
+    // The text object survived the round-trip with its family intact.
+    let vec_layer = reloaded.doc.all_vector_layers()[0].id;
+    let objs = reloaded.text_objects(vec_layer);
+    assert!(
+        objs.iter()
+            .any(|o| o.content == "Ag" && o.font_family == family),
+        "the reloaded text object keeps its content and embedded family"
+    );
+}
+
+/// The stronger embedding guarantee: an embedded font doesn't just round-trip by
+/// *name* — its glyphs **rasterize identically** after save/reload. Renders the
+/// same string with the embedded font and asserts (a) it differs from the
+/// fallback face (proving the real font is used, not a silent Noto fallback that
+/// would make a name-only test pass regardless), and (b) a fresh engine that
+/// only has the embedded bytes reproduces the exact same pixels. Uses
+/// Cantarell-VF — a variable CFF2 (`OTTO`) font, an outline format distinct from
+/// the bundled glyf TTF, so this also exercises a "weird" font kind end to end.
+#[test]
+fn embedded_font_renders_identically_after_reload() {
+    const CANTARELL_VF: &[u8] = include_bytes!("../../tests/fixtures/fonts/Cantarell-VF.otf");
+    let (w, h) = (96u32, 48u32);
+
+    fn render_text(engine: &mut DarklyEngine, family: Option<&str>) -> (LayerId, Vec<u8>) {
+        let mut text = crate::layer::TextProps::new("Ag".to_string());
+        text.size = 32.0;
+        if let Some(f) = family {
+            text.font_family = f.to_string();
+        }
+        let (id, _) = engine.add_text_layer(text, 4.0, 4.0, [255, 255, 255, 255], None);
+        let _ = engine.test_readback_canvas(); // force the Vello realization
+        (id, engine.test_readback_layer(id))
+    }
+
+    // Baseline: the same string in the fallback face (a family with no bytes →
+    // Noto / sans-serif), rendered in a throwaway engine so the saved doc stays
+    // clean.
+    let fallback_px = {
+        let mut fe = kitchen_sink_engine(w, h);
+        render_text(&mut fe, None).1
+    };
+
+    // The Cantarell render, in the engine we'll save.
+    let mut engine = kitchen_sink_engine(w, h);
+    let family = engine
+        .register_font(CANTARELL_VF.to_vec())
+        .first()
+        .expect("Cantarell-VF contributes a family")
+        .clone();
+    let (_layer, cantarell_px) = render_text(&mut engine, Some(&family));
+
+    assert_ne!(
+        cantarell_px, fallback_px,
+        "the embedded font must rasterize differently from the fallback — else a \
+         name-only round-trip would pass even if the font never registered"
+    );
+
+    // Round-trip into a fresh engine that has only the embedded bytes.
+    let bundle = drive_save_to_completion(&mut engine);
+    let zip_bytes = assemble_zip(&bundle);
+    let mut reloaded = kitchen_sink_engine(1, 1);
+    reloaded
+        .open_document(&zip_bytes)
+        .expect("reload happy path");
+    let reloaded_layer = reloaded.doc.all_vector_layers()[0].id;
+    let _ = reloaded.test_readback_canvas();
+    let reloaded_px = reloaded.test_readback_layer(reloaded_layer);
+
+    assert_eq!(
+        cantarell_px, reloaded_px,
+        "text must rasterize pixel-identically after embedding + reload — proving \
+         the embedded bytes reproduce the glyph outlines, not a fallback"
     );
 }
 
@@ -876,6 +1039,7 @@ fn synth_minimal_manifest() -> Manifest {
         modifiers: Vec::new(),
         selection_id: None,
         veils: Vec::new(),
+        fonts: Vec::new(),
     }
 }
 

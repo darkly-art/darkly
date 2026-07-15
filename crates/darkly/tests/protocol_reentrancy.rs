@@ -54,7 +54,7 @@ fn transport_enqueue_under_held_borrow_does_not_panic() {
 
     let _render_guard = cell.borrow_mut(); // render in flight
                                            // Re-entrant enqueue (as if fired inside submit()'s event pump):
-    transport.enqueue(1, "add_raster", json!({ "anchor": -1 }), Vec::new());
+    transport.enqueue(1, "add_raster", json!({ "anchor": null }), Vec::new());
     transport.enqueue(2, "layer_tree", json!(null), Vec::new());
 
     assert_eq!(
@@ -71,7 +71,7 @@ fn transport_enqueue_under_held_borrow_does_not_panic() {
 fn transport_try_drain_under_held_borrow_reschedules() {
     let cell = test_engine_cell(64, 64);
     let transport = Transport::new();
-    transport.enqueue(1, "add_raster", json!({ "anchor": -1 }), Vec::new());
+    transport.enqueue(1, "add_raster", json!({ "anchor": null }), Vec::new());
 
     let render_guard = cell.borrow_mut(); // render in flight
     match transport.try_drain(&cell) {

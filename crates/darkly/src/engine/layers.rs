@@ -1,13 +1,98 @@
 //! Layer CRUD and property operations.
 
+use darkly_macros::handlers;
+
 use super::DarklyEngine;
 use crate::document::MoveTarget;
+use crate::engine::protocol::{params_from_json, RawParams};
 use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::property::Property;
 use crate::undo::{
     CompoundAction, LayerAddAction, LayerMoveAction, LayerRemoveAction, PropertyAction, UndoAction,
 };
 
+/// Convert Darkly's row-major `[a, b, tx, c, d, ty]` affine (point map
+/// `x' = a·x + b·y + tx`, `y' = c·x + d·y + ty`) into kurbo's column-major
+/// `[a, b, c, d, e, f]` (`x' = a·x + c·y + e`, `y' = b·x + d·y + f`).
+fn transform_to_kurbo(t: &crate::transform::Transform) -> kurbo::Affine {
+    let [a, b, tx, c, d, ty] = t.to_affine();
+    kurbo::Affine::new([a as f64, c as f64, b as f64, d as f64, tx as f64, ty as f64])
+}
+
+/// Inverse of [`transform_to_kurbo`]: kurbo column-major `[a, b, c, d, e, f]`
+/// → Darkly row-major `[a, c, e, b, d, f]`. The one place this reordering
+/// lives, so consumers never reshuffle affine components inline.
+fn kurbo_to_affine(a: kurbo::Affine) -> crate::transform::Affine2D {
+    let [k0, k1, k2, k3, k4, k5] = a.as_coeffs();
+    [
+        k0 as f32, k2 as f32, k4 as f32, k1 as f32, k3 as f32, k5 as f32,
+    ]
+}
+
+/// The logical operations that route through one `Property::VectorObjects`
+/// undo kind. Each gets its own coalesce lane so a typing run, a style-slider
+/// drag, and a gizmo drag don't merge into a single undo step.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VectorOpKind {
+    Content,
+    Style,
+    Transform,
+    /// A text box-frame resize (origin + box size). Its own lane so a resize
+    /// drag coalesces to one undo step, distinct from a glyph transform.
+    Box,
+}
+
+/// Coalesce discriminator for one object's edits: distinct per `(object, op)`,
+/// so adjacent same-object same-op edits merge but a different object or op
+/// starts a fresh undo step. (Coalescing only inspects the stack top, so
+/// non-adjacent same-tag ops never merge across an intervening different one.)
+fn vector_coalesce_tag(object: crate::layer::ObjectId, op: VectorOpKind) -> u64 {
+    let op = match op {
+        VectorOpKind::Content => 0,
+        VectorOpKind::Style => 1,
+        VectorOpKind::Transform => 2,
+        VectorOpKind::Box => 3,
+    };
+    (object.0 << 2) | op
+}
+
+/// Extract an RGBA byte tuple from an optional solid fill, defaulting to opaque
+/// black for a missing or non-solid brush (mirrors the render-time fallback).
+fn brush_rgba(fill: &Option<peniko::Brush>) -> [u8; 4] {
+    match fill {
+        Some(peniko::Brush::Solid(c)) => {
+            let rgba8 = c.to_rgba8();
+            [rgba8.r, rgba8.g, rgba8.b, rgba8.a]
+        }
+        _ => [0, 0, 0, 255],
+    }
+}
+
+/// One text object's content, style, and fill color — the data the
+/// text-properties panel binds each editor block to. Carries no geometry:
+/// the panel edits off-canvas, so shaping/bounds are never needed.
+pub struct TextObjectEntry {
+    pub object: crate::layer::ObjectId,
+    pub content: String,
+    pub font_family: String,
+    pub size: f32,
+    /// Variable-font axis values (tag → value), including `wght`. Empty for an
+    /// untouched/static font.
+    pub variations: std::collections::BTreeMap<String, f32>,
+    /// OpenType feature values (tag → value).
+    pub features: std::collections::BTreeMap<String, u32>,
+    pub letter_spacing: f32,
+    pub word_spacing: f32,
+    pub line_height: f32,
+    pub italic: bool,
+    pub align: crate::layer::TextAlign,
+    pub color: [u8; 4],
+    /// `Some((w, h))` for area text, `None` for point text — lets the panel
+    /// tell which mode an object is in.
+    pub box_size: Option<(f32, f32)>,
+}
+
+#[handlers]
 impl DarklyEngine {
     // --- Layer CRUD ---
 
@@ -28,6 +113,482 @@ impl DarklyEngine {
         id
     }
 
+    // --- Wire entry points ---
+    //
+    // These are the protocol verbs the frontend calls: they take wire-friendly
+    // arguments (`RawParams`, `Option<LayerId>`) and forward to the typed
+    // primitives above/below. The param-bearing ones own the single coercion
+    // seam (`coerce_void_params`), pairing a raw params object with the sibling
+    // field that names its schema — the one thing generic request routing can't
+    // do for itself. Direct Rust callers (and tests) use the typed primitives.
+
+    /// Wire entry for `add_raster` — see [`Self::add_raster_layer`].
+    #[handler]
+    pub fn add_raster(&mut self, anchor: Option<LayerId>) -> LayerId {
+        self.add_raster_layer(anchor)
+    }
+
+    /// Wire entry for `add_void` — coerces `params` against the void type's
+    /// schema, then [`Self::add_void_layer`].
+    #[handler]
+    pub fn add_void(
+        &mut self,
+        void_type: String,
+        params: RawParams,
+        anchor: Option<LayerId>,
+    ) -> Option<LayerId> {
+        let pv = self.coerce_void_params(&void_type, &params.0);
+        self.add_void_layer(&void_type, pv, anchor)
+    }
+
+    /// Wire entry for `add_filter` — coerces `params` against the filter type's
+    /// schema (defaults fill any omitted values), then [`Self::add_filter_layer`].
+    #[handler]
+    pub fn add_filter(
+        &mut self,
+        pipeline: String,
+        params: RawParams,
+        anchor: Option<LayerId>,
+    ) -> Option<LayerId> {
+        let pv = params_from_json(&params.0, self.filter_param_defs(&pipeline));
+        self.add_filter_layer(&pipeline, pv, anchor)
+    }
+
+    /// Wire entry for `set_void_params` — resolves the layer's void type,
+    /// coerces `params` against its schema, then [`Self::update_void_params`].
+    /// A non-void (or stale) id is a silent no-op.
+    #[handler]
+    pub fn set_void_params(&mut self, id: LayerId, params: RawParams) {
+        let Some(type_id) = self.void_layer_type(id) else {
+            return;
+        };
+        let pv = self.coerce_void_params(&type_id, &params.0);
+        self.update_void_params(id, pv);
+    }
+
+    /// Wire entry for `set_filter_params` — resolves the layer's filter type,
+    /// coerces `params` against its schema, then [`Self::update_filter_params`].
+    /// A non-filter (or stale) id is a silent no-op. The exact analog of
+    /// [`Self::set_void_params`].
+    #[handler]
+    pub fn set_filter_params(&mut self, id: LayerId, params: RawParams) {
+        let Some(type_id) = self.filter_layer_pipeline(id) else {
+            return;
+        };
+        let pv = params_from_json(&params.0, self.filter_param_defs(&type_id));
+        self.update_filter_params(id, pv);
+    }
+
+    // --- Vector / text layers ---
+
+    /// Family names available to the font picker. Bundled fonts today.
+    pub fn list_fonts(&self) -> Vec<String> {
+        self.fonts.list_fonts().to_vec()
+    }
+
+    /// Register a font blob (uploaded `.ttf`/`.otf` or a decoded Google import)
+    /// into this engine's font collection. Returns the family names it
+    /// contributed so the frontend library can index them. A thin passthrough to
+    /// [`crate::text::FontRegistry::register_font`] — the bytes are content-hashed
+    /// and cached there so the families round-trip through `.darkly` save/load.
+    pub fn register_font(&mut self, bytes: Vec<u8>) -> Vec<String> {
+        self.fonts.register_font(bytes)
+    }
+
+    /// Local bbox of an owned object. Takes the object by reference so callers
+    /// iterating a cloned object list can shape each without re-borrowing the
+    /// document while `&mut self.fonts` is live.
+    fn object_bbox(&mut self, obj: &crate::layer::VectorObject) -> Option<kurbo::Rect> {
+        use kurbo::Shape;
+        match &obj.source {
+            crate::layer::ObjectSource::Text(t) => {
+                // Area text's extent is its fixed box; point text's is the
+                // natural shaped size. The box drives both the gizmo frame
+                // (`vector_object_info`) and hit-testing.
+                if let Some((w, h)) = t.layout.area_size() {
+                    Some(kurbo::Rect::new(0.0, 0.0, w as f64, h as f64))
+                } else {
+                    let layout = self.fonts.shape(t);
+                    Some(kurbo::Rect::new(
+                        0.0,
+                        0.0,
+                        layout.width() as f64,
+                        layout.height() as f64,
+                    ))
+                }
+            }
+            crate::layer::ObjectSource::Path(p) => Some(p.bounding_box()),
+        }
+    }
+
+    /// Hit-test a plane-space point against the objects of a vector layer,
+    /// returning the topmost object covering it (objects draw bottom-to-top, so
+    /// the iteration is reversed). The query point is mapped into each object's
+    /// local frame by the inverse of `layer_transform * obj.transform` — the
+    /// same composition `build_scene` draws through — so the test is tight even
+    /// for rotated/scaled text. `None` for a miss, a locked/hidden layer, or a
+    /// non-vector id. `(x, y)` are PLANE coordinates (see
+    /// `docs/coordinate-systems.md`).
+    pub fn hit_test_vector_object(
+        &mut self,
+        layer_id: LayerId,
+        x: f64,
+        y: f64,
+    ) -> Option<crate::layer::ObjectId> {
+        if !self.doc.is_node_editable(layer_id) || !self.doc.effective_visible(layer_id) {
+            return None;
+        }
+        let (objects, layer_affine) = match self.doc.layer(layer_id) {
+            Some(Layer::Vector(v)) => (v.objects.clone(), transform_to_kurbo(&v.transform)),
+            _ => return None,
+        };
+        let query = kurbo::Point::new(x, y);
+        for obj in objects.iter().rev() {
+            let Some(bbox) = self.object_bbox(obj) else {
+                continue;
+            };
+            let composed = layer_affine * obj.transform;
+            if composed.determinant().abs() < 1e-12 {
+                continue;
+            }
+            let local = composed.inverse() * query;
+            if bbox.contains(local) {
+                return Some(obj.id);
+            }
+        }
+        None
+    }
+
+    /// Add a vector layer seeded with one text object, placed so the text's
+    /// top-left baseline origin sits at canvas `(x, y)`, filled with `color`
+    /// (RGBA, 0–255). Returns the new layer id and the stamped object id. One
+    /// undo step.
+    pub fn add_text_layer(
+        &mut self,
+        text: crate::layer::TextProps,
+        x: f64,
+        y: f64,
+        color: [u8; 4],
+        anchor: Option<LayerId>,
+    ) -> (LayerId, crate::layer::ObjectId) {
+        let id = self.doc.add_vector_layer(anchor);
+        let fill = peniko::Brush::Solid(peniko::Color::from_rgba8(
+            color[0], color[1], color[2], color[3],
+        ));
+        let obj = crate::layer::VectorObject::text(text, kurbo::Affine::translate((x, y)), fill);
+        let object_id = match self.doc.find_node_mut(id) {
+            Some(LayerNode::Layer(Layer::Vector(v))) => v.push_object(obj),
+            _ => crate::layer::ObjectId::UNASSIGNED,
+        };
+        self.sync_vector_layer(id);
+        self.compositor.mark_dirty();
+
+        let parent = self.doc.parent_of(id);
+        let pos = self.doc.position_in_parent(id).unwrap_or(0);
+        self.push_undo(Box::new(LayerAddAction::new(id, parent, pos)));
+        (id, object_id)
+    }
+
+    /// Add a text object to an *existing* vector layer, placed so its origin
+    /// sits at canvas `(x, y)`, filled with `color`. The vector layer owns an
+    /// ordered list of objects, so this is the natural "another text box on the
+    /// same layer" path. One undo step (the object list before/after, via
+    /// [`Property::VectorObjects`] — the same undo kind [`Self::edit_vector_object`]
+    /// records). Returns the stamped object id, or `None` for a non-vector id.
+    pub fn add_text_object(
+        &mut self,
+        layer_id: LayerId,
+        text: crate::layer::TextProps,
+        x: f64,
+        y: f64,
+        color: [u8; 4],
+    ) -> Option<crate::layer::ObjectId> {
+        let old = match self.doc.layer(layer_id) {
+            Some(Layer::Vector(v)) => v.objects.clone(),
+            _ => return None,
+        };
+        let fill = peniko::Brush::Solid(peniko::Color::from_rgba8(
+            color[0], color[1], color[2], color[3],
+        ));
+        let obj = crate::layer::VectorObject::text(text, kurbo::Affine::translate((x, y)), fill);
+        let object_id = match self.doc.find_node_mut(layer_id) {
+            Some(LayerNode::Layer(Layer::Vector(v))) => v.push_object(obj),
+            _ => return None,
+        };
+        let new = match self.doc.layer(layer_id) {
+            Some(Layer::Vector(v)) => v.objects.clone(),
+            _ => return None,
+        };
+        self.push_undo(Box::new(PropertyAction::new(
+            layer_id,
+            Property::VectorObjects(old),
+            Property::VectorObjects(new),
+        )));
+        self.sync_vector_layer(layer_id);
+        self.compositor.mark_dirty();
+        Some(object_id)
+    }
+
+    /// Ensure the compositor's GPU state for a vector layer exists and rebuild
+    /// its `vello::Scene` from the document's authoritative objects. Idempotent
+    /// — safe after any object/style/transform change, on load, and on
+    /// undo/redo (`sync_compositor_layers` calls it for every vector layer).
+    pub(crate) fn sync_vector_layer(&mut self, id: LayerId) {
+        self.compositor
+            .ensure_vector_layer(&self.gpu.device, &self.gpu.queue, id);
+        let Some(Layer::Vector(v)) = self.doc.layer(id) else {
+            return;
+        };
+        let objects = v.objects.clone();
+        let layer_affine = transform_to_kurbo(&v.transform);
+        let scene = self.fonts.build_scene(&objects, layer_affine);
+        self.compositor.set_vector_scene(id, scene);
+    }
+
+    /// Replace the content string of one text object on a vector layer.
+    pub fn set_text_content(
+        &mut self,
+        id: LayerId,
+        object: crate::layer::ObjectId,
+        content: String,
+    ) {
+        self.edit_vector_object(id, object, VectorOpKind::Content, |obj| {
+            if let crate::layer::ObjectSource::Text(t) = &mut obj.source {
+                t.content = content;
+            }
+        });
+    }
+
+    /// Update one or more style fields (and/or fill color) of one text object on
+    /// a vector layer. `None` arguments leave that field unchanged. `variations`
+    /// and `features` are **merged** into the object's maps — passing one axis
+    /// keeps the rest — so the panel can edit a single slider without clobbering
+    /// the others. Box/layout is *not* here: it stays owned by
+    /// [`Self::set_text_box`] on its own undo lane (there is no second mutation
+    /// path for it).
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_text_style(
+        &mut self,
+        id: LayerId,
+        object: crate::layer::ObjectId,
+        font_family: Option<String>,
+        size: Option<f32>,
+        variations: Option<std::collections::BTreeMap<String, f32>>,
+        features: Option<std::collections::BTreeMap<String, u32>>,
+        letter_spacing: Option<f32>,
+        word_spacing: Option<f32>,
+        line_height: Option<f32>,
+        italic: Option<bool>,
+        align: Option<crate::layer::TextAlign>,
+        color: Option<[u8; 4]>,
+    ) {
+        self.edit_vector_object(id, object, VectorOpKind::Style, |obj| {
+            if let crate::layer::ObjectSource::Text(t) = &mut obj.source {
+                if let Some(f) = font_family {
+                    t.font_family = f;
+                }
+                if let Some(s) = size {
+                    t.size = s;
+                }
+                if let Some(vars) = variations {
+                    t.variations.extend(vars);
+                }
+                if let Some(feats) = features {
+                    t.features.extend(feats);
+                }
+                if let Some(ls) = letter_spacing {
+                    t.letter_spacing = ls;
+                }
+                if let Some(ws) = word_spacing {
+                    t.word_spacing = ws;
+                }
+                if let Some(lh) = line_height {
+                    t.line_height = lh;
+                }
+                if let Some(i) = italic {
+                    t.style = if i {
+                        crate::layer::TextStyle::Italic
+                    } else {
+                        crate::layer::TextStyle::Normal
+                    };
+                }
+                if let Some(a) = align {
+                    t.align = a;
+                }
+            }
+            if let Some(c) = color {
+                obj.fill = Some(peniko::Brush::Solid(peniko::Color::from_rgba8(
+                    c[0], c[1], c[2], c[3],
+                )));
+            }
+        });
+    }
+
+    /// Report a font family's capabilities (variable axes + real italic face) so
+    /// the UI can render font-driven controls. Thin passthrough to
+    /// [`crate::text::FontRegistry::font_axes`].
+    pub fn font_axes(&mut self, family: &str) -> crate::text::FontCapabilities {
+        self.fonts.font_axes(family)
+    }
+
+    /// The single chokepoint for editing one object on a vector layer in place.
+    /// Clones the object list, mutates the object matched by `object`, swaps the
+    /// list back, and records the whole swap as one undo step — coalesced on
+    /// `(object, op)` so a typing run, a style-slider drag, or a gizmo drag each
+    /// collapse to one step, but switching object or op kind starts a new one
+    /// (see [`crate::undo::PropertyAction::new_coalescing`]). Re-realizes the
+    /// layer's vello scene. No-op if the id pair doesn't resolve.
+    pub(crate) fn edit_vector_object<F: FnOnce(&mut crate::layer::VectorObject)>(
+        &mut self,
+        id: LayerId,
+        object: crate::layer::ObjectId,
+        op: VectorOpKind,
+        f: F,
+    ) {
+        let Some(Layer::Vector(v)) = self.doc.layer(id) else {
+            return;
+        };
+        let old = v.objects.clone();
+        let mut new = old.clone();
+        let Some(obj) = new.iter_mut().find(|o| o.id == object) else {
+            return;
+        };
+        f(obj);
+        if let Some(LayerNode::Layer(Layer::Vector(vm))) = self.doc.find_node_mut(id) {
+            vm.objects = new.clone();
+        }
+        self.coalesce_property_undo(PropertyAction::new_coalescing(
+            id,
+            Property::VectorObjects(old),
+            Property::VectorObjects(new),
+            vector_coalesce_tag(object, op),
+        ));
+        self.sync_vector_layer(id);
+        self.compositor.mark_dirty();
+    }
+
+    /// List every text object on a vector layer with its content, style, and
+    /// fill color (RGBA 0–255) — what the text-properties panel binds one
+    /// editor block to per object. Empty for a non-vector layer or one with no
+    /// text objects. Carries no geometry: the panel edits off-canvas, so
+    /// shaping/bounds are never needed.
+    pub fn text_objects(&self, id: LayerId) -> Vec<TextObjectEntry> {
+        let Some(Layer::Vector(v)) = self.doc.layer(id) else {
+            return Vec::new();
+        };
+        v.objects
+            .iter()
+            .filter_map(|obj| match &obj.source {
+                crate::layer::ObjectSource::Text(t) => Some(TextObjectEntry {
+                    object: obj.id,
+                    content: t.content.clone(),
+                    font_family: t.font_family.clone(),
+                    size: t.size,
+                    variations: t.variations.clone(),
+                    features: t.features.clone(),
+                    letter_spacing: t.letter_spacing,
+                    word_spacing: t.word_spacing,
+                    line_height: t.line_height,
+                    italic: matches!(t.style, crate::layer::TextStyle::Italic),
+                    align: t.align,
+                    color: brush_rgba(&obj.fill),
+                    box_size: t.layout.area_size(),
+                }),
+                crate::layer::ObjectSource::Path(_) => None,
+            })
+            .collect()
+    }
+
+    /// Read one object's gizmo geometry: its local bbox size plus the full
+    /// canvas affine `G = layer_transform * obj.transform`, reordered into the
+    /// frontend's row-major `Affine2D`. The gizmo's origin is `(0, 0)` — the
+    /// placement is folded into `G`, so `toCanvas(local) = G·local` draws the
+    /// box tight around the object. `None` if the id pair doesn't resolve.
+    pub fn vector_object_info(
+        &mut self,
+        id: LayerId,
+        object: crate::layer::ObjectId,
+    ) -> Option<(f32, f32, f32, f32, crate::transform::Affine2D)> {
+        let (obj, layer_affine) = match self.doc.layer(id) {
+            Some(Layer::Vector(v)) => {
+                (v.object(object).cloned()?, transform_to_kurbo(&v.transform))
+            }
+            _ => return None,
+        };
+        let bbox = self.object_bbox(&obj)?;
+        let g = layer_affine * obj.transform;
+        Some((
+            0.0,
+            0.0,
+            bbox.width() as f32,
+            bbox.height() as f32,
+            kurbo_to_affine(g),
+        ))
+    }
+
+    /// Set one object's transform from the gizmo's output. `gizmo_canvas` is the
+    /// full canvas affine `G` the gizmo produced, in Darkly's row-major
+    /// [`crate::transform::Transform`]; the layer transform is stripped
+    /// (`obj.transform = layer_transform⁻¹ · G`) so per-object transform stays
+    /// correct once a layer-level vector transform ships. Reads the object's
+    /// current transform as the undo `old`, coalesced under
+    /// [`VectorOpKind::Transform`] so a whole gizmo drag is one undo step.
+    /// Re-realizes the vello scene each call (raster-first; the same per-frame
+    /// rebuild `update_void_transform` does).
+    pub fn set_vector_object_transform(
+        &mut self,
+        id: LayerId,
+        object: crate::layer::ObjectId,
+        gizmo_canvas: crate::transform::Transform,
+    ) {
+        let layer_affine = match self.doc.layer(id) {
+            Some(Layer::Vector(v)) => transform_to_kurbo(&v.transform),
+            _ => return,
+        };
+        if layer_affine.determinant().abs() < 1e-12 {
+            return;
+        }
+        let new_transform = layer_affine.inverse() * transform_to_kurbo(&gizmo_canvas);
+        self.edit_vector_object(id, object, VectorOpKind::Transform, |obj| {
+            obj.transform = new_transform;
+        });
+    }
+
+    /// Resize a text object's layout box from the box gizmo's output, setting
+    /// the object transform (the box's moved origin, as the full canvas affine
+    /// `G`) and the box size atomically. Like
+    /// [`Self::set_vector_object_transform`] the layer transform is stripped
+    /// (`obj.transform = layer_transform⁻¹ · G`); both fields move under one
+    /// [`VectorOpKind::Box`] step so a whole resize drag is one undo. Converts a
+    /// point-text object to area text. No-op for a non-text object or a singular
+    /// layer transform.
+    pub fn set_text_box(
+        &mut self,
+        id: LayerId,
+        object: crate::layer::ObjectId,
+        gizmo_canvas: crate::transform::Transform,
+        box_size: (f32, f32),
+    ) {
+        let layer_affine = match self.doc.layer(id) {
+            Some(Layer::Vector(v)) => transform_to_kurbo(&v.transform),
+            _ => return,
+        };
+        if layer_affine.determinant().abs() < 1e-12 {
+            return;
+        }
+        let new_transform = layer_affine.inverse() * transform_to_kurbo(&gizmo_canvas);
+        self.edit_vector_object(id, object, VectorOpKind::Box, |obj| {
+            obj.transform = new_transform;
+            if let crate::layer::ObjectSource::Text(t) = &mut obj.source {
+                t.layout = crate::layer::TextLayout::Area {
+                    width: box_size.0,
+                    height: box_size.1,
+                };
+            }
+        });
+    }
+
+    #[handler]
     pub fn add_group(&mut self, anchor: Option<LayerId>) -> LayerId {
         let id = self.doc.add_group(anchor);
 
@@ -48,6 +609,7 @@ impl DarklyEngine {
     /// skipped; the new group is created only if at least one editable
     /// source remains. The whole op is one [`CompoundAction`], so a
     /// single undo restores the original tree.
+    #[handler]
     pub fn group_layers(&mut self, ids: Vec<LayerId>) -> Result<LayerId, String> {
         if ids.is_empty() {
             return Err("Need at least one layer to group".into());
@@ -270,34 +832,76 @@ impl DarklyEngine {
         ));
     }
 
+    /// Resolve a layer id to its filter `pipeline` id, if the layer is a filter.
+    /// Lets the protocol handler fetch the filter's param schema without
+    /// importing the layer enum.
+    pub fn filter_layer_pipeline(&self, layer_id: LayerId) -> Option<String> {
+        match self.doc.find_node(layer_id) {
+            Some(LayerNode::Layer(Layer::Filter(f))) => Some(f.pipeline.clone()),
+            _ => None,
+        }
+    }
+
+    /// Parameter schema for a filter type (empty for parameter-free filters).
+    /// Backs the protocol handler's JSON→`ParamValue` conversion.
+    pub fn filter_param_defs(&self, type_id: &str) -> &'static [crate::gpu::params::ParamDef] {
+        self.compositor.filter_pipeline_registry().params(type_id)
+    }
+
+    /// Replace a filter layer's parameter values. Coalesces with prior
+    /// `FilterParams` edits on the same layer so a curve drag is one undo step —
+    /// the exact analog of [`Self::update_void_params`]. The compositor rebuilds
+    /// any param-derived GPU resources (the curves LUT) lazily on the next
+    /// `sync_projection_states`, keyed by the param fingerprint.
+    pub fn update_filter_params(
+        &mut self,
+        layer_id: LayerId,
+        new_params: Vec<crate::gpu::params::ParamValue>,
+    ) {
+        if !self.doc.is_node_editable(layer_id) {
+            return;
+        }
+        let old_params = match self.doc.find_node(layer_id) {
+            Some(LayerNode::Layer(Layer::Filter(f))) => f.params.clone(),
+            _ => return,
+        };
+        if let Some(LayerNode::Layer(Layer::Filter(f))) = self.doc.find_node_mut(layer_id) {
+            f.params = new_params.clone();
+        }
+        self.compositor.mark_dirty();
+
+        self.coalesce_property_undo(PropertyAction::new(
+            layer_id,
+            Property::FilterParams(old_params),
+            Property::FilterParams(new_params),
+        ));
+    }
+
     /// Set a void layer's user transform (the void *consuming* the generic
     /// transform gizmo's output). Mirrors [`Self::update_void_params`]:
     /// reads the layer's CURRENT transform as the undo `old_value` before
     /// writing, so a whole gizmo drag coalesces into one undo step that
     /// restores the true pre-drag state — never identity.
-    pub fn update_void_transform(
-        &mut self,
-        layer_id: LayerId,
-        new_transform: crate::transform::Transform,
-    ) {
-        if !self.doc.is_node_editable(layer_id) {
+    #[handler]
+    pub fn update_void_transform(&mut self, id: LayerId, transform: crate::transform::Transform) {
+        if !self.doc.is_node_editable(id) {
             return;
         }
-        let old_transform = match self.doc.find_node(layer_id) {
+        let old_transform = match self.doc.find_node(id) {
             Some(LayerNode::Layer(Layer::Void(v))) => v.transform,
             _ => return,
         };
-        if let Some(LayerNode::Layer(Layer::Void(v))) = self.doc.find_node_mut(layer_id) {
-            v.transform = new_transform;
+        if let Some(LayerNode::Layer(Layer::Void(v))) = self.doc.find_node_mut(id) {
+            v.transform = transform;
         }
         self.compositor
-            .update_void_layer_transform(&self.gpu.queue, layer_id, &new_transform);
+            .update_void_layer_transform(&self.gpu.queue, id, &transform);
         self.compositor.mark_dirty();
 
         self.coalesce_property_undo(PropertyAction::new(
-            layer_id,
+            id,
             Property::Transform(old_transform),
-            Property::Transform(new_transform),
+            Property::Transform(transform),
         ));
     }
 
@@ -336,9 +940,10 @@ impl DarklyEngine {
     /// How the user may transform a layer — `live` / `destructive` / `none`.
     /// Resolves the void's static capability through the compositor-owned
     /// registry. Returned as a stable string for the WASM boundary.
-    pub fn layer_transform_capability(&self, layer_id: LayerId) -> &'static str {
+    #[handler]
+    pub fn layer_transform_capability(&self, id: LayerId) -> &'static str {
         use crate::layer::TransformCapability;
-        let cap = match self.doc.find_node(layer_id) {
+        let cap = match self.doc.find_node(id) {
             Some(LayerNode::Layer(l)) => l.transform_capability(self.compositor.void_registry()),
             _ => TransformCapability::None,
         };
@@ -425,10 +1030,10 @@ impl DarklyEngine {
     pub fn layer_bounds(&self, layer_id: LayerId) -> Option<crate::coord::CanvasRect> {
         match self.doc.layer(layer_id)? {
             Layer::Raster(r) => Some(r.pixels.bounds),
-            // Voids and filter layers store no pixels — their "bounds" concept
-            // is the canvas itself, which callers can ask for directly via
-            // `canvas_dimensions`.
-            Layer::Void(_) | Layer::Filter(_) => None,
+            // Voids, filter, and vector layers store no pixels — their "bounds"
+            // concept is the canvas itself, which callers can ask for directly
+            // via `canvas_dimensions`.
+            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) => None,
         }
     }
 
@@ -447,15 +1052,16 @@ impl DarklyEngine {
             .map(|p| p.bounds)
     }
 
-    pub fn remove_layer(&mut self, layer_id: LayerId) -> Result<(), String> {
-        if !self.doc.is_node_editable(layer_id) {
+    #[handler]
+    pub fn remove_layer(&mut self, id: LayerId) -> Result<(), String> {
+        if !self.doc.is_node_editable(id) {
             return Err("Layer is locked".into());
         }
         if self.doc.node_count() <= 1 {
             return Err("Cannot delete the last layer".into());
         }
 
-        if let Some(action) = self.detach_layer_for_remove(layer_id) {
+        if let Some(action) = self.detach_layer_for_remove(id) {
             self.push_undo(action);
         }
         self.compositor.mark_dirty();
@@ -485,6 +1091,7 @@ impl DarklyEngine {
     /// return value is the count of locked layers that were ignored so the
     /// UI can surface a "N locked layers skipped" toast. Errors only when
     /// removing the editable set would leave zero layers in the document.
+    #[handler]
     pub fn remove_layers(&mut self, ids: Vec<LayerId>) -> Result<usize, String> {
         let mut editable = Vec::with_capacity(ids.len());
         let mut skipped_locked = 0usize;
@@ -519,8 +1126,9 @@ impl DarklyEngine {
         Ok(skipped_locked)
     }
 
-    pub fn move_layer(&mut self, layer_id: LayerId, target: MoveTarget) {
-        if let Some(action) = self.move_layer_inner(layer_id, target) {
+    #[handler]
+    pub fn move_layer(&mut self, id: LayerId, target: MoveTarget) {
+        if let Some(action) = self.move_layer_inner(id, target) {
             self.push_undo(action);
         }
         self.compositor.mark_dirty();
@@ -554,6 +1162,7 @@ impl DarklyEngine {
     /// of locked-layer skips so the UI can toast. Errors when `target`
     /// references an id in `ids` or a descendant of one (the drop is
     /// self-referential).
+    #[handler]
     pub fn move_layers(&mut self, ids: Vec<LayerId>, target: MoveTarget) -> Result<usize, String> {
         let target_id = match target {
             MoveTarget::Before(t)
@@ -617,32 +1226,34 @@ impl DarklyEngine {
 
     // --- Layer properties ---
 
-    pub fn set_opacity(&mut self, layer_id: LayerId, opacity: f32) {
-        if !self.doc.is_node_editable(layer_id) {
+    #[handler]
+    pub fn set_opacity(&mut self, id: LayerId, opacity: f32) {
+        if !self.doc.is_node_editable(id) {
             return;
         }
-        let old_opacity = match self.doc.find_node(layer_id) {
+        let old_opacity = match self.doc.find_node(id) {
             Some(n) => n.blend().opacity,
             None => return,
         };
-        if let Some(node) = self.doc.find_node_mut(layer_id) {
+        if let Some(node) = self.doc.find_node_mut(id) {
             node.blend_mut().opacity = opacity;
         } else {
             return;
         }
 
-        self.refresh_blend_uniforms(layer_id);
+        self.refresh_blend_uniforms(id);
         self.compositor.mark_dirty();
 
         self.coalesce_property_undo(PropertyAction::new(
-            layer_id,
+            id,
             Property::Opacity(old_opacity),
             Property::Opacity(opacity),
         ));
     }
 
-    pub fn set_blend_mode(&mut self, layer_id: LayerId, type_id: &str) {
-        if !self.doc.is_node_editable(layer_id) {
+    #[handler]
+    pub fn set_blend_mode(&mut self, id: LayerId, type_id: &str) {
+        if !self.doc.is_node_editable(id) {
             return;
         }
         // Unknown blend-mode strings keep the existing mode rather than
@@ -652,7 +1263,7 @@ impl DarklyEngine {
             Some(reg) => reg,
             None => return,
         };
-        let old_mode = match self.doc.find_node(layer_id) {
+        let old_mode = match self.doc.find_node(id) {
             Some(n) => n.blend().blend_mode,
             None => return,
         };
@@ -660,10 +1271,10 @@ impl DarklyEngine {
         // to isolated — passthrough ignores the group's blend mode, so the
         // user's choice would have no visible effect otherwise.
         let was_passthrough = matches!(
-            self.doc.find_node(layer_id),
+            self.doc.find_node(id),
             Some(LayerNode::Group(g)) if g.passthrough,
         );
-        if let Some(node) = self.doc.find_node_mut(layer_id) {
+        if let Some(node) = self.doc.find_node_mut(id) {
             node.blend_mut().blend_mode = blend_mode;
             if was_passthrough {
                 if let LayerNode::Group(g) = node {
@@ -676,19 +1287,19 @@ impl DarklyEngine {
 
         if was_passthrough {
             self.compositor
-                .ensure_group_state(&self.gpu.device, &self.gpu.queue, layer_id);
+                .ensure_group_state(&self.gpu.device, &self.gpu.queue, id);
         }
-        self.refresh_blend_uniforms(layer_id);
+        self.refresh_blend_uniforms(id);
         self.compositor.mark_dirty();
 
         let blend_action: Box<dyn UndoAction> = Box::new(PropertyAction::new(
-            layer_id,
+            id,
             Property::BlendMode(old_mode),
             Property::BlendMode(blend_mode),
         ));
         if was_passthrough {
             let passthrough_action: Box<dyn UndoAction> = Box::new(PropertyAction::new(
-                layer_id,
+                id,
                 Property::Passthrough(true),
                 Property::Passthrough(false),
             ));
@@ -703,13 +1314,14 @@ impl DarklyEngine {
 
     /// Set the `visible` flag on any node — layer, group, or filter.
     /// Works uniformly across kinds because they all carry [`NodeCommon`].
-    pub fn set_layer_visible(&mut self, node_id: LayerId, visible: bool) {
+    #[handler]
+    pub fn set_layer_visible(&mut self, id: LayerId, visible: bool) {
         // Try layers/groups first; fall through to filters.
-        let old_visible = if let Some(node) = self.doc.find_node_mut(node_id) {
+        let old_visible = if let Some(node) = self.doc.find_node_mut(id) {
             let old = node.common().visible;
             node.common_mut().visible = visible;
             Some(old)
-        } else if let Some(filter) = self.doc.find_filter_mut(node_id) {
+        } else if let Some(filter) = self.doc.find_filter_mut(id) {
             let old = filter.common.visible;
             filter.common.visible = visible;
             Some(old)
@@ -718,17 +1330,18 @@ impl DarklyEngine {
         };
         if let Some(old) = old_visible {
             self.compositor.mark_dirty();
-            self.push_undo(Box::new(crate::undo::NodeVisibleAction::new(node_id, old)));
+            self.push_undo(Box::new(crate::undo::NodeVisibleAction::new(id, old)));
         }
     }
 
     /// Set the `locked` flag on any node — layer, group, or filter.
-    pub fn set_node_locked(&mut self, node_id: LayerId, locked: bool) {
-        let old_locked = if let Some(node) = self.doc.find_node_mut(node_id) {
+    #[handler]
+    pub fn set_node_locked(&mut self, id: LayerId, locked: bool) {
+        let old_locked = if let Some(node) = self.doc.find_node_mut(id) {
             let old = node.common().locked;
             node.common_mut().locked = locked;
             Some(old)
-        } else if let Some(filter) = self.doc.find_filter_mut(node_id) {
+        } else if let Some(filter) = self.doc.find_filter_mut(id) {
             let old = filter.common.locked;
             filter.common.locked = locked;
             Some(old)
@@ -736,7 +1349,7 @@ impl DarklyEngine {
             None
         };
         if let Some(old) = old_locked {
-            self.push_undo(Box::new(crate::undo::NodeLockedAction::new(node_id, old)));
+            self.push_undo(Box::new(crate::undo::NodeLockedAction::new(id, old)));
         }
     }
 
@@ -751,6 +1364,7 @@ impl DarklyEngine {
     /// every layer is independent: toggling visibility while isolated
     /// modifies that layer's `visible` field, and clearing isolation
     /// preserves whatever the user set.
+    #[handler]
     pub fn set_isolated_node(&mut self, id: Option<LayerId>) {
         if self.isolated_node == id {
             return;
@@ -784,6 +1398,7 @@ impl DarklyEngine {
 
     /// User-visible document name. Backs the tab title and the Save As
     /// picker's `suggestedName`. Persisted on disk as `manifest.name`.
+    #[handler]
     pub fn document_name(&self) -> &str {
         &self.doc.name
     }
@@ -801,6 +1416,7 @@ impl DarklyEngine {
     /// successful save (`poll_save_result`) or load (`open_document`
     /// installs a fresh `dirty = false` doc). UI close-tab and
     /// `beforeunload` flows consult this to decide whether to prompt.
+    #[handler]
     pub fn is_dirty(&self) -> bool {
         self.doc.dirty
     }
@@ -822,6 +1438,7 @@ impl DarklyEngine {
     /// crash-recovery snapshot: the restored document is unsaved work
     /// with no backing file handle, so it must read as dirty (otherwise
     /// closing the tab would silently discard the recovered work).
+    #[handler]
     pub fn mark_dirty(&mut self) {
         self.doc.dirty = true;
     }
@@ -830,26 +1447,28 @@ impl DarklyEngine {
     /// users expect to be free-standing, matching every other editor's
     /// "title bar rename" affordance. The save flow picks the new name
     /// up from `doc.name` the next time `start_save_document` runs.
+    #[handler]
     pub fn set_document_name(&mut self, name: String) {
         self.doc.name = name;
     }
 
-    pub fn set_layer_name(&mut self, layer_id: LayerId, name: &str) {
-        if !self.doc.is_node_editable(layer_id) {
+    #[handler]
+    pub fn set_layer_name(&mut self, id: LayerId, name: &str) {
+        if !self.doc.is_node_editable(id) {
             return;
         }
-        let old_name = match self.doc.find_node(layer_id) {
+        let old_name = match self.doc.find_node(id) {
             Some(n) => n.common().name.clone(),
             None => return,
         };
-        if let Some(node) = self.doc.find_node_mut(layer_id) {
+        if let Some(node) = self.doc.find_node_mut(id) {
             node.common_mut().name = name.to_string();
         } else {
             return;
         }
 
         self.push_undo(Box::new(PropertyAction::new(
-            layer_id,
+            id,
             Property::Name(old_name),
             Property::Name(name.to_string()),
         )));
@@ -889,31 +1508,33 @@ impl DarklyEngine {
         }
     }
 
-    pub fn set_group_collapsed(&mut self, group_id: LayerId, collapsed: bool) {
-        if let Some(LayerNode::Group(g)) = self.doc.find_node_mut(group_id) {
+    #[handler]
+    pub fn set_group_collapsed(&mut self, id: LayerId, collapsed: bool) {
+        if let Some(LayerNode::Group(g)) = self.doc.find_node_mut(id) {
             g.collapsed = collapsed;
         }
     }
 
-    pub fn set_group_passthrough(&mut self, group_id: LayerId, passthrough: bool) {
-        if !self.doc.is_node_editable(group_id) {
+    #[handler]
+    pub fn set_group_passthrough(&mut self, id: LayerId, passthrough: bool) {
+        if !self.doc.is_node_editable(id) {
             return;
         }
-        let old = match self.doc.find_node(group_id) {
+        let old = match self.doc.find_node(id) {
             Some(LayerNode::Group(g)) => g.passthrough,
             _ => return,
         };
-        if let Some(LayerNode::Group(g)) = self.doc.find_node_mut(group_id) {
+        if let Some(LayerNode::Group(g)) = self.doc.find_node_mut(id) {
             g.passthrough = passthrough;
         }
         if !passthrough {
             self.compositor
-                .ensure_group_state(&self.gpu.device, &self.gpu.queue, group_id);
-            let isolated = self.host_renders_isolated(group_id);
-            if let Some(LayerNode::Group(g)) = self.doc.find_node(group_id) {
+                .ensure_group_state(&self.gpu.device, &self.gpu.queue, id);
+            let isolated = self.host_renders_isolated(id);
+            if let Some(LayerNode::Group(g)) = self.doc.find_node(id) {
                 self.compositor.update_group_uniforms(
                     &self.gpu.queue,
-                    group_id,
+                    id,
                     g.blend.opacity,
                     g.blend.blend_mode.gpu_value,
                     isolated,
@@ -922,9 +1543,117 @@ impl DarklyEngine {
         }
         self.compositor.mark_dirty();
         self.push_undo(Box::new(PropertyAction::new(
-            group_id,
+            id,
             Property::Passthrough(old),
             Property::Passthrough(passthrough),
         )));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::coord::CanvasPoint;
+    use crate::gpu::context::GpuContext;
+    use crate::gpu::test_utils::test_device;
+    use crate::layer::{TextProps, VectorObject};
+
+    fn test_engine() -> DarklyEngine {
+        let (device, queue) = test_device();
+        let gpu = GpuContext::new_headless(device, queue);
+        DarklyEngine::new(gpu, 512, 256)
+    }
+
+    /// Push a second/third text object onto an existing vector layer (the
+    /// public API mints one layer per text; multi-object layers exercise the
+    /// topmost-wins iteration). Returns the stamped id.
+    fn push_text(
+        engine: &mut DarklyEngine,
+        layer: LayerId,
+        s: &str,
+        x: f64,
+        y: f64,
+    ) -> crate::layer::ObjectId {
+        let mut text = TextProps::new(s.to_string());
+        text.size = 40.0;
+        let fill = peniko::Brush::Solid(peniko::Color::from_rgba8(255, 255, 255, 255));
+        let obj = VectorObject::text(text, kurbo::Affine::translate((x, y)), fill);
+        let id = match engine.doc.find_node_mut(layer) {
+            Some(LayerNode::Layer(Layer::Vector(v))) => v.push_object(obj),
+            _ => panic!("not a vector layer"),
+        };
+        engine.sync_vector_layer(layer);
+        id
+    }
+
+    #[test]
+    fn hit_test_finds_topmost_object() {
+        let mut engine = test_engine();
+        // A non-zero canvas origin must not shift hit-testing: the query and the
+        // object placement are both PLANE coords, so a crop can't break it.
+        engine.doc.canvas_origin = CanvasPoint::new(40, 25);
+
+        let mut text = TextProps::new("Ag".to_string());
+        text.size = 40.0;
+        let (layer, a) = engine.add_text_layer(text, 10.0, 10.0, [255, 255, 255, 255], None);
+        // A second object, far to the right, that doesn't overlap `a`.
+        let b = push_text(&mut engine, layer, "Ag", 200.0, 10.0);
+
+        // A point a few px into each glyph box hits that object…
+        assert_eq!(engine.hit_test_vector_object(layer, 14.0, 22.0), Some(a));
+        assert_eq!(engine.hit_test_vector_object(layer, 204.0, 22.0), Some(b));
+        // …empty space hits nothing.
+        assert_eq!(engine.hit_test_vector_object(layer, 480.0, 240.0), None);
+
+        // A third object stacked directly over `a` — drawn last, so it wins the
+        // overlap (topmost-first via reverse iteration).
+        let c = push_text(&mut engine, layer, "Ag", 10.0, 10.0);
+        assert_eq!(engine.hit_test_vector_object(layer, 14.0, 22.0), Some(c));
+    }
+
+    #[test]
+    fn locked_or_hidden_layer_is_not_hit() {
+        let mut engine = test_engine();
+        let mut text = TextProps::new("Ag".to_string());
+        text.size = 40.0;
+        let (layer, _a) = engine.add_text_layer(text, 10.0, 10.0, [255, 255, 255, 255], None);
+        assert!(engine.hit_test_vector_object(layer, 14.0, 22.0).is_some());
+
+        engine.set_node_locked(layer, true);
+        assert_eq!(engine.hit_test_vector_object(layer, 14.0, 22.0), None);
+        engine.set_node_locked(layer, false);
+        engine.set_layer_visible(layer, false);
+        assert_eq!(engine.hit_test_vector_object(layer, 14.0, 22.0), None);
+    }
+
+    #[test]
+    fn vector_object_info_matrix_round_trips_through_set() {
+        let mut engine = test_engine();
+        let mut text = TextProps::new("Ag".to_string());
+        text.size = 40.0;
+        let (layer, obj) = engine.add_text_layer(text, 30.0, 20.0, [255, 255, 255, 255], None);
+
+        // The reported gizmo matrix, fed straight back as the gizmo's output,
+        // reproduces the same object transform (origin is folded into `G`).
+        let (ox, oy, w, h, matrix) = engine.vector_object_info(layer, obj).expect("info");
+        assert_eq!((ox, oy), (0.0, 0.0));
+        assert!(w > 0.0 && h > 0.0);
+
+        let before = match engine.doc.layer(layer) {
+            Some(Layer::Vector(v)) => v.object(obj).unwrap().transform,
+            _ => unreachable!(),
+        };
+        engine.set_vector_object_transform(
+            layer,
+            obj,
+            crate::transform::Transform::from_affine(matrix),
+        );
+        let after = match engine.doc.layer(layer) {
+            Some(Layer::Vector(v)) => v.object(obj).unwrap().transform,
+            _ => unreachable!(),
+        };
+        for (b, a) in before.as_coeffs().iter().zip(after.as_coeffs().iter()) {
+            assert!((b - a).abs() < 1e-4, "round-trip drift: {b} vs {a}");
+        }
     }
 }
