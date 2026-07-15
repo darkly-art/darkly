@@ -142,6 +142,15 @@ fn read_rgba(pixels: &[u8], width: u32, x: i32, y: i32) -> [u8; 4] {
 
 fn matches_rgba(pixels: &[u8], width: u32, x: i32, y: i32, seed: &[u8; 4], tol: i16) -> bool {
     let px = read_rgba(pixels, width, x, y);
+    // Fully transparent pixels compare by alpha alone: straight-alpha layer
+    // storage keeps ghost RGB under erased pixels (the erase blend zeroes only
+    // alpha), and invisible color must not form fill boundaries. Same rule as
+    // Krita's `KoColorSpace::differenceA` (plugins/color/lcms2engine/
+    // LcmsColorSpace.h) and GIMP's `pixel_difference`
+    // (app/core/gimppickable-contiguous-region.cc).
+    if px[3] == 0 || seed[3] == 0 {
+        return (px[3] as i16 - seed[3] as i16).abs() <= tol;
+    }
     (px[0] as i16 - seed[0] as i16).abs() <= tol
         && (px[1] as i16 - seed[1] as i16).abs() <= tol
         && (px[2] as i16 - seed[2] as i16).abs() <= tol

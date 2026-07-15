@@ -760,6 +760,68 @@ fn clear_selection_contents() {
     );
 }
 
+/// REGRESSION: select-all + delete erases only alpha (straight-alpha storage
+/// keeps ghost RGB under erased pixels), and the flood fill's similarity test
+/// used to compare that invisible RGB — a fill on the emptied layer stayed
+/// bounded by the old content's edges. Fully transparent pixels must compare
+/// by alpha alone, so the fill floods the whole canvas.
+#[test]
+fn flood_fill_floods_layer_emptied_by_clear_selection_contents() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+
+    // Paint content, then Ctrl+A + Delete — the canvas is now visually empty
+    // but the texture still holds the stroke's RGB with alpha = 0.
+    paint_full_stroke(&mut engine, layer_id, w, h);
+    engine.render(0.0); // flush pending diff undo
+    engine.select_all();
+    engine.clear_selection_contents(layer_id);
+
+    let pixels = engine.test_readback_layer(layer_id);
+    assert_eq!(
+        alpha_at(&pixels, w, w / 2, h / 2),
+        0,
+        "layer must be visually empty after select-all + delete"
+    );
+
+    // Fill green from inside the former stroke.
+    engine.begin_stroke(layer_id);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: (w / 2) as f32,
+        y: (h / 2) as f32,
+        r: 0,
+        g: 255,
+        b: 0,
+        a: 255,
+        tolerance: 32,
+    });
+    engine.end_stroke();
+    // Drive the fill's async layer readback to completion.
+    for _ in 0..8 {
+        engine.test_flush_readbacks();
+        engine.render(0.0);
+    }
+
+    let pixels = engine.test_readback_layer(layer_id);
+    let at = |x: u32, y: u32| {
+        let i = ((y * w + x) * 4) as usize;
+        &pixels[i..i + 4]
+    };
+    assert_eq!(at(w / 2, h / 2), &[0, 255, 0, 255], "seed point is filled");
+    // The fill must not stop at the deleted stroke's invisible edges.
+    assert_eq!(
+        at(4, 4),
+        &[0, 255, 0, 255],
+        "fill must flood past the ghost of the deleted content"
+    );
+    assert_eq!(
+        at(w - 4, h - 4),
+        &[0, 255, 0, 255],
+        "fill must reach the far corner of the emptied layer"
+    );
+}
+
 // ============================================================================
 // No selection → painting works normally
 // ============================================================================
