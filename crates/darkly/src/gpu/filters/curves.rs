@@ -93,6 +93,7 @@ pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "curves",
         display_name: "Curves",
+        icon: "fa6-solid:chart-line",
         params: PARAMS,
         create_pipeline,
     }

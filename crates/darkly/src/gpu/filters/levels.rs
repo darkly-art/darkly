@@ -112,6 +112,7 @@ pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "levels",
         display_name: "Levels",
+        icon: "fa6-solid:sliders",
         params: PARAMS,
         create_pipeline,
     }

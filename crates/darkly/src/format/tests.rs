@@ -487,7 +487,7 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
         .filter_pipeline_registry()
         .types()
         .into_iter()
-        .map(|(id, _name)| id.to_string())
+        .map(|(id, _name, _icon)| id.to_string())
         .collect();
     for pipeline in filter_types {
         engine.add_filter_layer(&pipeline, Vec::new(), None);

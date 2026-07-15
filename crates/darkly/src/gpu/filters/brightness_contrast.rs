@@ -103,6 +103,7 @@ pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "brightness_contrast",
         display_name: "Brightness/Contrast",
+        icon: "fa6-solid:sun",
         params: PARAMS,
         create_pipeline,
     }

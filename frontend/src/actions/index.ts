@@ -858,7 +858,7 @@ export function registerActions() {
             displayName: parametric ? `${flt.displayName}…` : flt.displayName,
             category: 'layers',
             description: `Apply "${flt.displayName}" to the active layer or mask (respecting any selection).`,
-            icon: 'fa6-solid:circle-half-stroke',
+            icon: flt.icon,
             menuPath: ['Colors:10'],
             enabled: () => app.activeLayerId !== null || 'No active layer',
             handler: async () => {

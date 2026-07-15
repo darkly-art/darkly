@@ -137,6 +137,7 @@ pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "hsv",
         display_name: "Hue/Saturation",
+        icon: "fa6-solid:palette",
         params: PARAMS,
         create_pipeline,
     }

@@ -33,7 +33,7 @@
         {#each app.filterTypes ?? [] as ft (ft.type)}
             <button class="card" onclick={() => pick(ft)}>
                 <div class="preview preview-icon">
-                    <Icon name="fa6-solid:circle-half-stroke" />
+                    <Icon name={ft.icon} />
                 </div>
                 <span class="card-name">{ft.displayName}</span>
             </button>

@@ -86,6 +86,7 @@ pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "desaturate",
         display_name: "Desaturate",
+        icon: "fa6-solid:droplet-slash",
         params: PARAMS,
         create_pipeline,
     }

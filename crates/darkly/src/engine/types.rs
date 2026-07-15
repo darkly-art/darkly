@@ -190,14 +190,18 @@ pub struct VeilTypeInfo {
     #[serde(rename = "type")]
     pub type_id: &'static str,
     pub display_name: &'static str,
+    /// Iconify name shown for this type. Filters carry a per-variant icon so
+    /// each reads distinctly in the Colors menu and the Add Filter Layer picker;
+    /// veils leave it empty (their UI renders a live preview, not an icon).
+    pub icon: &'static str,
     pub params: Vec<ParamInfo>,
 }
 
 /// Registry view of a void type for the "Add Void" picker. Mirrors
-/// [`VeilTypeInfo`] but additionally carries the void's iconify `icon` (always
-/// present — the picker's fallback when there's no rendered preview) and
-/// `supportsPreview` (whether to render a live thumbnail at all). `icon` is
-/// void-only and intentionally not symmetrized onto [`VeilTypeInfo`].
+/// [`VeilTypeInfo`] but additionally carries `supportsPreview` (whether to
+/// render a live thumbnail at all) and the browser `captureKind`. The void's
+/// iconify `icon` is always present — the picker's fallback when there's no
+/// rendered preview.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -580,6 +584,7 @@ pub(crate) fn node_to_layer_info(
                     .enumerate()
                     .map(|(j, def)| ParamInfo::from_def(def, f.params.get(j)))
                     .collect();
+                let pipeline_icon = filter_registry.icon(&f.pipeline);
                 LayerInfo::Filter {
                     id: f.id.to_ffi() as f64,
                     name: f.common.name.clone(),
@@ -589,7 +594,11 @@ pub(crate) fn node_to_layer_info(
                     can_have_mask: kind.can_have_mask,
                     can_rename: kind.can_rename,
                     has_thumbnail: kind.has_thumbnail,
-                    icon: kind.icon,
+                    icon: if pipeline_icon.is_empty() {
+                        kind.icon
+                    } else {
+                        pipeline_icon
+                    },
                     kind_name: kind.display_name,
                     opacity: f.blend.opacity,
                     blend_mode: f.blend.blend_mode.type_id,

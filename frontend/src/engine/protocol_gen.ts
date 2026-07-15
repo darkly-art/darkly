@@ -408,7 +408,13 @@ export type ParamInfo = { kind: string, name: string, min: number | null, max: n
  */
 options: JsonValue | null, };
 
-export type VeilTypeInfo = { type: string, displayName: string, params: Array<ParamInfo>, };
+export type VeilTypeInfo = { type: string, displayName: string, 
+/**
+ * Iconify name shown for this type. Filters carry a per-variant icon so
+ * each reads distinctly in the Colors menu and the Add Filter Layer picker;
+ * veils leave it empty (their UI renders a live preview, not an icon).
+ */
+icon: string, params: Array<ParamInfo>, };
 
 export type FlattenNodeReq = { node_id: number, };
 
@@ -437,6 +443,13 @@ export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 export type LayerKindTypeInfo = { type: string, displayName: string, };
 
 export type LayerTransformCapabilityReq = { id: number, };
+
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
 
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
@@ -489,13 +502,6 @@ pipeline: string,
  * uses.
  */
 params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
-
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
-/**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -662,7 +668,7 @@ export type VoidTransformInfoReq = { id: number, };
 
 export type VoidTransformInfoResp = { ox: number, oy: number, w: number, h: number, mode: number, matrix: Array<number>, };
 
-export type CaptureKind = "camera" | "display";
+export type CaptureKind = "camera" | "display" | "stream";
 
 export type VoidTypeInfo = { type: string, displayName: string, params: Array<ParamInfo>, icon: string, supportsPreview: boolean, 
 /**

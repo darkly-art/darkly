@@ -742,6 +742,43 @@ fn filter_layer_params(e: &DarklyEngine, id: LayerId) -> Vec<ParamValue> {
     panic!("filter layer {ffi} not found in layer tree");
 }
 
+/// Pull a filter layer's `icon` (as reported to the frontend) from the
+/// layer-tree query.
+fn filter_layer_icon(e: &DarklyEngine, id: LayerId) -> String {
+    let ffi = id.to_ffi() as f64;
+    for node in e.layer_tree() {
+        if let LayerInfo::Filter { id: nid, icon, .. } = &node {
+            if *nid == ffi {
+                return icon.to_string();
+            }
+        }
+    }
+    panic!("filter layer {ffi} not found in layer tree");
+}
+
+/// Each filter pipeline reports its own icon in the layer tree — the row must
+/// reflect *which* filter it is, not a single generic filter-layer glyph. Guards
+/// the `node_to_layer_info` Filter arm against regressing to the static
+/// `kind.icon` (which would make every filter layer identical).
+#[test]
+fn filter_layer_icon_is_pipeline_specific() {
+    let mut e = test_engine(8, 8);
+    let invert = e.add_filter_layer("invert", vec![], None).unwrap();
+    let curves = e
+        .add_filter_layer("curves", filter_defaults(&e, "curves"), None)
+        .unwrap();
+
+    let invert_icon = filter_layer_icon(&e, invert);
+    let curves_icon = filter_layer_icon(&e, curves);
+
+    assert!(!invert_icon.is_empty(), "invert layer must carry an icon");
+    assert!(!curves_icon.is_empty(), "curves layer must carry an icon");
+    assert_ne!(
+        invert_icon, curves_icon,
+        "distinct filters must report distinct icons (regressed to kind.icon?)"
+    );
+}
+
 #[test]
 fn add_curves_layer_yields_eight_identity_curves() {
     let mut e = test_engine(8, 8);

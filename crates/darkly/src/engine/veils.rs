@@ -280,6 +280,8 @@ impl DarklyEngine {
             .map(|(type_id, display_name, defs)| VeilTypeInfo {
                 type_id,
                 display_name,
+                // Veils render a live preview in their picker, so no icon.
+                icon: "",
                 params: defs.iter().map(|d| ParamInfo::from_def(d, None)).collect(),
             })
             .collect()

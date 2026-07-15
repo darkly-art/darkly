@@ -34,6 +34,7 @@ pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "invert",
         display_name: "Invert Colors",
+        icon: "fa6-solid:circle-half-stroke",
         params: &[],
         create_pipeline,
     }
