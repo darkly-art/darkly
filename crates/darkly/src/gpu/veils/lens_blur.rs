@@ -25,6 +25,7 @@ pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "lens_blur",
         display_name: "Lens Blur",
+        description: "Defocus the view with a soft camera-lens blur.",
         params: PARAMS,
         create_pipeline: create_lens_blur_pipeline,
         from_params: |params, shared| {

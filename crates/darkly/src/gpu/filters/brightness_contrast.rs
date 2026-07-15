@@ -104,6 +104,7 @@ pub fn register() -> FilterPipelineRegistration {
         type_id: "brightness_contrast",
         display_name: "Brightness/Contrast",
         icon: "fa6-solid:sun",
+        description: "The classic two-slider brightness and contrast adjustment.",
         params: PARAMS,
         create_pipeline,
     }

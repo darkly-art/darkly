@@ -194,6 +194,10 @@ pub struct VeilTypeInfo {
     /// each reads distinctly in the Colors menu and the Add Filter Layer picker;
     /// veils leave it empty (their UI renders a live preview, not an icon).
     pub icon: &'static str,
+    /// One-sentence summary from the registration — picker tooltips, and (for
+    /// filters) folded into the Colors-menu action description where the
+    /// command palette's search indexes it.
+    pub description: &'static str,
     pub params: Vec<ParamInfo>,
 }
 

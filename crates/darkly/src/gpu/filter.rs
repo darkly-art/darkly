@@ -71,6 +71,10 @@ pub struct FilterPipelineRegistration {
     /// Iconify name (e.g. `"fa6-solid:chart-line"`) shown wherever the filter
     /// surfaces — the Colors menu action and the filter-layer picker/tree row.
     pub icon: &'static str,
+    /// One-sentence summary shown as a picker tooltip and folded into the
+    /// Colors-menu action description, where the command palette's substring
+    /// search indexes it — include the terms users would search for.
+    pub description: &'static str,
     pub params: &'static [ParamDef],
     pub create_pipeline: fn(&wgpu::Device) -> Arc<dyn FilterEffect>,
 }
@@ -83,6 +87,7 @@ pub struct FilterPipelineRegistry {
 struct RegistryEntry {
     display_name: &'static str,
     icon: &'static str,
+    description: &'static str,
     params: &'static [ParamDef],
     create_pipeline: fn(&wgpu::Device) -> Arc<dyn FilterEffect>,
     cached_pipeline: Option<Arc<dyn FilterEffect>>,
@@ -103,6 +108,7 @@ impl FilterPipelineRegistry {
                 RegistryEntry {
                     display_name: reg.display_name,
                     icon: reg.icon,
+                    description: reg.description,
                     params: reg.params,
                     create_pipeline: reg.create_pipeline,
                     cached_pipeline: None,
@@ -112,15 +118,15 @@ impl FilterPipelineRegistry {
         FilterPipelineRegistry { entries }
     }
 
-    /// All registered filter type IDs with their display names and icons,
-    /// sorted by id for a stable menu order.
-    pub fn types(&self) -> Vec<(&'static str, &'static str, &'static str)> {
+    /// All registered filter type IDs with their display names, icons, and
+    /// descriptions, sorted by id for a stable menu order.
+    pub fn types(&self) -> Vec<(&'static str, &'static str, &'static str, &'static str)> {
         let mut types: Vec<_> = self
             .entries
             .iter()
-            .map(|(&id, e)| (id, e.display_name, e.icon))
+            .map(|(&id, e)| (id, e.display_name, e.icon, e.description))
             .collect();
-        types.sort_by_key(|(id, _, _)| *id);
+        types.sort_by_key(|(id, _, _, _)| *id);
         types
     }
 
@@ -182,7 +188,7 @@ mod tests {
     fn every_filter_has_a_unique_icon() {
         let registry = FilterPipelineRegistry::new();
         let mut seen = HashSet::new();
-        for (type_id, _display, icon) in registry.types() {
+        for (type_id, _display, icon, _description) in registry.types() {
             assert!(!icon.is_empty(), "filter '{type_id}' has no icon");
             assert!(
                 icon.contains(':'),

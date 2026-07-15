@@ -62,7 +62,8 @@ hotkeys:
   # docs/photoshop-default-hotkeys.md, "Keys for the Image ▸ Adjustments
   # menu"). Krita agrees (Ctrl+Shift+U → `krita_filter_desaturate`); GIMP has
   # no default Desaturate shortcut, so this is per-overlay, not a default.
-  filterDesaturate: $mod+Shift+KeyU
+  # Our desaturate is the `black_and_white` filter.
+  filterBlack_and_white: $mod+Shift+KeyU
 
 mouse_clicks:
   # Photoshop's eyedropper modifier is Alt+drag (not Ctrl+drag).

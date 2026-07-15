@@ -71,7 +71,8 @@ hotkeys:
   # docs/krita-default-hotkeys.md). Photoshop agrees (Shift+Ctrl+U → Image >
   # Adjustments > Desaturate); GIMP has no default Desaturate shortcut, so
   # this is per-overlay, not a default.
-  filterDesaturate: $mod+Shift+KeyU
+  # Our desaturate is the `black_and_white` filter.
+  filterBlack_and_white: $mod+Shift+KeyU
 
 mouse_clicks:
   # Krita's default "Sample FG color from merged image" — Ctrl+drag on

@@ -153,7 +153,13 @@ export class DarklyInstance {
      *  `registerActions` — a new filter in the Rust core surfaces a menu
      *  entry with zero frontend edits. */
     filterTypes = $state<
-        Array<{ type: string; displayName: string; icon: string; params?: unknown[] }>
+        Array<{
+            type: string;
+            displayName: string;
+            icon: string;
+            description: string;
+            params?: unknown[];
+        }>
     >([]);
 
     toolDisplayName(id: string): string {

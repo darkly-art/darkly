@@ -19,6 +19,7 @@ pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "pixelate",
         display_name: "Pixelate",
+        description: "Downsample the view into a blocky pixel mosaic.",
         params: PARAMS,
         create_pipeline: create_pixelate_pipeline,
         from_params: |params, shared| {

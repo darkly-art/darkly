@@ -46,10 +46,11 @@ impl DarklyEngine {
         registry
             .types()
             .into_iter()
-            .map(|(type_id, display_name, icon)| VeilTypeInfo {
+            .map(|(type_id, display_name, icon, description)| VeilTypeInfo {
                 type_id,
                 display_name,
                 icon,
+                description,
                 params: registry
                     .params(type_id)
                     .iter()

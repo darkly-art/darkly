@@ -43,7 +43,7 @@
 <Modal bind:open title="Add Veil" size="md">
     <div class="grid">
         {#each veilTypes as vt (vt.type)}
-            <button class="card" onclick={() => pick(vt)}>
+            <button class="card" title={vt.description} onclick={() => pick(vt)}>
                 <EffectPreview kind="veil" type={vt.type} />
                 <span class="card-name">{vt.displayName}</span>
             </button>

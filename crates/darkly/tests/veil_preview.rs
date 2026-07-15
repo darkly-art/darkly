@@ -70,8 +70,8 @@ fn animated_veil_preview_generates_distinct_frames() {
 fn static_veil_preview_is_single_frame() {
     let mut engine = headless_engine();
 
-    engine.start_veil_preview("monochrome");
-    let (w, h, frames) = drain_preview(&mut engine, "monochrome");
+    engine.start_veil_preview("black_and_white");
+    let (w, h, frames) = drain_preview(&mut engine, "black_and_white");
 
     assert_eq!(
         frames.len(),
@@ -79,19 +79,33 @@ fn static_veil_preview_is_single_frame() {
         "non-animated veil should produce exactly one frame"
     );
     assert_eq!(frames[0].len(), (w * h * 4) as usize);
+
+    // Pin the veil-side formula to the same shared core the filter pins in
+    // `tests/filters.rs`: default params → Lightness gray of the
+    // [120,60,200] canvas fill, (200+60)/2 = 130, neutral across RGB.
+    let center = ((h / 2) * w + w / 2) as usize * 4;
+    let p = &frames[0][center..center + 4];
+    assert!(
+        p[0] == p[1] && p[1] == p[2],
+        "black_and_white veil must produce neutral gray, got {p:?}"
+    );
+    assert!(
+        (p[0] as i32 - 130).abs() <= 1,
+        "default (Lightness) gray of [120,60,200] is ~130, got {p:?}"
+    );
 }
 
 #[test]
 fn veil_preview_regenerates_on_each_open() {
     let mut engine = headless_engine();
 
-    engine.start_veil_preview("monochrome");
-    let first = drain_preview(&mut engine, "monochrome");
+    engine.start_veil_preview("black_and_white");
+    let first = drain_preview(&mut engine, "black_and_white");
 
     // No caching: a second start after completion re-renders against the live
     // canvas and produces a fresh, valid preview.
-    engine.start_veil_preview("monochrome");
-    let second = drain_preview(&mut engine, "monochrome");
+    engine.start_veil_preview("black_and_white");
+    let second = drain_preview(&mut engine, "black_and_white");
     assert_eq!(first.0, second.0);
     assert_eq!(first.1, second.1);
     assert_eq!(first.2.len(), second.2.len());

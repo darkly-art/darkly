@@ -31,7 +31,7 @@
 <Modal bind:open title="Add Filter Layer" size="md">
     <div class="grid">
         {#each app.filterTypes ?? [] as ft (ft.type)}
-            <button class="card" onclick={() => pick(ft)}>
+            <button class="card" title={ft.description} onclick={() => pick(ft)}>
                 <div class="preview preview-icon">
                     <Icon name={ft.icon} />
                 </div>

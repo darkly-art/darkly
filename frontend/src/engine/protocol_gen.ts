@@ -162,6 +162,10 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: number, };
 
+export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "levels", name: string, default: [number, number, number, number, number], } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, } | { "kind": "color", name: string, default: [number, number, number], } | { "kind": "vec2", name: string, max: number, default: [number, number], } | { "kind": "list", name: string, item: Array<ParamDef>, max_len: number, default: Array<Array<[string, ConstParamValue]>>, };
+
+export type ConstParamValue = boolean | number | number | string | [number, number, number] | [number, number];
+
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
  * Slider min when the port is disconnected (UI metadata only).
@@ -295,13 +299,9 @@ natural_range: [number, number] | null,
  */
 persist_in_thumbnail: boolean, };
 
-export type PortDir = "Input" | "Output";
-
 export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
 
-export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "levels", name: string, default: [number, number, number, number, number], } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, } | { "kind": "color", name: string, default: [number, number, number], } | { "kind": "vec2", name: string, max: number, default: [number, number], } | { "kind": "list", name: string, item: Array<ParamDef>, max_len: number, default: Array<Array<[string, ConstParamValue]>>, };
-
-export type ConstParamValue = boolean | number | number | string | [number, number, number] | [number, number];
+export type PortDir = "Input" | "Output";
 
 export type NodeRegistration = { 
 /**
@@ -414,7 +414,13 @@ export type VeilTypeInfo = { type: string, displayName: string,
  * each reads distinctly in the Colors menu and the Add Filter Layer picker;
  * veils leave it empty (their UI renders a live preview, not an icon).
  */
-icon: string, params: Array<ParamInfo>, };
+icon: string, 
+/**
+ * One-sentence summary from the registration — picker tooltips, and (for
+ * filters) folded into the Colors-menu action description where the
+ * command palette's search indexes it.
+ */
+description: string, params: Array<ParamInfo>, };
 
 export type FlattenNodeReq = { node_id: number, };
 
@@ -443,13 +449,6 @@ export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 export type LayerKindTypeInfo = { type: string, displayName: string, };
 
 export type LayerTransformCapabilityReq = { id: number, };
-
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
-/**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
 
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
@@ -502,6 +501,13 @@ pipeline: string,
  * uses.
  */
 params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
+
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 

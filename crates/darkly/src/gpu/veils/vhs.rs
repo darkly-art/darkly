@@ -39,6 +39,7 @@ pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "vhs",
         display_name: "VHS",
+        description: "Analog VHS tape artifacts — scanlines, noise, and color bleed.",
         params: PARAMS,
         create_pipeline: create_vhs_pipeline,
         from_params: |params, shared| {

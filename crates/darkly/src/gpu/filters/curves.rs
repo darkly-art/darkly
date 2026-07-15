@@ -94,6 +94,7 @@ pub fn register() -> FilterPipelineRegistration {
         type_id: "curves",
         display_name: "Curves",
         icon: "fa6-solid:chart-line",
+        description: "Remap tones and colors with editable per-channel curves.",
         params: PARAMS,
         create_pipeline,
     }
