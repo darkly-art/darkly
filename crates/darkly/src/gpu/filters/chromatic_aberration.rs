@@ -261,7 +261,7 @@ pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "chromatic_aberration",
         display_name: "Chromatic Aberration",
-        icon: "fa6-solid:glasses",
+        icon: "lucide-lab:venn",
         params: PARAMS,
         create_pipeline,
     }
