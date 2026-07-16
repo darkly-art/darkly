@@ -73,6 +73,12 @@ pub struct ProcessRecorder {
     /// which the trailing capture fires, guaranteeing a burst's final state
     /// is always recorded.
     trailing_due: Option<f32>,
+    /// Set by [`ProcessRecorder::request_capture`] to force a capture whose
+    /// trigger is invisible to [`crate::document::Document::revision`] — live
+    /// void milestones (first streamed frame, feed disconnect) and the final
+    /// state on recording stop. Consumed only when a capture is actually
+    /// emitted, so a backpressure-held request retries like a pending revision.
+    forced_pending: bool,
     frame_index: u64,
     completed: VecDeque<RecordedFrame>,
 }
@@ -92,6 +98,7 @@ impl ProcessRecorder {
             last_seen_revision: 0,
             last_capture_time: None,
             trailing_due: None,
+            forced_pending: false,
             frame_index: 0,
             completed: VecDeque::new(),
         }
@@ -118,6 +125,7 @@ impl ProcessRecorder {
         self.base_h = base_h;
         if !enabled {
             self.trailing_due = None;
+            self.forced_pending = false;
             // Undrained frames were encoded for these parameters; they must
             // not leak into the next activation's (differently-configured)
             // encoder.
@@ -125,11 +133,21 @@ impl ProcessRecorder {
         }
     }
 
+    /// Force the next tick to capture even when the document revision hasn't
+    /// changed. The trigger source — a live void's first streamed frame, a
+    /// feed disconnect, or the final state on recording stop — mutates
+    /// GPU-authoritative pixels without touching the document, so it's
+    /// otherwise invisible to the revision-driven capture path.
+    pub fn request_capture(&mut self) {
+        self.forced_pending = true;
+    }
+
     /// True while the demand-driven frame loop must keep running for the
-    /// recorder's sake: a trailing capture is armed (it fires on a future
-    /// frame) or captured frames await draining by the frontend.
+    /// recorder's sake: a forced capture or trailing capture is pending (it
+    /// fires on a future frame) or captured frames await draining by the
+    /// frontend.
     pub fn needs_frames(&self) -> bool {
-        self.trailing_due.is_some() || !self.completed.is_empty()
+        self.forced_pending || self.trailing_due.is_some() || !self.completed.is_empty()
     }
 
     /// Stash a completed readback. Called by `handle_completed_readback`.
@@ -164,6 +182,15 @@ impl DarklyEngine {
             .configure(enabled, min_interval_secs, width, height, base_w, base_h);
     }
 
+    /// Request a one-off capture on the next frame, independent of the
+    /// document revision. No-ops unless the recorder is enabled, so callers
+    /// (live-void milestones, recording stop) can fire it unconditionally.
+    pub fn request_recording_capture(&mut self) {
+        if self.recorder.enabled {
+            self.recorder.request_capture();
+        }
+    }
+
     /// Drain the oldest completed recording frame, if any.
     pub fn poll_recording_frame(&mut self) -> Option<RecordedFrame> {
         self.recorder.pop_completed()
@@ -183,14 +210,21 @@ impl DarklyEngine {
             return;
         }
 
-        let changed = self.doc.revision != rec.last_seen_revision;
+        let revision_changed = self.doc.revision != rec.last_seen_revision;
         let interval_elapsed = rec
             .last_capture_time
             .is_none_or(|t| time_secs - t >= rec.min_interval_secs);
 
-        let fire = if changed && interval_elapsed {
+        let fire = if rec.forced_pending {
+            // A forced (milestone) capture bypasses the throttle: it's an
+            // explicit, rare request — a live void's first frame, a feed
+            // disconnect, the final state on stop — not the revision churn the
+            // interval exists to thin. It still yields to the backpressure
+            // gates below.
             true
-        } else if changed {
+        } else if revision_changed && interval_elapsed {
+            true
+        } else if revision_changed {
             // Inside the throttle window — arm (or keep) the trailing
             // capture so the burst's final state lands once the window
             // closes. Idempotent across frames: the due time is fixed by
@@ -357,5 +391,6 @@ impl DarklyEngine {
         rec.last_seen_revision = self.doc.revision;
         rec.last_capture_time = Some(time_secs);
         rec.trailing_due = None;
+        rec.forced_pending = false;
     }
 }

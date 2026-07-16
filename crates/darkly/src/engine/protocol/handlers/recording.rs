@@ -42,6 +42,15 @@ pub fn registrations() -> Vec<RequestRegistration> {
         })
         .post()
         .req::<SetRecordingParamsReq>(),
+        // Force a one-off capture on the next frame, independent of the
+        // document revision — how live-void milestones (first streamed frame,
+        // feed disconnect) and the final state on recording stop reach the
+        // recorder, since they change GPU pixels without touching the document.
+        RequestRegistration::new("request_recording_capture", |engine, _payload, _b| {
+            engine.request_recording_capture();
+            Ok(Response::empty())
+        })
+        .post(),
         // The response always carries the live canvas dimensions so the
         // per-frame poll doubles as the resize signal: the frontend rolls a
         // new segment when the canvas aspect ratio diverges from the one it

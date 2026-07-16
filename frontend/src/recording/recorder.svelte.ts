@@ -98,6 +98,12 @@ async function nextSegmentNumber(key: string): Promise<number> {
 // Per-tab recorder
 // ---------------------------------------------------------------------------
 
+/** Frames to pump waiting for the forced final capture's readback on stop
+ *  before giving up (~0.5s at 60fps). A single capture round-trips in ~2
+ *  frames; the ceiling only guards a gated or wedged readback from hanging
+ *  teardown. */
+const FINAL_CAPTURE_MAX_FRAMES = 30;
+
 class TabRecorder {
     worker: Worker | null = null;
     workerReady = false;
@@ -196,6 +202,15 @@ class TabRecorder {
      *  freed and must not be touched). */
     async deactivate(engineAlive: boolean): Promise<void> {
         if (engineAlive && this.inst.engine && this.active) {
+            // Record the final canvas state before capture stops. The last
+            // live-void frame — and any state reached after the last document
+            // revision bump — never triggered a capture, so without this the
+            // recording would end on a stale frame. Clearing `active` first
+            // hands the sole drain to `captureFinalFrame` (the render loop's
+            // `pollFrame` now no-ops); it must run before disabling, which
+            // clears the completed-frame queue.
+            this.active = false;
+            await this.captureFinalFrame();
             this.inst.engine.api.setRecordingParams({
                 enabled: false,
                 minIntervalSecs: 0,
@@ -227,6 +242,26 @@ class TabRecorder {
             });
         }
         this.settleFlushWaiters();
+    }
+
+    /** Force one last capture and drain it to the worker before the recorder
+     *  is disabled, so the recording ends on the true final canvas state.
+     *  Bounded: a gated capture (e.g. the canvas aspect diverged from the
+     *  negotiated base, which holds capture) or a wedged readback yields no
+     *  final frame rather than blocking teardown. Each iteration nudges the
+     *  render loop so the forced capture is submitted and its readback
+     *  completes; `pollFrame` no-ops here (`active` is already false), leaving
+     *  this the sole drainer. */
+    private async captureFinalFrame(): Promise<void> {
+        const engine = this.inst.engine;
+        if (!engine || !this.worker || !this.workerReady || !this.negotiated) return;
+        engine.api.requestRecordingCapture();
+        for (let i = 0; i < FINAL_CAPTURE_MAX_FRAMES; i++) {
+            this.inst.requestFrame();
+            await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+            const res = await engine.api.pollRecordingFrame();
+            if (postFrameToWorker(this, res)) return;
+        }
     }
 
     /** Drain the encoder and persist the segment meta, so the scratch on
@@ -272,6 +307,51 @@ class TabRecorder {
 // ---------------------------------------------------------------------------
 
 let firstCaptureToastShown = false;
+
+/** The `poll_recording_frame` response shape: the live canvas dims (the
+ *  resize signal) plus the drained capture, if any, with its RGBA on the
+ *  binary side-channel. */
+type RecordingFramePoll = {
+    canvasWidth: number;
+    canvasHeight: number;
+    frame: { width: number; height: number; frameIndex: number } | null;
+    bytes?: Uint8Array;
+};
+
+/** Copy a drained capture out of the WASM heap and hand it to the encoder
+ *  worker, moving the buffer with zero further copies (`ImageData` / worker
+ *  transfer reject SharedArrayBuffer-backed views). Frames whose dims don't
+ *  match the live segment's negotiated encoder were queued before a roll and
+ *  are dropped. Returns whether a frame was posted. Shared by the render-loop
+ *  drain and the final-frame drain on stop. */
+function postFrameToWorker(rec: TabRecorder, res: RecordingFramePoll): boolean {
+    const frame = res.frame;
+    if (
+        !frame ||
+        !res.bytes ||
+        !rec.negotiated ||
+        frame.width !== rec.negotiated.width ||
+        frame.height !== rec.negotiated.height
+    ) {
+        return false;
+    }
+    const copy = new Uint8Array(res.bytes.length);
+    copy.set(res.bytes);
+    rec.post(
+        {
+            type: 'frame',
+            data: copy.buffer,
+            frameIndex: frame.frameIndex,
+            timestampUs: Date.now() * 1000,
+        },
+        [copy.buffer],
+    );
+    if (!firstCaptureToastShown) {
+        firstCaptureToastShown = true;
+        toast.show('info', 'Process recording is on — Settings → Recording');
+    }
+    return true;
+}
 
 class ProcessRecordingService {
     private tabs = new Map<DarklyInstance, TabRecorder>();
@@ -382,32 +462,7 @@ class ProcessRecordingService {
             .then((res) => {
                 rec.pollInFlight = false;
                 if (!rec.active || !rec.worker) return;
-                const frame = res.frame;
-                // Drop frames captured for a previous configuration (queued
-                // before a roll) — the live encoder expects its own dims.
-                if (
-                    frame &&
-                    res.bytes &&
-                    rec.negotiated &&
-                    frame.width === rec.negotiated.width &&
-                    frame.height === rec.negotiated.height
-                ) {
-                    const copy = new Uint8Array(res.bytes.length);
-                    copy.set(res.bytes);
-                    rec.post(
-                        {
-                            type: 'frame',
-                            data: copy.buffer,
-                            frameIndex: frame.frameIndex,
-                            timestampUs: Date.now() * 1000,
-                        },
-                        [copy.buffer],
-                    );
-                    if (!firstCaptureToastShown) {
-                        firstCaptureToastShown = true;
-                        toast.show('info', 'Process recording is on — Settings → Recording');
-                    }
-                }
+                postFrameToWorker(rec, res);
                 const base = rec.baseDims;
                 if (
                     base &&

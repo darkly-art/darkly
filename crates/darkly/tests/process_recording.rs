@@ -121,6 +121,64 @@ fn throttle_defers_second_capture_until_trailing_fires() {
 }
 
 #[test]
+fn forced_capture_fires_without_revision_change() {
+    // Live voids stream GPU-authoritative pixels that never bump the document
+    // revision, so their visual timeline is invisible to the revision-driven
+    // capture path. `request_recording_capture` is the escape hatch that lets
+    // the void-milestone sites (first frame, disconnect, stop) record anyway.
+    let mut engine = test_engine(64, 64);
+    let layer = engine.add_raster_layer(None);
+    engine.set_recording_params(true, 0.0, 64, 64, 64, 64);
+
+    // Consume the pending revision from the layer add / stroke so the recorder
+    // is caught up: `last_seen_revision == doc.revision`.
+    stroke_at(&mut engine, layer, 32.0, 32.0);
+    poll_frame_within(&mut engine, 0.0, 16).expect("frame after paint stroke");
+
+    // Baseline: with no document change, nothing is captured.
+    for _ in 0..4 {
+        step(&mut engine, 1.0);
+    }
+    assert!(
+        engine.poll_recording_frame().is_none(),
+        "no capture may fire without a change or a forced request"
+    );
+
+    // A forced request captures even though the revision is unchanged.
+    engine.request_recording_capture();
+    let frame = poll_frame_within(&mut engine, 1.0, 16);
+    assert!(
+        frame.is_some(),
+        "request_recording_capture must fire a capture without a revision change"
+    );
+}
+
+#[test]
+fn forced_capture_bypasses_the_throttle_window() {
+    // Milestones (first frame, disconnect, stop) are explicit and rare, so a
+    // forced capture must fire immediately even inside the throttle window —
+    // otherwise a "final on stop" capture would be deferred up to
+    // `min_interval` and missed by the bounded stop-time drain.
+    let mut engine = test_engine(64, 64);
+    let layer = engine.add_raster_layer(None);
+    engine.set_recording_params(true, 5.0, 64, 64, 64, 64);
+
+    // First capture at t=0 opens a 5s throttle window.
+    stroke_at(&mut engine, layer, 32.0, 32.0);
+    poll_frame_within(&mut engine, 0.0, 16).expect("first capture");
+
+    // A forced request at t=0.5 — deep inside the window — must not wait for
+    // the window to close (a revision change here would only arm a trailing
+    // capture).
+    engine.request_recording_capture();
+    let frame = poll_frame_within(&mut engine, 0.5, 16);
+    assert!(
+        frame.is_some(),
+        "a forced capture must bypass the throttle window"
+    );
+}
+
+#[test]
 fn undo_triggers_capture() {
     let mut engine = test_engine(64, 64);
     let layer = engine.add_raster_layer(None);

@@ -737,6 +737,10 @@ export class DarklyInstance {
         this.streamSources.get(layerId)?.stop();
         this.streamSources = new Map(this.streamSources);
         this.clearStreamSessionStarted(layerId);
+        // Timelapse "final" milestone: a feed dropping holds its last frame on
+        // the GPU without any document change, so capture it before the render
+        // loop settles. A no-op when recording is off.
+        this.engine?.api.requestRecordingCapture();
         this.requestFrame();
     }
 

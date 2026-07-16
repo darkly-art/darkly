@@ -399,14 +399,14 @@ export type FillBackgroundReq = { id: number, };
 
 export type FillBackgroundColorReq = { id: number, rgba: [number, number, number, number], };
 
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
 export type ParamInfo = { kind: string, name: string, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
 /**
  * Enum: `["Label1", "Label2", ...]`.
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
 options: JsonValue | null, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
 export type VeilTypeInfo = { type: string, displayName: string, params: Array<ParamInfo>, };
 
@@ -437,6 +437,13 @@ export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 export type LayerKindTypeInfo = { type: string, displayName: string, };
 
 export type LayerTransformCapabilityReq = { id: number, };
+
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
 
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
@@ -489,13 +496,6 @@ pipeline: string,
  * uses.
  */
 params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
-
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
-/**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -664,7 +664,7 @@ export type VoidTransformInfoReq = { id: number, };
 
 export type VoidTransformInfoResp = { ox: number, oy: number, w: number, h: number, mode: number, matrix: Array<number>, };
 
-export type CaptureKind = "camera" | "display";
+export type CaptureKind = "camera" | "display" | "stream";
 
 export type VoidTypeInfo = { type: string, displayName: string, params: Array<ParamInfo>, icon: string, supportsPreview: boolean, 
 /**
@@ -810,6 +810,7 @@ export type RequestKind =
     | 'remove_veil'
     | 'request_histogram'
     | 'request_node_histogram'
+    | 'request_recording_capture'
     | 'rescale_image'
     | 'resize'
     | 'resize_canvas_rect'
@@ -1000,6 +1001,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'remove_veil',
     'request_histogram',
     'request_node_histogram',
+    'request_recording_capture',
     'rescale_image',
     'resize',
     'resize_canvas_rect',
@@ -1198,6 +1200,7 @@ export interface EngineApi {
     removeVeil(req: RemoveVeilReq): void;
     requestHistogram(req: HistogramReq): void;
     requestNodeHistogram(req: HistogramReq): void;
+    requestRecordingCapture(): void;
     rescaleImage(req: RescaleImageReq): void;
     resize(req: ResizeReq): void;
     resizeCanvasRect(req: ResizeCanvasRectReq): void;
@@ -1390,6 +1393,7 @@ export function makeApi(t: Transport): EngineApi {
         removeVeil: (req) => t.postFF('remove_veil', req),
         requestHistogram: (req) => t.postFF('request_histogram', req),
         requestNodeHistogram: (req) => t.postFF('request_node_histogram', req),
+        requestRecordingCapture: () => t.postFF('request_recording_capture'),
         rescaleImage: (req) => t.postFF('rescale_image', req),
         resize: (req) => t.postFF('resize', req),
         resizeCanvasRect: (req) => t.postFF('resize_canvas_rect', req),
