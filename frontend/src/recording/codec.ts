@@ -27,17 +27,35 @@ export type IsConfigSupported = (
  *  preferred resolution is rejected by every codec. */
 const FALLBACK_LONG_EDGES = [1920, 1280, 854, 640];
 
-/** Fit `(width, height)` inside `maxLongEdge`, preserving aspect. Both
- *  output dimensions are even (encoder requirement for 4:2:0 content) and
- *  at least 2. Never upscales. */
+/** Encoder frame alignment per axis. Widths are floored to whole 16×16
+ *  macroblocks so H.264 never emits a horizontal SPS crop rectangle —
+ *  some hardware decoders (Intel iHD/VAAPI) mis-decode horizontally
+ *  cropped streams to black. Heights only need the 4:2:0 even
+ *  requirement: the resulting bottom crop is the same pattern every
+ *  1920×1080 stream carries and decodes everywhere. */
+export const WIDTH_ALIGN = 16;
+export const HEIGHT_ALIGN = 2;
+
+/** Floor `v` to a multiple of `step`, with `step` as the minimum. */
+export function alignDim(v: number, step: number): number {
+    const r = Math.round(v);
+    return Math.max(step, r - (r % step));
+}
+
+/** Fit `(width, height)` inside `maxLongEdge`, preserving aspect. Width is
+ *  floored to a whole 16×16 macroblock so H.264 never signals a horizontal
+ *  SPS crop rectangle (mis-decoded to black by some hardware decoders);
+ *  height is floored to even for 4:2:0. Never upscales. */
 export function fitToLongEdge(
     width: number,
     height: number,
     maxLongEdge: number,
 ): { width: number; height: number } {
     const scale = Math.min(1, maxLongEdge / Math.max(width, height));
-    const even = (v: number) => Math.max(2, Math.round(v * scale) & ~1);
-    return { width: even(width), height: even(height) };
+    return {
+        width: alignDim(width * scale, WIDTH_ALIGN),
+        height: alignDim(height * scale, HEIGHT_ALIGN),
+    };
 }
 
 /** Bitrate policy: 0.07 bits per pixel per frame, clamped to 1–12 Mbps

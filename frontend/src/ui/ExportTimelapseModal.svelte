@@ -4,11 +4,10 @@
     import { getActiveInstance } from '../state/app.svelte';
     import { downloadBlob, sanitizeFilename } from '../storage';
     import { processRecording } from '../recording/recorder.svelte';
-    import { fitToLongEdge } from '../recording/codec';
+    import { fitToLongEdge, WIDTH_ALIGN, HEIGHT_ALIGN } from '../recording/codec';
     import {
         EXPORT_MAX_DIM,
         EXPORT_MAX_FPS,
-        EXPORT_MIN_DIM,
         EXPORT_MIN_FPS,
         GIF_LONG_EDGE,
         clampFps,
@@ -212,7 +211,7 @@
                     <div class="num">
                         <input
                             type="number"
-                            min={EXPORT_MIN_DIM}
+                            min={WIDTH_ALIGN}
                             max={EXPORT_MAX_DIM}
                             bind:value={width}
                             oninput={() => onDimInput('w', false)}
@@ -225,7 +224,7 @@
                     <div class="num">
                         <input
                             type="number"
-                            min={EXPORT_MIN_DIM}
+                            min={HEIGHT_ALIGN}
                             max={EXPORT_MAX_DIM}
                             bind:value={height}
                             oninput={() => onDimInput('h', false)}

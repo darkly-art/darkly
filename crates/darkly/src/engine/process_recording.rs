@@ -13,8 +13,9 @@
 //! pending revision) until the frontend notices via the canvas dims in
 //! every `poll_recording_frame` response and re-negotiates a new segment
 //! at the new aspect ratio. The aspect-fit viewport in the capture pass
-//! therefore only absorbs same-aspect rescales and even-align rounding;
-//! real letterbox bars are never encoded.
+//! therefore only absorbs same-aspect rescales and encoder alignment
+//! (width to whole 16×16 macroblocks, height to even) — at most a ≤15 px
+//! horizontal hairline, never real letterbox bars.
 //!
 //! All state here is **session** state per the document-authority taxonomy:
 //! none of it survives reload, and frames flow strictly downhill
@@ -336,8 +337,10 @@ impl DarklyEngine {
 
         // Aspect-fit the canvas into the fixed frame; any uncovered edge
         // keeps the clear color (opaque black). The tick's aspect gate
-        // means this only absorbs same-aspect rescales and even-align
-        // rounding — at most a hairline, never real letterbox bars.
+        // means this only absorbs same-aspect rescales and encoder
+        // alignment (width floored to a 16×16 macroblock, height to even)
+        // — at most a ≤15 px horizontal hairline, never real letterbox
+        // bars.
         let (cw, ch) = (
             self.compositor.canvas_width() as f32,
             self.compositor.canvas_height() as f32,

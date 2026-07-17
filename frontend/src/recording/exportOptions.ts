@@ -10,15 +10,15 @@
  * a single output canvas, so the user picks a target aspect ratio (one of
  * those present in the recording) and how segments of *other* aspect
  * ratios are converted onto it. Grouping uses the true document canvas
- * dims stored per segment — encoder dims are even-aligned fits whose
- * ratio is perturbed at small sizes.
+ * dims stored per segment — encoder dims are macroblock-aligned (width) /
+ * even (height) fits whose ratio is perturbed at small sizes.
  */
+import { alignDim, WIDTH_ALIGN, HEIGHT_ALIGN } from './codec';
 import { decoderConfigsCompatible, type SegmentMeta } from './segments';
 
 /** Per-axis ceiling for the output resolution: H.264 High 5.2 tops out at
  *  4096×2304 and the codec probe settles anything finer. */
 export const EXPORT_MAX_DIM = 4096;
-export const EXPORT_MIN_DIM = 2;
 
 export const EXPORT_MIN_FPS = 1;
 export const EXPORT_MAX_FPS = 120;
@@ -127,8 +127,8 @@ const NAMED_RATIOS: Array<[number, number]> = [
 ];
 
 /** Label a reduced aspect fraction: the nearest named ratio (within 1%,
- *  covering even-align perturbation and odd-pixel crops), exact small
- *  terms, or a decimal like `1.85:1`. */
+ *  covering odd-pixel canvas sizes), exact small terms, or a decimal like
+ *  `1.85:1`. */
 export function aspectLabel(arW: number, arH: number): string {
     const ar = arW / arH;
     for (const [w, h] of NAMED_RATIOS) {
@@ -143,25 +143,35 @@ export function aspectLabel(arW: number, arH: number): string {
 // Input sanitization
 // ---------------------------------------------------------------------------
 
-function clampDim(v: number): number {
-    if (!Number.isFinite(v)) return EXPORT_MIN_DIM;
-    const even = Math.round(v) & ~1;
-    return Math.min(EXPORT_MAX_DIM, Math.max(EXPORT_MIN_DIM, even));
+/** Sanitize one output dimension: floor to a multiple of `step` (width 16,
+ *  height 2 — see `alignDim`) and clamp to `EXPORT_MAX_DIM`. GIF has no
+ *  macroblocks, but sharing the one rule keeps the modal and pipeline
+ *  coherent at a cost of ≤15 px on GIF width. */
+function clampDim(v: number, step: number): number {
+    if (!Number.isFinite(v)) return step;
+    return Math.min(EXPORT_MAX_DIM, alignDim(v, step));
 }
 
 /** Derive both output dims from one edited axis, locked to the aspect
- *  ratio: the edited value is sanitized (even-aligned, clamped to
- *  [2, `EXPORT_MAX_DIM`]) and the other axis follows the exact fraction. */
+ *  ratio: the edited value is sanitized with its own axis step (width
+ *  macroblock-aligned to 16, height even) and clamped to `EXPORT_MAX_DIM`,
+ *  then the other axis follows the exact fraction sanitized with *its*
+ *  step. GIF width shares the 16 px rule for pipeline coherence. */
 export function lockedDims(
     axis: 'w' | 'h',
     value: number,
     arW: number,
     arH: number,
 ): { width: number; height: number } {
-    const v = clampDim(value);
     return axis === 'w'
-        ? { width: v, height: clampDim((v * arH) / arW) }
-        : { width: clampDim((v * arW) / arH), height: v };
+        ? (() => {
+              const width = clampDim(value, WIDTH_ALIGN);
+              return { width, height: clampDim((width * arH) / arW, HEIGHT_ALIGN) };
+          })()
+        : (() => {
+              const height = clampDim(value, HEIGHT_ALIGN);
+              return { width: clampDim((height * arW) / arH, WIDTH_ALIGN), height };
+          })();
 }
 
 /** Sanitize the playback-rate input: finite, clamped to

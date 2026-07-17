@@ -24,23 +24,36 @@ function fakeProbe(accept: (c: VideoEncoderConfig) => boolean): {
 }
 
 describe('fitToLongEdge', () => {
-    it('fits the long edge and preserves aspect, even-aligned', () => {
+    it('fits the long edge and preserves aspect, aligned', () => {
         expect(fitToLongEdge(3840, 2160, 1920)).toEqual({ width: 1920, height: 1080 });
-        expect(fitToLongEdge(2160, 3840, 1920)).toEqual({ width: 1080, height: 1920 });
+        // Portrait width floors to a whole macroblock (1080 % 16 = 8).
+        expect(fitToLongEdge(2160, 3840, 1920)).toEqual({ width: 1072, height: 1920 });
+    });
+
+    it('macroblock-aligns the width so H.264 emits no horizontal crop (regression: black hardware decode)', () => {
+        // A canvas resized to ~85:54 produced a 1700-wide stream; 1700 % 16 = 4
+        // forces a horizontal SPS crop rectangle that the Intel VAAPI decoder
+        // mis-decodes to black. Widths must be whole 16×16 macroblocks.
+        const { width, height } = fitToLongEdge(1700, 1080, 1700);
+        expect(width % 16).toBe(0);
+        expect(height % 2).toBe(0);
     });
 
     it('never upscales', () => {
         expect(fitToLongEdge(800, 600, 1920)).toEqual({ width: 800, height: 600 });
     });
 
-    it('forces even dimensions', () => {
+    it('aligns width to 16 and height to 2', () => {
         const { width, height } = fitToLongEdge(1001, 333, 1920);
-        expect(width % 2).toBe(0);
+        expect(width % 16).toBe(0);
+        expect(width).toBe(992);
         expect(height % 2).toBe(0);
+        expect(height).toBe(332);
     });
 
-    it('clamps degenerate dimensions up to 2', () => {
+    it('clamps degenerate dimensions up to the axis step', () => {
         expect(fitToLongEdge(10000, 1, 1920).height).toBe(2);
+        expect(fitToLongEdge(1, 10000, 1920).width).toBe(16);
     });
 });
 

@@ -137,11 +137,12 @@ describe('lockedDims', () => {
         expect(lockedDims('h', 1080, 16, 9)).toEqual({ width: 1920, height: 1080 });
     });
 
-    it('even-aligns both axes', () => {
+    it('aligns width to 16 and height to 2', () => {
         const { width, height } = lockedDims('w', 333, 16, 9);
-        expect(width % 2).toBe(0);
+        expect(width % 16).toBe(0);
         expect(height % 2).toBe(0);
-        expect(width).toBe(332);
+        expect(width).toBe(320);
+        expect(height).toBe(180);
     });
 
     it('clamps to the export range', () => {
@@ -149,8 +150,10 @@ describe('lockedDims', () => {
             width: EXPORT_MAX_DIM,
             height: EXPORT_MAX_DIM,
         });
-        expect(lockedDims('w', 0, 1, 1)).toEqual({ width: 2, height: 2 });
-        expect(lockedDims('h', NaN, 1, 1)).toEqual({ width: 2, height: 2 });
+        expect(lockedDims('w', 0, 1, 1)).toEqual({ width: 16, height: 16 });
+        // At degenerate sizes the per-axis floors break the aspect lock:
+        // the edited axis takes its own step, the derived axis follows.
+        expect(lockedDims('h', NaN, 1, 1)).toEqual({ width: 16, height: 2 });
     });
 });
 
