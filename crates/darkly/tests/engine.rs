@@ -3026,17 +3026,17 @@ fn add_paint_apply_undo_round_trip_preserves_mask() {
         "apply must multiply alpha by mask at probe; before={red_alpha} after={baked_alpha}"
     );
 
-    // Undo the apply. It pushes three actions in order:
+    // Undo the apply. `apply_mask` bundles its three sub-actions into ONE
+    // CompoundAction:
     //   1. GpuRegionAction for the host's pre-multiply alpha
     //   2. GpuRegionAction for the mask's pixels (saved separately so undo
     //      restores them into the freshly re-created texture after step 3)
     //   3. FilterRemoveAction for the detach
-    // Undo runs in reverse: re-attach filter → restore mask pixels →
-    // restore host alpha.
-    for _ in 0..3 {
-        engine.undo();
-        engine.render(0.0);
-    }
+    // CompoundAction::undo runs its children in reverse, so one Ctrl+Z replays
+    // re-attach filter → restore mask pixels → restore host alpha. A single
+    // `undo()` must therefore fully restore the pre-apply state.
+    engine.undo();
+    engine.render(0.0);
 
     let restored_mask_id = engine
         .host_mask_id(layer_id)
@@ -3057,6 +3057,186 @@ fn add_paint_apply_undo_round_trip_preserves_mask() {
     assert_eq!(
         restored_mask_byte, masked_byte,
         "mask painted byte at probe must be byte-identically restored after undo"
+    );
+}
+
+/// Regression (Bug 1 — coordinate frame): the destructive `apply_mask` bake
+/// must sample the mask in the mask's OWN plane-anchored frame, so the baked
+/// host alpha is byte-for-byte what the live composite showed. Force the
+/// canvas window, the layer extent, and the mask extent to DIVERGE by cropping
+/// to a nonzero origin AND a different size after painting: the layer and mask
+/// stay put in the plane while the window shifts and shrinks. The pre-fix bake
+/// sampled the mask through `(plane - canvas_origin) / canvas_size` (the
+/// selection frame), so the crop shifted AND scaled the baked coverage away
+/// from the mask's real texels.
+#[test]
+fn apply_mask_bakes_in_mask_frame_after_crop() {
+    use darkly::coord::CanvasRect;
+
+    let (cw, ch) = (256u32, 256u32);
+    let mut engine = test_engine(cw, ch);
+    let layer_id = engine.add_raster_layer(None);
+
+    // Opaque red line across y = ch/2; add a mask and paint a small, sharply
+    // localized black spot on that line. Both textures span the full canvas at
+    // origin (0, 0), so pre-crop all three frames coincide.
+    paint_full_stroke(&mut engine, layer_id, cw, ch);
+    engine.add_mask(layer_id);
+    let mask_id = engine.host_mask_id(layer_id).expect("mask just added");
+    paint_mask_dab(&mut engine, layer_id, 64.0, (ch / 2) as f32, 0.0);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    // Snapshot host alpha + mask bytes (in their own texture extents) BEFORE
+    // the destructive bake — this is the display-path input we recompute the
+    // expectation from.
+    let host_ext = engine.node_pixel_bounds(layer_id).expect("host bounds");
+    let mask_ext = engine.node_pixel_bounds(mask_id).expect("mask bounds");
+    let host_before = engine.test_readback_layer(layer_id);
+    let mask_before = engine.test_readback_mask(layer_id);
+    assert_eq!(
+        host_before.len(),
+        (host_ext.width * host_ext.height * 4) as usize,
+        "host readback must be tightly packed at its own extent"
+    );
+    assert_eq!(
+        mask_before.len(),
+        (mask_ext.width * mask_ext.height) as usize,
+        "mask readback must be tightly packed at its own extent"
+    );
+
+    // Crop to a window with BOTH a nonzero origin and a different size, so the
+    // buggy `(plane - origin) / size` mask sampling shifts and scales.
+    engine.resize_canvas(CanvasRect::from_xywh(40, 20, 200, 180));
+
+    engine.apply_mask(layer_id);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let host_after = engine.test_readback_layer(layer_id);
+    assert_eq!(
+        host_after.len(),
+        host_before.len(),
+        "the bake must not change the host extent"
+    );
+
+    // Recompute the display-path expectation on the CPU: for each host texel,
+    // map its plane position into the mask's OWN extent, take the mask byte
+    // there (or 255 when outside the footprint — the mask reveals 1.0), and
+    // expect baked alpha == round(alpha * mask / 255). The bake uses a Nearest
+    // sampler, so this is texel-exact (±1 for the unorm8 round-trip).
+    let hw = host_ext.width;
+    let mw = mask_ext.width;
+    let mh = mask_ext.height;
+    let mut worst = 0i32;
+    for hy in 0..host_ext.height {
+        for hx in 0..hw {
+            let plane_x = host_ext.x0() + hx as i32;
+            let plane_y = host_ext.y0() + hy as i32;
+            let mlx = plane_x - mask_ext.x0();
+            let mly = plane_y - mask_ext.y0();
+            let mask_val = if mlx >= 0 && mlx < mw as i32 && mly >= 0 && mly < mh as i32 {
+                mask_before[(mly as u32 * mw + mlx as u32) as usize]
+            } else {
+                255
+            };
+            let a_before = host_before[((hy * hw + hx) * 4 + 3) as usize] as f32;
+            let expected = (a_before * mask_val as f32 / 255.0).round() as i32;
+            let a_after = host_after[((hy * hw + hx) * 4 + 3) as usize] as i32;
+            worst = worst.max((a_after - expected).abs());
+        }
+    }
+    assert!(
+        worst <= 1,
+        "baked host alpha must match the display-path mask multiply in the \
+         mask's own frame; worst per-texel error was {worst}"
+    );
+}
+
+/// Regression (Bug 1 — footprint reveal): a host pixel OUTSIDE the mask's
+/// footprint must keep its alpha (the mask reveals 1.0 there, matching the
+/// live composite). Grow the host beyond the mask by enlarging the canvas
+/// after the mask is created, then painting into the new region; the mask stays
+/// at its original, smaller extent. The pre-fix bake sampled the mask through
+/// the canvas frame instead of the mask's own frame, so it read a stretched
+/// interior mask value (here: black) over the out-of-footprint host pixel and
+/// destroyed its alpha instead of preserving it.
+#[test]
+fn apply_mask_reveals_host_outside_mask_footprint() {
+    use darkly::coord::CanvasRect;
+
+    let (cw, ch) = (100u32, 100u32);
+    let mut engine = test_engine(cw, ch);
+    let layer_id = engine.add_raster_layer(None);
+
+    // Mask created at the small (100×100) canvas; paint a black spot at its
+    // center so a stretched (buggy) sample there reads ~0.
+    engine.add_mask(layer_id);
+    let mask_id = engine.host_mask_id(layer_id).expect("mask just added");
+    paint_mask_dab(&mut engine, layer_id, 50.0, 50.0, 0.0);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+    let mask_ext = engine.node_pixel_bounds(mask_id).expect("mask bounds");
+    assert_eq!(
+        mask_ext,
+        CanvasRect::from_xywh(0, 0, 100, 100),
+        "mask must stay at the small canvas extent (the center dab must not \
+         grow it) — the divergence this test needs"
+    );
+
+    // Enlarge the canvas, then paint an opaque red dab far outside the mask
+    // footprint. The host grows to cover it; the mask stays 100×100.
+    engine.resize_canvas(CanvasRect::from_xywh(0, 0, 300, 300));
+    let (probe_x, probe_y) = (150.0f32, 150.0f32);
+    engine.begin_stroke(layer_id);
+    engine.stroke_to(StrokeOp::BrushStroke {
+        x: probe_x,
+        y: probe_y,
+        pressure: 1.0,
+        x_tilt: 0.0,
+        y_tilt: 0.0,
+        rotation: 0.0,
+        tangential_pressure: 0.0,
+        time_ms: 0.0,
+        cr: 1.0,
+        cg: 0.0,
+        cb: 0.0,
+        ca: 1.0,
+    });
+    engine.end_stroke();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let host_ext = engine.node_pixel_bounds(layer_id).expect("host bounds");
+    assert_eq!(
+        engine.test_readback_layer(layer_id).len(),
+        (host_ext.width * host_ext.height * 4) as usize,
+        "host readback must be tightly packed at its own extent"
+    );
+    assert!(
+        (probe_x as i32) >= mask_ext.x0() + mask_ext.width as i32
+            || (probe_y as i32) >= mask_ext.y0() + mask_ext.height as i32,
+        "probe must lie outside the mask footprint"
+    );
+    let host_before = engine.test_readback_layer(layer_id);
+    let hlx = (probe_x as i32 - host_ext.x0()) as u32;
+    let hly = (probe_y as i32 - host_ext.y0()) as u32;
+    let a_before = alpha_at(&host_before, host_ext.width, hlx, hly);
+    assert!(
+        a_before > 200,
+        "test setup: probe must be opaque before apply; got {a_before}"
+    );
+
+    engine.apply_mask(layer_id);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let host_after = engine.test_readback_layer(layer_id);
+    let a_after = alpha_at(&host_after, host_ext.width, hlx, hly);
+    assert!(
+        (a_after as i32 - a_before as i32).abs() <= 1,
+        "host pixel outside the mask footprint must keep its alpha (the mask \
+         reveals 1.0 there); before={a_before} after={a_after}"
     );
 }
 

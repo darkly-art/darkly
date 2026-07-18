@@ -179,10 +179,10 @@ impl DarklyEngine {
         // Save the mask's R8 pixels too. The filter is removed at the end
         // of apply_mask; without this save, undo gets back the filter shell
         // with a fresh (all-white) mask texture and the user's painting on
-        // the mask is lost forever. The actual GpuRegionAction is committed
-        // and pushed AFTER `commit_region` for the host below — together
-        // with the FilterRemoveAction — so undo replays them in the right
-        // order: re-attach filter → restore mask pixels → restore host alpha.
+        // the mask is lost forever. Its GpuRegionAction is bundled below into
+        // the single CompoundAction alongside the host-alpha region and the
+        // FilterRemoveAction, so one undo replays them in the right order:
+        // re-attach filter → restore mask pixels → restore host alpha.
         let mask_frame = self
             .compositor
             .node_texture(mask_id)
@@ -218,31 +218,41 @@ impl DarklyEngine {
             )
         });
 
-        // GPU render pass: multiply layer alpha by mask values.
-        if let (Some(layer_tex), Some(mask_bg)) =
-            (self.compositor.node_texture(id), mask_bind_group.as_ref())
-        {
+        // GPU render pass: multiply layer alpha by mask values, sampling the
+        // mask in its OWN plane-anchored frame (`mask_rect`) so the bake matches
+        // the live composite. A mask *filter* texture is not canvas-window-sized
+        // (its extent is the host's bounds, possibly grown), so the generic
+        // `multiply_alpha_by_mask` selection-frame sampling would land the mask
+        // at shifted/scaled texels whenever the frames diverge (sub-canvas
+        // layer, grown mask, cropped canvas).
+        if let (Some(layer_tex), Some(mask_bg), Some(mask_rect)) = (
+            self.compositor.node_texture(id),
+            mask_bind_group.as_ref(),
+            mask_frame.as_ref().map(|f| f.canvas_extent),
+        ) {
             let target = crate::gpu::paint_target::GpuPaintTarget::from_node(
                 layer_tex,
                 self.doc.canvas_rect(),
             );
             self.gpu.encode("apply-mask-multiply", |encoder| {
-                target.multiply_alpha_by_mask(
+                target.multiply_alpha_by_mask_in_frame(
                     encoder,
                     &self.paint_pipelines,
                     &self.gpu.queue,
                     mask_bg,
+                    mask_rect,
                 );
             });
         }
 
-        // Commit both undo regions (host alpha + mask pixels) before pushing
-        // either, because the frames borrow `self.compositor` and `push_undo`
-        // needs `&mut self` total. Push order is preserved: host first so
-        // it pops last on undo. Each entry independently lands in the
-        // `Pending → Ready` pipeline; the compound action becomes restorable
-        // once each branch has either flipped to `Ready` or been hit by an
-        // undo that consumes its staging buffer directly.
+        // Commit both undo regions (host alpha + mask pixels) before building
+        // the compound, because the frames borrow `self.compositor` and
+        // `push_undo` needs `&mut self` total. They are collected in the order
+        // `[host, mask, filterRemove]` so `CompoundAction::undo` (reverse)
+        // replays them as filterRemove → mask → host. Each region entry
+        // independently lands in the `Pending → Ready` pipeline; the compound
+        // becomes restorable once each branch has either flipped to `Ready` or
+        // been hit by an undo that consumes its staging buffer directly.
         let host_entry = if let (Some(snap), Some(frame)) = (snap, layer_frame) {
             let rect = frame.canvas_extent;
             Some(commit_undo_region(
@@ -275,11 +285,12 @@ impl DarklyEngine {
             None
         };
 
+        let mut actions: Vec<Box<dyn UndoAction>> = Vec::new();
         if let Some(entry) = host_entry {
-            self.push_undo(Box::new(GpuRegionAction::new(entry)));
+            actions.push(Box::new(GpuRegionAction::new(entry)));
         }
         if let Some(entry) = mask_entry {
-            self.push_undo(Box::new(GpuRegionAction::new(entry)));
+            actions.push(Box::new(GpuRegionAction::new(entry)));
         }
 
         if self.isolated_node == Some(mask_id) {
@@ -289,16 +300,26 @@ impl DarklyEngine {
         // Apply baked the mask into the layer's alpha — layer pixels changed.
         self.compositor.mark_node_pixels_dirty(id);
 
-        // Remove the filter from the document and its GPU texture. The
-        // FilterRemoveAction is pushed last so undo pops it first — the
-        // re-attach happens before sync_compositor_layers re-allocates the
-        // R8 texture, after which the pending mask-region restore can land.
+        // Remove the filter from the document and its GPU texture, then bundle
+        // the FilterRemoveAction last in the vec so `CompoundAction::undo`
+        // (reverse) pops it first — the re-attach happens before
+        // sync_compositor_layers re-allocates the R8 texture, after which the
+        // pending mask-region restore can land.
         let detached = self.doc.detach_filter_for_undo(mask_id).is_some();
         self.compositor.dispose_node_texture(mask_id);
         self.compositor.dispose_mask_snapshot_state(id);
         self.compositor.dispose_projection_state(id);
         if detached {
-            self.push_undo(Box::new(FilterRemoveAction::new(mask_id, id)));
+            actions.push(Box::new(FilterRemoveAction::new(mask_id, id)));
+        }
+
+        // One Apply Mask = one undo step: fold the host-alpha region, mask-pixel
+        // region, and filter-detach into a single CompoundAction (or push the
+        // lone action directly when only one survived).
+        if actions.len() == 1 {
+            self.push_undo(actions.pop().unwrap());
+        } else if !actions.is_empty() {
+            self.push_undo(Box::new(CompoundAction::new(actions)));
         }
     }
 

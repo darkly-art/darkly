@@ -260,6 +260,8 @@ impl<'a> GpuPaintTarget<'a> {
             radius: 0.0, // solid fill — coverage from selection only
             softness: 0.0,
             color: [1.0, 1.0, 1.0, 1.0], // full erase strength
+            mask_offset: [0.0, 0.0],
+            mask_size: [0.0, 0.0],
         };
 
         self.execute_pass(
@@ -305,6 +307,8 @@ impl<'a> GpuPaintTarget<'a> {
             radius: 0.0,
             softness: 0.0,
             color: [0.0, 0.0, 0.0, 1.0],
+            mask_offset: [0.0, 0.0],
+            mask_size: [0.0, 0.0],
         };
 
         self.execute_pass(
@@ -342,6 +346,8 @@ impl<'a> GpuPaintTarget<'a> {
             radius: 0.0,
             softness: 0.0,
             color: [0.0, 0.0, 0.0, 1.0],
+            mask_offset: [0.0, 0.0],
+            mask_size: [0.0, 0.0],
         };
 
         self.execute_pass(
@@ -381,6 +387,55 @@ impl<'a> GpuPaintTarget<'a> {
             radius: 0.0,
             softness: 0.0,
             color: [0.0, 0.0, 0.0, 1.0],
+            mask_offset: [0.0, 0.0],
+            mask_size: [0.0, 0.0],
+        };
+
+        self.execute_pass(
+            encoder,
+            pipeline,
+            pipelines,
+            queue,
+            &uniforms,
+            Some(mask_bind_group),
+        );
+    }
+
+    /// Multiply only the ALPHA channel of the target by a mask sampled in the
+    /// mask's OWN plane-anchored frame (`mask_frame`), revealing `1.0` outside
+    /// the mask footprint. `dst.a *= mask`, `dst.rgb` unchanged.
+    ///
+    /// The destructive-bake sibling of [`multiply_alpha_by_mask`], which assumes
+    /// the bound texture is a canvas-window-sized selection mask. A mask *filter*
+    /// texture lives in its own extent (`mask_frame`), so it must be addressed
+    /// there and revealed outside its bounds — exactly the display path's
+    /// `sample_mask_plane` semantics. Used by `apply_mask` so the baked result
+    /// matches the live composite.
+    ///
+    /// [`multiply_alpha_by_mask`]: Self::multiply_alpha_by_mask
+    pub fn multiply_alpha_by_mask_in_frame(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &PaintPipelines,
+        queue: &wgpu::Queue,
+        mask_bind_group: &wgpu::BindGroup,
+        mask_frame: CanvasRect,
+    ) {
+        let pipeline = pipelines.alpha_mask_multiply_in_frame_pipeline();
+
+        let uniforms = PaintUniforms {
+            origin: [self.offset_x as f32, self.offset_y as f32],
+            size: [self.width as f32, self.height as f32],
+            target_offset: [self.offset_x as f32, self.offset_y as f32],
+            target_size: [self.width as f32, self.height as f32],
+            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
+            canvas_origin: [self.canvas_origin_x as f32, self.canvas_origin_y as f32],
+            center: [0.0, 0.0],
+            radius: 0.0,
+            softness: 0.0,
+            color: [0.0, 0.0, 0.0, 1.0],
+            mask_offset: [mask_frame.x0() as f32, mask_frame.y0() as f32],
+            mask_size: [mask_frame.width as f32, mask_frame.height as f32],
         };
 
         self.execute_pass(
@@ -418,6 +473,8 @@ impl<'a> GpuPaintTarget<'a> {
             radius: 0.0,
             softness: 0.0,
             color: [0.0, 0.0, 0.0, 1.0],
+            mask_offset: [0.0, 0.0],
+            mask_size: [0.0, 0.0],
         };
 
         self.execute_pass(
@@ -458,6 +515,8 @@ impl<'a> GpuPaintTarget<'a> {
             radius: 0.0,
             softness: 0.0,
             color,
+            mask_offset: [0.0, 0.0],
+            mask_size: [0.0, 0.0],
         };
 
         self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, None);
@@ -544,6 +603,8 @@ impl<'a> GpuPaintTarget<'a> {
             radius: 0.0, // solid fill — no SDF
             softness: 0.0,
             color: color_to_float(color, 1.0),
+            mask_offset: [0.0, 0.0],
+            mask_size: [0.0, 0.0],
         };
 
         self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, selection);
@@ -586,6 +647,8 @@ impl<'a> GpuPaintTarget<'a> {
             radius,
             softness,
             color: color_to_float(color, opacity),
+            mask_offset: [0.0, 0.0],
+            mask_size: [0.0, 0.0],
         };
 
         self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, selection);
@@ -649,6 +712,10 @@ pub struct PaintPipelines {
     inverse_mask_multiply_r8: wgpu::RenderPipeline,
     alpha_mask_multiply_rgba: wgpu::RenderPipeline,
     alpha_inverse_mask_multiply_rgba: wgpu::RenderPipeline,
+    /// Destructive mask bake: `dst.a *= mask` with the mask sampled in its own
+    /// plane-anchored frame (footprint-aware reveal). RGBA-only — `apply_mask`
+    /// guards on raster hosts, so R8 targets never take this path.
+    alpha_mask_multiply_in_frame_rgba: wgpu::RenderPipeline,
 
     pub(crate) uniform_buf: wgpu::Buffer,
     pub(crate) uniform_bind_group: wgpu::BindGroup,
@@ -686,6 +753,16 @@ impl PaintPipelines {
             source: wgpu::ShaderSource::Wgsl(
                 crate::gpu::canvas_lib::with_canvas_lib(include_str!(
                     "../../shaders/gradient.wgsl"
+                ))
+                .into(),
+            ),
+        });
+
+        let apply_mask_bake_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("apply-mask-bake"),
+            source: wgpu::ShaderSource::Wgsl(
+                crate::gpu::canvas_lib::with_canvas_lib(include_str!(
+                    "../../shaders/apply_mask_bake.wgsl"
                 ))
                 .into(),
             ),
@@ -1052,6 +1129,13 @@ impl PaintPipelines {
                 wgpu::TextureFormat::Rgba8Unorm,
                 blend_alpha_inverse_mask_multiply,
             ),
+            alpha_mask_multiply_in_frame_rgba: make_pipeline(
+                "alpha-mask-mul-in-frame-rgba",
+                &paint_layout,
+                &apply_mask_bake_shader,
+                wgpu::TextureFormat::Rgba8Unorm,
+                blend_alpha_mask_multiply,
+            ),
             uniform_buf,
             uniform_bind_group,
             gradient_uniform_buf,
@@ -1200,6 +1284,10 @@ impl PaintPipelines {
             _ => &self.alpha_inverse_mask_multiply_rgba,
         }
     }
+
+    fn alpha_mask_multiply_in_frame_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.alpha_mask_multiply_in_frame_rgba
+    }
 }
 
 /// Uniform data sent to the paint_circle shader.
@@ -1216,6 +1304,8 @@ struct PaintUniforms {
     radius: f32,             // Circle radius (0 = solid fill)
     softness: f32,           // Soft edge width in pixels
     color: [f32; 4],         // RGBA paint color (straight alpha)
+    mask_offset: [f32; 2],   // Mask texture plane-space offset (bake path only)
+    mask_size: [f32; 2],     // Mask texture pixel size; 0 = no footprint
 }
 
 /// Uniform data sent to the gradient shader.
