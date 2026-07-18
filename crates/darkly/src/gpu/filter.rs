@@ -68,6 +68,13 @@ pub trait FilterEffect: Send + Sync {
 pub struct FilterPipelineRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
+    /// Iconify name (e.g. `"fa6-solid:chart-line"`) shown wherever the filter
+    /// surfaces — the Colors menu action and the filter-layer picker/tree row.
+    pub icon: &'static str,
+    /// One-sentence summary shown as a picker tooltip and folded into the
+    /// Colors-menu action description, where the command palette's substring
+    /// search indexes it — include the terms users would search for.
+    pub description: &'static str,
     pub params: &'static [ParamDef],
     pub create_pipeline: fn(&wgpu::Device) -> Arc<dyn FilterEffect>,
 }
@@ -79,6 +86,8 @@ pub struct FilterPipelineRegistry {
 
 struct RegistryEntry {
     display_name: &'static str,
+    icon: &'static str,
+    description: &'static str,
     params: &'static [ParamDef],
     create_pipeline: fn(&wgpu::Device) -> Arc<dyn FilterEffect>,
     cached_pipeline: Option<Arc<dyn FilterEffect>>,
@@ -98,6 +107,8 @@ impl FilterPipelineRegistry {
                 reg.type_id,
                 RegistryEntry {
                     display_name: reg.display_name,
+                    icon: reg.icon,
+                    description: reg.description,
                     params: reg.params,
                     create_pipeline: reg.create_pipeline,
                     cached_pipeline: None,
@@ -107,15 +118,15 @@ impl FilterPipelineRegistry {
         FilterPipelineRegistry { entries }
     }
 
-    /// All registered filter type IDs with their display names, sorted by
-    /// id for a stable menu order.
-    pub fn types(&self) -> Vec<(&'static str, &'static str)> {
+    /// All registered filter type IDs with their display names, icons, and
+    /// descriptions, sorted by id for a stable menu order.
+    pub fn types(&self) -> Vec<(&'static str, &'static str, &'static str, &'static str)> {
         let mut types: Vec<_> = self
             .entries
             .iter()
-            .map(|(&id, e)| (id, e.display_name))
+            .map(|(&id, e)| (id, e.display_name, e.icon, e.description))
             .collect();
-        types.sort_by_key(|(id, _)| *id);
+        types.sort_by_key(|(id, _, _, _)| *id);
         types
     }
 
@@ -140,6 +151,12 @@ impl FilterPipelineRegistry {
             .unwrap_or("")
     }
 
+    /// Iconify name for a filter type, falling back to the empty string when
+    /// the type is unknown (callers substitute the generic layer-kind icon).
+    pub fn icon(&self, type_id: &str) -> &'static str {
+        self.entries.get(type_id).map(|e| e.icon).unwrap_or("")
+    }
+
     /// Get or create the shared effect for a filter type. Returns `None`
     /// for an unknown type rather than panicking — the caller (a protocol
     /// request carrying an arbitrary string) decides how to fail.
@@ -155,5 +172,33 @@ impl FilterPipelineRegistry {
                 .get_or_insert_with(|| (entry.create_pipeline)(device))
                 .clone(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// Every filter declares a well-formed, non-empty Iconify name, and no two
+    /// filters share one — so each reads distinctly in the Colors menu and the
+    /// Add Filter Layer picker. Guards against copy-pasting a `register()` and
+    /// forgetting to change the icon.
+    #[test]
+    fn every_filter_has_a_unique_icon() {
+        let registry = FilterPipelineRegistry::new();
+        let mut seen = HashSet::new();
+        for (type_id, _display, icon, _description) in registry.types() {
+            assert!(!icon.is_empty(), "filter '{type_id}' has no icon");
+            assert!(
+                icon.contains(':'),
+                "filter '{type_id}' icon '{icon}' is not a `prefix:name` Iconify id"
+            );
+            assert!(
+                seen.insert(icon),
+                "filter '{type_id}' reuses icon '{icon}' — icons must be unique per filter"
+            );
+        }
+        assert!(!seen.is_empty(), "no filters registered");
     }
 }

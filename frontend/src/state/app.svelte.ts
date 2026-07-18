@@ -207,7 +207,15 @@ export class DarklyInstance {
      *  at startup. Drives the dynamic, auto-discovered Colors-menu actions in
      *  `registerActions` — a new filter in the Rust core surfaces a menu
      *  entry with zero frontend edits. */
-    filterTypes = $state<Array<{ type: string; displayName: string; params?: unknown[] }>>([]);
+    filterTypes = $state<
+        Array<{
+            type: string;
+            displayName: string;
+            icon: string;
+            description: string;
+            params?: unknown[];
+        }>
+    >([]);
 
     toolDisplayName(id: string): string {
         return this.toolDisplayNames[id] ?? id;

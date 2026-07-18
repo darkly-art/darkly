@@ -112,6 +112,8 @@ pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "levels",
         display_name: "Levels",
+        icon: "fa6-solid:sliders",
+        description: "Tone mapping with black point, white point, gamma, and output range.",
         params: PARAMS,
         create_pipeline,
     }

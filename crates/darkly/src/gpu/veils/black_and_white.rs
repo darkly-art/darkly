@@ -1,127 +1,52 @@
-use crate::gpu::effect::{EffectCache, EffectPipeline};
-use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
-use std::sync::Arc;
+//! Black and White veil — the viewport surface of the shared black-and-white
+//! core ([`crate::gpu::black_and_white`]): a sampler-based fullscreen pass
+//! over the veil chain's ping-pong textures. The identity, param schema,
+//! uniform packing, and WGSL transform all live in the shared module; this
+//! file owns only the veil-side bindings and render pass.
 
-const PARAMS: &[ParamDef] = &[
-    ParamDef::Float {
-        name: "red_weight",
-        min: 0.0,
-        max: 1.0,
-        default: 0.299,
-    },
-    ParamDef::Float {
-        name: "green_weight",
-        min: 0.0,
-        max: 1.0,
-        default: 0.587,
-    },
-    ParamDef::Float {
-        name: "blue_weight",
-        min: 0.0,
-        max: 1.0,
-        default: 0.114,
-    },
-    ParamDef::Float {
-        name: "tint_hue",
-        min: 0.0,
-        max: 360.0,
-        default: 0.0,
-    },
-    ParamDef::Float {
-        name: "tint_strength",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-    },
-];
+use crate::gpu::black_and_white as bw;
+use crate::gpu::effect::{EffectCache, EffectPipeline};
+use crate::gpu::veil::{ParamValue, Veil, VeilRegistration};
+use std::sync::Arc;
 
 pub fn register() -> VeilRegistration {
     VeilRegistration {
-        type_id: "monochrome",
-        display_name: "Monochrome",
-        params: PARAMS,
-        create_pipeline: create_monochrome_pipeline,
-        from_params: |params, shared| {
-            let red_weight = match params.first() {
-                Some(ParamValue::Float(v)) => *v,
-                _ => 0.299,
-            };
-            let green_weight = match params.get(1) {
-                Some(ParamValue::Float(v)) => *v,
-                _ => 0.587,
-            };
-            let blue_weight = match params.get(2) {
-                Some(ParamValue::Float(v)) => *v,
-                _ => 0.114,
-            };
-            let tint_hue = match params.get(3) {
-                Some(ParamValue::Float(v)) => *v,
-                _ => 0.0,
-            };
-            let tint_strength = match params.get(4) {
-                Some(ParamValue::Float(v)) => *v,
-                _ => 0.0,
-            };
-            Box::new(Monochrome::new(
-                red_weight,
-                green_weight,
-                blue_weight,
-                tint_hue,
-                tint_strength,
-                shared,
-            ))
-        },
+        type_id: bw::TYPE_ID,
+        display_name: bw::DISPLAY_NAME,
+        description: bw::DESCRIPTION,
+        params: bw::PARAMS,
+        create_pipeline,
+        from_params: |params, shared| Box::new(BlackAndWhite::new(params, shared)),
     }
-}
-
-/// GPU uniforms for the monochrome shader.
-/// Layout must match the WGSL `Params` struct exactly.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct MonochromeUniforms {
-    red_weight: f32,
-    green_weight: f32,
-    blue_weight: f32,
-    tint_hue: f32,
-    tint_strength: f32,
-    _pad1: f32,
-    _pad2: f32,
-    _pad3: f32,
 }
 
 #[derive(Clone, Debug)]
-pub struct Monochrome {
-    pub red_weight: f32,
-    pub green_weight: f32,
-    pub blue_weight: f32,
-    pub tint_hue: f32,
-    pub tint_strength: f32,
+pub struct BlackAndWhite {
+    /// Schema-ordered values, padded to the full schema with defaults on
+    /// creation so `param_values()` always round-trips every slot.
+    params: Vec<ParamValue>,
     shared: Arc<EffectPipeline>,
 }
 
-impl Monochrome {
-    pub fn new(
-        red_weight: f32,
-        green_weight: f32,
-        blue_weight: f32,
-        tint_hue: f32,
-        tint_strength: f32,
-        shared: Arc<EffectPipeline>,
-    ) -> Self {
-        Monochrome {
-            red_weight,
-            green_weight,
-            blue_weight,
-            tint_hue,
-            tint_strength,
-            shared,
-        }
+impl BlackAndWhite {
+    pub fn new(params: &[ParamValue], shared: Arc<EffectPipeline>) -> Self {
+        let params = bw::PARAMS
+            .iter()
+            .enumerate()
+            .map(|(i, def)| {
+                params
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| def.default_value())
+            })
+            .collect();
+        BlackAndWhite { params, shared }
     }
 }
 
-impl Veil for Monochrome {
+impl Veil for BlackAndWhite {
     fn type_id(&self) -> &'static str {
-        "monochrome"
+        bw::TYPE_ID
     }
 
     fn clone_boxed(&self) -> Box<dyn Veil> {
@@ -129,13 +54,7 @@ impl Veil for Monochrome {
     }
 
     fn param_values(&self) -> Vec<ParamValue> {
-        vec![
-            ParamValue::Float(self.red_weight),
-            ParamValue::Float(self.green_weight),
-            ParamValue::Float(self.blue_weight),
-            ParamValue::Float(self.tint_hue),
-            ParamValue::Float(self.tint_strength),
-        ]
+        self.params.clone()
     }
 
     fn create_cache(
@@ -147,28 +66,19 @@ impl Veil for Monochrome {
         _viewport_width: u32,
         _viewport_height: u32,
     ) -> EffectCache {
-        let uniforms = MonochromeUniforms {
-            red_weight: self.red_weight,
-            green_weight: self.green_weight,
-            blue_weight: self.blue_weight,
-            tint_hue: self.tint_hue,
-            tint_strength: self.tint_strength,
-            _pad1: 0.0,
-            _pad2: 0.0,
-            _pad3: 0.0,
-        };
+        let uniforms = bw::pack_uniform(&self.params);
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("monochrome-uniforms"),
-            size: std::mem::size_of::<MonochromeUniforms>() as u64,
+            label: Some("black-and-white-uniforms"),
+            size: std::mem::size_of_val(&uniforms) as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&uniform_buf, 0, bytemuck::cast_slice(&uniforms));
 
         let layout = &self.shared.bind_group_layout;
         let bind_groups: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("monochrome-bg-{i}")),
+                label: Some(&format!("black-and-white-bg-{i}")),
                 layout,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -204,7 +114,7 @@ impl Veil for Monochrome {
         dst_view: &wgpu::TextureView,
     ) {
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("monochrome"),
+            label: Some("black-and-white"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: dst_view,
                 resolve_target: None,
@@ -222,12 +132,9 @@ impl Veil for Monochrome {
     }
 }
 
-fn create_monochrome_pipeline(
-    device: &wgpu::Device,
-    _format: wgpu::TextureFormat,
-) -> EffectPipeline {
+fn create_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> EffectPipeline {
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("monochrome-bgl"),
+        label: Some("black-and-white-bgl"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -259,27 +166,25 @@ fn create_monochrome_pipeline(
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("monochrome-pipeline-layout"),
+        label: Some("black-and-white-pipeline-layout"),
         bind_group_layouts: &[Some(&bind_group_layout)],
         immediate_size: 0,
     });
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("monochrome-shader"),
-        // Prepend the shared colour-space lib for `hsv_to_rgb` (same pattern the
-        // LUT filter and histogram use).
+        label: Some("black-and-white-shader"),
         source: wgpu::ShaderSource::Wgsl(
             format!(
                 "{}\n{}",
-                include_str!("../../../shaders/lib/colorspace.wgsl"),
-                include_str!("../../../shaders/veils/monochrome.wgsl"),
+                bw::SHADER_LIB,
+                include_str!("../../../shaders/veils/black_and_white.wgsl"),
             )
             .into(),
         ),
     });
 
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("monochrome-pipeline"),
+        label: Some("black-and-white-pipeline"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
@@ -289,7 +194,7 @@ fn create_monochrome_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_monochrome"),
+            entry_point: Some("fs_black_and_white"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 blend: None,

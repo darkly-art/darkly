@@ -162,6 +162,10 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: number, };
 
+export type PortDir = "Input" | "Output";
+
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
+
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
  * Slider min when the port is disconnected (UI metadata only).
@@ -295,10 +299,6 @@ natural_range: [number, number] | null,
  */
 persist_in_thumbnail: boolean, };
 
-export type PortDir = "Input" | "Output";
-
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
-
 export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "levels", name: string, default: [number, number, number, number, number], } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, } | { "kind": "color", name: string, default: [number, number, number], } | { "kind": "vec2", name: string, max: number, default: [number, number], } | { "kind": "list", name: string, item: Array<ParamDef>, max_len: number, default: Array<Array<[string, ConstParamValue]>>, };
 
 export type ConstParamValue = boolean | number | number | string | [number, number, number] | [number, number];
@@ -408,7 +408,19 @@ options: JsonValue | null, };
 
 export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
-export type VeilTypeInfo = { type: string, displayName: string, params: Array<ParamInfo>, };
+export type VeilTypeInfo = { type: string, displayName: string, 
+/**
+ * Iconify name shown for this type. Filters carry a per-variant icon so
+ * each reads distinctly in the Colors menu and the Add Filter Layer picker;
+ * veils leave it empty (their UI renders a live preview, not an icon).
+ */
+icon: string, 
+/**
+ * One-sentence summary from the registration — picker tooltips, and (for
+ * filters) folded into the Colors-menu action description where the
+ * command palette's search indexes it.
+ */
+description: string, params: Array<ParamInfo>, };
 
 export type FlattenNodeReq = { node_id: number, };
 

@@ -31,6 +31,7 @@ pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "frozen",
         display_name: "Frozen",
+        description: "Frost the view behind a pane of refracting ice.",
         params: PARAMS,
         create_pipeline: create_frozen_pipeline,
         from_params: |params, shared| {
