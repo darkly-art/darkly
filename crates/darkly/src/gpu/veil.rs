@@ -75,6 +75,9 @@ pub trait Veil: std::fmt::Debug {
 pub struct VeilRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
+    /// One-sentence summary shown as a tooltip in the Add Veil picker —
+    /// include the terms users would search for.
+    pub description: &'static str,
     pub params: &'static [ParamDef],
     pub create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
     pub from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Veil>,
@@ -87,6 +90,7 @@ pub struct VeilRegistry {
 
 struct RegistryEntry {
     display_name: &'static str,
+    description: &'static str,
     create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
     params: &'static [ParamDef],
     from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Veil>,
@@ -107,6 +111,7 @@ impl VeilRegistry {
                 reg.type_id,
                 RegistryEntry {
                     display_name: reg.display_name,
+                    description: reg.description,
                     create_pipeline: reg.create_pipeline,
                     params: reg.params,
                     from_params: reg.from_params,
@@ -117,14 +122,23 @@ impl VeilRegistry {
         VeilRegistry { entries }
     }
 
-    /// Return all registered veil type IDs with display name and parameter definitions.
-    pub fn types(&self) -> Vec<(&'static str, &'static str, &'static [ParamDef])> {
+    /// Return all registered veil type IDs with display name, description,
+    /// and parameter definitions.
+    #[allow(clippy::type_complexity)]
+    pub fn types(
+        &self,
+    ) -> Vec<(
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static [ParamDef],
+    )> {
         let mut types: Vec<_> = self
             .entries
             .iter()
-            .map(|(&id, e)| (id, e.display_name, e.params))
+            .map(|(&id, e)| (id, e.display_name, e.description, e.params))
             .collect();
-        types.sort_by_key(|(id, _, _)| *id);
+        types.sort_by_key(|(id, _, _, _)| *id);
         types
     }
 

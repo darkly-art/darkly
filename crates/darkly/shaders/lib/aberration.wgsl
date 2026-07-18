@@ -92,7 +92,9 @@ fn aberration_blurred(
 // share — a white entry has k1=1, moving everything), and `k2·axis·dot(axis,d_p)`
 // shifts only the component along the entry's hue axis (a primary entry has
 // k2=1 and an exact channel axis, giving a classic channel split). Alpha tracks
-// the same displacement so shifted content becomes/leaves coverage.
+// the *coverage* change of the displaced sample (`s.a − base.a`) — not the color
+// delta — so a pure hue shift inside a solid region leaves opacity untouched,
+// while content crossing an alpha edge still gains/loses coverage.
 //
 // Identity (offset 0, scale 1, blur 0) ⇒ d_p = 0 ⇒ bit-exact passthrough for any
 // entry colors; a flat image is unchanged except at gradients/edges where the
@@ -118,9 +120,14 @@ fn aberration_apply(
         let src_uv = center + (uv - center) * ab.scale + ab.offset_px / dims;
         let s = aberration_blurred(tex, samp, src_uv, ab.blur_px, dims);
         let d_p = s.rgb * s.a - b_p;            // premultiplied content delta
-        let proj = dot(ab.axis, d_p);
+        let proj = dot(ab.axis, d_p);           // color reconstruction (color + coverage move)
         out_p = out_p + ab.k1 * d_p + ab.k2 * ab.axis * proj;
-        acc_a = acc_a + ab.k1 * (s.a - base.a) + ab.k2 * proj;
+        // Alpha follows coverage change only: the displaced sample's alpha delta,
+        // weighted (for the chromatic share) by how much of the base pixel's
+        // content lies along the entry's hue axis. When the tap stays in a solid
+        // region (`cov == 0`) a pure color shift leaves alpha untouched.
+        let cov = s.a - base.a;
+        acc_a = acc_a + ab.k1 * cov + ab.k2 * dot(ab.axis, base.rgb) * cov;
     }
     // Negative fringes (hue-opposite content) and multi-entry overshoot can push
     // a premultiplied channel below zero; clamp before un-premultiplying.

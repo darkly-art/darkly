@@ -1,4 +1,8 @@
 import { describe, it, expect } from 'vitest';
+// Node builtin; the project intentionally omits @types/node (see
+// vite.config.ts and woff2_decode.test.ts). Vitest runs under node, so this
+// resolves at runtime.
+// @ts-ignore
 import { readFileSync } from 'node:fs';
 
 // Regression: UA focus rings kept resurfacing as bright white borders — first

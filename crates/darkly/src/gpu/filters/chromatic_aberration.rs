@@ -257,10 +257,17 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
     ))
 }
 
+/// Shared by the filter and veil registrations — like `PARAMS`, the veil
+/// module imports it so both surfaces present one identity.
+pub const DESCRIPTION: &str =
+    "Split the color channels apart along their hue axes, like a misaligned lens.";
+
 pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "chromatic_aberration",
         display_name: "Chromatic Aberration",
+        icon: "lucide-lab:venn",
+        description: DESCRIPTION,
         params: PARAMS,
         create_pipeline,
     }

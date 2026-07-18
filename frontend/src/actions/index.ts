@@ -857,8 +857,11 @@ export function registerActions() {
             id: `filter${filterType.charAt(0).toUpperCase()}${filterType.slice(1)}`,
             displayName: parametric ? `${flt.displayName}…` : flt.displayName,
             category: 'layers',
-            description: `Apply "${flt.displayName}" to the active layer or mask (respecting any selection).`,
-            icon: 'fa6-solid:circle-half-stroke',
+            // Lead with the registry's own summary — the command palette's
+            // substring search indexes descriptions, so its keywords (e.g.
+            // "desaturate" for Black and White) keep the filter findable.
+            description: `${flt.description} Applies to the active layer or mask (respecting any selection).`,
+            icon: flt.icon,
             menuPath: ['Colors:10'],
             enabled: () => app.activeLayerId !== null || 'No active layer',
             handler: async () => {

@@ -27,6 +27,7 @@ pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "grain",
         display_name: "Grain",
+        description: "Film grain noise over the view, optionally animated.",
         params: PARAMS,
         create_pipeline: create_evolve_pipeline,
         from_params: |params, shared| {

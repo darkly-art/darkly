@@ -304,6 +304,47 @@ fn identity_arbitrary_color_is_exact_passthrough() {
     );
 }
 
+/// A chromatic entry over a fully-opaque interior must not erode alpha: where
+/// the displaced tap stays in-bounds there is no coverage change, so a pure hue
+/// shift leaves every pixel opaque. Regression for the bug where the chromatic
+/// alpha term projected the *color* delta (not the coverage delta), leaving
+/// semi-transparent patches inside solid areas. Fails on the pre-fix shader,
+/// which drops alpha wherever the shifted red channel decreases.
+#[test]
+fn chromatic_entry_preserves_opaque_interior_alpha() {
+    let (w, h) = (16u32, 8u32);
+    let mut e = test_engine(w, h);
+    // Opaque image, red descending across x (constant low green/blue). A +x red
+    // shift then samples a *lower* red everywhere → a negative color delta.
+    let mut img = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            img[i] = (255 - x * 15) as u8;
+            img[i + 1] = 40;
+            img[i + 2] = 40;
+            img[i + 3] = 255;
+        }
+    }
+    let layer = e.paste_image(w, h, &img, 0, 0, None);
+
+    // Pure red entry, offset +3 x, no blur: interior taps (x + 3 < w) stay on the
+    // opaque fill, so alpha must remain 255 for every one of them.
+    let params = ca_params(vec![entry([3.0, 0.0], 1.0, [1.0, 0.0, 0.0], 0.0)]);
+    assert!(e.apply_filter_typed(layer, "chromatic_aberration", params));
+    let after = e.test_readback_layer(layer);
+
+    for y in 0..h {
+        for x in 0..(w - 3) {
+            assert_eq!(
+                px(&after, w, x, y)[3],
+                255,
+                "opaque interior pixel ({x},{y}) must stay fully opaque"
+            );
+        }
+    }
+}
+
 /// A `w`×`h` buffer split down the middle: `left` for `x < w/2`, `right`
 /// otherwise. Used to build opaque/transparent boundaries.
 fn half_split(w: u32, h: u32, left: [u8; 4], right: [u8; 4]) -> Vec<u8> {

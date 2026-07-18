@@ -24,6 +24,7 @@ pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "watercolor",
         display_name: "Watercolor",
+        description: "Bleed the view outward into soft watercolor washes.",
         params: PARAMS,
         create_pipeline: create_watercolor_pipeline,
         from_params: |params, shared| {
