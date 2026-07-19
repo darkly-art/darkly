@@ -42,44 +42,54 @@
     }
 </script>
 
-<button
-    class="chain-btn"
-    class:unlinked={!mask.linkedToHost}
-    disabled={!mask.editable || pendingLinked !== null}
-    onclick={toggle}
-    title={mask.linkedToHost ? 'Unlink mask from layer transforms' : 'Link mask to layer transforms'}
-    aria-label={mask.linkedToHost ? 'Unlink mask from layer transforms' : 'Link mask to layer transforms'}
->
-    <Icon name={mask.linkedToHost ? 'fa6-solid:link' : 'fa6-solid:link-slash'} />
-</button>
-
-{#if thumbnail}
+<div class="mask-chain-control">
     <button
-        class="thumb-btn"
-        class:thumb-active={active}
-        class:mask-disabled={!enabled}
-        type="button"
-        aria-label="Edit mask"
-        aria-pressed={active}
-        onclick={selectMask}
-        oncontextmenu={openMaskMenu}
+        class="chain-btn"
+        class:unlinked={!mask.linkedToHost}
+        disabled={!mask.editable || pendingLinked !== null}
+        onclick={toggle}
+        title={mask.linkedToHost ? 'Unlink mask from layer transforms' : 'Link mask to layer transforms'}
+        aria-label={mask.linkedToHost ? 'Unlink mask from layer transforms' : 'Link mask to layer transforms'}
     >
-        <img
-            class="thumb"
-            src={thumbnail}
-            alt=""
-            width={THUMB_SIZE}
-            height={THUMB_SIZE}
-            draggable="false"
-            use:bindingSite={{ name: 'maskThumb', ctx: () => ({ layerId: mask.id }) }}
-        />
+        <Icon name={mask.linkedToHost ? 'fa6-solid:link' : 'fa6-solid:link-slash'} />
     </button>
-{/if}
+
+    {#if thumbnail}
+        <button
+            class="thumb-btn"
+            class:thumb-active={active}
+            class:mask-disabled={!enabled}
+            type="button"
+            aria-label="Edit mask"
+            aria-pressed={active}
+            onclick={selectMask}
+            oncontextmenu={openMaskMenu}
+        >
+            <img
+                class="thumb"
+                src={thumbnail}
+                alt=""
+                width={THUMB_SIZE}
+                height={THUMB_SIZE}
+                draggable="false"
+                use:bindingSite={{ name: 'maskThumb', ctx: () => ({ layerId: mask.id }) }}
+            />
+        </button>
+    {/if}
+</div>
 
 <style>
+    .mask-chain-control {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        margin-left: -6px;
+        flex-shrink: 0;
+    }
     .chain-btn {
-        width: 18px;
+        width: 12px;
         height: 24px;
+        padding: 0;
         display: flex;
         align-items: center;
         justify-content: center;
