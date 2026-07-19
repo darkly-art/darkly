@@ -5,7 +5,7 @@
 
 use darkly::coord::CanvasRect;
 use darkly::gpu::atlas::CanvasFrame;
-use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
+use darkly::gpu::paint_target::{GpuPaintTarget, PaintCommandEncoder, PaintPipelines};
 use darkly::gpu::region_store::RegionScratch;
 use darkly::gpu::test_utils::*;
 use darkly::gpu::transform::{
@@ -1108,7 +1108,7 @@ fn cancel_floating_after_layer_grow() {
         CanvasRect::from_xywh(-256, -256, new_w, new_h),
         CanvasRect::from_xywh(0, 0, new_w, new_h),
     );
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.fill_rect(
         &mut enc,
         &pipelines,
@@ -1116,7 +1116,7 @@ fn cancel_floating_after_layer_grow() {
         CanvasRect::from_xywh(50, 50, 100, 100),
         [0, 255, 0, 255],
     );
-    submit(&queue, enc);
+    enc.submit();
 
     // Cancel: restore_from_scratch using the canvas-coord saved rect.
     let mut enc = encoder(&device);

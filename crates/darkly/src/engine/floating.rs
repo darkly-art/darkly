@@ -491,14 +491,20 @@ impl DarklyEngine {
                             extraction_bounds.height,
                         ),
                     );
-                    self.gpu.encode("transform-mask-source", |encoder| {
-                        source.multiply_by_mask(
-                            encoder,
-                            &self.paint_pipelines,
-                            &self.gpu.queue,
-                            &mask,
-                        );
-                    });
+                    let mut encoder = crate::gpu::paint_target::PaintCommandEncoder::new(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &self.paint_pipelines,
+                        "transform-mask-source",
+                        1,
+                    );
+                    source.multiply_by_mask(
+                        &mut encoder,
+                        &self.paint_pipelines,
+                        &self.gpu.queue,
+                        &mask,
+                    );
+                    encoder.submit();
                 }
             }
             let clear_shape =
@@ -689,12 +695,13 @@ impl DarklyEngine {
 
         // Allocate, copy, clear, and transform every replacement in one encoder.
         // Dropping this encoder on any error publishes no writes.
-        let mut encoder = self
-            .gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("transform-staged-commit"),
-            });
+        let mut encoder = crate::gpu::paint_target::PaintCommandEncoder::new(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &self.paint_pipelines,
+            "transform-staged-commit",
+            session.targets.len(),
+        );
         let mut staged = Vec::with_capacity(session.targets.len());
         for (_target_index, (target, (_, extent))) in
             session.targets.iter().zip(&proposed).enumerate()
@@ -702,13 +709,16 @@ impl DarklyEngine {
             commit_checkpoint!(TransformCommitFailurePoint::StagedAllocation {
                 target: _target_index
             });
-            let Some(resource) = self.compositor.prepare_staged_node_texture(
-                &self.gpu.device,
-                &self.gpu.queue,
-                &mut encoder,
-                target.node_id,
-                *extent,
-            ) else {
+            let resource = encoder.with_raw(|raw| {
+                self.compositor.prepare_staged_node_texture(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    raw,
+                    target.node_id,
+                    *extent,
+                )
+            });
+            let Some(resource) = resource else {
                 return Err(session);
             };
             commit_checkpoint!(TransformCommitFailurePoint::TargetEncoding {
@@ -827,7 +837,7 @@ impl DarklyEngine {
 
         // Publication: one GPU submission followed by one non-interleavable CPU
         // mutation scope for mappings, authoritative extents, selection, history.
-        self.gpu.queue.submit([encoder.finish()]);
+        encoder.submit();
         for &(node_id, extent) in &proposed {
             self.doc.set_node_pixel_bounds(node_id, extent);
         }
@@ -1064,6 +1074,26 @@ impl DarklyEngine {
                     .targets
                     .iter()
                     .map(|target| target.node_id)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[cfg(feature = "testing")]
+    pub fn test_transform_clear_rects(&self) -> Vec<(LayerId, Option<CanvasRect>)> {
+        self.transform_session
+            .as_ref()
+            .map(|session| {
+                session
+                    .targets
+                    .iter()
+                    .map(|target| {
+                        let rect = match target.clear_shape {
+                            ClearShape::Rect(rect) => Some(rect),
+                            ClearShape::Selection { .. } => None,
+                        };
+                        (target.node_id, rect)
+                    })
                     .collect()
             })
             .unwrap_or_default()

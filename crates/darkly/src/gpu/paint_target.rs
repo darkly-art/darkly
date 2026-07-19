@@ -6,6 +6,103 @@
 use crate::coord::CanvasRect;
 use crate::gpu::atlas::{CanvasFrame, LayerTexture};
 
+struct PaintUniformChunk {
+    buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    slots: u32,
+    next: u32,
+}
+
+/// One command buffer together with immutable, draw-local paint uniforms.
+pub struct PaintCommandEncoder<'a> {
+    encoder: wgpu::CommandEncoder,
+    device: &'a wgpu::Device,
+    queue: &'a wgpu::Queue,
+    pipelines: &'a PaintPipelines,
+    stride: u64,
+    initial_slots: u32,
+    chunks: Vec<PaintUniformChunk>,
+}
+
+impl<'a> PaintCommandEncoder<'a> {
+    pub fn new(
+        device: &'a wgpu::Device,
+        queue: &'a wgpu::Queue,
+        pipelines: &'a PaintPipelines,
+        label: &'static str,
+        initial_slots: usize,
+    ) -> Self {
+        let alignment = device.limits().min_uniform_buffer_offset_alignment as u64;
+        let size = std::mem::size_of::<PaintUniforms>() as u64;
+        let stride = size.div_ceil(alignment).max(1) * alignment;
+        Self {
+            encoder: device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) }),
+            device,
+            queue,
+            pipelines,
+            stride,
+            initial_slots: initial_slots.max(1) as u32,
+            chunks: Vec::new(),
+        }
+    }
+
+    pub fn with_raw<R>(&mut self, f: impl FnOnce(&mut wgpu::CommandEncoder) -> R) -> R {
+        f(&mut self.encoder)
+    }
+
+    fn reserve_uniform(&mut self, uniforms: &PaintUniforms) -> (usize, u32) {
+        let needs_chunk = self
+            .chunks
+            .last()
+            .is_none_or(|chunk| chunk.next == chunk.slots);
+        if needs_chunk {
+            let slots = self
+                .chunks
+                .last()
+                .map_or(self.initial_slots, |chunk| chunk.slots.saturating_mul(2));
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("paint-command-uniforms"),
+                size: self.stride * u64::from(slots),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bind_group =
+                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("paint-command-uniform-bg"),
+                    layout: &self.pipelines.uniform_bgl,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &buffer,
+                            offset: 0,
+                            size: std::num::NonZeroU64::new(
+                                std::mem::size_of::<PaintUniforms>() as u64
+                            ),
+                        }),
+                    }],
+                });
+            self.chunks.push(PaintUniformChunk {
+                buffer,
+                bind_group,
+                slots,
+                next: 0,
+            });
+        }
+        let index = self.chunks.len() - 1;
+        let chunk = &mut self.chunks[index];
+        let offset = u64::from(chunk.next) * self.stride;
+        chunk.next += 1;
+        self.queue
+            .write_buffer(&chunk.buffer, offset, bytemuck::bytes_of(uniforms));
+        (index, offset as u32)
+    }
+
+    pub fn submit(self) {
+        self.queue.submit([self.encoder.finish()]);
+    }
+}
+
 /// A GPU texture you can paint on. Lightweight handle — no owned GPU state.
 ///
 /// All coordinate-bearing fields are private. Callers go through the typed
@@ -159,7 +256,7 @@ impl<'a> GpuPaintTarget<'a> {
     /// Paint a soft circle onto the target via alpha-over blending.
     pub fn composite_circle(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut PaintCommandEncoder<'_>,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
         cx: f32,
@@ -177,7 +274,7 @@ impl<'a> GpuPaintTarget<'a> {
     /// Paint a soft circle with a custom selection mask bind group.
     pub fn composite_circle_with_selection(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut PaintCommandEncoder<'_>,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
         cx: f32,
@@ -207,7 +304,7 @@ impl<'a> GpuPaintTarget<'a> {
     /// paste-extent layers.
     pub fn fill_rect(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut PaintCommandEncoder<'_>,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
         rect: CanvasRect,
@@ -221,7 +318,7 @@ impl<'a> GpuPaintTarget<'a> {
     /// "selection".
     pub fn fill_rect_with_selection(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut PaintCommandEncoder<'_>,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
         rect: CanvasRect,
@@ -241,7 +338,7 @@ impl<'a> GpuPaintTarget<'a> {
     /// Set selected pixels to an entity's uncovered value.
     pub fn clear_with_selection(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut PaintCommandEncoder<'_>,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
         selection_bind_group: &wgpu::BindGroup,
@@ -266,7 +363,7 @@ impl<'a> GpuPaintTarget<'a> {
     /// selection texture — used for clear_selection_contents.
     pub fn erase_with_selection(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut PaintCommandEncoder<'_>,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
         selection_bind_group: &wgpu::BindGroup,
@@ -310,7 +407,7 @@ impl<'a> GpuPaintTarget<'a> {
     /// scales the alpha channel, which is correct for straight-alpha storage.
     pub fn multiply_by_mask(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut PaintCommandEncoder<'_>,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
         mask_bind_group: &wgpu::BindGroup,
@@ -352,7 +449,7 @@ impl<'a> GpuPaintTarget<'a> {
     /// destinations. Use `multiply_alpha_by_inverse_mask` instead.
     pub fn multiply_by_inverse_mask(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut PaintCommandEncoder<'_>,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
         mask_bind_group: &wgpu::BindGroup,
@@ -393,7 +490,7 @@ impl<'a> GpuPaintTarget<'a> {
     /// only affects the alpha channel.
     pub fn multiply_alpha_by_mask(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut PaintCommandEncoder<'_>,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
         mask_bind_group: &wgpu::BindGroup,
@@ -439,7 +536,7 @@ impl<'a> GpuPaintTarget<'a> {
     /// [`multiply_alpha_by_mask`]: Self::multiply_alpha_by_mask
     pub fn multiply_alpha_by_mask_in_frame(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut PaintCommandEncoder<'_>,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
         mask_bind_group: &wgpu::BindGroup,
@@ -479,7 +576,7 @@ impl<'a> GpuPaintTarget<'a> {
     /// opacity at selected pixels without darkening the color.
     pub fn multiply_alpha_by_inverse_mask(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut PaintCommandEncoder<'_>,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
         mask_bind_group: &wgpu::BindGroup,
@@ -516,7 +613,7 @@ impl<'a> GpuPaintTarget<'a> {
     /// paste-extent layers.
     pub fn clear_rect(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut PaintCommandEncoder<'_>,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
         rect: CanvasRect,
@@ -598,7 +695,7 @@ impl<'a> GpuPaintTarget<'a> {
         });
 
         pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &pipelines.gradient_uniform_bind_group, &[]);
+        pass.set_bind_group(0, &pipelines.gradient_uniform_bind_group, &[0]);
         pass.set_bind_group(1, sel, &[]);
         pass.draw(0..3, 0..1);
     }
@@ -607,7 +704,7 @@ impl<'a> GpuPaintTarget<'a> {
 
     fn fill_rect_inner(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut PaintCommandEncoder<'_>,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
         rect: CanvasRect,
@@ -636,7 +733,7 @@ impl<'a> GpuPaintTarget<'a> {
 
     fn draw_circle(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut PaintCommandEncoder<'_>,
         pipeline: &wgpu::RenderPipeline,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
@@ -680,30 +777,31 @@ impl<'a> GpuPaintTarget<'a> {
 
     fn execute_pass(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut PaintCommandEncoder<'_>,
         pipeline: &wgpu::RenderPipeline,
         pipelines: &PaintPipelines,
-        queue: &wgpu::Queue,
+        _queue: &wgpu::Queue,
         uniforms: &PaintUniforms,
         selection: Option<&wgpu::BindGroup>,
     ) {
-        queue.write_buffer(&pipelines.uniform_buf, 0, bytemuck::bytes_of(uniforms));
-
+        let (chunk_index, offset) = encoder.reserve_uniform(uniforms);
         let sel = selection.unwrap_or(&pipelines.default_selection_bind_group);
-
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("paint-target"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: self.view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        });
+        let chunk = &encoder.chunks[chunk_index];
+        let mut pass = encoder
+            .encoder
+            .begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("paint-target"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: self.view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
 
         // Viewport must match the unpadded canvas size so NDC [-1,1] maps to
         // [0, canvas_w] × [0, canvas_h]. Without this, the padded texture dimensions
@@ -711,7 +809,7 @@ impl<'a> GpuPaintTarget<'a> {
         // 0 at the origin to (padded - unpadded) at the far edge.
         pass.set_viewport(0.0, 0.0, self.width as f32, self.height as f32, 0.0, 1.0);
         pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &pipelines.uniform_bind_group, &[]);
+        pass.set_bind_group(0, &chunk.bind_group, &[offset]);
         pass.set_bind_group(1, sel, &[]);
         pass.draw(0..3, 0..1);
     }
@@ -741,8 +839,7 @@ pub struct PaintPipelines {
     /// guards on raster hosts, so R8 targets never take this path.
     alpha_mask_multiply_in_frame_rgba: wgpu::RenderPipeline,
 
-    pub(crate) uniform_buf: wgpu::Buffer,
-    pub(crate) uniform_bind_group: wgpu::BindGroup,
+    uniform_bgl: wgpu::BindGroupLayout,
 
     gradient_uniform_buf: wgpu::Buffer,
     gradient_uniform_bind_group: wgpu::BindGroup,
@@ -800,7 +897,7 @@ impl PaintPipelines {
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
+                    has_dynamic_offset: true,
                     min_binding_size: None,
                 },
                 count: None,
@@ -821,22 +918,6 @@ impl PaintPipelines {
         });
 
         // --- Uniform buffers ---
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("paint-uniforms"),
-            size: std::mem::size_of::<PaintUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("paint-uniform-bg"),
-            layout: &uniform_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buf.as_entire_binding(),
-            }],
-        });
-
         let gradient_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gradient-uniforms"),
             size: std::mem::size_of::<GradientUniforms>() as u64,
@@ -1160,8 +1241,7 @@ impl PaintPipelines {
                 wgpu::TextureFormat::Rgba8Unorm,
                 blend_alpha_mask_multiply,
             ),
-            uniform_buf,
-            uniform_bind_group,
+            uniform_bgl,
             gradient_uniform_buf,
             gradient_uniform_bind_group,
             default_selection_bind_group,

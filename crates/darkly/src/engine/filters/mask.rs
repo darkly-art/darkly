@@ -255,15 +255,21 @@ impl DarklyEngine {
                 layer_tex,
                 self.doc.canvas_rect(),
             );
-            self.gpu.encode("apply-mask-multiply", |encoder| {
-                target.multiply_alpha_by_mask_in_frame(
-                    encoder,
-                    &self.paint_pipelines,
-                    &self.gpu.queue,
-                    mask_bg,
-                    mask_rect,
-                );
-            });
+            let mut encoder = crate::gpu::paint_target::PaintCommandEncoder::new(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &self.paint_pipelines,
+                "apply-mask-multiply",
+                1,
+            );
+            target.multiply_alpha_by_mask_in_frame(
+                &mut encoder,
+                &self.paint_pipelines,
+                &self.gpu.queue,
+                mask_bg,
+                mask_rect,
+            );
+            encoder.submit();
         }
 
         // Commit both undo regions (host alpha + mask pixels) before building

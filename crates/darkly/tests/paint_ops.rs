@@ -5,7 +5,7 @@
 
 use darkly::coord::CanvasRect;
 use darkly::gpu::atlas::CanvasFrame;
-use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
+use darkly::gpu::paint_target::{GpuPaintTarget, PaintCommandEncoder, PaintPipelines};
 use darkly::gpu::region_store::RegionScratch;
 use darkly::gpu::test_utils::*;
 
@@ -207,7 +207,7 @@ fn gpu_flood_fill_interior() {
 
     // Use fill_rect to paint 4 border strips.
     let red = [255u8, 0, 0, 255];
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     use darkly::coord::CanvasRect;
     target.fill_rect(
         &mut enc,
@@ -216,8 +216,8 @@ fn gpu_flood_fill_interior() {
         CanvasRect::from_xywh(10, 10, 40, 2),
         red,
     ); // top
-    submit(&queue, enc);
-    let mut enc = encoder(&device);
+    enc.submit();
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.fill_rect(
         &mut enc,
         &pipelines,
@@ -225,8 +225,8 @@ fn gpu_flood_fill_interior() {
         CanvasRect::from_xywh(10, 48, 40, 2),
         red,
     ); // bottom
-    submit(&queue, enc);
-    let mut enc = encoder(&device);
+    enc.submit();
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.fill_rect(
         &mut enc,
         &pipelines,
@@ -234,8 +234,8 @@ fn gpu_flood_fill_interior() {
         CanvasRect::from_xywh(10, 10, 2, 40),
         red,
     ); // left
-    submit(&queue, enc);
-    let mut enc = encoder(&device);
+    enc.submit();
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.fill_rect(
         &mut enc,
         &pipelines,
@@ -243,7 +243,7 @@ fn gpu_flood_fill_interior() {
         CanvasRect::from_xywh(48, 10, 2, 40),
         red,
     ); // right
-    submit(&queue, enc);
+    enc.submit();
 
     // Readback to get the pixel data for CPU flood fill.
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -307,7 +307,7 @@ fn gpu_flood_fill_interior() {
     });
     let mask_bg = pipelines.create_selection_bind_group(&device, &mask_view, &sampler);
 
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.fill_rect_with_selection(
         &mut enc,
         &pipelines,
@@ -316,7 +316,7 @@ fn gpu_flood_fill_interior() {
         [0, 0, 255, 255],
         &mask_bg,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
 
@@ -413,7 +413,7 @@ fn gpu_flood_fill_undo() {
         fmt,
         darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
     );
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.fill_rect_with_selection(
         &mut enc,
         &pipelines,
@@ -422,7 +422,7 @@ fn gpu_flood_fill_undo() {
         [0, 255, 0, 255],
         &mask_bg,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     // Commit undo entry.
     let mut enc = encoder(&device);
@@ -482,7 +482,7 @@ fn gpu_color_pick_readback() {
         darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
     );
 
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.fill_rect(
         &mut enc,
         &pipelines,
@@ -490,9 +490,9 @@ fn gpu_color_pick_readback() {
         CanvasRect::from_xywh(10, 10, 1, 1),
         [255, 0, 0, 255],
     );
-    submit(&queue, enc);
+    enc.submit();
 
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.fill_rect(
         &mut enc,
         &pipelines,
@@ -500,7 +500,7 @@ fn gpu_color_pick_readback() {
         CanvasRect::from_xywh(50, 50, 1, 1),
         [0, 0, 255, 255],
     );
-    submit(&queue, enc);
+    enc.submit();
 
     // Read back individual pixels.
     let pick = |x: u32, y: u32| -> [u8; 4] {
@@ -649,7 +649,7 @@ fn gpu_fill_rect_with_mask() {
         fmt,
         darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
     );
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.fill_rect_with_selection(
         &mut enc,
         &pipelines,
@@ -658,7 +658,7 @@ fn gpu_fill_rect_with_mask() {
         [0, 255, 0, 255],
         &mask_bg,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
 

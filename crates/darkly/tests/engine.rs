@@ -4649,65 +4649,168 @@ fn cancel_transform_on_mask_leaves_texture_pristine() {
 #[test]
 fn transform_mask_under_isolation_previews_grayscale() {
     use darkly::gpu::transform::affine_translate;
-    let (cw, ch) = (32u32, 32u32);
-    let mut engine = test_engine(cw, ch);
-    let host = engine.add_raster_layer(None);
-    // Host content is irrelevant (isolation hides it); fill with red so a
-    // red leak in the assertion would be obvious.
-    fill_layer(&mut engine, host, 255, 0, 0);
-    engine.add_mask(host);
-    let mask_id = engine.host_mask_id(host).expect("host has mask");
+    let (cw, ch) = (40u32, 32u32);
+    let (ox, oy) = (11i32, 7i32);
+    for (label, linked, initiate_from_mask) in [
+        ("mask-unlinked", false, true),
+        ("mask-linked", true, true),
+        ("host-linked", true, false),
+    ] {
+        let mut engine = test_engine(cw, ch);
+        engine.resize_canvas(darkly::coord::CanvasRect::from_xywh(ox, oy, cw, ch));
+        let host = engine.add_raster_layer(None);
+        paint_at(
+            &mut engine,
+            host,
+            (ox + 30) as f32,
+            (oy + 16) as f32,
+            1.0,
+            0.0,
+            0.0,
+        );
+        engine.add_mask(host);
+        let mask_id = engine.host_mask_id(host).expect("host has mask");
+        engine.set_mask_linked_to_host(mask_id, linked);
 
-    // Mask: a small white square at (4..12, 4..12) on a black background.
-    engine.select_rect(4.0, 4.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
-    engine.begin_stroke(mask_id);
-    engine.stroke_to(StrokeOp::FloodFill {
-        x: 1.0,
-        y: 1.0,
-        r: 255,
-        g: 255,
-        b: 255,
-        a: 255,
-        tolerance: 0,
-    });
-    engine.end_stroke();
-    engine.clear_selection();
-    engine.test_flush_readbacks();
+        // Start with a white mask, then paint a disconnected asymmetric black
+        // shape. The selections here constrain painting only; the transform
+        // itself deliberately has no active selection.
+        engine.select_all();
+        engine.begin_stroke(mask_id);
+        engine.stroke_to(StrokeOp::FloodFill {
+            x: (ox + 1) as f32,
+            y: (oy + 1) as f32,
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+            tolerance: 0,
+        });
+        engine.end_stroke();
+        engine.test_flush_readbacks();
+        engine.clear_selection();
+        for (x, y, w, h) in [
+            (ox + 5, oy + 5, 3, 7),
+            (ox + 8, oy + 9, 5, 3),
+            (ox + 3, oy + 22, 3, 3),
+        ] {
+            engine.select_rect(
+                x as f32,
+                y as f32,
+                w as f32,
+                h as f32,
+                SelectionMode::Replace,
+                false,
+                0.0,
+            );
+            engine.begin_stroke(mask_id);
+            engine.stroke_to(StrokeOp::FloodFill {
+                x: x as f32,
+                y: y as f32,
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+                tolerance: 0,
+            });
+            engine.end_stroke();
+            engine.test_flush_readbacks();
+            engine.clear_selection();
+        }
+        engine.test_flush_readbacks();
+        engine.set_isolated_node(Some(mask_id));
 
-    // Isolate the mask.
-    engine.set_isolated_node(Some(mask_id));
+        engine.clear_selection();
+        assert!(!engine.has_selection(), "{label}");
+        let initiator = if initiate_from_mask { mask_id } else { host };
+        let started = engine.begin_transform(initiator);
+        if !started {
+            assert!(engine.test_has_pending_transform(), "{label}");
+            for _ in 0..8 {
+                engine.test_flush_readbacks();
+                engine.render(0.0);
+                if !engine.test_has_pending_transform() {
+                    break;
+                }
+            }
+        }
+        assert!(!engine.test_has_pending_transform(), "{label}");
+        assert!(engine.has_floating(), "{label}");
+        let expected_targets = if linked {
+            if initiate_from_mask {
+                vec![mask_id, host]
+            } else {
+                vec![host, mask_id]
+            }
+        } else {
+            vec![mask_id]
+        };
+        assert_eq!(
+            engine.test_transform_target_ids(),
+            expected_targets,
+            "{label}"
+        );
+        let mask_rect = darkly::coord::CanvasRect::from_xywh(ox, oy, cw, ch);
+        let host_rect = darkly::coord::CanvasRect::from_xywh(ox + 5, oy, 35, ch);
+        let clear_rects = engine.test_transform_clear_rects();
+        let expected_clear_rects = if linked {
+            if initiate_from_mask {
+                vec![(mask_id, Some(mask_rect)), (host, Some(host_rect))]
+            } else {
+                vec![(host, Some(host_rect)), (mask_id, Some(mask_rect))]
+            }
+        } else {
+            vec![(mask_id, Some(mask_rect))]
+        };
+        assert_eq!(clear_rects, expected_clear_rects, "{label}");
+        assert!(
+            clear_rects.iter().all(|(_, rect)| rect.is_some()),
+            "{label}: whole-content clears must be rectangles"
+        );
+        let resolved_mask = clear_rects
+            .iter()
+            .find(|(id, _)| *id == mask_id)
+            .and_then(|(_, rect)| *rect)
+            .unwrap();
+        assert_eq!(resolved_mask, mask_rect, "{label}: mask document extent");
+        if linked {
+            let resolved_host = clear_rects
+                .iter()
+                .find(|(id, _)| *id == host)
+                .and_then(|(_, rect)| *rect)
+                .unwrap();
+            assert_eq!(
+                resolved_host, host_rect,
+                "{label}: host tight alpha-content bounds"
+            );
+        }
+        engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+            18.0, 0.0,
+        )));
+        engine.render(0.0);
 
-    // Transform: translate the white square +16 pixels right.
-    engine.select_rect(4.0, 4.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
-    let started = engine.begin_transform(mask_id);
-    assert!(started);
-    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
-        16.0, 0.0,
-    )));
-    engine.render(0.0);
+        let canvas = engine.test_readback_canvas();
+        let sample = |x, y| rgba_at(&canvas, cw, (x - ox) as u32, (y - oy) as u32);
+        for (name, x, y, expected) in [
+            ("vacated vertical", ox + 6, oy + 6, 255),
+            ("vacated foot", ox + 10, oy + 10, 255),
+            ("moved vertical", ox + 24, oy + 6, 0),
+            ("moved foot", ox + 28, oy + 10, 0),
+            ("asymmetric gap", ox + 28, oy + 6, 255),
+            ("moved disconnected component", ox + 22, oy + 23, 0),
+            ("vacated disconnected component", ox + 4, oy + 23, 255),
+            ("white control", ox + 16, oy + 20, 255),
+        ] {
+            let pixel = sample(x, y);
+            assert_eq!(
+                pixel,
+                [expected, expected, expected, 255],
+                "{label}: {name}"
+            );
+        }
 
-    let canvas = engine.test_readback_canvas();
-    // New position (20..28, 4..12) should be opaque grayscale white.
-    let moved = rgba_at(&canvas, cw, 24, 8);
-    assert!(
-        moved[0] > 200 && moved[1] > 200 && moved[2] > 200 && moved[3] == 255,
-        "transformed mask position should render as grayscale white through \
-         the isolated-host shader path; got {moved:?}"
-    );
-    // RGB should be equal (grayscale) — no red leak from the host color.
-    assert!(
-        (moved[0] as i32 - moved[1] as i32).abs() < 4,
-        "isolated-mask preview must be RGB-equal grayscale; got {moved:?}"
-    );
-    // Vacated source pixels use the reveal mask's white uncovered value.
-    let original = rgba_at(&canvas, cw, 8, 8);
-    assert!(
-        original[0] > 224 && original[1] > 224 && original[2] > 224,
-        "original mask position should be white after the preview shift; \
-         got {original:?}"
-    );
-
-    engine.cancel_floating();
+        engine.cancel_floating();
+    }
 }
 
 // ============================================================================

@@ -231,7 +231,7 @@ impl Compositor {
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::gpu::paint_target::PaintCommandEncoder<'_>,
         paint_pipelines: &crate::gpu::paint_target::PaintPipelines,
         staged: &crate::gpu::compositor::StagedNodeTexture,
         param: &TransformPreviewParams<'_>,
@@ -278,13 +278,15 @@ impl Compositor {
                 *uncovered,
             ),
         }
-        self.transform_pass.render_state_commit(
-            device,
-            encoder,
-            state,
-            staged.texture(),
-            staged.view(),
-        );
+        encoder.with_raw(|raw| {
+            self.transform_pass.render_state_commit(
+                device,
+                raw,
+                state,
+                staged.texture(),
+                staged.view(),
+            )
+        });
         true
     }
 
@@ -335,9 +337,13 @@ impl Compositor {
             return false;
         }
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("transform-preview-batch"),
-        });
+        let mut encoder = crate::gpu::paint_target::PaintCommandEncoder::new(
+            device,
+            queue,
+            paint_pipelines,
+            "transform-preview-batch",
+            params.len(),
+        );
         let origin = self.canvas_origin;
         let canvas_rect = self.canvas_rect();
         for (param, state) in params.iter().zip(&session.targets) {
@@ -357,42 +363,46 @@ impl Compositor {
                 self.canvas_width,
                 self.canvas_height,
             );
-            crate::gpu::clear_view_transparent(
-                &mut encoder,
-                &state.preview_view,
-                "transform-preview-clear",
-            );
+            encoder.with_raw(|raw| {
+                crate::gpu::clear_view_transparent(
+                    raw,
+                    &state.preview_view,
+                    "transform-preview-clear",
+                )
+            });
             if let Some(visible) = live.canvas_extent().intersect(canvas_rect) {
                 let local = live
                     .canvas_to_layer_rect(visible)
                     .expect("intersection is layer-local");
-                encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: live.texture(),
-                        mip_level: 0,
-                        origin: wgpu::Origin3d {
-                            x: local.x0(),
-                            y: local.y0(),
-                            z: 0,
+                encoder.with_raw(|raw| {
+                    raw.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: live.texture(),
+                            mip_level: 0,
+                            origin: wgpu::Origin3d {
+                                x: local.x0(),
+                                y: local.y0(),
+                                z: 0,
+                            },
+                            aspect: wgpu::TextureAspect::All,
                         },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &state.preview_texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d {
-                            x: (visible.x0() - origin.x) as u32,
-                            y: (visible.y0() - origin.y) as u32,
-                            z: 0,
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &state.preview_texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d {
+                                x: (visible.x0() - origin.x) as u32,
+                                y: (visible.y0() - origin.y) as u32,
+                                z: 0,
+                            },
+                            aspect: wgpu::TextureAspect::All,
                         },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: visible.width,
-                        height: visible.height,
-                        depth_or_array_layers: 1,
-                    },
-                );
+                        wgpu::Extent3d {
+                            width: visible.width,
+                            height: visible.height,
+                            depth_or_array_layers: 1,
+                        },
+                    )
+                });
             }
             let preview_target = crate::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
                 &state.preview_texture,
@@ -415,15 +425,17 @@ impl Compositor {
                     *uncovered,
                 ),
             }
-            self.transform_pass.render_state_commit(
-                device,
-                &mut encoder,
-                state,
-                &state.preview_texture,
-                &state.preview_view,
-            );
+            encoder.with_raw(|raw| {
+                self.transform_pass.render_state_commit(
+                    device,
+                    raw,
+                    state,
+                    &state.preview_texture,
+                    &state.preview_view,
+                )
+            });
         }
-        queue.submit([encoder.finish()]);
+        encoder.submit();
         self.transform_session
             .as_mut()
             .expect("session retained during batch")
@@ -483,20 +495,22 @@ impl Compositor {
             self.canvas_height,
         );
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("floating-preview-build"),
-        });
+        let mut encoder = crate::gpu::paint_target::PaintCommandEncoder::new(
+            device,
+            queue,
+            paint_pipelines,
+            "floating-preview-build",
+            1,
+        );
 
         // 0. Reset the whole preview to transparent. The copy below only
         //    repaints the canvas portion live actually covers, and the
         //    commit shader discards outside the transformed source bounds —
         //    so canvas pixels outside live's extent would otherwise retain
         //    previous-frame transform writes (ghost trails).
-        crate::gpu::clear_view_transparent(
-            &mut encoder,
-            &state.preview_view,
-            "floating-preview-clear",
-        );
+        encoder.with_raw(|raw| {
+            crate::gpu::clear_view_transparent(raw, &state.preview_view, "floating-preview-clear")
+        });
 
         // 1. Copy live → preview so non-source-rect pixels are preserved.
         //    Live texture sits at its plane extent; clip the copy to the
@@ -516,33 +530,35 @@ impl Compositor {
                 .expect("intersect with live's extent yields a layer-local rect");
             let dst_x = (visible.x0() - origin.x) as u32;
             let dst_y = (visible.y0() - origin.y) as u32;
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: live.texture(),
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: visible_layer.x0(),
-                        y: visible_layer.y0(),
-                        z: 0,
+            encoder.with_raw(|raw| {
+                raw.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: live.texture(),
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: visible_layer.x0(),
+                            y: visible_layer.y0(),
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
                     },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &state.preview_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: dst_x,
-                        y: dst_y,
-                        z: 0,
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &state.preview_texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: dst_x,
+                            y: dst_y,
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
                     },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: visible.width,
-                    height: visible.height,
-                    depth_or_array_layers: 1,
-                },
-            );
+                    wgpu::Extent3d {
+                        width: visible.width,
+                        height: visible.height,
+                        depth_or_array_layers: 1,
+                    },
+                )
+            });
         }
 
         // 2. Apply the source-rect clear (transform mode only — paste mode
@@ -576,14 +592,15 @@ impl Compositor {
         }
 
         // 3. Run the commit shader into the preview at the current matrix.
-        self.transform_pass.render_commit(
-            device,
-            &mut encoder,
-            &state.preview_texture,
-            &state.preview_view,
-        );
-
-        queue.submit(std::iter::once(encoder.finish()));
+        encoder.with_raw(|raw| {
+            self.transform_pass.render_commit(
+                device,
+                raw,
+                &state.preview_texture,
+                &state.preview_view,
+            )
+        });
+        encoder.submit();
     }
 
     /// Render the transform directly into the live target texture.
