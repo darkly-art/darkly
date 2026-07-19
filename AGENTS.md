@@ -159,6 +159,66 @@ We do not blindly copy prior art; we use it to inform our own decisions. Our imp
 
 When an idea, algorithm, shader, or implementation comes from an external source — open source code, Shadertoy, papers, blog posts, video tutorials, etc. — credit the source and author at the top of the file (or inline next to the borrowed fragment, if it's smaller than file-scope). Include the author's name or handle and a link to the original.
 
+## Planning and Independent Review Workflow
+
+Every bug fix and feature addition must use the following workflow unless the user explicitly waives it.
+
+### 1. Write the Plan
+
+Before modifying production code:
+
+1. Investigate the relevant code and prior art.
+2. For a bug, identify the root cause and design a regression test that fails before the fix.
+3. Write the implementation plan to `docs/plans/<descriptive-name>.md`.
+4. Do not begin implementation yet.
+
+The plan must be self-contained. It must describe the problem, root cause or feature semantics, affected architecture, implementation steps, test strategy, risks, and unresolved questions.
+
+### 2. Obtain an Independent Review
+
+Before revising or implementing the plan, have a fresh, isolated agent review it.
+
+The reviewer must:
+
+- Receive no parent conversation history, summaries, conclusions, or unpublished planning context.
+- Receive only the repository instructions, the plan path, and the review task.
+- Use the strongest reasoning model available, preferably the same model and reasoning level as the planning agent.
+- Independently investigate the relevant repository code, architecture, tests, history, and required prior art rather than treating the plan's framing or conclusions as authoritative.
+- Determine whether the plan addresses the underlying problem rather than only its visible symptom.
+- Actively search for simpler and more general solutions, including deleting unnecessary machinery, reusing existing abstractions, relocating behavior to its proper architectural owner, or making the invalid state impossible to express.
+- Consider whether the bug exposes awkward ownership, duplicated authority, misplaced dispatch, leaky abstractions, missing modularity, or another deeper design smell that warrants a broader refactor.
+- Challenge the proposed scope in both directions: identify unjustified complexity or overreach, but also identify when a narrow patch would leave the underlying defect intact.
+- Compare credible alternative approaches and explain why the recommended approach best preserves a minimal, elegant, and maintainable codebase.
+- Verify that the testing strategy proves the intended behavior and, for bugs, specifically prevents the reported failure from returning.
+- Critique correctness, architectural fit, ownership, authority, modularity, duplication, complexity, test coverage, prior-art support, and relevant coordinate-system or GPU constraints.
+- Write its findings under `## Independent Review` at the top of the plan, ordered by importance and supported with concrete file references.
+- Give a clear verdict: `accept`, `revise`, or `rethink`.
+- Not modify production code.
+
+The reviewer is not confined to validating statements made by the plan. It must form its own view of the problem and recommend a substantially different design when that would produce a cleaner system.
+
+When the current agent platform supports isolated subagents, spawn one without forking or inheriting the parent conversation. When it does not, stop and ask the user to run this review in a fresh session. Reviewing the plan in the planning agent's existing context does not satisfy this requirement.
+
+### 3. Revise the Plan
+
+The original planning context must read the independent review and reconsider the approach before implementation.
+
+For every substantive finding, it must either:
+
+- Revise the plan to address it; or
+- Preserve the original approach and record a concise, evidence-backed reason that directly answers the reviewer's concern.
+
+If the verdict is `rethink`, do not patch the existing plan incrementally. Re-investigate the problem and rewrite the proposed approach around the underlying design issue. Preserve the independent review in the plan.
+
+### 4. Implement
+
+Only after the reviewed plan has been revised:
+
+1. Implement the plan.
+2. For a bug, write and demonstrate the failing regression test before applying the fix.
+3. Verify the change using the checks appropriate to the affected components.
+4. Keep the plan synchronized with material implementation decisions.
+
 ## Testing Principle
 
 **Every feature must have a test.** Verify the feature works. The test exists; it passes. That's it.
