@@ -210,15 +210,28 @@ For every substantive finding, it must either:
 
 If the verdict is `rethink`, do not patch the existing plan incrementally. Re-investigate the problem and rewrite the proposed approach around the underlying design issue. Preserve the independent review in the plan.
 
-### 4. Implement
+### 4. Obtain User Approval
 
-Only after the reviewed plan has been revised, the orchestrator must delegate implementation to a fresh, isolated execution agent.
+After revising the plan, the orchestrator must tell the user:
+
+- The exact path to the plan file.
+- The reviewer's verdict.
+- A concise summary of the proposed approach and any important tradeoffs or unresolved questions.
+- That no production implementation has begun.
+
+The orchestrator must then stop and explicitly ask the user whether to proceed with implementation. Creating, reviewing, or revising the plan does not constitute approval to implement it. Approval must be given after the user has been shown the revised plan path and summary; do not infer it from the original feature or bug-fix request.
+
+If the user requests plan changes, return to the appropriate earlier step and obtain approval again after revising and, when required, re-reviewing the plan.
+
+### 5. Implement
+
+Only after the user explicitly approves the revised plan, the orchestrator must delegate implementation to a fresh, isolated execution agent.
 
 The execution agent must:
 
 - Receive no parent conversation history, summaries, conclusions, or unpublished planning context.
 - Receive only the repository instructions, the revised plan path, and the execution task.
-- Be told explicitly that planning and independent review are complete and that it is executing stage 4 of this workflow, so it must not restart the planning workflow.
+- Be told explicitly that planning, independent review, revision, and user approval are complete and that it is executing stage 5 of this workflow, so it must not restart the planning workflow.
 - Use a model and reasoning level capable of implementing the plan reliably, preferably the same model and reasoning level as the planning agent.
 - Read the complete revised plan, including the independent review and the recorded resolution of its findings, before modifying production code.
 - Independently inspect the files it needs to implement and verify the change rather than relying on unstated assumptions from the planning context.
