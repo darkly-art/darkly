@@ -631,6 +631,31 @@ impl DarklyEngine {
         let Some(session) = self.transform_session.take() else {
             return false;
         };
+        match self.finish_transform_commit(session) {
+            Ok(()) => true,
+            Err(session) => {
+                self.transform_session = Some(session);
+                false
+            }
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn finish_transform_commit(
+        &mut self,
+        session: TransformSession,
+    ) -> Result<(), TransformSession> {
+        // Test-only failure injection. Expands to nothing in release builds, so the
+        // gated enum and field are never named outside test/testing configurations.
+        macro_rules! commit_checkpoint {
+            ($point:expr) => {
+                #[cfg(any(test, feature = "testing"))]
+                if self.transform_commit_failure == Some($point) {
+                    return Err(session);
+                }
+            };
+        }
+
         if session.operation.is_identity() {
             self.compositor.clear_transform_session();
             if let Some(snapshot) = session.selection {
@@ -641,13 +666,12 @@ impl DarklyEngine {
                     }
                 }
             }
-            return true;
+            return Ok(());
         }
         if session.setup_generation != self.transform_setup_generation
             || !self.doc.validate_pixel_transform_plan(&session.plan)
         {
-            self.transform_session = Some(session);
-            return false;
+            return Err(session);
         }
 
         let proposed: Vec<_> = session
@@ -675,15 +699,9 @@ impl DarklyEngine {
         for (_target_index, (target, (_, extent))) in
             session.targets.iter().zip(&proposed).enumerate()
         {
-            #[cfg(any(test, feature = "testing"))]
-            if self.transform_commit_failure
-                == Some(TransformCommitFailurePoint::StagedAllocation {
-                    target: _target_index,
-                })
-            {
-                self.transform_session = Some(session);
-                return false;
-            }
+            commit_checkpoint!(TransformCommitFailurePoint::StagedAllocation {
+                target: _target_index
+            });
             let Some(resource) = self.compositor.prepare_staged_node_texture(
                 &self.gpu.device,
                 &self.gpu.queue,
@@ -691,18 +709,11 @@ impl DarklyEngine {
                 target.node_id,
                 *extent,
             ) else {
-                self.transform_session = Some(session);
-                return false;
+                return Err(session);
             };
-            #[cfg(any(test, feature = "testing"))]
-            if self.transform_commit_failure
-                == Some(TransformCommitFailurePoint::TargetEncoding {
-                    target: _target_index,
-                })
-            {
-                self.transform_session = Some(session);
-                return false;
-            }
+            commit_checkpoint!(TransformCommitFailurePoint::TargetEncoding {
+                target: _target_index
+            });
             let param = crate::gpu::floating_preview::TransformPreviewParams {
                 node_id: target.node_id,
                 matrix: crate::transform::evaluator_for_target(
@@ -723,51 +734,33 @@ impl DarklyEngine {
                 &resource,
                 &param,
             ) {
-                self.transform_session = Some(session);
-                return false;
+                return Err(session);
             }
             staged.push(resource);
         }
 
-        #[cfg(any(test, feature = "testing"))]
-        if self.transform_commit_failure
-            == Some(TransformCommitFailurePoint::FinalMembershipValidation)
-        {
-            self.transform_session = Some(session);
-            return false;
-        }
+        commit_checkpoint!(TransformCommitFailurePoint::FinalMembershipValidation);
         if !self.doc.validate_pixel_transform_plan(&session.plan) {
-            self.transform_session = Some(session);
-            return false;
+            return Err(session);
         }
 
-        #[cfg(any(test, feature = "testing"))]
-        {
-            if session.targets.iter().enumerate().any(|(target, _)| {
-                self.transform_commit_failure
-                    == Some(TransformCommitFailurePoint::PixelUndoCapture { target })
-            }) || (session.selection.is_some()
-                && self.transform_commit_failure
-                    == Some(TransformCommitFailurePoint::SelectionAction))
-                || self.transform_commit_failure
-                    == Some(TransformCommitFailurePoint::PublicationSetup)
-            {
-                self.transform_session = Some(session);
-                return false;
-            }
+        for _target in 0..session.targets.len() {
+            commit_checkpoint!(TransformCommitFailurePoint::PixelUndoCapture { target: _target });
         }
+        if session.selection.is_some() {
+            commit_checkpoint!(TransformCommitFailurePoint::SelectionAction);
+        }
+        commit_checkpoint!(TransformCommitFailurePoint::PublicationSetup);
 
         // All recoverable preparation and publication-readiness gates precede
         // operation-owned undo capture, so failure cannot strand a readback.
         let mut entries = Vec::with_capacity(session.targets.len());
         for target in &session.targets {
             let Some(texture) = self.compositor.node_texture(target.node_id) else {
-                self.transform_session = Some(session);
-                return false;
+                return Err(session);
             };
             if texture.format() != target.semantics.format {
-                self.transform_session = Some(session);
-                return false;
+                return Err(session);
             }
             let frame = texture.canvas_frame();
             let snapshot = self
@@ -799,8 +792,7 @@ impl DarklyEngine {
                 .selection_state()
                 .map(|state| state.canvas_frame())
             else {
-                self.transform_session = Some(session);
-                return false;
+                return Err(session);
             };
             let snapshot = self
                 .gpu
@@ -814,8 +806,7 @@ impl DarklyEngine {
                     )
                 });
             let Some(filter_id) = self.selection_modifier_id() else {
-                self.transform_session = Some(session);
-                return false;
+                return Err(session);
             };
             Some(SelectionAction::new(
                 selection.active,
@@ -873,7 +864,7 @@ impl DarklyEngine {
         }
         self.push_undo(Box::new(CompoundAction::new(actions)));
         self.compositor.clear_transform_session();
-        true
+        Ok(())
     }
 
     /// Commit floating content: render transformed pixels into the target
