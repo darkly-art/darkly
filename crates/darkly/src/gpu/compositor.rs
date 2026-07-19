@@ -1162,7 +1162,7 @@ impl Compositor {
 
         let tool_overlay = ToolOverlay::new(device, queue, surface_format);
 
-        let transform_pass = crate::gpu::transform::TransformPass::new(device);
+        let transform_pass = crate::gpu::transform::TransformPass::new(device, queue);
         let rescale_pass = crate::gpu::rescale::RescalePass::new(device);
         let ortho_pass = crate::gpu::ortho_transform::OrthoTransformPass::new(device);
         let content_bounds = ContentBoundsPass::new(device);

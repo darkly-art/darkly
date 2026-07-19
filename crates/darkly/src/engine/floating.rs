@@ -10,7 +10,6 @@ use crate::coord::{CanvasRect, WindowRect};
 use crate::document::{
     PixelTransformPlan, PixelTransformSemantics, TransformCapabilityError, TransformPlanError,
 };
-use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::transform::{ClearShape, FloatingContent, FloatingMode, Transform};
 
 fn selection_texture_rect(bounds: WindowRect) -> CanvasRect {
@@ -451,6 +450,23 @@ impl DarklyEngine {
             let Some(extraction_bounds) = extraction else {
                 continue;
             };
+            let source_coverage = if selection.is_some() {
+                let local = (
+                    extraction_bounds.x0() - self.doc.canvas_origin.x,
+                    extraction_bounds.y0() - self.doc.canvas_origin.y,
+                );
+                let Some(coverage) = self.cropped_selection_pixels(
+                    local,
+                    extraction_bounds.width,
+                    extraction_bounds.height,
+                ) else {
+                    self.compositor.clear_transform_session();
+                    return TransformSetupOutcome::Pending;
+                };
+                Some(coverage)
+            } else {
+                None
+            };
             let prepared = self.gpu.encode_ret("transform-prepare-target", |encoder| {
                 self.compositor.prepare_transform_target_from_gpu(
                     &self.gpu.device,
@@ -459,6 +475,7 @@ impl DarklyEngine {
                     (extraction_bounds.x0(), extraction_bounds.y0()),
                     extraction_bounds.width,
                     extraction_bounds.height,
+                    source_coverage.as_deref(),
                     planned.node_id,
                     planned.semantics,
                 )
@@ -470,43 +487,6 @@ impl DarklyEngine {
                     operation: crate::document::PixelTransformOperation::DestructiveTransform,
                 });
             };
-            if selection.is_some() {
-                let local = (
-                    extraction_bounds.x0() - self.doc.canvas_origin.x,
-                    extraction_bounds.y0() - self.doc.canvas_origin.y,
-                );
-                if let Some(mask) = self.upload_cropped_selection_r8(
-                    local,
-                    extraction_bounds.width,
-                    extraction_bounds.height,
-                ) {
-                    let source = GpuPaintTarget::from_canvas_texture(
-                        &prepared.source_texture,
-                        &prepared.source_view,
-                        prepared.target_format,
-                        CanvasRect::from_xywh(
-                            0,
-                            0,
-                            extraction_bounds.width,
-                            extraction_bounds.height,
-                        ),
-                    );
-                    let mut encoder = crate::gpu::paint_target::PaintCommandEncoder::new(
-                        &self.gpu.device,
-                        &self.gpu.queue,
-                        &self.paint_pipelines,
-                        "transform-mask-source",
-                        1,
-                    );
-                    source.multiply_by_mask(
-                        &mut encoder,
-                        &self.paint_pipelines,
-                        &self.gpu.queue,
-                        &mask,
-                    );
-                    encoder.submit();
-                }
-            }
             let clear_shape =
                 selection
                     .as_ref()

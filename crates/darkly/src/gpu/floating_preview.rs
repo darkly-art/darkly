@@ -143,6 +143,7 @@ impl Compositor {
             queue,
             &self.sampler,
             rgba_data,
+            None,
             source_width,
             source_height,
             target_layer,
@@ -169,6 +170,7 @@ impl Compositor {
         source_origin: (i32, i32),
         source_width: u32,
         source_height: u32,
+        source_coverage: Option<&[u8]>,
         target_layer: LayerId,
         semantics: &'static crate::document::PixelTransformSemantics,
     ) -> Option<crate::gpu::transform::TransformState> {
@@ -195,6 +197,7 @@ impl Compositor {
             source_origin,
             source_width,
             source_height,
+            source_coverage,
             target_layer,
             target_format,
             preview_texture,

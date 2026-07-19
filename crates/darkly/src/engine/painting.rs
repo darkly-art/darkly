@@ -1576,25 +1576,6 @@ impl DarklyEngine {
             .map(|t| GpuPaintTarget::from_node(t, self.doc.canvas_rect()))
     }
 
-    /// Upload a cropped region of the GPU selection as an R8 texture bind group.
-    /// Reads from the CPU cache (populated by async readback or eagerly on upload).
-    pub(crate) fn upload_cropped_selection_r8(
-        &self,
-        origin: (i32, i32),
-        width: u32,
-        height: u32,
-    ) -> Option<wgpu::BindGroup> {
-        let pixels = self.cropped_selection_pixels(origin, width, height)?;
-        Some(self.paint_pipelines.upload_r8_bind_group(
-            &self.gpu.device,
-            &self.gpu.queue,
-            width,
-            height,
-            &pixels,
-            "selection-cropped",
-        ))
-    }
-
     /// Crop the live selection's CPU cache to a `width`×`height` window-local
     /// region at `origin`, returning straight R8 coverage (0 outside the
     /// canvas). `None` if there's no selection or the cache hasn't landed.

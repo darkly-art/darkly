@@ -45,11 +45,11 @@ fn pixel_at(pixels: &[u8], w: u32, x: u32, y: u32, bpp: u32) -> &[u8] {
 /// supply a placeholder.
 fn setup_transform_pass(
     device: &wgpu::Device,
-    _queue: &wgpu::Queue,
+    queue: &wgpu::Queue,
     _canvas_w: u32,
     _canvas_h: u32,
 ) -> (TransformPass, wgpu::Sampler) {
-    let pass = TransformPass::new(device);
+    let pass = TransformPass::new(device, queue);
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
@@ -138,6 +138,7 @@ fn set_floating_content_rgba(
     queue: &wgpu::Queue,
     sampler: &wgpu::Sampler,
     rgba_data: &[u8],
+    source_coverage: Option<&[u8]>,
     source_w: u32,
     source_h: u32,
     target_layer: LayerId,
@@ -160,6 +161,7 @@ fn set_floating_content_rgba(
         queue,
         sampler,
         rgba_data,
+        source_coverage,
         source_w,
         source_h,
         target_layer,
@@ -217,6 +219,7 @@ fn transform_commit_translate() {
         &queue,
         &sampler,
         &source_data,
+        None,
         sw,
         sh,
         LayerId::from_ffi(1),
@@ -312,6 +315,7 @@ fn transform_commit_translate_undo() {
         &queue,
         &sampler,
         &source_data,
+        None,
         sw,
         sh,
         LayerId::from_ffi(1),
@@ -421,6 +425,7 @@ fn transform_commit_rotate_90() {
         &queue,
         &sampler,
         &source_data,
+        None,
         sw,
         sh,
         LayerId::from_ffi(1),
@@ -520,6 +525,7 @@ fn paste_commit_identity() {
         &queue,
         &sampler,
         &source_data,
+        None,
         sw,
         sh,
         LayerId::from_ffi(1),
@@ -602,6 +608,7 @@ fn paste_commit_undo() {
         &queue,
         &sampler,
         &source_data,
+        None,
         sw,
         sh,
         LayerId::from_ffi(1),
@@ -715,6 +722,7 @@ fn commit_composites_over_existing() {
         &queue,
         &sampler,
         &source_data,
+        None,
         sw,
         sh,
         LayerId::from_ffi(1),
@@ -798,6 +806,7 @@ fn transform_commit_on_mask() {
         &queue,
         &sampler,
         &source_data,
+        None,
         sw,
         sh,
         LayerId::from_ffi(1),
@@ -852,6 +861,198 @@ fn transform_commit_on_mask() {
         "original pos should be 0"
     );
     assert_eq!(pixels[0], 0, "corner should be 0");
+}
+
+/// Explicit selection coverage keeps an unselected R8 texel distinct from a
+/// selected source whose scalar value is zero.
+#[test]
+fn transform_r8_distinguishes_zero_value_from_zero_coverage() {
+    let (device, queue) = test_device();
+    let (cw, ch) = (16u32, 16u32);
+    let (sw, sh) = (8u32, 8u32);
+    let format = wgpu::TextureFormat::R8Unorm;
+    let target = vec![200u8; (cw * ch) as usize];
+    let (target_tex, target_view) =
+        create_test_texture_with_format(&device, &queue, cw, ch, &target, format);
+    let source = vec![0u8, 0, 0, 255]
+        .into_iter()
+        .cycle()
+        .take((sw * sh * 4) as usize)
+        .collect::<Vec<_>>();
+    let mut coverage = vec![0u8; (sw * sh) as usize];
+    for y in 2..6 {
+        for x in 2..6 {
+            coverage[(y * sw + x) as usize] = 255;
+        }
+    }
+
+    let (mut pass, sampler) = setup_transform_pass(&device, &queue, cw, ch);
+    set_floating_content_rgba(
+        &mut pass,
+        &device,
+        &queue,
+        &sampler,
+        &source,
+        Some(&coverage),
+        sw,
+        sh,
+        LayerId::from_ffi(1),
+        cw,
+        ch,
+        format,
+    );
+    let mut enc = encoder(&device);
+    commit_to_texture(
+        &pass,
+        &device,
+        &mut enc,
+        &queue,
+        &target_tex,
+        &target_view,
+        &IDENTITY,
+        (4, 4),
+        sw,
+        sh,
+        (0, 0),
+        cw,
+        ch,
+        cw,
+        ch,
+    );
+    submit(&queue, enc);
+
+    let pixels = readback_texture(&device, &queue, &target_tex, format, cw, ch);
+    assert_eq!(
+        pixels[(4 * cw + 4) as usize],
+        200,
+        "zero coverage inside the source rectangle must retain the destination"
+    );
+    assert!(
+        pixels[(8 * cw + 8) as usize] < 5,
+        "fully selected scalar zero must overwrite the destination"
+    );
+}
+
+#[test]
+fn transform_r8_interpolates_partial_coverage() {
+    let (device, queue) = test_device();
+    let (cw, ch) = (16u32, 16u32);
+    let (sw, sh) = (8u32, 8u32);
+    let format = wgpu::TextureFormat::R8Unorm;
+    let target = vec![200u8; (cw * ch) as usize];
+    let (target_tex, target_view) =
+        create_test_texture_with_format(&device, &queue, cw, ch, &target, format);
+    let source = vec![100u8, 100, 100, 255]
+        .into_iter()
+        .cycle()
+        .take((sw * sh * 4) as usize)
+        .collect::<Vec<_>>();
+    let coverage = vec![128u8; (sw * sh) as usize];
+
+    let (mut pass, sampler) = setup_transform_pass(&device, &queue, cw, ch);
+    set_floating_content_rgba(
+        &mut pass,
+        &device,
+        &queue,
+        &sampler,
+        &source,
+        Some(&coverage),
+        sw,
+        sh,
+        LayerId::from_ffi(1),
+        cw,
+        ch,
+        format,
+    );
+    let mut enc = encoder(&device);
+    commit_to_texture(
+        &pass,
+        &device,
+        &mut enc,
+        &queue,
+        &target_tex,
+        &target_view,
+        &IDENTITY,
+        (4, 4),
+        sw,
+        sh,
+        (0, 0),
+        cw,
+        ch,
+        cw,
+        ch,
+    );
+    submit(&queue, enc);
+
+    let pixels = readback_texture(&device, &queue, &target_tex, format, cw, ch);
+    let value = pixels[(8 * cw + 8) as usize];
+    assert!(
+        (149..=151).contains(&value),
+        "50% coverage should mix scalar 100 over 200 to about 150, got {value}"
+    );
+}
+
+#[test]
+fn transform_rgba_applies_explicit_coverage_to_premultiplied_source() {
+    let (device, queue) = test_device();
+    let (cw, ch) = (16u32, 16u32);
+    let (sw, sh) = (8u32, 8u32);
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let target = [0u8, 0, 255, 255]
+        .into_iter()
+        .cycle()
+        .take((cw * ch * 4) as usize)
+        .collect::<Vec<_>>();
+    let (target_tex, target_view) = create_test_texture(&device, &queue, cw, ch, &target);
+    let source = [255u8, 0, 0, 255]
+        .into_iter()
+        .cycle()
+        .take((sw * sh * 4) as usize)
+        .collect::<Vec<_>>();
+    let coverage = vec![128u8; (sw * sh) as usize];
+
+    let (mut pass, sampler) = setup_transform_pass(&device, &queue, cw, ch);
+    set_floating_content_rgba(
+        &mut pass,
+        &device,
+        &queue,
+        &sampler,
+        &source,
+        Some(&coverage),
+        sw,
+        sh,
+        LayerId::from_ffi(1),
+        cw,
+        ch,
+        format,
+    );
+    let mut enc = encoder(&device);
+    commit_to_texture(
+        &pass,
+        &device,
+        &mut enc,
+        &queue,
+        &target_tex,
+        &target_view,
+        &IDENTITY,
+        (4, 4),
+        sw,
+        sh,
+        (0, 0),
+        cw,
+        ch,
+        cw,
+        ch,
+    );
+    submit(&queue, enc);
+
+    let pixels = readback_texture(&device, &queue, &target_tex, format, cw, ch);
+    let pixel = pixel_at(&pixels, cw, 8, 8, 4);
+    assert!(
+        (126..=129).contains(&pixel[0]) && (126..=129).contains(&pixel[2]),
+        "50% selected opaque red over blue should be half red/half blue, got {pixel:?}"
+    );
+    assert_eq!(pixel[3], 255);
 }
 
 // ============================================================================
@@ -924,6 +1125,7 @@ fn transform_commit_onto_offset_layer_lands_at_canvas_coords() {
         &queue,
         &sampler,
         &source_data,
+        None,
         sw,
         sh,
         LayerId::from_ffi(1),

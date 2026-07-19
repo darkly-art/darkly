@@ -161,11 +161,18 @@ When an idea, algorithm, shader, or implementation comes from an external source
 
 ## Planning and Independent Review Workflow
 
-Every bug fix and feature addition must use the following workflow unless the user explicitly waives it. The original planning context is the orchestrator: it owns the plan, delegates independent review and execution, reconciles their results, and reports the outcome. It does not implement the production change itself.
+Every bug fix and feature addition must use the following workflow unless the user explicitly waives it. The main thread is the orchestrator: it delegates the initial plan draft and independent review, revises the plan, obtains user approval, implements the change itself, and keeps the user involved throughout.
 
 ### 1. Write the Plan
 
-Before modifying production code:
+Before modifying production code, the orchestrator must delegate the initial plan draft to a fresh, isolated planning agent.
+
+The planning agent must:
+
+- Receive no parent conversation history, summaries, conclusions, or unpublished planning context.
+- Receive only the repository instructions and the user's task.
+- Use the strongest reasoning model available, preferably the same model and reasoning level as the orchestrator.
+- Not modify production code.
 
 1. Investigate the relevant code and prior art.
 2. For a bug, identify the root cause and design a regression test that fails before the fix.
@@ -173,6 +180,8 @@ Before modifying production code:
 4. Do not begin implementation yet.
 
 The plan must be self-contained. It must describe the problem, root cause or feature semantics, affected architecture, implementation steps, test strategy, risks, and unresolved questions.
+
+When the current platform cannot provide an isolated planning agent, stop and ask the user to run the planning task in a fresh session.
 
 ### 2. Obtain an Independent Review
 
@@ -201,7 +210,7 @@ When the current agent platform supports isolated subagents, spawn one without f
 
 ### 3. Revise the Plan
 
-The original planning context must read the independent review and reconsider the approach before implementation.
+The orchestrator must read the draft and independent review, then reconsider and revise the approach before implementation.
 
 For every substantive finding, it must either:
 
@@ -225,27 +234,14 @@ If the user requests plan changes, return to the appropriate earlier step and ob
 
 ### 5. Implement
 
-Only after the user explicitly approves the revised plan, the orchestrator must delegate implementation to a fresh, isolated execution agent.
-
-The execution agent must:
-
-- Receive no parent conversation history, summaries, conclusions, or unpublished planning context.
-- Receive only the repository instructions, the revised plan path, and the execution task.
-- Be told explicitly that planning, independent review, revision, and user approval are complete and that it is executing stage 5 of this workflow, so it must not restart the planning workflow.
-- Use a model and reasoning level capable of implementing the plan reliably, preferably the same model and reasoning level as the planning agent.
-- Read the complete revised plan, including the independent review and the recorded resolution of its findings, before modifying production code.
-- Independently inspect the files it needs to implement and verify the change rather than relying on unstated assumptions from the planning context.
-- Follow the plan unless implementation reveals that it is incorrect, unsafe, incomplete, or unnecessarily complex. In that case, stop production edits, report the evidence to the orchestrator, and wait for the plan to be revised and reviewed again.
-- Keep the plan synchronized with material implementation discoveries and decisions that do not require redesign.
-- Return a concise summary of changes, tests, failures, and remaining concerns to the orchestrator.
-
-The execution agent must then:
+Only after the user explicitly approves the revised plan, the orchestrator implements it in the main thread so the user can follow the work and provide direction.
 
 1. Implement the plan.
 2. For a bug, write and demonstrate the failing regression test before applying the fix.
 3. Verify the change using the checks appropriate to the affected components.
+4. Keep the plan synchronized with material implementation discoveries and decisions.
 
-The orchestrator must inspect the execution agent's result and repository diff, request follow-up work from the execution agent when needed, and produce the final report. The orchestrator must not silently finish incomplete implementation itself. When the current platform cannot provide an isolated execution agent, stop and ask the user to run the revised plan in a fresh session.
+If implementation reveals that the plan is incorrect, unsafe, incomplete, or unnecessarily complex, stop production edits and return to step 3. Material redesigns must be recorded in the plan, independently reviewed, and explicitly approved by the user before implementation resumes.
 
 ## Testing Principle
 

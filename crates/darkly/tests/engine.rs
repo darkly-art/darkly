@@ -4260,6 +4260,247 @@ fn linked_transform_commit_and_undo_are_atomic_for_both_targets() {
     assert!(!engine.has_selection());
 }
 
+/// A selected transform carries shape coverage independently from mask values.
+/// Ellipse corners lie inside the extraction rectangle but outside the selected
+/// shape; translating through the linked, host-initiated path must not turn
+/// those destination pixels into opaque black mask values.
+#[test]
+fn linked_host_ellipse_transform_preserves_mask_outside_selection() {
+    use darkly::coord::CanvasRect;
+    use darkly::gpu::transform::affine_translate;
+
+    let (canvas_w, canvas_h) = (48u32, 32u32);
+    let canvas_origin = (11i32, 7i32);
+    let mut engine = test_engine(canvas_w, canvas_h);
+    engine.resize_canvas(CanvasRect::from_xywh(
+        canvas_origin.0,
+        canvas_origin.1,
+        canvas_w,
+        canvas_h,
+    ));
+    let host = engine.add_raster_layer(None);
+    engine.begin_stroke(host);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: (canvas_origin.0 + 1) as f32,
+        y: (canvas_origin.1 + 1) as f32,
+        r: 220,
+        g: 30,
+        b: 10,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    paint_at(&mut engine, host, 13.0, 9.0, 10.0, 40.0, 1.0);
+    paint_at(&mut engine, host, 20.0, 18.0, 0.0, 1.0, 0.0);
+
+    engine.add_mask(host);
+    let mask = engine.host_mask_id(host).expect("host has mask");
+    engine.begin_stroke(mask);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: (canvas_origin.0 + 1) as f32,
+        y: (canvas_origin.1 + 1) as f32,
+        r: 200,
+        g: 200,
+        b: 200,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    engine.test_flush_readbacks();
+
+    let selection_rect = CanvasRect::from_xywh(15, 12, 12, 12);
+    let translate_x = 20i32;
+    engine.select_ellipse(
+        selection_rect.x0() as f32,
+        selection_rect.y0() as f32,
+        selection_rect.width as f32,
+        selection_rect.height as f32,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
+    let selection = engine
+        .test_selection_cpu_cache()
+        .expect("ellipse selection has a CPU coverage map")
+        .to_vec();
+    assert!(selection
+        .iter()
+        .all(|&coverage| coverage == 0 || coverage == 255));
+
+    let host_before = engine.test_readback_layer(host);
+    let mask_before = engine.test_readback_mask(host);
+    let selection_before = engine.test_readback_selection();
+    assert_eq!(engine.node_pixel_bounds(mask), Some(engine.canvas_rect()));
+    assert_eq!(mask_before.len(), (canvas_w * canvas_h) as usize);
+
+    assert!(engine.begin_transform(host));
+    assert_eq!(engine.test_transform_target_ids(), vec![host, mask]);
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        translate_x as f32,
+        0.0,
+    )));
+    engine.commit_floating();
+
+    let host_after = engine.test_readback_layer(host);
+    let mask_after = engine.test_readback_mask(host);
+    let mut mask_expected = mask_before.clone();
+    for window_y in 0..canvas_h {
+        for window_x in 0..canvas_w {
+            let coverage = selection[(window_y * canvas_w + window_x) as usize];
+            if coverage != 255 {
+                continue;
+            }
+            let source_x = canvas_origin.0 + window_x as i32;
+            let destination_x = source_x + translate_x;
+            let source_index = (window_y * canvas_w + window_x) as usize;
+            let destination_index =
+                (window_y * canvas_w + (destination_x - canvas_origin.0) as u32) as usize;
+            mask_expected[source_index] = 255;
+            mask_expected[destination_index] = mask_before[source_index];
+        }
+    }
+    if let Some(index) = mask_after
+        .iter()
+        .zip(&mask_expected)
+        .position(|(actual, expected)| actual != expected)
+    {
+        let x = index as u32 % canvas_w;
+        let y = index as u32 / canvas_w;
+        panic!(
+            "linked ellipse translation changed mask window pixel ({x}, {y}): expected {}, got {}",
+            mask_expected[index], mask_after[index]
+        );
+    }
+
+    let destination_rect = CanvasRect::from_xywh(
+        selection_rect.x0() + translate_x,
+        selection_rect.y0(),
+        selection_rect.width,
+        selection_rect.height,
+    );
+    for y in 0..canvas_h {
+        for x in 0..canvas_w {
+            let point =
+                CanvasRect::from_xywh(canvas_origin.0 + x as i32, canvas_origin.1 + y as i32, 1, 1);
+            if selection_rect.intersect(point).is_some()
+                || destination_rect.intersect(point).is_some()
+            {
+                continue;
+            }
+            let index = ((y * canvas_w + x) * 4) as usize;
+            assert_eq!(
+                &host_after[index..index + 4],
+                &host_before[index..index + 4],
+                "host control changed outside the source/destination bounds at ({x}, {y})"
+            );
+        }
+    }
+    assert!(!engine.has_selection(), "commit consumes the selection");
+
+    engine.undo();
+    engine.test_flush_readbacks();
+    assert_eq!(engine.test_readback_layer(host), host_before);
+    assert_eq!(engine.test_readback_mask(host), mask_before);
+    assert_eq!(engine.test_readback_selection(), selection_before);
+}
+
+#[test]
+fn linked_ellipse_transform_is_independent_of_initiator_order() {
+    use darkly::gpu::transform::affine_translate;
+
+    fn run(initiate_from_mask: bool) -> (Vec<u8>, Vec<u8>) {
+        let mut engine = test_engine(32, 32);
+        let host = engine.add_raster_layer(None);
+        fill_layer(&mut engine, host, 220, 30, 10);
+        engine.add_mask(host);
+        let mask = engine.host_mask_id(host).expect("host has mask");
+        fill_mask_value(&mut engine, mask, 96);
+        engine.select_ellipse(4.0, 8.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
+
+        let initiator = if initiate_from_mask { mask } else { host };
+        assert!(engine.begin_transform(initiator));
+        let expected_order = if initiate_from_mask {
+            vec![mask, host]
+        } else {
+            vec![host, mask]
+        };
+        assert_eq!(engine.test_transform_target_ids(), expected_order);
+        engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+            16.0, 0.0,
+        )));
+        engine.commit_floating();
+        (
+            engine.test_readback_layer(host),
+            engine.test_readback_mask(host),
+        )
+    }
+
+    let host_first = run(false);
+    let mask_first = run(true);
+    assert_eq!(host_first.0, mask_first.0);
+    assert_eq!(host_first.1, mask_first.1);
+}
+
+#[test]
+fn linked_feathered_ellipse_uses_coverage_for_mask_clear_and_commit() {
+    use darkly::gpu::transform::affine_translate;
+
+    let (cw, ch) = (64u32, 48u32);
+    let mut engine = test_engine(cw, ch);
+    let host = engine.add_raster_layer(None);
+    fill_layer(&mut engine, host, 220, 30, 10);
+    engine.add_mask(host);
+    let mask = engine.host_mask_id(host).expect("host has mask");
+    fill_mask_value(&mut engine, mask, 255);
+
+    let translate_x = 32u32;
+    engine.select_rect(0.0, 8.0, 28.0, 28.0, SelectionMode::Replace, false, 0.0);
+    engine.clear_selection_contents(mask);
+    engine.select_ellipse(8.0, 16.0, 12.0, 12.0, SelectionMode::Replace, true, 4.0);
+    let selection = engine
+        .test_selection_cpu_cache()
+        .expect("feathered ellipse has a CPU coverage map")
+        .to_vec();
+    let partial_index = selection
+        .iter()
+        .enumerate()
+        .filter(|(_, coverage)| **coverage > 0 && **coverage < 255)
+        .min_by_key(|(_, coverage)| (i16::from(**coverage) - 128).unsigned_abs())
+        .map(|(index, _)| index)
+        .expect("feathered ellipse contains partial coverage");
+    let source_x = partial_index as u32 % cw;
+    let source_y = partial_index as u32 / cw;
+    let destination_x = source_x + translate_x;
+    let coverage = selection[partial_index];
+    let before = engine.test_readback_mask(host);
+    assert_eq!(before[partial_index], 0, "source fixture is scalar zero");
+    assert_eq!(
+        before[(source_y * cw + destination_x) as usize],
+        255,
+        "destination fixture is scalar white"
+    );
+
+    assert!(engine.begin_transform(host));
+    assert_eq!(engine.test_transform_target_ids(), vec![host, mask]);
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        translate_x as f32,
+        0.0,
+    )));
+    engine.commit_floating();
+
+    let after = engine.test_readback_mask(host);
+    let cleared = after[partial_index];
+    let committed = after[(source_y * cw + destination_x) as usize];
+    assert!(
+        (i16::from(cleared) - i16::from(coverage)).abs() <= 2,
+        "source clear must use selection coverage {coverage}, got {cleared}"
+    );
+    assert!(
+        (i16::from(committed) - i16::from(255 - coverage)).abs() <= 8,
+        "destination must mix scalar zero over white by coverage {coverage}, got {committed}"
+    );
+}
+
 #[test]
 fn transform_commit_preparation_failures_leave_no_delayed_or_published_state() {
     use darkly::engine::TransformCommitFailurePoint;

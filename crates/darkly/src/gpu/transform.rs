@@ -189,8 +189,19 @@ pub struct TransformBlendUniforms {
 pub struct TransformState {
     pub source_texture: wgpu::Texture,
     pub source_view: wgpu::TextureView,
+    /// Selection coverage stays separate from source values so an unselected
+    /// texel cannot alias a selected zero-valued R8 texel. Selected transforms
+    /// own this texture for the session; whole-content transforms and pastes
+    /// sample the transform pass's shared opaque fallback.
+    ///
+    /// Representation informed by GIMP contributors' `gimp_selection_extract`
+    /// (https://gitlab.gnome.org/GNOME/gimp/-/blob/master/app/core/gimpselection.c)
+    /// and Krita contributors' `TransformStrokeStrategy::createDeviceCache`
+    /// (https://invent.kde.org/graphics/krita/-/blob/master/plugins/tools/tool_transform2/strokes/transform_stroke_strategy.cpp).
+    pub source_coverage_texture: Option<wgpu::Texture>,
+    pub source_coverage_view: Option<wgpu::TextureView>,
     pub uniform_buf: wgpu::Buffer,
-    /// Bind group for the commit pass (source + sampler + uniforms).
+    /// Bind group for the commit pass (source value + coverage + sampler + uniforms).
     pub commit_bind_group: wgpu::BindGroup,
     pub target_layer: LayerId,
     pub target_format: wgpu::TextureFormat,
@@ -227,13 +238,15 @@ pub struct TransformPass {
     /// Single-texture BGL used for dest copy (commit) and premultiply passes.
     single_tex_bgl: wgpu::BindGroupLayout,
     premultiply_pipeline: wgpu::RenderPipeline,
+    _opaque_coverage_texture: wgpu::Texture,
+    opaque_coverage_view: wgpu::TextureView,
     /// One-target compatibility state used only by paste. Interactive transforms
     /// own explicit states in the compositor's `TransformGpuSession`.
     pub paste: Option<TransformState>,
 }
 
 impl TransformPass {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         // --- Commit pipelines (render directly to a target texture) ---
         let commit_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -262,6 +275,16 @@ impl TransformPass {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
                             min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
                         },
                         count: None,
                     },
@@ -373,14 +396,65 @@ impl TransformPass {
             cache: None,
         });
 
+        let (opaque_coverage_texture, opaque_coverage_view) =
+            Self::create_source_coverage(device, queue, 1, 1, &[255], "transform-coverage-opaque");
+
         TransformPass {
             commit_rgba_pipeline,
             commit_r8_pipeline,
             commit_bind_group_layout,
             single_tex_bgl,
             premultiply_pipeline,
+            _opaque_coverage_texture: opaque_coverage_texture,
+            opaque_coverage_view,
             paste: None,
         }
+    }
+
+    fn create_source_coverage(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        data: &[u8],
+        label: &str,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        debug_assert_eq!(data.len(), (width * height) as usize);
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
     }
 
     /// Build the source texture + uniforms + commit bind group for a paste.
@@ -401,6 +475,7 @@ impl TransformPass {
         queue: &wgpu::Queue,
         sampler: &wgpu::Sampler,
         rgba_data: &[u8],
+        source_coverage: Option<&[u8]>,
         source_width: u32,
         source_height: u32,
         target_layer: LayerId,
@@ -508,12 +583,30 @@ impl TransformPass {
             mapped_at_creation: false,
         });
 
+        let source_coverage = source_coverage.map(|coverage| {
+            Self::create_source_coverage(
+                device,
+                queue,
+                source_width,
+                source_height,
+                coverage,
+                "transform-source-coverage",
+            )
+        });
+        let coverage_view = source_coverage
+            .as_ref()
+            .map_or(&self.opaque_coverage_view, |(_, view)| view);
         let commit_bind_group =
-            self.make_commit_bind_group(device, &source_view, sampler, &uniform_buf);
+            self.make_commit_bind_group(device, &source_view, coverage_view, sampler, &uniform_buf);
+        let (source_coverage_texture, source_coverage_view) = source_coverage
+            .map(|(texture, view)| (Some(texture), Some(view)))
+            .unwrap_or((None, None));
 
         self.paste = Some(TransformState {
             source_texture,
             source_view,
+            source_coverage_texture,
+            source_coverage_view,
             uniform_buf,
             commit_bind_group,
             target_layer,
@@ -536,13 +629,14 @@ impl TransformPass {
     pub fn set_floating_content_from_gpu(
         &mut self,
         device: &wgpu::Device,
-        _queue: &wgpu::Queue,
+        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         sampler: &wgpu::Sampler,
         layer: &LayerTexture,
         source_origin: (i32, i32),
         source_width: u32,
         source_height: u32,
+        source_coverage: Option<&[u8]>,
         target_layer: LayerId,
         target_format: wgpu::TextureFormat,
         preview_texture: wgpu::Texture,
@@ -688,12 +782,30 @@ impl TransformPass {
             mapped_at_creation: false,
         });
 
+        let source_coverage = source_coverage.map(|coverage| {
+            Self::create_source_coverage(
+                device,
+                queue,
+                source_width,
+                source_height,
+                coverage,
+                "transform-source-coverage",
+            )
+        });
+        let coverage_view = source_coverage
+            .as_ref()
+            .map_or(&self.opaque_coverage_view, |(_, view)| view);
         let commit_bind_group =
-            self.make_commit_bind_group(device, &source_view, sampler, &uniform_buf);
+            self.make_commit_bind_group(device, &source_view, coverage_view, sampler, &uniform_buf);
+        let (source_coverage_texture, source_coverage_view) = source_coverage
+            .map(|(texture, view)| (Some(texture), Some(view)))
+            .unwrap_or((None, None));
 
         self.paste = Some(TransformState {
             source_texture,
             source_view,
+            source_coverage_texture,
+            source_coverage_view,
             uniform_buf,
             commit_bind_group,
             target_layer,
@@ -705,11 +817,12 @@ impl TransformPass {
         });
     }
 
-    /// Bind group for the commit pass: source + sampler + uniforms.
+    /// Bind group for the commit pass: source value + coverage + sampler + uniforms.
     fn make_commit_bind_group(
         &self,
         device: &wgpu::Device,
         source_view: &wgpu::TextureView,
+        coverage_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
         uniform_buf: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
@@ -728,6 +841,10 @@ impl TransformPass {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: uniform_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(coverage_view),
                 },
             ],
         })
