@@ -18,6 +18,14 @@ pub struct MaskFilter {
     pub linked_to_host: bool,
 }
 
+pub static PIXEL_TRANSFORM_SEMANTICS: crate::document::PixelTransformSemantics =
+    crate::document::PixelTransformSemantics {
+        format: wgpu::TextureFormat::R8Unorm,
+        uncovered_value: crate::document::PixelValue::White,
+        bounds_policy: crate::document::PixelTransformBoundsPolicy::DocumentExtent,
+        sampling: crate::document::PixelTransformSampling::SingleChannel,
+    };
+
 impl MaskFilter {
     pub fn new(bounds: CanvasRect) -> Self {
         MaskFilter {
@@ -31,6 +39,40 @@ impl MaskFilter {
 /// (notably `Filter::kind`) reference the same constant the registration
 /// uses — no parallel string literal anywhere.
 pub const TYPE_ID: &str = "mask";
+
+pub(crate) fn transform_membership(
+    doc: &crate::document::Document,
+    initiator_id: LayerId,
+) -> crate::document::pixel_transform::TransformMembershipSnapshot {
+    use crate::document::pixel_transform::TransformMembershipSnapshot;
+
+    let relationship = doc
+        .find_filter(initiator_id)
+        .and_then(|filter| match &filter.kind {
+            FilterKind::Mask(mask) => doc
+                .parent_of(initiator_id)
+                .map(|host_id| (initiator_id, host_id, mask.linked_to_host)),
+            _ => None,
+        })
+        .or_else(|| {
+            doc.filters_of(initiator_id).iter().find_map(|&mask_id| {
+                let filter = doc.find_filter(mask_id)?;
+                let FilterKind::Mask(mask) = &filter.kind else {
+                    return None;
+                };
+                Some((mask_id, initiator_id, mask.linked_to_host))
+            })
+        });
+
+    match relationship {
+        Some((mask_id, host_id, linked)) => TransformMembershipSnapshot::MaskHost {
+            mask_id,
+            host_id,
+            linked,
+        },
+        None => TransformMembershipSnapshot::Independent { initiator_id },
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct MaskBody {

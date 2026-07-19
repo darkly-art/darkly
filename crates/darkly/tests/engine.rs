@@ -4152,6 +4152,43 @@ fn fill_mask_value(engine: &mut DarklyEngine, mask: darkly::layer::LayerId, valu
 }
 
 #[test]
+fn empty_async_transform_setup_is_terminal() {
+    let mut engine = test_engine(32, 32);
+    let layer = engine.add_raster_layer(None);
+
+    assert!(!engine.begin_transform(layer));
+    assert!(engine.test_has_pending_transform());
+    for _ in 0..8 {
+        engine.test_flush_readbacks();
+        engine.render(0.0);
+        if !engine.test_has_pending_transform() {
+            break;
+        }
+    }
+
+    assert!(!engine.test_has_pending_transform());
+    assert!(!engine.has_floating());
+}
+
+#[test]
+fn unsupported_linked_endpoint_reports_structured_capability_error() {
+    let mut engine = test_engine(32, 32);
+    let group = engine.add_group(None);
+    engine.add_mask(group);
+    let mask = engine.host_mask_id(group).unwrap();
+
+    assert!(!engine.begin_transform(mask));
+    let error = engine
+        .take_transform_setup_error()
+        .expect("capability rejection");
+    assert_eq!(error.endpoint, group);
+    assert_eq!(
+        error.operation,
+        darkly::document::PixelTransformOperation::DestructiveTransform
+    );
+}
+
+#[test]
 fn linked_transform_membership_is_symmetric_and_fixed_across_modes() {
     let mut engine = test_engine(32, 32);
     let host = engine.add_raster_layer(None);
@@ -4221,6 +4258,73 @@ fn linked_transform_commit_and_undo_are_atomic_for_both_targets() {
     assert_ne!(engine.test_readback_layer(host), host_before);
     assert_ne!(engine.test_readback_mask(host), mask_before);
     assert!(!engine.has_selection());
+}
+
+#[test]
+fn transform_commit_preparation_failures_leave_no_delayed_or_published_state() {
+    use darkly::engine::TransformCommitFailurePoint;
+    use darkly::gpu::transform::affine_translate;
+
+    let failures = [
+        TransformCommitFailurePoint::StagedAllocation { target: 1 },
+        TransformCommitFailurePoint::TargetEncoding { target: 1 },
+        TransformCommitFailurePoint::PixelUndoCapture { target: 1 },
+        TransformCommitFailurePoint::SelectionAction,
+        TransformCommitFailurePoint::FinalMembershipValidation,
+        TransformCommitFailurePoint::PublicationSetup,
+    ];
+
+    for failure in failures {
+        let mut engine = test_engine(32, 32);
+        let host = engine.add_raster_layer(None);
+        fill_layer(&mut engine, host, 200, 20, 20);
+        engine.add_mask(host);
+        let mask = engine.host_mask_id(host).unwrap();
+        fill_mask_value(&mut engine, mask, 80);
+        engine.select_all();
+        engine.test_flush_readbacks();
+
+        let host_before = engine.test_readback_layer(host);
+        let mask_before = engine.test_readback_mask(host);
+        let selection_before = engine.test_readback_selection();
+        let host_bounds = engine.layer_bounds(host);
+        let mask_bounds = engine.node_pixel_bounds(mask);
+        let bookkeeping_before = engine.test_transform_commit_observables();
+
+        assert!(engine.begin_transform(host), "setup for {failure:?}");
+        engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+            40.0, 0.0,
+        )));
+        let preview_revision = engine.test_transform_preview_revision();
+        engine.test_set_transform_commit_failure(Some(failure));
+        engine.commit_floating();
+
+        assert!(engine.has_floating(), "active session lost for {failure:?}");
+        assert_eq!(engine.test_transform_target_ids(), vec![host, mask]);
+        assert_eq!(engine.test_transform_preview_revision(), preview_revision);
+        assert_eq!(engine.test_readback_layer(host), host_before);
+        assert_eq!(engine.test_readback_mask(host), mask_before);
+        assert_eq!(engine.test_readback_selection(), selection_before);
+        assert_eq!(engine.layer_bounds(host), host_bounds);
+        assert_eq!(engine.node_pixel_bounds(mask), mask_bounds);
+        assert!(engine.has_selection());
+        assert_eq!(
+            engine.test_transform_commit_observables(),
+            bookkeeping_before
+        );
+
+        engine.test_flush_readbacks();
+        assert_eq!(
+            engine.test_transform_commit_observables(),
+            bookkeeping_before
+        );
+        assert_eq!(engine.test_readback_layer(host), host_before);
+        assert_eq!(engine.test_readback_mask(host), mask_before);
+        assert_eq!(engine.test_readback_selection(), selection_before);
+
+        engine.test_set_transform_commit_failure(None);
+        engine.cancel_floating();
+    }
 }
 
 #[test]

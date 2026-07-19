@@ -28,6 +28,7 @@
         "@vitejs/plugin-basic-ssl": "^2.1.4",
         "@webgpu/types": "^0.1.71",
         "fake-indexeddb": "^6.2.5",
+        "jsdom": "^29.1.1",
         "svelte": "^5.56.5",
         "svelte-check": "^4.7.2",
         "typescript": "^7.0.2",

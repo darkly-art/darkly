@@ -57,7 +57,7 @@ pub enum ClearShape {
     /// the marching ants disappear during the drag preview), and the
     /// commit-side replay needs that mask shape.
     Selection {
-        mask_bind_group: wgpu::BindGroup,
+        mask_bind_group: std::sync::Arc<wgpu::BindGroup>,
         uncovered: crate::document::PixelValue,
     },
 }

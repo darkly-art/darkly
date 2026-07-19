@@ -2036,6 +2036,11 @@ impl Compositor {
         self.content_bounds.get(layer_id)
     }
 
+    /// Whether content bounds resolved for this generation, including empty.
+    pub fn content_bounds_resolved(&self, layer_id: LayerId) -> bool {
+        self.content_bounds.is_resolved(layer_id)
+    }
+
     /// Request async content bounds computation for a layer.
     /// Results arrive on the next frame — retrieve via [`content_bounds`].
     /// Bounds are returned in **layer-local** pixel coords (top-left of the

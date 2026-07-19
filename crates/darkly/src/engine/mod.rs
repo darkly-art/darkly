@@ -9,6 +9,8 @@ mod export;
 mod filters;
 mod flatten;
 mod floating;
+#[cfg(any(test, feature = "testing"))]
+pub use floating::TransformCommitFailurePoint;
 mod image_rescale;
 mod layer_flip;
 mod layers;
@@ -74,9 +76,8 @@ use std::collections::HashMap;
 /// `node_id` may refer to a raster layer or a mask filter; the format is
 /// derived from the node's [`PixelBuffer`].
 pub(crate) struct PendingTransform {
-    pub node_id: LayerId,
     pub setup_generation: u64,
-    pub relationship: crate::document::TransformRelationshipSnapshot,
+    pub plan: crate::document::PixelTransformPlan,
 }
 
 /// Deferred layer/selection flip — waiting for the selection CPU cache (the
@@ -571,8 +572,9 @@ pub struct DarklyEngine {
     pub(crate) pending_transform: Option<PendingTransform>,
     /// Monotonic cancellation token for asynchronous transform setup.
     pub(crate) transform_setup_generation: u64,
-    #[cfg(feature = "testing")]
-    pub(crate) transform_commit_fail_target: Option<usize>,
+    pub(crate) transform_setup_error: Option<crate::document::TransformCapabilityError>,
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) transform_commit_failure: Option<floating::TransformCommitFailurePoint>,
     /// Pending layer/selection flip waiting for the selection CPU cache.
     pub(crate) pending_flip: Option<PendingFlip>,
     /// Pending destructive filter waiting for the selection CPU cache.
@@ -741,8 +743,9 @@ impl DarklyEngine {
             selection_pipelines,
             pending_transform: None,
             transform_setup_generation: 0,
-            #[cfg(feature = "testing")]
-            transform_commit_fail_target: None,
+            transform_setup_error: None,
+            #[cfg(any(test, feature = "testing"))]
+            transform_commit_failure: None,
             pending_flip: None,
             pending_filter: None,
             filter_preview: None,

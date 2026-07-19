@@ -9,8 +9,9 @@ pub use filters::mask::MaskFilter;
 pub use filters::selection::{SelectionCpuCache, SelectionFilter};
 pub use layer_kind::{LayerKindRegistration, LayerKindRegistry};
 pub use pixel_transform::{
-    PixelTransformBoundsPolicy, PixelTransformSampling, PixelTransformSemantics, PixelValue,
-    TransformPlanError, TransformRelationshipSnapshot,
+    PixelTransformBoundsPolicy, PixelTransformOperation, PixelTransformPlan,
+    PixelTransformSampling, PixelTransformSemantics, PixelTransformTarget, PixelValue,
+    TransformCapabilityError, TransformMembershipSnapshot, TransformPlanError,
 };
 
 use std::collections::HashMap;

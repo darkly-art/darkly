@@ -3,7 +3,7 @@
     import { bindingSite } from '../../actions/binding_site';
     import Icon from '../../icons/Icon.svelte';
     import { THUMB_SIZE } from './thumbnails.svelte';
-    import { toggleMaskLink, type MaskLinkState } from './maskChain';
+    import { requestedMaskLink, type MaskLinkState } from './maskChain';
 
     let { mask, thumbnail, active, enabled, onselect, oncontextmenu, onupdate }: {
         mask: MaskLinkState;
@@ -15,16 +15,37 @@
         onupdate: () => void;
     } = $props();
 
+    let pendingLinked = $state<boolean | null>(null);
+
+    $effect(() => {
+        if (pendingLinked === mask.linkedToHost) pendingLinked = null;
+    });
+
     function toggle(event: MouseEvent) {
         event.stopPropagation();
-        if (app.engine && toggleMaskLink(app.engine.api, mask)) onupdate();
+        if (!app.engine || pendingLinked !== null) return;
+        const desired = requestedMaskLink(mask);
+        if (desired === null) return;
+        pendingLinked = desired;
+        app.engine.api.setMaskLinkedToHost({ id: mask.id, linked: desired });
+        onupdate();
+    }
+
+    function selectMask(event: MouseEvent) {
+        event.stopPropagation();
+        onselect(event);
+    }
+
+    function openMaskMenu(event: MouseEvent) {
+        event.stopPropagation();
+        oncontextmenu(event);
     }
 </script>
 
 <button
     class="chain-btn"
     class:unlinked={!mask.linkedToHost}
-    disabled={!mask.editable}
+    disabled={!mask.editable || pendingLinked !== null}
     onclick={toggle}
     title={mask.linkedToHost ? 'Unlink mask from layer transforms' : 'Link mask to layer transforms'}
     aria-label={mask.linkedToHost ? 'Unlink mask from layer transforms' : 'Link mask to layer transforms'}
@@ -33,21 +54,26 @@
 </button>
 
 {#if thumbnail}
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <img
-        class="thumb"
+    <button
+        class="thumb-btn"
         class:thumb-active={active}
         class:mask-disabled={!enabled}
-        src={thumbnail}
-        alt="mask"
-        width={THUMB_SIZE}
-        height={THUMB_SIZE}
-        draggable="false"
-        use:bindingSite={{ name: 'maskThumb', ctx: () => ({ layerId: mask.id }) }}
-        onclick={onselect}
-        oncontextmenu={oncontextmenu}
-    />
+        type="button"
+        aria-label="Edit mask"
+        aria-pressed={active}
+        onclick={selectMask}
+        oncontextmenu={openMaskMenu}
+    >
+        <img
+            class="thumb"
+            src={thumbnail}
+            alt=""
+            width={THUMB_SIZE}
+            height={THUMB_SIZE}
+            draggable="false"
+            use:bindingSite={{ name: 'maskThumb', ctx: () => ({ layerId: mask.id }) }}
+        />
+    </button>
 {/if}
 
 <style>
@@ -68,15 +94,22 @@
     .chain-btn:hover:not(:disabled) { color: var(--text); }
     .chain-btn.unlinked { color: var(--text-dim); }
     .chain-btn:disabled { cursor: default; opacity: 0.45; }
-    .thumb {
+    .thumb-btn {
         width: 32px;
         height: 32px;
+        padding: 0;
         border: 2px solid var(--text-dim);
         border-radius: 4px;
         flex-shrink: 0;
         cursor: pointer;
-        image-rendering: pixelated;
+        overflow: hidden;
         background: var(--thumb-bg);
+    }
+    .thumb {
+        display: block;
+        width: 100%;
+        height: 100%;
+        image-rendering: pixelated;
     }
     .thumb-active { border-color: var(--accent); }
     .mask-disabled { opacity: 0.4; }

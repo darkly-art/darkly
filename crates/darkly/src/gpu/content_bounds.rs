@@ -18,7 +18,7 @@ pub struct ContentBoundsPass {
     bind_group_layout: wgpu::BindGroupLayout,
 
     /// Cached content bounds per layer: `[x, y, w, h]`.
-    cached: HashMap<LayerId, [u32; 4]>,
+    cached: HashMap<LayerId, Option<[u32; 4]>>,
 
     /// Generation counter per layer — incremented on invalidation.
     /// Pending results whose generation doesn't match are discarded.
@@ -119,7 +119,12 @@ impl ContentBoundsPass {
     /// Return cached content bounds for a layer, if available.
     /// Returns `[x, y, w, h]` or `None` if not yet computed or invalidated.
     pub fn get(&self, layer_id: LayerId) -> Option<[u32; 4]> {
-        self.cached.get(&layer_id).copied()
+        self.cached.get(&layer_id).copied().flatten()
+    }
+
+    /// True once this generation has resolved, including an empty result.
+    pub fn is_resolved(&self, layer_id: LayerId) -> bool {
+        self.cached.contains_key(&layer_id)
     }
 
     /// True if a bounds computation is in flight for this layer.
@@ -250,11 +255,9 @@ impl ContentBoundsPass {
                     let p = self.pending.swap_remove(i);
                     let current_gen = self.generation.get(&p.layer_id).copied().unwrap_or(0);
                     if p.gen == current_gen {
-                        // `result` is already origin + size, or `None` when the
-                        // texture is fully transparent (no cached entry).
-                        if let Some(bounds) = result {
-                            self.cached.insert(p.layer_id, bounds);
-                        }
+                        // Preserve a resolved empty result so callers do not
+                        // requeue the same terminal computation indefinitely.
+                        self.cached.insert(p.layer_id, result);
                         completed.push(p.layer_id);
                     }
                     // Stale result (generation changed since dispatch) → drop it.

@@ -170,9 +170,13 @@ impl Compositor {
         source_width: u32,
         source_height: u32,
         target_layer: LayerId,
+        semantics: &'static crate::document::PixelTransformSemantics,
     ) -> Option<crate::gpu::transform::TransformState> {
         let layer = self.node_textures.get(&target_layer)?;
         let target_format = layer.format();
+        if target_format != semantics.format {
+            return None;
+        }
         let (preview_texture, preview_view, preview_mask_bg, preview_blend_uniform_buf) =
             self.allocate_preview_resources(device, target_format);
         // Re-borrow `layer` after `allocate_preview_resources` — the helper

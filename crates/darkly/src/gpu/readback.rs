@@ -276,6 +276,11 @@ impl<C> ReadbackScheduler<C> {
         !self.tasks.is_empty()
     }
 
+    #[cfg(any(test, feature = "testing"))]
+    pub fn pending_count(&self) -> usize {
+        self.tasks.len()
+    }
+
     /// True if any pending readback matches the predicate.
     pub fn any<F: Fn(&C) -> bool>(&self, f: F) -> bool {
         self.tasks.iter().any(|(_, ctx)| f(ctx))

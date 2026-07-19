@@ -30,7 +30,9 @@
 import { ToolBase, type Tool, type ToolDescriptor } from './registry';
 import type { DarklyInstance } from '../state/app.svelte';
 import { getActiveInstance } from '../state/app.svelte';
-import { runHook } from './tool_session';
+import { runHook, ToolSessionCancelled } from './tool_session';
+import { toast } from '../state/toast.svelte';
+import { describeTransformCapabilityRejection } from './transform_errors';
 import { TransformGizmo } from './transform_gizmo';
 import {
     floatingTransformBinding,
@@ -103,7 +105,14 @@ class TransformTool extends ToolBase {
             // readback); if it isn't ready this frame, `onFrame` picks it up
             // once it is.
             if (!(await engine.api.hasFloating())) {
-                await engine.api.beginTransform({ id: layerId });
+                try {
+                    await engine.api.beginTransform({ id: layerId });
+                } catch (error) {
+                    if (error instanceof ToolSessionCancelled) throw error;
+                    toast.show('error', describeTransformCapabilityRejection(error), { durationMs: 6000 });
+                    this.inst.requestFrame();
+                    return;
+                }
             }
             if (await this.gizmo?.attach(floatingTransformBinding(this.sessionAccess))) {
                 this.applyEntryMode();

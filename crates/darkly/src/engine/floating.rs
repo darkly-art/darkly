@@ -4,27 +4,78 @@ use darkly_macros::handlers;
 
 use super::rendering::commit_undo_region;
 use super::{DarklyEngine, PendingTransform};
-use crate::coord::CanvasRect;
-use crate::document::TransformRelationshipSnapshot;
+use std::sync::Arc;
+
+use crate::coord::{CanvasRect, WindowRect};
+use crate::document::{
+    PixelTransformPlan, PixelTransformSemantics, TransformCapabilityError, TransformPlanError,
+};
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::transform::{ClearShape, FloatingContent, FloatingMode, Transform};
 
+fn selection_texture_rect(bounds: WindowRect) -> CanvasRect {
+    CanvasRect::from_xywh(bounds.x0(), bounds.y0(), bounds.width, bounds.height)
+}
+
 pub(crate) struct TransformTarget {
     pub node_id: LayerId,
+    pub semantics: &'static PixelTransformSemantics,
     pub document_bounds: CanvasRect,
     pub extraction_bounds: CanvasRect,
     pub clear_shape: ClearShape,
+}
+
+pub(crate) struct TransformSelectionSnapshot {
+    pub active: bool,
+    pub window_bounds: WindowRect,
+    pub canvas_bounds: CanvasRect,
+    pub cpu_cache: Option<Vec<u8>>,
+    pub clear_mask: Arc<wgpu::BindGroup>,
+    pub overlay_suppressed: bool,
+}
+
+#[derive(Debug)]
+pub(crate) enum TransformSetupOutcome {
+    Pending,
+    Active,
+    NoOp,
+    Stale,
+    Rejected(TransformCapabilityError),
+}
+
+#[cfg(any(test, feature = "testing"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransformCommitFailurePoint {
+    StagedAllocation {
+        target: usize,
+    },
+    TargetEncoding {
+        target: usize,
+    },
+    /// `save_region` is infallible; this checkpoint rejects readiness before
+    /// any target undo capture or readback is created.
+    PixelUndoCapture {
+        target: usize,
+    },
+    /// Selection snapshot/action construction is infallible once its resources
+    /// are validated; this checkpoint runs before any undo readback is created.
+    SelectionAction,
+    FinalMembershipValidation,
+    /// Encoder finalization and queue submission are infallible APIs. This
+    /// checkpoint models failure of the last publication-readiness gate before
+    /// operation-owned undo readbacks are scheduled.
+    PublicationSetup,
 }
 
 pub(crate) struct TransformSession {
     pub initiator_id: LayerId,
     pub operation_frame: CanvasRect,
     pub operation: Transform,
-    pub relationship: TransformRelationshipSnapshot,
+    pub plan: PixelTransformPlan,
     pub targets: Vec<TransformTarget>,
     pub setup_generation: u64,
     pub preview_revision: u64,
-    pub has_selection: bool,
+    pub selection: Option<TransformSelectionSnapshot>,
 }
 use crate::layer::{Layer, LayerId};
 use crate::undo::{
@@ -236,109 +287,123 @@ impl DarklyEngine {
     pub fn begin_transform(&mut self, id: LayerId) -> bool {
         self.auto_commit_floating();
         self.transform_setup_generation = self.transform_setup_generation.wrapping_add(1);
+        self.transform_setup_error = None;
         let generation = self.transform_setup_generation;
-        let relationship = match self.doc.plan_pixel_transform(id) {
+        let plan = match self.doc.plan_pixel_transform(id) {
             Ok(plan) => plan,
+            Err(TransformPlanError::Unsupported(error)) => {
+                self.transform_setup_error = Some(error);
+                return false;
+            }
             Err(_) => return false,
         };
 
         if self.has_selection() && self.selection_pixel_bounds().is_none() {
             let bounds = self.selection_cpu_cache().and_then(|data| {
-                crate::mask::pixel_bounds_r8(data, self.doc.width, self.doc.height).map(
-                    |[x, y, w, h]| crate::coord::WindowRect::from_xywh(x as i32, y as i32, w, h),
-                )
+                crate::mask::pixel_bounds_r8(data, self.doc.width, self.doc.height)
+                    .map(|[x, y, w, h]| WindowRect::from_xywh(x as i32, y as i32, w, h))
             });
             if let Some(bounds) = bounds {
                 self.set_selection_pixel_bounds(Some(bounds));
             } else {
                 self.pending_transform = Some(PendingTransform {
-                    node_id: id,
                     setup_generation: generation,
-                    relationship,
+                    plan,
                 });
                 return false;
             }
         }
 
-        if self.prepare_transform_session(id, generation, relationship.clone()) {
-            true
-        } else {
-            self.pending_transform = Some(PendingTransform {
-                node_id: id,
-                setup_generation: generation,
-                relationship,
-            });
-            false
+        let pending_plan = plan.clone();
+        match self.prepare_transform_session(generation, plan) {
+            TransformSetupOutcome::Active => true,
+            TransformSetupOutcome::Pending => {
+                self.pending_transform = Some(PendingTransform {
+                    setup_generation: generation,
+                    plan: pending_plan,
+                });
+                false
+            }
+            TransformSetupOutcome::Rejected(error) => {
+                self.transform_setup_error = Some(error);
+                false
+            }
+            TransformSetupOutcome::NoOp | TransformSetupOutcome::Stale => false,
+        }
+    }
+
+    pub(crate) fn handle_transform_setup_outcome(&mut self, pending: PendingTransform) -> bool {
+        match self.prepare_transform_session(pending.setup_generation, pending.plan.clone()) {
+            TransformSetupOutcome::Active => true,
+            TransformSetupOutcome::Pending => {
+                self.pending_transform = Some(pending);
+                false
+            }
+            TransformSetupOutcome::Rejected(error) => {
+                self.transform_setup_error = Some(error);
+                false
+            }
+            TransformSetupOutcome::NoOp | TransformSetupOutcome::Stale => false,
         }
     }
 
     pub(crate) fn prepare_transform_session(
         &mut self,
-        initiator_id: LayerId,
         setup_generation: u64,
-        relationship: TransformRelationshipSnapshot,
-    ) -> bool {
+        plan: PixelTransformPlan,
+    ) -> TransformSetupOutcome {
         if setup_generation != self.transform_setup_generation
-            || !self
-                .doc
-                .validate_pixel_transform_snapshot(initiator_id, &relationship)
+            || !self.doc.validate_pixel_transform_plan(&plan)
         {
-            return false;
+            self.compositor.clear_transform_session();
+            return TransformSetupOutcome::Stale;
         }
-        let selection = self
-            .selection_pixel_bounds()
-            .map(|bounds| bounds.to_canvas(self.doc.canvas_origin));
+        let selection_bounds = self.selection_pixel_bounds();
+        let selection_canvas =
+            selection_bounds.map(|bounds| bounds.to_canvas(self.doc.canvas_origin));
         let has_selection = self.has_selection();
         if !has_selection {
             let mut waiting = false;
-            for &node_id in &relationship.targets {
-                let semantics = self
-                    .doc
-                    .pixel_transform_semantics(node_id)
-                    .expect("relationship planner validates semantics");
-                if semantics.bounds_policy
+            for target in &plan.targets {
+                if target.semantics.bounds_policy
                     == crate::document::PixelTransformBoundsPolicy::AlphaContent
-                    && self.compositor.content_bounds(node_id).is_none()
+                    && !self.compositor.content_bounds_resolved(target.node_id)
                 {
                     self.compositor.request_content_bounds(
                         &self.gpu.device,
                         &self.gpu.queue,
-                        node_id,
+                        target.node_id,
                     );
                     waiting = true;
                 }
             }
             if waiting {
-                return false;
+                return TransformSetupOutcome::Pending;
             }
         }
-        let mut geometries = Vec::with_capacity(relationship.targets.len());
-        for &node_id in &relationship.targets {
-            let Some(document_bounds) = self.doc.node_pixel_bounds(node_id) else {
-                return false;
+        let mut geometries = Vec::with_capacity(plan.targets.len());
+        for target in &plan.targets {
+            let Some(document_bounds) = self.doc.node_pixel_bounds(target.node_id) else {
+                return TransformSetupOutcome::Stale;
             };
-            let semantics = self
-                .doc
-                .pixel_transform_semantics(node_id)
-                .expect("relationship planner validates semantics");
-            let extraction = if let Some(selection) = selection {
+            let extraction = if let Some(selection) = selection_canvas {
                 document_bounds.intersect(selection)
             } else {
-                match semantics.bounds_policy {
+                match target.semantics.bounds_policy {
                     crate::document::PixelTransformBoundsPolicy::DocumentExtent => {
                         Some(document_bounds)
                     }
                     crate::document::PixelTransformBoundsPolicy::AlphaContent => {
                         let [x, y, width, height] = self
                             .compositor
-                            .content_bounds(node_id)
-                            .expect("all alpha-content bounds were resolved above");
+                            .content_bounds(target.node_id)
+                            .unwrap_or([0, 0, 0, 0]);
                         if width == 0 || height == 0 {
                             None
                         } else {
                             let origin = self
                                 .compositor
-                                .node_texture(node_id)
+                                .node_texture(target.node_id)
                                 .map(|texture| {
                                     texture.layer_to_canvas(crate::coord::LayerPoint::new(x, y))
                                 })
@@ -349,46 +414,63 @@ impl DarklyEngine {
                     }
                 }
             };
-            geometries.push((node_id, document_bounds, extraction));
+            geometries.push((target, document_bounds, extraction));
         }
         if geometries
             .iter()
             .all(|(_, _, extraction)| extraction.is_none())
         {
-            return false;
+            self.compositor.clear_transform_session();
+            return TransformSetupOutcome::NoOp;
         }
-        let operation_frame = if let Some(selection) = selection {
-            selection
-        } else {
+        let operation_frame = selection_canvas.unwrap_or_else(|| {
             geometries
                 .iter()
                 .filter_map(|(_, _, extraction)| *extraction)
                 .reduce(|left, right| left.union(right))
                 .expect("at least one extraction")
+        });
+        let selection = if has_selection {
+            let window_bounds =
+                selection_bounds.expect("active selection setup requires resolved bounds");
+            Some(TransformSelectionSnapshot {
+                active: true,
+                window_bounds,
+                canvas_bounds: operation_frame,
+                cpu_cache: self.selection_cpu_cache().map(<[u8]>::to_vec),
+                clear_mask: Arc::new(self.snapshot_selection_for_clear()),
+                overlay_suppressed: true,
+            })
+        } else {
+            None
         };
 
         let mut gpu_targets = Vec::new();
         let mut targets = Vec::new();
-        for (node_id, document_bounds, extraction) in geometries {
+        for (planned, document_bounds, extraction) in geometries {
             let Some(extraction_bounds) = extraction else {
                 continue;
             };
-            let source_origin = (extraction_bounds.x0(), extraction_bounds.y0());
             let prepared = self.gpu.encode_ret("transform-prepare-target", |encoder| {
                 self.compositor.prepare_transform_target_from_gpu(
                     &self.gpu.device,
                     &self.gpu.queue,
                     encoder,
-                    source_origin,
+                    (extraction_bounds.x0(), extraction_bounds.y0()),
                     extraction_bounds.width,
                     extraction_bounds.height,
-                    node_id,
+                    planned.node_id,
+                    planned.semantics,
                 )
             });
             let Some(prepared) = prepared else {
-                return false;
+                self.compositor.clear_transform_session();
+                return TransformSetupOutcome::Rejected(TransformCapabilityError {
+                    endpoint: planned.node_id,
+                    operation: crate::document::PixelTransformOperation::DestructiveTransform,
+                });
             };
-            if has_selection {
+            if selection.is_some() {
                 let local = (
                     extraction_bounds.x0() - self.doc.canvas_origin.x,
                     extraction_bounds.y0() - self.doc.canvas_origin.y,
@@ -419,20 +501,18 @@ impl DarklyEngine {
                     });
                 }
             }
-            let clear_shape = if has_selection {
-                ClearShape::Selection {
-                    mask_bind_group: self.snapshot_selection_for_clear(),
-                    uncovered: self
-                        .doc
-                        .pixel_transform_semantics(node_id)
-                        .unwrap()
-                        .uncovered_value,
-                }
-            } else {
-                ClearShape::Rect(extraction_bounds)
-            };
+            let clear_shape =
+                selection
+                    .as_ref()
+                    .map_or(ClearShape::Rect(extraction_bounds), |snapshot| {
+                        ClearShape::Selection {
+                            mask_bind_group: Arc::clone(&snapshot.clear_mask),
+                            uncovered: planned.semantics.uncovered_value,
+                        }
+                    });
             targets.push(TransformTarget {
-                node_id,
+                node_id: planned.node_id,
+                semantics: planned.semantics,
                 document_bounds,
                 extraction_bounds,
                 clear_shape,
@@ -440,24 +520,31 @@ impl DarklyEngine {
             gpu_targets.push(prepared);
         }
         if setup_generation != self.transform_setup_generation {
-            return false;
+            self.compositor.clear_transform_session();
+            return TransformSetupOutcome::Stale;
         }
         self.compositor
             .install_transform_session(&self.gpu.queue, gpu_targets);
         self.transform_session = Some(TransformSession {
-            initiator_id,
+            initiator_id: plan.initiator_id,
             operation_frame,
             operation: Transform::identity(),
-            relationship,
+            plan,
             targets,
             setup_generation,
             preview_revision: 0,
-            has_selection,
+            selection,
         });
         if has_selection {
             self.clear_channel_overlay(crate::engine::OverlayChannel::Selection);
         }
-        self.publish_transform_preview()
+        if self.publish_transform_preview() {
+            TransformSetupOutcome::Active
+        } else {
+            self.transform_session = None;
+            self.compositor.clear_transform_session();
+            TransformSetupOutcome::Stale
+        }
     }
 
     fn publish_transform_preview(&mut self) -> bool {
@@ -546,15 +633,18 @@ impl DarklyEngine {
         };
         if session.operation.is_identity() {
             self.compositor.clear_transform_session();
-            if let Some(selection) = self.selection_cpu_cache().map(<[u8]>::to_vec) {
-                self.update_selection_overlay_from_readback(selection);
+            if let Some(snapshot) = session.selection {
+                debug_assert_eq!(snapshot.canvas_bounds, session.operation_frame);
+                if snapshot.overlay_suppressed {
+                    if let Some(selection) = snapshot.cpu_cache {
+                        self.update_selection_overlay_from_readback(selection);
+                    }
+                }
             }
             return true;
         }
         if session.setup_generation != self.transform_setup_generation
-            || !self
-                .doc
-                .validate_pixel_transform_snapshot(session.initiator_id, &session.relationship)
+            || !self.doc.validate_pixel_transform_plan(&session.plan)
         {
             self.transform_session = Some(session);
             return false;
@@ -573,62 +663,6 @@ impl DarklyEngine {
             })
             .collect();
 
-        // Prepare exact pre-publication undo snapshots. These schedule only
-        // GPU→CPU copies; live textures and document bounds remain unchanged.
-        let mut entries = Vec::with_capacity(session.targets.len());
-        for target in &session.targets {
-            let Some(texture) = self.compositor.node_texture(target.node_id) else {
-                self.transform_session = Some(session);
-                return false;
-            };
-            let format = texture.format();
-            let frame = texture.canvas_frame();
-            let snapshot = self.gpu.encode_ret("transform-stage-undo-save", |encoder| {
-                self.region_scratch.save_region(
-                    &self.gpu.device,
-                    encoder,
-                    &frame,
-                    format,
-                    target.document_bounds,
-                )
-            });
-            let entry = commit_undo_region(
-                &self.gpu,
-                &self.region_scratch,
-                &mut self.readbacks,
-                "transform-stage-undo-entry",
-                target.node_id,
-                &frame,
-                &snapshot,
-                target.document_bounds,
-            );
-            entries.push(entry);
-        }
-
-        let selection_metadata = session.has_selection.then(|| {
-            SelectionMetadataAction::new(
-                self.selection_pixel_bounds(),
-                self.selection_cpu_cache().map(<[u8]>::to_vec),
-            )
-        });
-        let selection_action = if session.has_selection {
-            let bounds = self
-                .selection_pixel_bounds()
-                .map(|bounds| {
-                    CanvasRect::from_xywh(bounds.x0(), bounds.y0(), bounds.width, bounds.height)
-                })
-                .unwrap_or_else(|| CanvasRect::from_xywh(0, 0, self.doc.width, self.doc.height));
-            self.save_selection_for_undo(bounds);
-            self.commit_selection_undo_entry(bounds)
-                .map(|entry| SelectionAction::new(true, entry))
-        } else {
-            None
-        };
-        if session.has_selection && selection_action.is_none() {
-            self.transform_session = Some(session);
-            return false;
-        }
-
         // Allocate, copy, clear, and transform every replacement in one encoder.
         // Dropping this encoder on any error publishes no writes.
         let mut encoder = self
@@ -641,8 +675,12 @@ impl DarklyEngine {
         for (_target_index, (target, (_, extent))) in
             session.targets.iter().zip(&proposed).enumerate()
         {
-            #[cfg(feature = "testing")]
-            if self.transform_commit_fail_target == Some(_target_index) {
+            #[cfg(any(test, feature = "testing"))]
+            if self.transform_commit_failure
+                == Some(TransformCommitFailurePoint::StagedAllocation {
+                    target: _target_index,
+                })
+            {
                 self.transform_session = Some(session);
                 return false;
             }
@@ -656,6 +694,15 @@ impl DarklyEngine {
                 self.transform_session = Some(session);
                 return false;
             };
+            #[cfg(any(test, feature = "testing"))]
+            if self.transform_commit_failure
+                == Some(TransformCommitFailurePoint::TargetEncoding {
+                    target: _target_index,
+                })
+            {
+                self.transform_session = Some(session);
+                return false;
+            }
             let param = crate::gpu::floating_preview::TransformPreviewParams {
                 node_id: target.node_id,
                 matrix: crate::transform::evaluator_for_target(
@@ -682,6 +729,111 @@ impl DarklyEngine {
             staged.push(resource);
         }
 
+        #[cfg(any(test, feature = "testing"))]
+        if self.transform_commit_failure
+            == Some(TransformCommitFailurePoint::FinalMembershipValidation)
+        {
+            self.transform_session = Some(session);
+            return false;
+        }
+        if !self.doc.validate_pixel_transform_plan(&session.plan) {
+            self.transform_session = Some(session);
+            return false;
+        }
+
+        #[cfg(any(test, feature = "testing"))]
+        {
+            if session.targets.iter().enumerate().any(|(target, _)| {
+                self.transform_commit_failure
+                    == Some(TransformCommitFailurePoint::PixelUndoCapture { target })
+            }) || (session.selection.is_some()
+                && self.transform_commit_failure
+                    == Some(TransformCommitFailurePoint::SelectionAction))
+                || self.transform_commit_failure
+                    == Some(TransformCommitFailurePoint::PublicationSetup)
+            {
+                self.transform_session = Some(session);
+                return false;
+            }
+        }
+
+        // All recoverable preparation and publication-readiness gates precede
+        // operation-owned undo capture, so failure cannot strand a readback.
+        let mut entries = Vec::with_capacity(session.targets.len());
+        for target in &session.targets {
+            let Some(texture) = self.compositor.node_texture(target.node_id) else {
+                self.transform_session = Some(session);
+                return false;
+            };
+            if texture.format() != target.semantics.format {
+                self.transform_session = Some(session);
+                return false;
+            }
+            let frame = texture.canvas_frame();
+            let snapshot = self
+                .gpu
+                .encode_ret("transform-stage-undo-save", |undo_encoder| {
+                    self.region_scratch.save_region(
+                        &self.gpu.device,
+                        undo_encoder,
+                        &frame,
+                        target.semantics.format,
+                        target.document_bounds,
+                    )
+                });
+            entries.push(commit_undo_region(
+                &self.gpu,
+                &self.region_scratch,
+                &mut self.readbacks,
+                "transform-stage-undo-entry",
+                target.node_id,
+                &frame,
+                &snapshot,
+                target.document_bounds,
+            ));
+        }
+        let selection_action = if let Some(selection) = &session.selection {
+            let rect = selection_texture_rect(selection.window_bounds);
+            let Some(frame) = self
+                .compositor
+                .selection_state()
+                .map(|state| state.canvas_frame())
+            else {
+                self.transform_session = Some(session);
+                return false;
+            };
+            let snapshot = self
+                .gpu
+                .encode_ret("transform-selection-undo-save", |undo_encoder| {
+                    self.region_scratch.save_region(
+                        &self.gpu.device,
+                        undo_encoder,
+                        &frame,
+                        wgpu::TextureFormat::R8Unorm,
+                        rect,
+                    )
+                });
+            let Some(filter_id) = self.selection_modifier_id() else {
+                self.transform_session = Some(session);
+                return false;
+            };
+            Some(SelectionAction::new(
+                selection.active,
+                commit_undo_region(
+                    &self.gpu,
+                    &self.region_scratch,
+                    &mut self.readbacks,
+                    "transform-selection-undo-entry",
+                    filter_id,
+                    &frame,
+                    &snapshot,
+                    rect,
+                ),
+            ))
+        } else {
+            None
+        };
+
         // Publication: one GPU submission followed by one non-interleavable CPU
         // mutation scope for mappings, authoritative extents, selection, history.
         self.gpu.queue.submit([encoder.finish()]);
@@ -690,10 +842,9 @@ impl DarklyEngine {
         }
         self.compositor
             .publish_staged_node_textures(&self.gpu.device, &self.gpu.queue, staged);
-        if session.has_selection {
-            let bounds = self.selection_pixel_bounds();
+        if let Some(selection_snapshot) = &session.selection {
             if let Some(selection) = self.compositor.selection_state_mut() {
-                selection.clear_region(&self.gpu.queue, bounds);
+                selection.clear_region(&self.gpu.queue, Some(selection_snapshot.window_bounds));
             }
             self.set_selection_active(false);
             self.set_selection_pixel_bounds(None);
@@ -711,11 +862,14 @@ impl DarklyEngine {
             }
             actions.push(Box::new(GpuRegionAction::new(entry)));
         }
-        if let Some(metadata) = selection_metadata {
-            actions.push(Box::new(metadata));
-        }
-        if let Some(selection) = selection_action {
-            actions.push(Box::new(selection));
+        if let Some(selection_snapshot) = &session.selection {
+            actions.push(Box::new(SelectionMetadataAction::new(
+                Some(selection_snapshot.window_bounds),
+                selection_snapshot.cpu_cache.clone(),
+            )));
+            if let Some(selection) = selection_action {
+                actions.push(Box::new(selection));
+            }
         }
         self.push_undo(Box::new(CompoundAction::new(actions)));
         self.compositor.clear_transform_session();
@@ -900,6 +1054,16 @@ impl DarklyEngine {
         self.compositor.clear_floating_content();
     }
 
+    #[handler]
+    pub fn take_transform_setup_error(&mut self) -> Option<TransformCapabilityError> {
+        self.transform_setup_error.take()
+    }
+
+    #[cfg(feature = "testing")]
+    pub fn test_has_pending_transform(&self) -> bool {
+        self.pending_transform.is_some()
+    }
+
     #[cfg(feature = "testing")]
     pub fn test_transform_target_ids(&self) -> Vec<LayerId> {
         self.transform_session
@@ -921,7 +1085,25 @@ impl DarklyEngine {
 
     #[cfg(feature = "testing")]
     pub fn test_fail_transform_commit_at_target(&mut self, target: Option<usize>) {
-        self.transform_commit_fail_target = target;
+        self.transform_commit_failure =
+            target.map(|target| TransformCommitFailurePoint::StagedAllocation { target });
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_set_transform_commit_failure(
+        &mut self,
+        failure: Option<TransformCommitFailurePoint>,
+    ) {
+        self.transform_commit_failure = failure;
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_transform_commit_observables(&self) -> (usize, usize, bool) {
+        (
+            self.undo_stack.test_undo_len(),
+            self.readbacks.pending_count(),
+            self.pending_selection_snapshot.is_some(),
+        )
     }
 
     /// Cancel floating content: drop the floating session. The live target
@@ -931,10 +1113,14 @@ impl DarklyEngine {
     pub fn cancel_floating(&mut self) {
         self.transform_setup_generation = self.transform_setup_generation.wrapping_add(1);
         self.pending_transform = None;
-        if self.transform_session.take().is_some() {
+        if let Some(session) = self.transform_session.take() {
             self.compositor.clear_transform_session();
-            if let Some(selection) = self.selection_cpu_cache().map(<[u8]>::to_vec) {
-                self.update_selection_overlay_from_readback(selection);
+            if let Some(snapshot) = session.selection {
+                if snapshot.overlay_suppressed {
+                    if let Some(selection) = snapshot.cpu_cache {
+                        self.update_selection_overlay_from_readback(selection);
+                    }
+                }
             }
             self.compositor.mark_dirty();
             return;

@@ -145,6 +145,11 @@ impl UndoStack {
         }
     }
 
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_undo_len(&self) -> usize {
+        self.undo_steps.len()
+    }
+
     /// Push a completed action. Clears redo history.
     ///
     /// Takes `&mut Document` so the chokepoint can set the sticky

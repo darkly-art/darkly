@@ -306,17 +306,8 @@ impl DarklyEngine {
         // Any completed target bounds may make the fixed multi-target plan ready.
         if !bounds_completed.is_empty() {
             if let Some(pt) = self.pending_transform.take() {
-                let ready = pt.setup_generation == self.transform_setup_generation
-                    && self.transform_session.is_none()
-                    && self.prepare_transform_session(
-                        pt.node_id,
-                        pt.setup_generation,
-                        pt.relationship.clone(),
-                    );
-                if ready {
+                if self.transform_session.is_none() && self.handle_transform_setup_outcome(pt) {
                     any_completed = true;
-                } else if pt.setup_generation == self.transform_setup_generation {
-                    self.pending_transform = Some(pt);
                 }
             }
         }
@@ -404,15 +395,8 @@ impl DarklyEngine {
                 }
                 if self.selection_pixel_bounds().is_some() {
                     if let Some(pt) = self.pending_transform.take() {
-                        let ready = pt.setup_generation == self.transform_setup_generation
-                            && self.transform_session.is_none()
-                            && self.prepare_transform_session(
-                                pt.node_id,
-                                pt.setup_generation,
-                                pt.relationship.clone(),
-                            );
-                        if !ready && pt.setup_generation == self.transform_setup_generation {
-                            self.pending_transform = Some(pt);
+                        if self.transform_session.is_none() {
+                            self.handle_transform_setup_outcome(pt);
                         }
                     }
                     if let Some(pf) = self.pending_flip.take() {
