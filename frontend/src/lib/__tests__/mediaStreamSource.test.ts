@@ -166,3 +166,67 @@ describe('MediaStreamSource caps upload resolution to the display target', () =>
         expect(uploads).toEqual([{ width: 3840, height: 2160 }]);
     });
 });
+
+describe('FrameSource timelapse start milestone (base-class behavior)', () => {
+    // A live void's streamed frames never bump the document revision, so the
+    // recorder would miss its first frame. The base fires `requestRecordingCapture`
+    // on the first upload of each connection so the recording captures the void
+    // appearing. Exercised through MediaStreamSource (the base is abstract).
+    function sourceWithCaptureSpy() {
+        vi.stubGlobal('createImageBitmap', (_s: unknown, opts?: ImageBitmapOptions) =>
+            Promise.resolve({
+                width: opts?.resizeWidth ?? 4,
+                height: opts?.resizeHeight ?? 4,
+                close: () => {},
+            }),
+        );
+        let captures = 0;
+        const engine = {
+            uploadVoidExternalImage: () => {},
+            api: {
+                requestRecordingCapture: () => {
+                    captures++;
+                },
+            },
+        } as unknown as Engine;
+        const src = new MediaStreamSource(5, engine, 'display');
+        const fields = src as unknown as { video: unknown; hasFrame: boolean };
+        fields.video = {
+            videoWidth: 4,
+            videoHeight: 4,
+            srcObject: null,
+            pause: () => {},
+            remove: () => {},
+        };
+        fields.hasFrame = true;
+        return { src, captures: () => captures };
+    }
+
+    it('requests one capture on the first frame, then not again on the same connection', async () => {
+        const { src, captures } = sourceWithCaptureSpy();
+
+        src.tick(4);
+        await flush();
+        expect(captures()).toBe(1);
+
+        // Later frames of the same connection must not re-fire the milestone.
+        src.tick(8);
+        await flush();
+        expect(captures()).toBe(1);
+    });
+
+    it('re-arms on a fresh connection (connected transition)', async () => {
+        const { src, captures } = sourceWithCaptureSpy();
+
+        src.tick(4);
+        await flush();
+        expect(captures()).toBe(1);
+
+        // A reconnect lands on `connected`, opening a new frame epoch whose
+        // first upload is again a start worth capturing.
+        (src as unknown as { setStatus(s: string): void }).setStatus('connected');
+        src.tick(8);
+        await flush();
+        expect(captures()).toBe(2);
+    });
+});

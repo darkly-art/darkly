@@ -29,7 +29,7 @@ vi.mock('../transform_modes', () => ({
 }));
 
 import { TransformGizmo } from '../transform_gizmo';
-import { beginToolSession } from '../tool_session';
+import { SessionEngine } from '../tool_session';
 
 function deferred<T>() {
     let resolve!: (v: T) => void;
@@ -45,12 +45,14 @@ const INFO = {
     matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1],
 };
 
+let session: SessionEngine | null = null;
+const sess = () => session;
 beforeEach(() => {
     pushSpy.mockClear();
     engine.post.mockClear();
-    // The gizmo pushes/clears its overlay through the live tool session; begin
-    // one over the fake engine so `toolEngine()` resolves.
-    beginToolSession(engine as never);
+    // The gizmo pushes/clears its overlay through the session accessor supplied
+    // at construction; establish one over the fake engine.
+    session = new SessionEngine(engine as never);
 });
 
 /**
@@ -66,7 +68,7 @@ withApi(engine);
 
 describe('transform gizmo commit during in-flight frame read', () => {
     it('does not resurrect the overlay when committed mid-read', async () => {
-        const gizmo = new TransformGizmo({} as never);
+        const gizmo = new TransformGizmo({} as never, sess);
 
         let gate = deferred<typeof INFO | null>();
         const binding = {

@@ -155,6 +155,7 @@ impl UndoStack {
         action: Box<dyn UndoAction>,
     ) -> Vec<Box<dyn UndoAction>> {
         doc.dirty = true;
+        doc.revision += 1;
         let mut evicted: Vec<Box<dyn UndoAction>> = self.redo_steps.drain(..).collect();
         for a in &evicted {
             self.total_bytes = self.total_bytes.saturating_sub(a.byte_cost());
@@ -203,9 +204,10 @@ impl UndoStack {
         doc: &mut Document,
         action: PropertyAction,
     ) -> Vec<Box<dyn UndoAction>> {
-        doc.dirty = true;
         if let Some(top) = self.undo_steps.last_mut() {
             if top.try_coalesce_property(&action) {
+                doc.dirty = true;
+                doc.revision += 1;
                 return Vec::new();
             }
         }
@@ -524,6 +526,53 @@ mod tests {
 
         undo.redo(&mut doc);
         assert!(doc.dirty, "redo also leaves dirty set");
+    }
+
+    #[test]
+    fn revision_bumped_by_undo_push() {
+        // The revision counter shares the dirty chokepoint: every push
+        // must advance it so observers (e.g. the process recorder) see
+        // a change.
+        let mut doc = Document::new(64, 64);
+        let mut undo = UndoStack::new(50);
+        let before = doc.revision;
+
+        let id = doc.add_raster_layer(None);
+        let parent = doc.parent_of(id);
+        let pos = doc.position_in_parent(id).unwrap();
+        let _ = undo.push(&mut doc, Box::new(LayerAddAction::new(id, parent, pos)));
+        assert!(doc.revision > before, "push must bump revision");
+    }
+
+    #[test]
+    fn revision_bumped_by_coalesce_property_both_branches() {
+        // Both coalesce outcomes — fresh push and merge-into-top — are
+        // document mutations, so both must advance the revision.
+        use super::property::Property;
+
+        let mut doc = Document::new(64, 64);
+        let mut undo = UndoStack::new(50);
+        let id = doc.add_raster_layer(None);
+
+        let before = doc.revision;
+        let _ = undo.coalesce_property(
+            &mut doc,
+            PropertyAction::new(id, Property::Opacity(1.0), Property::Opacity(0.5)),
+        );
+        assert!(
+            doc.revision > before,
+            "fresh-push branch must bump revision"
+        );
+
+        let before = doc.revision;
+        let _ = undo.coalesce_property(
+            &mut doc,
+            PropertyAction::new(id, Property::Opacity(0.5), Property::Opacity(0.3)),
+        );
+        assert!(
+            doc.revision > before,
+            "merge-into-top branch must bump revision"
+        );
     }
 
     #[test]

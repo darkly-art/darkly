@@ -128,7 +128,14 @@ describe('menu action registrations', () => {
         const ids = file!.entries
             .filter(e => e.kind === 'action')
             .map(e => (e as { actionId: string }).actionId);
-        expect(ids).toEqual(['newDocument', 'open', 'saveDocument', 'saveDocumentAs', 'exportImage']);
+        expect(ids).toEqual([
+            'newDocument',
+            'open',
+            'saveDocument',
+            'saveDocumentAs',
+            'exportImage',
+            'exportTimelapse',
+        ]);
     });
 
     it('sorts actions without an order suffix to the end, keeping registration order', () => {

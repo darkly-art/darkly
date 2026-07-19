@@ -23,6 +23,8 @@ const { engine, fakeApp, gizmo, TransformGizmoMock, deferrals } = vi.hoisted(() 
     };
     const fakeApp = {
         engine,
+        session: null as unknown,
+        canvasEl: {} as unknown,
         activeLayerId: 5 as number | null,
         requestFrame: vi.fn(),
         transformModeMenu: null as unknown,
@@ -46,19 +48,29 @@ vi.mock('../transform_bindings', () => ({
 }));
 
 import { transformTool } from '../transform.svelte';
-import {
-    beginToolSession,
-    killToolSession,
-    toolEngine,
-    ToolSessionCancelled,
-} from '../tool_session';
+import { SessionEngine, ToolSessionCancelled } from '../tool_session';
 import { withApi } from '../../engine/testApi';
 
 // Layer a real transport + typed api over the fake engine's send/post spies so a
 // `SessionEngine` can be begun over it.
 withApi(engine);
 
-const ctx = { canvasEl: {} } as never;
+// The tool is created once, bound to the fake instance; it reads its session
+// live off `fakeApp.session` on every hook (as the real `ToolBase.engine` getter
+// reads `inst.session`).
+const tool = transformTool.create(fakeApp as never);
+
+/** Begin a fresh per-instance session (kills any prior), as the transition
+ *  effect does. */
+function beginSession() {
+    (fakeApp.session as SessionEngine | null)?.kill();
+    fakeApp.session = new SessionEngine(engine as never);
+}
+/** Sever the session, leaving none — parked ops reject on resume. */
+function killSession() {
+    (fakeApp.session as SessionEngine | null)?.kill();
+    fakeApp.session = null;
+}
 
 async function flush() {
     for (let i = 0; i < 6; i++) await Promise.resolve();
@@ -74,7 +86,7 @@ beforeEach(() => {
     fakeApp.activeLayerId = 5;
     delete deferrals.cap;
     delete deferrals.hf;
-    killToolSession();
+    killSession();
 });
 
 /**
@@ -89,19 +101,19 @@ beforeEach(() => {
 describe('transform onFrame resumes into a torn-down tool', () => {
     it('rejects with ToolSessionCancelled instead of dereferencing a null gizmo', async () => {
         deferrals.hf = { resolve: () => {} };
-        beginToolSession(engine as never);
-        // onActivate seeds the module gizmo; its own activate() sees cap 'none'
+        beginSession();
+        // onActivate seeds the gizmo; its own activate() sees cap 'none'
         // (eager) and no-ops.
-        transformTool.onActivate?.(ctx);
+        tool.onActivate?.();
         await flush();
 
         gizmo.active = false;
-        const framePromise = transformTool.onFrame!() as unknown as Promise<void>;
+        const framePromise = tool.onFrame!() as unknown as Promise<void>;
         await flush(); // parked on the deferred has_floating
 
         // Tool switch: onDeactivate commits + nulls the gizmo; the session dies.
-        transformTool.onDeactivate?.(ctx);
-        killToolSession();
+        tool.onDeactivate?.();
+        killSession();
 
         deferrals.hf.resolve(false);
 
@@ -121,11 +133,11 @@ describe('transform activate resumes after an active-layer change', () => {
     it('does not begin_transform/attach for the layer captured before the change', async () => {
         deferrals.cap = { resolve: () => {} };
         deferrals.hf = { resolve: () => {} };
-        beginToolSession(engine as never);
+        beginSession();
 
         // activate() (via onActivate) captures layerId = 5, then parks on the
         // capability read.
-        transformTool.onActivate?.(ctx);
+        tool.onActivate?.();
         await flush();
 
         // Capability resolves 'destructive' while the session is still alive, so
@@ -134,10 +146,10 @@ describe('transform activate resumes after an active-layer change', () => {
         await flush();
 
         // ...the active layer changes and the session is rebegun (as the
-        // CanvasView layer-change effect does), killing the old session.
+        // transition effect's layer-change plan does), killing the old session.
         fakeApp.activeLayerId = 6;
-        beginToolSession(engine as never);
-        expect(toolEngine()).not.toBeNull();
+        beginSession();
+        expect(fakeApp.session).not.toBeNull();
 
         // The parked has_floating read now resolves — but on the dead session, so
         // activate unwinds without issuing begin_transform or attaching.

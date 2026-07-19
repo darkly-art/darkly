@@ -1,6 +1,4 @@
-import { app } from '../state/app.svelte';
-import { toolRegistry, type ToolContext } from './registry';
-import { toolEngine } from './tool_session';
+import { app, getActiveInstance } from '../state/app.svelte';
 import { screenToCanvas } from '../canvas/coordinates';
 
 // Shared machinery for modifier-held cursors — chords that temporarily own
@@ -78,36 +76,23 @@ export function onPointerRelease(cb: () => void): () => void {
     return () => releaseListeners.delete(cb);
 }
 
-/** The context handed to `suspendHover` / `restoreHover`, or null when no
- *  tool session / canvas is live. */
-function hoverCtx(): ToolContext | null {
-    const engine = toolEngine();
-    const canvasEl = app.canvasEl;
-    if (!engine || !canvasEl) return null;
-    return {
-        engine,
-        canvasEl,
-        screenToCanvas: (sx, sy) => screenToCanvas(sx, sy, canvasEl),
-    };
-}
-
 function suspendActiveToolHover(): void {
-    const tool = toolRegistry.get(app.activeToolId);
-    const ctx = hoverCtx();
-    if (tool?.suspendHover && ctx) {
-        tool.suspendHover(ctx);
+    const inst = getActiveInstance();
+    const tool = inst?.tool(inst.activeToolId);
+    if (tool?.suspendHover) {
+        tool.suspendHover();
     } else {
         // Tools without the hook still get their transient overlay cleared —
         // `clear_overlay` is generic; we don't know which tool drew it.
-        app.engine?.api.clearOverlay();
+        inst?.engine?.api.clearOverlay();
     }
 }
 
 function restoreActiveToolHover(): void {
-    const tool = toolRegistry.get(app.activeToolId);
-    const ctx = hoverCtx();
-    if (tool?.restoreHover && ctx && lastCanvas) {
-        tool.restoreHover(ctx, lastCanvas.x, lastCanvas.y);
+    const inst = getActiveInstance();
+    const tool = inst?.tool(inst.activeToolId);
+    if (tool?.restoreHover && lastCanvas) {
+        tool.restoreHover(lastCanvas.x, lastCanvas.y);
     }
 }
 

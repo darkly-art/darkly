@@ -105,6 +105,10 @@ settings:
   # Autosave / crash recovery. Darkly-original (no reference-editor analog).
   autosave.enabled: true
   autosave.intervalSeconds: 120
+  # Process recording (timelapse). Passive capture, embedded in the .darkly file.
+  recording.enabled: true
+  recording.minIntervalSeconds: 1.5
+  recording.maxLongEdge: "1920"
   # Animation tick divisors.
   animation.veil_divisor: 2
   animation.overlay_divisor: 4

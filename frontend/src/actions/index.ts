@@ -9,9 +9,10 @@ import { selectionModify } from '../state/selectionModify.svelte';
 import { filterModal } from '../state/filterModal.svelte';
 import type { FilterParam } from '../ui/filters/filterParams';
 import { exportImage } from '../state/exportImage.svelte';
+import { exportTimelapse } from '../state/exportTimelapse.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
 import { toast } from '../state/toast.svelte';
-import { toolRegistry, type Tool } from '../tools/registry';
+import { toolRegistry, type ToolDescriptor } from '../tools/registry';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { brushSession } from '../tools/brush.svelte';
 import { registerBrushParamActions } from './brush_params';
@@ -22,6 +23,7 @@ import { pickOpenFile, type OpenedFile } from '../storage/fileHandle';
 import { detectKind, isImageKind, type FileKind } from '../storage/detectKind';
 import { saveDocument } from '../storage/saveDocument';
 import { fontLibrary } from '../state/font_library.svelte';
+import { processRecording } from '../recording/recorder.svelte';
 import { canSave } from '../storage/fileHandle';
 import { shell } from '../multi_tab/shell.svelte';
 import { about } from '../state/about.svelte';
@@ -61,7 +63,7 @@ function tabNameFromFile(fileName: string): string {
 /** The Iconify icon name for a tool-switch action — the tool's own `icon`,
  *  falling back to a generic glyph for the (now hypothetical) tool that ships
  *  none. Every tool currently declares one. */
-function glyphFromTool(tool: Tool): string {
+function glyphFromTool(tool: ToolDescriptor): string {
     return tool.icon ?? 'fa6-solid:wrench';
 }
 
@@ -109,6 +111,11 @@ export function openDarklyAsTab(picked: OpenedFile): void {
     // initial display before handle bootstrap finishes).
     const inst = shell.open(tabNameFromFile(picked.name));
     inst.fileHandle = picked.handle;
+    // Seed the tab's recording scratch from the file's embedded recording
+    // now, while the async engine bootstrap runs — the scratch lock orders
+    // this ahead of the recorder's segment scan, so this session's capture
+    // appends after the absorbed segments.
+    void processRecording.absorbDarkly(inst, picked.bytes);
     inst.onHandleReady = async (engine) => {
         try {
             await engine.api.openDocument(picked.bytes);
@@ -567,6 +574,18 @@ export function registerActions() {
         handler: () => {
             if (!app.engine) return;
             exportImage.open = true;
+        },
+    });
+    actions.register({
+        id: 'exportTimelapse',
+        displayName: 'Export Timelapse…',
+        category: 'file',
+        description: 'Export the process recording as an MP4 or GIF timelapse.',
+        icon: 'fa6-solid:video',
+        menuPath: ['File:51'],
+        handler: () => {
+            if (!app.engine) return;
+            exportTimelapse.open = true;
         },
     });
     // -- Floating content / transform --

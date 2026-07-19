@@ -10,13 +10,14 @@
  * test exercises the equivalent path on the Rust side.
  */
 
-import { zip } from 'fflate';
+import { zip, type Zippable } from 'fflate';
 import { app, getActiveInstance, type DarklyInstance } from '../state/app.svelte';
 import { toast } from '../state/toast.svelte';
 import { canSave, pickSaveFile, writeToHandle } from './fileHandle';
 import { sanitizeFilename } from './index';
 import { removeSnapshot } from './recovery';
 import { sessionId } from '../state/recoverySession';
+import { processRecording } from '../recording/recorder.svelte';
 
 /** Why a `.darkly` save is being produced — see the Rust `SavePurpose`.
  *  A `'snapshot'` autosave leaves the document dirty; a `'file'` save
@@ -95,7 +96,12 @@ export async function produceDarklyBytes(
     purpose: SavePurpose,
 ): Promise<Uint8Array> {
     const bundle = await runSaveBundle(instance, purpose === 'snapshot');
-    return assembleZip(bundle);
+    // The process recording is embedded in real file saves only. Autosave
+    // snapshots skip it: the OPFS scratch is already crash-safe on its own,
+    // so re-embedding it per snapshot would be pure write amplification.
+    const recording =
+        purpose === 'file' ? await processRecording.collectZipEntries(instance) : [];
+    return assembleZip(bundle, recording);
 }
 
 /** Resolve the file handle for the active save. Re-uses the cached
@@ -139,8 +145,12 @@ function runSaveBundle(instance: DarklyInstance, snapshot: boolean): Promise<Sav
     });
 }
 
-/** Build the .darkly zip bytes from a SaveBundle. */
-async function assembleZip(bundle: SaveBundle): Promise<Uint8Array> {
+/** Build the .darkly zip bytes from a SaveBundle, plus any embedded
+ *  process-recording entries (already-compressed video — stored raw). */
+async function assembleZip(
+    bundle: SaveBundle,
+    recording: Array<{ path: string; bytes: Uint8Array }> = [],
+): Promise<Uint8Array> {
     const composite = await encodeRgbaPng(
         bundle.compositeRgba,
         bundle.compositeWidth,
@@ -152,13 +162,19 @@ async function assembleZip(bundle: SaveBundle): Promise<Uint8Array> {
         bundle.compositeHeight,
     );
 
-    const entries: Record<string, Uint8Array> = {
+    const entries: Zippable = {
         [MANIFEST_PATH]: bundle.manifestJson,
         [COMPOSITE_PATH]: composite,
         [THUMBNAIL_PATH]: thumbnail,
     };
     for (const blob of bundle.blobs) {
         entries[blob.path] = blob.bytes;
+    }
+    for (const entry of recording) {
+        // Encoded video doesn't deflate — don't burn CPU trying.
+        entries[entry.path] = entry.path.endsWith('.bin')
+            ? [entry.bytes, { level: 0 }]
+            : entry.bytes;
     }
 
     return await new Promise((resolve, reject) => {

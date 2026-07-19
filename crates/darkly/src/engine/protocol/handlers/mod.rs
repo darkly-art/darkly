@@ -13,6 +13,7 @@ pub mod image_io;
 pub mod layers;
 pub mod overlay;
 pub mod preview;
+pub mod recording;
 pub mod selection;
 pub mod text;
 pub mod view;
@@ -33,6 +34,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
     all.extend(layers::registrations());
     all.extend(overlay::registrations());
     all.extend(preview::registrations());
+    all.extend(recording::registrations());
     all.extend(selection::registrations());
     all.extend(text::registrations());
     all.extend(view::registrations());

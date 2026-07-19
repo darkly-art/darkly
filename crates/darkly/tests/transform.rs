@@ -1074,7 +1074,12 @@ fn cancel_floating_after_layer_grow() {
             depth_or_array_layers: 1,
         },
     );
-    store.grow_scratch_preserving(&device, &mut enc, new_w, new_h, 256, 256);
+    store.grow_scratch_preserving(
+        &device,
+        &mut enc,
+        CanvasRect::from_xywh(0, 0, init_w, init_h),
+        CanvasRect::from_xywh(-256, -256, new_w, new_h),
+    );
     submit(&queue, enc);
 
     // After grow, the engine widens snap.saved to the full new canvas

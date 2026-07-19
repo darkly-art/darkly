@@ -162,9 +162,9 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: number, };
 
-export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "levels", name: string, default: [number, number, number, number, number], } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, } | { "kind": "color", name: string, default: [number, number, number], } | { "kind": "vec2", name: string, max: number, default: [number, number], } | { "kind": "list", name: string, item: Array<ParamDef>, max_len: number, default: Array<Array<[string, ConstParamValue]>>, };
+export type PortDir = "Input" | "Output";
 
-export type ConstParamValue = boolean | number | number | string | [number, number, number] | [number, number];
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -299,9 +299,9 @@ natural_range: [number, number] | null,
  */
 persist_in_thumbnail: boolean, };
 
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
+export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "levels", name: string, default: [number, number, number, number, number], } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, } | { "kind": "color", name: string, default: [number, number, number], } | { "kind": "vec2", name: string, max: number, default: [number, number], } | { "kind": "list", name: string, item: Array<ParamDef>, max_len: number, default: Array<Array<[string, ConstParamValue]>>, };
 
-export type PortDir = "Input" | "Output";
+export type ConstParamValue = boolean | number | number | string | [number, number, number] | [number, number];
 
 export type NodeRegistration = { 
 /**
@@ -399,14 +399,14 @@ export type FillBackgroundReq = { id: number, };
 
 export type FillBackgroundColorReq = { id: number, rgba: [number, number, number, number], };
 
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
 export type ParamInfo = { kind: string, name: string, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
 /**
  * Enum: `["Label1", "Label2", ...]`.
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
 options: JsonValue | null, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
 export type VeilTypeInfo = { type: string, displayName: string, 
 /**
@@ -449,6 +449,13 @@ export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 export type LayerKindTypeInfo = { type: string, displayName: string, };
 
 export type LayerTransformCapabilityReq = { id: number, };
+
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
 
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
@@ -501,13 +508,6 @@ pipeline: string,
  * uses.
  */
 params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
-
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
-/**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -610,6 +610,8 @@ export type SetOverlayMaskReq = { width: number, height: number, rgba: Array<num
 export type SetPixelFilterReq = { mode: string, };
 
 export type SetPreviewThemeReq = { fg: [number, number, number, number], bg: [number, number, number, number], };
+
+export type SetRecordingParamsReq = { enabled: boolean, minIntervalSecs: number, width: number, height: number, baseWidth: number, baseHeight: number, };
 
 export type SetTextBoxReq = { id: number, object: number, 
 /**
@@ -808,6 +810,7 @@ export type RequestKind =
     | 'poll_copy_rich_result'
     | 'poll_export_result'
     | 'poll_preview'
+    | 'poll_recording_frame'
     | 'poll_save_result'
     | 'preview_filter'
     | 'redo'
@@ -819,6 +822,7 @@ export type RequestKind =
     | 'remove_veil'
     | 'request_histogram'
     | 'request_node_histogram'
+    | 'request_recording_capture'
     | 'rescale_image'
     | 'resize'
     | 'resize_canvas_rect'
@@ -846,6 +850,7 @@ export type RequestKind =
     | 'set_overlay_mask'
     | 'set_pixel_filter'
     | 'set_preview_theme'
+    | 'set_recording_params'
     | 'set_text_box'
     | 'set_text_content'
     | 'set_text_style'
@@ -996,6 +1001,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'poll_copy_rich_result',
     'poll_export_result',
     'poll_preview',
+    'poll_recording_frame',
     'poll_save_result',
     'preview_filter',
     'redo',
@@ -1007,6 +1013,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'remove_veil',
     'request_histogram',
     'request_node_histogram',
+    'request_recording_capture',
     'rescale_image',
     'resize',
     'resize_canvas_rect',
@@ -1034,6 +1041,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_overlay_mask',
     'set_pixel_filter',
     'set_preview_theme',
+    'set_recording_params',
     'set_text_box',
     'set_text_content',
     'set_text_style',
@@ -1192,6 +1200,7 @@ export interface EngineApi {
     pollCopyRichResult(): Promise<string | null>;
     pollExportResult(): Promise<{ width: number, height: number, bytes: Uint8Array } | null>;
     pollPreview(req: PreviewReq): Promise<{ width: number, height: number, fps: number, frameCount: number, bytes: Uint8Array } | null>;
+    pollRecordingFrame(): Promise<{ canvasWidth: number, canvasHeight: number, frame: { width: number, height: number, frameIndex: number } | null, bytes?: Uint8Array }>;
     pollSaveResult(): Promise<{ manifestLen: number, compositeWidth: number, compositeHeight: number, compositeLen: number, blobs: { path: string, len: number }[], bytes: Uint8Array } | null>;
     previewFilter(req: PreviewFilterReq): Promise<boolean>;
     redo(): void;
@@ -1203,6 +1212,7 @@ export interface EngineApi {
     removeVeil(req: RemoveVeilReq): void;
     requestHistogram(req: HistogramReq): void;
     requestNodeHistogram(req: HistogramReq): void;
+    requestRecordingCapture(): void;
     rescaleImage(req: RescaleImageReq): void;
     resize(req: ResizeReq): void;
     resizeCanvasRect(req: ResizeCanvasRectReq): void;
@@ -1230,6 +1240,7 @@ export interface EngineApi {
     setOverlayMask(req: SetOverlayMaskReq): void;
     setPixelFilter(req: SetPixelFilterReq): void;
     setPreviewTheme(req: SetPreviewThemeReq): void;
+    setRecordingParams(req: SetRecordingParamsReq): void;
     setTextBox(req: SetTextBoxReq): void;
     setTextContent(req: SetTextContentReq): void;
     setTextStyle(req: SetTextStyleReq): void;
@@ -1382,6 +1393,7 @@ export function makeApi(t: Transport): EngineApi {
         pollCopyRichResult: () => t.request('poll_copy_rich_result'),
         pollExportResult: () => t.request('poll_export_result'),
         pollPreview: (req) => t.request('poll_preview', req),
+        pollRecordingFrame: () => t.request('poll_recording_frame'),
         pollSaveResult: () => t.request('poll_save_result'),
         previewFilter: (req) => t.request('preview_filter', req),
         redo: () => t.postFF('redo'),
@@ -1393,6 +1405,7 @@ export function makeApi(t: Transport): EngineApi {
         removeVeil: (req) => t.postFF('remove_veil', req),
         requestHistogram: (req) => t.postFF('request_histogram', req),
         requestNodeHistogram: (req) => t.postFF('request_node_histogram', req),
+        requestRecordingCapture: () => t.postFF('request_recording_capture'),
         rescaleImage: (req) => t.postFF('rescale_image', req),
         resize: (req) => t.postFF('resize', req),
         resizeCanvasRect: (req) => t.postFF('resize_canvas_rect', req),
@@ -1420,6 +1433,7 @@ export function makeApi(t: Transport): EngineApi {
         setOverlayMask: (req) => t.postFF('set_overlay_mask', req),
         setPixelFilter: (req) => t.postFF('set_pixel_filter', req),
         setPreviewTheme: (req) => t.postFF('set_preview_theme', req),
+        setRecordingParams: (req) => t.postFF('set_recording_params', req),
         setTextBox: (req) => t.postFF('set_text_box', req),
         setTextContent: (req) => t.postFF('set_text_content', req),
         setTextStyle: (req) => t.postFF('set_text_style', req),

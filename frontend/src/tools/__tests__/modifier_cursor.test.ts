@@ -23,6 +23,8 @@ const { fakeApp, paintTool, sessionEngine } = vi.hoisted(() => {
     const fakeApp = {
         activeToolId: 'brush',
         engine: sessionEngine,
+        // The focused instance's tool is looked up via `inst.tool(id)`.
+        tool: (_id: string) => paintTool,
         canvasEl: {
             getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100 }),
         } as unknown as HTMLCanvasElement | null,
@@ -31,9 +33,7 @@ const { fakeApp, paintTool, sessionEngine } = vi.hoisted(() => {
     };
     return { fakeApp, paintTool, sessionEngine };
 });
-vi.mock('../../state/app.svelte', () => ({ app: fakeApp }));
-vi.mock('../registry', () => ({ toolRegistry: { get: () => paintTool } }));
-vi.mock('../tool_session', () => ({ toolEngine: () => sessionEngine }));
+vi.mock('../../state/app.svelte', () => ({ app: fakeApp, getActiveInstance: () => fakeApp }));
 vi.mock('../../canvas/coordinates', () => ({
     screenToCanvas: (sx: number, sy: number) => ({ x: sx, y: sy }),
 }));
@@ -79,7 +79,7 @@ describe('engagement and the cursor slot', () => {
         expect(fakeApp.toolCursor).toBe(null);
         expect(mc.isToolHoverSuppressed()).toBe(false);
         expect(paintTool.restoreHover).toHaveBeenCalledTimes(1);
-        const [, cx, cy] = paintTool.restoreHover!.mock.calls[0];
+        const [cx, cy] = paintTool.restoreHover!.mock.calls[0];
         expect(cx).toBe(30);
         expect(cy).toBe(40);
     });

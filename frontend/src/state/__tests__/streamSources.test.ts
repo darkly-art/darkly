@@ -13,7 +13,11 @@ const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 function setup() {
     const inst = new DarklyInstance();
     // Enough engine for `startStreamSource`; uploads never happen (no ticks).
-    inst.engine = { uploadVoidExternalImage: () => {} } as any;
+    // `api.requestRecordingCapture` is invoked by the disconnect milestone.
+    inst.engine = {
+        uploadVoidExternalImage: () => {},
+        api: { requestRecordingCapture: vi.fn() },
+    } as any;
     // rAF + engine touch — neither exists in the node test env.
     inst.requestFrame = vi.fn();
     inst.refreshLayerTree = vi.fn(async () => {}) as any;
@@ -56,6 +60,9 @@ describe('stream source disconnect persistence', () => {
         // The opt-in resets so the Connect button reappears.
         expect(inst.streamSessionStarted.has(5)).toBe(false);
         expect(inst.requestFrame).toHaveBeenCalled();
+        // Timelapse "final" milestone: the last held frame is captured before
+        // the render loop settles.
+        expect(inst.engine!.api.requestRecordingCapture).toHaveBeenCalled();
     });
 
     it('stopStreamSource still prunes (delete / undo / orphan path)', async () => {

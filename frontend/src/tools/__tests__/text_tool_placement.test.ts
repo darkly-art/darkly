@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { fakeApp } = vi.hoisted(() => ({
     fakeApp: {
         engine: null as unknown,
+        canvasEl: {} as unknown,
         selectLayer: vi.fn(),
         requestFrame: vi.fn(),
         activeLayerId: 5 as number | null,
@@ -17,33 +18,43 @@ const { fakeApp } = vi.hoisted(() => ({
 vi.mock('../../state/app.svelte', () => ({ app: fakeApp }));
 vi.mock('../../config/store.svelte', () => ({ config: { get: () => undefined } }));
 
-import { textTool, textSession } from '../text.svelte';
+import { textTool, type TextPlacement } from '../text.svelte';
 
-const ctx = {} as never;
+// The per-document edit state lives on the tool instance now; widen the created
+// tool so the placement field is visible.
+type TextToolLike = {
+    onPointerDown(e: PointerEvent, cx: number, cy: number): Promise<void>;
+    onPointerMove(e: PointerEvent, cx: number, cy: number): void;
+    onPointerUp(): void;
+    placement: TextPlacement | null;
+    editing: unknown;
+};
+const tool = textTool.create(fakeApp as never) as unknown as TextToolLike;
+
 const ev = (button = 0) => ({ button }) as unknown as PointerEvent;
 
 beforeEach(() => {
     fakeApp.selectLayer.mockClear();
     fakeApp.engine = null;
     fakeApp.activeLayerId = 5;
-    textSession.placement = null;
-    textSession.editing = null;
+    tool.placement = null;
+    tool.editing = null;
 });
 
 describe('text tool placement (first-click regression)', () => {
     it('a click on empty canvas sets a point placement and does not deselect', async () => {
-        await textTool.onPointerDown(ctx, ev(), 100, 60);
+        await tool.onPointerDown(ev(), 100, 60);
         // No movement between down and up → a click, i.e. point text.
-        textTool.onPointerUp(ctx, ev());
-        expect(textSession.placement).toEqual({ x: 100, y: 60, anchorLayerId: 5, box: null });
+        tool.onPointerUp();
+        expect(tool.placement).toEqual({ x: 100, y: 60, anchorLayerId: 5, box: null });
         expect(fakeApp.selectLayer).not.toHaveBeenCalled();
     });
 
     it('a drag commits an area-text box placement', async () => {
-        await textTool.onPointerDown(ctx, ev(), 20, 20);
-        textTool.onPointerMove(ctx, ev(), 220, 140);
-        textTool.onPointerUp(ctx, ev());
-        expect(textSession.placement).toEqual({
+        await tool.onPointerDown(ev(), 20, 20);
+        tool.onPointerMove(ev(), 220, 140);
+        tool.onPointerUp();
+        expect(tool.placement).toEqual({
             x: 20,
             y: 20,
             anchorLayerId: 5,

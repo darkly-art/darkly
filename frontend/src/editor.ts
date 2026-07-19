@@ -11,11 +11,13 @@ import { createHandle } from './state/session';
 import { fontLibrary } from './state/font_library.svelte';
 import type { Engine } from './engine/protocol';
 import { setupModifierCursorTracking } from './tools/modifier_cursor';
+import { setupToolSessionRejectionGuard } from './tools/tool_session';
 import { setupColorPickerModifierTracking } from './tools/colorpicker_cursor';
 import { setupCloneSourceModifierTracking } from './tools/clone_source_cursor';
 import { setupHeldModsTracking } from './actions/held_mods';
 import { autosave } from './state/autosave.svelte';
 import { recovery } from './state/recovery.svelte';
+import { processRecording } from './recording/recorder.svelte';
 
 let processInitialized = false;
 
@@ -50,6 +52,11 @@ export async function ensureProcessInit(): Promise<void> {
     // modules below consume. Idempotent.
     setupModifierCursorTracking();
 
+    // Window-level backstop that swallows an unhandled ToolSessionCancelled —
+    // the safety net for any bare `void tool.asyncHook()` spawn that skipped
+    // `runHook`. Idempotent.
+    setupToolSessionRejectionGuard();
+
     // Wire the color-picker cursor so it engages as soon as the held
     // modifier resolves to `sampleColor` with a paint tool active (not just
     // on pointerdown). Idempotent.
@@ -66,6 +73,11 @@ export async function ensureProcessInit(): Promise<void> {
     // arms the snapshot interval + tab-switch hook.
     autosave.start();
     void recovery.init();
+
+    // Process recording (timelapse). Watches the shell for tab lifecycle
+    // and config for the enabled/interval/resolution settings; each tab's
+    // render loop drains captured frames via `processRecording.pollFrame`.
+    processRecording.start();
 
     processInitialized = true;
 }
