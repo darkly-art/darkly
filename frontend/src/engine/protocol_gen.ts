@@ -162,9 +162,9 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: number, };
 
-export type PortDir = "Input" | "Output";
+export type ConstParamValue = boolean | number | number | string | [number, number, number] | [number, number];
 
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
+export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "levels", name: string, default: [number, number, number, number, number], } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, } | { "kind": "color", name: string, default: [number, number, number], } | { "kind": "vec2", name: string, max: number, default: [number, number], } | { "kind": "list", name: string, item: Array<ParamDef>, max_len: number, default: Array<Array<[string, ConstParamValue]>>, };
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -299,9 +299,9 @@ natural_range: [number, number] | null,
  */
 persist_in_thumbnail: boolean, };
 
-export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "levels", name: string, default: [number, number, number, number, number], } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, } | { "kind": "color", name: string, default: [number, number, number], } | { "kind": "vec2", name: string, max: number, default: [number, number], } | { "kind": "list", name: string, item: Array<ParamDef>, max_len: number, default: Array<Array<[string, ConstParamValue]>>, };
+export type PortDir = "Input" | "Output";
 
-export type ConstParamValue = boolean | number | number | string | [number, number, number] | [number, number];
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
 
 export type NodeRegistration = { 
 /**
@@ -399,14 +399,14 @@ export type FillBackgroundReq = { id: number, };
 
 export type FillBackgroundColorReq = { id: number, rgba: [number, number, number, number], };
 
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
 export type ParamInfo = { kind: string, name: string, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
 /**
  * Enum: `["Label1", "Label2", ...]`.
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
 options: JsonValue | null, };
-
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
 export type VeilTypeInfo = { type: string, displayName: string, 
 /**
@@ -451,6 +451,10 @@ export type LayerKindTypeInfo = { type: string, displayName: string, };
 export type LayerTransformCapabilityReq = { id: number, };
 
 export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * Whether this modifier participates in transforms with its host.
+ */
+linkedToHost: boolean,
 /**
  * See [`LayerInfo::Raster::editable`] — a modifier is editable when
  * neither it nor its host (nor any ancestor of the host) is locked.
@@ -600,6 +604,8 @@ export type SetIsolatedNodeReq = { id: number | null, };
 export type SetLayerNameReq = { id: number, name: string, };
 
 export type SetLayerVisibleReq = { id: number, visible: boolean, };
+
+export type SetMaskLinkedToHostReq = { id: number, linked: boolean, };
 
 export type SetNodeLockedReq = { id: number, locked: boolean, };
 
@@ -844,6 +850,7 @@ export type RequestKind =
     | 'set_isolated_node'
     | 'set_layer_name'
     | 'set_layer_visible'
+    | 'set_mask_linked_to_host'
     | 'set_node_locked'
     | 'set_opacity'
     | 'set_overlay'
@@ -1035,6 +1042,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_isolated_node',
     'set_layer_name',
     'set_layer_visible',
+    'set_mask_linked_to_host',
     'set_node_locked',
     'set_opacity',
     'set_overlay',
@@ -1234,6 +1242,7 @@ export interface EngineApi {
     setIsolatedNode(req: SetIsolatedNodeReq): void;
     setLayerName(req: SetLayerNameReq): void;
     setLayerVisible(req: SetLayerVisibleReq): void;
+    setMaskLinkedToHost(req: SetMaskLinkedToHostReq): void;
     setNodeLocked(req: SetNodeLockedReq): void;
     setOpacity(req: SetOpacityReq): void;
     setOverlay(req: SetOverlayReq): void;
@@ -1427,6 +1436,7 @@ export function makeApi(t: Transport): EngineApi {
         setIsolatedNode: (req) => t.postFF('set_isolated_node', req),
         setLayerName: (req) => t.postFF('set_layer_name', req),
         setLayerVisible: (req) => t.postFF('set_layer_visible', req),
+        setMaskLinkedToHost: (req) => t.postFF('set_mask_linked_to_host', req),
         setNodeLocked: (req) => t.postFF('set_node_locked', req),
         setOpacity: (req) => t.postFF('set_opacity', req),
         setOverlay: (req) => t.postFF('set_overlay', req),

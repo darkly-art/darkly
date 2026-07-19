@@ -4136,6 +4136,166 @@ fn isolating_mask_modifier_renders_grayscale() {
 /// position and clears the source rect. Catches regressions in either
 /// the commit shader (output value) or the engine's clear/save sequence
 /// (which used to require a destructive setup-clear + un-clear dance).
+fn fill_mask_value(engine: &mut DarklyEngine, mask: darkly::layer::LayerId, value: u8) {
+    engine.begin_stroke(mask);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r: value,
+        g: value,
+        b: value,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    engine.test_flush_readbacks();
+}
+
+#[test]
+fn linked_transform_membership_is_symmetric_and_fixed_across_modes() {
+    let mut engine = test_engine(32, 32);
+    let host = engine.add_raster_layer(None);
+    engine.add_mask(host);
+    let mask = engine.host_mask_id(host).unwrap();
+
+    engine.select_all();
+    assert!(engine.begin_transform(host));
+    assert_eq!(engine.test_transform_target_ids(), vec![host, mask]);
+    let first_revision = engine.test_transform_preview_revision().unwrap();
+    engine.update_floating_matrix(darkly::transform::Transform::Perspective([
+        1.0, 0.0, 2.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0,
+    ]));
+    assert_eq!(engine.test_transform_target_ids(), vec![host, mask]);
+    assert!(engine.test_transform_preview_revision().unwrap() > first_revision);
+    engine.cancel_floating();
+
+    assert!(engine.begin_transform(mask));
+    assert_eq!(engine.test_transform_target_ids(), vec![mask, host]);
+    engine.cancel_floating();
+
+    engine.set_mask_linked_to_host(mask, false);
+    assert!(engine.begin_transform(host));
+    assert_eq!(engine.test_transform_target_ids(), vec![host]);
+    engine.cancel_floating();
+    assert!(engine.begin_transform(mask));
+    assert_eq!(engine.test_transform_target_ids(), vec![mask]);
+    engine.cancel_floating();
+}
+
+#[test]
+fn linked_transform_commit_and_undo_are_atomic_for_both_targets() {
+    use darkly::gpu::transform::affine_translate;
+
+    let mut engine = test_engine(32, 32);
+    let host = engine.add_raster_layer(None);
+    fill_layer(&mut engine, host, 220, 30, 10);
+    engine.add_mask(host);
+    let mask = engine.host_mask_id(host).unwrap();
+    fill_mask_value(&mut engine, mask, 96);
+    let host_before = engine.test_readback_layer(host);
+    let mask_before = engine.test_readback_mask(host);
+    let host_bounds = engine.layer_bounds(host).unwrap();
+    let mask_bounds = engine.node_pixel_bounds(mask).unwrap();
+
+    engine.select_rect(4.0, 4.0, 12.0, 12.0, SelectionMode::Replace, false, 0.0);
+    assert!(engine.begin_transform(mask));
+    assert_eq!(engine.test_transform_target_ids(), vec![mask, host]);
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        20.0, 3.0,
+    )));
+    engine.commit_floating();
+    assert_ne!(engine.test_readback_layer(host), host_before);
+    assert_ne!(engine.test_readback_mask(host), mask_before);
+    assert!(!engine.has_selection());
+
+    engine.undo();
+    engine.test_flush_readbacks();
+    assert_eq!(engine.test_readback_layer(host), host_before);
+    assert_eq!(engine.test_readback_mask(host), mask_before);
+    assert_eq!(engine.layer_bounds(host), Some(host_bounds));
+    assert_eq!(engine.node_pixel_bounds(mask), Some(mask_bounds));
+    assert!(engine.has_selection());
+
+    engine.redo();
+    engine.test_flush_readbacks();
+    assert_ne!(engine.test_readback_layer(host), host_before);
+    assert_ne!(engine.test_readback_mask(host), mask_before);
+    assert!(!engine.has_selection());
+}
+
+#[test]
+fn linked_transform_second_target_failure_publishes_nothing() {
+    use darkly::gpu::transform::affine_translate;
+
+    let mut engine = test_engine(32, 32);
+    let host = engine.add_raster_layer(None);
+    fill_layer(&mut engine, host, 200, 20, 20);
+    engine.add_mask(host);
+    let mask = engine.host_mask_id(host).unwrap();
+    fill_mask_value(&mut engine, mask, 80);
+    let host_before = engine.test_readback_layer(host);
+    let mask_before = engine.test_readback_mask(host);
+    let host_bounds = engine.layer_bounds(host);
+    let mask_bounds = engine.node_pixel_bounds(mask);
+
+    engine.select_all();
+    assert!(engine.begin_transform(host));
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        40.0, 0.0,
+    )));
+    engine.test_fail_transform_commit_at_target(Some(1));
+    engine.commit_floating();
+
+    assert!(
+        engine.has_floating(),
+        "failed publication retains visible work"
+    );
+    assert_eq!(engine.test_readback_layer(host), host_before);
+    assert_eq!(engine.test_readback_mask(host), mask_before);
+    assert_eq!(engine.layer_bounds(host), host_bounds);
+    assert_eq!(engine.node_pixel_bounds(mask), mask_bounds);
+    assert!(engine.has_selection());
+    engine.test_fail_transform_commit_at_target(None);
+    engine.cancel_floating();
+}
+
+#[test]
+fn defect_regression_transform_growth_undo_restores_exact_extent() {
+    use darkly::gpu::transform::affine_translate;
+
+    let mut engine = test_engine(32, 32);
+    let layer = engine.add_raster_layer(None);
+    fill_layer(&mut engine, layer, 255, 0, 0);
+    engine.select_rect(4.0, 4.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
+    let before = engine.layer_bounds(layer).unwrap();
+
+    assert!(engine.begin_transform(layer));
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        80.0, 0.0,
+    )));
+    engine.commit_floating();
+    assert_ne!(engine.layer_bounds(layer), Some(before));
+    assert!(!engine.has_selection(), "commit consumes the selection");
+
+    engine.undo();
+    engine.test_flush_readbacks();
+    assert_eq!(engine.layer_bounds(layer), Some(before));
+    assert!(
+        engine.has_selection(),
+        "the same undo step restores selection disposition"
+    );
+}
+
+#[test]
+fn defect_regression_public_transform_capability_accepts_mask() {
+    let mut engine = test_engine(32, 32);
+    let host = engine.add_raster_layer(None);
+    engine.add_mask(host);
+    let mask = engine.host_mask_id(host).expect("host has mask");
+
+    assert_eq!(engine.layer_transform_capability(mask), "destructive");
+}
+
 #[test]
 fn transform_translate_on_mask_moves_pixels() {
     use darkly::gpu::transform::affine_translate;
@@ -4199,14 +4359,15 @@ fn transform_translate_on_mask_moves_pixels() {
             );
         }
     }
-    // Source rect cleared to 0 by the commit-time ClearShape application.
+    // Vacated reveal-mask pixels return to white (full reveal), matching the
+    // mask's type-owned uncovered-value semantics.
     for dy in 0..sel_h {
         for dx in 0..sel_w {
             let v = post[((sel_y + dy) * cw + sel_x + dx) as usize];
             assert_eq!(
                 v,
-                0,
-                "source pixel at ({}, {}) should be cleared after commit, got {v}",
+                255,
+                "source pixel at ({}, {}) should be full reveal after commit, got {v}",
                 sel_x + dx,
                 sel_y + dy,
             );
@@ -4302,7 +4463,9 @@ fn mask_visible_during_transform_drag() {
         "right half should be transparent (mask=0)"
     );
 
-    // Begin transform on the mask, translate by +cw/2 (mask shifts right).
+    // This regression isolates mask preview semantics; unlink so the host remains
+    // stationary while only the mask shifts.
+    engine.set_mask_linked_to_host(mask_id, false);
     engine.select_all();
     let started = engine.begin_transform(mask_id);
     assert!(started, "begin_transform on mask must succeed");
@@ -4313,15 +4476,14 @@ fn mask_visible_during_transform_drag() {
     engine.render(0.0);
 
     let dragging = engine.test_readback_canvas();
-    // After the translate, the *preview* mask covers the right half. So:
-    //   - left half should now be transparent (mask=0 there post-shift),
-    //   - right half should now be opaque red (mask=255 there post-shift).
+    // The transformed mask covers the right half while its vacated source uses
+    // the reveal mask's white uncovered value, so both halves reveal the host.
     // The broken state showed the left half still red because the live
     // mask was destructively cleared and the preview never ran.
     assert_eq!(
         rgba_at(&dragging, cw, 4, ch / 2)[3],
-        0,
-        "during drag, original mask position should be uncovered by the preview mask"
+        255,
+        "during drag, vacated reveal-mask pixels should remain full reveal"
     );
     assert!(
         rgba_at(&dragging, cw, cw - 4, ch / 2)[0] > 200,
@@ -4433,11 +4595,11 @@ fn transform_mask_under_isolation_previews_grayscale() {
         (moved[0] as i32 - moved[1] as i32).abs() < 4,
         "isolated-mask preview must be RGB-equal grayscale; got {moved:?}"
     );
-    // Original square position is now black (mask shifted away from it).
+    // Vacated source pixels use the reveal mask's white uncovered value.
     let original = rgba_at(&canvas, cw, 8, 8);
     assert!(
-        original[0] < 32 && original[1] < 32 && original[2] < 32,
-        "original mask position should be black after the preview shift; \
+        original[0] > 224 && original[1] > 224 && original[2] > 224,
+        "original mask position should be white after the preview shift; \
          got {original:?}"
     );
 
@@ -5357,4 +5519,49 @@ fn multi_duplicate_returns_new_ids_one_undo() {
             "one undo must remove every duplicate"
         );
     }
+}
+
+fn projected_mask_link(engine: &DarklyEngine, host: LayerId) -> bool {
+    use darkly::engine::types::LayerInfo;
+
+    engine
+        .layer_tree()
+        .into_iter()
+        .find_map(|node| match node {
+            LayerInfo::Raster { id, modifiers, .. } if id == host.to_ffi() as f64 => modifiers
+                .into_iter()
+                .find(|modifier| modifier.kind == "mask")
+                .map(|modifier| modifier.linked_to_host),
+            _ => None,
+        })
+        .expect("host mask must be projected")
+}
+
+#[test]
+fn mask_link_state_is_projected_and_undoable_on_the_mask_entity() {
+    let mut engine = test_engine(32, 32);
+    let host = engine.add_raster_layer(None);
+    engine.add_mask(host);
+    let mask = engine.test_mask_id(host).expect("mask present");
+
+    assert!(projected_mask_link(&engine, host));
+    engine.set_mask_linked_to_host(mask, false);
+    assert!(!projected_mask_link(&engine, host));
+
+    engine.undo();
+    assert!(projected_mask_link(&engine, host));
+    engine.redo();
+    assert!(!projected_mask_link(&engine, host));
+}
+
+#[test]
+fn duplicate_preserves_mask_link_state() {
+    let mut engine = test_engine(32, 32);
+    let host = engine.add_raster_layer(None);
+    engine.add_mask(host);
+    let mask = engine.test_mask_id(host).expect("mask present");
+    engine.set_mask_linked_to_host(mask, false);
+
+    let duplicate = engine.duplicate_node(host).expect("duplicate succeeded");
+    assert!(!projected_mask_link(&engine, duplicate));
 }

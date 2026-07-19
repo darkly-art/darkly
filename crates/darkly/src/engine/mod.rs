@@ -75,6 +75,8 @@ use std::collections::HashMap;
 /// derived from the node's [`PixelBuffer`].
 pub(crate) struct PendingTransform {
     pub node_id: LayerId,
+    pub setup_generation: u64,
+    pub relationship: crate::document::TransformRelationshipSnapshot,
 }
 
 /// Deferred layer/selection flip — waiting for the selection CPU cache (the
@@ -413,8 +415,10 @@ pub struct DarklyEngine {
     pub(crate) overlays: [Vec<OverlayPrimitive>; OverlayChannel::COUNT],
     /// Internal clipboard — holds typed content for copy/paste within Darkly.
     pub(crate) clipboard: Option<Clipboard>,
-    /// Active floating content (paste-in-place or interactive transform).
+    /// Active paste compatibility session.
     pub(crate) floating: Option<FloatingContent>,
+    /// Active destructive pixel-transform operation, independent from paste.
+    pub(crate) transform_session: Option<floating::TransformSession>,
 
     // --- GPU Paint Infrastructure ---
     pub(crate) region_scratch: RegionScratch,
@@ -565,6 +569,10 @@ pub struct DarklyEngine {
     // --- Deferred operations ---
     /// Pending transform waiting for content bounds computation.
     pub(crate) pending_transform: Option<PendingTransform>,
+    /// Monotonic cancellation token for asynchronous transform setup.
+    pub(crate) transform_setup_generation: u64,
+    #[cfg(feature = "testing")]
+    pub(crate) transform_commit_fail_target: Option<usize>,
     /// Pending layer/selection flip waiting for the selection CPU cache.
     pub(crate) pending_flip: Option<PendingFlip>,
     /// Pending destructive filter waiting for the selection CPU cache.
@@ -692,6 +700,7 @@ impl DarklyEngine {
             overlays: Default::default(),
             clipboard: None,
             floating: None,
+            transform_session: None,
             region_scratch,
             paint_pipelines,
             scratch_snapshot: None,
@@ -731,6 +740,9 @@ impl DarklyEngine {
             pending_undo_commit: None,
             selection_pipelines,
             pending_transform: None,
+            transform_setup_generation: 0,
+            #[cfg(feature = "testing")]
+            transform_commit_fail_target: None,
             pending_flip: None,
             pending_filter: None,
             filter_preview: None,

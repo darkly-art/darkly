@@ -15,12 +15,14 @@ use crate::layer::{LayerId, NodeCommon, PixelBuffer};
 
 pub struct MaskFilter {
     pub pixels: PixelBuffer,
+    pub linked_to_host: bool,
 }
 
 impl MaskFilter {
     pub fn new(bounds: CanvasRect) -> Self {
         MaskFilter {
             pixels: PixelBuffer::new(bounds, wgpu::TextureFormat::R8Unorm),
+            linked_to_host: true,
         }
     }
 }
@@ -35,6 +37,7 @@ struct MaskBody {
     name: String,
     visible: bool,
     locked: bool,
+    linked_to_host: bool,
     pixels: ManifestPixelRef,
 }
 
@@ -63,6 +66,7 @@ fn serialize(filter: &Filter) -> SerializedEntity {
         name: filter.common.name.clone(),
         visible: filter.common.visible,
         locked: filter.common.locked,
+        linked_to_host: mask.linked_to_host,
         pixels: pixels.clone(),
     };
     SerializedEntity {
@@ -87,7 +91,10 @@ fn deserialize(body: &serde_json::Value, id: LayerId) -> Result<Filter, LoadErro
             visible: body.visible,
             locked: body.locked,
         },
-        kind: FilterKind::mask_with_bounds(body.pixels.bounds),
+        kind: FilterKind::Mask(MaskFilter {
+            pixels: PixelBuffer::new(body.pixels.bounds, wgpu::TextureFormat::R8Unorm),
+            linked_to_host: body.linked_to_host,
+        }),
     })
 }
 
@@ -95,4 +102,41 @@ fn remap_ids(_modifier: &mut Filter, _id_map: &IdMap) {
     // Mask filters carry no cross-references — the host pointer is the
     // document's `parent` map, populated separately by the loader from
     // the host's `filters: Vec<u64>` list.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::coord::CanvasPoint;
+
+    fn filter(linked_to_host: bool) -> Filter {
+        let mut mask = MaskFilter::new(CanvasRect::new(CanvasPoint::new(3, -2), 8, 6));
+        mask.linked_to_host = linked_to_host;
+        Filter {
+            id: LayerId::from_ffi(7),
+            common: NodeCommon {
+                name: "Mask".into(),
+                visible: true,
+                locked: false,
+            },
+            kind: FilterKind::Mask(mask),
+        }
+    }
+
+    #[test]
+    fn link_state_round_trips_through_mask_body() {
+        let serialized = serialize(&filter(false));
+        let loaded = deserialize(&serialized.body, LayerId::from_ffi(9)).unwrap();
+        let FilterKind::Mask(mask) = loaded.kind else {
+            panic!("loaded filter is not a mask");
+        };
+        assert!(!mask.linked_to_host);
+    }
+
+    #[test]
+    fn missing_link_state_is_rejected() {
+        let mut body = serialize(&filter(true)).body;
+        body.as_object_mut().unwrap().remove("linked_to_host");
+        assert!(deserialize(&body, LayerId::from_ffi(9)).is_err());
+    }
 }

@@ -19,6 +19,28 @@
 use crate::gpu::compositor::{BlendUniforms, Compositor};
 use crate::layer::LayerId;
 
+pub struct TransformGpuSession {
+    pub targets: Vec<crate::gpu::transform::TransformState>,
+    pub published_preview_revision: u64,
+}
+
+pub struct TransformPreviewParams<'a> {
+    pub node_id: LayerId,
+    pub matrix: crate::gpu::transform::Mat3,
+    pub source_origin: (i32, i32),
+    pub source_width: u32,
+    pub source_height: u32,
+    pub clear_shape: &'a crate::gpu::transform::ClearShape,
+}
+
+impl TransformGpuSession {
+    pub fn target(&self, node_id: LayerId) -> Option<&crate::gpu::transform::TransformState> {
+        self.targets
+            .iter()
+            .find(|target| target.target_layer == node_id)
+    }
+}
+
 impl Compositor {
     /// Allocate the per-target preview texture (and, when target is R8, a
     /// mask-shape bind group sampling it) plus the canvas-aligned blend
@@ -139,7 +161,7 @@ impl Compositor {
     /// Set floating content by copying directly from a node's GPU texture.
     /// GPU→GPU copy — no CPU tiles involved. Format dispatch (R8 mask vs RGBA
     /// layer) is driven by the texture's own format from the unified node pool.
-    pub fn set_floating_content_from_gpu(
+    pub fn prepare_transform_target_from_gpu(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -148,11 +170,8 @@ impl Compositor {
         source_width: u32,
         source_height: u32,
         target_layer: LayerId,
-    ) {
-        let layer = match self.node_textures.get(&target_layer) {
-            Some(t) => t,
-            None => return,
-        };
+    ) -> Option<crate::gpu::transform::TransformState> {
+        let layer = self.node_textures.get(&target_layer)?;
         let target_format = layer.format();
         let (preview_texture, preview_view, preview_mask_bg, preview_blend_uniform_buf) =
             self.allocate_preview_resources(device, target_format);
@@ -179,10 +198,234 @@ impl Compositor {
             preview_mask_bg,
             preview_blend_uniform_buf,
         );
-        // Seed the preview's blend uniforms from the live layer's cached
-        // props now that the floating session is active.
-        self.write_preview_blend_uniforms_if_active(queue, target_layer);
+        self.transform_pass.take_paste_state()
+    }
+
+    pub fn install_transform_session(
+        &mut self,
+        queue: &wgpu::Queue,
+        targets: Vec<crate::gpu::transform::TransformState>,
+    ) {
+        self.transform_session = Some(TransformGpuSession {
+            targets,
+            published_preview_revision: 0,
+        });
+        let ids: Vec<_> = self
+            .transform_session
+            .as_ref()
+            .unwrap()
+            .targets
+            .iter()
+            .map(|target| target.target_layer)
+            .collect();
+        for id in ids {
+            self.write_preview_blend_uniforms_if_active(queue, id);
+        }
+    }
+
+    pub fn encode_transform_to_staged(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        paint_pipelines: &crate::gpu::paint_target::PaintPipelines,
+        staged: &crate::gpu::compositor::StagedNodeTexture,
+        param: &TransformPreviewParams<'_>,
+    ) -> bool {
+        let Some(state) = self
+            .transform_session
+            .as_ref()
+            .and_then(|session| session.target(param.node_id))
+        else {
+            return false;
+        };
+        let extent = staged.canvas_extent();
+        self.transform_pass.update_state_uniforms(
+            queue,
+            state,
+            &param.matrix,
+            param.source_origin,
+            param.source_width,
+            param.source_height,
+            (extent.x0(), extent.y0()),
+            extent.width,
+            extent.height,
+            self.canvas_width,
+            self.canvas_height,
+        );
+        let target = crate::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
+            staged.texture(),
+            staged.view(),
+            state.target_format,
+            extent,
+        );
+        match param.clear_shape {
+            crate::gpu::transform::ClearShape::Rect(rect) => {
+                target.clear_rect(encoder, paint_pipelines, queue, *rect)
+            }
+            crate::gpu::transform::ClearShape::Selection {
+                mask_bind_group,
+                uncovered,
+            } => target.clear_with_selection(
+                encoder,
+                paint_pipelines,
+                queue,
+                mask_bind_group,
+                *uncovered,
+            ),
+        }
+        self.transform_pass.render_state_commit(
+            device,
+            encoder,
+            state,
+            staged.texture(),
+            staged.view(),
+        );
+        true
+    }
+
+    pub fn clear_transform_session(&mut self) {
+        self.transform_session = None;
         self.mark_dirty();
+    }
+
+    pub(super) fn transform_preview_target(
+        &self,
+        node_id: LayerId,
+    ) -> Option<&crate::gpu::transform::TransformState> {
+        self.transform_session
+            .as_ref()
+            .filter(|session| session.published_preview_revision > 0)
+            .and_then(|session| session.target(node_id))
+            .or_else(|| {
+                self.transform_pass
+                    .paste
+                    .as_ref()
+                    .filter(|target| target.target_layer == node_id)
+            })
+    }
+
+    pub fn transform_preview_revision(&self) -> Option<u64> {
+        self.transform_session
+            .as_ref()
+            .map(|session| session.published_preview_revision)
+    }
+
+    pub fn publish_transform_preview_batch(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        paint_pipelines: &crate::gpu::paint_target::PaintPipelines,
+        revision: u64,
+        params: &[TransformPreviewParams<'_>],
+    ) -> bool {
+        let Some(session) = self.transform_session.as_ref() else {
+            return false;
+        };
+        if params.len() != session.targets.len()
+            || params
+                .iter()
+                .zip(&session.targets)
+                .any(|(param, target)| param.node_id != target.target_layer)
+        {
+            return false;
+        }
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("transform-preview-batch"),
+        });
+        let origin = self.canvas_origin;
+        let canvas_rect = self.canvas_rect();
+        for (param, state) in params.iter().zip(&session.targets) {
+            let Some(live) = self.node_textures.get(&param.node_id) else {
+                return false;
+            };
+            self.transform_pass.update_state_uniforms(
+                queue,
+                state,
+                &param.matrix,
+                param.source_origin,
+                param.source_width,
+                param.source_height,
+                (origin.x, origin.y),
+                self.canvas_width,
+                self.canvas_height,
+                self.canvas_width,
+                self.canvas_height,
+            );
+            crate::gpu::clear_view_transparent(
+                &mut encoder,
+                &state.preview_view,
+                "transform-preview-clear",
+            );
+            if let Some(visible) = live.canvas_extent().intersect(canvas_rect) {
+                let local = live
+                    .canvas_to_layer_rect(visible)
+                    .expect("intersection is layer-local");
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: live.texture(),
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: local.x0(),
+                            y: local.y0(),
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &state.preview_texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: (visible.x0() - origin.x) as u32,
+                            y: (visible.y0() - origin.y) as u32,
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: visible.width,
+                        height: visible.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            let preview_target = crate::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
+                &state.preview_texture,
+                &state.preview_view,
+                state.target_format,
+                canvas_rect,
+            );
+            match param.clear_shape {
+                crate::gpu::transform::ClearShape::Rect(rect) => {
+                    preview_target.clear_rect(&mut encoder, paint_pipelines, queue, *rect);
+                }
+                crate::gpu::transform::ClearShape::Selection {
+                    mask_bind_group,
+                    uncovered,
+                } => preview_target.clear_with_selection(
+                    &mut encoder,
+                    paint_pipelines,
+                    queue,
+                    mask_bind_group,
+                    *uncovered,
+                ),
+            }
+            self.transform_pass.render_state_commit(
+                device,
+                &mut encoder,
+                state,
+                &state.preview_texture,
+                &state.preview_view,
+            );
+        }
+        queue.submit([encoder.finish()]);
+        self.transform_session
+            .as_mut()
+            .expect("session retained during batch")
+            .published_preview_revision = revision;
+        self.mark_dirty();
+        true
     }
 
     /// Update the floating preview: write the current matrix uniforms, copy
@@ -206,7 +449,7 @@ impl Compositor {
         source_height: u32,
         clear_shape: Option<&crate::gpu::transform::ClearShape>,
     ) {
-        let Some(state) = self.transform_pass.active.as_ref() else {
+        let Some(state) = self.transform_pass.paste.as_ref() else {
             return;
         };
         let live = match self.node_textures.get(&state.target_layer) {
@@ -313,12 +556,16 @@ impl Compositor {
                 crate::gpu::transform::ClearShape::Rect(rect) => {
                     preview_target.clear_rect(&mut encoder, paint_pipelines, queue, *rect);
                 }
-                crate::gpu::transform::ClearShape::Selection { mask_bind_group } => {
-                    preview_target.erase_with_selection(
+                crate::gpu::transform::ClearShape::Selection {
+                    mask_bind_group,
+                    uncovered,
+                } => {
+                    preview_target.clear_with_selection(
                         &mut encoder,
                         paint_pipelines,
                         queue,
                         mask_bind_group,
+                        *uncovered,
                     );
                 }
             }
@@ -348,7 +595,7 @@ impl Compositor {
         source_width: u32,
         source_height: u32,
     ) {
-        let Some(state) = self.transform_pass.active.as_ref() else {
+        let Some(state) = self.transform_pass.paste.as_ref() else {
             return;
         };
         let live = match self.node_textures.get(&state.target_layer) {
@@ -384,7 +631,7 @@ impl Compositor {
     /// Returns None if no floating content is active.
     pub fn transform_source_texture(&self) -> Option<(&wgpu::Texture, &wgpu::TextureView)> {
         self.transform_pass
-            .active
+            .paste
             .as_ref()
             .map(|s| (&s.source_texture, &s.source_view))
     }
@@ -399,9 +646,18 @@ impl Compositor {
         queue: &wgpu::Queue,
         layer_id: LayerId,
     ) {
-        let state = match self.transform_pass.active.as_ref() {
-            Some(s) if s.target_layer == layer_id => s,
-            _ => return,
+        let state = match self
+            .transform_session
+            .as_ref()
+            .and_then(|session| session.target(layer_id))
+            .or_else(|| {
+                self.transform_pass
+                    .paste
+                    .as_ref()
+                    .filter(|s| s.target_layer == layer_id)
+            }) {
+            Some(state) => state,
+            None => return,
         };
         let cache = match self.layer_cache.get(&layer_id) {
             Some(c) => c,

@@ -537,6 +537,25 @@ struct ProjectionState {
     padded_h: u32,
 }
 
+pub struct StagedNodeTexture {
+    pub node_id: LayerId,
+    texture: LayerTexture,
+}
+
+impl StagedNodeTexture {
+    pub fn canvas_extent(&self) -> CanvasRect {
+        self.texture.canvas_extent()
+    }
+
+    pub fn texture(&self) -> &wgpu::Texture {
+        self.texture.texture()
+    }
+
+    pub fn view(&self) -> &wgpu::TextureView {
+        self.texture.view()
+    }
+}
+
 pub struct Compositor {
     /// Per-group GPU state. Every non-passthrough group (including root)
     /// owns a GroupState with its own accumulators and composite cache.
@@ -669,6 +688,7 @@ pub struct Compositor {
 
     // --- Floating Content Transform ---
     pub(super) transform_pass: crate::gpu::transform::TransformPass,
+    pub(super) transform_session: Option<crate::gpu::floating_preview::TransformGpuSession>,
 
     // --- Image rescale resampling ---
     rescale_pass: crate::gpu::rescale::RescalePass,
@@ -1182,6 +1202,7 @@ impl Compositor {
             filter_pipeline_registry: crate::gpu::filter::FilterPipelineRegistry::new(),
             filter_caches: HashMap::new(),
             transform_pass,
+            transform_session: None,
             rescale_pass,
             ortho_pass,
             isolated_node: None,
@@ -1383,6 +1404,71 @@ impl Compositor {
         // Resize rewrites the texture; thumbnail must reflect the new
         // extent + transferred pixels.
         self.mark_node_pixels_dirty(node_id);
+        self.mark_dirty();
+    }
+
+    /// Allocate and populate an unpublished replacement texture. No compositor
+    /// mapping or document state changes until [`publish_staged_node_textures`].
+    pub fn prepare_staged_node_texture(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        node_id: LayerId,
+        new_extent: CanvasRect,
+    ) -> Option<StagedNodeTexture> {
+        let current = self.node_textures.get(&node_id)?;
+        let texture = match current.format() {
+            wgpu::TextureFormat::R8Unorm => {
+                LayerTexture::new_mask_with_extent(device, queue, new_extent)
+            }
+            wgpu::TextureFormat::Rgba8Unorm => LayerTexture::with_bounds(device, new_extent),
+            _ => return None,
+        };
+        let overlap = current.canvas_extent().intersect(new_extent)?;
+        let src = current.canvas_to_layer_rect(overlap)?;
+        let dst_x = (overlap.x0() - new_extent.x0()) as u32;
+        let dst_y = (overlap.y0() - new_extent.y0()) as u32;
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: current.texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: src.x0(),
+                    y: src.y0(),
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: texture.texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: dst_x,
+                    y: dst_y,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: overlap.width,
+                height: overlap.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        Some(StagedNodeTexture { node_id, texture })
+    }
+
+    pub fn publish_staged_node_textures(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        staged: Vec<StagedNodeTexture>,
+    ) {
+        for target in staged {
+            self.swap_node_texture(device, queue, target.node_id, target.texture);
+            self.mark_node_pixels_dirty(target.node_id);
+        }
         self.mark_dirty();
     }
 
@@ -3060,7 +3146,8 @@ impl Compositor {
         Self::effective_mask_bind_group_fields(
             &self.mask_bind_groups,
             &self.default_mask_bind_group,
-            &self.transform_pass,
+            self.transform_session.as_ref(),
+            self.transform_pass.paste.as_ref(),
             doc,
             host_id,
         )
@@ -3073,7 +3160,8 @@ impl Compositor {
     fn effective_mask_bind_group_fields<'a>(
         mask_bind_groups: &'a HashMap<LayerId, wgpu::BindGroup>,
         default_mask_bind_group: &'a wgpu::BindGroup,
-        transform_pass: &'a crate::gpu::transform::TransformPass,
+        transform_session: Option<&'a crate::gpu::floating_preview::TransformGpuSession>,
+        paste: Option<&'a crate::gpu::transform::TransformState>,
         doc: &Document,
         host_id: LayerId,
     ) -> &'a wgpu::BindGroup {
@@ -3083,14 +3171,16 @@ impl Compositor {
             .and_then(|m| mask_bind_groups.get(&m.id))
             .unwrap_or(default_mask_bind_group);
 
-        if let Some(state) = transform_pass.active.as_ref() {
-            if doc.parent_of(state.target_layer) == Some(host_id) {
-                if let Some(bg) = state.preview_mask_bind_group.as_ref() {
-                    return bg;
-                }
-            }
-        }
-        live_or_default
+        let preview = transform_session
+            .filter(|session| session.published_preview_revision > 0)
+            .and_then(|session| {
+                doc.mask_filter(host_id)
+                    .and_then(|mask| session.target(mask.id))
+            })
+            .or_else(|| paste.filter(|state| doc.parent_of(state.target_layer) == Some(host_id)));
+        preview
+            .and_then(|state| state.preview_mask_bind_group.as_ref())
+            .unwrap_or(live_or_default)
     }
 
     /// Run the present pass, veil chain, and final blit to surface.
@@ -3614,14 +3704,13 @@ impl Compositor {
     }
 
     /// During an active transform, the roles a masked host's preview can play:
-    /// `(layer_transforming, mask_transforming)`. At most one is true — the
-    /// layer or the mask is being dragged, not both. Drives whether the
-    /// projection samples the preview layer / preview mask vs. the live ones.
+    /// `(layer_transforming, mask_transforming)`. Both may be true for one
+    /// published linked-transform revision.
     fn projection_transform_roles(&self, host_id: LayerId, mask_id: LayerId) -> (bool, bool) {
-        match self.transform_pass.active.as_ref() {
-            Some(s) => (s.target_layer == host_id, s.target_layer == mask_id),
-            None => (false, false),
-        }
+        (
+            self.transform_preview_target(host_id).is_some(),
+            self.transform_preview_target(mask_id).is_some(),
+        )
     }
 
     /// Allocate a [`ProjectionState`] for `host_id` at the given dimensions,
@@ -3816,11 +3905,7 @@ impl Compositor {
             };
             // A mask being transform-previewed is canvas-aligned; otherwise it
             // samples in its live extent.
-            let mask_transforming = self
-                .transform_pass
-                .active
-                .as_ref()
-                .is_some_and(|s| s.target_layer == mask_id);
+            let mask_transforming = self.transform_preview_target(mask_id).is_some();
             let (mask_offset, mask_size) = if mask_transforming {
                 (canvas_origin, canvas_size)
             } else {
@@ -3914,10 +3999,11 @@ impl Compositor {
         // Geometry for these is set to match in `sync_projection_states`.
         let (layer_transforming, mask_transforming) =
             self.projection_transform_roles(host_id, mask_id);
-        let preview = self.transform_pass.active.as_ref();
+        let layer_preview = self.transform_preview_target(host_id);
+        let mask_preview = self.transform_preview_target(mask_id);
 
         let layer_view = if layer_transforming {
-            match preview {
+            match layer_preview {
                 Some(s) => &s.preview_view,
                 None => return,
             }
@@ -3932,7 +4018,7 @@ impl Compositor {
             .get(&mask_id)
             .unwrap_or(&self.default_mask_bind_group);
         let mask_bg = if mask_transforming {
-            preview
+            mask_preview
                 .and_then(|s| s.preview_mask_bind_group.as_ref())
                 .unwrap_or(live_mask_bg)
         } else {
@@ -4104,10 +4190,16 @@ impl Compositor {
         // collapses to the live path for them; if voids ever do, the same
         // code path will Just Work.
         let active_floating = self
-            .transform_pass
-            .active
+            .transform_session
             .as_ref()
-            .filter(|s| s.target_layer == layer_id);
+            .filter(|session| session.published_preview_revision > 0)
+            .and_then(|session| session.target(layer_id))
+            .or_else(|| {
+                self.transform_pass
+                    .paste
+                    .as_ref()
+                    .filter(|state| state.target_layer == layer_id)
+            });
         let layer_view = match active_floating {
             Some(s) => &s.preview_view,
             None => match self.node_textures.get(&layer_id) {
@@ -4169,7 +4261,8 @@ impl Compositor {
         let mask_bg = Self::effective_mask_bind_group_fields(
             &self.mask_bind_groups,
             &self.default_mask_bind_group,
-            &self.transform_pass,
+            self.transform_session.as_ref(),
+            self.transform_pass.paste.as_ref(),
             doc,
             layer_id,
         );
@@ -4511,7 +4604,8 @@ impl Compositor {
         let child_mask_bg = Self::effective_mask_bind_group_fields(
             &self.mask_bind_groups,
             &self.default_mask_bind_group,
-            &self.transform_pass,
+            self.transform_session.as_ref(),
+            self.transform_pass.paste.as_ref(),
             doc,
             group_id,
         );

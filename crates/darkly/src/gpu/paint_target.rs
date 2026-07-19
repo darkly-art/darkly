@@ -238,6 +238,30 @@ impl<'a> GpuPaintTarget<'a> {
         );
     }
 
+    /// Set selected pixels to an entity's uncovered value.
+    pub fn clear_with_selection(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &PaintPipelines,
+        queue: &wgpu::Queue,
+        selection_bind_group: &wgpu::BindGroup,
+        uncovered: crate::document::PixelValue,
+    ) {
+        match uncovered {
+            crate::document::PixelValue::Transparent => {
+                self.erase_with_selection(encoder, pipelines, queue, selection_bind_group)
+            }
+            crate::document::PixelValue::White => self.fill_rect_with_selection(
+                encoder,
+                pipelines,
+                queue,
+                self.canvas_extent(),
+                [255, 255, 255, 255],
+                selection_bind_group,
+            ),
+        }
+    }
+
     /// Erase pixels within a selection mask. Full-canvas erase modulated by the
     /// selection texture — used for clear_selection_contents.
     pub fn erase_with_selection(

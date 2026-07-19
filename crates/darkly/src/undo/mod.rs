@@ -4,8 +4,11 @@ mod compound;
 mod filter;
 mod gpu_region;
 mod layer;
+mod mask_property;
+mod pixel_bounds;
 pub mod property;
 mod selection;
+mod selection_metadata;
 mod tombstones;
 
 pub use canvas_geometry::CanvasGeometryAction;
@@ -17,8 +20,11 @@ pub use layer::{
     BakeLayersAction, BakeSourceSlot, DuplicateAction, LayerAddAction, LayerMoveAction,
     LayerRemoveAction,
 };
+pub use mask_property::MaskLinkedToHostAction;
+pub use pixel_bounds::PixelBoundsAction;
 pub use property::PropertyAction;
 pub use selection::SelectionAction;
+pub use selection_metadata::SelectionMetadataAction;
 
 use crate::document::Document;
 use crate::gpu::compositor::Compositor;
@@ -75,6 +81,11 @@ pub trait UndoAction {
     /// Returns `None` for non-selection actions.
     fn swap_selection_active(&mut self, _current_active: bool) -> Option<bool> {
         None
+    }
+
+    /// Whether this action restores exact document-side selection bounds/cache.
+    fn restores_selection_metadata(&self) -> bool {
+        false
     }
 
     /// Called when this action is permanently dropped from both undo and redo

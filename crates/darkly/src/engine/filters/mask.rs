@@ -12,7 +12,8 @@ use super::super::rendering::commit_undo_region;
 use super::super::DarklyEngine;
 use crate::layer::LayerId;
 use crate::undo::{
-    CompoundAction, FilterAddAction, FilterRemoveAction, GpuRegionAction, UndoAction,
+    CompoundAction, FilterAddAction, FilterRemoveAction, GpuRegionAction, MaskLinkedToHostAction,
+    UndoAction,
 };
 
 #[handlers]
@@ -79,10 +80,30 @@ impl DarklyEngine {
         self.push_undo(Box::new(FilterAddAction::new(mod_id, id)));
     }
 
+    /// Set the transform relationship state owned by a mask filter entity.
+    #[handler]
+    pub fn set_mask_linked_to_host(&mut self, id: LayerId, linked: bool) {
+        if !self.resolve_transform_conflict() || !self.doc.is_node_editable(id) {
+            return;
+        }
+        let old = match self.doc.find_filter_mut(id) {
+            Some(filter) => match &mut filter.kind {
+                crate::document::FilterKind::Mask(mask) if mask.linked_to_host != linked => {
+                    let old = mask.linked_to_host;
+                    mask.linked_to_host = linked;
+                    old
+                }
+                _ => return,
+            },
+            None => return,
+        };
+        self.push_undo(Box::new(MaskLinkedToHostAction::new(id, old)));
+    }
+
     /// Remove the mask filter on a host layer or group.
     #[handler]
     pub fn remove_mask(&mut self, id: LayerId) {
-        if !self.doc.is_node_editable(id) {
+        if !self.resolve_transform_conflict() || !self.doc.is_node_editable(id) {
             return;
         }
         let mask_id = match self.doc.mask_filter_id(id) {
@@ -419,6 +440,19 @@ impl DarklyEngine {
     /// doesn't surface in the layer panel), the mark is a no-op: the drain
     /// only readbacks ids present in `compositor.node_textures`.
     pub(crate) fn clone_filter_pixels(&mut self, src_id: LayerId, dst_id: LayerId) {
+        let linked_to_host = self.doc.find_filter(src_id).and_then(|filter| {
+            if let crate::document::FilterKind::Mask(mask) = &filter.kind {
+                Some(mask.linked_to_host)
+            } else {
+                None
+            }
+        });
+        if let (Some(linked), Some(filter)) = (linked_to_host, self.doc.find_filter_mut(dst_id)) {
+            if let crate::document::FilterKind::Mask(mask) = &mut filter.kind {
+                mask.linked_to_host = linked;
+            }
+        }
+
         let (src_frame, _) = match self.modifier_frame(src_id) {
             Some(v) => v,
             None => return,

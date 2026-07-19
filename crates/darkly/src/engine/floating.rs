@@ -4,10 +4,33 @@ use darkly_macros::handlers;
 
 use super::rendering::commit_undo_region;
 use super::{DarklyEngine, PendingTransform};
+use crate::coord::CanvasRect;
+use crate::document::TransformRelationshipSnapshot;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::transform::{ClearShape, FloatingContent, FloatingMode, Transform};
+
+pub(crate) struct TransformTarget {
+    pub node_id: LayerId,
+    pub document_bounds: CanvasRect,
+    pub extraction_bounds: CanvasRect,
+    pub clear_shape: ClearShape,
+}
+
+pub(crate) struct TransformSession {
+    pub initiator_id: LayerId,
+    pub operation_frame: CanvasRect,
+    pub operation: Transform,
+    pub relationship: TransformRelationshipSnapshot,
+    pub targets: Vec<TransformTarget>,
+    pub setup_generation: u64,
+    pub preview_revision: u64,
+    pub has_selection: bool,
+}
 use crate::layer::{Layer, LayerId};
-use crate::undo::{GpuRegionAction, LayerAddAction};
+use crate::undo::{
+    CompoundAction, GpuRegionAction, LayerAddAction, PixelBoundsAction, SelectionAction,
+    SelectionMetadataAction, UndoAction,
+};
 
 #[handlers]
 impl DarklyEngine {
@@ -15,15 +38,29 @@ impl DarklyEngine {
     /// Call this before operations that would conflict with floating content
     /// (layer switch, paint, undo, etc.).
     pub fn auto_commit_floating(&mut self) {
+        let _ = self.resolve_transform_conflict();
+    }
+
+    /// Generic chokepoint for document edits that can invalidate transform
+    /// topology, capability, selection, or target resources.
+    pub(crate) fn resolve_transform_conflict(&mut self) -> bool {
+        if self.pending_transform.take().is_some() {
+            self.transform_setup_generation = self.transform_setup_generation.wrapping_add(1);
+        }
+        if self.transform_session.is_some() {
+            return self.commit_transform_session() && self.transform_session.is_none();
+        }
         if self.floating.is_some() {
             self.commit_floating();
+            return self.floating.is_none();
         }
+        true
     }
 
     /// Check if there is active floating content.
     #[handler]
     pub fn has_floating(&self) -> bool {
-        self.floating.is_some()
+        self.transform_session.is_some() || self.floating.is_some()
     }
 
     /// Return floating content info for the frontend overlay:
@@ -33,15 +70,26 @@ impl DarklyEngine {
     /// not session-local — a re-`adopt()` can't desync it.
     /// Returns None if no floating content is active.
     pub fn floating_info(&self) -> Option<(f32, f32, f32, f32, Transform)> {
-        self.floating.as_ref().map(|fc| {
-            (
-                fc.source_origin.0 as f32,
-                fc.source_origin.1 as f32,
-                fc.source_width as f32,
-                fc.source_height as f32,
-                fc.transform,
-            )
-        })
+        if let Some(session) = self.transform_session.as_ref() {
+            let frame = session.operation_frame;
+            Some((
+                frame.x0() as f32,
+                frame.y0() as f32,
+                frame.width as f32,
+                frame.height as f32,
+                session.operation,
+            ))
+        } else {
+            self.floating.as_ref().map(|fc| {
+                (
+                    fc.source_origin.0 as f32,
+                    fc.source_origin.1 as f32,
+                    fc.source_width as f32,
+                    fc.source_height as f32,
+                    fc.transform,
+                )
+            })
+        }
     }
 
     /// Return the layer the active floating content will commit to.
@@ -51,7 +99,10 @@ impl DarklyEngine {
     /// auto-created target).
     #[handler]
     pub fn floating_target_layer(&self) -> Option<LayerId> {
-        self.floating.as_ref().map(|fc| fc.target_layer)
+        self.transform_session
+            .as_ref()
+            .map(|session| session.initiator_id)
+            .or_else(|| self.floating.as_ref().map(|fc| fc.target_layer))
     }
 
     /// Paste from the internal clipboard as floating content on the current
@@ -180,246 +231,273 @@ impl DarklyEngine {
         new_id
     }
 
-    /// Begin an interactive transform on the current layer/mask content.
-    ///
-    /// When a selection is active, source bounds come from the selection and
-    /// the transform is set up synchronously (returns true).
-    ///
-    /// When there is no selection, content bounds are needed from the
-    /// compositor's GPU compute system. If cached, setup is synchronous.
-    /// Otherwise, an async compute is dispatched and the transform completes
-    /// on the next frame via `poll_pending`.
+    /// Begin one fixed-membership destructive transform session.
     #[handler]
     pub fn begin_transform(&mut self, id: LayerId) -> bool {
-        if !self.doc.is_node_editable(id) {
-            return false;
-        }
         self.auto_commit_floating();
+        self.transform_setup_generation = self.transform_setup_generation.wrapping_add(1);
+        let generation = self.transform_setup_generation;
+        let relationship = match self.doc.plan_pixel_transform(id) {
+            Ok(plan) => plan,
+            Err(_) => return false,
+        };
 
-        // Active node may be either a raster layer or a mask filter — both
-        // own a `PixelBuffer` and a node texture. The doc lookup just verifies
-        // the id resolves to one of those two; the rest of the flow uses the
-        // node id uniformly.
-        if self.doc.layer(id).is_none() && self.doc.find_filter(id).is_none() {
-            return false;
-        }
-
-        let canvas_w = self.doc.width;
-        let canvas_h = self.doc.height;
-
-        // Determine source bounds.
-        if self.has_selection() {
-            // Selection bounds come from cpu_cache (populated eagerly on
-            // upload or lazily from async readback). If unavailable, defer.
-            if self.selection_pixel_bounds().is_none() {
-                let recomputed = {
-                    let data = self.selection_cpu_cache();
-                    data.map(|d| {
-                        crate::mask::pixel_bounds_r8(d, self.doc.width, self.doc.height).map(
-                            |[x, y, w, h]| {
-                                crate::coord::WindowRect::from_xywh(x as i32, y as i32, w, h)
-                            },
-                        )
-                    })
-                };
-                match recomputed {
-                    Some(bounds) => self.set_selection_pixel_bounds(bounds),
-                    None => {
-                        // Cache not ready — defer until SelectionReadback completes.
-                        self.pending_transform = Some(PendingTransform { node_id: id });
-                        return false;
-                    }
-                }
-            }
-            let bounds = match self.selection_pixel_bounds() {
-                Some(b) => b,
-                None => return false,
-            };
-
-            // Bounds are window-local; clamp against the window, then lift the
-            // origin into plane space — `setup_transform` wants a plane-space
-            // source origin, matching the no-selection branch's `layer_to_canvas`.
-            let x = bounds.x0().max(0);
-            let y = bounds.y0().max(0);
-            let w = bounds.width.min(canvas_w.saturating_sub(x as u32));
-            let h = bounds.height.min(canvas_h.saturating_sub(y as u32));
-
-            if w == 0 || h == 0 {
+        if self.has_selection() && self.selection_pixel_bounds().is_none() {
+            let bounds = self.selection_cpu_cache().and_then(|data| {
+                crate::mask::pixel_bounds_r8(data, self.doc.width, self.doc.height).map(
+                    |[x, y, w, h]| crate::coord::WindowRect::from_xywh(x as i32, y as i32, w, h),
+                )
+            });
+            if let Some(bounds) = bounds {
+                self.set_selection_pixel_bounds(Some(bounds));
+            } else {
+                self.pending_transform = Some(PendingTransform {
+                    node_id: id,
+                    setup_generation: generation,
+                    relationship,
+                });
                 return false;
             }
+        }
 
-            let origin = crate::coord::WindowPoint::new(x, y).to_canvas(self.doc.canvas_origin);
-            self.setup_transform(id, (origin.x, origin.y), w, h);
+        if self.prepare_transform_session(id, generation, relationship.clone()) {
             true
         } else {
-            // No selection — use compositor content bounds.
-            if let Some(bounds) = self.compositor.content_bounds(id) {
-                // content_bounds are in layer-local coords; translate to
-                // canvas-space via the layer texture so callers (and floating
-                // preview/uniforms) see canvas coords.
-                let [bx, by, bw, bh] = bounds;
-                if bw == 0 || bh == 0 {
-                    return false;
-                }
-                let canvas_origin = self
-                    .compositor
-                    .node_texture(id)
-                    .map(|t| t.layer_to_canvas(crate::coord::LayerPoint::new(bx, by)))
-                    .unwrap_or(crate::coord::CanvasPoint::new(bx as i32, by as i32));
-                self.setup_transform(id, (canvas_origin.x, canvas_origin.y), bw, bh);
-                true
-            } else {
-                // Bounds not yet computed — request async GPU compute.
-                self.compositor
-                    .request_content_bounds(&self.gpu.device, &self.gpu.queue, id);
-                self.pending_transform = Some(super::PendingTransform { node_id: id });
-                false
-            }
+            self.pending_transform = Some(PendingTransform {
+                node_id: id,
+                setup_generation: generation,
+                relationship,
+            });
+            false
         }
     }
 
-    /// Common setup logic for interactive transforms — copies source region
-    /// to the floating texture and stores a `ClearShape` so commit (and the
-    /// per-frame preview) can erase the source rect on the right surface
-    /// before re-rendering. The live target texture is **not** mutated:
-    /// preview is a derived view, and commit applies the clear to the live
-    /// target right before writing the transform.
-    pub(crate) fn setup_transform(
+    pub(crate) fn prepare_transform_session(
         &mut self,
-        node_id: LayerId,
-        source_origin: (i32, i32),
-        source_width: u32,
-        source_height: u32,
-    ) {
-        let layer_id = node_id;
-        let format = self
-            .compositor
-            .node_texture(node_id)
-            .map(|t| t.format())
-            .unwrap_or(wgpu::TextureFormat::Rgba8Unorm);
-        let canvas_w = self.doc.width;
-        let canvas_h = self.doc.height;
-
-        // Layer's current canvas-space extent (paste-extent layers may run
-        // off-canvas), and the canvas-space rect of the source region
-        // clipped against it.
-        let layer_extent = self
-            .compositor
-            .node_texture(node_id)
-            .map(|t| t.canvas_extent())
-            .unwrap_or(crate::coord::CanvasRect::from_xywh(
-                0, 0, canvas_w, canvas_h,
-            ));
-        let canvas_source = crate::coord::CanvasRect::from_xywh(
-            source_origin.0,
-            source_origin.1,
-            source_width,
-            source_height,
-        );
-        let canvas_save_rect = layer_extent
-            .intersect(canvas_source)
-            .unwrap_or_else(|| crate::coord::CanvasRect::from_xywh(0, 0, 0, 0));
-
-        // Bail if the target node has no GPU texture (caller already
-        // validated the id, but a freshly-added paste-extent layer can be
-        // pre-bounds-allocation).
-        if self.compositor.node_texture(node_id).is_none() {
-            return;
+        initiator_id: LayerId,
+        setup_generation: u64,
+        relationship: TransformRelationshipSnapshot,
+    ) -> bool {
+        if setup_generation != self.transform_setup_generation
+            || !self
+                .doc
+                .validate_pixel_transform_snapshot(initiator_id, &relationship)
+        {
+            return false;
         }
-
-        // Copy source region from the live target into the floating source
-        // texture (premultiplied for RGBA, raw for R8).
-        self.gpu.encode("transform-copy-source", |encoder| {
-            self.compositor.set_floating_content_from_gpu(
-                &self.gpu.device,
-                &self.gpu.queue,
-                encoder,
-                source_origin,
-                source_width,
-                source_height,
-                layer_id,
-            );
-        });
-
-        // If selection is active, mask the source texture so only selected
-        // pixels are included in the transform. Snapshot the selection into
-        // a dedicated R8 so commit can replay it after the live selection
-        // clear at the end of setup zeroes the marching ants.
+        let selection = self
+            .selection_pixel_bounds()
+            .map(|bounds| bounds.to_canvas(self.doc.canvas_origin));
         let has_selection = self.has_selection();
-        let clear_shape = if has_selection {
-            // `source_origin` is plane (it indexes the live layer + the clear
-            // rect); the selection cpu-cache is window-local, so shift back by
-            // `canvas_origin` for the crop read.
-            let o = self.doc.canvas_origin;
-            let sel_origin = (source_origin.0 - o.x, source_origin.1 - o.y);
-            let cropped_sel_bg =
-                self.upload_cropped_selection_r8(sel_origin, source_width, source_height);
-
-            if let Some(sel_bg) = &cropped_sel_bg {
-                if let Some(source_tex) = self.compositor.transform_source_texture() {
-                    let target = GpuPaintTarget::from_canvas_texture(
-                        source_tex.0,
-                        source_tex.1,
-                        format,
-                        crate::coord::CanvasRect::from_xywh(0, 0, source_width, source_height),
+        if !has_selection {
+            let mut waiting = false;
+            for &node_id in &relationship.targets {
+                let semantics = self
+                    .doc
+                    .pixel_transform_semantics(node_id)
+                    .expect("relationship planner validates semantics");
+                if semantics.bounds_policy
+                    == crate::document::PixelTransformBoundsPolicy::AlphaContent
+                    && self.compositor.content_bounds(node_id).is_none()
+                {
+                    self.compositor.request_content_bounds(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        node_id,
                     );
-                    self.gpu.encode("transform-sel-mask", |encoder| {
-                        target.multiply_by_mask(
+                    waiting = true;
+                }
+            }
+            if waiting {
+                return false;
+            }
+        }
+        let mut geometries = Vec::with_capacity(relationship.targets.len());
+        for &node_id in &relationship.targets {
+            let Some(document_bounds) = self.doc.node_pixel_bounds(node_id) else {
+                return false;
+            };
+            let semantics = self
+                .doc
+                .pixel_transform_semantics(node_id)
+                .expect("relationship planner validates semantics");
+            let extraction = if let Some(selection) = selection {
+                document_bounds.intersect(selection)
+            } else {
+                match semantics.bounds_policy {
+                    crate::document::PixelTransformBoundsPolicy::DocumentExtent => {
+                        Some(document_bounds)
+                    }
+                    crate::document::PixelTransformBoundsPolicy::AlphaContent => {
+                        let [x, y, width, height] = self
+                            .compositor
+                            .content_bounds(node_id)
+                            .expect("all alpha-content bounds were resolved above");
+                        if width == 0 || height == 0 {
+                            None
+                        } else {
+                            let origin = self
+                                .compositor
+                                .node_texture(node_id)
+                                .map(|texture| {
+                                    texture.layer_to_canvas(crate::coord::LayerPoint::new(x, y))
+                                })
+                                .unwrap_or(crate::coord::CanvasPoint::new(x as i32, y as i32));
+                            document_bounds
+                                .intersect(CanvasRect::from_xywh(origin.x, origin.y, width, height))
+                        }
+                    }
+                }
+            };
+            geometries.push((node_id, document_bounds, extraction));
+        }
+        if geometries
+            .iter()
+            .all(|(_, _, extraction)| extraction.is_none())
+        {
+            return false;
+        }
+        let operation_frame = if let Some(selection) = selection {
+            selection
+        } else {
+            geometries
+                .iter()
+                .filter_map(|(_, _, extraction)| *extraction)
+                .reduce(|left, right| left.union(right))
+                .expect("at least one extraction")
+        };
+
+        let mut gpu_targets = Vec::new();
+        let mut targets = Vec::new();
+        for (node_id, document_bounds, extraction) in geometries {
+            let Some(extraction_bounds) = extraction else {
+                continue;
+            };
+            let source_origin = (extraction_bounds.x0(), extraction_bounds.y0());
+            let prepared = self.gpu.encode_ret("transform-prepare-target", |encoder| {
+                self.compositor.prepare_transform_target_from_gpu(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    encoder,
+                    source_origin,
+                    extraction_bounds.width,
+                    extraction_bounds.height,
+                    node_id,
+                )
+            });
+            let Some(prepared) = prepared else {
+                return false;
+            };
+            if has_selection {
+                let local = (
+                    extraction_bounds.x0() - self.doc.canvas_origin.x,
+                    extraction_bounds.y0() - self.doc.canvas_origin.y,
+                );
+                if let Some(mask) = self.upload_cropped_selection_r8(
+                    local,
+                    extraction_bounds.width,
+                    extraction_bounds.height,
+                ) {
+                    let source = GpuPaintTarget::from_canvas_texture(
+                        &prepared.source_texture,
+                        &prepared.source_view,
+                        prepared.target_format,
+                        CanvasRect::from_xywh(
+                            0,
+                            0,
+                            extraction_bounds.width,
+                            extraction_bounds.height,
+                        ),
+                    );
+                    self.gpu.encode("transform-mask-source", |encoder| {
+                        source.multiply_by_mask(
                             encoder,
                             &self.paint_pipelines,
                             &self.gpu.queue,
-                            sel_bg,
+                            &mask,
                         );
                     });
                 }
             }
-
-            ClearShape::Selection {
-                mask_bind_group: self.snapshot_selection_for_clear(),
-            }
-        } else {
-            ClearShape::Rect(canvas_save_rect)
-        };
-
-        self.floating = Some(FloatingContent {
-            source_origin,
-            source_width,
-            source_height,
-            transform: Transform::identity(),
-            target_layer: layer_id,
-            mode: FloatingMode::Transform { clear_shape },
+            let clear_shape = if has_selection {
+                ClearShape::Selection {
+                    mask_bind_group: self.snapshot_selection_for_clear(),
+                    uncovered: self
+                        .doc
+                        .pixel_transform_semantics(node_id)
+                        .unwrap()
+                        .uncovered_value,
+                }
+            } else {
+                ClearShape::Rect(extraction_bounds)
+            };
+            targets.push(TransformTarget {
+                node_id,
+                document_bounds,
+                extraction_bounds,
+                clear_shape,
+            });
+            gpu_targets.push(prepared);
+        }
+        if setup_generation != self.transform_setup_generation {
+            return false;
+        }
+        self.compositor
+            .install_transform_session(&self.gpu.queue, gpu_targets);
+        self.transform_session = Some(TransformSession {
+            initiator_id,
+            operation_frame,
+            operation: Transform::identity(),
+            relationship,
+            targets,
+            setup_generation,
+            preview_revision: 0,
+            has_selection,
         });
-
-        // Selection was used to define what gets picked up — clear it now
-        // so marching ants disappear and the transform output isn't clipped
-        // by the live selection during commit.
         if has_selection {
-            let bounds = self.selection_pixel_bounds();
-            if let Some(state) = self.compositor.selection_state_mut() {
-                state.clear_region(&self.gpu.queue, bounds);
-            }
-            self.set_selection_pixel_bounds(None);
-            self.set_selection_active(false);
-            self.invalidate_selection_cpu_cache();
-
             self.clear_channel_overlay(crate::engine::OverlayChannel::Selection);
         }
-
-        // Render the initial preview so the host's blend reads the right
-        // texture from the very first frame after setup.
-        self.update_floating_preview();
+        self.publish_transform_preview()
     }
 
-    /// Build (or rebuild) the floating preview texture for the current
-    /// matrix and clear shape. Called after `setup_transform` and on every
-    /// `update_floating_matrix`.
+    fn publish_transform_preview(&mut self) -> bool {
+        let Some(mut session) = self.transform_session.take() else {
+            return false;
+        };
+        session.preview_revision = session.preview_revision.wrapping_add(1);
+        let revision = session.preview_revision;
+        let params: Vec<_> = session
+            .targets
+            .iter()
+            .map(
+                |target| crate::gpu::floating_preview::TransformPreviewParams {
+                    node_id: target.node_id,
+                    matrix: crate::transform::evaluator_for_target(
+                        &session.operation,
+                        session.operation_frame,
+                        target.extraction_bounds.origin,
+                    ),
+                    source_origin: (target.extraction_bounds.x0(), target.extraction_bounds.y0()),
+                    source_width: target.extraction_bounds.width,
+                    source_height: target.extraction_bounds.height,
+                    clear_shape: &target.clear_shape,
+                },
+            )
+            .collect();
+        let published = self.compositor.publish_transform_preview_batch(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &self.paint_pipelines,
+            revision,
+            &params,
+        );
+        self.transform_session = Some(session);
+        published
+    }
+
     fn update_floating_preview(&mut self) {
         let Some(fc) = self.floating.as_ref() else {
             return;
-        };
-        let clear_shape = match &fc.mode {
-            FloatingMode::Transform { clear_shape } => Some(clear_shape),
-            FloatingMode::Paste { .. } => None,
         };
         self.compositor.update_floating_preview(
             &self.gpu.device,
@@ -429,7 +507,7 @@ impl DarklyEngine {
             fc.source_origin,
             fc.source_width,
             fc.source_height,
-            clear_shape,
+            None,
         );
     }
 
@@ -450,22 +528,217 @@ impl DarklyEngine {
     /// homography updates flow through the same path as affine drags.
     #[handler]
     pub fn update_floating_matrix(&mut self, transform: Transform) {
-        if let Some(fc) = self.floating.as_mut() {
+        if let Some(session) = self.transform_session.as_mut() {
+            session.operation = transform;
+            self.publish_transform_preview();
+        } else if let Some(fc) = self.floating.as_mut() {
             fc.transform = transform;
+            self.update_floating_preview();
         } else {
             return;
         }
-        self.update_floating_preview();
         self.compositor.mark_dirty();
+    }
+
+    fn commit_transform_session(&mut self) -> bool {
+        let Some(session) = self.transform_session.take() else {
+            return false;
+        };
+        if session.operation.is_identity() {
+            self.compositor.clear_transform_session();
+            if let Some(selection) = self.selection_cpu_cache().map(<[u8]>::to_vec) {
+                self.update_selection_overlay_from_readback(selection);
+            }
+            return true;
+        }
+        if session.setup_generation != self.transform_setup_generation
+            || !self
+                .doc
+                .validate_pixel_transform_snapshot(session.initiator_id, &session.relationship)
+        {
+            self.transform_session = Some(session);
+            return false;
+        }
+
+        let proposed: Vec<_> = session
+            .targets
+            .iter()
+            .map(|target| {
+                let affected = crate::transform::affected_bounds(
+                    &session.operation,
+                    session.operation_frame,
+                    target.extraction_bounds,
+                );
+                (target.node_id, target.document_bounds.union(affected))
+            })
+            .collect();
+
+        // Prepare exact pre-publication undo snapshots. These schedule only
+        // GPU→CPU copies; live textures and document bounds remain unchanged.
+        let mut entries = Vec::with_capacity(session.targets.len());
+        for target in &session.targets {
+            let Some(texture) = self.compositor.node_texture(target.node_id) else {
+                self.transform_session = Some(session);
+                return false;
+            };
+            let format = texture.format();
+            let frame = texture.canvas_frame();
+            let snapshot = self.gpu.encode_ret("transform-stage-undo-save", |encoder| {
+                self.region_scratch.save_region(
+                    &self.gpu.device,
+                    encoder,
+                    &frame,
+                    format,
+                    target.document_bounds,
+                )
+            });
+            let entry = commit_undo_region(
+                &self.gpu,
+                &self.region_scratch,
+                &mut self.readbacks,
+                "transform-stage-undo-entry",
+                target.node_id,
+                &frame,
+                &snapshot,
+                target.document_bounds,
+            );
+            entries.push(entry);
+        }
+
+        let selection_metadata = session.has_selection.then(|| {
+            SelectionMetadataAction::new(
+                self.selection_pixel_bounds(),
+                self.selection_cpu_cache().map(<[u8]>::to_vec),
+            )
+        });
+        let selection_action = if session.has_selection {
+            let bounds = self
+                .selection_pixel_bounds()
+                .map(|bounds| {
+                    CanvasRect::from_xywh(bounds.x0(), bounds.y0(), bounds.width, bounds.height)
+                })
+                .unwrap_or_else(|| CanvasRect::from_xywh(0, 0, self.doc.width, self.doc.height));
+            self.save_selection_for_undo(bounds);
+            self.commit_selection_undo_entry(bounds)
+                .map(|entry| SelectionAction::new(true, entry))
+        } else {
+            None
+        };
+        if session.has_selection && selection_action.is_none() {
+            self.transform_session = Some(session);
+            return false;
+        }
+
+        // Allocate, copy, clear, and transform every replacement in one encoder.
+        // Dropping this encoder on any error publishes no writes.
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("transform-staged-commit"),
+            });
+        let mut staged = Vec::with_capacity(session.targets.len());
+        for (_target_index, (target, (_, extent))) in
+            session.targets.iter().zip(&proposed).enumerate()
+        {
+            #[cfg(feature = "testing")]
+            if self.transform_commit_fail_target == Some(_target_index) {
+                self.transform_session = Some(session);
+                return false;
+            }
+            let Some(resource) = self.compositor.prepare_staged_node_texture(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &mut encoder,
+                target.node_id,
+                *extent,
+            ) else {
+                self.transform_session = Some(session);
+                return false;
+            };
+            let param = crate::gpu::floating_preview::TransformPreviewParams {
+                node_id: target.node_id,
+                matrix: crate::transform::evaluator_for_target(
+                    &session.operation,
+                    session.operation_frame,
+                    target.extraction_bounds.origin,
+                ),
+                source_origin: (target.extraction_bounds.x0(), target.extraction_bounds.y0()),
+                source_width: target.extraction_bounds.width,
+                source_height: target.extraction_bounds.height,
+                clear_shape: &target.clear_shape,
+            };
+            if !self.compositor.encode_transform_to_staged(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &mut encoder,
+                &self.paint_pipelines,
+                &resource,
+                &param,
+            ) {
+                self.transform_session = Some(session);
+                return false;
+            }
+            staged.push(resource);
+        }
+
+        // Publication: one GPU submission followed by one non-interleavable CPU
+        // mutation scope for mappings, authoritative extents, selection, history.
+        self.gpu.queue.submit([encoder.finish()]);
+        for &(node_id, extent) in &proposed {
+            self.doc.set_node_pixel_bounds(node_id, extent);
+        }
+        self.compositor
+            .publish_staged_node_textures(&self.gpu.device, &self.gpu.queue, staged);
+        if session.has_selection {
+            let bounds = self.selection_pixel_bounds();
+            if let Some(selection) = self.compositor.selection_state_mut() {
+                selection.clear_region(&self.gpu.queue, bounds);
+            }
+            self.set_selection_active(false);
+            self.set_selection_pixel_bounds(None);
+            self.invalidate_selection_cpu_cache();
+            self.clear_channel_overlay(crate::engine::OverlayChannel::Selection);
+        }
+
+        let mut actions: Vec<Box<dyn UndoAction>> = Vec::new();
+        for ((target, (_, extent)), entry) in session.targets.iter().zip(&proposed).zip(entries) {
+            if target.document_bounds != *extent {
+                actions.push(Box::new(PixelBoundsAction::new(
+                    target.node_id,
+                    target.document_bounds,
+                )));
+            }
+            actions.push(Box::new(GpuRegionAction::new(entry)));
+        }
+        if let Some(metadata) = selection_metadata {
+            actions.push(Box::new(metadata));
+        }
+        if let Some(selection) = selection_action {
+            actions.push(Box::new(selection));
+        }
+        self.push_undo(Box::new(CompoundAction::new(actions)));
+        self.compositor.clear_transform_session();
+        true
     }
 
     /// Commit floating content: render transformed pixels into the target
     /// layer/mask texture via a GPU render pass.
     #[handler]
     pub fn commit_floating(&mut self) {
+        if self.transform_session.is_some() {
+            self.commit_transform_session();
+            return;
+        }
         let fc = match self.floating.take() {
             Some(fc) => fc,
-            None => return,
+            None => {
+                if self.pending_transform.take().is_some() {
+                    self.transform_setup_generation =
+                        self.transform_setup_generation.wrapping_add(1);
+                }
+                return;
+            }
         };
 
         let layer_id = fc.target_layer;
@@ -501,6 +774,8 @@ impl DarklyEngine {
             (max_y.max(src_max_y) - min_y.min(soy)).max(0) as u32,
         );
 
+        let old_bounds = self.doc.node_pixel_bounds(layer_id);
+
         // Grow the target (or its host, for mask filters) so the layer
         // texture can hold any portion of the affected rect that lies
         // outside its current bounds — including pixels past the canvas
@@ -508,15 +783,13 @@ impl DarklyEngine {
         // neither raster nor filter with a raster host), commit falls
         // back to the pre-grow extent and the texture-side clip below
         // still keeps the commit consistent.
-        let _ = self.grow_node_to_fit(layer_id, affected_canvas);
+        let grew = self.grow_node_to_fit(layer_id, affected_canvas).is_some();
 
         // Path A — paste onto a layer auto-created for this paste.
         // The layer is empty by construction, so a single LayerAddAction
         // captures the whole paste as one undo step (no GpuRegionAction).
-        if let FloatingMode::Paste {
-            created_layer_id: Some(_),
-        } = fc.mode
-        {
+        let FloatingMode::Paste { created_layer_id } = fc.mode;
+        if created_layer_id.is_some() {
             self.gpu.encode("paste-commit", |encoder| {
                 self.compositor.commit_floating_to_texture(
                     &self.gpu.device,
@@ -547,6 +820,7 @@ impl DarklyEngine {
             .node_texture(layer_id)
             .map(|t| t.canvas_extent());
         let affected_canvas_rect = match target_canvas_extent {
+            Some(extent) if grew => extent,
             Some(extent) => match affected_canvas.intersect(extent) {
                 Some(c) => c,
                 None => {
@@ -601,40 +875,7 @@ impl DarklyEngine {
             affected_canvas_rect,
         );
 
-        // Apply ClearShape to the live target, then run commit. Same
-        // sequence the preview applies on every drag, but here it lands
-        // on the live texture and survives the floating session.
-        self.gpu.encode("transform-commit", |encoder| {
-            if let FloatingMode::Transform {
-                ref clear_shape, ..
-            } = fc.mode
-            {
-                let target = self
-                    .compositor
-                    .node_texture(layer_id)
-                    .map(|t| GpuPaintTarget::from_node(t, self.doc.canvas_rect()));
-                if let Some(target) = target {
-                    match clear_shape {
-                        ClearShape::Rect(rect) => {
-                            target.clear_rect(
-                                encoder,
-                                &self.paint_pipelines,
-                                &self.gpu.queue,
-                                *rect,
-                            );
-                        }
-                        ClearShape::Selection { mask_bind_group } => {
-                            target.erase_with_selection(
-                                encoder,
-                                &self.paint_pipelines,
-                                &self.gpu.queue,
-                                mask_bind_group,
-                            );
-                        }
-                    }
-                }
-            }
-
+        self.gpu.encode("paste-commit", |encoder| {
             self.compositor.commit_floating_to_texture(
                 &self.gpu.device,
                 encoder,
@@ -645,11 +886,42 @@ impl DarklyEngine {
                 fc.source_height,
             );
         });
-        self.push_undo(Box::new(GpuRegionAction::new(entry)));
+        let mut actions: Vec<Box<dyn UndoAction>> = Vec::new();
+        if grew {
+            if let Some(old_bounds) = old_bounds {
+                actions.push(Box::new(PixelBoundsAction::new(layer_id, old_bounds)));
+            }
+        }
+        actions.push(Box::new(GpuRegionAction::new(entry)));
+        self.push_undo(Box::new(CompoundAction::new(actions)));
 
         // Clean up GPU state
         self.compositor.mark_node_pixels_dirty(layer_id);
         self.compositor.clear_floating_content();
+    }
+
+    #[cfg(feature = "testing")]
+    pub fn test_transform_target_ids(&self) -> Vec<LayerId> {
+        self.transform_session
+            .as_ref()
+            .map(|session| {
+                session
+                    .targets
+                    .iter()
+                    .map(|target| target.node_id)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[cfg(feature = "testing")]
+    pub fn test_transform_preview_revision(&self) -> Option<u64> {
+        self.compositor.transform_preview_revision()
+    }
+
+    #[cfg(feature = "testing")]
+    pub fn test_fail_transform_commit_at_target(&mut self, target: Option<usize>) {
+        self.transform_commit_fail_target = target;
     }
 
     /// Cancel floating content: drop the floating session. The live target
@@ -657,26 +929,36 @@ impl DarklyEngine {
     /// separate texture), so cancel is a pure session-state reset.
     #[handler]
     pub fn cancel_floating(&mut self) {
+        self.transform_setup_generation = self.transform_setup_generation.wrapping_add(1);
+        self.pending_transform = None;
+        if self.transform_session.take().is_some() {
+            self.compositor.clear_transform_session();
+            if let Some(selection) = self.selection_cpu_cache().map(<[u8]>::to_vec) {
+                self.update_selection_overlay_from_readback(selection);
+            }
+            self.compositor.mark_dirty();
+            return;
+        }
         let fc = match self.floating.take() {
             Some(fc) => fc,
             None => return,
         };
 
-        if let FloatingMode::Paste {
-            created_layer_id: Some(id),
-        } = fc.mode
-        {
+        let FloatingMode::Paste { created_layer_id } = fc.mode;
+        if let Some(id) = created_layer_id {
             // Paste auto-created a target layer; drop it silently. No undo
             // entry to maintain — `LayerAddAction` is only pushed on commit.
             self.doc.detach_for_undo(id);
             self.compositor.dispose_layer(id);
             self.compositor.mark_dirty();
         }
-        // FloatingMode::Transform and Paste-onto-existing both leave the
-        // target texture exactly as it was at setup_transform — nothing to
-        // restore.
+        // Paste onto an existing target never mutates the live texture before
+        // commit, so cancel has nothing to restore.
 
         self.compositor.clear_floating_content();
+        if let Some(selection) = self.selection_cpu_cache().map(<[u8]>::to_vec) {
+            self.update_selection_overlay_from_readback(selection);
+        }
         self.compositor.mark_dirty();
     }
 }

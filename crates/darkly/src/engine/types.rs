@@ -178,6 +178,8 @@ pub struct ModifierInfo {
     pub name: String,
     pub visible: bool,
     pub locked: bool,
+    /// Whether this modifier participates in transforms with its host.
+    pub linked_to_host: bool,
     /// See [`LayerInfo::Raster::editable`] — a modifier is editable when
     /// neither it nor its host (nor any ancestor of the host) is locked.
     pub editable: bool,
@@ -676,6 +678,10 @@ pub(crate) fn modifier_to_info(
         name: modifier.common.name.clone(),
         visible: modifier.common.visible,
         locked: modifier.common.locked,
+        linked_to_host: match &modifier.kind {
+            crate::document::FilterKind::Mask(mask) => mask.linked_to_host,
+            crate::document::FilterKind::Selection(_) => false,
+        },
         editable: doc.is_node_editable(modifier.id),
     }
 }

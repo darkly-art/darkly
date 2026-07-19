@@ -45,12 +45,7 @@ pub fn pack_inv_rows(m: &Mat3) -> [[f32; 4]; 3] {
 // FloatingContent — CPU-side data owned by the engine
 // ---------------------------------------------------------------------------
 
-/// Shape of the clear that `setup_transform` applied to the source layer.
-///
-/// Stored on `FloatingMode::Transform` so that `commit_floating` can replay
-/// the same shape after the un-clear/save sequence — without it the
-/// transform shader's `discard`-outside-transformed-bounds would leave a
-/// duplicate copy of the source at its original position.
+/// Type-owned source-clear shape for one interactive transform target.
 pub enum ClearShape {
     /// `setup_transform` did a full-rect clear (no-selection branch).
     /// Replay with `clear_rect`.
@@ -61,7 +56,10 @@ pub enum ClearShape {
     /// `gpu_selection.clear()` runs at the end of `setup_transform` (so
     /// the marching ants disappear during the drag preview), and the
     /// commit-side replay needs that mask shape.
-    Selection { mask_bind_group: wgpu::BindGroup },
+    Selection {
+        mask_bind_group: wgpu::BindGroup,
+        uncovered: crate::document::PixelValue,
+    },
 }
 
 /// How the floating content was created — determines commit/cancel behavior.
@@ -71,17 +69,6 @@ pub enum FloatingMode {
     /// for this paste and should be removed on cancel. `None` means paste
     /// targets a pre-existing layer; cancel is a no-op.
     Paste { created_layer_id: Option<LayerId> },
-    /// Extracted from a layer — commit writes transformed pixels into the
-    /// live target after applying `clear_shape` to the source rect.
-    /// Cancel is a no-op on the texture: setup_transform doesn't touch
-    /// the live target, so there's nothing to restore.
-    Transform {
-        /// Shape of the source-rect clear that commit applies before the
-        /// transform render. The same shape is also applied to the
-        /// per-update preview texture so the preview matches what commit
-        /// will write.
-        clear_shape: ClearShape,
-    },
 }
 
 /// Floating content state, owned by the engine.
@@ -240,7 +227,9 @@ pub struct TransformPass {
     /// Single-texture BGL used for dest copy (commit) and premultiply passes.
     single_tex_bgl: wgpu::BindGroupLayout,
     premultiply_pipeline: wgpu::RenderPipeline,
-    pub active: Option<TransformState>,
+    /// One-target compatibility state used only by paste. Interactive transforms
+    /// own explicit states in the compositor's `TransformGpuSession`.
+    pub paste: Option<TransformState>,
 }
 
 impl TransformPass {
@@ -390,7 +379,7 @@ impl TransformPass {
             commit_bind_group_layout,
             single_tex_bgl,
             premultiply_pipeline,
-            active: None,
+            paste: None,
         }
     }
 
@@ -522,7 +511,7 @@ impl TransformPass {
         let commit_bind_group =
             self.make_commit_bind_group(device, &source_view, sampler, &uniform_buf);
 
-        self.active = Some(TransformState {
+        self.paste = Some(TransformState {
             source_texture,
             source_view,
             uniform_buf,
@@ -702,7 +691,7 @@ impl TransformPass {
         let commit_bind_group =
             self.make_commit_bind_group(device, &source_view, sampler, &uniform_buf);
 
-        self.active = Some(TransformState {
+        self.paste = Some(TransformState {
             source_texture,
             source_view,
             uniform_buf,
@@ -764,9 +753,39 @@ impl TransformPass {
         canvas_width: u32,
         canvas_height: u32,
     ) {
-        let Some(state) = self.active.as_ref() else {
+        let Some(state) = self.paste.as_ref() else {
             return;
         };
+        self.update_state_uniforms(
+            queue,
+            state,
+            matrix,
+            source_origin,
+            source_width,
+            source_height,
+            target_offset,
+            target_width,
+            target_height,
+            canvas_width,
+            canvas_height,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_state_uniforms(
+        &self,
+        queue: &wgpu::Queue,
+        state: &TransformState,
+        matrix: &Mat3,
+        source_origin: (i32, i32),
+        source_width: u32,
+        source_height: u32,
+        target_offset: (i32, i32),
+        target_width: u32,
+        target_height: u32,
+        canvas_width: u32,
+        canvas_height: u32,
+    ) {
         let [inv_row0, inv_row1, inv_row2] = pack_inv_rows(matrix);
         let is_r8 = if state.target_format == wgpu::TextureFormat::R8Unorm {
             1.0
@@ -804,10 +823,20 @@ impl TransformPass {
         target_texture: &wgpu::Texture,
         target_view: &wgpu::TextureView,
     ) {
-        let Some(state) = self.active.as_ref() else {
+        let Some(state) = self.paste.as_ref() else {
             return;
         };
+        self.render_state_commit(device, encoder, state, target_texture, target_view);
+    }
 
+    pub fn render_state_commit(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        state: &TransformState,
+        target_texture: &wgpu::Texture,
+        target_view: &wgpu::TextureView,
+    ) {
         let dest_bg = super::straight_composite::copy_for_compositing(
             device,
             encoder,
@@ -843,12 +872,16 @@ impl TransformPass {
 
     /// Remove floating content GPU state.
     pub fn clear(&mut self) {
-        self.active = None;
+        self.paste = None;
+    }
+
+    pub fn take_paste_state(&mut self) -> Option<TransformState> {
+        self.paste.take()
     }
 
     /// Check if floating content is active and targets the given layer.
     pub fn targets_layer(&self, layer_id: LayerId) -> bool {
-        self.active
+        self.paste
             .as_ref()
             .is_some_and(|s| s.target_layer == layer_id)
     }

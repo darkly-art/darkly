@@ -7,9 +7,11 @@
     import { toast } from '../../state/toast.svelte';
     import Icon from '../../icons/Icon.svelte';
     import ContextMenu, { type ContextMenuItem } from '../ContextMenu.svelte';
+    import MaskChainControl from './MaskChainControl.svelte';
 
     interface Modifier {
         id: number; kind: string; name: string; visible: boolean; locked: boolean;
+        linkedToHost: boolean; editable: boolean;
     }
 
     let { layer, depth = 0, onupdate }: {
@@ -404,20 +406,15 @@
         </span>
     {/if}
 
-    {#if hasMask && maskThumb}
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <img
-            class="thumb"
-            class:thumb-active={isEditingMask}
-            class:mask-disabled={!maskEnabled}
-            src={maskThumb}
-            alt="mask"
-            width={THUMB_SIZE}
-            height={THUMB_SIZE}
-            draggable="false"
-            use:bindingSite={{ name: 'maskThumb', ctx: () => ({ layerId: maskModifier!.id }) }}
-            onclick={clickMaskThumb}
+    {#if maskModifier}
+        <MaskChainControl
+            mask={maskModifier}
+            thumbnail={maskThumb}
+            active={isEditingMask}
+            enabled={maskEnabled}
+            onselect={clickMaskThumb}
             oncontextmenu={onMaskContextMenu}
+            {onupdate}
         />
     {/if}
 
@@ -583,9 +580,6 @@
         color: var(--accent);
     }
 
-    .mask-disabled {
-        opacity: 0.4;
-    }
 
     .layer-name {
         flex: 1;

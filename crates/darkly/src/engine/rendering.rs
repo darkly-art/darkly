@@ -303,24 +303,20 @@ impl DarklyEngine {
         self.compositor.poll_histogram(&self.gpu.device);
         let mut any_completed = false;
 
-        // Complete pending transform if content bounds just arrived.
-        if let Some(pt) = &self.pending_transform {
-            if bounds_completed.contains(&pt.node_id) {
-                let node_id = pt.node_id;
-                self.pending_transform = None;
-
-                if self.floating.is_none() {
-                    if let Some(bounds) = self.compositor.content_bounds(node_id) {
-                        // content_bounds are layer-local; translate to canvas.
-                        let [bx, by, bw, bh] = bounds;
-                        let canvas_origin = self
-                            .compositor
-                            .node_texture(node_id)
-                            .map(|t| t.layer_to_canvas(crate::coord::LayerPoint::new(bx, by)))
-                            .unwrap_or(crate::coord::CanvasPoint::new(bx as i32, by as i32));
-                        self.setup_transform(node_id, (canvas_origin.x, canvas_origin.y), bw, bh);
-                        any_completed = true;
-                    }
+        // Any completed target bounds may make the fixed multi-target plan ready.
+        if !bounds_completed.is_empty() {
+            if let Some(pt) = self.pending_transform.take() {
+                let ready = pt.setup_generation == self.transform_setup_generation
+                    && self.transform_session.is_none()
+                    && self.prepare_transform_session(
+                        pt.node_id,
+                        pt.setup_generation,
+                        pt.relationship.clone(),
+                    );
+                if ready {
+                    any_completed = true;
+                } else if pt.setup_generation == self.transform_setup_generation {
+                    self.pending_transform = Some(pt);
                 }
             }
         }
@@ -408,8 +404,15 @@ impl DarklyEngine {
                 }
                 if self.selection_pixel_bounds().is_some() {
                     if let Some(pt) = self.pending_transform.take() {
-                        if self.floating.is_none() {
-                            self.begin_transform(pt.node_id);
+                        let ready = pt.setup_generation == self.transform_setup_generation
+                            && self.transform_session.is_none()
+                            && self.prepare_transform_session(
+                                pt.node_id,
+                                pt.setup_generation,
+                                pt.relationship.clone(),
+                            );
+                        if !ready && pt.setup_generation == self.transform_setup_generation {
+                            self.pending_transform = Some(pt);
                         }
                     }
                     if let Some(pf) = self.pending_flip.take() {
@@ -889,6 +892,7 @@ impl DarklyEngine {
 
         // If this is a selection GPU action, restore the selection texture
         // and swap the active flag.
+        let restores_selection_metadata = action.restores_selection_metadata();
         if let Some(restored_active) = action.swap_selection_active(self.has_selection()) {
             self.set_selection_active(restored_active);
 
@@ -910,8 +914,10 @@ impl DarklyEngine {
                 }
             }
 
-            self.set_selection_pixel_bounds(None); // will be recomputed from readback
-            self.kick_selection_readback();
+            if !restores_selection_metadata {
+                self.set_selection_pixel_bounds(None); // recomputed from readback
+                self.kick_selection_readback();
+            }
         }
 
         match direction {
