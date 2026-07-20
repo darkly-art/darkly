@@ -161,87 +161,54 @@ When an idea, algorithm, shader, or implementation comes from an external source
 
 ## Planning and Independent Review Workflow
 
-Every bug fix and feature addition must use the following workflow unless the user explicitly waives it. The main thread is the orchestrator: it delegates the initial plan draft and independent review, revises the plan, obtains user approval, implements the change itself, and keeps the user involved throughout.
+Unless the user explicitly waives it, every bug fix and feature follows this workflow. Production code may not change before step 5.
 
-### 1. Write the Plan
+### 1. Draft
 
-Before modifying production code, the orchestrator must delegate the initial plan draft to a fresh, isolated planning agent.
+Delegate planning to a fresh, isolated agent with only the repository instructions and user request. It must investigate the code and required prior art, then write a self-contained plan to `docs/plans/<name>.md` covering:
 
-The planning agent must:
+- Problem and root cause or feature semantics
+- Architectural impact and implementation steps
+- Tests, risks, and unresolved questions
+- A rough LOC estimate, split into production, tests, and generated/docs changes.
+  This estimate is a primary scope and complexity signal, not optional metadata.
+- For bugs, a regression test that will fail before the fix
 
-- Receive no parent conversation history, summaries, conclusions, or unpublished planning context.
-- Receive only the repository instructions and the user's task.
-- Use the strongest reasoning model available, preferably the same model and reasoning level as the orchestrator.
-- Not modify production code.
+The planning agent must not modify production code. If isolated agents are unavailable, ask the user to run this step in a fresh session.
 
-1. Investigate the relevant code and prior art.
-2. For a bug, identify the root cause and design a regression test that fails before the fix.
-3. Write the implementation plan to `docs/plans/<descriptive-name>.md`.
-4. Do not begin implementation yet.
+### 2. Review
 
-The plan must be self-contained. It must describe the problem, root cause or feature semantics, affected architecture, implementation steps, test strategy, risks, and unresolved questions.
+Have a different fresh, isolated agent independently investigate the repository and review the plan. Give it only the repository instructions, plan path, and review task.
 
-When the current platform cannot provide an isolated planning agent, stop and ask the user to run the planning task in a fresh session.
+The reviewer must challenge the diagnosis, scope, architecture, ownership, authority, modularity, duplication, complexity, prior-art support, and test coverage. It should seek the simplest general solution, including removing machinery or relocating behavior to its proper owner, and ensure bug tests reproduce the reported failure.
 
-### 2. Obtain an Independent Review
+Add concrete, file-referenced findings under `## Independent Review` at the top of the plan and give a verdict: `accept`, `revise`, or `rethink`. Do not modify production code. If isolated agents are unavailable, ask the user to run this step in a fresh session.
 
-Before revising or implementing the plan, have a fresh, isolated agent review it.
+### 3. Revise
 
-The reviewer must:
+The orchestrator addresses every substantive finding in the plan or records an evidence-backed reason for rejecting it. A `rethink` verdict requires re-investigation and a rewritten approach, not an incremental patch. Preserve the review.
 
-- Receive no parent conversation history, summaries, conclusions, or unpublished planning context.
-- Receive only the repository instructions, the plan path, and the review task.
-- Use the strongest reasoning model available, preferably the same model and reasoning level as the planning agent.
-- Independently investigate the relevant repository code, architecture, tests, history, and required prior art rather than treating the plan's framing or conclusions as authoritative.
-- Determine whether the plan addresses the underlying problem rather than only its visible symptom.
-- Actively search for simpler and more general solutions, including deleting unnecessary machinery, reusing existing abstractions, relocating behavior to its proper architectural owner, or making the invalid state impossible to express.
-- Consider whether the bug exposes awkward ownership, duplicated authority, misplaced dispatch, leaky abstractions, missing modularity, or another deeper design smell that warrants a broader refactor.
-- Challenge the proposed scope in both directions: identify unjustified complexity or overreach, but also identify when a narrow patch would leave the underlying defect intact.
-- Compare credible alternative approaches and explain why the recommended approach best preserves a minimal, elegant, and maintainable codebase.
-- Verify that the testing strategy proves the intended behavior and, for bugs, specifically prevents the reported failure from returning.
-- Critique correctness, architectural fit, ownership, authority, modularity, duplication, complexity, test coverage, prior-art support, and relevant coordinate-system or GPU constraints.
-- Write its findings under `## Independent Review` at the top of the plan, ordered by importance and supported with concrete file references.
-- Give a clear verdict: `accept`, `revise`, or `rethink`.
-- Not modify production code.
+### 4. Approve
 
-The reviewer is not confined to validating statements made by the plan. It must form its own view of the problem and recommend a substantially different design when that would produce a cleaner system.
+Give the user:
 
-When the current agent platform supports isolated subagents, spawn one without forking or inheriting the parent conversation. When it does not, stop and ask the user to run this review in a fresh session. Reviewing the plan in the planning agent's existing context does not satisfy this requirement.
+- **First:** the estimated LOC range, split into production and tests. Lead the
+  approval summary with this because it is the clearest signal of implementation
+  size and possible over-design.
+- The plan path and review verdict
+- The proposed approach, tradeoffs, and unresolved questions
+- Confirmation that implementation has not begun
 
-### 3. Revise the Plan
-
-The orchestrator must read the draft and independent review, then reconsider and revise the approach before implementation.
-
-For every substantive finding, it must either:
-
-- Revise the plan to address it; or
-- Preserve the original approach and record a concise, evidence-backed reason that directly answers the reviewer's concern.
-
-If the verdict is `rethink`, do not patch the existing plan incrementally. Re-investigate the problem and rewrite the proposed approach around the underlying design issue. Preserve the independent review in the plan.
-
-### 4. Obtain User Approval
-
-After revising the plan, the orchestrator must tell the user:
-
-- The exact path to the plan file.
-- The reviewer's verdict.
-- A concise summary of the proposed approach and any important tradeoffs or unresolved questions.
-- That no production implementation has begun.
-
-The orchestrator must then stop and explicitly ask the user whether to proceed with implementation. Creating, reviewing, or revising the plan does not constitute approval to implement it. Approval must be given after the user has been shown the revised plan path and summary; do not infer it from the original feature or bug-fix request.
-
-If the user requests plan changes, return to the appropriate earlier step and obtain approval again after revising and, when required, re-reviewing the plan.
+Then stop and request explicit approval. Plan changes require revision and, when material, another independent review and approval.
 
 ### 5. Implement
 
-Only after the user explicitly approves the revised plan, the orchestrator implements it in the main thread so the user can follow the work and provide direction.
+After approval, the orchestrator implements and verifies the plan. For bugs, first demonstrate the regression test failing, then make it pass.
 
-1. Implement the plan.
-2. For a bug, write and demonstrate the failing regression test before applying the fix.
-3. Verify the change using the checks appropriate to the affected components.
-4. Keep the plan synchronized with material implementation discoveries and decisions.
-
-If implementation reveals that the plan is incorrect, unsafe, incomplete, or unnecessarily complex, stop production edits and return to step 3. Material redesigns must be recorded in the plan, independently reviewed, and explicitly approved by the user before implementation resumes.
+Keep the plan synchronized with material discoveries. If the implementation's
+expected LOC materially exceeds the approved estimate, stop and explain why
+before continuing. If implementation requires a material redesign, stop and
+return to review, revision, and user approval.
 
 ## Testing Principle
 
