@@ -683,9 +683,8 @@ impl DarklyEngine {
             session.targets.len(),
         );
         let mut staged = Vec::with_capacity(session.targets.len());
-        for (_target_index, (target, (_, extent))) in
-            session.targets.iter().zip(&proposed).enumerate()
-        {
+        for (target, (_, extent)) in session.targets.iter().zip(&proposed) {
+            let _target_index = staged.len();
             commit_checkpoint!(TransformCommitFailurePoint::StagedAllocation {
                 target: _target_index
             });

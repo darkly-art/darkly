@@ -139,7 +139,7 @@ impl Document {
             if !self.is_node_editable(node_id) {
                 return Err(TransformPlanError::NotEditable(node_id));
             }
-            let semantics = self.pixel_transform_semantics(node_id).ok_or_else(|| {
+            let semantics = self.pixel_transform_semantics(node_id).ok_or({
                 TransformPlanError::Unsupported(TransformCapabilityError {
                     endpoint: node_id,
                     operation: PixelTransformOperation::DestructiveTransform,

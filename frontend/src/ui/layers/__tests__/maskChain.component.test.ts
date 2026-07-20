@@ -130,7 +130,10 @@ describe('layer row mask integrations', () => {
             },
         }],
     ])('renders the shared mask controls in the %s row', (_kind, component, props) => {
-        const { target } = render(component, { ...props, onupdate: vi.fn() });
+        const { target } = render(component as Parameters<typeof mount>[0], {
+            ...props,
+            onupdate: vi.fn(),
+        });
         expect(button(target, 'Unlink mask from layer transforms')).toBeTruthy();
         expect(button(target, 'Edit mask')).toBeTruthy();
     });
