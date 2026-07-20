@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use crate::coord::{CanvasRect, WindowRect};
 use crate::document::{
-    PixelTransformPlan, PixelTransformSemantics, TransformCapabilityError, TransformPlanError,
+    PixelTransformPlan, PixelTransformSemantics, TransformCapabilityError, TransformLinkPolicy,
+    TransformPlanError,
 };
 use crate::gpu::transform::{ClearShape, FloatingContent, FloatingMode, Transform};
 
@@ -84,6 +85,26 @@ use crate::undo::{
 
 #[handlers]
 impl DarklyEngine {
+    pub(crate) fn pixel_transform_link_policy(&self) -> TransformLinkPolicy {
+        self.isolated_node.map_or(
+            TransformLinkPolicy::Document,
+            TransformLinkPolicy::IndependentOf,
+        )
+    }
+
+    pub(crate) fn plan_pixel_transform(
+        &self,
+        id: LayerId,
+    ) -> Result<PixelTransformPlan, TransformPlanError> {
+        self.doc
+            .plan_pixel_transform_with_policy(id, self.pixel_transform_link_policy())
+    }
+
+    fn validate_pixel_transform_plan(&self, plan: &PixelTransformPlan) -> bool {
+        plan.link_policy == self.pixel_transform_link_policy()
+            && self.doc.validate_pixel_transform_plan(plan)
+    }
+
     /// Auto-commit any active floating content before performing other edits.
     /// Call this before operations that would conflict with floating content
     /// (layer switch, paint, undo, etc.).
@@ -288,7 +309,7 @@ impl DarklyEngine {
         self.transform_setup_generation = self.transform_setup_generation.wrapping_add(1);
         self.transform_setup_error = None;
         let generation = self.transform_setup_generation;
-        let plan = match self.doc.plan_pixel_transform(id) {
+        let plan = match self.plan_pixel_transform(id) {
             Ok(plan) => plan,
             Err(TransformPlanError::Unsupported(error)) => {
                 self.transform_setup_error = Some(error);
@@ -352,7 +373,7 @@ impl DarklyEngine {
         plan: PixelTransformPlan,
     ) -> TransformSetupOutcome {
         if setup_generation != self.transform_setup_generation
-            || !self.doc.validate_pixel_transform_plan(&plan)
+            || !self.validate_pixel_transform_plan(&plan)
         {
             self.compositor.clear_transform_session();
             return TransformSetupOutcome::Stale;
@@ -655,7 +676,7 @@ impl DarklyEngine {
             return Ok(());
         }
         if session.setup_generation != self.transform_setup_generation
-            || !self.doc.validate_pixel_transform_plan(&session.plan)
+            || !self.validate_pixel_transform_plan(&session.plan)
         {
             return Err(session);
         }
@@ -729,7 +750,7 @@ impl DarklyEngine {
         }
 
         commit_checkpoint!(TransformCommitFailurePoint::FinalMembershipValidation);
-        if !self.doc.validate_pixel_transform_plan(&session.plan) {
+        if !self.validate_pixel_transform_plan(&session.plan) {
             return Err(session);
         }
 

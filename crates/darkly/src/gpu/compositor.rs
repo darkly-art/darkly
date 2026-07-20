@@ -1939,6 +1939,11 @@ impl Compositor {
         self.mark_dirty();
     }
 
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_isolated_node(&self) -> Option<LayerId> {
+        self.isolated_node
+    }
+
     /// True if the renderer should descend into / render `id` under the
     /// current isolation target. When no target is set, every id qualifies.
     /// Otherwise the path is `ancestors(target) ∪ {target} ∪ descendants(target)` —

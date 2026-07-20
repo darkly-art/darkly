@@ -1,4 +1,4 @@
-import type { Engine, EngineState } from '../engine/protocol';
+import { reportEngineError, type Engine, type EngineState } from '../engine/protocol';
 import type { JsonValue } from '../engine/protocol_gen';
 import type { SaveBundle } from '../storage/saveDocument';
 import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
@@ -321,6 +321,25 @@ export class DarklyInstance {
     // that node's contribution (e.g. a mask renders grayscale on canvas).
     // Replaces the old per-layer `showMaskLayerId`.
     isolatedNodeId = $state<number | null>(null);
+    private isolationRequestGeneration = 0;
+
+    async setIsolatedNode(id: number | null): Promise<number | null> {
+        const engine = this.engine;
+        if (!engine) return this.isolatedNodeId;
+        const generation = ++this.isolationRequestGeneration;
+        let installed: number | null;
+        try {
+            installed = await engine.api.setIsolatedNode({ id });
+        } catch (error) {
+            reportEngineError(error);
+            return this.isolatedNodeId;
+        }
+        if (generation === this.isolationRequestGeneration && engine === this.engine) {
+            this.isolatedNodeId = installed;
+            this.requestFrame();
+        }
+        return installed;
+    }
 
     // Layer tree (read from WASM, refreshed after mutations/undo/redo).
     layerTree = $state<any[]>([]);
@@ -406,9 +425,7 @@ export class DarklyInstance {
         // nothing if the new layer is hidden by isolation). Selecting the
         // same isolated node is a no-op.
         if (this.isolatedNodeId !== null && id !== this.isolatedNodeId) {
-            this.engine?.api.setIsolatedNode({ id: null });
-            this.isolatedNodeId = null;
-            this.requestFrame();
+            void this.setIsolatedNode(null);
         }
         this.activeLayerId = id;
         this.selectedLayerIds = id === null ? new Set() : new Set([id]);
@@ -469,9 +486,7 @@ export class DarklyInstance {
             return;
         }
         if (this.isolatedNodeId !== null) {
-            this.engine?.api.setIsolatedNode({ id: null });
-            this.isolatedNodeId = null;
-            this.requestFrame();
+            void this.setIsolatedNode(null);
         }
         this.selectedLayerIds = new Set(ids);
         this.activeLayerId = ids[ids.length - 1];

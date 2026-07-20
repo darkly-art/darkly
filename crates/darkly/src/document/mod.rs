@@ -11,7 +11,7 @@ pub use layer_kind::{LayerKindRegistration, LayerKindRegistry};
 pub use pixel_transform::{
     PixelTransformBoundsPolicy, PixelTransformOperation, PixelTransformPlan,
     PixelTransformSampling, PixelTransformSemantics, PixelTransformTarget, PixelValue,
-    TransformCapabilityError, TransformMembershipSnapshot, TransformPlanError,
+    TransformCapabilityError, TransformLinkPolicy, TransformMembershipSnapshot, TransformPlanError,
 };
 
 use std::collections::HashMap;

@@ -4186,6 +4186,15 @@ fn unsupported_linked_endpoint_reports_structured_capability_error() {
         error.operation,
         darkly::document::PixelTransformOperation::DestructiveTransform
     );
+
+    engine.set_isolated_node(Some(mask));
+    assert_eq!(engine.layer_transform_capability(mask), "destructive");
+    engine.select_all();
+    assert!(engine.begin_transform(mask));
+    assert_eq!(engine.test_transform_target_ids(), vec![mask]);
+    engine.cancel_floating();
+    engine.set_isolated_node(None);
+    assert_eq!(engine.layer_transform_capability(mask), "none");
 }
 
 #[test]
@@ -4642,6 +4651,103 @@ fn defect_regression_public_transform_capability_accepts_mask() {
 }
 
 #[test]
+fn isolated_transform_treats_incident_mask_link_as_temporarily_unlinked() {
+    let mut engine = test_engine(32, 32);
+    let host = engine.add_raster_layer(None);
+    fill_layer(&mut engine, host, 255, 0, 0);
+    engine.add_mask(host);
+    let mask = engine.host_mask_id(host).expect("host has mask");
+    let unrelated = engine.add_raster_layer(None);
+    engine.select_all();
+
+    for (isolated, initiator) in [(host, host), (host, mask), (mask, host), (mask, mask)] {
+        engine.set_isolated_node(Some(isolated));
+        assert!(engine.begin_transform(initiator));
+        assert_eq!(engine.test_transform_target_ids(), vec![initiator]);
+        engine.cancel_floating();
+    }
+
+    engine.set_isolated_node(Some(unrelated));
+    for (initiator, expected) in [(host, vec![host, mask]), (mask, vec![mask, host])] {
+        assert!(engine.begin_transform(initiator));
+        assert_eq!(engine.test_transform_target_ids(), expected);
+        engine.cancel_floating();
+    }
+
+    engine.set_isolated_node(None);
+    assert!(projected_mask_link(&engine, host));
+}
+
+#[test]
+fn isolation_change_cancels_pending_transform_setup() {
+    let mut engine = test_engine(32, 32);
+    let layer = engine.add_raster_layer(None);
+
+    assert!(!engine.begin_transform(layer));
+    assert!(engine.test_has_pending_transform());
+    assert_eq!(engine.set_isolated_node(Some(layer)), Some(layer));
+    assert!(!engine.test_has_pending_transform());
+    assert!(!engine.has_floating());
+}
+
+#[test]
+fn isolation_change_commits_active_linked_transform_before_switching_policy() {
+    use darkly::gpu::transform::affine_translate;
+
+    let mut engine = test_engine(32, 32);
+    let host = engine.add_raster_layer(None);
+    fill_layer(&mut engine, host, 220, 30, 10);
+    engine.add_mask(host);
+    let mask = engine.host_mask_id(host).unwrap();
+    fill_mask_value(&mut engine, mask, 96);
+    let host_before = engine.test_readback_layer(host);
+    let mask_before = engine.test_readback_mask(host);
+    engine.select_all();
+    assert!(engine.begin_transform(host));
+    assert_eq!(engine.test_transform_target_ids(), vec![host, mask]);
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        4.0, 0.0,
+    )));
+
+    assert_eq!(engine.set_isolated_node(Some(mask)), Some(mask));
+
+    assert!(!engine.has_floating());
+    assert_ne!(engine.test_readback_layer(host), host_before);
+    assert_ne!(engine.test_readback_mask(host), mask_before);
+    assert_eq!(engine.isolated_node(), Some(mask));
+    assert_eq!(engine.test_compositor_isolated_node(), Some(mask));
+}
+
+#[test]
+fn failed_transform_commit_rejects_isolation_change() {
+    use darkly::engine::TransformCommitFailurePoint;
+    use darkly::gpu::transform::affine_translate;
+
+    let mut engine = test_engine(32, 32);
+    let host = engine.add_raster_layer(None);
+    fill_layer(&mut engine, host, 220, 30, 10);
+    engine.add_mask(host);
+    let mask = engine.host_mask_id(host).unwrap();
+    engine.select_all();
+    assert!(engine.begin_transform(host));
+    engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        4.0, 0.0,
+    )));
+    engine.test_set_transform_commit_failure(Some(
+        TransformCommitFailurePoint::FinalMembershipValidation,
+    ));
+
+    assert_eq!(engine.set_isolated_node(Some(mask)), None);
+
+    assert_eq!(engine.isolated_node(), None);
+    assert_eq!(engine.test_compositor_isolated_node(), None);
+    assert!(engine.has_floating());
+    assert_eq!(engine.test_transform_target_ids(), vec![host, mask]);
+    engine.test_set_transform_commit_failure(None);
+    engine.cancel_floating();
+}
+
+#[test]
 fn transform_translate_on_mask_moves_pixels() {
     use darkly::gpu::transform::affine_translate;
     let (cw, ch) = (32u32, 32u32);
@@ -4892,11 +4998,7 @@ fn transform_mask_under_isolation_previews_grayscale() {
     use darkly::gpu::transform::affine_translate;
     let (cw, ch) = (40u32, 32u32);
     let (ox, oy) = (11i32, 7i32);
-    for (label, linked, initiate_from_mask) in [
-        ("mask-unlinked", false, true),
-        ("mask-linked", true, true),
-        ("host-linked", true, false),
-    ] {
+    for (label, linked) in [("mask-unlinked", false), ("mask-linked", true)] {
         let mut engine = test_engine(cw, ch);
         engine.resize_canvas(darkly::coord::CanvasRect::from_xywh(ox, oy, cw, ch));
         let host = engine.add_raster_layer(None);
@@ -4963,8 +5065,7 @@ fn transform_mask_under_isolation_previews_grayscale() {
 
         engine.clear_selection();
         assert!(!engine.has_selection(), "{label}");
-        let initiator = if initiate_from_mask { mask_id } else { host };
-        let started = engine.begin_transform(initiator);
+        let started = engine.begin_transform(mask_id);
         if !started {
             assert!(engine.test_has_pending_transform(), "{label}");
             for _ in 0..8 {
@@ -4977,32 +5078,10 @@ fn transform_mask_under_isolation_previews_grayscale() {
         }
         assert!(!engine.test_has_pending_transform(), "{label}");
         assert!(engine.has_floating(), "{label}");
-        let expected_targets = if linked {
-            if initiate_from_mask {
-                vec![mask_id, host]
-            } else {
-                vec![host, mask_id]
-            }
-        } else {
-            vec![mask_id]
-        };
-        assert_eq!(
-            engine.test_transform_target_ids(),
-            expected_targets,
-            "{label}"
-        );
+        assert_eq!(engine.test_transform_target_ids(), vec![mask_id], "{label}");
         let mask_rect = darkly::coord::CanvasRect::from_xywh(ox, oy, cw, ch);
-        let host_rect = darkly::coord::CanvasRect::from_xywh(ox + 5, oy, 35, ch);
         let clear_rects = engine.test_transform_clear_rects();
-        let expected_clear_rects = if linked {
-            if initiate_from_mask {
-                vec![(mask_id, Some(mask_rect)), (host, Some(host_rect))]
-            } else {
-                vec![(host, Some(host_rect)), (mask_id, Some(mask_rect))]
-            }
-        } else {
-            vec![(mask_id, Some(mask_rect))]
-        };
+        let expected_clear_rects = vec![(mask_id, Some(mask_rect))];
         assert_eq!(clear_rects, expected_clear_rects, "{label}");
         assert!(
             clear_rects.iter().all(|(_, rect)| rect.is_some()),
@@ -5014,17 +5093,6 @@ fn transform_mask_under_isolation_previews_grayscale() {
             .and_then(|(_, rect)| *rect)
             .unwrap();
         assert_eq!(resolved_mask, mask_rect, "{label}: mask document extent");
-        if linked {
-            let resolved_host = clear_rects
-                .iter()
-                .find(|(id, _)| *id == host)
-                .and_then(|(_, rect)| *rect)
-                .unwrap();
-            assert_eq!(
-                resolved_host, host_rect,
-                "{label}: host tight alpha-content bounds"
-            );
-        }
         engine.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
             18.0, 0.0,
         )));

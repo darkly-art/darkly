@@ -67,10 +67,34 @@ pub enum TransformMembershipSnapshot {
     },
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TransformLinkPolicy {
+    #[default]
+    Document,
+    IndependentOf(LayerId),
+}
+
+impl TransformMembershipSnapshot {
+    fn expands_under(self, policy: TransformLinkPolicy) -> bool {
+        match self {
+            Self::MaskHost {
+                mask_id,
+                host_id,
+                linked,
+            } => {
+                linked
+                    && !matches!(policy, TransformLinkPolicy::IndependentOf(id) if id == mask_id || id == host_id)
+            }
+            Self::Independent { .. } => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PixelTransformPlan {
     pub initiator_id: LayerId,
     pub membership: TransformMembershipSnapshot,
+    pub link_policy: TransformLinkPolicy,
     pub targets: Vec<PixelTransformTarget>,
 }
 
@@ -111,25 +135,34 @@ impl Document {
         &self,
         initiator_id: LayerId,
     ) -> Result<PixelTransformPlan, TransformPlanError> {
+        self.plan_pixel_transform_with_policy(initiator_id, TransformLinkPolicy::Document)
+    }
+
+    pub fn plan_pixel_transform_with_policy(
+        &self,
+        initiator_id: LayerId,
+        link_policy: TransformLinkPolicy,
+    ) -> Result<PixelTransformPlan, TransformPlanError> {
         if !self.entities.contains_key(initiator_id) {
             return Err(TransformPlanError::Missing(initiator_id));
         }
         let membership = super::filters::mask::transform_membership(self, initiator_id);
-        let ids = match membership {
-            TransformMembershipSnapshot::Independent { .. } => vec![initiator_id],
-            TransformMembershipSnapshot::MaskHost {
-                mask_id,
-                host_id,
-                linked: true,
-            } => vec![
-                initiator_id,
-                if initiator_id == mask_id {
-                    host_id
-                } else {
-                    mask_id
-                },
-            ],
-            TransformMembershipSnapshot::MaskHost { linked: false, .. } => vec![initiator_id],
+        let ids = if membership.expands_under(link_policy) {
+            match membership {
+                TransformMembershipSnapshot::MaskHost {
+                    mask_id, host_id, ..
+                } => vec![
+                    initiator_id,
+                    if initiator_id == mask_id {
+                        host_id
+                    } else {
+                        mask_id
+                    },
+                ],
+                TransformMembershipSnapshot::Independent { .. } => unreachable!(),
+            }
+        } else {
+            vec![initiator_id]
         };
         let mut targets = Vec::with_capacity(ids.len());
         for node_id in ids {
@@ -150,12 +183,13 @@ impl Document {
         Ok(PixelTransformPlan {
             initiator_id,
             membership,
+            link_policy,
             targets,
         })
     }
 
     pub fn validate_pixel_transform_plan(&self, plan: &PixelTransformPlan) -> bool {
-        self.plan_pixel_transform(plan.initiator_id)
+        self.plan_pixel_transform_with_policy(plan.initiator_id, plan.link_policy)
             .is_ok_and(|current| current == *plan)
     }
 }
@@ -204,6 +238,34 @@ mod tests {
         let (doc, host, mask) = document_with_mask(false);
         assert_eq!(doc.plan_pixel_transform(host).unwrap().targets.len(), 1);
         assert_eq!(doc.plan_pixel_transform(mask).unwrap().targets.len(), 1);
+    }
+
+    #[test]
+    fn policy_suppresses_only_an_incident_link() {
+        let (doc, host, mask) = document_with_mask(true);
+        let unrelated = LayerId::from_ffi(99);
+        for isolated in [host, mask] {
+            for initiator in [host, mask] {
+                let plan = doc
+                    .plan_pixel_transform_with_policy(
+                        initiator,
+                        TransformLinkPolicy::IndependentOf(isolated),
+                    )
+                    .unwrap();
+                assert_eq!(plan.targets.len(), 1);
+                assert_eq!(plan.targets[0].node_id, initiator);
+            }
+        }
+        assert_eq!(
+            doc.plan_pixel_transform_with_policy(
+                host,
+                TransformLinkPolicy::IndependentOf(unrelated),
+            )
+            .unwrap()
+            .targets
+            .len(),
+            2
+        );
     }
 
     #[test]

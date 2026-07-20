@@ -78,6 +78,25 @@ fn add_void_unknown_type_returns_null_id() {
 }
 
 #[test]
+fn set_isolated_node_returns_the_installed_session_value() {
+    let reg = RequestRegistry::new();
+    let mut engine = test_engine(64, 64);
+    let layer = engine.add_raster_layer(None);
+
+    let resp = reg
+        .dispatch(
+            &mut engine,
+            "set_isolated_node",
+            json!({ "id": layer.to_ffi() }),
+            &[],
+        )
+        .expect("set isolation dispatch");
+
+    assert_eq!(resp.value, json!(layer.to_ffi()));
+    assert_eq!(engine.isolated_node(), Some(layer));
+}
+
+#[test]
 fn layer_tree_query_round_trips_to_an_array() {
     let reg = RequestRegistry::new();
     let mut engine = test_engine(64, 64);

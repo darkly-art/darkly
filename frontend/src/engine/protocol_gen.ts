@@ -162,9 +162,9 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: number, };
 
-export type ConstParamValue = boolean | number | number | string | [number, number, number] | [number, number];
-
 export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "levels", name: string, default: [number, number, number, number, number], } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, } | { "kind": "color", name: string, default: [number, number, number], } | { "kind": "vec2", name: string, max: number, default: [number, number], } | { "kind": "list", name: string, item: Array<ParamDef>, max_len: number, default: Array<Array<[string, ConstParamValue]>>, };
+
+export type ConstParamValue = boolean | number | number | string | [number, number, number] | [number, number];
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -299,9 +299,9 @@ natural_range: [number, number] | null,
  */
 persist_in_thumbnail: boolean, };
 
-export type PortDir = "Input" | "Output";
-
 export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
+
+export type PortDir = "Input" | "Output";
 
 export type NodeRegistration = { 
 /**
@@ -399,14 +399,14 @@ export type FillBackgroundReq = { id: number, };
 
 export type FillBackgroundColorReq = { id: number, rgba: [number, number, number, number], };
 
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
 export type ParamInfo = { kind: string, name: string, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
 /**
  * Enum: `["Label1", "Label2", ...]`.
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
 options: JsonValue | null, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
 export type VeilTypeInfo = { type: string, displayName: string, 
 /**
@@ -449,17 +449,6 @@ export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 export type LayerKindTypeInfo = { type: string, displayName: string, };
 
 export type LayerTransformCapabilityReq = { id: number, };
-
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
-/**
- * Whether this modifier participates in transforms with its host.
- */
-linkedToHost: boolean,
-/**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
 
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
@@ -512,6 +501,17 @@ pipeline: string,
  * uses.
  */
 params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
+
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * Whether this modifier participates in transforms with its host.
+ */
+linkedToHost: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -659,6 +659,10 @@ export type StrokeOp = { "op": "flood_fill", x: number, y: number, r: number, g:
  * Foreground color as linear RGBA floats (0-1).
  */
 cr: number, cg: number, cb: number, ca: number, };
+
+export type PixelTransformOperation = "destructive_transform";
+
+export type TransformCapabilityError = { endpoint: number, operation: PixelTransformOperation, };
 
 export type LayerIdReq = { id: number, };
 
@@ -871,6 +875,7 @@ export type RequestKind =
     | 'start_preview'
     | 'start_save_document'
     | 'stroke_to'
+    | 'take_transform_setup_error'
     | 'text_objects'
     | 'tool_types'
     | 'undo'
@@ -1063,6 +1068,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'start_preview',
     'start_save_document',
     'stroke_to',
+    'take_transform_setup_error',
     'text_objects',
     'tool_types',
     'undo',
@@ -1239,7 +1245,7 @@ export interface EngineApi {
     setFilterParams(req: SetFilterParamsReq): void;
     setGroupCollapsed(req: SetGroupCollapsedReq): void;
     setGroupPassthrough(req: SetGroupPassthroughReq): void;
-    setIsolatedNode(req: SetIsolatedNodeReq): void;
+    setIsolatedNode(req: SetIsolatedNodeReq): Promise<number | null>;
     setLayerName(req: SetLayerNameReq): void;
     setLayerVisible(req: SetLayerVisibleReq): void;
     setMaskLinkedToHost(req: SetMaskLinkedToHostReq): void;
@@ -1263,6 +1269,7 @@ export interface EngineApi {
     startPreview(req: PreviewReq): void;
     startSaveDocument(req: StartSaveDocumentReq): Promise<void>;
     strokeTo(req: StrokeToReq): void;
+    takeTransformSetupError(): Promise<TransformCapabilityError | null>;
     textObjects(req: LayerIdReq): Promise<{ objects: Array<{ object: number, content: string, font_family: string, size: number, variations: Record<string, number>, features: Record<string, number>, letter_spacing: number, word_spacing: number, line_height: number, italic: boolean, align: string, color: [number, number, number, number], box: [number, number] | null }> }>;
     toolTypes(): Promise<Array<ToolTypeInfo>>;
     undo(): void;
@@ -1433,7 +1440,7 @@ export function makeApi(t: Transport): EngineApi {
         setFilterParams: (req) => t.postFF('set_filter_params', req),
         setGroupCollapsed: (req) => t.postFF('set_group_collapsed', req),
         setGroupPassthrough: (req) => t.postFF('set_group_passthrough', req),
-        setIsolatedNode: (req) => t.postFF('set_isolated_node', req),
+        setIsolatedNode: (req) => t.request('set_isolated_node', req),
         setLayerName: (req) => t.postFF('set_layer_name', req),
         setLayerVisible: (req) => t.postFF('set_layer_visible', req),
         setMaskLinkedToHost: (req) => t.postFF('set_mask_linked_to_host', req),
@@ -1457,6 +1464,7 @@ export function makeApi(t: Transport): EngineApi {
         startPreview: (req) => t.postFF('start_preview', req),
         startSaveDocument: (req) => t.request('start_save_document', req),
         strokeTo: (req) => t.postFF('stroke_to', req),
+        takeTransformSetupError: () => t.request('take_transform_setup_error'),
         textObjects: (req) => t.request('text_objects', req),
         toolTypes: () => t.request('tool_types'),
         undo: () => t.postFF('undo'),

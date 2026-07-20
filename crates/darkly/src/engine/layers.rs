@@ -950,7 +950,7 @@ impl DarklyEngine {
             {
                 TransformCapability::Live
             }
-            _ if self.doc.plan_pixel_transform(id).is_ok() => TransformCapability::Destructive,
+            _ if self.plan_pixel_transform(id).is_ok() => TransformCapability::Destructive,
             _ => TransformCapability::None,
         };
         match cap {
@@ -1386,9 +1386,12 @@ impl DarklyEngine {
     /// modifies that layer's `visible` field, and clearing isolation
     /// preserves whatever the user set.
     #[handler]
-    pub fn set_isolated_node(&mut self, id: Option<LayerId>) {
+    pub fn set_isolated_node(&mut self, id: Option<LayerId>) -> Option<LayerId> {
         if self.isolated_node == id {
-            return;
+            return self.isolated_node;
+        }
+        if !self.resolve_transform_conflict() {
+            return self.isolated_node;
         }
         self.isolated_node = id;
         // Mirror to the compositor so the render walk can filter off-path
@@ -1398,11 +1401,17 @@ impl DarklyEngine {
         self.compositor.set_isolated_node(id);
         self.sync_compositor_layers();
         self.compositor.mark_dirty();
+        self.isolated_node
     }
 
     /// Read the current isolated-node id, if any.
     pub fn isolated_node(&self) -> Option<LayerId> {
         self.isolated_node
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_compositor_isolated_node(&self) -> Option<LayerId> {
+        self.compositor.test_isolated_node()
     }
 
     /// True when the host's `isolated` blend uniform should fire — i.e. the

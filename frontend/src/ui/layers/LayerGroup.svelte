@@ -238,8 +238,7 @@
     function toggleShowMask() {
         if (app.engine && maskModifier !== null) {
             const next = isMaskIsolated ? null : maskModifier.id;
-            app.engine.api.setIsolatedNode({ id: next });
-            app.isolatedNodeId = next;
+            void app.setIsolatedNode(next);
             onupdate();
         }
     }
