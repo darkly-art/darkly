@@ -260,11 +260,12 @@ impl Compositor {
             self.canvas_width,
             self.canvas_height,
         );
-        let target = crate::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
+        let target = crate::gpu::paint_target::GpuPaintTarget::from_extent(
             staged.texture(),
             staged.view(),
             state.target_format,
             extent,
+            self.canvas_rect(),
         );
         match param.clear_shape {
             crate::gpu::transform::ClearShape::Rect(rect) => {

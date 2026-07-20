@@ -23,6 +23,12 @@ Top to bottom, with their authority:
   pixels, always non-negative. Converted only through its `LayerTexture`
   (`layer_to_canvas` / `canvas_to_layer_rect`).
 
+`GpuPaintTarget` keeps two plane-space rectangles with different roles: the
+target texture's extent locates its texels in the plane, while the canvas-window
+rectangle anchors window-sized resources such as the selection texture. For an
+extra-canvas layer or mask these rectangles differ; its node extent must never
+be reused as the selection texture's sampling frame.
+
 The invariant: **`plane = window_local + canvas_origin`**.
 
 **How to convert — always through a named method, never hand-written `± canvas_origin`:**
