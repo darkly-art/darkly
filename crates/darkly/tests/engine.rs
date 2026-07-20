@@ -5160,13 +5160,14 @@ fn isolated_selected_mask_transform_commit_uses_canvas_window_frame() {
         -8.0, 0.0,
     )));
     engine.commit_floating();
-    let grown = engine.node_pixel_bounds(mask).expect("mask has pixel bounds");
+    let grown = engine
+        .node_pixel_bounds(mask)
+        .expect("mask has pixel bounds");
     assert_eq!(grown, CanvasRect::from_xywh(ox - 8, oy, cw + 8, ch));
     assert_ne!(grown, engine.canvas_rect());
     let before_second = engine.test_readback_mask(host);
-    let grown_index = |x: i32, y: i32| {
-        ((y - grown.y0()) as u32 * grown.width + (x - grown.x0()) as u32) as usize
-    };
+    let grown_index =
+        |x: i32, y: i32| ((y - grown.y0()) as u32 * grown.width + (x - grown.x0()) as u32) as usize;
     assert_eq!(before_second[grown_index(ox + 10, oy + 10)], 80);
 
     let (sx, sy, sw, sh) = (ox + 10, oy + 9, 5u32, 7u32);
@@ -5189,21 +5190,25 @@ fn isolated_selected_mask_transform_commit_uses_canvas_window_frame() {
     engine.render(0.0);
 
     let preview = engine.test_readback_canvas();
-    let preview_value = |x: i32, y: i32| {
-        rgba_at(&preview, cw, (x - ox) as u32, (y - oy) as u32)[0]
-    };
+    let preview_value = |x: i32, y: i32| rgba_at(&preview, cw, (x - ox) as u32, (y - oy) as u32)[0];
     assert_eq!(preview_value(sx + 1, sy + 1), 255, "preview vacates source");
     assert_eq!(
         preview_value(sx + translate_x + 1, sy + 1),
         80,
         "preview moves selected mask pixels"
     );
-    assert_eq!(preview_value(sx - 2, sy + 1), 80, "preview preserves control");
+    assert_eq!(
+        preview_value(sx - 2, sy + 1),
+        80,
+        "preview preserves control"
+    );
 
     engine.commit_floating();
     let after = engine.test_readback_mask(host);
     let expected: Vec<_> = preview.chunks_exact(4).map(|pixel| pixel[0]).collect();
-    let after_bounds = engine.node_pixel_bounds(mask).expect("committed mask bounds");
+    let after_bounds = engine
+        .node_pixel_bounds(mask)
+        .expect("committed mask bounds");
     for window_y in 0..ch {
         for window_x in 0..cw {
             let plane_x = ox + window_x as i32;
