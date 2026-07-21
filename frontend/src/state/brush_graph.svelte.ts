@@ -312,7 +312,10 @@ export class BrushGraphState {
     async importYaml(yaml: string): Promise<string | null> {
         if (!app.engine) return 'engine not ready';
         const result = await app.engine.api.brushGraphImportYaml({ yaml });
-        if (result !== null) {
+        // Success is a nullish sentinel (the protocol's `null`); a failure is an
+        // `{ error }` envelope. Match nullishly so a stray `undefined` can never
+        // be mistaken for a failure and dereferenced.
+        if (result != null) {
             const err = String(result.error ?? result);
             this.error = err;
             return err;
