@@ -30,7 +30,7 @@
     // re-laying out then would clobber the user's arrangement, so the
     // guard keeps this a one-shot per fresh graph.
     $effect(() => {
-        if (!brushGraph.hasUnpositionedNodes) return;
+        if (!brushGraph.needsInitialLayout) return;
         const sizes: Record<string, [number, number]> = {};
         for (const el of document.querySelectorAll<HTMLElement>('[data-node-id]')) {
             const id = el.dataset.nodeId;
