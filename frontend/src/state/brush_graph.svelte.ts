@@ -111,7 +111,7 @@ export const WIRE_COLORS: Record<string, string> = {
  *  dynamic (`JsonValue`) at the boundary and cast to [`BrushGraph`] here. */
 type GraphCommandResult = { graph: JsonValue } | { error: string };
 
-class BrushGraphState {
+export class BrushGraphState {
     /** Local view of the graph (snapshot from Rust). */
     graph = $state<BrushGraph | null>(null);
 
@@ -312,7 +312,10 @@ class BrushGraphState {
     async importYaml(yaml: string): Promise<string | null> {
         if (!app.engine) return 'engine not ready';
         const result = await app.engine.api.brushGraphImportYaml({ yaml });
-        if (result !== null) {
+        // Success is a nullish sentinel (the protocol's `null`); a failure is an
+        // `{ error }` envelope. Match nullishly so a stray `undefined` can never
+        // be mistaken for a failure and dereferenced.
+        if (result != null) {
             const err = String(result.error ?? result);
             this.error = err;
             return err;
@@ -418,14 +421,16 @@ class BrushGraphState {
         await this.snapshotTopologyVersion();
     }
 
-    /** True when at least one node lacks a UI position — i.e. the graph
-     *  was just loaded/reset and the canvas should run auto-layout. */
-    get hasUnpositionedNodes(): boolean {
+    /** True only for a fresh graph where NO node has a UI position yet — i.e.
+     *  it was just loaded/reset/imported and the canvas should run its one-time
+     *  auto-layout. A graph that already has positioned nodes (e.g. one new node
+     *  awaiting placement mid-`addNode`) is deliberately excluded, so spawning a
+     *  node never triggers a full relayout that would move existing nodes. */
+    get needsInitialLayout(): boolean {
         if (!this.graph) return false;
-        for (const idStr of Object.keys(this.graph.nodes)) {
-            if (!this.nodePositions[Number(idStr)]) return true;
-        }
-        return false;
+        const ids = Object.keys(this.graph.nodes);
+        if (ids.length === 0) return false;
+        return ids.every((idStr) => !this.nodePositions[Number(idStr)]);
     }
 
     /**
@@ -454,11 +459,8 @@ class BrushGraphState {
     async addNode(typeId: string, x: number, y: number): Promise<number | null> {
         if (!app.engine) return null;
         await this.applyResult(await app.engine.api.brushGraphAddNode({ type_id: typeId }));
-        // applyResult records the error and leaves `this.graph` unchanged
-        // on failure. If we didn't bail here, the code below would write
-        // `(x, y)` into nodePositions[next_id - 1] — and that id still
-        // points at the *previously*-added node (typically Paint), making
-        // it visibly warp to the cursor.
+        // On failure `applyResult` records the error and leaves `this.graph`
+        // unchanged; bail before deriving an id from a stale `next_id`.
         if (this.error) return null;
         if (!this.graph) return null;
         const id = this.graph.next_id - 1;
