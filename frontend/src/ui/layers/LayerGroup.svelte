@@ -1,6 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
-    import { getNodeThumbnail, THUMB_SIZE } from './thumbnails.svelte';
+    import { getNodeThumbnail } from './thumbnails.svelte';
     import { actions } from '../../actions/registry';
     import { bindingSite } from '../../actions/binding_site';
     import { tooltipForAction } from '../../config/store.svelte';
@@ -9,9 +9,11 @@
     import LayerGroup from './LayerGroup.svelte';
     import Icon from '../../icons/Icon.svelte';
     import ContextMenu, { type ContextMenuItem } from '../ContextMenu.svelte';
+    import MaskChainControl from './MaskChainControl.svelte';
 
     interface Modifier {
         id: number; kind: string; name: string; visible: boolean; locked: boolean;
+        linkedToHost: boolean; editable: boolean;
     }
 
     let { group, depth = 0, onupdate }: {
@@ -236,8 +238,7 @@
     function toggleShowMask() {
         if (app.engine && maskModifier !== null) {
             const next = isMaskIsolated ? null : maskModifier.id;
-            app.engine.api.setIsolatedNode({ id: next });
-            app.isolatedNodeId = next;
+            void app.setIsolatedNode(next);
             onupdate();
         }
     }
@@ -370,20 +371,15 @@
             <span class="group-name">{group.name}</span>
         {/if}
 
-        {#if hasMask && maskThumb}
-            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-            <img
-                class="thumb"
-                class:thumb-active={isEditingMask}
-                class:mask-disabled={!maskEnabled}
-                src={maskThumb}
-                alt="mask"
-                width={THUMB_SIZE}
-                height={THUMB_SIZE}
-                draggable="false"
-                use:bindingSite={{ name: 'maskThumb', ctx: () => ({ layerId: maskModifier!.id }) }}
-                onclick={clickMaskThumb}
+        {#if maskModifier}
+            <MaskChainControl
+                mask={maskModifier}
+                thumbnail={maskThumb}
+                active={isEditingMask}
+                enabled={maskEnabled}
+                onselect={clickMaskThumb}
                 oncontextmenu={onMaskContextMenu}
+                {onupdate}
             />
         {/if}
 
@@ -568,16 +564,4 @@
         outline: none;
     }
 
-    .thumb {
-        width: 32px;
-        height: 32px;
-        border: 2px solid var(--text-dim);
-        border-radius: 4px;
-        flex-shrink: 0;
-        cursor: pointer;
-        image-rendering: pixelated;
-        background: var(--thumb-bg);
-    }
-    .thumb-active { border-color: var(--accent); }
-    .mask-disabled { opacity: 0.4; }
 </style>

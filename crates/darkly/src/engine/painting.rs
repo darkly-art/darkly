@@ -96,10 +96,10 @@ impl DarklyEngine {
         &mut self,
         node_id: LayerId,
         rect: CanvasRect,
-        label_save: &str,
+        _label_save: &str,
         label_commit: &'static str,
         mutate: impl FnOnce(
-            &mut wgpu::CommandEncoder,
+            &mut crate::gpu::paint_target::PaintCommandEncoder<'_>,
             GpuPaintTarget<'_>,
             &PaintPipelines,
             &wgpu::Queue,
@@ -114,13 +114,19 @@ impl DarklyEngine {
 
         // Save then mutate in one command buffer — wgpu executes recorded
         // commands in order, so the snapshot captures pre-mutation pixels.
-        let snap = self.gpu.encode_ret(label_save, |encoder| {
-            let snap =
-                self.region_scratch
-                    .save_region(&self.gpu.device, encoder, &frame, format, rect);
-            mutate(encoder, target, &self.paint_pipelines, &self.gpu.queue);
-            snap
+        let mut encoder = crate::gpu::paint_target::PaintCommandEncoder::new(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &self.paint_pipelines,
+            label_commit,
+            1,
+        );
+        let snap = encoder.with_raw(|raw| {
+            self.region_scratch
+                .save_region(&self.gpu.device, raw, &frame, format, rect)
         });
+        mutate(&mut encoder, target, &self.paint_pipelines, &self.gpu.queue);
+        encoder.submit();
 
         // `frame`'s last use; after this the shared `compositor` borrow is free
         // for the `&mut` calls below (NLL).
@@ -1414,16 +1420,22 @@ impl DarklyEngine {
             None => return,
         };
 
-        self.gpu.encode("flood-fill-stamp", |encoder| {
-            target.fill_rect_with_selection(
-                encoder,
-                &self.paint_pipelines,
-                &self.gpu.queue,
-                self.doc.canvas_rect(),
-                color,
-                &mask_bind_group,
-            );
-        });
+        let mut encoder = crate::gpu::paint_target::PaintCommandEncoder::new(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &self.paint_pipelines,
+            "flood-fill-stamp",
+            1,
+        );
+        target.fill_rect_with_selection(
+            &mut encoder,
+            &self.paint_pipelines,
+            &self.gpu.queue,
+            self.doc.canvas_rect(),
+            color,
+            &mask_bind_group,
+        );
+        encoder.submit();
 
         // 4. Commit undo. The lazy save in `gpu_stroke_to` populated
         //    `scratch_snapshot` with the full layer; flood fill can change
@@ -1562,25 +1574,6 @@ impl DarklyEngine {
         self.compositor
             .node_texture(node_id)
             .map(|t| GpuPaintTarget::from_node(t, self.doc.canvas_rect()))
-    }
-
-    /// Upload a cropped region of the GPU selection as an R8 texture bind group.
-    /// Reads from the CPU cache (populated by async readback or eagerly on upload).
-    pub(crate) fn upload_cropped_selection_r8(
-        &self,
-        origin: (i32, i32),
-        width: u32,
-        height: u32,
-    ) -> Option<wgpu::BindGroup> {
-        let pixels = self.cropped_selection_pixels(origin, width, height)?;
-        Some(self.paint_pipelines.upload_r8_bind_group(
-            &self.gpu.device,
-            &self.gpu.queue,
-            width,
-            height,
-            &pixels,
-            "selection-cropped",
-        ))
     }
 
     /// Crop the live selection's CPU cache to a `width`×`height` window-local

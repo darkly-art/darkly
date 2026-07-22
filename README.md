@@ -107,6 +107,7 @@ For a feature to count, it must be:
 - [x] Raster layers + groups
 - [x] 16 blend modes
 - [x] Layer masks
+    - [x] Link/unlink mask and host transforms
 - [x] Rect, ellipse, lasso, polygon, magic wand selection
 - [x] Selection Replace / Add / Subtract / Intersect modes
 - [x] Pan / zoom / rotate view

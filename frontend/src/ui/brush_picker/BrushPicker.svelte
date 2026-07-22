@@ -3,6 +3,7 @@
     import { brushGraph } from '../../state/brush_graph.svelte';
     import type { BrushInfo } from '../../state/brush_graph.svelte';
     import BrushTile from './BrushTile.svelte';
+    import { brushPickerPlacement } from './placement';
 
     interface Props {
         onSelect: (brush: BrushInfo) => void;
@@ -17,18 +18,24 @@
 
     let pickerEl: HTMLElement | undefined = $state();
     let left = $state(0);
-    let bottom = $state(0);
+    let top = $state<number | null>(null);
+    let bottom = $state<number | null>(null);
 
-    // Anchor the fixed dropdown above the trigger, left-aligned and clamped
-    // into the viewport. Recomputed on scroll/resize because the tool-options
-    // bar reflows (controls wrap) as the window changes.
+    // Anchor the fixed dropdown on whichever side of the trigger has more
+    // room. The toolbar is at the bottom normally and at the top while the
+    // brush builder is fullscreen. Recompute when either layout moves.
     function reposition() {
         if (!anchor) return;
         const r = anchor.getBoundingClientRect();
-        const gap = 6;
         const width = pickerEl?.offsetWidth ?? 480;
-        left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
-        bottom = window.innerHeight - r.top + gap;
+        const placement = brushPickerPlacement(
+            r,
+            { width: window.innerWidth, height: window.innerHeight },
+            width,
+        );
+        left = placement.left;
+        top = placement.top;
+        bottom = placement.bottom;
     }
 
     $effect(() => {
@@ -136,7 +143,8 @@
     data-keep-open="brush-picker"
     onkeydown={handleKey}
     style:left="{left}px"
-    style:bottom="{bottom}px"
+    style:top={top === null ? undefined : `${top}px`}
+    style:bottom={bottom === null ? undefined : `${bottom}px`}
 >
     <!-- Non-scrolling header: the search box stays put while the grid
          below scrolls. The active brush lives on the trigger foot. -->
@@ -185,8 +193,8 @@
 </div>
 
 <style>
-    /* A black rounded dropdown anchored to the trigger button and popping
-     * upward. No border, no shadow: it reads against the raised bar and the
+    /* A black rounded dropdown anchored to the trigger button. No border or
+     * shadow: it reads against the raised bar and the
      * canvas by fill contrast, and its lighter tile wells give it body.
      * `max-width` keeps it from pushing past the viewport edge.
      *

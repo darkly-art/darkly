@@ -359,6 +359,9 @@ impl DarklyEngine {
 
     #[handler]
     pub fn clear_selection(&mut self) {
+        if !self.resolve_transform_conflict() {
+            return;
+        }
         if let Some((was_active, entry)) = self.clear_selection_collecting_undo() {
             self.push_undo(Box::new(SelectionAction::new(was_active, entry)));
         }
@@ -398,6 +401,9 @@ impl DarklyEngine {
 
     #[handler]
     pub fn select_all(&mut self) {
+        if !self.resolve_transform_conflict() {
+            return;
+        }
         let rect = self.selection_full_canvas_rect();
         self.save_selection_for_undo(rect);
         let was_active = self.has_selection();
@@ -419,7 +425,7 @@ impl DarklyEngine {
 
     #[handler]
     pub fn invert_selection(&mut self) {
-        if !self.has_selection() {
+        if !self.resolve_transform_conflict() || !self.has_selection() {
             return;
         }
         let rect = self.selection_full_canvas_rect();
@@ -589,6 +595,9 @@ impl DarklyEngine {
 
     /// Apply a tight-bounds rasterized mask (from SDF tools).
     pub(crate) fn apply_selection_mask(&mut self, mask: RasterizedMask, mode: SelectionMode) {
+        if !self.resolve_transform_conflict() {
+            return;
+        }
         let was_active = self.has_selection();
         let rect = self.selection_undo_rect_for_shape([mask.x, mask.y, mask.width, mask.height]);
         self.save_selection_for_undo(rect);
@@ -659,6 +668,9 @@ impl DarklyEngine {
         mode: SelectionMode,
         was_active: bool,
     ) {
+        if !self.resolve_transform_conflict() {
+            return;
+        }
         match mode {
             SelectionMode::Replace => {
                 self.upload_selection_replace_full(&shape_pixels);

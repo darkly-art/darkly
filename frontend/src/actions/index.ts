@@ -1139,12 +1139,9 @@ export function registerActions() {
 // while soloed and those changes persist after un-solo.
 
 function toggleIsolation(targetId: number) {
-    const engine = app.engine;
-    if (!engine) return;
+    if (!app.engine) return;
     const next = app.isolatedNodeId === targetId ? null : targetId;
-    engine.api.setIsolatedNode({ id: next });
-    app.isolatedNodeId = next;
-    app.requestFrame();
+    void app.setIsolatedNode(next);
 }
 
 /** Find a layer by id in the tree (recursive search). */

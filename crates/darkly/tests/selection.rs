@@ -10,7 +10,7 @@ use darkly::engine::types::StrokeOp;
 use darkly::engine::DarklyEngine;
 use darkly::gpu::atlas::CanvasFrame;
 use darkly::gpu::context::GpuContext;
-use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
+use darkly::gpu::paint_target::{GpuPaintTarget, PaintCommandEncoder, PaintPipelines};
 use darkly::gpu::test_utils::*;
 use darkly::layer::LayerId;
 use darkly::mask;
@@ -201,9 +201,9 @@ fn gpu_clear_selection_contents() {
     );
 
     // Erase within selection.
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.erase_with_selection(&mut enc, &pipelines, &queue, &sel_bg);
-    submit(&queue, enc);
+    enc.submit();
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
 
@@ -267,9 +267,9 @@ fn gpu_clear_selection_undo() {
         fmt,
         darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
     );
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.erase_with_selection(&mut enc, &pipelines, &queue, &sel_bg);
-    submit(&queue, enc);
+    enc.submit();
 
     let mut enc = encoder(&device);
     let (entry, _req) = store.commit_region(
@@ -347,7 +347,7 @@ fn gpu_flood_fill_respects_selection() {
         fmt,
         darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
     );
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.fill_rect_with_selection(
         &mut enc,
         &pipelines,
@@ -356,7 +356,7 @@ fn gpu_flood_fill_respects_selection() {
         [0, 0, 255, 255],
         &mask_bg,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     let result = readback_texture(&device, &queue, &tex, fmt, w, h);
 

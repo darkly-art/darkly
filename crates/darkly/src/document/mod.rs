@@ -2,11 +2,17 @@ pub mod filter;
 pub mod filters;
 pub mod layer_kind;
 pub mod layer_kinds;
+pub mod pixel_transform;
 
 pub use filter::{Filter, FilterEntityRegistration, FilterKind, FilterRegistry};
 pub use filters::mask::MaskFilter;
 pub use filters::selection::{SelectionCpuCache, SelectionFilter};
 pub use layer_kind::{LayerKindRegistration, LayerKindRegistry};
+pub use pixel_transform::{
+    PixelTransformBoundsPolicy, PixelTransformOperation, PixelTransformPlan,
+    PixelTransformSampling, PixelTransformSemantics, PixelTransformTarget, PixelValue,
+    TransformCapabilityError, TransformLinkPolicy, TransformMembershipSnapshot, TransformPlanError,
+};
 
 use std::collections::HashMap;
 

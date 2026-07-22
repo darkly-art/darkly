@@ -944,7 +944,13 @@ impl DarklyEngine {
     pub fn layer_transform_capability(&self, id: LayerId) -> &'static str {
         use crate::layer::TransformCapability;
         let cap = match self.doc.find_node(id) {
-            Some(LayerNode::Layer(l)) => l.transform_capability(self.compositor.void_registry()),
+            Some(LayerNode::Layer(l))
+                if l.transform_capability(self.compositor.void_registry())
+                    == TransformCapability::Live =>
+            {
+                TransformCapability::Live
+            }
+            _ if self.plan_pixel_transform(id).is_ok() => TransformCapability::Destructive,
             _ => TransformCapability::None,
         };
         match cap {
@@ -1054,6 +1060,9 @@ impl DarklyEngine {
 
     #[handler]
     pub fn remove_layer(&mut self, id: LayerId) -> Result<(), String> {
+        if !self.resolve_transform_conflict() {
+            return Err("Active transform could not be committed".into());
+        }
         if !self.doc.is_node_editable(id) {
             return Err("Layer is locked".into());
         }
@@ -1093,6 +1102,9 @@ impl DarklyEngine {
     /// removing the editable set would leave zero layers in the document.
     #[handler]
     pub fn remove_layers(&mut self, ids: Vec<LayerId>) -> Result<usize, String> {
+        if !self.resolve_transform_conflict() {
+            return Err("Active transform could not be committed".into());
+        }
         let mut editable = Vec::with_capacity(ids.len());
         let mut skipped_locked = 0usize;
         for &id in &ids {
@@ -1128,6 +1140,9 @@ impl DarklyEngine {
 
     #[handler]
     pub fn move_layer(&mut self, id: LayerId, target: MoveTarget) {
+        if !self.resolve_transform_conflict() {
+            return;
+        }
         if let Some(action) = self.move_layer_inner(id, target) {
             self.push_undo(action);
         }
@@ -1164,6 +1179,9 @@ impl DarklyEngine {
     /// self-referential).
     #[handler]
     pub fn move_layers(&mut self, ids: Vec<LayerId>, target: MoveTarget) -> Result<usize, String> {
+        if !self.resolve_transform_conflict() {
+            return Err("Active transform could not be committed".into());
+        }
         let target_id = match target {
             MoveTarget::Before(t)
             | MoveTarget::After(t)
@@ -1337,6 +1355,9 @@ impl DarklyEngine {
     /// Set the `locked` flag on any node — layer, group, or filter.
     #[handler]
     pub fn set_node_locked(&mut self, id: LayerId, locked: bool) {
+        if !self.resolve_transform_conflict() {
+            return;
+        }
         let old_locked = if let Some(node) = self.doc.find_node_mut(id) {
             let old = node.common().locked;
             node.common_mut().locked = locked;
@@ -1365,9 +1386,12 @@ impl DarklyEngine {
     /// modifies that layer's `visible` field, and clearing isolation
     /// preserves whatever the user set.
     #[handler]
-    pub fn set_isolated_node(&mut self, id: Option<LayerId>) {
+    pub fn set_isolated_node(&mut self, id: Option<LayerId>) -> Option<LayerId> {
         if self.isolated_node == id {
-            return;
+            return self.isolated_node;
+        }
+        if !self.resolve_transform_conflict() {
+            return self.isolated_node;
         }
         self.isolated_node = id;
         // Mirror to the compositor so the render walk can filter off-path
@@ -1377,11 +1401,17 @@ impl DarklyEngine {
         self.compositor.set_isolated_node(id);
         self.sync_compositor_layers();
         self.compositor.mark_dirty();
+        self.isolated_node
     }
 
     /// Read the current isolated-node id, if any.
     pub fn isolated_node(&self) -> Option<LayerId> {
         self.isolated_node
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_compositor_isolated_node(&self) -> Option<LayerId> {
+        self.compositor.test_isolated_node()
     }
 
     /// True when the host's `isolated` blend uniform should fire — i.e. the

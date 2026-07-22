@@ -3,7 +3,7 @@
 //! Tests compositing, alpha blending, erasing, masking, and GPU readback.
 //! Run with: `cargo test -p darkly --test paint_target`
 
-use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
+use darkly::gpu::paint_target::{GpuPaintTarget, PaintCommandEncoder, PaintPipelines};
 use darkly::gpu::readback;
 use darkly::gpu::test_utils::*;
 
@@ -20,6 +20,53 @@ fn submit(queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) {
 // ============================================================================
 // GpuPaintTarget tests
 // ============================================================================
+
+#[test]
+fn two_draws_in_one_encoder_keep_distinct_uniforms() {
+    let (device, queue) = test_device();
+    let (w, h) = (20, 16);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+    let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0; (w * h * 4) as usize]);
+    let pipelines = PaintPipelines::new(
+        &device,
+        &queue,
+        &darkly::gpu::selection::selection_mask_bgl(&device),
+    );
+    let target = GpuPaintTarget::from_canvas_texture(
+        &tex,
+        &view,
+        fmt,
+        darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
+    );
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "two-paints", 2);
+    target.fill_rect(
+        &mut enc,
+        &pipelines,
+        &queue,
+        darkly::coord::CanvasRect::from_xywh(1, 2, 4, 3),
+        [255, 0, 0, 255],
+    );
+    target.fill_rect(
+        &mut enc,
+        &pipelines,
+        &queue,
+        darkly::coord::CanvasRect::from_xywh(12, 9, 7, 5),
+        [0, 255, 0, 255],
+    );
+    enc.submit();
+
+    let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
+    let at = |x: u32, y: u32| {
+        let i = ((y * w + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+    };
+    assert_eq!(at(2, 3), [255, 0, 0, 255]);
+    assert_eq!(at(15, 11), [0, 255, 0, 255]);
+    assert_eq!(at(0, 0), [0, 0, 0, 0]);
+    assert_eq!(at(8, 3), [0, 0, 0, 0]);
+    assert_eq!(at(10, 11), [0, 0, 0, 0]);
+    assert_eq!(at(15, 7), [0, 0, 0, 0]);
+}
 
 /// composite_circle: paint red circle, verify center is red and corners are transparent.
 #[test]
@@ -41,7 +88,7 @@ fn paint_target_composite_circle() {
         darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
     );
 
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.composite_circle(
         &mut enc,
         &pipelines,
@@ -52,7 +99,7 @@ fn paint_target_composite_circle() {
         [255, 0, 0, 255],
         1.0,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
 
@@ -110,7 +157,7 @@ fn paint_target_alpha_blending() {
     );
 
     // Paint red circle at center with 50% alpha.
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.composite_circle(
         &mut enc,
         &pipelines,
@@ -121,7 +168,7 @@ fn paint_target_alpha_blending() {
         [255, 0, 0, 128],
         1.0,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
     let c = ((64 * w + 64) * 4) as usize;
@@ -156,7 +203,7 @@ fn paint_target_r8_mask() {
     );
 
     // Composite black → luminance 0 → mask toward 0.
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.composite_circle(
         &mut enc,
         &pipelines,
@@ -167,7 +214,7 @@ fn paint_target_r8_mask() {
         [0, 0, 0, 255],
         1.0,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
 
@@ -229,7 +276,7 @@ fn paint_target_selection_masking() {
         darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
     );
 
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.composite_circle_with_selection(
         &mut enc,
         &pipelines,
@@ -241,7 +288,7 @@ fn paint_target_selection_masking() {
         1.0,
         &sel_bind_group,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
 
@@ -373,7 +420,7 @@ fn paint_target_composite_circle_on_offset_layer() {
         darkly::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h),
     );
 
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.composite_circle(
         &mut enc,
         &pipelines,
@@ -384,7 +431,7 @@ fn paint_target_composite_circle_on_offset_layer() {
         [0, 255, 0, 255],
         1.0,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, lw, lh);
 
@@ -442,7 +489,7 @@ fn paint_target_fill_rect_canvas_space_on_offset_layer() {
 
     // Canvas-space rect at (10, 10) size (20, 20). Maps to layer-local
     // (10 - (-50), 10 - (-50)) = (60, 60).
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.fill_rect(
         &mut enc,
         &pipelines,
@@ -450,7 +497,7 @@ fn paint_target_fill_rect_canvas_space_on_offset_layer() {
         darkly::coord::CanvasRect::from_xywh(10, 10, 20, 20),
         [0, 0, 255, 255],
     );
-    submit(&queue, enc);
+    enc.submit();
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, lw, lh);
     // Layer-local (65, 65) — interior of the rect.
@@ -501,7 +548,7 @@ fn paint_target_fill_rect_canvas_negative_origin_on_offset_layer() {
     );
 
     // Canvas-space rect at (-30, 10) size (10, 10). Maps to layer-local (20, 60).
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.fill_rect(
         &mut enc,
         &pipelines,
@@ -509,7 +556,7 @@ fn paint_target_fill_rect_canvas_negative_origin_on_offset_layer() {
         darkly::coord::CanvasRect::from_xywh(-30, 10, 10, 10),
         [0, 255, 0, 255],
     );
-    submit(&queue, enc);
+    enc.submit();
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, lw, lh);
     // Layer-local (25, 65) — interior.

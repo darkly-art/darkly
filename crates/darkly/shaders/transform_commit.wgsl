@@ -51,26 +51,37 @@ struct Uniforms {
     is_r8: f32,
 }
 @group(0) @binding(2) var<uniform> u: Uniforms;
+@group(0) @binding(3) var t_coverage: texture_2d<f32>;
 
 // Destination copy (straight alpha) — for shader-side Porter-Duff.
 @group(1) @binding(0) var t_dest: texture_2d<f32>;
 
-// Sample the (premultiplied) source for a single destination-local position.
+struct SourceSample {
+    value: vec4f,
+    coverage: f32,
+}
+
+// Sample the source value and selection coverage for one destination-local
+// position. Keeping them separate lets R8 represent both a selected value of
+// zero and an unselected texel without ambiguity.
 // The shared `proj_local` (lib/projective.wgsl) maps it back through the
 // inverse homography with the perspective divide; this owns the normalization
 // to a source UV and the bounds check. Returns transparent (0) outside the
 // source bounds or behind the camera, so edge sub-samples average toward zero
 // coverage (anti-aliasing).
-fn sample_src(local: vec2f) -> vec4f {
+fn sample_src(local: vec2f) -> SourceSample {
     let pre = proj_local(u.inv_row0, u.inv_row1, u.inv_row2, local);
     if (pre.z < 0.5) {
-        return vec4f(0.0);
+        return SourceSample(vec4f(0.0), 0.0);
     }
     let src_uv = pre.xy / u.source_size;
     if (any(src_uv < vec2f(0.0)) || any(src_uv >= vec2f(1.0))) {
-        return vec4f(0.0);
+        return SourceSample(vec4f(0.0), 0.0);
     }
-    return textureSampleLevel(t_source, t_sampler, src_uv, 0.0);
+    return SourceSample(
+        textureSampleLevel(t_source, t_sampler, src_uv, 0.0),
+        textureSampleLevel(t_coverage, t_sampler, src_uv, 0.0).r,
+    );
 }
 
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
@@ -85,33 +96,46 @@ fn sample_src(local: vec2f) -> vec4f {
     // minified / far edge of a perspective warp (both Krita's worker and GIMP
     // supersample). Averaging four premultiplied taps over a rotated grid
     // anti-aliases the warped edge and also softens affine minification.
-    let fg_pm =
-        0.25 * (sample_src(local + vec2f(-0.375, -0.125))
-              + sample_src(local + vec2f( 0.125, -0.375))
-              + sample_src(local + vec2f( 0.375,  0.125))
-              + sample_src(local + vec2f(-0.125,  0.375)));
-    let fg_a = fg_pm.a * u.opacity;
-    let fg_pre = fg_pm.rgb * u.opacity;
+    let s0 = sample_src(local + vec2f(-0.375, -0.125));
+    let s1 = sample_src(local + vec2f( 0.125, -0.375));
+    let s2 = sample_src(local + vec2f( 0.375,  0.125));
+    let s3 = sample_src(local + vec2f(-0.125,  0.375));
+    let coverage = 0.25 * (s0.coverage + s1.coverage + s2.coverage + s3.coverage);
 
-    if (fg_a <= 0.0) {
+    if (coverage <= 0.0) {
         discard;
     }
 
     // Read destination (straight alpha — the layer's existing pixels).
     let bg = textureLoad(t_dest, vec2i(in.position.xy), 0);
 
-    // Porter-Duff source-over (premultiplied fg, straight bg → straight output).
-    let blended = source_over(fg_pre, fg_a, bg);
-
     if (u.is_r8 > 0.5) {
-        // R8 target: source and dest are both single-channel; the value
-        // we want is already in `.r`. The earlier RGB→luminance dot was a
-        // bug for R8 inputs — sampling an R8Unorm texture as vec4 yields
-        // (R, 0, 0, 1), so a luminance dot multiplied every committed
-        // pixel by 0.2126, darkening the mask each commit.
-        return vec4f(blended.r, blended.r, blended.r, blended.a);
+        // Average value×coverage separately from coverage. Dividing to recover
+        // a straight scalar and mixing it back by coverage algebraically
+        // reduces to the weighted value plus the uncovered destination.
+        let weighted_value = 0.25 * (
+            s0.value.r * s0.coverage
+            + s1.value.r * s1.coverage
+            + s2.value.r * s2.coverage
+            + s3.value.r * s3.coverage
+        ) * u.opacity;
+        let applied_coverage = coverage * u.opacity;
+        let value = weighted_value + bg.r * (1.0 - applied_coverage);
+        return vec4f(value, value, value, 1.0);
     } else {
-        // RGBA mode: output straight-alpha color.
-        return blended;
+        // RGBA sources are premultiplied before this pass. Apply selection
+        // coverage per sub-sample, then source-over the straight destination.
+        let fg_pm = 0.25 * (
+            s0.value * s0.coverage
+            + s1.value * s1.coverage
+            + s2.value * s2.coverage
+            + s3.value * s3.coverage
+        );
+        let fg_a = fg_pm.a * u.opacity;
+        if (fg_a <= 0.0) {
+            discard;
+        }
+        let fg_pre = fg_pm.rgb * u.opacity;
+        return source_over(fg_pre, fg_a, bg);
     }
 }
