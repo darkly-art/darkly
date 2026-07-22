@@ -895,7 +895,9 @@ fn assemble_shader(
     out.push('\n');
     out.push_str(include_str!("../../../shaders/brush/_shape.wgsl"));
     out.push('\n');
-    out.push_str(include_str!("../../../shaders/brush/_noise.wgsl"));
+    // Binding-free 2D fBm core (`fbm_value_noise`, `fbm_rot`, hash, fade) —
+    // the `noise` node compiles calls into these. Dead-stripped when unused.
+    out.push_str(include_str!("../../../shaders/lib/fbm2d.wgsl"));
     out.push('\n');
     out.push_str(include_str!("../../../shaders/brush/_prelude.wgsl"));
     out.push('\n');

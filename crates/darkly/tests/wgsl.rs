@@ -585,6 +585,83 @@ fn clone_brush_compiles_with_samples_source() {
     naga_validate(&compiled.cursor_preview_wgsl, "clone cursor_preview_wgsl");
 }
 
+/// The noise node compiles to smooth, per-channel fBm: three independent
+/// seeds drive `fbm_rot` (interpolated value noise), NOT the old blocky
+/// `node_noise_value` cell hash, and no 3D texture binding leaks in from the
+/// lib split. The fully assembled shader validates under naga.
+#[test]
+fn noise_node_emits_per_channel_fbm() {
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node(
+        "pen_input",
+        reg.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let noise = graph.add_node(
+        "noise",
+        reg.get("noise").unwrap().ports.clone(),
+        vec![
+            darkly::gpu::params::ParamValue::Float(32.0), // scale
+            darkly::gpu::params::ParamValue::Int(7),      // seed
+            darkly::gpu::params::ParamValue::Int(4),      // octaves
+            darkly::gpu::params::ParamValue::Float(0.6),  // warp
+            darkly::gpu::params::ParamValue::Float(0.5),  // roughness
+        ],
+    );
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let wires = [
+        (pen, "position", term, "position"),
+        (noise, "color", term, "rgba"),
+    ];
+    for (fnode, fport, tnode, tport) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: fnode,
+                    port: fport.into(),
+                },
+                PortRef {
+                    node: tnode,
+                    port: tport.into(),
+                },
+            )
+            .unwrap();
+    }
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("noise compiles");
+
+    // Smooth, interpolated fBm — not the old blocky cell hash.
+    assert!(
+        compiled.stroke_wgsl.contains("fbm_rot("),
+        "noise must call the interpolated fBm helper; not found in:\n{}",
+        compiled.stroke_wgsl,
+    );
+    assert!(
+        !compiled.stroke_wgsl.contains("node_noise_value"),
+        "noise must not emit the old cell-noise call",
+    );
+    // Three channels off consecutive seeds (7, 8, 9) — independent R/G/B.
+    for seed_lit in ["7u", "8u", "9u"] {
+        assert!(
+            compiled.stroke_wgsl.contains(seed_lit),
+            "noise must drive channel seed {seed_lit}; not found in:\n{}",
+            compiled.stroke_wgsl,
+        );
+    }
+    // The 2D/3D lib split must not leak the 3D texture path into the brush
+    // shader (which has no such binding) — a re-merge would fail here and also
+    // fail naga with a `@group(0)` collision.
+    assert!(
+        !compiled.stroke_wgsl.contains("texture_3d")
+            && !compiled.stroke_wgsl.contains("fbm_noise3d"),
+        "brush shader must not include the 3D fbm bindings",
+    );
+    // Fully assembled shader is valid under the same front-end wgpu uses.
+    naga_validate(&compiled.stroke_wgsl, "noise stroke_wgsl");
+    naga_validate(&compiled.cursor_preview_wgsl, "noise cursor_preview_wgsl");
+}
+
 /// Parse + validate a fully assembled brush shader under naga (the same
 /// front-end wgpu uses in-app), panicking with the diagnostic on failure.
 fn naga_validate(src: &str, label: &str) {

@@ -74,7 +74,7 @@ Voids are a type of layer that specializes in pulling inspiration from outside s
 
 You can use the `Noise` void to inject entropy, or `Screenshare` to stream another app (3D software, movie, or video game) directly into a layer. This is great for hybrid workflows, and situations where you want to try out different lighting or camera angles, without having to pose, render and paste over and over.
 
-Voids can live anywhere in your layer stack -- over or underneath any other layer. They support masks and blend modes. They are the natural compliment to veils, and a natural integration point for other art programs like Blender, which may have dedicated voids in the future 🧡
+Voids can live anywhere in your layer stack -- over or underneath any other layer. They support masks and blend modes. They are the natural compliment to veils, and a natural integration point for other art programs like Blender, which has its own [dedicated void](https://extensions.blender.org/add-ons/darkly-stream/) 🧡
 
 ## Feature Roadmap
 

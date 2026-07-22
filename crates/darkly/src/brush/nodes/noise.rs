@@ -1,33 +1,28 @@
-//! Noise node — procedural 2D cell noise sampled per fragment.
+//! Noise node — procedural, domain-warped, per-octave-rotated fBm sampled
+//! per fragment.
 //!
-//! Outputs a grayscale RGBA `color` whose channels all hold the same
-//! noise value, so the same downstream chain a texture-driven brush
-//! uses (`noise → split_color → luminance → …`) keeps working when the
-//! texture is swapped for procedural noise. Charcoal uses this for
-//! paper grain — no `.jpg` asset, no `@group(3)` binding, just an
-//! integer-cell PCG hash inlined into the compiled shader.
+//! Outputs a chromatic RGBA `color`: each channel is an independent fBm
+//! field driven by `seed + {0,1,2}`, so R, G, and B carry uncorrelated
+//! noise — genuine color grain / cloud. For a monochrome field (paper
+//! grain, scatter masks) desaturate downstream via `noise → split_color
+//! → luminance`, which averages the three channels back into one scalar.
 //!
-//! Each integer cell is hashed independently; there is no
-//! interpolation between cells. Adjacent fragments that don't share
-//! a cell read uncorrelated values, which is the "every pixel is a
-//! random value" shape: at `scale = 1` every fragment is its own
-//! random sample; larger scales group pixels into hard-edged cells
-//! that share one hashed value.
+//! The field is **interpolated value noise** (bilinear blend of corner
+//! hashes through a quintic fade — smooth and resolution-independent, not
+//! blocky cell noise), summed over `octaves` at doubling frequency, with a
+//! single-octave domain warp and a per-octave rotation that break the
+//! axis-aligned value-noise lattice. It never visibly repeats. `scale`
+//! sets the base feature size in canvas pixels; `warp` the domain
+//! distortion; `roughness` the per-octave amplitude falloff.
 //!
-//! Coordinate frame matches [`super::image`]: `target_pos` (canvas
-//! pixels in stroke mode, preview-mask texels in preview mode) divided
-//! by `scale` gives the cell size in pixels.
+//! Coordinate frame matches [`super::image`]: `target_pos` (canvas pixels
+//! in stroke mode, preview-mask texels in preview mode) divided by `scale`
+//! gives the base feature size in pixels.
 //!
-//! Helpers (`node_noise_value`, hash, fade) live in
-//! `shaders/brush/_noise.wgsl` and are always linked into the assembled
-//! brush shader; the WGSL compiler dead-strips them when no node calls
-//! through. See that file for credits.
-//!
-//! Restoration note: the previous Charcoal layout sampled a
-//! `paper-charcoal.jpg` texture through the [`super::image`] node and
-//! depended on the engine's `TextureRegistry` to bind it at
-//! `@group(3)`. Procedural noise removes that runtime dependency and
-//! frees the `@group(3)` slot for terminal use.
+//! The math (`fbm_value_noise`, `fbm_seed_xform`, `fbm_rot`, hash, fade)
+//! lives in the shared `shaders/lib/fbm2d.wgsl`, concatenated into every
+//! assembled brush shader; the WGSL compiler dead-strips it when no node
+//! calls through. See that file for credits.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
@@ -48,30 +43,48 @@ pub fn register() -> BrushNodeRegistration {
             description: "Procedural noise sampled where the brush touches the canvas — for grain, jitter, and texture.",
             ports: vec![
                 PortDef::output("color", BrushWireType::Vec4).with_description(
-                    "Grayscale RGBA value noise at the fragment's canvas-pixel position",
+                    "Chromatic RGBA fBm noise at the fragment's canvas-pixel position — each channel an independent field",
                 ),
             ],
             params: &[
-                // Canvas pixels per noise cell. `scale = 1` gives
-                // a unique hash per fragment (true per-pixel noise);
-                // larger values group pixels into hard-edged cells
-                // sharing one hash. Sub-pixel scales sweep multiple
-                // cells per fragment, which still reads as per-pixel
-                // noise but with a different sampling phase. Capping
-                // at 16 keeps the cell from approaching the dab's
-                // own radius (where it would flatten to a single
-                // hashed value).
+                // Base feature size in canvas pixels: `target_pos / scale`
+                // sets the lowest octave's cell size. Larger = bigger, softer
+                // features; higher octaves add detail at half the size each.
                 ParamDef::Float {
                     name: "scale",
-                    min: 0.1,
-                    max: 16.0,
-                    default: 1.0,
+                    min: 1.0,
+                    max: 512.0,
+                    default: 32.0,
                 },
                 ParamDef::Int {
                     name: "seed",
                     min: 0,
                     max: 65535,
                     default: 1,
+                },
+                // Number of fBm octaves — each adds detail at 2× frequency,
+                // `roughness×` amplitude. 1 = a single smooth blob field.
+                ParamDef::Int {
+                    name: "octaves",
+                    min: 1,
+                    max: 8,
+                    default: 4,
+                },
+                // Domain-warp strength. 0 = pure fBm; higher smears the field
+                // into a marbled, organic distortion.
+                ParamDef::Float {
+                    name: "warp",
+                    min: 0.0,
+                    max: 2.5,
+                    default: 0.6,
+                },
+                // Per-octave amplitude falloff (gain). Lower = smoother
+                // (low octaves dominate); higher = grainier / more detail.
+                ParamDef::Float {
+                    name: "roughness",
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.5,
                 },
             ],
             is_gpu: false,
@@ -98,20 +111,43 @@ impl BrushNodeEvaluator for NoiseEvaluator {
         if !cctx.consumed_outputs.contains("color") {
             return Ok(wgsl);
         }
-        // Tiny epsilon floor guards the divide; the param min itself
-        // (0.1) keeps the user-facing range inside the useful zone.
+        // Tiny epsilon floor guards the divide; the param min (1.0) keeps
+        // the user-facing range inside the useful zone.
         let scale = cctx
             .params
             .first()
             .and_then(param_as_f32)
-            .unwrap_or(1.0)
+            .unwrap_or(32.0)
             .max(1e-3);
         let seed = cctx.params.get(1).and_then(param_as_u32).unwrap_or(1);
+        let octaves = cctx
+            .params
+            .get(2)
+            .and_then(param_as_i32)
+            .unwrap_or(4)
+            .clamp(1, 8);
+        let warp = cctx
+            .params
+            .get(3)
+            .and_then(param_as_f32)
+            .unwrap_or(0.6)
+            .max(0.0);
+        let gain = cctx
+            .params
+            .get(4)
+            .and_then(param_as_f32)
+            .unwrap_or(0.5)
+            .clamp(0.0, 1.0);
 
+        let [r_seed, g_seed, b_seed] = CHANNEL_SEED_OFFSETS.map(|o| seed.wrapping_add(o));
         let var = cctx.ident("noise_c");
         wgsl.body = format!(
-            "    let {var}_n = node_noise_value(target_pos / {scale:.6}, {seed}u);\n\
-             \x20   let {var} = vec4<f32>({var}_n, {var}_n, {var}_n, 1.0);\n"
+            "    let {var}_p = target_pos / {scale:.6};\n\
+             \x20   let {var} = vec4<f32>(\n\
+             \x20       fbm_rot({var}_p, {r_seed}u, {octaves}, {gain:.6}, {warp:.6}),\n\
+             \x20       fbm_rot({var}_p, {g_seed}u, {octaves}, {gain:.6}, {warp:.6}),\n\
+             \x20       fbm_rot({var}_p, {b_seed}u, {octaves}, {gain:.6}, {warp:.6}),\n\
+             \x20       1.0);\n"
         );
         wgsl.outputs.insert("color".into(), var);
         Ok(wgsl)
@@ -134,18 +170,32 @@ fn param_as_u32(p: &ParamValue) -> Option<u32> {
     }
 }
 
-// ── CPU mirror of the WGSL noise functions ──────────────────────────────
+fn param_as_i32(p: &ParamValue) -> Option<i32> {
+    match p {
+        ParamValue::Int(v) => Some(*v),
+        ParamValue::Float(v) => Some(*v as i32),
+        _ => None,
+    }
+}
+
+// ── CPU mirror of the WGSL fBm functions ────────────────────────────────
 //
-// Byte-equivalent (up to floating-point reassociation) to the helpers
-// in `shaders/brush/_noise.wgsl`. Used to render the brush-builder's
-// in-node preview thumbnail without round-tripping through the GPU —
-// a 96 × 96 tile is ~9k pixels, one hash per pixel, comfortably
-// sub-millisecond.
+// Byte-equivalent (up to floating-point reassociation) to the helpers in
+// `shaders/lib/fbm2d.wgsl`: `fbm_value_noise`, `fbm_seed_xform`, `fbm_rot`.
+// Used to render the brush-builder's in-node preview thumbnail without
+// round-tripping through the GPU.
 //
-// Keep these in lockstep with the WGSL versions — if the shader
-// algorithm changes (e.g. switch to Gaussian distribution, add
-// blurring, etc.) these CPU mirrors must change the same way or the
-// preview lies to the user about what they'll see on canvas.
+// Keep these in lockstep with the WGSL versions — including the exact
+// rotation/offset constants (`i*0.9`, `i*13.7`, `i*7.1`, the `64.0` seed
+// offset scale, the warp offsets `(11.5,3.7)`/`(5.2,1.3)`). If the shader
+// algorithm or any constant changes, these mirrors must change the same
+// way or the preview lies to the user about what they'll see on canvas.
+
+/// Per-channel seed offsets for the R/G/B channels (alpha is opaque).
+/// PCG decorrelates adjacent seeds, so three consecutive seeds drive three
+/// independent fields. Shared by the WGSL emitter and the CPU mirror below —
+/// the two must apply the same offsets or the preview diverges from canvas.
+const CHANNEL_SEED_OFFSETS: [u32; 3] = [0, 1, 2];
 
 fn cpu_pcg(n: u32) -> u32 {
     let mut h = n.wrapping_mul(747796405).wrapping_add(2891336453);
@@ -161,8 +211,74 @@ fn cpu_hash2(cx: i32, cy: i32, seed: u32) -> f32 {
     h as f32 / u32::MAX as f32
 }
 
+fn cpu_fade(t: f32) -> f32 {
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+}
+
+/// Interpolated 2D value noise — bilinear blend of the four corner hashes
+/// through the quintic fade. Mirrors `fbm_value_noise`.
 fn cpu_noise_value(px: f32, py: f32, seed: u32) -> f32 {
-    cpu_hash2(px.floor() as i32, py.floor() as i32, seed)
+    let ix = px.floor() as i32;
+    let iy = py.floor() as i32;
+    let wx = cpu_fade(px - ix as f32);
+    let wy = cpu_fade(py - iy as f32);
+    let a = cpu_hash2(ix, iy, seed);
+    let b = cpu_hash2(ix + 1, iy, seed);
+    let c = cpu_hash2(ix, iy + 1, seed);
+    let d = cpu_hash2(ix + 1, iy + 1, seed);
+    let ab = a + (b - a) * wx;
+    let cd = c + (d - c) * wx;
+    ab + (cd - ab) * wy
+}
+
+/// Seed → (base angle, offset x, offset y). Mirrors `fbm_seed_xform`
+/// (the WGSL uses a `6.28318530718` literal for TAU; the ~1e-7 difference
+/// from `std::f32::consts::TAU` is immaterial for a decorrelation angle).
+fn cpu_seed_xform(seed: u32) -> (f32, f32, f32) {
+    let a = cpu_pcg(seed) as f32 / u32::MAX as f32 * std::f32::consts::TAU;
+    let ox = cpu_pcg(seed.wrapping_add(101)) as f32 / u32::MAX as f32 * 64.0;
+    let oy = cpu_pcg(seed.wrapping_add(202)) as f32 / u32::MAX as f32 * 64.0;
+    (a, ox, oy)
+}
+
+/// Per-octave rotated, domain-warped fBm scalar. Mirrors `fbm_rot`.
+fn cpu_fbm(px: f32, py: f32, seed: u32, octaves: i32, gain: f32, warp: f32) -> f32 {
+    let (base_a, ox, oy) = cpu_seed_xform(seed);
+    let mut cx = px;
+    let mut cy = py;
+    if warp > 0.0 {
+        let wx = cpu_noise_value(cx + 11.5, cy + 3.7, seed);
+        let wy = cpu_noise_value(cx + 5.2, cy + 1.3, seed);
+        cx += warp * (wx - 0.5);
+        cy += warp * (wy - 0.5);
+    }
+    let mut sum = 0.0;
+    let mut amp = 1.0;
+    let mut freq = 1.0;
+    let mut norm = 0.0;
+    let n = octaves.max(1);
+    for i in 0..n {
+        let ang = base_a + i as f32 * 0.9;
+        let (sa, ca) = ang.sin_cos();
+        let sx = cx * freq;
+        let sy = cy * freq;
+        let rx = sx * ca - sy * sa + ox + i as f32 * 13.7;
+        let ry = sx * sa + sy * ca + oy + i as f32 * 7.1;
+        sum += amp * cpu_noise_value(rx, ry, seed.wrapping_add((i as u32).wrapping_mul(1013)));
+        norm += amp;
+        freq *= 2.0;
+        amp *= gain;
+    }
+    sum / norm
+}
+
+/// Chromatic mirror of the shader's `vec4` output — three independent fBm
+/// fields under the offset seeds, alpha opaque. Mirrors the WGSL emitter's
+/// per-channel [`CHANNEL_SEED_OFFSETS`] fanout.
+fn cpu_noise_color(px: f32, py: f32, seed: u32, octaves: i32, gain: f32, warp: f32) -> [f32; 4] {
+    let [r, g, b] =
+        CHANNEL_SEED_OFFSETS.map(|o| cpu_fbm(px, py, seed.wrapping_add(o), octaves, gain, warp));
+    [r, g, b, 1.0]
 }
 
 /// Render a square noise preview tile and PNG-encode it. Called by
@@ -173,19 +289,36 @@ pub fn render_preview_png(params: &[ParamValue], size: u32) -> Vec<u8> {
     let scale = params
         .first()
         .and_then(param_as_f32)
-        .unwrap_or(1.0)
+        .unwrap_or(32.0)
         .max(1e-3);
     let seed = params.get(1).and_then(param_as_u32).unwrap_or(1);
+    let octaves = params
+        .get(2)
+        .and_then(param_as_i32)
+        .unwrap_or(4)
+        .clamp(1, 8);
+    let warp = params.get(3).and_then(param_as_f32).unwrap_or(0.6).max(0.0);
+    let gain = params
+        .get(4)
+        .and_then(param_as_f32)
+        .unwrap_or(0.5)
+        .clamp(0.0, 1.0);
 
     let mut img = vec![0u8; (size * size * 4) as usize];
     for y in 0..size {
         for x in 0..size {
-            let n = cpu_noise_value(x as f32 / scale, y as f32 / scale, seed).clamp(0.0, 1.0);
-            let v = (n * 255.0) as u8;
+            let c = cpu_noise_color(
+                x as f32 / scale,
+                y as f32 / scale,
+                seed,
+                octaves,
+                gain,
+                warp,
+            );
             let i = ((y * size + x) * 4) as usize;
-            img[i] = v;
-            img[i + 1] = v;
-            img[i + 2] = v;
+            img[i] = (c[0].clamp(0.0, 1.0) * 255.0) as u8;
+            img[i + 1] = (c[1].clamp(0.0, 1.0) * 255.0) as u8;
+            img[i + 2] = (c[2].clamp(0.0, 1.0) * 255.0) as u8;
             img[i + 3] = 255;
         }
     }
@@ -203,7 +336,22 @@ mod tests {
         assert_eq!(reg.node.category, "texture");
         assert_eq!(reg.node.ports.len(), 1);
         assert_eq!(reg.node.ports[0].name, "color");
-        assert_eq!(reg.node.params.len(), 2);
+        assert_eq!(reg.node.params.len(), 5);
+    }
+
+    #[test]
+    fn cpu_noise_is_interpolated_not_cell() {
+        // Regression: the field must be smooth, not blocky. Two coordinates
+        // in the SAME integer cell but at different fractional positions must
+        // produce DIFFERENT values — cell noise (`hash(floor(p))`) returns the
+        // identical hash for both (this test fails against it); interpolated
+        // value noise blends the corner hashes, so it must not.
+        let a = cpu_noise_value(3.10, 3.10, 7);
+        let b = cpu_noise_value(3.15, 3.10, 7);
+        assert!(
+            (a - b).abs() > 1e-6,
+            "sub-cell samples must differ (interpolated, not cell noise): a={a} b={b}"
+        );
     }
 
     #[test]
@@ -218,20 +366,53 @@ mod tests {
     }
 
     #[test]
-    fn cpu_noise_stays_in_unit_range() {
-        // The shader's range is [0, 1); CPU mirror must agree so the
-        // preview pixels don't clamp or wrap unexpectedly.
+    fn cpu_noise_color_channels_are_independent() {
+        // Real color: the three channels are uncorrelated fBm fields, not a
+        // broadcast of one scalar. Alpha stays opaque.
+        let c = cpu_noise_color(3.7, 12.1, 42, 4, 0.5, 0.6);
+        assert_eq!(c[3], 1.0, "alpha must be opaque");
+        assert!((c[0] - c[1]).abs() > 1e-6, "r and g must differ: {c:?}");
+        assert!((c[1] - c[2]).abs() > 1e-6, "g and b must differ: {c:?}");
+        assert!((c[0] - c[2]).abs() > 1e-6, "r and b must differ: {c:?}");
+    }
+
+    #[test]
+    fn cpu_noise_color_red_matches_scalar_fbm() {
+        // The R channel is the base seed (offset 0), so it equals the plain
+        // scalar fBm — the mono path (split_color → luminance) stays
+        // consistent with what R carries.
+        let seed = 9;
+        assert_eq!(
+            cpu_noise_color(2.2, 5.5, seed, 4, 0.5, 0.6)[0],
+            cpu_fbm(2.2, 5.5, seed, 4, 0.5, 0.6),
+        );
+    }
+
+    #[test]
+    fn cpu_fbm_stays_in_unit_range() {
+        // The renormalized fBm stays in ~[0, 1]; the CPU mirror must agree so
+        // preview pixels don't clamp or wrap. Small tolerance for float
+        // reassociation in the octave sum.
         for y in 0..50 {
             for x in 0..50 {
-                let n = cpu_noise_value(x as f32 * 0.31, y as f32 * 0.47, 7);
-                assert!((0.0..=1.0).contains(&n), "x={x} y={y} n={n} out of [0, 1]");
+                let n = cpu_fbm(x as f32 * 0.31, y as f32 * 0.47, 7, 5, 0.5, 0.6);
+                assert!(
+                    (-0.001..=1.001).contains(&n),
+                    "x={x} y={y} n={n} out of [0, 1]"
+                );
             }
         }
     }
 
     #[test]
     fn render_preview_png_returns_png_bytes() {
-        let params = vec![ParamValue::Float(2.0), ParamValue::Int(1)];
+        let params = vec![
+            ParamValue::Float(32.0),
+            ParamValue::Int(1),
+            ParamValue::Int(4),
+            ParamValue::Float(0.6),
+            ParamValue::Float(0.5),
+        ];
         let png = render_preview_png(&params, 32);
         assert!(!png.is_empty(), "preview PNG must be non-empty");
         assert_eq!(
