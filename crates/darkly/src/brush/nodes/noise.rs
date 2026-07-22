@@ -1,11 +1,10 @@
 //! Noise node — procedural 2D cell noise sampled per fragment.
 //!
-//! Outputs a grayscale RGBA `color` whose channels all hold the same
-//! noise value, so the same downstream chain a texture-driven brush
-//! uses (`noise → split_color → luminance → …`) keeps working when the
-//! texture is swapped for procedural noise. Charcoal uses this for
-//! paper grain — no `.jpg` asset, no `@group(3)` binding, just an
-//! integer-cell PCG hash inlined into the compiled shader.
+//! Outputs a chromatic RGBA `color`: each channel is an independent hash
+//! of the fragment's cell, so R, G, and B carry uncorrelated noise —
+//! genuine color grain / static. For a monochrome field (paper grain,
+//! scatter masks) desaturate downstream via `noise → split_color →
+//! luminance`, which averages the three channels back into one scalar.
 //!
 //! Each integer cell is hashed independently; there is no
 //! interpolation between cells. Adjacent fragments that don't share
@@ -22,12 +21,6 @@
 //! `shaders/brush/_noise.wgsl` and are always linked into the assembled
 //! brush shader; the WGSL compiler dead-strips them when no node calls
 //! through. See that file for credits.
-//!
-//! Restoration note: the previous Charcoal layout sampled a
-//! `paper-charcoal.jpg` texture through the [`super::image`] node and
-//! depended on the engine's `TextureRegistry` to bind it at
-//! `@group(3)`. Procedural noise removes that runtime dependency and
-//! frees the `@group(3)` slot for terminal use.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
@@ -48,7 +41,7 @@ pub fn register() -> BrushNodeRegistration {
             description: "Procedural noise sampled where the brush touches the canvas — for grain, jitter, and texture.",
             ports: vec![
                 PortDef::output("color", BrushWireType::Vec4).with_description(
-                    "Grayscale RGBA value noise at the fragment's canvas-pixel position",
+                    "Chromatic RGBA value noise at the fragment's canvas-pixel position — each channel an independent hash",
                 ),
             ],
             params: &[
@@ -108,10 +101,15 @@ impl BrushNodeEvaluator for NoiseEvaluator {
             .max(1e-3);
         let seed = cctx.params.get(1).and_then(param_as_u32).unwrap_or(1);
 
+        let [r_seed, g_seed, b_seed] = CHANNEL_SEED_OFFSETS.map(|o| seed.wrapping_add(o));
         let var = cctx.ident("noise_c");
         wgsl.body = format!(
-            "    let {var}_n = node_noise_value(target_pos / {scale:.6}, {seed}u);\n\
-             \x20   let {var} = vec4<f32>({var}_n, {var}_n, {var}_n, 1.0);\n"
+            "    let {var}_p = target_pos / {scale:.6};\n\
+             \x20   let {var} = vec4<f32>(\n\
+             \x20       node_noise_value({var}_p, {r_seed}u),\n\
+             \x20       node_noise_value({var}_p, {g_seed}u),\n\
+             \x20       node_noise_value({var}_p, {b_seed}u),\n\
+             \x20       1.0);\n"
         );
         wgsl.outputs.insert("color".into(), var);
         Ok(wgsl)
@@ -147,6 +145,13 @@ fn param_as_u32(p: &ParamValue) -> Option<u32> {
 // blurring, etc.) these CPU mirrors must change the same way or the
 // preview lies to the user about what they'll see on canvas.
 
+/// Per-channel seed offsets for the R/G/B channels (alpha is opaque).
+/// PCG decorrelates adjacent seeds, so three consecutive seeds hash into
+/// three independent channels. Shared by the WGSL emitter and the CPU
+/// mirror below — the two must apply the same offsets or the preview
+/// diverges from the canvas.
+const CHANNEL_SEED_OFFSETS: [u32; 3] = [0, 1, 2];
+
 fn cpu_pcg(n: u32) -> u32 {
     let mut h = n.wrapping_mul(747796405).wrapping_add(2891336453);
     let shift = (h >> 28).wrapping_add(4);
@@ -165,6 +170,14 @@ fn cpu_noise_value(px: f32, py: f32, seed: u32) -> f32 {
     cpu_hash2(px.floor() as i32, py.floor() as i32, seed)
 }
 
+/// Chromatic mirror of the shader's `vec4` output — the same cell hashed
+/// under three offset seeds, alpha opaque. Mirrors the WGSL emitter's
+/// per-channel [`CHANNEL_SEED_OFFSETS`] hashing.
+fn cpu_noise_color(px: f32, py: f32, seed: u32) -> [f32; 4] {
+    let [r, g, b] = CHANNEL_SEED_OFFSETS.map(|o| cpu_noise_value(px, py, seed.wrapping_add(o)));
+    [r, g, b, 1.0]
+}
+
 /// Render a square noise preview tile and PNG-encode it. Called by
 /// the engine's `brush_node_preview` for noise-type nodes. Synchronous —
 /// the work is small enough that an async readback is more ceremony
@@ -180,12 +193,11 @@ pub fn render_preview_png(params: &[ParamValue], size: u32) -> Vec<u8> {
     let mut img = vec![0u8; (size * size * 4) as usize];
     for y in 0..size {
         for x in 0..size {
-            let n = cpu_noise_value(x as f32 / scale, y as f32 / scale, seed).clamp(0.0, 1.0);
-            let v = (n * 255.0) as u8;
+            let c = cpu_noise_color(x as f32 / scale, y as f32 / scale, seed);
             let i = ((y * size + x) * 4) as usize;
-            img[i] = v;
-            img[i + 1] = v;
-            img[i + 2] = v;
+            img[i] = (c[0].clamp(0.0, 1.0) * 255.0) as u8;
+            img[i + 1] = (c[1].clamp(0.0, 1.0) * 255.0) as u8;
+            img[i + 2] = (c[2].clamp(0.0, 1.0) * 255.0) as u8;
             img[i + 3] = 255;
         }
     }
@@ -215,6 +227,28 @@ mod tests {
         // Different seed → different value almost surely.
         let c = cpu_noise_value(3.7, 12.1, 43);
         assert!((a - c).abs() > 1e-6, "seed must perturb the hash");
+    }
+
+    #[test]
+    fn cpu_noise_color_channels_are_independent() {
+        // Real color: the three channels are uncorrelated hashes of the
+        // same cell, not a broadcast of one scalar. Alpha stays opaque.
+        let c = cpu_noise_color(3.7, 12.1, 42);
+        assert_eq!(c[3], 1.0, "alpha must be opaque");
+        assert!((c[0] - c[1]).abs() > 1e-6, "r and g must differ: {c:?}");
+        assert!((c[1] - c[2]).abs() > 1e-6, "g and b must differ: {c:?}");
+        assert!((c[0] - c[2]).abs() > 1e-6, "r and b must differ: {c:?}");
+    }
+
+    #[test]
+    fn cpu_noise_color_red_matches_scalar_noise() {
+        // The R channel is the base seed (offset 0), so it equals the
+        // plain scalar helper — the mono path stays consistent.
+        let seed = 9;
+        assert_eq!(
+            cpu_noise_color(2.2, 5.5, seed)[0],
+            cpu_noise_value(2.2, 5.5, seed),
+        );
     }
 
     #[test]

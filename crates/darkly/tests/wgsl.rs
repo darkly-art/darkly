@@ -585,6 +585,64 @@ fn clone_brush_compiles_with_samples_source() {
     naga_validate(&compiled.cursor_preview_wgsl, "clone cursor_preview_wgsl");
 }
 
+/// The noise node emits genuine per-channel color: its compiled body hashes
+/// three independent seeds into R/G/B rather than broadcasting one value, and
+/// the fully assembled shader validates under naga. Guards against a
+/// regression back to the old `vec4(n, n, n, 1.0)` grayscale broadcast.
+#[test]
+fn noise_node_emits_per_channel_color() {
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node(
+        "pen_input",
+        reg.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let noise = graph.add_node(
+        "noise",
+        reg.get("noise").unwrap().ports.clone(),
+        vec![
+            darkly::gpu::params::ParamValue::Float(1.0), // scale
+            darkly::gpu::params::ParamValue::Int(7),     // seed
+        ],
+    );
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let wires = [
+        (pen, "position", term, "position"),
+        (noise, "color", term, "rgba"),
+    ];
+    for (fnode, fport, tnode, tport) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: fnode,
+                    port: fport.into(),
+                },
+                PortRef {
+                    node: tnode,
+                    port: tport.into(),
+                },
+            )
+            .unwrap();
+    }
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("noise compiles");
+
+    // Three channels hashed off consecutive seeds (7, 8, 9) — the tell that
+    // R/G/B are independent, not a single broadcast. The prelude's
+    // `node_noise_value` definition uses the `seed` param, never these
+    // literals, so each appears only at a channel call site.
+    for seed_lit in ["7u", "8u", "9u"] {
+        assert!(
+            compiled.stroke_wgsl.contains(seed_lit),
+            "noise must hash channel seed {seed_lit}; not found in:\n{}",
+            compiled.stroke_wgsl,
+        );
+    }
+    // Fully assembled shader is valid under the same front-end wgpu uses.
+    naga_validate(&compiled.stroke_wgsl, "noise stroke_wgsl");
+}
+
 /// Parse + validate a fully assembled brush shader under naga (the same
 /// front-end wgpu uses in-app), panicking with the diagnostic on failure.
 fn naga_validate(src: &str, label: &str) {
