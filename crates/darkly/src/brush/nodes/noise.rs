@@ -15,9 +15,15 @@
 //! sets the base feature size in canvas pixels; `warp` the domain
 //! distortion; `roughness` the per-octave amplitude falloff.
 //!
-//! Coordinate frame matches [`super::image`]: `target_pos` (canvas pixels
-//! in stroke mode, preview-mask texels in preview mode) divided by `scale`
-//! gives the base feature size in pixels.
+//! Coordinate frame is selectable via the `space` param, shared with
+//! [`super::image`] through [`crate::brush::wgsl::frame_sample_coord_expr`]:
+//! **Canvas** (default) samples `target_pos / scale` — canvas pixels in
+//! stroke mode, preview-mask texels in preview — so the grain is pinned to
+//! the canvas. **Dab** samples the stamp's oriented unit frame (`local_uv`
+//! rotated by the `rotation` input, offset per dab by `variation`), so the
+//! grain rides the stamp instead of swimming under it. `scale_with_brush`
+//! chooses whether Dab-frame grain scales with the brush or stays
+//! pixel-locked.
 //!
 //! The math (`fbm_value_noise`, `fbm_seed_xform`, `fbm_rot`, hash, fade)
 //! lives in the shared `shaders/lib/fbm2d.wgsl`, concatenated into every
@@ -26,11 +32,11 @@
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
-use crate::brush::wgsl::{CompileWgslCtx, NodeWgsl};
+use crate::brush::wgsl::{frame_sample_coord_expr, CompileWgslCtx, NodeWgsl, SampleFrame};
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::gpu::params::{ParamDef, ParamValue};
-use crate::nodegraph::{NodeRegistration, PortDef};
+use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 pub const TYPE_ID: &str = "noise";
 
@@ -42,8 +48,29 @@ pub fn register() -> BrushNodeRegistration {
             display_name: "Noise",
             description: "Procedural noise sampled where the brush touches the canvas — for grain, jitter, and texture.",
             ports: vec![
+                // Per-dab orientation and decorrelation for Dab-space
+                // sampling — the same input-port path `shape.rotation_input`
+                // uses. Hidden in Canvas mode, where the grain is pinned to
+                // the canvas and neither applies.
+                PortDef::input("rotation", BrushWireType::Scalar)
+                    .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
+                    .with_label("Rotation")
+                    .with_unit(UnitType::Degrees)
+                    .with_visible_when("space", [1])
+                    .with_description(
+                        "Per-dab orientation (radians) for Dab space. Wire pen direction here so the grain follows the stroke.",
+                    ),
+                PortDef::input("variation", BrushWireType::Scalar)
+                    .with_range(0.0, 1024.0, 0.0)
+                    .with_natural_range(0.0, 1024.0)
+                    .with_label("Variation")
+                    .with_unit(UnitType::Raw)
+                    .with_visible_when("space", [1])
+                    .with_description(
+                        "Per-dab decorrelation offset for Dab space. Wire random (Per-Dab) so overlapping dabs show independent grain.",
+                    ),
                 PortDef::output("color", BrushWireType::Vec4).with_description(
-                    "Chromatic RGBA fBm noise at the fragment's canvas-pixel position — each channel an independent field",
+                    "Chromatic RGBA fBm noise at the fragment's sample position — each channel an independent field",
                 ),
             ],
             params: &[
@@ -85,6 +112,22 @@ pub fn register() -> BrushNodeRegistration {
                     min: 0.0,
                     max: 1.0,
                     default: 0.5,
+                },
+                // Coordinate frame the field is sampled in. Canvas pins the
+                // grain to the canvas (default — paper/grain use case where
+                // overlapping strokes share phase); Dab locks it to the stamp
+                // so it rotates and translates rigidly with each dab.
+                ParamDef::Enum {
+                    name: "space",
+                    options: &["Canvas", "Dab"],
+                    default: 0,
+                },
+                // Dab-space only: `true` scales the grain with the brush,
+                // `false` keeps grain density constant in canvas pixels. No
+                // effect in Canvas space.
+                ParamDef::Bool {
+                    name: "scale_with_brush",
+                    default: true,
                 },
             ],
             is_gpu: false,
@@ -139,10 +182,24 @@ impl BrushNodeEvaluator for NoiseEvaluator {
             .unwrap_or(0.5)
             .clamp(0.0, 1.0);
 
+        let space = SampleFrame::from_index(cctx.params.get(5).and_then(param_as_u32).unwrap_or(0));
+        let scale_with_brush = cctx.params.get(6).and_then(param_as_bool).unwrap_or(true);
+        let rotation = cctx.input("rotation").as_f32();
+        let variation = cctx.input("variation").as_f32();
+        let (frame_pre, coord) = frame_sample_coord_expr(
+            space,
+            scale,
+            scale_with_brush,
+            &rotation,
+            &variation,
+            &cctx.ident("noise"),
+        );
+
         let [r_seed, g_seed, b_seed] = CHANNEL_SEED_OFFSETS.map(|o| seed.wrapping_add(o));
         let var = cctx.ident("noise_c");
         wgsl.body = format!(
-            "    let {var}_p = target_pos / {scale:.6};\n\
+            "{frame_pre}\
+             \x20   let {var}_p = {coord};\n\
              \x20   let {var} = vec4<f32>(\n\
              \x20       fbm_rot({var}_p, {r_seed}u, {octaves}, {gain:.6}, {warp:.6}),\n\
              \x20       fbm_rot({var}_p, {g_seed}u, {octaves}, {gain:.6}, {warp:.6}),\n\
@@ -174,6 +231,13 @@ fn param_as_i32(p: &ParamValue) -> Option<i32> {
     match p {
         ParamValue::Int(v) => Some(*v),
         ParamValue::Float(v) => Some(*v as i32),
+        _ => None,
+    }
+}
+
+fn param_as_bool(p: &ParamValue) -> Option<bool> {
+    match p {
+        ParamValue::Bool(v) => Some(*v),
         _ => None,
     }
 }
@@ -334,9 +398,13 @@ mod tests {
         let reg = register();
         assert_eq!(reg.node.type_id, "noise");
         assert_eq!(reg.node.category, "texture");
-        assert_eq!(reg.node.ports.len(), 1);
-        assert_eq!(reg.node.ports[0].name, "color");
-        assert_eq!(reg.node.params.len(), 5);
+        // rotation + variation inputs, plus the color output.
+        assert_eq!(reg.node.ports.len(), 3);
+        assert!(reg.node.ports.iter().any(|p| p.name == "color"));
+        assert!(reg.node.ports.iter().any(|p| p.name == "rotation"));
+        assert!(reg.node.ports.iter().any(|p| p.name == "variation"));
+        // scale, seed, octaves, warp, roughness, space, scale_with_brush.
+        assert_eq!(reg.node.params.len(), 7);
     }
 
     #[test]

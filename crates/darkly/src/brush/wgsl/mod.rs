@@ -59,6 +59,7 @@ pub mod context;
 pub mod dab_record;
 pub mod extent;
 pub mod intrinsics;
+pub mod sample_frame;
 pub mod type_system;
 
 pub use context::{CompileWgslCtx, InputBinding, NodeWgsl, ShaderMode};
@@ -67,6 +68,7 @@ pub use dab_record::{
 };
 pub use extent::{ExtentContribution, ExtentCtx};
 pub use intrinsics::{pack_intrinsic_uniforms, IntrinsicUniforms, INTRINSIC_UNIFORMS_SIZE};
+pub use sample_frame::{frame_sample_coord_expr, SampleFrame};
 pub use type_system::{DabField, DabPacker, UniformField, UniformPacker, ValuePacker, WgslType};
 
 use std::collections::{HashMap, HashSet};

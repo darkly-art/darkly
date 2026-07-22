@@ -716,3 +716,282 @@ fn static_texture_brush_preview_declares_single_graph_texture() {
     );
     naga_validate(&compiled.stroke_wgsl, "charcoal stroke_wgsl");
 }
+
+// ── Sampling-frame selector (noise/image `space`) ───────────────────────
+//
+// The `space` param folds a coordinate frame into the emitted sample
+// coordinate at compile time: Canvas keeps the historical `target_pos /
+// scale` (grain pinned to the canvas); Dab samples the stamp's oriented
+// unit frame so the grain rides the rotating stamp. These tests assert the
+// emitter picks the right arm and that both shader variants stay valid.
+
+/// Noise params in registration order, with `space`/`scale_with_brush`
+/// appended. `space`: 0 = Canvas, 1 = Dab.
+fn noise_params(space: i32, scale_with_brush: bool) -> Vec<darkly::gpu::params::ParamValue> {
+    use darkly::gpu::params::ParamValue;
+    vec![
+        ParamValue::Float(32.0), // scale
+        ParamValue::Int(7),      // seed
+        ParamValue::Int(4),      // octaves
+        ParamValue::Float(0.6),  // warp
+        ParamValue::Float(0.5),  // roughness
+        ParamValue::Int(space),
+        ParamValue::Bool(scale_with_brush),
+    ]
+}
+
+/// Wire a slice of `(from_node, from_port, to_node, to_port)` into a graph.
+fn wire(
+    graph: &mut Graph<BrushWireType>,
+    wires: &[(
+        darkly::nodegraph::NodeId,
+        &str,
+        darkly::nodegraph::NodeId,
+        &str,
+    )],
+) {
+    for &(fnode, fport, tnode, tport) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: fnode,
+                    port: fport.into(),
+                },
+                PortRef {
+                    node: tnode,
+                    port: tport.into(),
+                },
+            )
+            .unwrap();
+    }
+}
+
+#[test]
+fn noise_canvas_space_is_byte_identical() {
+    // Regression guard: a Canvas-space noise brush must emit the exact
+    // `target_pos / scale` coordinate shipped brushes already rely on, and
+    // never the Dab oriented-frame locals. Guarantees zero behavior change
+    // for existing brushes when the frame selector defaults to Canvas.
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node(
+        "pen_input",
+        reg.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let noise = graph.add_node(
+        "noise",
+        reg.get("noise").unwrap().ports.clone(),
+        noise_params(0, true),
+    );
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    wire(
+        &mut graph,
+        &[
+            (pen, "position", term, "position"),
+            (noise, "color", term, "rgba"),
+        ],
+    );
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    assert!(
+        compiled.stroke_wgsl.contains("target_pos / 32.000000"),
+        "Canvas mode must emit the canvas-pixel coordinate; not found",
+    );
+    assert!(
+        !compiled.stroke_wgsl.contains("dab_local"),
+        "Canvas mode must not emit the Dab oriented-frame basis",
+    );
+    naga_validate(&compiled.stroke_wgsl, "noise canvas stroke");
+    naga_validate(&compiled.cursor_preview_wgsl, "noise canvas preview");
+}
+
+#[test]
+fn noise_dab_space_emits_oriented_frame_and_variation() {
+    // Dab mode must rotate the unit-disc offset by the `rotation` input and
+    // fold the `variation` offset. With both inputs unwired they fall to
+    // literal defaults (0), so the basis and offset still appear.
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node(
+        "pen_input",
+        reg.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let noise = graph.add_node(
+        "noise",
+        reg.get("noise").unwrap().ports.clone(),
+        noise_params(1, true),
+    );
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    wire(
+        &mut graph,
+        &[
+            (pen, "position", term, "position"),
+            (noise, "color", term, "rgba"),
+        ],
+    );
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    let w = &compiled.stroke_wgsl;
+    assert!(
+        w.contains("dab_local"),
+        "Dab mode must emit the oriented basis local"
+    );
+    assert!(
+        w.contains("cos(") && w.contains("sin("),
+        "Dab basis must rotate by the rotation input"
+    );
+    assert!(
+        w.contains("* 64.0"),
+        "Dab mode must fold the per-dab variation offset"
+    );
+    assert!(
+        !w.contains("target_pos / 32.000000"),
+        "Dab mode must not fall back to the canvas coordinate",
+    );
+    naga_validate(w, "noise dab stroke");
+    naga_validate(&compiled.cursor_preview_wgsl, "noise dab preview");
+}
+
+#[test]
+fn noise_scale_with_brush_picks_arm_at_compile_time() {
+    let reg = registry();
+    for (swb, expect_norm) in [(true, true), (false, false)] {
+        let mut graph = Graph::<BrushWireType>::new();
+        let pen = graph.add_node(
+            "pen_input",
+            reg.get("pen_input").unwrap().ports.clone(),
+            vec![],
+        );
+        let noise = graph.add_node(
+            "noise",
+            reg.get("noise").unwrap().ports.clone(),
+            noise_params(1, swb),
+        );
+        let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+        wire(
+            &mut graph,
+            &[
+                (pen, "position", term, "position"),
+                (noise, "color", term, "rgba"),
+            ],
+        );
+        let plan = compile(&graph, reg.as_map()).unwrap();
+        let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+        let w = &compiled.stroke_wgsl;
+        if expect_norm {
+            assert!(
+                w.contains("dab_local / 32.000000"),
+                "scale_with_brush=true divides the unit-disc offset"
+            );
+            // The skeleton always defines `local_uv = local * d.inv_radius_target_px`,
+            // so guard against the *reconstruction* specifically, not the symbol.
+            assert!(
+                !w.contains("1.0 / d.inv_radius_target_px"),
+                "scale_with_brush=true must not reconstruct pixels"
+            );
+        } else {
+            assert!(
+                w.contains("1.0 / d.inv_radius_target_px"),
+                "scale_with_brush=false must reconstruct dab-pixels from inv_radius",
+            );
+        }
+    }
+}
+
+#[test]
+fn noise_rotation_input_wires_per_dab() {
+    // Wiring pen.drawing_angle → noise.rotation must substitute the per-dab
+    // drawing-angle expression into the oriented basis (not a literal),
+    // proving orientation flows through the ordinary input-port path.
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node(
+        "pen_input",
+        reg.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let noise = graph.add_node(
+        "noise",
+        reg.get("noise").unwrap().ports.clone(),
+        noise_params(1, true),
+    );
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    wire(
+        &mut graph,
+        &[
+            (pen, "position", term, "position"),
+            (pen, "drawing_angle", noise, "rotation"),
+            (noise, "color", term, "rgba"),
+        ],
+    );
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    assert!(
+        compiled
+            .stroke_wgsl
+            .contains("_drawing_angle - u.intrinsic.view_rotation"),
+        "noise.rotation must carry the wired per-dab drawing_angle expression",
+    );
+    naga_validate(&compiled.stroke_wgsl, "noise wired-rotation stroke");
+    naga_validate(
+        &compiled.cursor_preview_wgsl,
+        "noise wired-rotation preview",
+    );
+}
+
+#[test]
+fn image_dab_tip_needs_no_shape_node() {
+    // The finding-#2 case: an image tip in its default Dab space, oriented by
+    // pen.drawing_angle, with NO shape node present. Both shader variants must
+    // compile and sample in the oriented frame.
+    use darkly::gpu::params::ParamValue;
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node(
+        "pen_input",
+        reg.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let image = graph.add_node(
+        "image",
+        reg.get("image").unwrap().ports.clone(),
+        vec![
+            ParamValue::String("paper".into()), // texture_name
+            ParamValue::Float(512.0),           // scale
+            ParamValue::Int(1),                 // space = Dab (default)
+            ParamValue::Bool(true),             // scale_with_brush
+        ],
+    );
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    wire(
+        &mut graph,
+        &[
+            (pen, "position", term, "position"),
+            (pen, "drawing_angle", image, "rotation"),
+            (image, "color", term, "rgba"),
+        ],
+    );
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    for (label, w) in [
+        ("stroke_wgsl", &compiled.stroke_wgsl),
+        ("cursor_preview_wgsl", &compiled.cursor_preview_wgsl),
+    ] {
+        assert!(
+            w.contains("@fragment") && w.contains("fn fs_main"),
+            "{label} must be a complete fragment shader"
+        );
+        assert!(
+            w.contains("dab_local"),
+            "{label} image tip must sample the oriented Dab frame"
+        );
+        assert!(
+            w.contains("_drawing_angle - u.intrinsic.view_rotation"),
+            "{label} image.rotation must be the wired drawing_angle"
+        );
+    }
+    naga_validate(&compiled.stroke_wgsl, "image dab-tip stroke");
+    naga_validate(&compiled.cursor_preview_wgsl, "image dab-tip preview");
+}
