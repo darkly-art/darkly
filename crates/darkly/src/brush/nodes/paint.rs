@@ -414,7 +414,6 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::output("dab_size", BrushWireType::Vec2)
                     .with_description("Brush mark size in canvas pixels"),
             ],
-            params: &[],
             is_gpu: true,
             is_terminal: true,
             supports_erase: true,

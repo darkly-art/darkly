@@ -451,7 +451,7 @@ impl PortableValue {
         }
     }
 
-    fn kind_label(&self) -> &'static str {
+    pub fn kind_label(&self) -> &'static str {
         match self {
             Self::Bool(_) => "bool",
             Self::Int(_) => "integer",

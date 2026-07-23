@@ -39,6 +39,17 @@ pub enum BrushWireType {
     Vec2,
     /// `vec4<f32>` (RGBA color, premultiplied; arbitrary 4-vector).
     Vec4,
+    /// A dropdown-selected index that picks a compile-time WGSL branch
+    /// (shape algorithm, sampling space, random mode). Carries an `i32`
+    /// value like `Int`, but is a distinct type so it's editable as a
+    /// labeled dropdown and — crucially — **not wirable**: a per-dab wire
+    /// can't drive a compile-time branch.
+    Enum,
+    /// A texture / icon name, resolved at compile time. **Not wirable.**
+    String,
+    /// Curve control points, baked into a LUT at compile time. **Not
+    /// wirable** — the whole spline is a compile-time constant.
+    Curve,
 }
 
 impl WireKind for BrushWireType {
@@ -53,6 +64,14 @@ impl WireKind for BrushWireType {
             // Scalar widens to Int (truncates) or vice versa.
             (Scalar, Int) | (Int, Scalar)
         )
+    }
+
+    /// `Enum`/`String`/`Curve` select a compile-time arm or bake a
+    /// constant, so no per-dab wire can drive them. Every scalar-family
+    /// shape computes per fragment and is wirable — defaulted here so a
+    /// new wire type is wirable unless it opts out.
+    fn is_wirable(self) -> bool {
+        !matches!(self, Self::Enum | Self::String | Self::Curve)
     }
 }
 
@@ -103,14 +122,19 @@ impl ScalarValue {
         }
     }
 
-    /// Coerce this value to match a target wire type.
+    /// Coerce this value to match a target wire type. The non-wirable
+    /// data shapes (`Enum`/`String`/`Curve`) never carry a runtime slot
+    /// value — the connect guard rejects wiring them — so they collapse to
+    /// the scalar coercion; the arm exists only to keep the match total.
     pub fn coerce(self, target: BrushWireType) -> Self {
         match target {
-            BrushWireType::Scalar => Self::Scalar(self.as_f32()),
+            BrushWireType::Scalar | BrushWireType::Enum | BrushWireType::Curve => {
+                Self::Scalar(self.as_f32())
+            }
             BrushWireType::Int => Self::Int(self.as_f32() as i32),
             BrushWireType::Bool => Self::Bool(self.as_f32() > 0.5),
             BrushWireType::Vec2 => Self::Vec2(self.as_vec2()),
-            BrushWireType::Vec4 => Self::Vec4(self.as_color()),
+            BrushWireType::Vec4 | BrushWireType::String => Self::Vec4(self.as_color()),
         }
     }
 }
@@ -147,6 +171,28 @@ mod tests {
             BrushWireType::Int,
             BrushWireType::Scalar
         ));
+    }
+
+    #[test]
+    fn is_wirable_truth_table() {
+        // Scalar-family shapes accept a per-dab wire.
+        for ty in [
+            BrushWireType::Scalar,
+            BrushWireType::Int,
+            BrushWireType::Bool,
+            BrushWireType::Vec2,
+            BrushWireType::Vec4,
+        ] {
+            assert!(ty.is_wirable(), "{ty:?} should be wirable");
+        }
+        // Branch/data shapes resolve at compile time — never wirable.
+        for ty in [
+            BrushWireType::Enum,
+            BrushWireType::String,
+            BrushWireType::Curve,
+        ] {
+            assert!(!ty.is_wirable(), "{ty:?} should not be wirable");
+        }
     }
 
     #[test]

@@ -8,7 +8,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::gpu::params::ParamValue;
 use crate::nodegraph::{
     ExecStep, ExecutionPlan, Graph, InputSlot, NodeId, NodeRegistration, PortDef, PortDir, PortRef,
 };
@@ -38,11 +37,9 @@ pub struct EvalContext<'a> {
     /// the upstream slot held no value (the named input then resolves to
     /// the port default, same as if it were disconnected).
     pub input_values: &'a [Option<ScalarValue>],
-    /// Per-instance parameter overrides from the graph.
-    pub params: &'a [ParamValue],
     /// Port definitions for this node instance (for reading defaults).
     pub port_defs: &'a [PortDef<BrushWireType>],
-    /// Precomputed curve LUT, if this node has a Curve parameter.
+    /// Precomputed curve LUT, if this node has a Curve-typed input.
     pub lut: Option<&'a CurveLut>,
     /// PRNG seed for this stroke (deterministic per-stroke randomness).
     pub stroke_seed: u32,
@@ -63,10 +60,10 @@ impl EvalContext<'_> {
                 break;
             }
         }
-        // Fall back to port default.
+        // Fall back to the port's authored value.
         for port in self.port_defs {
             if port.name == name && port.dir == PortDir::Input {
-                return ScalarValue::Scalar(port.default);
+                return port.value.as_scalar_value();
             }
         }
         ScalarValue::default()
@@ -75,31 +72,6 @@ impl EvalContext<'_> {
     /// Read an input as f32 (with coercion and default fallback).
     pub fn input_f32(&self, name: &str) -> f32 {
         self.input(name).as_f32()
-    }
-
-    /// Read a parameter by index as f32.
-    pub fn param_f32(&self, index: usize) -> f32 {
-        match self.params.get(index) {
-            Some(ParamValue::Float(v)) => *v,
-            Some(ParamValue::Int(v)) => *v as f32,
-            _ => 0.0,
-        }
-    }
-
-    /// Read a parameter by index as &str.
-    pub fn param_str(&self, index: usize) -> &str {
-        match self.params.get(index) {
-            Some(ParamValue::String(s)) => s.as_str(),
-            _ => "",
-        }
-    }
-
-    /// Read a parameter by index as curve control points.
-    pub fn param_curve(&self, index: usize) -> &[[f32; 2]] {
-        match self.params.get(index) {
-            Some(ParamValue::Curve(pts)) => pts.as_slice(),
-            _ => &[[0.0, 0.0], [1.0, 1.0]],
-        }
     }
 
     /// O(1) curve lookup using the precomputed LUT.
@@ -507,7 +479,6 @@ pub struct BrushGraphRunner {
 }
 
 struct NodeData {
-    params: Vec<ParamValue>,
     port_defs: Vec<PortDef<BrushWireType>>,
     lut: Option<CurveLut>,
 }
@@ -524,7 +495,6 @@ fn build_eval_ctx<'a>(
     EvalContext {
         input_slots,
         input_values,
-        params: node.map(|n| n.params.as_slice()).unwrap_or(&[]),
         port_defs: node.map(|n| n.port_defs.as_slice()).unwrap_or(&[]),
         lut: node.and_then(|n| n.lut.as_ref()),
         stroke_seed,
@@ -572,14 +542,15 @@ impl BrushGraphRunner {
         let mut node_data = HashMap::new();
         for step in &plan.steps {
             if let Some(node) = graph.nodes().get(&step.node_id) {
-                let lut = node.params.iter().find_map(|p| match p {
-                    ParamValue::Curve(pts) if pts.len() >= 2 => Some(CurveLut::from_points(pts)),
+                let lut = node.ports.iter().find_map(|p| match &p.value {
+                    crate::brush::input_value::InputValue::Curve(pts) if pts.len() >= 2 => {
+                        Some(CurveLut::from_points(pts))
+                    }
                     _ => None,
                 });
                 node_data.insert(
                     step.node_id,
                     NodeData {
-                        params: node.params.clone(),
                         port_defs: node.ports.clone(),
                         lut,
                     },

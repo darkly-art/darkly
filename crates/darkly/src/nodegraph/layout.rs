@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn single_node() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node("a", vec![scalar_out("out")], vec![]);
+        let a = g.add_node("a", vec![scalar_out("out")]);
         let pos = g.auto_layout();
         // Disconnected single node at x=0, centered vertically.
         assert_eq!(pos[&a][0], 0.0);
@@ -330,9 +330,9 @@ mod tests {
     #[test]
     fn linear_chain() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node("a", vec![scalar_out("out")], vec![]);
-        let b = g.add_node("b", vec![scalar_in("in"), scalar_out("out")], vec![]);
-        let c = g.add_node("c", vec![scalar_in("in")], vec![]);
+        let a = g.add_node("a", vec![scalar_out("out")]);
+        let b = g.add_node("b", vec![scalar_in("in"), scalar_out("out")]);
+        let c = g.add_node("c", vec![scalar_in("in")]);
         wire(&mut g, a, "out", b, "in");
         wire(&mut g, b, "out", c, "in");
 
@@ -347,10 +347,10 @@ mod tests {
     fn diamond() {
         // A → B, A → C, B → D, C → D
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node("a", vec![scalar_out("out")], vec![]);
-        let b = g.add_node("b", vec![scalar_in("in"), scalar_out("out")], vec![]);
-        let c = g.add_node("c", vec![scalar_in("in"), scalar_out("out")], vec![]);
-        let d = g.add_node("d", vec![scalar_in("in_a"), scalar_in("in_b")], vec![]);
+        let a = g.add_node("a", vec![scalar_out("out")]);
+        let b = g.add_node("b", vec![scalar_in("in"), scalar_out("out")]);
+        let c = g.add_node("c", vec![scalar_in("in"), scalar_out("out")]);
+        let d = g.add_node("d", vec![scalar_in("in_a"), scalar_in("in_b")]);
         wire(&mut g, a, "out", b, "in");
         wire(&mut g, a, "out", c, "in");
         wire(&mut g, b, "out", d, "in_a");
@@ -372,9 +372,9 @@ mod tests {
         // source → curve → stamp, source → stamp
         // stamp should be at layer 2 (longest path), not layer 1.
         let mut g = Graph::<TestWireKind>::new();
-        let src = g.add_node("src", vec![scalar_out("out1"), scalar_out("out2")], vec![]);
-        let curve = g.add_node("curve", vec![scalar_in("in"), scalar_out("out")], vec![]);
-        let stamp = g.add_node("stamp", vec![scalar_in("in_a"), scalar_in("in_b")], vec![]);
+        let src = g.add_node("src", vec![scalar_out("out1"), scalar_out("out2")]);
+        let curve = g.add_node("curve", vec![scalar_in("in"), scalar_out("out")]);
+        let stamp = g.add_node("stamp", vec![scalar_in("in_a"), scalar_in("in_b")]);
         wire(&mut g, src, "out1", curve, "in");
         wire(&mut g, curve, "out", stamp, "in_a");
         wire(&mut g, src, "out2", stamp, "in_b");
@@ -390,9 +390,9 @@ mod tests {
     #[test]
     fn disconnected_nodes() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node("a", vec![scalar_out("out")], vec![]);
-        let b = g.add_node("b", vec![scalar_in("in")], vec![]);
-        let orphan = g.add_node("orphan", vec![scalar_out("out")], vec![]);
+        let a = g.add_node("a", vec![scalar_out("out")]);
+        let b = g.add_node("b", vec![scalar_in("in")]);
+        let orphan = g.add_node("orphan", vec![scalar_out("out")]);
         wire(&mut g, a, "out", b, "in");
 
         let pos = g.auto_layout();
@@ -404,9 +404,9 @@ mod tests {
     #[test]
     fn all_disconnected() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node("a", vec![scalar_out("out")], vec![]);
-        let b = g.add_node("b", vec![scalar_out("out")], vec![]);
-        let c = g.add_node("c", vec![scalar_out("out")], vec![]);
+        let a = g.add_node("a", vec![scalar_out("out")]);
+        let b = g.add_node("b", vec![scalar_out("out")]);
+        let c = g.add_node("c", vec![scalar_out("out")]);
 
         let pos = g.auto_layout();
 
@@ -428,11 +428,11 @@ mod tests {
         // After layout, b1 and b2 should maintain their relative ordering
         // from their sources, so wires don't cross.
         let mut g = Graph::<TestWireKind>::new();
-        let a1 = g.add_node("a1", vec![scalar_out("out")], vec![]);
-        let a2 = g.add_node("a2", vec![scalar_out("out")], vec![]);
-        let b1 = g.add_node("b1", vec![scalar_in("in"), scalar_out("out")], vec![]);
-        let b2 = g.add_node("b2", vec![scalar_in("in"), scalar_out("out")], vec![]);
-        let sink = g.add_node("sink", vec![scalar_in("in_a"), scalar_in("in_b")], vec![]);
+        let a1 = g.add_node("a1", vec![scalar_out("out")]);
+        let a2 = g.add_node("a2", vec![scalar_out("out")]);
+        let b1 = g.add_node("b1", vec![scalar_in("in"), scalar_out("out")]);
+        let b2 = g.add_node("b2", vec![scalar_in("in"), scalar_out("out")]);
+        let sink = g.add_node("sink", vec![scalar_in("in_a"), scalar_in("in_b")]);
         wire(&mut g, a1, "out", b1, "in");
         wire(&mut g, a2, "out", b2, "in");
         wire(&mut g, b1, "out", sink, "in_a");
@@ -454,10 +454,9 @@ mod tests {
         let tall = g.add_node(
             "tall",
             (0..10).map(|i| scalar_out(&format!("out{i}"))).collect(),
-            vec![],
         );
-        let small = g.add_node("small", vec![scalar_out("out")], vec![]);
-        let sink = g.add_node("sink", vec![scalar_in("in1"), scalar_in("in2")], vec![]);
+        let small = g.add_node("small", vec![scalar_out("out")]);
+        let sink = g.add_node("sink", vec![scalar_in("in1"), scalar_in("in2")]);
         wire(&mut g, tall, "out0", sink, "in1");
         wire(&mut g, small, "out", sink, "in2");
 
@@ -488,13 +487,12 @@ mod tests {
         // This must not break the topo sort (in-degree must be counted
         // at the node level, not the connection level).
         let mut g = Graph::<TestWireKind>::new();
-        let src = g.add_node("src", vec![scalar_out("out1"), scalar_out("out2")], vec![]);
+        let src = g.add_node("src", vec![scalar_out("out1"), scalar_out("out2")]);
         let mid = g.add_node(
             "mid",
             vec![scalar_in("in1"), scalar_in("in2"), scalar_out("out")],
-            vec![],
         );
-        let sink = g.add_node("sink", vec![scalar_in("in")], vec![]);
+        let sink = g.add_node("sink", vec![scalar_in("in")]);
         wire(&mut g, src, "out1", mid, "in1");
         wire(&mut g, src, "out2", mid, "in2");
         wire(&mut g, mid, "out", sink, "in");

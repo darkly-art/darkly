@@ -2,7 +2,6 @@ use serde::Serialize;
 
 use super::graph::PortDef;
 use super::WireKind;
-use crate::gpu::params::ParamDef;
 
 /// Static metadata describing a node type in a particular domain.
 ///
@@ -30,10 +29,11 @@ pub struct NodeRegistration<W: WireKind> {
     /// "scalar" or "fragment shader"); per-port detail goes on the ports
     /// themselves via `PortDef::with_description`.
     pub description: &'static str,
-    /// Port definitions for this node type.
+    /// Port definitions for this node type — the node's single, unified
+    /// input/output list. Every input carries its own authored value and
+    /// widget metadata on the [`PortDef`]; there is no separate parameter
+    /// system.
     pub ports: Vec<PortDef<W>>,
-    /// Parameter definitions (for inline UI sliders).
-    pub params: &'static [ParamDef],
     /// Whether this node requires GPU execution.
     pub is_gpu: bool,
     /// True for output terminals whose upstream graph fuses into a

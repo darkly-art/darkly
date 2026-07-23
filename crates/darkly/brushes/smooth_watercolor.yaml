@@ -3,13 +3,13 @@ category: Wet Media
 nodes:
   1:
     type: pen_input
-    port_defaults:
+    inputs:
       stabilize: 0.5
   2:
     type: paint_color
   3:
     type: shape
-    port_defaults:
+    inputs:
       amplitude: 0.05
       frequency: 5.0
   4:

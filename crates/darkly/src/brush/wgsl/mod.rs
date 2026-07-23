@@ -324,10 +324,10 @@ pub fn compile_brush_to_wgsl(
             inputs.insert(slot_info.port_name.clone(), InputBinding::Wired(remapped));
         }
 
-        // Curve LUT (only present on nodes with a Curve param).
+        // Curve LUT (only present on nodes with a Curve-typed input).
         let lut: Option<crate::brush::curve_math::CurveLut> =
-            node.params.iter().find_map(|p| match p {
-                crate::gpu::params::ParamValue::Curve(pts) if pts.len() >= 2 => {
+            node.ports.iter().find_map(|p| match &p.value {
+                crate::brush::input_value::InputValue::Curve(pts) if pts.len() >= 2 => {
                     Some(crate::brush::curve_math::CurveLut::from_points(pts))
                 }
                 _ => None,
@@ -367,7 +367,6 @@ pub fn compile_brush_to_wgsl(
 
         let cctx = CompileWgslCtx {
             node_id: step.node_id,
-            params: &node.params,
             port_defs: &node.ports,
             inputs,
             lut: lut.as_ref(),
@@ -431,7 +430,6 @@ pub fn compile_brush_to_wgsl(
             let (preview_node, preview_inputs, preview_consumed) = preview_cctx_parts;
             let preview_cctx = CompileWgslCtx {
                 node_id: step.node_id,
-                params: &preview_node.params,
                 port_defs: &preview_node.ports,
                 inputs: preview_inputs,
                 lut: lut.as_ref(),
@@ -848,15 +846,14 @@ fn hash_graph_topology(graph: &crate::nodegraph::Graph<BrushWireType>) -> u64 {
         let node = &graph.nodes()[id];
         id.0.hash(&mut hasher);
         node.type_id.hash(&mut hasher);
-        // Hash params by serialising — order is stable; values that
-        // affect compilation (algorithm enum, curve points) end up in
-        // the hash.
-        if let Ok(s) = serde_json::to_string(&node.params) {
-            s.hash(&mut hasher);
-        }
+        // Hash each input's authored value by serialising — order is
+        // stable; every value that affects compilation (scalar defaults,
+        // algorithm enum, texture name, curve points) rides along.
         for port in &node.ports {
             port.name.hash(&mut hasher);
-            port.default.to_bits().hash(&mut hasher);
+            if let Ok(s) = serde_json::to_string(&port.value) {
+                s.hash(&mut hasher);
+            }
         }
     }
     let mut conns: Vec<_> = graph.connections.iter().collect();

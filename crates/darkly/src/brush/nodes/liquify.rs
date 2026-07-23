@@ -163,7 +163,6 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::output("dab_size", BrushWireType::Vec2)
                     .with_description("Size of the affected area"),
             ],
-            params: &[],
             is_gpu: true,
             is_terminal: true,
             supports_erase: false,

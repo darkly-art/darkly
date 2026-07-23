@@ -22,12 +22,12 @@ use std::sync::{Arc, OnceLock};
 use darkly::brush::compile_graph;
 use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, StrokeResources};
+use darkly::brush::input_value::InputValue;
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::brush::registry;
 use darkly::brush::stroke_buffer::StrokeBuffer;
 use darkly::brush::wire::BrushWireType;
-use darkly::gpu::params::ParamValue;
 use darkly::gpu::test_utils::{create_test_texture, readback_texture, test_device};
 use darkly::nodegraph::{Graph, PortRef};
 
@@ -70,33 +70,18 @@ fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWir
     let pen = graph.add_node(
         "pen_input",
         registry.get("pen_input").unwrap().ports.clone(),
-        vec![],
     );
     let paint_color = graph.add_node(
         "paint_color",
         registry.get("paint_color").unwrap().ports.clone(),
-        vec![],
     );
-    let curve = graph.add_node(
-        "curve",
-        registry.get("curve").unwrap().ports.clone(),
-        vec![ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]])],
-    );
-    let shape = graph.add_node(
-        "shape",
-        registry.get("shape").unwrap().ports.clone(),
-        vec![ParamValue::Int(algorithm)],
-    );
-    let stamp = graph.add_node(
-        "stamp",
-        registry.get("stamp").unwrap().ports.clone(),
-        vec![ParamValue::Int(0)], // Alpha Mask
-    );
-    let terminal = graph.add_node(
-        "paint",
-        registry.get("paint").unwrap().ports.clone(),
-        vec![],
-    );
+    let curve = graph.add_node("curve", registry.get("curve").unwrap().ports.clone());
+    let shape = graph.add_node("shape", registry.get("shape").unwrap().ports.clone());
+    graph
+        .set_port_value(shape, "algorithm", InputValue::Int(algorithm))
+        .unwrap();
+    let stamp = graph.add_node("stamp", registry.get("stamp").unwrap().ports.clone());
+    let terminal = graph.add_node("paint", registry.get("paint").unwrap().ports.clone());
 
     graph
         .set_port_default(shape, "amplitude", amplitude)
@@ -492,7 +477,11 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
         .map(|(id, _)| *id)
         .unwrap();
     graph
-        .set_param(curve_id, 0, ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]]))
+        .set_port_value(
+            curve_id,
+            "curve",
+            InputValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]]),
+        )
         .unwrap();
 
     let mut h = harness(&black_canvas(), graph);

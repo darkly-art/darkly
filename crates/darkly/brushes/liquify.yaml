@@ -3,7 +3,7 @@ category: Effects
 nodes:
   1:
     type: pen_input
-    port_defaults:
+    inputs:
       spacing: 0.0
       spacing_min_px: 4.0
   2:

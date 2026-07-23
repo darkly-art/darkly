@@ -3,13 +3,13 @@ category: Basic
 nodes:
   1:
     type: pen_input
-    port_defaults:
+    inputs:
       stabilize: 0.6
   2:
     type: paint_color
   3:
     type: shape
-    port_defaults:
+    inputs:
       softness: 0.1
   4:
     type: stamp
@@ -17,7 +17,7 @@ nodes:
     type: paint
   6:
     type: curve
-    params:
+    inputs:
       curve:
       - - 0.0
         - 0.0

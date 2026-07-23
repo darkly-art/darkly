@@ -23,7 +23,6 @@ pub fn register() -> BrushNodeRegistration {
             description: "The color currently selected in the toolbar.",
             ports: vec![PortDef::output("color", BrushWireType::Vec4)
                 .with_description("Current foreground painting color (RGBA)")],
-            params: &[],
             is_gpu: false,
             is_terminal: false,
             supports_erase: true,

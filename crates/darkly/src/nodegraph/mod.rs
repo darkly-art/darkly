@@ -29,6 +29,14 @@ pub trait WireKind:
     /// expecting type `to`.  This allows implicit coercions (e.g.
     /// Int → Float) without requiring explicit conversion nodes.
     fn compatible(from: Self, to: Self) -> bool;
+
+    /// Returns `true` if an upstream wire may drive an input of this type
+    /// per-dab. Defaulted to `true` — a new wire type is wirable unless it
+    /// opts out (branch/data shapes that resolve at compile time). Consumers
+    /// call this; they never `matches!` on the variant (type-owned dispatch).
+    fn is_wirable(self) -> bool {
+        true
+    }
 }
 
 pub use compiler::compile;
@@ -43,11 +51,18 @@ pub(crate) mod tests {
     pub enum TestWireKind {
         Scalar,
         Color,
+        /// A compile-time data shape used to exercise the wirability guard —
+        /// same type on both ends (so the type check passes) but not wirable.
+        Data,
     }
 
     impl WireKind for TestWireKind {
         fn compatible(from: Self, to: Self) -> bool {
             from == to
+        }
+
+        fn is_wirable(self) -> bool {
+            !matches!(self, Self::Data)
         }
     }
 }

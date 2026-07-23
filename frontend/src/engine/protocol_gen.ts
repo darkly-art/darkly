@@ -143,9 +143,7 @@ export type BrushGraphReorderExposedPortReq = { key: string, new_index: number, 
 
 export type BrushGraphSetExposedPortMetaReq = { key: string, label: string, description: string, icon: string, };
 
-export type BrushGraphSetParamReq = { node_id: number, param_index: number, kind: string, value: JsonValue, };
-
-export type BrushGraphSetPortDefaultReq = { node_id: number, port_name: string, value: number, };
+export type BrushGraphSetInputReq = { node_id: number, input_name: string, kind: string, value: JsonValue, };
 
 export type BrushGraphUnexposePortReq = { node_id: number, port_name: string, };
 
@@ -162,9 +160,11 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: number, };
 
-export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "levels", name: string, default: [number, number, number, number, number], } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, } | { "kind": "color", name: string, default: [number, number, number], } | { "kind": "vec2", name: string, max: number, default: [number, number], } | { "kind": "list", name: string, item: Array<ParamDef>, max_len: number, default: Array<Array<[string, ConstParamValue]>>, };
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
 
-export type ConstParamValue = boolean | number | number | string | [number, number, number] | [number, number];
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+
+export type PortDir = "Input" | "Output";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -176,9 +176,29 @@ min: number,
  */
 max: number, 
 /**
- * Default value when the port is disconnected.
+ * The authored value used when this input port is disconnected — the
+ * full typed value (scalar slider value, enum-dropdown index, texture
+ * name, curve points, color). Wired inputs ignore it and take the
+ * upstream expression. For output ports it stays the neutral scalar
+ * default and is unused. Replaces the old scalar-only `default: f32`;
+ * numeric inputs carry [`InputValue::Scalar`].
  */
-default: number, 
+value: InputValue, 
+/**
+ * Enum-dropdown labels, in index order — non-empty only for
+ * [`WireKind`]-`Enum` inputs (shape's `algorithm`, noise/image `space`,
+ * random's `mode`). Empty for every other input kind.
+ */
+enum_options?: Array<string>, 
+/**
+ * Whether an upstream wire may drive this input per-dab. Computed from
+ * `wire_type.is_wirable()` at construction and carried as data so the
+ * frontend reads it directly rather than re-deriving the rule — the
+ * single source of truth is [`WireKind::is_wirable`]. Every port built
+ * from a registration (`PortDef::input`/`output`, and the clones in
+ * `add_node` / portable import) sets it correctly; serde round-trips it.
+ */
+wirable: boolean, 
 /**
  * Quantization step. `0.0` (the default) means continuous; any positive
  * value snaps the slider, scrub, and typed-value commits to multiples of
@@ -299,10 +319,6 @@ natural_range: [number, number] | null,
  */
 persist_in_thumbnail: boolean, };
 
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
-
-export type PortDir = "Input" | "Output";
-
 export type NodeRegistration = { 
 /**
  * Unique identifier (e.g. "pen_input", "multiply").
@@ -327,13 +343,12 @@ display_name: string,
  */
 description: string, 
 /**
- * Port definitions for this node type.
+ * Port definitions for this node type — the node's single, unified
+ * input/output list. Every input carries its own authored value and
+ * widget metadata on the [`PortDef`]; there is no separate parameter
+ * system.
  */
 ports: Array<PortDef>, 
-/**
- * Parameter definitions (for inline UI sliders).
- */
-params: Array<ParamDef>, 
 /**
  * Whether this node requires GPU execution.
  */
@@ -399,14 +414,14 @@ export type FillBackgroundReq = { id: number, };
 
 export type FillBackgroundColorReq = { id: number, rgba: [number, number, number, number], };
 
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
 export type ParamInfo = { kind: string, name: string, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
 /**
  * Enum: `["Label1", "Label2", ...]`.
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
 options: JsonValue | null, };
-
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
 export type VeilTypeInfo = { type: string, displayName: string, 
 /**
@@ -449,6 +464,17 @@ export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 export type LayerKindTypeInfo = { type: string, displayName: string, };
 
 export type LayerTransformCapabilityReq = { id: number, };
+
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * Whether this modifier participates in transforms with its host.
+ */
+linkedToHost: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
 
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
@@ -501,17 +527,6 @@ pipeline: string,
  * uses.
  */
 params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
-
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
-/**
- * Whether this modifier participates in transforms with its host.
- */
-linkedToHost: boolean, 
-/**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -733,8 +748,7 @@ export type RequestKind =
     | 'brush_graph_reorder_exposed_port'
     | 'brush_graph_reset'
     | 'brush_graph_set_exposed_port_meta'
-    | 'brush_graph_set_param'
-    | 'brush_graph_set_port_default'
+    | 'brush_graph_set_input'
     | 'brush_graph_unexpose_port'
     | 'brush_graph_validate'
     | 'brush_import'
@@ -926,8 +940,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'brush_graph_reorder_exposed_port',
     'brush_graph_reset',
     'brush_graph_set_exposed_port_meta',
-    'brush_graph_set_param',
-    'brush_graph_set_port_default',
+    'brush_graph_set_input',
     'brush_graph_unexpose_port',
     'brush_graph_validate',
     'brush_import',
@@ -1127,8 +1140,7 @@ export interface EngineApi {
     brushGraphReorderExposedPort(req: BrushGraphReorderExposedPortReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphReset(): void;
     brushGraphSetExposedPortMeta(req: BrushGraphSetExposedPortMetaReq): Promise<{ graph: JsonValue } | { error: string }>;
-    brushGraphSetParam(req: BrushGraphSetParamReq): Promise<{ graph: JsonValue } | { error: string }>;
-    brushGraphSetPortDefault(req: BrushGraphSetPortDefaultReq): Promise<{ graph: JsonValue } | { error: string }>;
+    brushGraphSetInput(req: BrushGraphSetInputReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphUnexposePort(req: BrushGraphUnexposePortReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphValidate(req: BrushGraphJsonReq): Promise<null | { error: string }>;
     brushImport(bytes: Uint8Array): Promise<string>;
@@ -1322,8 +1334,7 @@ export function makeApi(t: Transport): EngineApi {
         brushGraphReorderExposedPort: (req) => t.request('brush_graph_reorder_exposed_port', req),
         brushGraphReset: () => t.postFF('brush_graph_reset'),
         brushGraphSetExposedPortMeta: (req) => t.request('brush_graph_set_exposed_port_meta', req),
-        brushGraphSetParam: (req) => t.request('brush_graph_set_param', req),
-        brushGraphSetPortDefault: (req) => t.request('brush_graph_set_port_default', req),
+        brushGraphSetInput: (req) => t.request('brush_graph_set_input', req),
         brushGraphUnexposePort: (req) => t.request('brush_graph_unexpose_port', req),
         brushGraphValidate: (req) => t.request('brush_graph_validate', req),
         brushImport: (bytes) => t.request('brush_import', {}, bytes),

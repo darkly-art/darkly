@@ -8,6 +8,7 @@ pub mod curve_math;
 pub mod eval;
 pub mod gpu_context;
 pub mod import;
+pub mod input_value;
 pub mod interpolation;
 pub mod library;
 pub mod node;
@@ -202,7 +203,6 @@ pub fn graph_capabilities(
 /// → stamp → paint` — minus the per-brush configuration
 /// closure (no exposed softness, no flow wire).
 pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
-    use crate::gpu::params::ParamValue;
     use crate::nodegraph::{Graph, PortRef};
 
     let registry = registry();
@@ -211,28 +211,16 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
     let pen = graph.add_node(
         "pen_input",
         registry.get("pen_input").unwrap().ports.clone(),
-        vec![],
     );
     let paint_color = graph.add_node(
         "paint_color",
         registry.get("paint_color").unwrap().ports.clone(),
-        vec![],
     );
-    let shape = graph.add_node(
-        "shape",
-        registry.get("shape").unwrap().ports.clone(),
-        vec![ParamValue::Int(0)], // sine, amplitude 0 → plain disc
-    );
-    let stamp = graph.add_node(
-        "stamp",
-        registry.get("stamp").unwrap().ports.clone(),
-        vec![],
-    );
-    let terminal = graph.add_node(
-        "paint",
-        registry.get("paint").unwrap().ports.clone(),
-        vec![],
-    );
+    // Shape node defaults to the Sine algorithm (index 0) with amplitude 0 →
+    // a plain disc; no input override needed.
+    let shape = graph.add_node("shape", registry.get("shape").unwrap().ports.clone());
+    let stamp = graph.add_node("stamp", registry.get("stamp").unwrap().ports.clone());
+    let terminal = graph.add_node("paint", registry.get("paint").unwrap().ports.clone());
 
     let wires = [
         (pen, "pressure", terminal, "flow"),
@@ -342,7 +330,7 @@ pub fn reset_exposed_scrubs(graph: &mut crate::nodegraph::Graph<BrushWireType>) 
                 && port.dir == crate::nodegraph::PortDir::Input
                 && !port.persist_in_thumbnail
             {
-                resets.push((*id, port.name.clone(), port.default));
+                resets.push((*id, port.name.clone(), port.value.as_f32()));
             }
         }
     }
@@ -372,7 +360,6 @@ mod tests {
     use super::paint_info::{PaintInformation, StrokeRecord};
     use super::wire::{BrushWireType, ScalarValue};
     use super::*;
-    use crate::gpu::params::ParamValue;
     use crate::nodegraph::{Graph, NodeId, PortRef};
 
     /// Helper: build a graph with pen_input.pressure → multiply.a,
@@ -382,10 +369,10 @@ mod tests {
         let mut graph = Graph::new();
 
         let pen_reg = registry.get("pen_input").unwrap();
-        let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
+        let pen = graph.add_node("pen_input", pen_reg.ports.clone());
 
         let mul_reg = registry.get("multiply").unwrap();
-        let multiply = graph.add_node("multiply", mul_reg.ports.clone(), vec![]);
+        let multiply = graph.add_node("multiply", mul_reg.ports.clone());
 
         // pen.pressure → multiply.a
         graph
@@ -438,15 +425,11 @@ mod tests {
         let mut graph = Graph::new();
 
         let pen_reg = registry.get("pen_input").unwrap();
-        let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
+        let pen = graph.add_node("pen_input", pen_reg.ports.clone());
 
         // Default identity curve: [(0,0), (1,1)] → output ≈ input
         let curve_reg = registry.get("curve").unwrap();
-        let curve = graph.add_node(
-            "curve",
-            curve_reg.ports.clone(),
-            vec![ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]])],
-        );
+        let curve = graph.add_node("curve", curve_reg.ports.clone());
 
         graph
             .connect(
@@ -487,15 +470,22 @@ mod tests {
         let mut graph = Graph::new();
 
         let pen_reg = registry.get("pen_input").unwrap();
-        let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
+        let pen = graph.add_node("pen_input", pen_reg.ports.clone());
 
         // S-curve: compress low values
         let curve_reg = registry.get("curve").unwrap();
-        let curve = graph.add_node(
-            "curve",
-            curve_reg.ports.clone(),
-            vec![ParamValue::Curve(vec![[0.0, 0.0], [0.5, 0.2], [1.0, 1.0]])],
-        );
+        let curve = graph.add_node("curve", curve_reg.ports.clone());
+        graph
+            .set_port_value(
+                curve,
+                "curve",
+                crate::brush::input_value::InputValue::Curve(vec![
+                    [0.0, 0.0],
+                    [0.5, 0.2],
+                    [1.0, 1.0],
+                ]),
+            )
+            .unwrap();
 
         graph
             .connect(
@@ -560,7 +550,7 @@ mod tests {
         let mut graph = Graph::new();
 
         let mul_reg = registry.get("multiply").unwrap();
-        let multiply = graph.add_node("multiply", mul_reg.ports.clone(), vec![]);
+        let multiply = graph.add_node("multiply", mul_reg.ports.clone());
 
         let evaluators = registry.evaluators();
         let mut runner = BrushGraphRunner::new(&graph, registry.as_map(), evaluators).unwrap();
@@ -586,7 +576,7 @@ mod tests {
         let mut graph = Graph::new();
 
         let color_reg = registry.get("paint_color").unwrap();
-        let color_node = graph.add_node("paint_color", color_reg.ports.clone(), vec![]);
+        let color_node = graph.add_node("paint_color", color_reg.ports.clone());
 
         let evaluators = registry.evaluators();
         let mut runner = BrushGraphRunner::new(&graph, registry.as_map(), evaluators).unwrap();

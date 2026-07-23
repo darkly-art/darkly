@@ -838,7 +838,11 @@ fn pen_input_spacing_port_controls_dab_density() {
     let layer_id = engine.add_raster_layer(None);
     let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
     engine
-        .brush_graph_set_port_default(pen_id, "spacing", 0.10)
+        .brush_graph_set_input(
+            pen_id,
+            "spacing",
+            darkly::brush::input_value::InputValue::Scalar(0.10),
+        )
         .expect("default spacing port must exist");
     paint_horizontal_stroke(&mut engine, layer_id, w, h);
     let dense_alpha = alpha_sum(&engine.test_readback_layer(layer_id), w, h);
@@ -848,7 +852,11 @@ fn pen_input_spacing_port_controls_dab_density() {
     let layer_id = engine.add_raster_layer(None);
     let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
     engine
-        .brush_graph_set_port_default(pen_id, "spacing", 1.0)
+        .brush_graph_set_input(
+            pen_id,
+            "spacing",
+            darkly::brush::input_value::InputValue::Scalar(1.0),
+        )
         .expect("spacing port must exist");
     paint_horizontal_stroke(&mut engine, layer_id, w, h);
     let sparse_alpha = alpha_sum(&engine.test_readback_layer(layer_id), w, h);
@@ -886,7 +894,11 @@ fn small_brush_does_not_emit_subpixel_dab_spacing() {
     // this exercises the spacing-floor path end-to-end.
     let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
     engine
-        .brush_graph_set_port_default(pen_id, "spacing", 0.04)
+        .brush_graph_set_input(
+            pen_id,
+            "spacing",
+            darkly::brush::input_value::InputValue::Scalar(0.04),
+        )
         .expect("spacing port must exist");
 
     // Horizontal stroke from x=16 to x=(w-16) at y = h/2. Same shape
@@ -5255,7 +5267,11 @@ fn long_stabilized_stroke_no_fallback() {
     // Full-strength stabilization → max_divergence_window = 11 (iterations=10
     // + 1 from the influence-radius model). Spacing = 11 / 7 = 1.
     engine
-        .brush_graph_set_port_default(pen_id, "stabilize", 1.0)
+        .brush_graph_set_input(
+            pen_id,
+            "stabilize",
+            darkly::brush::input_value::InputValue::Scalar(1.0),
+        )
         .unwrap();
 
     engine.begin_stroke(layer_id);

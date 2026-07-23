@@ -7,7 +7,7 @@ import { BrushGraphState, type BrushGraph, type NodeInstance } from '../brush_gr
 // already-positioned node. `needsInitialLayout` encodes that distinction.
 
 function node(id: number): NodeInstance {
-    return { id, type_id: 'test', ports: [], params: [] };
+    return { id, type_id: 'test', ports: [] };
 }
 
 function graphWith(...ids: number[]): BrushGraph {

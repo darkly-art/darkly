@@ -3,14 +3,14 @@ category: Basic
 nodes:
   1:
     type: pen_input
-    port_defaults:
+    inputs:
       spacing: 0.046481613
       stabilize: 0.6
   2:
     type: paint_color
   7:
     type: shape
-    port_defaults:
+    inputs:
       softness: 0.15
       # Plain disc (sine, amplitude 0 ⇒ r ≡ 1) squashed by `aspect` into the
       # elliptical broad-nib tip. `aspect` is area-preserving, so the nib is
@@ -22,7 +22,7 @@ nodes:
     type: stamp
   9:
     type: paint
-    port_defaults:
+    inputs:
       size: 0.05
 connections:
 - 1.position -> 9.position

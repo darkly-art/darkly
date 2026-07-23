@@ -14,10 +14,11 @@
 use std::collections::HashMap;
 
 use darkly::brush::eval::BrushNodeEvaluator;
+use darkly::brush::input_value::InputValue;
 use darkly::brush::wgsl::{compile_brush_to_wgsl, CompileError};
 use darkly::brush::wire::BrushWireType;
 use darkly::brush::BrushNodeRegistry;
-use darkly::nodegraph::{compile, Graph, PortRef};
+use darkly::nodegraph::{compile, Graph, NodeId, PortRef};
 
 fn registry() -> &'static BrushNodeRegistry {
     darkly::brush::registry()
@@ -131,27 +132,11 @@ fn shape_rotation_subtracts_from_theta_for_drawing_angle_compatibility() {
 fn stamp_rotation_counteracts_view_rotation() {
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
-    let pen = graph.add_node(
-        "pen_input",
-        reg.get("pen_input").unwrap().ports.clone(),
-        vec![],
-    );
-    let paint_color = graph.add_node(
-        "paint_color",
-        reg.get("paint_color").unwrap().ports.clone(),
-        vec![],
-    );
-    let shape = graph.add_node(
-        "shape",
-        reg.get("shape").unwrap().ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Int(0)], // Sine
-    );
-    let stamp = graph.add_node(
-        "stamp",
-        reg.get("stamp").unwrap().ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Int(0)],
-    );
-    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let paint_color = graph.add_node("paint_color", reg.get("paint_color").unwrap().ports.clone());
+    let shape = graph.add_node("shape", reg.get("shape").unwrap().ports.clone());
+    let stamp = graph.add_node("stamp", reg.get("stamp").unwrap().ports.clone());
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     let wires = [
         (pen, "position", term, "position"),
         (pen, "drawing_angle", shape, "rotation_input"),
@@ -239,32 +224,15 @@ fn extent_protocol_composes_along_chain() {
     // compose pass must surface it on the CompiledBrush.
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
-    let pen = graph.add_node(
-        "pen_input",
-        reg.get("pen_input").unwrap().ports.clone(),
-        vec![],
-    );
-    let paint_color = graph.add_node(
-        "paint_color",
-        reg.get("paint_color").unwrap().ports.clone(),
-        vec![],
-    );
-    let rand_amp = graph.add_node(
-        "random",
-        reg.get("random").unwrap().ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Int(0)],
-    );
-    let shape = graph.add_node(
-        "shape",
-        reg.get("shape").unwrap().ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Int(1)], // Perlin
-    );
-    let stamp = graph.add_node(
-        "stamp",
-        reg.get("stamp").unwrap().ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Int(0)],
-    );
-    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let paint_color = graph.add_node("paint_color", reg.get("paint_color").unwrap().ports.clone());
+    let rand_amp = graph.add_node("random", reg.get("random").unwrap().ports.clone());
+    let shape = graph.add_node("shape", reg.get("shape").unwrap().ports.clone());
+    graph
+        .set_port_value(shape, "algorithm", InputValue::Int(1))
+        .unwrap(); // Perlin
+    let stamp = graph.add_node("stamp", reg.get("stamp").unwrap().ports.clone());
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     let wires = [
         (rand_amp, "value", shape, "amplitude"),
         (shape, "mask", stamp, "tip"),
@@ -313,32 +281,12 @@ fn extent_grows_with_shape_aspect_anisotropy() {
     // the tall nib would be clipped to the round bbox on save-point rewind.
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
-    let pen = graph.add_node(
-        "pen_input",
-        reg.get("pen_input").unwrap().ports.clone(),
-        vec![],
-    );
-    let paint_color = graph.add_node(
-        "paint_color",
-        reg.get("paint_color").unwrap().ports.clone(),
-        vec![],
-    );
-    let rand_aspect = graph.add_node(
-        "random",
-        reg.get("random").unwrap().ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Int(0)],
-    );
-    let shape = graph.add_node(
-        "shape",
-        reg.get("shape").unwrap().ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Int(0)], // Sine, amplitude default 0
-    );
-    let stamp = graph.add_node(
-        "stamp",
-        reg.get("stamp").unwrap().ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Int(0)],
-    );
-    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let paint_color = graph.add_node("paint_color", reg.get("paint_color").unwrap().ports.clone());
+    let rand_aspect = graph.add_node("random", reg.get("random").unwrap().ports.clone());
+    let shape = graph.add_node("shape", reg.get("shape").unwrap().ports.clone());
+    let stamp = graph.add_node("stamp", reg.get("stamp").unwrap().ports.clone());
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     let wires = [
         (rand_aspect, "value", shape, "aspect"),
         (shape, "mask", stamp, "tip"),
@@ -383,32 +331,12 @@ fn extent_neutral_when_aspect_unwired() {
     // factor must stay at the pre-anisotropy 1.5, not grow.
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
-    let pen = graph.add_node(
-        "pen_input",
-        reg.get("pen_input").unwrap().ports.clone(),
-        vec![],
-    );
-    let paint_color = graph.add_node(
-        "paint_color",
-        reg.get("paint_color").unwrap().ports.clone(),
-        vec![],
-    );
-    let rand_amp = graph.add_node(
-        "random",
-        reg.get("random").unwrap().ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Int(0)],
-    );
-    let shape = graph.add_node(
-        "shape",
-        reg.get("shape").unwrap().ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Int(0)], // Sine
-    );
-    let stamp = graph.add_node(
-        "stamp",
-        reg.get("stamp").unwrap().ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Int(0)],
-    );
-    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let paint_color = graph.add_node("paint_color", reg.get("paint_color").unwrap().ports.clone());
+    let rand_amp = graph.add_node("random", reg.get("random").unwrap().ports.clone());
+    let shape = graph.add_node("shape", reg.get("shape").unwrap().ports.clone());
+    let stamp = graph.add_node("stamp", reg.get("stamp").unwrap().ports.clone());
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     let wires = [
         (rand_amp, "value", shape, "amplitude"),
         (shape, "mask", stamp, "tip"),
@@ -448,12 +376,8 @@ fn extent_default_identity_when_no_shape() {
     // `paint` terminal's footprint exactly.
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
-    let pen = graph.add_node(
-        "pen_input",
-        reg.get("pen_input").unwrap().ports.clone(),
-        vec![],
-    );
-    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     graph
         .connect(
             PortRef {
@@ -487,12 +411,8 @@ fn paint_only_graph_falls_through_to_disc() {
     // by local_dist" path runs. Smoke test that this compiles too.
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
-    let pen = graph.add_node(
-        "pen_input",
-        reg.get("pen_input").unwrap().ports.clone(),
-        vec![],
-    );
-    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     graph
         .connect(
             PortRef {
@@ -593,23 +513,18 @@ fn clone_brush_compiles_with_samples_source() {
 fn noise_node_emits_per_channel_fbm() {
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
-    let pen = graph.add_node(
-        "pen_input",
-        reg.get("pen_input").unwrap().ports.clone(),
-        vec![],
-    );
-    let noise = graph.add_node(
-        "noise",
-        reg.get("noise").unwrap().ports.clone(),
-        vec![
-            darkly::gpu::params::ParamValue::Float(32.0), // scale
-            darkly::gpu::params::ParamValue::Int(7),      // seed
-            darkly::gpu::params::ParamValue::Int(4),      // octaves
-            darkly::gpu::params::ParamValue::Float(0.6),  // warp
-            darkly::gpu::params::ParamValue::Float(0.5),  // roughness
-        ],
-    );
-    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
+    for (name, v) in [
+        ("scale", InputValue::Scalar(32.0)),
+        ("seed", InputValue::Int(7)),
+        ("octaves", InputValue::Scalar(4.0)),
+        ("warp", InputValue::Scalar(0.6)),
+        ("roughness", InputValue::Scalar(0.5)),
+    ] {
+        graph.set_port_value(noise, name, v).unwrap();
+    }
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     let wires = [
         (pen, "position", term, "position"),
         (noise, "color", term, "rgba"),
@@ -725,19 +640,25 @@ fn static_texture_brush_preview_declares_single_graph_texture() {
 // unit frame so the grain rides the rotating stamp. These tests assert the
 // emitter picks the right arm and that both shader variants stay valid.
 
-/// Noise params in registration order, with `space`/`scale_with_brush`
-/// appended. `space`: 0 = Canvas, 1 = Dab.
-fn noise_params(space: i32, scale_with_brush: bool) -> Vec<darkly::gpu::params::ParamValue> {
-    use darkly::gpu::params::ParamValue;
-    vec![
-        ParamValue::Float(32.0), // scale
-        ParamValue::Int(7),      // seed
-        ParamValue::Int(4),      // octaves
-        ParamValue::Float(0.6),  // warp
-        ParamValue::Float(0.5),  // roughness
-        ParamValue::Int(space),
-        ParamValue::Bool(scale_with_brush),
-    ]
+/// Apply the noise node's inputs in registration order, with
+/// `space`/`scale_with_brush`. `space`: 0 = Canvas, 1 = Dab.
+fn apply_noise_inputs(
+    graph: &mut Graph<BrushWireType>,
+    noise: NodeId,
+    space: i32,
+    scale_with_brush: bool,
+) {
+    for (name, v) in [
+        ("scale", InputValue::Scalar(32.0)),
+        ("seed", InputValue::Int(7)),
+        ("octaves", InputValue::Scalar(4.0)),
+        ("warp", InputValue::Scalar(0.6)),
+        ("roughness", InputValue::Scalar(0.5)),
+        ("space", InputValue::Int(space)),
+        ("scale_with_brush", InputValue::Bool(scale_with_brush)),
+    ] {
+        graph.set_port_value(noise, name, v).unwrap();
+    }
 }
 
 /// Wire a slice of `(from_node, from_port, to_node, to_port)` into a graph.
@@ -774,17 +695,10 @@ fn noise_canvas_space_is_byte_identical() {
     // for existing brushes when the frame selector defaults to Canvas.
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
-    let pen = graph.add_node(
-        "pen_input",
-        reg.get("pen_input").unwrap().ports.clone(),
-        vec![],
-    );
-    let noise = graph.add_node(
-        "noise",
-        reg.get("noise").unwrap().ports.clone(),
-        noise_params(0, true),
-    );
-    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
+    apply_noise_inputs(&mut graph, noise, 0, true);
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     wire(
         &mut graph,
         &[
@@ -794,9 +708,16 @@ fn noise_canvas_space_is_byte_identical() {
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
     let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    // `scale` is now a Scalar *input* read via `cctx.input("scale").as_f32()`,
+    // and `sample_frame` interpolates the scale expression parenthesized — so
+    // an unwired 32.0 default emits `target_pos / (32.000000)`. The numeric
+    // literal (`32.000000`) is unchanged; the surrounding parens are the only
+    // permitted textual delta, required so a *wired* scale expression composes.
+    // This pins the param→input migration for a value that was a `ParamDef`
+    // before this change.
     assert!(
-        compiled.stroke_wgsl.contains("target_pos / 32.000000"),
-        "Canvas mode must emit the canvas-pixel coordinate; not found",
+        compiled.stroke_wgsl.contains("target_pos / (32.000000)"),
+        "Canvas mode must emit the parenthesized canvas-pixel coordinate; not found",
     );
     assert!(
         !compiled.stroke_wgsl.contains("dab_local"),
@@ -806,6 +727,72 @@ fn noise_canvas_space_is_byte_identical() {
     naga_validate(&compiled.cursor_preview_wgsl, "noise canvas preview");
 }
 
+/// A wirable scalar input (`noise.scale`) driven by a per-dab sensor
+/// (`pen.pressure`) must emit the upstream expression in the divide — not a
+/// literal — and both shader variants must still pass naga validation. Guards
+/// the subsumed scalar-to-port conversion at its highest-risk seam.
+#[test]
+fn noise_scale_wired_emits_upstream_expr_and_validates() {
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
+    apply_noise_inputs(&mut graph, noise, 0, true);
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
+    wire(
+        &mut graph,
+        &[
+            (pen, "position", term, "position"),
+            (pen, "pressure", noise, "scale"),
+            (noise, "color", term, "rgba"),
+        ],
+    );
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    // The literal default must be gone — the divide now reads the wired dab
+    // field (`d.n0_pressure` or similar), parenthesized.
+    assert!(
+        !compiled.stroke_wgsl.contains("target_pos / (32.000000)"),
+        "wired scale must not fall back to the literal default",
+    );
+    assert!(
+        compiled.stroke_wgsl.contains("_pressure"),
+        "wired scale must interpolate the upstream pressure expression",
+    );
+    naga_validate(&compiled.stroke_wgsl, "noise wired-scale stroke");
+    naga_validate(&compiled.cursor_preview_wgsl, "noise wired-scale preview");
+}
+
+/// A wired `octaves` input must emit the `clamp(i32(round(..)), 1, 8)` guard
+/// (i32, not u32 — `fbm_rot`'s octave arg is i32) and validate on both
+/// variants — the naga-riskiest arm of the subsumed conversion.
+#[test]
+fn noise_octaves_wired_emits_i32_clamp_and_validates() {
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let rand = graph.add_node("random", reg.get("random").unwrap().ports.clone());
+    let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
+    apply_noise_inputs(&mut graph, noise, 0, true);
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
+    wire(
+        &mut graph,
+        &[
+            (pen, "position", term, "position"),
+            (rand, "value", noise, "octaves"),
+            (noise, "color", term, "rgba"),
+        ],
+    );
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    assert!(
+        compiled.stroke_wgsl.contains("clamp(i32(round("),
+        "wired octaves must emit an i32 round+clamp guard",
+    );
+    naga_validate(&compiled.stroke_wgsl, "noise wired-octaves stroke");
+    naga_validate(&compiled.cursor_preview_wgsl, "noise wired-octaves preview");
+}
+
 #[test]
 fn noise_dab_space_emits_oriented_frame_and_variation() {
     // Dab mode must rotate the unit-disc offset by the `rotation` input and
@@ -813,17 +800,10 @@ fn noise_dab_space_emits_oriented_frame_and_variation() {
     // literal defaults (0), so the basis and offset still appear.
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
-    let pen = graph.add_node(
-        "pen_input",
-        reg.get("pen_input").unwrap().ports.clone(),
-        vec![],
-    );
-    let noise = graph.add_node(
-        "noise",
-        reg.get("noise").unwrap().ports.clone(),
-        noise_params(1, true),
-    );
-    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
+    apply_noise_inputs(&mut graph, noise, 1, true);
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     wire(
         &mut graph,
         &[
@@ -859,17 +839,10 @@ fn noise_scale_with_brush_picks_arm_at_compile_time() {
     let reg = registry();
     for (swb, expect_norm) in [(true, true), (false, false)] {
         let mut graph = Graph::<BrushWireType>::new();
-        let pen = graph.add_node(
-            "pen_input",
-            reg.get("pen_input").unwrap().ports.clone(),
-            vec![],
-        );
-        let noise = graph.add_node(
-            "noise",
-            reg.get("noise").unwrap().ports.clone(),
-            noise_params(1, swb),
-        );
-        let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+        let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+        let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
+        apply_noise_inputs(&mut graph, noise, 1, swb);
+        let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
         wire(
             &mut graph,
             &[
@@ -882,7 +855,7 @@ fn noise_scale_with_brush_picks_arm_at_compile_time() {
         let w = &compiled.stroke_wgsl;
         if expect_norm {
             assert!(
-                w.contains("dab_local / 32.000000"),
+                w.contains("dab_local / (32.000000)"),
                 "scale_with_brush=true divides the unit-disc offset"
             );
             // The skeleton always defines `local_uv = local * d.inv_radius_target_px`,
@@ -907,17 +880,10 @@ fn noise_rotation_input_wires_per_dab() {
     // proving orientation flows through the ordinary input-port path.
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
-    let pen = graph.add_node(
-        "pen_input",
-        reg.get("pen_input").unwrap().ports.clone(),
-        vec![],
-    );
-    let noise = graph.add_node(
-        "noise",
-        reg.get("noise").unwrap().ports.clone(),
-        noise_params(1, true),
-    );
-    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
+    apply_noise_inputs(&mut graph, noise, 1, true);
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     wire(
         &mut graph,
         &[
@@ -946,25 +912,19 @@ fn image_dab_tip_needs_no_shape_node() {
     // The finding-#2 case: an image tip in its default Dab space, oriented by
     // pen.drawing_angle, with NO shape node present. Both shader variants must
     // compile and sample in the oriented frame.
-    use darkly::gpu::params::ParamValue;
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
-    let pen = graph.add_node(
-        "pen_input",
-        reg.get("pen_input").unwrap().ports.clone(),
-        vec![],
-    );
-    let image = graph.add_node(
-        "image",
-        reg.get("image").unwrap().ports.clone(),
-        vec![
-            ParamValue::String("paper".into()), // texture_name
-            ParamValue::Float(512.0),           // scale
-            ParamValue::Int(1),                 // space = Dab (default)
-            ParamValue::Bool(true),             // scale_with_brush
-        ],
-    );
-    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let image = graph.add_node("image", reg.get("image").unwrap().ports.clone());
+    for (name, v) in [
+        ("texture_name", InputValue::String("paper".into())),
+        ("scale", InputValue::Scalar(512.0)),
+        ("space", InputValue::Int(1)),
+        ("scale_with_brush", InputValue::Bool(true)),
+    ] {
+        graph.set_port_value(image, name, v).unwrap();
+    }
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     wire(
         &mut graph,
         &[

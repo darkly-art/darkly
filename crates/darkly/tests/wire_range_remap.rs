@@ -13,16 +13,11 @@
 //! registration).
 
 use darkly::brush::eval::BrushGraphRunner;
+use darkly::brush::input_value::InputValue;
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::registry;
 use darkly::brush::wire::ScalarValue;
-use darkly::gpu::params::ParamValue;
 use darkly::nodegraph::{Graph, PortDef, PortRef};
-
-/// Per-instance params for the `random` node: mode=0 (per-dab, the default).
-fn random_params() -> Vec<ParamValue> {
-    vec![ParamValue::Int(0)]
-}
 
 fn read_scalar(runner: &BrushGraphRunner, type_id: &str, port: &str) -> f32 {
     let slot = runner
@@ -55,7 +50,7 @@ fn random_outputs_unit_range_and_varies_per_dab() {
     let registry = registry();
     let mut graph = Graph::new();
     let random_reg = registry.get("random").unwrap();
-    graph.add_node("random", random_reg.ports.clone(), random_params());
+    graph.add_node("random", random_reg.ports.clone());
 
     let mut runner =
         BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
@@ -99,7 +94,7 @@ fn random_to_wide_range_input_remaps() {
     let mut graph = Graph::new();
 
     let random_reg = registry.get("random").unwrap();
-    let random = graph.add_node("random", random_reg.ports.clone(), random_params());
+    let random = graph.add_node("random", random_reg.ports.clone());
 
     // Clone multiply's ports, then widen the `a` input's natural_range to
     // simulate wiring random into something like `shape.seed`.
@@ -111,7 +106,7 @@ fn random_to_wide_range_input_remaps() {
                 .with_natural_range(0.0, 1024.0);
         }
     }
-    let multiply = graph.add_node("multiply", multiply_ports, vec![]);
+    let multiply = graph.add_node("multiply", multiply_ports);
 
     graph
         .connect(
@@ -157,7 +152,7 @@ fn pen_pressure_to_frequency_range_remaps() {
     let mut graph = Graph::new();
 
     let pen_reg = registry.get("pen_input").unwrap();
-    let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", pen_reg.ports.clone());
 
     let multiply_reg = registry.get("multiply").unwrap();
     let mut multiply_ports = multiply_reg.ports.clone();
@@ -167,7 +162,7 @@ fn pen_pressure_to_frequency_range_remaps() {
                 .with_natural_range(1.0, 16.0);
         }
     }
-    let multiply = graph.add_node("multiply", multiply_ports, vec![]);
+    let multiply = graph.add_node("multiply", multiply_ports);
 
     graph
         .connect(
@@ -225,10 +220,10 @@ fn math_node_output_passes_through_to_ranged_input() {
     let mut multiply_src_ports = multiply_src_reg.ports.clone();
     for p in multiply_src_ports.iter_mut() {
         if p.name == "a" || p.name == "b" {
-            p.default = 0.5;
+            p.value = InputValue::Scalar(0.5);
         }
     }
-    let multiply_src = graph.add_node("multiply", multiply_src_ports, vec![]);
+    let multiply_src = graph.add_node("multiply", multiply_src_ports);
 
     // Sink multiply: `a` carries an overridden natural_range Some((0, 1024)).
     // If multiply_src were mistakenly opted in to source-side remap, we'd
@@ -242,7 +237,7 @@ fn math_node_output_passes_through_to_ranged_input() {
                 .with_natural_range(0.0, 1024.0);
         }
     }
-    let multiply_sink = graph.add_node("multiply", multiply_sink_ports, vec![]);
+    let multiply_sink = graph.add_node("multiply", multiply_sink_ports);
 
     graph
         .connect(
@@ -285,7 +280,7 @@ fn ranged_source_to_unranged_input_passes_through() {
     let mut graph = Graph::new();
 
     let random_reg = registry.get("random").unwrap();
-    let random = graph.add_node("random", random_reg.ports.clone(), random_params());
+    let random = graph.add_node("random", random_reg.ports.clone());
 
     // multiply.a — explicitly STRIP the natural_range so this node-instance
     // behaves as if the consumer hadn't opted in.
@@ -296,7 +291,7 @@ fn ranged_source_to_unranged_input_passes_through() {
             p.natural_range = None;
         }
     }
-    let multiply = graph.add_node("multiply", multiply_ports, vec![]);
+    let multiply = graph.add_node("multiply", multiply_ports);
 
     graph
         .connect(
@@ -334,17 +329,10 @@ fn identity_range_is_a_noop() {
     let mut graph = Graph::new();
 
     let pen_reg = registry.get("pen_input").unwrap();
-    let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", pen_reg.ports.clone());
 
     let curve_reg = registry.get("curve").unwrap();
-    let curve = graph.add_node(
-        "curve",
-        curve_reg.ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Curve(vec![
-            [0.0, 0.0],
-            [1.0, 1.0],
-        ])],
-    );
+    let curve = graph.add_node("curve", curve_reg.ports.clone());
 
     graph
         .connect(
@@ -389,7 +377,7 @@ fn unit_source_to_bipolar_dest_spans_full_range() {
     let mut graph = Graph::new();
 
     let random_reg = registry.get("random").unwrap();
-    let random = graph.add_node("random", random_reg.ports.clone(), random_params());
+    let random = graph.add_node("random", random_reg.ports.clone());
 
     let multiply_reg = registry.get("multiply").unwrap();
     let mut multiply_ports = multiply_reg.ports.clone();
@@ -399,7 +387,7 @@ fn unit_source_to_bipolar_dest_spans_full_range() {
                 .with_natural_range(-100.0, 100.0);
         }
     }
-    let multiply = graph.add_node("multiply", multiply_ports, vec![]);
+    let multiply = graph.add_node("multiply", multiply_ports);
 
     graph
         .connect(
@@ -456,7 +444,7 @@ fn radian_to_radian_wire_passes_through() {
     let mut graph = Graph::new();
 
     let pen_reg = registry.get("pen_input").unwrap();
-    let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", pen_reg.ports.clone());
 
     // multiply.a with no natural_range (radians-style dest).
     let multiply_reg = registry.get("multiply").unwrap();
@@ -466,7 +454,7 @@ fn radian_to_radian_wire_passes_through() {
             p.natural_range = None;
         }
     }
-    let multiply = graph.add_node("multiply", multiply_ports, vec![]);
+    let multiply = graph.add_node("multiply", multiply_ports);
 
     graph
         .connect(

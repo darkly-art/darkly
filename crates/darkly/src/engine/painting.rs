@@ -338,7 +338,7 @@ impl DarklyEngine {
             .values()
             .find(|n| n.type_id == crate::brush::nodes::clone_source::TYPE_ID)
             .and_then(|n| n.ports.iter().find(|p| p.name == port))
-            .map(|p| p.default)
+            .map(|p| p.value.as_f32())
     }
 
     /// `true` when the active brush's `clone_source` node is in *anchored*

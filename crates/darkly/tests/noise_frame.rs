@@ -16,11 +16,11 @@ use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::gpu_context::{
     BrushGpuContext, BrushPerfCounters, CursorPreviewState, DabBatch,
 };
+use darkly::brush::input_value::InputValue;
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::brush::registry;
 use darkly::brush::wire::BrushWireType;
-use darkly::gpu::params::ParamValue;
 use darkly::gpu::test_utils::{readback_texture, test_device};
 use darkly::nodegraph::{Graph, PortRef};
 
@@ -53,25 +53,21 @@ fn preview_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
 fn build_dab_noise_graph() -> Graph<BrushWireType> {
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
-    let pen = graph.add_node(
-        "pen_input",
-        reg.get("pen_input").unwrap().ports.clone(),
-        vec![],
-    );
-    let noise = graph.add_node(
-        "noise",
-        reg.get("noise").unwrap().ports.clone(),
-        vec![
-            ParamValue::Float(6.0),  // scale — small ⇒ many cells across the stamp
-            ParamValue::Int(7),      // seed
-            ParamValue::Int(4),      // octaves
-            ParamValue::Float(0.6),  // warp
-            ParamValue::Float(0.5),  // roughness
-            ParamValue::Int(1),      // space = Dab
-            ParamValue::Bool(false), // scale_with_brush = pixel-locked
-        ],
-    );
-    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
+    // scale small ⇒ many cells across the stamp; space = Dab, pixel-locked.
+    for (name, v) in [
+        ("scale", InputValue::Scalar(6.0)),
+        ("seed", InputValue::Int(7)),
+        ("octaves", InputValue::Scalar(4.0)),
+        ("warp", InputValue::Scalar(0.6)),
+        ("roughness", InputValue::Scalar(0.5)),
+        ("space", InputValue::Int(1)),
+        ("scale_with_brush", InputValue::Bool(false)),
+    ] {
+        graph.set_port_value(noise, name, v).unwrap();
+    }
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     let wires = [
         (pen, "position", term, "position"),
         (pen, "drawing_angle", noise, "rotation"),

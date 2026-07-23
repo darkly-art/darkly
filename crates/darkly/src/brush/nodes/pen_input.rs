@@ -24,7 +24,7 @@ pub fn read_scalar_input(graph: &Graph<BrushWireType>, port_name: &str) -> Optio
         if node.type_id == TYPE_ID {
             for port in &node.ports {
                 if port.name == port_name && port.dir == PortDir::Input {
-                    return Some(port.default);
+                    return Some(port.value.as_f32());
                 }
             }
         }
@@ -171,7 +171,6 @@ pub fn register() -> BrushNodeRegistration {
                      this many canvas pixels regardless of brush size.",
                 ),
         ],
-        params: &[],
         is_gpu: false,
         is_terminal: false,
         supports_erase: true,
@@ -291,17 +290,17 @@ mod tests {
                 .iter_mut()
                 .find(|p| p.name == "spacing")
                 .expect("spacing port present")
-                .default = v;
+                .value = crate::brush::input_value::InputValue::Scalar(v);
         }
         if let Some(v) = spacing_min_px {
             ports
                 .iter_mut()
                 .find(|p| p.name == "spacing_min_px")
                 .expect("spacing_min_px port present")
-                .default = v;
+                .value = crate::brush::input_value::InputValue::Scalar(v);
         }
         let mut graph = Graph::<BrushWireType>::new();
-        graph.add_node(TYPE_ID, ports, vec![]);
+        graph.add_node(TYPE_ID, ports);
         graph
     }
 

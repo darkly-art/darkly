@@ -3,15 +3,14 @@ category: Wet Media
 nodes:
   1:
     type: pen_input
-    port_defaults:
+    inputs:
       stabilize: 0.5
   2:
     type: paint_color
   3:
     type: shape
-    params:
+    inputs:
       algorithm: 1
-    port_defaults:
       amplitude: 0.4
       frequency: 12.0
       octaves: 4.0

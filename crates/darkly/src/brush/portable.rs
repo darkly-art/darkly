@@ -9,19 +9,20 @@
 //! Compared to the raw `Graph<W>` JSON, this representation drops
 //! everything that can be re-derived from the node registration — port
 //! definitions, registration metadata, monotonic id counters — and
-//! presents params by name instead of position. The result is something
-//! a human can read and an AI can describe.
+//! presents input values by name. The result is something a human can
+//! read and an AI can describe.
 //!
 //! Round-trip rules:
 //! - Node ids are plain integers. Import assigns fresh internal ids and
 //!   translates the YAML's connection list through a small id map, so
 //!   contiguous ids (`1..=N`) round-trip byte-identically while gaps in
 //!   hand-edited YAML compact on the next export.
-//! - Params are keyed by name; type is coerced from the registration's
-//!   `ParamDef`.
-//! - `port_defaults` is a diff against the registration's port defaults
-//!   — only overridden values appear in YAML. Keeps the format compact
-//!   given that brushes typically override 1-3 ports out of 10+.
+//! - `inputs` is a single by-name map of every input whose authored value
+//!   differs from the node registration's default — one map for every
+//!   input kind (scalar default, enum index, texture name, curve points).
+//!   Only overrides appear in YAML, so the format stays compact given that
+//!   brushes typically override 1-3 inputs out of 10+. Each value is
+//!   coerced to the port's wire type on import.
 //! - `exposed` is a *complete* list of the brush's exposed input ports
 //!   per node. Declarative ("these are exposed") rather than diff
 //!   ("these flip from registration") so it stays readable without
@@ -33,10 +34,11 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::brush::bundle::{Brush, BrushMetadata};
+use crate::brush::input_value::InputValue;
 use crate::brush::stabilizer::StabilizerConfig;
 use crate::brush::wire::BrushWireType;
 use crate::brush::BrushNodeRegistry;
-use crate::gpu::params::{ParamValue, PortableValue};
+use crate::gpu::params::PortableValue;
 use crate::nodegraph::{exposed_port_key, ExposedPortMeta, Graph, NodeId, PortDir, PortRef};
 use indexmap::IndexMap;
 
@@ -77,10 +79,13 @@ pub struct PortableBrush {
 pub struct PortableNode {
     #[serde(rename = "type")]
     pub type_id: String,
+    /// Input values that differ from the node registration's defaults, keyed
+    /// by input name. One unified map — every input kind (scalar default,
+    /// enum index, texture name, curve points, …) rides the same
+    /// [`PortableValue`] DTO. Only overrides serialize, so the format stays
+    /// a compact diff.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub params: BTreeMap<String, PortableValue>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub port_defaults: BTreeMap<String, f32>,
+    pub inputs: BTreeMap<String, PortableValue>,
 }
 
 /// A wire serialized as `"<from_id>.<from_port> -> <to_id>.<to_port>"`.
@@ -180,37 +185,23 @@ impl PortableBrush {
                 )
             })?;
 
-            // Params: by-name map, only emit entries whose value differs
-            // from the registration default. Missing entries on import
-            // fall back to the registration default, so this stays a
-            // proper diff.
-            let mut params = BTreeMap::new();
-            for (i, def) in reg.params.iter().enumerate() {
-                let Some(value) = node.params.get(i) else {
-                    continue;
-                };
-                if *value == def.default_value() {
-                    continue;
-                }
-                params.insert(def.name().to_string(), PortableValue::from_param(value));
-            }
-
-            // Port defaults: diff against registration values. Walk the
-            // instance's input ports because that's where the live
-            // values are; cross-reference the registration to know
-            // which to drop.
-            let mut port_defaults = BTreeMap::new();
+            // Inputs: one by-name map diffed against the registration. Walk
+            // the instance's input ports (where the live values are) and
+            // cross-reference the registration to drop unchanged defaults.
+            // Missing entries on import fall back to the registration value,
+            // so this stays a compact diff over every input kind.
+            let mut inputs = BTreeMap::new();
             for port in &node.ports {
                 if port.dir != PortDir::Input {
                     continue;
                 }
-                let reg_default = reg
+                let reg_value = reg
                     .ports
                     .iter()
                     .find(|p| p.name == port.name)
-                    .map(|p| p.default);
-                if Some(port.default) != reg_default {
-                    port_defaults.insert(port.name.clone(), port.default);
+                    .map(|p| &p.value);
+                if reg_value != Some(&port.value) {
+                    inputs.insert(port.name.clone(), port.value.to_portable());
                 }
             }
 
@@ -218,8 +209,7 @@ impl PortableBrush {
                 id.0,
                 PortableNode {
                     type_id: node.type_id.clone(),
-                    params,
-                    port_defaults,
+                    inputs,
                 },
             );
         }
@@ -298,46 +288,25 @@ impl PortableBrush {
                 .get(&pn.type_id)
                 .ok_or_else(|| format!("unknown node type '{}'", pn.type_id))?;
 
-            // Params: positional vec, defaulted from registration, then
-            // overridden by name from the YAML. One pass — both the
-            // existence check and the index lookup come from the same
-            // find.
-            let mut params: Vec<ParamValue> =
-                reg.params.iter().map(|d| d.default_value()).collect();
-            for (name, value) in &pn.params {
-                let Some((idx, def)) = reg
-                    .params
-                    .iter()
-                    .enumerate()
-                    .find(|(_, d)| d.name() == name)
-                else {
-                    return Err(format!("unknown param '{name}' on '{}'", pn.type_id));
-                };
-                params[idx] = def.coerce_portable(value.clone()).map_err(|m| {
-                    format!(
-                        "param '{name}' on '{}': expected {}, got {}",
-                        pn.type_id, m.expected, m.actual
-                    )
-                })?;
-            }
-
-            // Ports: clone from registration, then apply port_defaults
-            // overrides.
+            // Ports: clone from registration, then apply the by-name input
+            // overrides, coercing each portable value to the port's wire type
+            // (the brush-side analog of the filter `coerce_portable` path).
             let mut ports = reg.ports.clone();
-            for (name, &value) in &pn.port_defaults {
+            for (name, value) in &pn.inputs {
                 let port = ports
                     .iter_mut()
                     .find(|p| p.name == *name && p.dir == PortDir::Input)
-                    .ok_or_else(|| {
+                    .ok_or_else(|| format!("unknown input '{name}' on '{}'", pn.type_id))?;
+                port.value =
+                    InputValue::from_portable(port.wire_type, value.clone()).map_err(|m| {
                         format!(
-                            "unknown input port '{name}' on '{}' (port_defaults)",
-                            pn.type_id
+                            "input '{name}' on '{}': expected {}, got {}",
+                            pn.type_id, m.expected, m.actual
                         )
                     })?;
-                port.default = value;
             }
 
-            let new_id = graph.add_node(pn.type_id.clone(), ports, params);
+            let new_id = graph.add_node(pn.type_id.clone(), ports);
             id_map.insert(yaml_id, new_id);
         }
 
@@ -400,6 +369,7 @@ impl PortableBrush {
 mod tests {
     use super::*;
     use crate::brush::registry;
+    use crate::gpu::params::ParamValue;
 
     /// Round-trip the default graph and confirm the result compiles to
     /// the same shape (nodes, connections, params, port defaults) as the
@@ -422,7 +392,6 @@ mod tests {
                 .values()
                 .find(|n| n.type_id == original.type_id)
                 .unwrap_or_else(|| panic!("missing node of type '{}'", original.type_id));
-            assert_eq!(original.params, restored_node.params);
             for port in &original.ports {
                 if port.dir != PortDir::Input {
                     continue;
@@ -432,13 +401,10 @@ mod tests {
                     .iter()
                     .find(|p| p.name == port.name)
                     .expect("missing input port");
-                assert!(
-                    (port.default - r.default).abs() < 1e-6,
-                    "default mismatch on {}.{}: {} vs {}",
-                    original.type_id,
-                    port.name,
-                    port.default,
-                    r.default
+                assert_eq!(
+                    port.value, r.value,
+                    "value mismatch on {}.{}",
+                    original.type_id, port.name
                 );
             }
         }
@@ -488,13 +454,56 @@ mod tests {
             .iter()
             .find(|p| p.name == "softness")
             .unwrap();
-        assert!((port.default - 0.37).abs() < 1e-6);
+        assert!((port.value.as_f32() - 0.37).abs() < 1e-6);
         assert!(restored.is_port_exposed(restored_shape.id, "softness"));
         let restored_key = exposed_port_key(restored_shape.id, "softness");
         let meta = &restored.exposed_ports[&restored_key];
         assert_eq!(meta.label, "Softness");
         assert_eq!(meta.description, "Edge falloff");
         assert_eq!(meta.icon, "fa6-solid:circle-half-stroke");
+    }
+
+    /// The unified model's headline guarantee: a non-wirable input (here
+    /// the shape node's `algorithm` Enum) is fully *exposable*, and both the
+    /// exposure and a non-default enum value survive a YAML round trip.
+    #[test]
+    fn enum_input_is_exposable_and_round_trips() {
+        let registry = registry();
+        let mut graph = crate::brush::default_graph();
+        let shape = *graph
+            .nodes()
+            .iter()
+            .find(|(_, n)| n.type_id == "shape")
+            .map(|(id, _)| id)
+            .expect("default has a shape node");
+
+        // Override the enum to Perlin (1) and expose it — neither was
+        // possible under the old param system.
+        graph
+            .set_port_value(shape, "algorithm", InputValue::Int(1))
+            .unwrap();
+        graph.expose_port(shape, "algorithm").unwrap();
+
+        let portable = PortableBrush::from_graph_only(&graph, registry).unwrap();
+        let yaml = serde_yaml_ng::to_string(&portable).unwrap();
+        let restored = serde_yaml_ng::from_str::<PortableBrush>(&yaml)
+            .unwrap()
+            .into_graph(registry)
+            .unwrap();
+
+        let restored_shape = restored
+            .nodes()
+            .values()
+            .find(|n| n.type_id == "shape")
+            .expect("restored graph has a shape node");
+        let algo = restored_shape
+            .ports
+            .iter()
+            .find(|p| p.name == "algorithm")
+            .unwrap();
+        assert_eq!(algo.value, InputValue::Int(1));
+        assert!(!algo.wirable, "an enum input must not be wirable");
+        assert!(restored.is_port_exposed(restored_shape.id, "algorithm"));
     }
 
     /// Unknown node `type:` must fail import with a clear error,
@@ -512,34 +521,34 @@ nodes:
         assert!(err.contains("unknown node type"), "got: {err}");
     }
 
-    /// Unknown param name must be rejected loudly — the format is
+    /// Unknown input name must be rejected loudly — the format is
     /// small enough that silently dropping fields would hide bugs in
     /// hand-edited YAML and built-in brush files.
     #[test]
-    fn unknown_param_rejected() {
+    fn unknown_input_rejected() {
         let registry = registry();
         let yaml = "\
 nodes:
   1:
     type: shape
-    params:
-      this_param_does_not_exist: 1
+    inputs:
+      this_input_does_not_exist: 1
 ";
         let portable: PortableBrush = serde_yaml_ng::from_str(yaml).unwrap();
         let err = portable.into_graph(registry).unwrap_err();
-        assert!(err.contains("unknown param"), "got: {err}");
+        assert!(err.contains("unknown input"), "got: {err}");
     }
 
-    /// Param type-mismatch must be rejected — passing a curve into an
-    /// integer slot should fail with a clear error.
+    /// Input type-mismatch must be rejected — passing a curve into an
+    /// enum slot should fail with a clear error.
     #[test]
-    fn param_type_mismatch_rejected() {
+    fn input_type_mismatch_rejected() {
         let registry = registry();
         let yaml = "\
 nodes:
   1:
     type: shape
-    params:
+    inputs:
       algorithm: [[0.0, 0.0], [1.0, 1.0]]
 ";
         let portable: PortableBrush = serde_yaml_ng::from_str(yaml).unwrap();

@@ -37,11 +37,11 @@
         brushGraph.setExposedPortValue(nodeId, portName, displayValue);
     }
 
-    /** Flip a Bool exposed port — toggles the port's f32 default between 0 and 1
-     *  via the standard scalar setter, since Bool is encoded as `default >= 0.5`. */
+    /** Flip a Bool exposed port — toggles the input value between 0 and 1 via
+     *  the display-space exposed-port setter (Bool reads as `value >= 0.5`). */
     function handleExposedBool(nodeId: number, portName: string, current: boolean) {
         const next = current ? 0 : 1;
-        brushGraph.setPortDefaultLocal(nodeId, portName, next);
+        brushGraph.setInputLocal(nodeId, portName, next);
         brushGraph.setExposedPortValue(nodeId, portName, next);
     }
 

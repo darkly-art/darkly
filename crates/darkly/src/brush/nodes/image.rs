@@ -27,11 +27,11 @@
 //! [`super::split_color`].
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::input_value::InputValue;
 use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wgsl::{frame_sample_coord_expr, CompileWgslCtx, NodeWgsl, SampleFrame};
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
-use crate::gpu::params::{ParamDef, ParamValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 pub const TYPE_ID: &str = "image";
@@ -64,33 +64,34 @@ pub fn register() -> BrushNodeRegistration {
                     .with_description(
                         "Per-dab decorrelation offset for Dab space. Wire random (Per-Dab) so overlapping dabs sample independent regions.",
                     ),
-                PortDef::output("color", BrushWireType::Vec4)
-                    .with_description("RGBA value sampled from the named texture at the fragment's sample position"),
-            ],
-            params: &[
-                ParamDef::String {
-                    name: "texture_name",
-                    default: "",
-                },
-                ParamDef::Float {
-                    name: "scale",
-                    min: 1.0,
-                    max: 4096.0,
-                    default: 512.0,
-                },
+                // Named texture, resolved at compile time — not wirable.
+                PortDef::input("texture_name", BrushWireType::String)
+                    .with_value(InputValue::String(String::new()))
+                    .with_label("Texture")
+                    .with_description("Name of the picture in the brush bundle to sample."),
+                // Feature size in canvas pixels. A per-dab-computable scalar,
+                // so it's wirable (drive it from pressure, a curve, etc.).
+                PortDef::input("scale", BrushWireType::Scalar)
+                    .with_range(1.0, 4096.0, 512.0)
+                    .with_natural_range(1.0, 4096.0)
+                    .with_label("Scale")
+                    .with_unit(UnitType::Pixels)
+                    .with_description("Base feature size in canvas pixels."),
                 // A tip picture rides the stamp, so Dab is the default; Canvas
                 // is offered for tiling a picture as a fixed canvas texture.
-                ParamDef::Enum {
-                    name: "space",
-                    options: &["Canvas", "Dab"],
-                    default: 1,
-                },
+                PortDef::input("space", BrushWireType::Enum)
+                    .with_enum_options(["Canvas", "Dab"])
+                    .with_value(InputValue::Int(1))
+                    .with_label("Space")
+                    .with_description("Sample in canvas space (pinned) or the dab's oriented frame."),
                 // Dab-space only: `true` scales the picture with the brush,
                 // `false` keeps its texel density constant in canvas pixels.
-                ParamDef::Bool {
-                    name: "scale_with_brush",
-                    default: true,
-                },
+                PortDef::input("scale_with_brush", BrushWireType::Bool)
+                    .with_value(InputValue::Bool(true))
+                    .with_label("Scale With Brush")
+                    .with_description("Dab space only: scale the picture with the brush size."),
+                PortDef::output("color", BrushWireType::Vec4)
+                    .with_description("RGBA value sampled from the named texture at the fragment's sample position"),
             ],
             is_gpu: false,
             is_terminal: false,
@@ -120,56 +121,27 @@ impl BrushNodeEvaluator for ImageEvaluator {
             // `textureSample` and don't reserve a binding either.
             return Ok(wgsl);
         }
-        let texture_name = cctx
-            .params
-            .first()
-            .and_then(|p| match p {
-                crate::gpu::params::ParamValue::String(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .unwrap_or("");
+        let texture_name = cctx.input("texture_name").string();
         if texture_name.is_empty() {
             return Err("image node: `texture_name` is empty".into());
         }
-        let scale = cctx
-            .params
-            .get(1)
-            .and_then(|p| match p {
-                ParamValue::Float(v) => Some(*v),
-                ParamValue::Int(v) => Some(*v as f32),
-                _ => None,
-            })
-            .unwrap_or(512.0)
-            .max(1.0);
-        let space = SampleFrame::from_index(
-            cctx.params
-                .get(2)
-                .and_then(|p| match p {
-                    ParamValue::Int(v) => Some((*v).max(0) as u32),
-                    _ => None,
-                })
-                .unwrap_or(1),
-        );
-        let scale_with_brush = cctx
-            .params
-            .get(3)
-            .and_then(|p| match p {
-                ParamValue::Bool(v) => Some(*v),
-                _ => None,
-            })
-            .unwrap_or(true);
+        // `scale` is a wirable Scalar input, so it resolves to a WGSL
+        // expression (a literal when unwired, an upstream expr when wired).
+        let scale_expr = cctx.input("scale").as_f32();
+        let space = SampleFrame::from_index(cctx.input("space").enum_index().max(0) as u32);
+        let scale_with_brush = cctx.input("scale_with_brush").boolean();
         let rotation = cctx.input("rotation").as_f32();
         let variation = cctx.input("variation").as_f32();
         let (frame_pre, coord) = frame_sample_coord_expr(
             space,
-            scale,
+            &scale_expr,
             scale_with_brush,
             &rotation,
             &variation,
             &cctx.ident("img"),
         );
 
-        let slot = cctx.request_texture(texture_name);
+        let slot = cctx.request_texture(&texture_name);
         let var = cctx.ident("img_c");
         // The frame helper's `coord` is canvas-pixel space in Canvas mode
         // and the stamp's oriented frame in Dab mode; both wrap cleanly
@@ -191,12 +163,15 @@ mod tests {
         let reg = register();
         assert_eq!(reg.node.type_id, "image");
         assert_eq!(reg.node.category, "texture");
-        // rotation + variation inputs plus the color output.
-        assert_eq!(reg.node.ports.len(), 3);
+        // rotation, variation, texture_name, scale, space, scale_with_brush
+        // inputs plus the color output — all unified as ports now.
+        assert_eq!(reg.node.ports.len(), 7);
         assert!(reg.node.ports.iter().any(|p| p.name == "color"));
         assert!(reg.node.ports.iter().any(|p| p.name == "rotation"));
         assert!(reg.node.ports.iter().any(|p| p.name == "variation"));
-        // texture_name, scale, space, scale_with_brush.
-        assert_eq!(reg.node.params.len(), 4);
+        assert!(reg.node.ports.iter().any(|p| p.name == "texture_name"));
+        assert!(reg.node.ports.iter().any(|p| p.name == "scale"));
+        assert!(reg.node.ports.iter().any(|p| p.name == "space"));
+        assert!(reg.node.ports.iter().any(|p| p.name == "scale_with_brush"));
     }
 }

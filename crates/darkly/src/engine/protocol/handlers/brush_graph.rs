@@ -9,17 +9,17 @@
 //! - **value-shaping** — `{ yaml }` / `{ value }` envelopes, and the
 //!   `null | { error }` compile/validate result (`returns = ok_error` would fit,
 //!   but the kind/method mismatch keeps these hand-written anyway).
-//! - **param marshalling** — `brush_graph_set_param` (kind/value → `ParamValue`)
+//! - **input marshalling** — `brush_graph_set_input` (kind/value → `InputValue`)
 //!   and `brush_graph_auto_layout` (`HashMap<u64,…>` ↔ `NodeId` keys).
 //! - **`brush_upload_image`** — an always-`Err` stub with unused params.
 
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::brush::input_value::InputValue;
 use crate::engine::protocol::{
     bad_payload, decode, graph_result, ok_or_error, ProtocolError, RequestRegistration, Response,
 };
-use crate::gpu::params::ParamValue;
 
 /// `{ json }` — a serialized node-graph (compile / validate).
 #[derive(Deserialize)]
@@ -35,13 +35,16 @@ pub struct BrushGraphYamlReq {
     pub yaml: String,
 }
 
-/// `{ node_id, param_index, kind, value }` — set one node param. `value` is
-/// interpreted per `kind` (`float`/`int`/`bool`/`string`/`curve`).
+/// `{ node_id, input_name, kind, value }` — set one node input's authored
+/// value. `value` is interpreted per `kind`
+/// (`float`/`int`/`enum`/`bool`/`string`/`curve`). One setter for every
+/// input kind — the unified replacement for the former param/port-default
+/// split.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-pub struct BrushGraphSetParamReq {
+pub struct BrushGraphSetInputReq {
     pub node_id: u64,
-    pub param_index: usize,
+    pub input_name: String,
     pub kind: String,
     #[cfg_attr(feature = "ts-export", ts(type = "JsonValue"))]
     pub value: serde_json::Value,
@@ -91,13 +94,13 @@ pub fn registrations() -> Vec<RequestRegistration> {
         .send()
         .req::<BrushGraphYamlReq>()
         .resp_literal("null | { error: string }"),
-        RequestRegistration::new("brush_graph_set_param", |engine, payload, _b| {
-            let r: BrushGraphSetParamReq = decode(payload)?;
-            let pv = match r.kind.as_str() {
-                "float" => ParamValue::Float(r.value.as_f64().unwrap_or(0.0) as f32),
-                "int" => ParamValue::Int(r.value.as_f64().unwrap_or(0.0) as i32),
-                "bool" => ParamValue::Bool(r.value.as_bool().unwrap_or(false)),
-                "string" => ParamValue::String(r.value.as_str().unwrap_or_default().to_string()),
+        RequestRegistration::new("brush_graph_set_input", |engine, payload, _b| {
+            let r: BrushGraphSetInputReq = decode(payload)?;
+            let iv = match r.kind.as_str() {
+                "float" | "scalar" => InputValue::Scalar(r.value.as_f64().unwrap_or(0.0) as f32),
+                "int" | "enum" => InputValue::Int(r.value.as_f64().unwrap_or(0.0) as i32),
+                "bool" => InputValue::Bool(r.value.as_bool().unwrap_or(false)),
+                "string" => InputValue::String(r.value.as_str().unwrap_or_default().to_string()),
                 "curve" => {
                     // Accept a real JSON array of [x, y] pairs (protocol
                     // native) or a JSON-encoded string (legacy shape).
@@ -105,16 +108,16 @@ pub fn registrations() -> Vec<RequestRegistration> {
                         .ok()
                         .or_else(|| r.value.as_str().and_then(|s| serde_json::from_str(s).ok()))
                         .unwrap_or_else(|| vec![[0.0, 0.0], [1.0, 1.0]]);
-                    ParamValue::Curve(points)
+                    InputValue::Curve(points)
                 }
                 other => {
-                    return graph_result(Err(format!("unknown param kind: {other}")));
+                    return graph_result(Err(format!("unknown input kind: {other}")));
                 }
             };
-            graph_result(engine.brush_graph_set_param(r.node_id, r.param_index, pv))
+            graph_result(engine.brush_graph_set_input(r.node_id, &r.input_name, iv))
         })
         .send()
-        .req::<BrushGraphSetParamReq>()
+        .req::<BrushGraphSetInputReq>()
         .resp_literal("{ graph: JsonValue } | { error: string }"),
         RequestRegistration::new("brush_graph_auto_layout", |engine, payload, _b| {
             let r: BrushGraphAutoLayoutReq = decode(payload)?;

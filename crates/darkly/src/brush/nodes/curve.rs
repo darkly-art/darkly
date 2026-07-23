@@ -9,11 +9,11 @@
 //! precomputed LUTs for brush dynamics curves.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::input_value::InputValue;
 use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wgsl::{CompileWgslCtx, NodeWgsl};
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
-use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef};
 
 const DEFAULT_CURVE: &[[f32; 2]] = &[[0.0, 0.0], [1.0, 1.0]];
@@ -31,14 +31,17 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::input("input", BrushWireType::Scalar)
                     .with_natural_range(0.0, 1.0)
                     .with_description("Input value (0\u{2013}1) to remap through the curve"),
+                // The spline itself — a compile-time constant baked into a
+                // LUT. Not wirable (the whole curve is fixed per brush);
+                // exposable so a brush author can surface the editor.
+                PortDef::input("curve", BrushWireType::Curve)
+                    .with_value(InputValue::Curve(DEFAULT_CURVE.to_vec()))
+                    .with_label("Curve")
+                    .with_description("The response curve control points."),
                 PortDef::output("output", BrushWireType::Scalar)
                     .with_natural_range(0.0, 1.0)
                     .with_description("Remapped output from the spline transfer function"),
             ],
-            params: &[ParamDef::Curve {
-                name: "curve",
-                default: DEFAULT_CURVE,
-            }],
             is_gpu: false,
             is_terminal: false,
             supports_erase: true,

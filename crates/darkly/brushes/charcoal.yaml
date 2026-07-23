@@ -3,7 +3,7 @@ category: Dry Media
 nodes:
   1:
     type: pen_input
-    port_defaults:
+    inputs:
       spacing: 0.02
   2:
     type: paint_color
@@ -11,9 +11,8 @@ nodes:
     type: split_color
   4:
     type: shape
-    params:
+    inputs:
       algorithm: 2
-    port_defaults:
       amplitude: 0.5
       frequency: 3.0
       rotation: 5.750458
@@ -24,21 +23,21 @@ nodes:
     type: stamp
   7:
     type: paint
-    port_defaults:
+    inputs:
       flow: 0.5
       size: 0.12
   8:
     type: image
-    params:
+    inputs:
       scale: 500.0
       texture_name: paper
   9:
     type: levels
-    port_defaults:
+    inputs:
       in_low: 0.72
   10:
     type: curve
-    params:
+    inputs:
       curve:
       - - 0.0
         - 0.8
@@ -46,7 +45,7 @@ nodes:
         - 0.6
   11:
     type: curve
-    params:
+    inputs:
       curve:
       - - 0.0
         - 0.0
@@ -54,7 +53,7 @@ nodes:
         - 0.35
   12:
     type: curve
-    params:
+    inputs:
       curve:
       - - 0.0
         - 0.0
@@ -64,8 +63,8 @@ nodes:
         - 1.0
   13:
     type: switch
-    port_defaults:
-      select: 1.0
+    inputs:
+      select: true
 connections:
 - '1.drawing_angle -> 13.in_0_scalar'
 - '1.position -> 7.position'

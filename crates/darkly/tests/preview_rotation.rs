@@ -22,6 +22,7 @@ use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::gpu_context::{
     BrushGpuContext, BrushPerfCounters, CursorPreviewState, DabBatch,
 };
+use darkly::brush::input_value::InputValue;
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::brush::registry;
@@ -62,29 +63,18 @@ fn build_graph_with_rotation_wire() -> Graph<BrushWireType> {
     let pen = graph.add_node(
         "pen_input",
         registry.get("pen_input").unwrap().ports.clone(),
-        vec![],
     );
     let paint_color = graph.add_node(
         "paint_color",
         registry.get("paint_color").unwrap().ports.clone(),
-        vec![],
     );
-    let shape = graph.add_node(
-        "shape",
-        registry.get("shape").unwrap().ports.clone(),
-        // Algorithm = 2 (Superformula).
-        vec![darkly::gpu::params::ParamValue::Int(2)],
-    );
-    let stamp = graph.add_node(
-        "stamp",
-        registry.get("stamp").unwrap().ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Int(0)],
-    );
-    let term = graph.add_node(
-        "paint",
-        registry.get("paint").unwrap().ports.clone(),
-        vec![],
-    );
+    let shape = graph.add_node("shape", registry.get("shape").unwrap().ports.clone());
+    // Algorithm = 2 (Superformula).
+    graph
+        .set_port_value(shape, "algorithm", InputValue::Int(2))
+        .unwrap();
+    let stamp = graph.add_node("stamp", registry.get("stamp").unwrap().ports.clone());
+    let term = graph.add_node("paint", registry.get("paint").unwrap().ports.clone());
 
     let wires = [
         (pen, "position", term, "position"),

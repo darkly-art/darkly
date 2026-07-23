@@ -7,7 +7,7 @@ nodes:
     type: paint_color
   3:
     type: shape
-    port_defaults:
+    inputs:
       softness: 1.0
   4:
     type: stamp

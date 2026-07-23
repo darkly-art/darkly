@@ -3,11 +3,11 @@ category: Misc
 nodes:
   1:
     type: pen_input
-    port_defaults:
+    inputs:
       spacing: 0.05
   2:
     type: shape
-    port_defaults:
+    inputs:
       softness: 0.2
   3:
     type: clone_source

@@ -170,8 +170,9 @@ Delegate planning to a fresh, isolated agent with only the repository instructio
 - Problem and root cause or feature semantics
 - Architectural impact and implementation steps
 - Tests, risks, and unresolved questions
-- A rough LOC estimate, split into production, tests, and generated/docs changes.
-  This estimate is a primary scope and complexity signal, not optional metadata.
+- A rough LOC estimate — lines added or lines removed, not lines touched — split
+  into production, tests, and generated/docs changes. This estimate is a primary
+  scope and complexity signal, not optional metadata.
 - For bugs, a regression test that will fail before the fix
 
 The planning agent must not modify production code. If isolated agents are unavailable, ask the user to run this step in a fresh session.
@@ -192,9 +193,9 @@ The orchestrator addresses every substantive finding in the plan or records an e
 
 Give the user:
 
-- **First:** the estimated LOC range, split into production and tests. Lead the
-  approval summary with this because it is the clearest signal of implementation
-  size and possible over-design.
+- **First:** the estimated LOC range from the plan. Lead the approval summary with
+  this because it is the clearest signal of implementation size and possible
+  over-design.
 - The plan path and review verdict
 - The proposed approach, tradeoffs, and unresolved questions
 - Confirmation that implementation has not begun

@@ -272,7 +272,11 @@ fn install_clone_brush(engine: &mut DarklyEngine) {
     engine.set_brush_graph(&json).expect("clone graph compiles");
     let term_id = find_node_id(engine, "paint");
     engine
-        .brush_graph_set_port_default(term_id, "size", 0.15)
+        .brush_graph_set_input(
+            term_id,
+            "size",
+            darkly::brush::input_value::InputValue::Scalar(0.15),
+        )
         .expect("paint size port");
 }
 
@@ -339,8 +343,12 @@ fn sample_merged_clones_composite() {
 
     install_clone_brush(&mut e);
     let clone_id = find_node_id(&e, "clone_source");
-    e.brush_graph_set_port_default(clone_id, "merged", 1.0)
-        .expect("merged port");
+    e.brush_graph_set_input(
+        clone_id,
+        "merged",
+        darkly::brush::input_value::InputValue::Scalar(1.0),
+    )
+    .expect("merged port");
     // Pin the red bottom layer to prove merged overrides the pin.
     e.set_clone_source(32.0, 64.0, Some(bottom));
     paint_dab(&mut e, dest, 96.0, 64.0, [1.0, 1.0, 1.0]);

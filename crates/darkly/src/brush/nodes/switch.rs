@@ -23,6 +23,7 @@
 //! actually wires it dynamically.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::input_value::InputValue;
 use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wgsl::{CompileWgslCtx, NodeWgsl};
 use crate::brush::wire::{BrushWireType, ScalarValue};
@@ -78,8 +79,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_description("Routed to out_vec4 when select=1"),
                 PortDef::output("out_vec4", BrushWireType::Vec4).with_description("Selected vec4"),
                 PortDef::input(SELECT_PORT, BrushWireType::Bool)
-                    .with_range(0.0, 1.0, 0.0)
-                    .with_step(1.0)
+                    .with_value(InputValue::Bool(false))
                     .with_label("Select")
                     .with_description(
                         "Routes one of two inputs to the output. If the \
@@ -87,7 +87,6 @@ pub fn register() -> BrushNodeRegistration {
                          to its own port default.",
                     ),
             ],
-            params: &[],
             is_gpu: false,
             is_terminal: false,
             supports_erase: true,
@@ -161,7 +160,7 @@ pub(crate) fn apply_to(graph: &mut Graph<BrushWireType>) {
             node.ports
                 .iter()
                 .find(|p| p.name == SELECT_PORT && p.dir == PortDir::Input)
-                .map(|p| p.default >= 0.5)
+                .map(|p| p.value.as_f32() >= 0.5)
                 .unwrap_or(false)
         };
 
@@ -214,18 +213,17 @@ pub(crate) fn apply_to(graph: &mut Graph<BrushWireType>) {
 mod tests {
     use super::*;
     use crate::brush;
-    use crate::gpu::params::ParamValue;
     use crate::nodegraph::{Connection, Graph, NodeId, PortRef};
 
     /// Helper: instantiate a node of `type_id` from the live registry,
-    /// using the registration's default params.
+    /// cloning the registration's input/output ports (which carry each
+    /// input's default value).
     fn add_node(graph: &mut Graph<BrushWireType>, type_id: &str) -> NodeId {
         let registry = brush::registry();
         let reg = registry
             .get(type_id)
             .unwrap_or_else(|| panic!("no registration for {type_id}"));
-        let params: Vec<ParamValue> = reg.params.iter().map(|p| p.default_value()).collect();
-        graph.add_node(type_id, reg.ports.clone(), params)
+        graph.add_node(type_id, reg.ports.clone())
     }
 
     fn pr(node: NodeId, port: &str) -> PortRef {

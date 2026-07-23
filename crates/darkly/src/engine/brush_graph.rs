@@ -6,9 +6,9 @@
 use darkly_macros::handlers;
 
 use super::{DarklyEngine, ReadbackContext};
+use crate::brush::input_value::InputValue;
 use crate::brush::state::BrushState;
 use crate::brush::wire::BrushWireType;
-use crate::gpu::params::ParamValue;
 use crate::nodegraph::Graph;
 use crate::nodegraph::{NodeId, PortDir, PortRef, UnitType};
 
@@ -174,7 +174,7 @@ impl DarklyEngine {
                 if port.dir == PortDir::Input {
                     brush
                         .defaults
-                        .insert((node.id, port.name.clone()), port.default);
+                        .insert((node.id, port.name.clone()), port.value.as_f32());
                 }
             }
         }
@@ -612,7 +612,7 @@ impl DarklyEngine {
         };
         match node.type_id.as_str() {
             crate::brush::nodes::noise::TYPE_ID => {
-                crate::brush::nodes::noise::render_preview_png(&node.params, 96)
+                crate::brush::nodes::noise::render_preview_png(&node.ports, 96)
             }
             _ => Vec::new(),
         }
@@ -776,15 +776,10 @@ impl DarklyEngine {
         let reg = registry
             .get(type_id)
             .ok_or_else(|| format!("unknown node type: {type_id}"))?;
-        let params = reg
-            .params
-            .iter()
-            .map(|p| p.default_value())
-            .collect::<Vec<_>>();
         let ports = reg.ports.clone();
         let type_id = type_id.to_string();
         self.try_mutate(ChangeKind::Topology, |g| {
-            g.add_node(type_id, ports, params);
+            g.add_node(type_id, ports);
             Ok(())
         })
     }
@@ -844,29 +839,18 @@ impl DarklyEngine {
         })
     }
 
-    /// Update a parameter on a node and compile.
-    pub fn brush_graph_set_param(
+    /// Set an input's authored value on a node and compile. One setter for
+    /// every input kind — the scalar default of a wirable port, an enum
+    /// index, a texture name, curve points. Replaces the former split
+    /// `set_param` (by index) / `set_port_default` (by name) pair.
+    pub fn brush_graph_set_input(
         &mut self,
         node_id: u64,
-        param_index: usize,
-        value: ParamValue,
+        input_name: &str,
+        value: InputValue,
     ) -> Result<String, String> {
         self.try_mutate(ChangeKind::Topology, |g| {
-            g.set_param(NodeId(node_id), param_index, value)
-                .map_err(|e| format!("{e}"))
-        })
-    }
-
-    /// Update a port's default value and compile.
-    #[handler(returns = graph)]
-    pub fn brush_graph_set_port_default(
-        &mut self,
-        node_id: u64,
-        port_name: &str,
-        value: f32,
-    ) -> Result<String, String> {
-        self.try_mutate(ChangeKind::Topology, |g| {
-            g.set_port_default(NodeId(node_id), port_name, value)
+            g.set_port_value(NodeId(node_id), input_name, value)
                 .map_err(|e| format!("{e}"))
         })
     }
@@ -973,9 +957,13 @@ impl DarklyEngine {
                         .defaults
                         .get(&(node_id, port_name.to_string()))
                         .copied()
-                        .unwrap_or_else(|| reg_port.map(|rp| rp.default).unwrap_or(port.default));
+                        .unwrap_or_else(|| {
+                            reg_port
+                                .map(|rp| rp.value.as_f32())
+                                .unwrap_or(port.value.as_f32())
+                        });
                     ExposedValue::Scalar {
-                        value: unit_type.to_display(port.default),
+                        value: unit_type.to_display(port.value.as_f32()),
                         min: unit_type.to_display(port.min),
                         max: unit_type.to_display(port.max),
                         default: unit_type.to_display(reset_default),
@@ -983,7 +971,7 @@ impl DarklyEngine {
                     }
                 }
                 BrushWireType::Bool => ExposedValue::Bool {
-                    value: port.default >= 0.5,
+                    value: port.value.as_bool(),
                 },
                 _ => continue,
             };

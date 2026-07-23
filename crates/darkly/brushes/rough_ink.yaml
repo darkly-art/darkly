@@ -3,13 +3,13 @@ category: Basic
 nodes:
   1:
     type: pen_input
-    port_defaults:
+    inputs:
       stabilize: 0.6
   2:
     type: paint_color
   3:
     type: curve
-    params:
+    inputs:
       curve:
       - - 0.0
         - 0.0
@@ -25,9 +25,8 @@ nodes:
     type: random
   7:
     type: shape
-    params:
+    inputs:
       algorithm: 1
-    port_defaults:
       frequency: 8.0
       octaves: 4.0
       softness: 0.1

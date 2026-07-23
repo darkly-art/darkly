@@ -14,19 +14,34 @@ export type { BrushInfo };
 
 // --- Types mirroring Rust's nodegraph structures ---
 
+/** The authored value on a disconnected input, mirroring Rust's
+ *  `InputValue` (serde-untagged): a scalar/enum index is a `number`, a
+ *  bool is a `boolean`, a texture name is a `string`, curve points are an
+ *  array of `[x, y]` pairs. */
+export type InputValue = number | boolean | string | Array<[number, number]> | number[];
+
 export interface PortDef {
     name: string;
     dir: 'Input' | 'Output';
     wire_type: string;  // BrushWireType variant name
     min: number;
     max: number;
-    default: number;
+    /** The authored value used when the input is disconnected — the full
+     *  typed value (scalar default, enum index, texture name, curve points).
+     *  Replaces the old scalar-only `default`. */
+    value: InputValue;
+    /** Dropdown labels in index order — non-empty only for `Enum` inputs. */
+    enum_options?: string[];
+    /** Whether an upstream wire may drive this input per-dab. Sourced from
+     *  `BrushWireType::is_wirable` in Rust and carried as data; the wire dot
+     *  is drawn only when true. */
+    wirable: boolean;
     description: string;
     unit_type: string;  // "Normalized" | "Percent" | "Degrees" | "Raw"
     icon: string;
     label: string;
     exposed: boolean;
-    /** When set, the port is shown only when the named param's current
+    /** When set, the port is shown only when the named input's current
      *  integer value is in the allowed list. Tuple shape mirrors the
      *  Rust serialization of `(String, Vec<i32>)`. UI-only — the engine
      *  ignores this field. */
@@ -41,8 +56,7 @@ export interface PortDef {
 export interface NodeInstance {
     id: number;         // NodeId(u64) — safe as f64 for small values
     type_id: string;
-    ports: PortDef[];
-    params: any[];      // ParamValue array
+    ports: PortDef[];   // the node's single, unified input/output list
 }
 
 export interface Connection {
@@ -62,7 +76,6 @@ export interface NodeTypeInfo {
     display_name: string;
     description: string;
     ports: PortDef[];
-    params: any[];
     is_gpu: boolean;
 }
 
@@ -102,6 +115,11 @@ export const WIRE_COLORS: Record<string, string> = {
     Bool: '#ff6b6b',
     Vec2: '#6bff6b',
     Vec4: '#ffaa4a',
+    // Non-wirable data shapes — never drawn on a wire, but coloured for the
+    // editing widgets that show their swatch/label.
+    Enum: '#c58aff',
+    String: '#ffd24a',
+    Curve: '#4affd2',
 };
 
 // --- State ---
@@ -496,35 +514,23 @@ export class BrushGraphState {
         await this.applyResult(await app.engine.api.brushGraphDisconnect({ from_node: fromNode, from_port: fromPort, to_node: toNode, to_port: toPort }));
     }
 
-    /** Update a node's parameter value locally (for responsive slider feedback). */
-    setParamLocal(nodeId: number, paramIndex: number, value: any) {
-        if (!this.graph) return;
-        const node = this.graph.nodes[String(nodeId)];
-        if (node && paramIndex < node.params.length) {
-            // Mutate in place — only consumers reading this param re-evaluate.
-            node.params[paramIndex] = value;
-        }
-    }
-
-    /** Update a node's parameter value via Rust (compiles the graph). */
-    async setParam(nodeId: number, paramIndex: number, kind: string, value: any) {
-        if (!app.engine) return;
-        await this.applyResult(await app.engine.api.brushGraphSetParam({ node_id: nodeId, param_index: paramIndex, kind, value }));
-    }
-
-    /** Update a port's default value locally (for responsive slider feedback). */
-    setPortDefaultLocal(nodeId: number, portName: string, value: number) {
+    /** Update an input's authored value locally (for responsive slider
+     *  feedback). One setter for every input kind. */
+    setInputLocal(nodeId: number, inputName: string, value: InputValue) {
         if (!this.graph) return;
         const node = this.graph.nodes[String(nodeId)];
         if (!node) return;
-        const port = node.ports.find(p => p.name === portName && p.dir === 'Input');
-        if (port) port.default = value;
+        const port = node.ports.find(p => p.name === inputName && p.dir === 'Input');
+        if (port) port.value = value;
     }
 
-    /** Update a port's default value via Rust (compiles the graph). */
-    async setPortDefault(nodeId: number, portName: string, value: number) {
+    /** Update an input's authored value via Rust (compiles the graph). One
+     *  setter for every input kind — the unified replacement for the former
+     *  `setParam` (by index) / `setPortDefault` (by name) pair. `kind` is one
+     *  of `float`/`int`/`enum`/`bool`/`string`/`curve`. */
+    async setInput(nodeId: number, inputName: string, kind: string, value: InputValue) {
         if (!app.engine) return;
-        await this.applyResult(await app.engine.api.brushGraphSetPortDefault({ node_id: nodeId, port_name: portName, value }));
+        await this.applyResult(await app.engine.api.brushGraphSetInput({ node_id: nodeId, input_name: inputName, kind, value }));
     }
 
     /** Get a flat array of all node instances. */
@@ -567,8 +573,8 @@ export class BrushGraphState {
             return;
         }
 
-        // Set the resource_name param (index 0) on the Image node.
-        await this.applyResult(await app.engine.api.brushGraphSetParam({ node_id: nodeId, param_index: 0, kind: 'string', value: resourceName }));
+        // Set the `texture_name` input on the Image node.
+        await this.applyResult(await app.engine.api.brushGraphSetInput({ node_id: nodeId, input_name: 'texture_name', kind: 'string', value: resourceName }));
 
         // Cache a thumbnail for canvas rendering.
         const clamped = new Uint8ClampedArray(rgba.length);

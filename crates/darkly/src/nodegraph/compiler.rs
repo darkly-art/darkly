@@ -244,7 +244,6 @@ mod tests {
                 display_name: "Source",
                 description: "",
                 ports: vec![PortDef::output("out", TestWireKind::Scalar)],
-                params: &[],
                 is_gpu: false,
                 is_terminal: false,
                 supports_erase: true,
@@ -262,7 +261,6 @@ mod tests {
                     PortDef::input("in", TestWireKind::Scalar),
                     PortDef::output("out", TestWireKind::Scalar),
                 ],
-                params: &[],
                 is_gpu: false,
                 is_terminal: false,
                 supports_erase: true,
@@ -277,7 +275,6 @@ mod tests {
                 display_name: "Sink",
                 description: "",
                 ports: vec![PortDef::input("in", TestWireKind::Scalar)],
-                params: &[],
                 is_gpu: false,
                 is_terminal: false,
                 supports_erase: true,
@@ -290,24 +287,15 @@ mod tests {
     #[test]
     fn topological_sort_linear_chain() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node(
-            "source",
-            vec![PortDef::output("out", TestWireKind::Scalar)],
-            vec![],
-        );
+        let a = g.add_node("source", vec![PortDef::output("out", TestWireKind::Scalar)]);
         let b = g.add_node(
             "passthrough",
             vec![
                 PortDef::input("in", TestWireKind::Scalar),
                 PortDef::output("out", TestWireKind::Scalar),
             ],
-            vec![],
         );
-        let c = g.add_node(
-            "sink",
-            vec![PortDef::input("in", TestWireKind::Scalar)],
-            vec![],
-        );
+        let c = g.add_node("sink", vec![PortDef::input("in", TestWireKind::Scalar)]);
 
         g.connect(
             PortRef {
@@ -345,16 +333,8 @@ mod tests {
     #[test]
     fn slot_indices_wired_correctly() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node(
-            "source",
-            vec![PortDef::output("out", TestWireKind::Scalar)],
-            vec![],
-        );
-        let b = g.add_node(
-            "sink",
-            vec![PortDef::input("in", TestWireKind::Scalar)],
-            vec![],
-        );
+        let a = g.add_node("source", vec![PortDef::output("out", TestWireKind::Scalar)]);
+        let b = g.add_node("sink", vec![PortDef::input("in", TestWireKind::Scalar)]);
 
         g.connect(
             PortRef {
@@ -386,18 +366,13 @@ mod tests {
     fn diamond_graph() {
         // A → B, A → C, B → D, C → D
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node(
-            "source",
-            vec![PortDef::output("out", TestWireKind::Scalar)],
-            vec![],
-        );
+        let a = g.add_node("source", vec![PortDef::output("out", TestWireKind::Scalar)]);
         let b = g.add_node(
             "passthrough",
             vec![
                 PortDef::input("in", TestWireKind::Scalar),
                 PortDef::output("out", TestWireKind::Scalar),
             ],
-            vec![],
         );
         let c = g.add_node(
             "passthrough",
@@ -405,7 +380,6 @@ mod tests {
                 PortDef::input("in", TestWireKind::Scalar),
                 PortDef::output("out", TestWireKind::Scalar),
             ],
-            vec![],
         );
         let d = g.add_node(
             "sink",
@@ -413,7 +387,6 @@ mod tests {
                 PortDef::input("in_a", TestWireKind::Scalar),
                 PortDef::input("in_b", TestWireKind::Scalar),
             ],
-            vec![],
         );
 
         g.connect(
@@ -490,7 +463,6 @@ mod tests {
                 PortDef::output("out1", TestWireKind::Scalar),
                 PortDef::output("out2", TestWireKind::Scalar),
             ],
-            vec![],
         );
         let b = g.add_node(
             "sink",
@@ -498,7 +470,6 @@ mod tests {
                 PortDef::input("in1", TestWireKind::Scalar),
                 PortDef::input("in2", TestWireKind::Scalar),
             ],
-            vec![],
         );
 
         g.connect(
@@ -536,7 +507,6 @@ mod tests {
                     PortDef::output("out1", TestWireKind::Scalar),
                     PortDef::output("out2", TestWireKind::Scalar),
                 ],
-                params: &[],
                 is_gpu: false,
                 is_terminal: false,
                 supports_erase: true,
@@ -554,7 +524,6 @@ mod tests {
                     PortDef::input("in1", TestWireKind::Scalar),
                     PortDef::input("in2", TestWireKind::Scalar),
                 ],
-                params: &[],
                 is_gpu: false,
                 is_terminal: false,
                 supports_erase: true,

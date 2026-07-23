@@ -20,10 +20,10 @@
 //! spliced into every compiled brush that consumes a shape.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::input_value::InputValue;
 use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wgsl::{CompileWgslCtx, ExtentContribution, ExtentCtx, NodeWgsl};
 use crate::brush::wire::{BrushWireType, ScalarValue};
-use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 // ── Node ────────────────────────────────────────────────────────────────
@@ -47,6 +47,14 @@ pub fn register() -> BrushNodeRegistration {
         display_name: "Shape",
         description: "Procedural brush-tip silhouette — disc, bumpy circle, or superformula.",
         ports: vec![
+            // Compile-time branch selector — picks the silhouette algorithm.
+            // Not wirable (an enum can't be driven per-dab); exposable like
+            // every other input.
+            PortDef::input("algorithm", BrushWireType::Enum)
+                .with_enum_options(["Sine Harmonic", "Perlin Noise", "Superformula"])
+                .with_value(InputValue::Int(0))
+                .with_label("Algorithm")
+                .with_description("Silhouette generator: bumpy sine, organic Perlin, or Gielis superformula."),
             PortDef::input("softness", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
                 .with_natural_range(0.0, 1.0)
@@ -162,11 +170,6 @@ pub fn register() -> BrushNodeRegistration {
                 .with_natural_range(0.0, 1.0)
                 .with_description("Per-fragment mask value (0..1) — the procedural shape's alpha at this fragment"),
         ],
-        params: &[ParamDef::Enum {
-            name: "algorithm",
-            options: &["Sine Harmonic", "Perlin Noise", "Superformula"],
-            default: 0,
-        }],
         is_gpu: true,
         is_terminal: false,
         supports_erase: true,
@@ -214,10 +217,7 @@ impl BrushNodeEvaluator for ShapeEvaluator {
             return Ok(wgsl);
         }
 
-        let algorithm = match cctx.params.first() {
-            Some(crate::gpu::params::ParamValue::Int(v)) => (*v as u32).min(2),
-            _ => 0,
-        };
+        let algorithm = (cctx.input("algorithm").enum_index().max(0) as u32).min(2);
         let amplitude = cctx.input("amplitude").as_f32();
         let frequency = cctx.input("frequency").as_f32();
         let rotation = cctx.input("rotation").as_f32();
@@ -283,10 +283,7 @@ impl BrushNodeEvaluator for ShapeEvaluator {
     /// [`ExtentCtx::port_max_value`] so the bound covers every value
     /// any wire can deliver, not just the per-dab realisation.
     fn extent(&self, ctx: &ExtentCtx) -> ExtentContribution {
-        let algorithm = match ctx.params.first() {
-            Some(crate::gpu::params::ParamValue::Int(v)) => (*v as u32).min(2),
-            _ => 0,
-        };
+        let algorithm = (ctx.port_enum("algorithm").max(0) as u32).min(2);
         let base = match algorithm {
             // r(θ) = 1 + A·sin(...) for sine, and 1 + A·(2·fbm - 1)
             // for perlin (fbm ∈ [0, 1] → swing in [-1, 1]) — both

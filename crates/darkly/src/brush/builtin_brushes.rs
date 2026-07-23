@@ -145,9 +145,9 @@ mod tests {
             .find(|p| p.name == "spacing")
             .expect("pen_input has a spacing port");
         assert!(
-            spacing.default <= 0.05,
+            spacing.value.as_f32() <= 0.05,
             "liquify spacing default is {}, expected <= 5% for smooth warps",
-            spacing.default
+            spacing.value.as_f32()
         );
     }
 }

@@ -3,12 +3,12 @@ category: Effects
 nodes:
   1:
     type: pen_input
-    port_defaults:
+    inputs:
       spacing: 0.01
       stabilize: 0.4
   2:
     type: shape
-    port_defaults:
+    inputs:
       softness: 0.4
   3:
     type: smudge
