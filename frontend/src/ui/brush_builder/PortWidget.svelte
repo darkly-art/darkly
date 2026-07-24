@@ -298,6 +298,7 @@
 <div
     class="port-row"
     class:port-right={side === 'right'}
+    class:port-block={showCurve}
     title={regPort?.description || ''}
 >
     {#if showDot}
@@ -369,6 +370,13 @@
             onclick={(e) => e.stopPropagation()}
         />
     {:else if showCurve}
+        <!-- A curve is a full-height block widget, so it gets its own header
+             row (label + expose) with the editor stacked below — it can't sit
+             inside the fixed-height inline row the scalar widgets use. -->
+        <div class="port-block-head">
+            <span class="port-label">{regPort?.label || port.name}</span>
+            {#if canExpose}{@render exposeBtn()}{/if}
+        </div>
         <CurveEditor
             points={port.value as Array<[number, number]>}
             oninput={(pts) => brushGraph.setInputLocal(nodeId, port.name, pts)}
@@ -377,17 +385,19 @@
     {:else}
         <span class="port-label">{regPort?.label || port.name}</span>
     {/if}
-    {#if canExpose}
-        <button
-            class="expose-toggle"
-            class:exposed={isExposed}
-            title={isExposed ? 'Hide from brush bar' : 'Expose in brush bar'}
-            onclick={toggleExposed}
-        >
-            <Icon name="fa6-solid:eye" />
-        </button>
-    {/if}
+    {#if canExpose && !showCurve}{@render exposeBtn()}{/if}
 </div>
+
+{#snippet exposeBtn()}
+    <button
+        class="expose-toggle"
+        class:exposed={isExposed}
+        title={isExposed ? 'Hide from brush bar' : 'Expose in brush bar'}
+        onclick={toggleExposed}
+    >
+        <Icon name="fa6-solid:eye" />
+    </button>
+{/snippet}
 
 <style>
     .port-row {
@@ -402,6 +412,25 @@
         flex-direction: row-reverse;
         padding-left: 0;
         padding-right: 10px;
+    }
+    /* Block widgets (curve editor) can't live in the fixed-height inline
+       row — stack a header + the editor vertically and let the node grow to
+       contain it, so it's neither clipped nor mis-measured by auto-layout. */
+    .port-block {
+        height: auto;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 3px;
+        padding: 4px 6px;
+    }
+    .port-block-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 4px;
+    }
+    .port-block :global(.curve-editor) {
+        align-self: center;
     }
     .port-dot {
         position: absolute;

@@ -248,7 +248,7 @@
             title={tooltipForAction('Add node', 'addBrushNode')}
         >+ Add Node</button>
         <button class="toolbar-btn" onclick={handleReset} title="Reset to default">Reset</button>
-        <button class="toolbar-btn" onclick={() => brushGraph.measureAndLayout('button')} title="Auto-layout nodes">Layout</button>
+        <button class="toolbar-btn" onclick={() => brushGraph.measureAndLayout()} title="Auto-layout nodes">Layout</button>
         <div class="spacer"></div>
         <button class="toolbar-btn" onclick={handleCopy} title="Copy graph as YAML to clipboard">Copy</button>
         <button class="toolbar-btn" onclick={handlePaste} title="Replace graph with YAML from clipboard">Paste</button>

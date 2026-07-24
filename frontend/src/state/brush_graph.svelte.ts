@@ -503,32 +503,13 @@ export class BrushGraphState {
     /** Measure every node widget currently in the DOM and run auto-layout with
      *  the real sizes. The single measure-and-place path shared by the canvas
      *  one-shot (on a fresh load) and the toolbar Layout button. */
-    measureAndLayout(reason = 'unknown') {
-        const total = this.graph ? Object.keys(this.graph.nodes).length : 0;
-        const rows: Array<{ id: string; type: string; w: number; h: number }> = [];
+    measureAndLayout() {
         const sizes: Record<string, [number, number]> = {};
         for (const el of document.querySelectorAll<HTMLElement>('[data-node-id]')) {
             const id = el.dataset.nodeId;
-            if (!id) continue;
-            const w = el.offsetWidth;
-            const h = el.offsetHeight;
-            sizes[id] = [w, h];
-            rows.push({ id, type: this.graph?.nodes[id]?.type_id ?? '?', w, h });
+            if (id) sizes[id] = [el.offsetWidth, el.offsetHeight];
         }
-        // TEMP diagnostic (brush auto-layout first-open bug): per-node measured
-        // sizes + measured-vs-total count + graph identity. Compare the
-        // `initial-open` table to the `button` table.
-        // eslint-disable-next-line no-console
-        console.table(rows);
-        // eslint-disable-next-line no-console
-        console.log('[layout] measure', reason, {
-            measured: rows.length,
-            total,
-            generation: this.layoutGeneration,
-            lastLaidOut: this.lastLaidOutGeneration,
-            needsInitialLayout: this.needsInitialLayout,
-        });
-        if (Object.keys(sizes).length > 0) void this.autoLayout(sizes, reason);
+        if (Object.keys(sizes).length > 0) void this.autoLayout(sizes);
     }
 
     /**
@@ -540,21 +521,11 @@ export class BrushGraphState {
      * load supersedes it during the WASM round-trip, the result is discarded so
      * a stale graph's positions never overwrite the current one.
      */
-    async autoLayout(sizes?: Record<string, [number, number]>, reason = 'unknown') {
+    async autoLayout(sizes?: Record<string, [number, number]>) {
         if (!app.engine) return;
         const gen = this.layoutGeneration;
-        // TEMP diagnostic (brush auto-layout first-open bug): sizes handed to Rust.
-        // eslint-disable-next-line no-console
-        console.log('[layout] sizes->rust', reason, { generation: gen, sizes });
         const layout = await app.engine.api.brushGraphAutoLayout({ sizes: sizes ?? {} }) as Record<string, [number, number]>;
-        // TEMP diagnostic (brush auto-layout first-open bug): positions Rust returned.
-        // eslint-disable-next-line no-console
-        console.log('[layout] rust->positions', reason, { computedForGen: gen, nowGen: this.layoutGeneration, layout });
-        if (gen !== this.layoutGeneration) {
-            // eslint-disable-next-line no-console
-            console.log('[layout] DISCARDED stale write', reason, { computedForGen: gen, nowGen: this.layoutGeneration });
-            return; // superseded by a newer load
-        }
+        if (gen !== this.layoutGeneration) return; // superseded by a newer load
         if (layout && typeof layout === 'object') {
             const next: Record<number, [number, number]> = {};
             for (const [idStr, pos] of Object.entries(layout)) {
