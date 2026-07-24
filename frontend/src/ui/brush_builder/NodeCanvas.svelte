@@ -30,15 +30,22 @@
     // re-laying out then would clobber the user's arrangement, so the
     // guard keeps this a one-shot per fresh graph.
     $effect(() => {
-        if (!brushGraph.needsInitialLayout) return;
-        const sizes: Record<string, [number, number]> = {};
-        for (const el of document.querySelectorAll<HTMLElement>('[data-node-id]')) {
-            const id = el.dataset.nodeId;
-            if (id) sizes[id] = [el.offsetWidth, el.offsetHeight];
-        }
-        if (Object.keys(sizes).length > 0) {
-            brushGraph.autoLayout(sizes);
-        }
+        // TEMP diagnostic (brush auto-layout first-open bug): observe every
+        // evaluation of this effect — the graph identity + generation it sees,
+        // the DOM node count at that instant, and whether it decides to lay out.
+        const need = brushGraph.needsInitialLayout;
+        const graphIds = brushGraph.graph ? Object.keys(brushGraph.graph.nodes) : [];
+        const domCount = document.querySelectorAll('[data-node-id]').length;
+        // eslint-disable-next-line no-console
+        console.log('[layout] effect', {
+            needsInitialLayout: need,
+            generation: brushGraph.layoutGeneration,
+            graphNodes: graphIds.length,
+            domNodes: domCount,
+            graphIds,
+        });
+        if (!need) return;
+        brushGraph.measureAndLayout('initial-open');
     });
 
     // --- Pan / zoom ---
