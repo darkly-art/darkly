@@ -121,3 +121,18 @@ describe('autoLayout generation guard (regression)', () => {
         expect(state.needsInitialLayout).toBe(true);
     });
 });
+
+describe('beginLayoutGeneration invalidates node-id-keyed caches', () => {
+    // Image thumbnails are keyed by `image_${nodeId}`, and node ids restart per
+    // brush — so a stale bitmap would alias onto a reused id under the next
+    // graph. ImageBitmap is GPU-backed and must be closed, not just dropped.
+    it('closes and clears image thumbnails on a fresh graph', () => {
+        const close = vi.fn();
+        state.imageThumbnails.set('image_1', { close } as unknown as ImageBitmap);
+
+        state.beginLayoutGeneration();
+
+        expect(close).toHaveBeenCalledTimes(1);
+        expect(state.imageThumbnails.size).toBe(0);
+    });
+});

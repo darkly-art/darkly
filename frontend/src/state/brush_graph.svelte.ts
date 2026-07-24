@@ -482,6 +482,12 @@ export class BrushGraphState {
      *  generation to be discarded on arrival. Public so tests can drive the
      *  fresh-load transition without a live engine. */
     beginLayoutGeneration() {
+        // Drop image-node thumbnails from the outgoing graph: they're keyed by
+        // `image_${nodeId}`, and node ids restart per brush, so a stale bitmap
+        // would alias onto a reused id under the new graph. `ImageBitmap` is
+        // GPU-backed and must be closed explicitly or it leaks.
+        for (const bmp of this.imageThumbnails.values()) bmp.close();
+        this.imageThumbnails.clear();
         this.nodePositions = {};
         this.layoutGeneration++;
     }

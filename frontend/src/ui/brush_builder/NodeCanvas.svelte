@@ -78,6 +78,21 @@
         coords,
     });
 
+    // Port offsets are keyed by node id, and node ids restart per brush. On a
+    // brush swap the `{#each …(node.id)}` reuses widgets for colliding ids, so
+    // PortWidget's mount-time `register()` never re-fires and stale offsets
+    // would persist. Clear on every fresh graph (tracked by `layoutGeneration`)
+    // so `portWorldPos`'s DOM-measure fallback re-derives them for the new nodes.
+    let lastLayoutGen = -1;
+    $effect(() => {
+        const gen = brushGraph.layoutGeneration;
+        if (gen !== lastLayoutGen) {
+            lastLayoutGen = gen;
+            portOffsets.clear();
+            portVersion++;
+        }
+    });
+
     // --- Interaction state ---
 
     let isPanning = false;
