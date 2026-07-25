@@ -102,7 +102,6 @@ For a feature to count, it must be:
 - [x] Text tool
 - [x] Pressure / tilt / spacing / distance / angle inputs
 - [x] Laplacian stabilizer
-- [x] Stroke prediction (look-ahead tail hiding input latency)
 - [x] HSV picker, foreground/background swatches
 - [x] Color picker
 - [x] Raster layers + groups
