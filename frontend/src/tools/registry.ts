@@ -13,16 +13,6 @@ import { screenToCanvas } from '../canvas/coordinates';
  * rejects on resume, so the await — not a context object — is the cancellation
  * point. See `tool_session.ts`.
  */
-/** A forward-predicted pointer sample: canvas-space position plus the raw
- *  predicted `PointerEvent` (for pressure/tilt/twist). Produced by the generic
- *  pointer dispatch from `getPredictedEvents()` and consumed by
- *  {@link Tool.onPredictedMove}. */
-export interface PredictedSample {
-    x: number;
-    y: number;
-    e: PointerEvent;
-}
-
 export interface Tool {
     onActivate?(): void;
     onDeactivate?(): void;
@@ -41,14 +31,6 @@ export interface Tool {
     onPointerUp?(e: PointerEvent): void;
     /** Pointer left the canvas. Tools with hover overlays should clear them here. */
     onPointerLeave?(): void;
-
-    /** Forward-predicted pointer samples (`getPredictedEvents()`), already
-     *  transformed to canvas space, handed to the tool during a stroke/drag so
-     *  it can draw *ahead* of the pen and hide pipeline latency. The samples are
-     *  transient: they must never be committed to the document/undo — a tool
-     *  renders them as an overlay only, discarded on the next real sample and on
-     *  pointer up. Tools that don't implement it ignore prediction entirely. */
-    onPredictedMove?(samples: PredictedSample[]): void | Promise<void>;
 
     /** Re-establish hover-time visual feedback (e.g. the brush's dab
      *  preview) at the given canvas position, without requiring a live

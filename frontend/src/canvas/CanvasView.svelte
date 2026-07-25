@@ -266,23 +266,7 @@
         // case. Still request a frame — a chord's onMove may have queued
         // work (e.g. a pick that needs `pollPick` to commit next frame).
         if (!isToolHoverSuppressed()) {
-            const tool = inst.tool(inst.activeToolId);
-            void runHook(tool?.onPointerMove?.(e, pos.x, pos.y));
-            // Forward prediction: while a stroke/drag is in progress (a button
-            // held), hand the tool the browser's predicted future samples so it
-            // can draw ahead of the pen and hide pipeline latency. Purely
-            // additive — a tool without `onPredictedMove` ignores it; predicted
-            // points are transient overlay-only and never committed.
-            if (e.buttons !== 0 && tool?.onPredictedMove) {
-                const predicted = e.getPredictedEvents?.() ?? [];
-                if (predicted.length > 0) {
-                    const samples = predicted.map((pe) => {
-                        const p = getCanvasCoords(pe);
-                        return { x: p.x, y: p.y, e: pe };
-                    });
-                    void runHook(tool.onPredictedMove(samples));
-                }
-            }
+            void runHook(inst.tool(inst.activeToolId)?.onPointerMove?.(e, pos.x, pos.y));
         }
         inst.requestFrame();
     }
