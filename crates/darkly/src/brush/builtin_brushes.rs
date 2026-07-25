@@ -132,22 +132,12 @@ mod tests {
             .into_iter()
             .find(|b| b.metadata.name == "Liquify")
             .expect("Liquify built-in must exist");
-        let pen = brush
-            .metadata
-            .graph
-            .nodes()
-            .values()
-            .find(|n| n.type_id == crate::brush::nodes::pen_input::TYPE_ID)
-            .expect("liquify brush has a pen_input node");
-        let spacing = pen
-            .ports
-            .iter()
-            .find(|p| p.name == "spacing")
-            .expect("pen_input has a spacing port");
+        let spacing =
+            crate::brush::nodes::brush_settings::read_scalar_input(&brush.metadata.graph, "spacing")
+                .expect("liquify brush_settings has a spacing port");
         assert!(
-            spacing.value.as_f32() <= 0.05,
-            "liquify spacing default is {}, expected <= 5% for smooth warps",
-            spacing.value.as_f32()
+            spacing <= 0.05,
+            "liquify spacing default is {spacing}, expected <= 5% for smooth warps",
         );
     }
 }

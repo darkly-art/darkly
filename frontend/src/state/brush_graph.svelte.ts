@@ -51,6 +51,10 @@ export interface PortDef {
      *  `min`. Used by integer-valued ports like the circle node's
      *  `frequency`. */
     step: number;
+    /** This input port is also a wire source (`PortDef::source` in Rust): its
+     *  value can be wired *from* into other nodes. The editor shows the
+     *  source handle only while the input is not itself driven. */
+    source: boolean;
 }
 
 export interface NodeInstance {

@@ -3,9 +3,12 @@ category: Effects
 nodes:
   1:
     type: pen_input
+  100:
+    type: brush_settings
     inputs:
       spacing: 0.0
       spacing_min_px: 4.0
+      size: 0.3
   2:
     type: liquify
 connections:
@@ -14,7 +17,7 @@ connections:
 - '1.motion -> 2.motion'
 - '1.position -> 2.position'
 exposed_ports:
-  "1.stabilize": {}
-  "2.size": {}
+  "100.stabilize": {}
+  "100.size": {}
   "2.softness": {}
   "2.strength": {}

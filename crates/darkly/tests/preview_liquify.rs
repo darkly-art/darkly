@@ -49,8 +49,14 @@ fn liquify_preview_shows_neutral_gray_disc() {
         .find(|b| b.metadata.name == "Liquify")
         .expect("Liquify brush registered");
     let mut graph = brush.metadata.graph.clone();
-    let term_id = darkly::brush::find_terminal(&graph).expect("brush has a terminal");
-    graph.set_port_default(term_id, "size", 0.2).unwrap();
+    let _term_id = darkly::brush::find_terminal(&graph).expect("brush has a terminal");
+    graph
+        .set_port_default(
+            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            0.2,
+        )
+        .unwrap();
 
     let (device, queue) = test_device();
     let device = Arc::new(device);
@@ -148,7 +154,13 @@ fn liquify_preview_softness_reshapes_falloff() {
             .unwrap();
         let mut graph = brush.metadata.graph.clone();
         let term_id = darkly::brush::find_terminal(&graph).unwrap();
-        graph.set_port_default(term_id, "size", 0.2).unwrap();
+        graph
+            .set_port_default(
+                darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+                "size",
+                0.2,
+            )
+            .unwrap();
         graph
             .set_port_default(term_id, "softness", softness)
             .unwrap();

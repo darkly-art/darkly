@@ -120,11 +120,15 @@ pub fn compile<W: WireKind>(
     let mut next_slot: usize = 0;
     let mut output_slot_map: HashMap<PortRef, usize> = HashMap::new();
 
-    // First pass: assign slots to all output ports.
+    // First pass: assign a slot to every wire source — all outputs, plus
+    // settable-source inputs (whose resolved value is also readable as a
+    // source). `is_source()` is the single predicate; keyed by
+    // `PortRef { node, port }` with no direction, which stays collision-free
+    // because no node carries a same-named input+output.
     for &node_id in &sorted {
         let node = &graph.nodes()[&node_id];
         for port in &node.ports {
-            if port.dir == PortDir::Output {
+            if port.is_source() {
                 let pr = PortRef {
                     node: node_id,
                     port: port.name.clone(),
@@ -199,6 +203,15 @@ pub fn compile<W: WireKind>(
                     }
                     // Disconnected inputs use their default value — the
                     // evaluator handles that (no slot assigned).
+                    //
+                    // A settable-source input is also a source: it owns an
+                    // output slot (assigned in the first pass) that the runner
+                    // seeds with its resolved value, so downstream wires can
+                    // read it. Publish that slot so `build_slot_outputs` and
+                    // the seeding path find it.
+                    if port.is_source() {
+                        output_slots.push((port.name.clone(), output_slot_map[&pr]));
+                    }
                 }
                 PortDir::Output => {
                     let pr = PortRef {
@@ -360,6 +373,47 @@ mod tests {
         // ...and b's input must record `a.out` as its source port.
         assert_eq!(b_step.input_slots[0].source.node, a);
         assert_eq!(b_step.input_slots[0].source.port, "out");
+    }
+
+    /// A settable-source input owns an output slot and a wire leaving it
+    /// resolves to that slot — so a downstream node can read the source
+    /// input's value just like a real output.
+    #[test]
+    fn settable_source_input_owns_an_output_slot() {
+        let mut g = Graph::<TestWireKind>::new();
+        let knob = g.add_node(
+            "knob",
+            vec![PortDef::input("val", TestWireKind::Scalar).source()],
+        );
+        let sink = g.add_node("sink", vec![PortDef::input("in", TestWireKind::Scalar)]);
+
+        g.connect(
+            PortRef {
+                node: knob,
+                port: "val".into(),
+            },
+            PortRef {
+                node: sink,
+                port: "in".into(),
+            },
+        )
+        .unwrap();
+
+        let plan = compile(&g, &test_registry()).unwrap();
+        let knob_step = plan.steps.iter().find(|s| s.node_id == knob).unwrap();
+        let sink_step = plan.steps.iter().find(|s| s.node_id == sink).unwrap();
+
+        // The source input is published as an output slot...
+        let val_slot = knob_step
+            .output_slots
+            .iter()
+            .find(|(name, _)| name == "val")
+            .map(|(_, slot)| *slot)
+            .expect("settable-source input must own an output slot");
+        // ...and the downstream input resolves to it.
+        assert_eq!(sink_step.input_slots[0].slot, val_slot);
+        assert_eq!(sink_step.input_slots[0].source.node, knob);
+        assert_eq!(sink_step.input_slots[0].source.port, "val");
     }
 
     #[test]

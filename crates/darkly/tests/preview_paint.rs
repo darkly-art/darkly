@@ -51,9 +51,13 @@ fn render_cursor_preview(brush_name: &str, size_override: f32, color: [f32; 4]) 
         .find(|b| b.metadata.name == brush_name)
         .unwrap_or_else(|| panic!("builtin brush `{brush_name}` not registered"));
     let mut graph = brush.metadata.graph.clone();
-    let term_id = darkly::brush::find_terminal(&graph).expect("brush has a terminal");
+    let _term_id = darkly::brush::find_terminal(&graph).expect("brush has a terminal");
     graph
-        .set_port_default(term_id, "size", size_override)
+        .set_port_default(
+            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            size_override,
+        )
         .unwrap();
 
     let (device, queue) = test_device();

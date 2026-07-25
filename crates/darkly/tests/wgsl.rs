@@ -727,6 +727,57 @@ fn noise_canvas_space_is_byte_identical() {
     naga_validate(&compiled.cursor_preview_wgsl, "noise canvas preview");
 }
 
+/// The settable-source `brush_settings.size` must reach a *compiled* brush:
+/// wiring it into a node that reads its input in WGSL (`noise.scale`) has to
+/// emit the packed per-dab size field in the shader, not the node's default
+/// literal. This is the guard for the review's F1 — a source seeded only in the
+/// CPU slot table would compile clean here and silently deliver nothing.
+#[test]
+fn settings_size_source_reaches_compiled_brush() {
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let settings = graph.add_node(
+        "brush_settings",
+        reg.get("brush_settings").unwrap().ports.clone(),
+    );
+    // A distinctive base size — packed per-dab at runtime, so it appears in the
+    // shader as a `d.<field>` reference, never as a baked literal.
+    graph
+        .set_port_default(settings, "size", 0.25)
+        .expect("brush_settings has a size input");
+    let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
+    apply_noise_inputs(&mut graph, noise, 0, true);
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
+    wire(
+        &mut graph,
+        &[
+            (settings, "size", noise, "scale"),
+            (pen, "position", term, "position"),
+            (noise, "color", term, "rgba"),
+        ],
+    );
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+
+    // `noise.scale` now divides by the wired size dab field, not the 32.0
+    // default literal — proof the source flows through the compiled path.
+    let size_field = format!("d.n{}_size", settings.0);
+    assert!(
+        compiled.stroke_wgsl.contains(&size_field),
+        "compiled shader must reference the packed size field `{size_field}`",
+    );
+    assert!(
+        !compiled.stroke_wgsl.contains("target_pos / (32.000000)"),
+        "the wired size must override noise.scale's default literal",
+    );
+    naga_validate(&compiled.stroke_wgsl, "settings.size → noise.scale stroke");
+    naga_validate(
+        &compiled.cursor_preview_wgsl,
+        "settings.size → noise.scale preview",
+    );
+}
+
 /// A wirable scalar input (`noise.scale`) driven by a per-dab sensor
 /// (`pen.pressure`) must emit the upstream expression in the divide — not a
 /// literal — and both shader variants must still pass naga validation. Guards

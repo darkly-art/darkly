@@ -54,6 +54,10 @@ fn build_dab_noise_graph() -> Graph<BrushWireType> {
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    graph.add_node(
+        "brush_settings",
+        reg.get("brush_settings").unwrap().ports.clone(),
+    );
     let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
     // scale small ⇒ many cells across the stamp; space = Dab, pixel-locked.
     for (name, v) in [
@@ -88,7 +92,13 @@ fn build_dab_noise_graph() -> Graph<BrushWireType> {
             .unwrap();
     }
     // Big dab so the grain fills most of the preview texture.
-    graph.set_port_default(term, "size", 0.45).unwrap();
+    graph
+        .set_port_default(
+            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            0.45,
+        )
+        .unwrap();
     graph
 }
 

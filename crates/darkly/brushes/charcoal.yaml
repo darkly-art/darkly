@@ -3,8 +3,11 @@ category: Dry Media
 nodes:
   1:
     type: pen_input
+  100:
+    type: brush_settings
     inputs:
       spacing: 0.02
+      size: 0.12
   2:
     type: paint_color
   3:
@@ -25,7 +28,6 @@ nodes:
     type: paint
     inputs:
       flow: 0.5
-      size: 0.12
   8:
     type: image
     inputs:
@@ -82,8 +84,8 @@ connections:
 - '12.output -> 5.a'
 - '13.out_scalar -> 4.rotation_input'
 exposed_ports:
-  '1.stabilize': {}
-  '7.size': {}
+  '100.stabilize': {}
+  '100.size': {}
   '7.opacity': {}
   '4.rotation':
     label: Rotation

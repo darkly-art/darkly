@@ -3,6 +3,8 @@ category: Basic
 nodes:
   1:
     type: pen_input
+  100:
+    type: brush_settings
     inputs:
       stabilize: 0.6
   2:
@@ -32,10 +34,10 @@ connections:
 - '2.color -> 4.color'
 - '3.mask -> 4.tip'
 - '4.dab -> 5.rgba'
-- '6.output -> 5.size_input'
+- '6.output -> 5.size'
 exposed_ports:
-  "1.stabilize": {}
-  "5.size": {}
+  "100.stabilize": {}
+  "100.size": {}
   "3.softness": {}
   "5.flow": {}
   "5.opacity": {}

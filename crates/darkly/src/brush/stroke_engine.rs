@@ -96,12 +96,19 @@ impl StrokeEngine {
     /// color (linear RGBA).  `spacing` controls dab placement.
     /// `stabilizer` is the stroke stabilization algorithm.
     pub fn new(
-        runner: BrushGraphRunner,
+        mut runner: BrushGraphRunner,
         color: [f32; 4],
         spacing: SpacingConfig,
+        base_size: f32,
         stabilizer: Box<dyn StabilizerAlgorithm>,
         clone_source_anchor: Option<[f32; 2]>,
     ) -> Self {
+        // Base brush size is stroke-constant, read out-of-band from
+        // `pen_input.size` at stroke start. Injected as ambient state so every
+        // terminal's `effective_radius` and the `pen_input.size` graph signal
+        // see one consistent value.
+        runner.set_base_size(base_size);
+
         let stroke_seed = web_time::SystemTime::now()
             .duration_since(web_time::SystemTime::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u32)

@@ -74,7 +74,13 @@ fn render_blur_dabs(size: f32, strength: f32, opacity: f32, dabs: &[[f32; 2]]) -
 
     let mut graph = brush.metadata.graph.clone();
     let term_id = darkly::brush::find_terminal(&graph).expect("Blur brush has a terminal");
-    graph.set_port_default(term_id, "size", size).unwrap();
+    graph
+        .set_port_default(
+            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            size,
+        )
+        .unwrap();
     graph
         .set_port_default(term_id, "strength", strength)
         .unwrap();

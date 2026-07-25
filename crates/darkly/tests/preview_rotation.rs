@@ -64,6 +64,10 @@ fn build_graph_with_rotation_wire() -> Graph<BrushWireType> {
         "pen_input",
         registry.get("pen_input").unwrap().ports.clone(),
     );
+    graph.add_node(
+        "brush_settings",
+        registry.get("brush_settings").unwrap().ports.clone(),
+    );
     let paint_color = graph.add_node(
         "paint_color",
         registry.get("paint_color").unwrap().ports.clone(),
@@ -100,7 +104,13 @@ fn build_graph_with_rotation_wire() -> Graph<BrushWireType> {
             .unwrap();
     }
     // Big size so the mask occupies most of the preview texture.
-    graph.set_port_default(term, "size", 0.4).unwrap();
+    graph
+        .set_port_default(
+            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            0.4,
+        )
+        .unwrap();
     // Superformula with a 4-pointed silhouette so rotation moves the
     // shape's lobes from axes to diagonals (and vice versa).
     graph.set_port_default(shape, "frequency", 4.0).unwrap();

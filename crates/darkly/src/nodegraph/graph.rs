@@ -232,6 +232,19 @@ pub struct PortDef<W: WireKind> {
     /// thumbnail re-renders, not just the editor preview.
     #[serde(default)]
     pub persist_in_thumbnail: bool,
+    /// This input port is *also* a wire source: its resolved value (the
+    /// wired value if driven, else the authored default) is available for
+    /// other nodes to wire *from*, exactly like an output. Only meaningful
+    /// on `dir == Input`; ignored on outputs (which are sources anyway).
+    ///
+    /// The editor shows the source handle only while the input is not
+    /// itself wire-driven — a driven port's value is the driver's, so it
+    /// should be tapped there instead. Consumers that resolve "which port a
+    /// wire leaves from" must ask [`PortDef::is_source`], never
+    /// `dir == Output`, or a settable-source is treated as a second-class
+    /// source (skipped by wire-range remap, unreachable by `find_port`).
+    #[serde(default)]
+    pub source: bool,
 }
 
 impl<W: WireKind> PortDef<W> {
@@ -256,6 +269,7 @@ impl<W: WireKind> PortDef<W> {
             step: 0.0,
             natural_range: None,
             persist_in_thumbnail: false,
+            source: false,
         }
     }
 
@@ -280,7 +294,15 @@ impl<W: WireKind> PortDef<W> {
             step: 0.0,
             natural_range: None,
             persist_in_thumbnail: false,
+            source: false,
         }
+    }
+
+    /// `true` if a wire may leave this port — every output, plus a
+    /// settable-source input (see [`PortDef::source`]). The single predicate
+    /// every wire-source resolution must use instead of `dir == Output`.
+    pub fn is_source(&self) -> bool {
+        self.dir == PortDir::Output || (self.dir == PortDir::Input && self.source)
     }
 
     /// Declare the slider/preset range and default value for this port.
@@ -374,6 +396,13 @@ impl<W: WireKind> PortDef<W> {
     /// Mark this port as exposed in the brush properties panel by default.
     pub fn exposed(mut self) -> Self {
         self.exposed = true;
+        self
+    }
+
+    /// Mark this input port as a settable-source: its resolved value is also
+    /// available as a wire source. See [`PortDef::source`] / [`PortDef::is_source`].
+    pub fn source(mut self) -> Self {
+        self.source = true;
         self
     }
 
@@ -770,6 +799,14 @@ impl<W: WireKind> Graph<W> {
             return Err(GraphError::CycleDetected);
         }
 
+        // Driving a settable-source input retires any wires that were tapping
+        // it as a source: once driven, the port's value is the driver's, and
+        // the editor hides its source handle (see `PortDef::source`), so the
+        // graph must not keep carrying the old knob value downstream. A plain
+        // input has no outgoing wires, so this is a no-op for it.
+        self.connections
+            .retain(|c| !(c.from.node == to.node && c.from.port == to.port));
+
         self.connections.push(Connection { from, to });
         Ok(())
     }
@@ -907,16 +944,26 @@ impl<W: WireKind> Graph<W> {
     // ── helpers ──────────────────────────────────────────────────────
 
     /// Find the wire type of a port, returning an error if the node or
-    /// port doesn't exist or has the wrong direction.
+    /// port doesn't exist or can't play the requested role. `expected_dir`
+    /// names the *role* the endpoint plays on a wire: `Output` = the source
+    /// end (resolved by [`PortDef::is_source`], so settable-source inputs
+    /// qualify), `Input` = the sink end.
     fn find_port(&self, pr: &PortRef, expected_dir: PortDir) -> Result<W, GraphError> {
         let node = self
             .nodes
             .get(&pr.node)
             .ok_or(GraphError::NodeNotFound(pr.node))?;
+        let matches = |p: &&PortDef<W>| {
+            p.name == pr.port
+                && match expected_dir {
+                    PortDir::Output => p.is_source(),
+                    PortDir::Input => p.dir == PortDir::Input,
+                }
+        };
         let def = node
             .ports
             .iter()
-            .find(|p| p.name == pr.port && p.dir == expected_dir)
+            .find(matches)
             .ok_or_else(|| GraphError::PortNotFound {
                 node: pr.node,
                 port: pr.port.clone(),
@@ -959,6 +1006,86 @@ mod tests {
     }
     fn color_out(name: &str) -> PortDef<TestWireKind> {
         PortDef::output(name, TestWireKind::Color)
+    }
+
+    fn scalar_source(name: &str) -> PortDef<TestWireKind> {
+        PortDef::input(name, TestWireKind::Scalar).source()
+    }
+
+    /// A settable-source input resolves as a wire *source* (its `is_source()`
+    /// is honoured by `connect`'s from-side), while still being a settable
+    /// input on the same node — the two never interfere.
+    #[test]
+    fn settable_source_is_both_wire_source_and_settable_input() {
+        let mut g = Graph::<TestWireKind>::new();
+        let a = g.add_node("knob", vec![scalar_source("val")]);
+        let b = g.add_node("sink", vec![scalar_in("in")]);
+
+        // Wire *from* the settable-source input into another node's input.
+        g.connect(
+            PortRef {
+                node: a,
+                port: "val".into(),
+            },
+            PortRef {
+                node: b,
+                port: "in".into(),
+            },
+        )
+        .expect("settable-source resolves as a wire source");
+        assert_eq!(g.connections.len(), 1);
+
+        // Setting its default targets the input side and doesn't disturb the
+        // wire leaving it.
+        g.set_port_default(a, "val", 0.5).unwrap();
+        assert_eq!(g.connections.len(), 1);
+    }
+
+    /// Driving a settable-source input (wiring *into* it) retires any wires
+    /// that were tapping it as a source — its value is now the driver's.
+    #[test]
+    fn driving_a_settable_source_drops_its_outgoing_wires() {
+        let mut g = Graph::<TestWireKind>::new();
+        let knob = g.add_node("knob", vec![scalar_source("val")]);
+        let sink = g.add_node("sink", vec![scalar_in("in")]);
+        let driver = g.add_node("driver", vec![scalar_out("out")]);
+
+        g.connect(
+            PortRef {
+                node: knob,
+                port: "val".into(),
+            },
+            PortRef {
+                node: sink,
+                port: "in".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(g.connections.len(), 1);
+
+        // Now drive the knob from `driver`. The knob→sink source wire must go.
+        g.connect(
+            PortRef {
+                node: driver,
+                port: "out".into(),
+            },
+            PortRef {
+                node: knob,
+                port: "val".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            g.connections.len(),
+            1,
+            "outgoing source wire should be dropped"
+        );
+        assert!(
+            g.connections
+                .iter()
+                .all(|c| c.to.node == knob && c.to.port == "val"),
+            "only the driver→knob wire should remain",
+        );
     }
 
     #[test]

@@ -20,18 +20,19 @@ use crate::undo::GpuRegionAction;
 
 #[handlers]
 impl DarklyEngine {
-    /// Read the stabilize strength from the pen_input node's "stabilize" port
-    /// default in the active brush graph.  Returns 0.0 if not found.
-    fn pen_input_stabilize_strength(&self) -> f32 {
+    /// Read the stabilize strength from the brush_settings node's "stabilize"
+    /// port default in the active brush graph.  Returns 0.0 if not found.
+    fn active_stabilize_strength(&self) -> f32 {
         use crate::brush::state::BrushState;
         let tool = self.tool_session.read();
         let brush = tool
             .get::<BrushState>()
             .expect("BrushState registered at session init");
-        crate::brush::nodes::pen_input::read_scalar_input(&brush.graph, "stabilize").unwrap_or(0.0)
+        crate::brush::nodes::brush_settings::read_scalar_input(&brush.graph, "stabilize")
+            .unwrap_or(0.0)
     }
 
-    /// Build the `SpacingConfig` for the active brush graph. Reads pen_input
+    /// Build the `SpacingConfig` for the active brush graph. Reads brush_settings
     /// port defaults — the same source the editor preview reads — so a real
     /// stroke and its preview stamp at the same intervals.
     fn active_spacing_config(&self) -> SpacingConfig {
@@ -40,7 +41,19 @@ impl DarklyEngine {
         let brush = tool
             .get::<BrushState>()
             .expect("BrushState registered at session init");
-        crate::brush::nodes::pen_input::spacing_config(&brush.graph)
+        crate::brush::nodes::brush_settings::spacing_config(&brush.graph)
+    }
+
+    /// Read the active brush's base size from its `brush_settings.size` knob —
+    /// the same out-of-band source the editor preview uses, so a real stroke and
+    /// its preview render dabs at the same size.
+    fn active_base_size(&self) -> f32 {
+        use crate::brush::state::BrushState;
+        let tool = self.tool_session.read();
+        let brush = tool
+            .get::<BrushState>()
+            .expect("BrushState registered at session init");
+        crate::brush::nodes::brush_settings::base_size(&brush.graph)
     }
 
     /// Flush any pending diff-based undo commit. Called before overwriting the
@@ -892,7 +905,7 @@ impl DarklyEngine {
             let sample_merged = samples_source && self.clone_sample_merged();
 
             // Derive stabilizer from the pen_input node's "stabilize" port.
-            let strength = self.pen_input_stabilize_strength();
+            let strength = self.active_stabilize_strength();
             let stabilizer_config = if strength > 0.0 {
                 crate::brush::stabilizer::StabilizerConfig {
                     algorithm: "laplacian".into(),
@@ -909,6 +922,7 @@ impl DarklyEngine {
                 runner,
                 color,
                 self.active_spacing_config(),
+                self.active_base_size(),
                 stabilizer,
                 clone_source_anchor,
             ));

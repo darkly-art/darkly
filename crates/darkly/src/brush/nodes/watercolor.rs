@@ -57,11 +57,6 @@ use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 // ── Constants ───────────────────────────────────────────────────────────
 
-/// Canvas-pixel reference for `size_input * size = 1.0`. Same
-/// constant as every other brush node — see
-/// [`crate::brush::DAB_REFERENCE_SIZE`].
-const SIZE_REFERENCE_PX: f32 = crate::brush::DAB_REFERENCE_SIZE as f32;
-
 const ATLAS_WIDTH: u32 = 128;
 const ATLAS_HEIGHT: u32 = 128;
 
@@ -561,22 +556,14 @@ pub fn register() -> BrushNodeRegistration {
             ports: vec![
                 PortDef::input("position", BrushWireType::Vec2)
                     .with_description("Canvas-pixel pen tip for this dab"),
-                PortDef::input("size_input", BrushWireType::Scalar)
+                PortDef::input("size", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
                     .with_natural_range(0.0, 1.0)
-                    .with_label("Size Input")
-                    .with_unit(UnitType::Percent)
-                    .with_description(
-                        "Per-touch size multiplier (wire pressure here for pressure-sensitive size).",
-                    ),
-                PortDef::input("size", BrushWireType::Scalar)
-                    .with_range(0.0, 4.0, 0.1)
                     .with_label("Size")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa6-solid:up-right-and-down-left-from-center")
-                    .exposed()
-                    .with_preview_value(0.1)
-                    .with_description("Overall brush size"),
+                    .with_description(
+                        "Per-touch size multiplier (wire pressure here for pressure-sensitive size). Multiplies onto the brush's base size, owned by pen_input.",
+                    ),
                 PortDef::input("flow", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
                     .with_natural_range(0.0, 1.0)
@@ -642,10 +629,7 @@ pub struct WatercolorEvaluator;
 
 impl WatercolorEvaluator {
     fn effective_radius(ctx: &EvalContext) -> f32 {
-        let size_input = ctx.input_f32("size_input").max(0.0);
-        let size = ctx.input_f32("size").max(0.0);
-        let effective_size = size_input * size;
-        (effective_size * SIZE_REFERENCE_PX * 0.5).max(0.5)
+        crate::brush::read_mirror_terminal::effective_radius(ctx)
     }
 }
 

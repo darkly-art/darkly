@@ -48,6 +48,12 @@
      *  show their widget + expose button but no dot). */
     let showDot = $derived(port.dir === 'Output' || port.wirable);
 
+    /** A settable-source input (`port.source`) also offers a right-edge source
+     *  handle to wire *from* — but only while the input itself is undriven. Once
+     *  a wire drives the port its value is the driver's, so the source handle
+     *  hides (mirror of `showSlider` hiding the value widget when connected). */
+    let showSourceHandle = $derived(port.dir === 'Input' && port.source && !connected);
+
     /** Commit kind for the slider path, keyed off the wire type. */
     let sliderKind = $derived(
         port.wire_type === 'Int' ? 'int' : port.wire_type === 'Bool' ? 'bool' : 'float'
@@ -83,6 +89,43 @@
         });
         return () => untrack(() => unregister(nodeId, portName, portDir));
     });
+
+    // A settable-source input carries a *second* wire endpoint on the same row:
+    // an `Output`-role source handle on the right edge. Registered under the
+    // `(node, name, 'Output')` key (distinct from the left `Input` dot), so the
+    // wire renderer resolves wires leaving `node.name` to this offset.
+    let sourceDotEl: HTMLDivElement | undefined;
+    $effect(() => {
+        const portName = port.name;
+        const shown = showSourceHandle;
+        untrack(() => {
+            if (!shown || !sourceDotEl) return;
+            const nodeEl = sourceDotEl.closest('[data-node-id]') as HTMLElement;
+            if (!nodeEl) return;
+            register(nodeId, portName, 'Output', coords.elementCenterInParent(sourceDotEl, nodeEl));
+        });
+        return () => untrack(() => unregister(nodeId, portName, 'Output'));
+    });
+
+    /** Start dragging a wire *from* this settable-source's source handle. */
+    function onSourceDown(e: PointerEvent) {
+        e.preventDefault();
+        brushGraph.draggingFrom = { node: nodeId, port: port.name, dir: 'Output' };
+    }
+
+    /** Drop onto the source handle: accept a wire dragged from an input, same
+     *  as dropping on a real output. */
+    function onSourceUp(e: PointerEvent) {
+        e.stopPropagation();
+        e.preventDefault();
+        const drag = brushGraph.draggingFrom;
+        if (!drag) return;
+        if (drag.dir === 'Input' && !(drag.node === nodeId && drag.port === port.name)) {
+            brushGraph.connect(nodeId, port.name, drag.node, drag.port);
+        }
+        brushGraph.draggingFrom = null;
+        brushGraph.dragMouse = null;
+    }
 
     function onPointerDown(e: PointerEvent) {
         // Don't stopPropagation — the container needs to see this event
@@ -387,6 +430,21 @@
             <Icon name="fa6-solid:eye" />
         </button>
     {/if}
+    {#if showSourceHandle}
+        <div
+            class="port-dot port-source-dot"
+            title="Wire this control into another node"
+            style="background: var(--bg-active); border-color: {color};"
+            role="button"
+            tabindex="-1"
+            onpointerdown={onSourceDown}
+            onpointerup={onSourceUp}
+            bind:this={sourceDotEl}
+            data-port-node={nodeId}
+            data-port-name={port.name}
+            data-port-dir="Output"
+        ></div>
+    {/if}
 </div>
 
 <style>
@@ -420,6 +478,14 @@
         left: -5px;
     }
     .port-right .port-dot {
+        right: -5px;
+    }
+    /* The settable-source handle always sits on the node's right (output)
+       edge, even though it lives inside a left-side input row. Selector
+       specificity matches the `:not(.port-right) .port-dot` rule above and
+       comes later, so `left` is overridden back to the right edge. */
+    .port-row:not(.port-right) .port-source-dot {
+        left: auto;
         right: -5px;
     }
     .port-dot:hover {

@@ -71,6 +71,10 @@ fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWir
         "pen_input",
         registry.get("pen_input").unwrap().ports.clone(),
     );
+    graph.add_node(
+        "brush_settings",
+        registry.get("brush_settings").unwrap().ports.clone(),
+    );
     let paint_color = graph.add_node(
         "paint_color",
         registry.get("paint_color").unwrap().ports.clone(),
@@ -87,7 +91,13 @@ fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWir
         .set_port_default(shape, "amplitude", amplitude)
         .unwrap();
     graph.set_port_default(shape, "softness", 0.0).unwrap();
-    graph.set_port_default(terminal, "size", size).unwrap();
+    graph
+        .set_port_default(
+            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            size,
+        )
+        .unwrap();
     graph.set_port_default(terminal, "opacity", 1.0).unwrap();
     graph.set_port_default(terminal, "flow", 1.0).unwrap();
 
@@ -96,7 +106,7 @@ fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWir
     // override, which a wire would shadow.
     let wires = [
         (pen, "pressure", curve, "input"),
-        (curve, "output", terminal, "size_input"),
+        (curve, "output", terminal, "size"),
         (shape, "mask", stamp, "tip"),
         (paint_color, "color", stamp, "color"),
         (stamp, "dab", terminal, "rgba"),
@@ -366,8 +376,14 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
     // Override the brush's size port so the dab fits in the test
     // canvas — the builtin's exposed size is small by default.
     let mut graph = rough_ink.metadata.graph.clone();
-    let term_id = darkly::brush::find_terminal(&graph).unwrap();
-    graph.set_port_default(term_id, "size", 0.15).unwrap();
+    let _term_id = darkly::brush::find_terminal(&graph).unwrap();
+    graph
+        .set_port_default(
+            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            0.15,
+        )
+        .unwrap();
 
     let runner = compile_graph(&graph).expect("Rough Ink compiles");
     let compiled = runner.compiled_brush().expect("compiled brush attached");
@@ -462,8 +478,14 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
         .find(|b| b.metadata.name == "Rough Ink")
         .expect("Rough Ink registered");
     let mut graph = rough_ink.metadata.graph.clone();
-    let term_id = darkly::brush::find_terminal(&graph).unwrap();
-    graph.set_port_default(term_id, "size", 0.15).unwrap();
+    let _term_id = darkly::brush::find_terminal(&graph).unwrap();
+    graph
+        .set_port_default(
+            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            0.15,
+        )
+        .unwrap();
     // Replace the builtin's pressure-shaping curve (a monotone Hermite
     // spline through `(0,0), (0.4,0.7), (1,1)`) with the identity curve
     // so this test's `r_a` / `r_b` math (radius ∝ pressure) lines up

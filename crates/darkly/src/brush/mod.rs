@@ -48,8 +48,9 @@ use wire::BrushWireType;
 /// - `StrokeEngine::default_diameter() = DAB_REFERENCE_SIZE * 0.5` —
 ///   spacing fallback before any dab has reported its own size.
 ///
-/// **Not a hard cap on dab footprint.** `effective_size` (= `size_input
-/// × size`) can exceed 1.0 unbounded — both the slider and any wired
+/// **Not a hard cap on dab footprint.** `effective_size` (= the
+/// `pen_input.size` base knob × the terminal's per-touch `size`
+/// modulation) can exceed 1.0 unbounded — both the slider and any wired
 /// sensor (pen pressure, random, ...) can push past 100%. The system
 /// must tolerate dab footprints arbitrarily larger than this value.
 ///
@@ -211,6 +212,13 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
     let pen = graph.add_node(
         "pen_input",
         registry.get("pen_input").unwrap().ports.clone(),
+    );
+    // Brush-level settings (base size, spacing, stabilize) live on their own
+    // node, read out-of-band — no wires. Adding it gives the default brush a
+    // size knob (its `size` port is registration-exposed).
+    graph.add_node(
+        "brush_settings",
+        registry.get("brush_settings").unwrap().ports.clone(),
     );
     let paint_color = graph.add_node(
         "paint_color",

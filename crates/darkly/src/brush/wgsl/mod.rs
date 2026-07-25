@@ -807,7 +807,7 @@ fn apply_wire_remap(
         .and_then(|n| {
             n.ports
                 .iter()
-                .find(|p| p.name == source.port && p.dir == PortDir::Output)
+                .find(|p| p.name == source.port && p.is_source())
         })
         .and_then(|p| p.natural_range);
     let dst_range = graph

@@ -3,6 +3,8 @@ category: Misc
 nodes:
   1:
     type: pen_input
+  100:
+    type: brush_settings
     inputs:
       spacing: 0.05
   2:
@@ -18,14 +20,14 @@ nodes:
 connections:
 - '1.position -> 3.center'
 - '1.position -> 5.position'
-- '1.pressure -> 5.size_input'
+- '1.pressure -> 5.size'
 - '2.mask -> 4.tip'
 - '3.color -> 4.color'
 - '4.dab -> 5.rgba'
 exposed_ports:
-  '5.size': {}
+  '100.size': {}
   '5.opacity': {}
   '2.softness': {}
-  '1.spacing': {}
+  '100.spacing': {}
   '3.mode': {}
   '3.merged': {}

@@ -3,9 +3,12 @@ category: Effects
 nodes:
   1:
     type: pen_input
+  100:
+    type: brush_settings
     inputs:
       spacing: 0.01
       stabilize: 0.4
+      size: 0.2
   2:
     type: shape
     inputs:
@@ -14,11 +17,11 @@ nodes:
     type: blur
 connections:
 - '1.position -> 3.position'
-- '1.pressure -> 3.size_input'
+- '1.pressure -> 3.size'
 - '2.mask -> 3.mask'
 exposed_ports:
-  "1.stabilize": {}
-  "3.size": {}
+  "100.stabilize": {}
+  "100.size": {}
   "2.softness": {}
   "3.strength": {}
   "3.opacity": {}

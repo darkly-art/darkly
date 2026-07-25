@@ -16,6 +16,9 @@ import { runHook } from '../tools/tool_session';
  */
 type RoleSpec = { portName: string; step: number; kind: 'mult' | 'add' };
 const ROLE_MAP: Record<string, RoleSpec> = {
+    // `size` is the base-size knob, owned exclusively by `pen_input` (the
+    // terminals' `size` is per-touch modulation and is not exposed), so this
+    // exact `portName === 'size'` match resolves unambiguously to pen_input.
     size: { portName: 'size', step: 1.15, kind: 'mult' },
     // Future roles plug in here without changing call sites:
     // opacity:  { portName: 'flow',     step: 0.05, kind: 'add' },

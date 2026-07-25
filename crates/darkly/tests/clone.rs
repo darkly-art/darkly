@@ -82,10 +82,16 @@ fn render_clone(p: &CloneParams) -> Vec<u8> {
         .expect("Clone builtin registered");
 
     let mut graph = brush.metadata.graph.clone();
-    let term_id = darkly::brush::find_terminal(&graph).expect("clone has a terminal");
+    let _term_id = darkly::brush::find_terminal(&graph).expect("clone has a terminal");
     // Force a size that fits inside the half-canvas patch so the whole
     // dab footprint samples red.
-    graph.set_port_default(term_id, "size", 0.15).unwrap();
+    graph
+        .set_port_default(
+            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            0.15,
+        )
+        .unwrap();
 
     let (device, queue) = shared_device();
     let (layer_texture, layer_view) =

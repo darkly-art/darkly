@@ -3,9 +3,12 @@ category: Basic
 nodes:
   1:
     type: pen_input
+  100:
+    type: brush_settings
     inputs:
       spacing: 0.046481613
       stabilize: 0.6
+      size: 0.05
   2:
     type: paint_color
   7:
@@ -22,16 +25,14 @@ nodes:
     type: stamp
   9:
     type: paint
-    inputs:
-      size: 0.05
 connections:
 - 1.position -> 9.position
 - 2.color -> 8.color
 - 7.mask -> 8.tip
 - 8.dab -> 9.rgba
 exposed_ports:
-  1.stabilize: {}
-  9.size: {}
+  100.stabilize: {}
+  100.size: {}
   7.rotation: {}
   7.aspect: {}
   9.flow: {}

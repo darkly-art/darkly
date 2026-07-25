@@ -22,7 +22,13 @@ fn probe_softness_zero() {
         .unwrap();
     let mut graph = brush.metadata.graph.clone();
     let term_id = darkly::brush::find_terminal(&graph).unwrap();
-    graph.set_port_default(term_id, "size", 0.3).unwrap();
+    graph
+        .set_port_default(
+            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            0.3,
+        )
+        .unwrap();
     graph.set_port_default(term_id, "softness", 0.0).unwrap();
 
     let (device, queue) = test_device();
