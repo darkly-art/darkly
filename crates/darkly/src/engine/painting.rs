@@ -31,16 +31,11 @@ impl DarklyEngine {
         crate::brush::nodes::pen_input::read_scalar_input(&brush.graph, "stabilize").unwrap_or(0.0)
     }
 
-    /// Read the prediction horizon (ms of look-ahead) from the pen_input
-    /// node's "predict" port default in the active brush graph. Returns 0.0
-    /// (off) if the port isn't present.
-    fn pen_input_predict_horizon(&self) -> f32 {
-        use crate::brush::state::BrushState;
-        let tool = self.tool_session.read();
-        let brush = tool
-            .get::<BrushState>()
-            .expect("BrushState registered at session init");
-        crate::brush::nodes::pen_input::read_scalar_input(&brush.graph, "predict").unwrap_or(0.0)
+    /// Read the global prediction horizon (ms of look-ahead) from config.
+    /// `0` = off. Prediction is a global editor preference, not per-brush —
+    /// see `config/sections/input.rs`.
+    fn prediction_horizon_ms(&self) -> f32 {
+        crate::config::get_f64("input.predictionHorizon") as f32
     }
 
     /// Build the `SpacingConfig` for the active brush graph. Reads pen_input
@@ -548,10 +543,6 @@ impl DarklyEngine {
                 cb,
                 ca,
             } => {
-                // Dev instrumentation: this input sample is being applied to the
-                // stroke. The oldest sample of a coalesced burst this frame wins
-                // the latency measurement (see `InputLatencyMeter`).
-                self.input_meter.record_sample(time_ms);
                 self.brush_stroke_to(
                     layer_id,
                     x,
@@ -925,7 +916,7 @@ impl DarklyEngine {
             // smoothed polyline, so it only engages when a real stabilizer is
             // active AND a look-ahead horizon is configured. Otherwise the
             // inner stabilizer is used bare.
-            let horizon_ms = self.pen_input_predict_horizon();
+            let horizon_ms = self.prediction_horizon_ms();
             let stabilizer: Box<dyn crate::brush::stabilizer::StabilizerAlgorithm> =
                 if strength > 0.0 && horizon_ms > 0.0 {
                     Box::new(crate::brush::stabilizer::PredictingStabilizer::new(

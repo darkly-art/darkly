@@ -61,16 +61,6 @@ export interface EngineState {
     thumbnailVersion: number;
     dirty: boolean;
     hasSelection: boolean;
-    /** Dev instrumentation: EMA of worst-sample input→frame latency (ms) —
-     *  present minus the oldest sample consumed. 0 before any stroke sample
-     *  lands. Read by the latency HUD. */
-    inputLatencyMs: number;
-    /** Dev instrumentation: EMA of tip latency (ms) — present minus the newest
-     *  sample consumed. The perceptual lag; the Phase 2 gate metric. */
-    inputLatencyTipMs: number;
-    /** Dev instrumentation: stroke samples consumed on the most recent stroke
-     *  frame — the coalesced-fidelity proof (rises above ~1 on fast strokes). */
-    strokeSamplesLastFrame: number;
 }
 
 interface FrameStatus {

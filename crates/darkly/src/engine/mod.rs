@@ -642,10 +642,6 @@ pub struct DarklyEngine {
     /// read by the WASM bridge when it logs a slow frame.
     pub(crate) last_frame_phases: FrameRenderPhases,
 
-    /// Dev instrumentation: input→frame latency + coalesced-sample fidelity,
-    /// surfaced on [`EngineState`]. Session-only.
-    pub(crate) input_meter: crate::engine::perf::InputLatencyMeter,
-
     /// Passive process-recording (timelapse) capture state. Session-only;
     /// the persistent recording is a frontend-owned artifact.
     pub(crate) recorder: ProcessRecorder,
@@ -768,7 +764,6 @@ impl DarklyEngine {
             brush_full_rerender_events: 0,
             last_brush_perf: BrushPerfCounters::default(),
             last_frame_phases: FrameRenderPhases::default(),
-            input_meter: crate::engine::perf::InputLatencyMeter::default(),
             recorder: ProcessRecorder::new(),
         };
 

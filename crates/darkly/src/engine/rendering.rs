@@ -613,12 +613,6 @@ impl DarklyEngine {
 
     /// Render a frame. Returns true if animations need another frame.
     pub fn render(&mut self, time_secs: f32) -> bool {
-        // Fold any stroke samples consumed during this frame's FIFO drain into
-        // the input-latency meter. `time_secs` is the rAF present timestamp on
-        // the same `performance.now()` timeline as the samples' `time_ms`, so
-        // their difference is the input-to-frame latency for this frame.
-        self.input_meter.readout(time_secs as f64 * 1000.0);
-
         // Sub-phase wall-clock timing for the slow-frame log. Always
         // recorded into `self.last_frame_phases` even on fast frames — the
         // WASM bridge decides whether to emit; nominal cost is a handful

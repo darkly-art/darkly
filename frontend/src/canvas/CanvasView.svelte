@@ -16,7 +16,6 @@
     import { isToolHoverSuppressed } from '../tools/modifier_cursor';
     import { isEditableTarget } from '../lib/isEditableTarget';
     import TransformModeMenu from '../ui/TransformModeMenu.svelte';
-    import LatencyHud from './LatencyHud.svelte';
 
     /** Optional pre-built instance. When provided, CanvasView skips the
      *  single-instance bootstrap (`initEditor`) and just wires the canvas
@@ -465,9 +464,6 @@
     <!-- Right-click mode-switch menu for the transform tool. The tool sets
          `app.transformModeMenu`; this renders against it. -->
     <TransformModeMenu />
-
-    <!-- Dev-only input-latency HUD (hidden in release unless `?latency`). -->
-    <LatencyHud />
 </div>
 
 <style>

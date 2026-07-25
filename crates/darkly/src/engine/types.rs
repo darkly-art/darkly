@@ -31,17 +31,6 @@ pub struct EngineState {
     pub dirty: bool,
     /// Document has an active selection. Backs selection-gated menu items.
     pub has_selection: bool,
-    /// Dev instrumentation: EMA of worst-sample input→frame latency (ms,
-    /// performance.now timeline) over recent stroke frames — present minus the
-    /// *oldest* sample consumed. 0 before any stroke sample lands. See
-    /// [`crate::engine::perf::InputLatencyMeter`].
-    pub input_latency_ms: f32,
-    /// Dev instrumentation: EMA of tip latency (ms) — present minus the *newest*
-    /// sample consumed. The perceptual lag; the Phase 2 (prediction) gate metric.
-    pub input_latency_tip_ms: f32,
-    /// Dev instrumentation: stroke samples consumed on the most recent stroke
-    /// frame — the coalesced-fidelity proof (rises above ~1 on fast strokes).
-    pub stroke_samples_last_frame: u32,
 }
 
 /// Per-instance view of a tree node. `type` (variant tag) and `blendMode` are

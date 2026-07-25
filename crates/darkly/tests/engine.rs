@@ -5257,6 +5257,12 @@ fn long_stabilized_stroke_no_fallback() {
     engine
         .brush_graph_set_port_default(pen_id, "stabilize", 1.0)
         .unwrap();
+    // Prediction is a thread-global config pref; pin it off so a prior
+    // prediction test leaking a nonzero horizon can't widen the window here.
+    darkly::config::set(
+        "input.predictionHorizon",
+        darkly::config::ConfigValue::Float(0.0),
+    );
 
     engine.begin_stroke(layer_id);
     // 400 samples along a slow spiral — enough to push the ring well past
@@ -5315,9 +5321,11 @@ fn run_predicted_l_stroke(
     engine
         .brush_graph_set_port_default(pen_id, "stabilize", 1.0)
         .unwrap();
-    engine
-        .brush_graph_set_port_default(pen_id, "predict", predict_ms)
-        .unwrap();
+    // Prediction horizon is a global config pref, not a per-brush port.
+    darkly::config::set(
+        "input.predictionHorizon",
+        darkly::config::ConfigValue::Float(predict_ms as f64),
+    );
 
     engine.begin_stroke(layer_id);
     let mut t = 0.0f64;
@@ -5424,9 +5432,11 @@ fn predicted_stroke_keeps_checkpoint_coverage() {
     engine
         .brush_graph_set_port_default(pen_id, "stabilize", 1.0)
         .unwrap();
-    engine
-        .brush_graph_set_port_default(pen_id, "predict", 30.0)
-        .unwrap();
+    // Prediction horizon is a global config pref, not a per-brush port.
+    darkly::config::set(
+        "input.predictionHorizon",
+        darkly::config::ConfigValue::Float(30.0),
+    );
 
     engine.begin_stroke(layer_id);
     let samples = 400usize;
