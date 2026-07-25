@@ -1,7 +1,8 @@
-import { ToolBase, type ToolDescriptor } from './registry';
+import { ToolBase, type ToolDescriptor, type PredictedSample } from './registry';
 import { getActiveInstance, type DarklyInstance, type Color } from '../state/app.svelte';
 import { runHook } from './tool_session';
 import { brushGraph } from '../state/brush_graph.svelte';
+import { config } from '../config/store.svelte';
 import { srgbToLinear } from '../lib/color';
 import { effectivePressure } from '../lib/pressure';
 import { strokeRecorder, currentCanvasDimensions } from '../lib/strokeRecorder';
@@ -31,6 +32,11 @@ class BrushSession {
     eraseMode = $state(false);
 }
 export const brushSession = new BrushSession();
+
+/** Fallback stroke-prediction lead (dabs ahead of the pen) when the
+ *  `input.predictionLead` config value is unavailable. Mirrors the default in
+ *  `presets/defaults.yaml`. */
+const DEFAULT_PREDICTION_LEAD = 9;
 
 /** Soft-contrast strength for big brushes. Tuned by eye. */
 const BASE_STRENGTH = 0.22;
@@ -128,6 +134,16 @@ class BrushTool extends ToolBase {
      *  invalidates on *stroke start* within the same session, a boundary a tool
      *  session doesn't draw — so it stays. */
     private hoverGen = 0;
+
+    /** Monotonic guard for the predicted-tail overlay, bumped on every push and
+     *  on stroke end. An async `onPredictedMove` re-checks it after its await so
+     *  a stale push can't land after the stroke ends or a newer prediction. */
+    private predictGen = 0;
+
+    /** Latest real cursor position during a stroke — the anchor the predicted
+     *  tail extrapolates from when the browser predicts only one sample. Null
+     *  outside a stroke. */
+    private strokePos: [number, number] | null = null;
 
     /** Refresh the on-canvas brush cursor preview at `(cx, cy)` using the given
      *  pose. Also reachable by non-brush callers (the shift+drag size scrub, the
@@ -242,10 +258,12 @@ class BrushTool extends ToolBase {
         engine.api.clearOverlay();
         engine.api.clearBrushCursorPreviewPose();
         this.clearHover();
+        this.predictGen++;
         this.inst.toolCursor = 'none';
         const params = brushStrokeParams(e, cx, cy, this.inst.foreground);
         engine.api.beginStroke({ id: layerId });
         engine.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
+        this.strokePos = [cx, cy];
         // Capture the clone dest anchor so the source marker tracks the cursor
         // in aligned mode (no-op for non-clone brushes).
         onCloneStrokeStart(cx, cy);
@@ -261,16 +279,89 @@ class BrushTool extends ToolBase {
             engine.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
             strokeRecorder.addEvent(params);
             onCloneStrokeMove(cx, cy);
+            this.strokePos = [cx, cy];
             return;
         }
         // Hover: re-render the preview with live pen data + draw it.
         void runHook(this.pushHoverOverlay(cursorPose(e), cx, cy));
     }
 
+    /** Draw a short predicted continuation of the stroke *ahead* of the last
+     *  real sample, as a transient overlay tail, to hide pipeline latency. The
+     *  predicted dabs are never committed — they live only in the single-slot
+     *  overlay and are replaced by the next real sample / cleared on pointer up
+     *  (see {@link onPointerUp}). Erase strokes opt out (an additive overlay
+     *  can't preview a subtractive edit). */
+    async onPredictedMove(samples: PredictedSample[]): Promise<void> {
+        const engine = this.engine;
+        if (!engine || samples.length === 0 || brushSession.eraseMode) return;
+
+        // How far ahead of the pen to draw, from config (0 disables prediction).
+        const leadCount =
+            (config.get('input.predictionLead') as number | undefined) ?? DEFAULT_PREDICTION_LEAD;
+        if (leadCount <= 0) return;
+
+        // Build the tail's positions. Start with the browser's predicted
+        // samples, then extrapolate along the pen's motion until we have
+        // `leadCount` — so the reach is set by config, not by how few events the
+        // browser happens to predict.
+        const pts: Array<[number, number]> = samples
+            .slice(0, leadCount)
+            .map((s) => [s.x, s.y]);
+        // Step vector: between the last two predicted points, or from the real
+        // cursor to the first predicted point when only one exists.
+        let step: [number, number] | null = null;
+        if (pts.length >= 2) {
+            step = [pts[pts.length - 1][0] - pts[pts.length - 2][0],
+                    pts[pts.length - 1][1] - pts[pts.length - 2][1]];
+        } else if (this.strokePos) {
+            step = [pts[0][0] - this.strokePos[0], pts[0][1] - this.strokePos[1]];
+        }
+        while (step && pts.length < leadCount) {
+            const last = pts[pts.length - 1];
+            pts.push([last[0] + step[0], last[1] + step[1]]);
+        }
+
+        // Shape the dab mask from the leading predicted pose; every stamp reuses
+        // that one preview mask.
+        const lead = samples[samples.length - 1];
+        const gen = ++this.predictGen;
+        const info = (await engine.api.refreshBrushCursorPreview({
+            x: lead.x, y: lead.y,
+            pressure: effectivePressure(lead.e),
+            tilt_x: (lead.e.tiltX ?? 0) / 90,
+            tilt_y: (lead.e.tiltY ?? 0) / 90,
+            rotation: (lead.e.twist ?? 0) / 360,
+            tangential_pressure: (lead.e as { tangentialPressure?: number }).tangentialPressure ?? 0,
+        })) as BrushCursorPreviewInfo | null;
+        // The stroke ended (pointer up/cancel) or a newer prediction superseded
+        // this one during the await — bail so a ghost tail can't outlive it.
+        if (gen !== this.predictGen || !info) return;
+
+        const c = this.inst.foreground;
+        const rgb: [number, number, number] = [srgbToLinear(c.r), srgbToLinear(c.g), srgbToLinear(c.b)];
+        const baseAlpha = c.a / 255;
+        engine.api.setOverlay({
+            primitives: pts.map((p, i) => {
+                // Fade toward the tip so a wrong prediction is visually cheap.
+                const alpha = baseAlpha * (1 - i / (pts.length + 1));
+                return prim(KIND_MASKED_STAMP, FLAG_CANVAS_SPACE, p, info.halfExtent, {
+                    color: [rgb[0], rgb[1], rgb[2], alpha],
+                });
+            }),
+        });
+    }
+
     onPointerUp(): void {
         this.engine?.api.endStroke();
         strokeRecorder.endStroke();
         onCloneStrokeEnd();
+        // Discard any predicted tail so no ghost survives the pen lifting — the
+        // overlay is single-slot and nothing else clears it on stroke end. The
+        // generation bump also makes any in-flight async predicted push bail.
+        this.predictGen++;
+        this.strokePos = null;
+        this.engine?.api.clearOverlay();
     }
 
     onPointerLeave(): void {

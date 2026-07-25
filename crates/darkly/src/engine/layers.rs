@@ -1461,6 +1461,9 @@ impl DarklyEngine {
             thumbnail_version: self.thumbnail_version(),
             dirty: self.is_dirty(),
             has_selection: self.has_selection(),
+            input_latency_ms: self.input_meter.mean_latency_ms(),
+            input_latency_tip_ms: self.input_meter.tip_latency_ms(),
+            stroke_samples_last_frame: self.input_meter.samples_last_frame(),
         }
     }
 

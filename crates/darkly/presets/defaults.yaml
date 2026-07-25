@@ -133,6 +133,8 @@ settings:
   ui.brushBuilder.previewHeight: 120
   # Input.
   input.fingerPainting: true
+  # Dabs drawn ahead of the pen to hide input latency (0 disables prediction).
+  input.predictionLead: 9
   # Editing.
   edit.activateTransformAfterPaste: true
   # Colors.

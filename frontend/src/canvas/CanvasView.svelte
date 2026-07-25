@@ -16,6 +16,7 @@
     import { isToolHoverSuppressed } from '../tools/modifier_cursor';
     import { isEditableTarget } from '../lib/isEditableTarget';
     import TransformModeMenu from '../ui/TransformModeMenu.svelte';
+    import LatencyHud from './LatencyHud.svelte';
 
     /** Optional pre-built instance. When provided, CanvasView skips the
      *  single-instance bootstrap (`initEditor`) and just wires the canvas
@@ -265,7 +266,23 @@
         // case. Still request a frame — a chord's onMove may have queued
         // work (e.g. a pick that needs `pollPick` to commit next frame).
         if (!isToolHoverSuppressed()) {
-            void runHook(inst.tool(inst.activeToolId)?.onPointerMove?.(e, pos.x, pos.y));
+            const tool = inst.tool(inst.activeToolId);
+            void runHook(tool?.onPointerMove?.(e, pos.x, pos.y));
+            // Forward prediction: while a stroke/drag is in progress (a button
+            // held), hand the tool the browser's predicted future samples so it
+            // can draw ahead of the pen and hide pipeline latency. Purely
+            // additive — a tool without `onPredictedMove` ignores it; predicted
+            // points are transient overlay-only and never committed.
+            if (e.buttons !== 0 && tool?.onPredictedMove) {
+                const predicted = e.getPredictedEvents?.() ?? [];
+                if (predicted.length > 0) {
+                    const samples = predicted.map((pe) => {
+                        const p = getCanvasCoords(pe);
+                        return { x: p.x, y: p.y, e: pe };
+                    });
+                    void runHook(tool.onPredictedMove(samples));
+                }
+            }
         }
         inst.requestFrame();
     }
@@ -464,6 +481,9 @@
     <!-- Right-click mode-switch menu for the transform tool. The tool sets
          `app.transformModeMenu`; this renders against it. -->
     <TransformModeMenu />
+
+    <!-- Dev-only input-latency HUD (hidden in release unless `?latency`). -->
+    <LatencyHud />
 </div>
 
 <style>

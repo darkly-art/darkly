@@ -536,6 +536,10 @@ impl DarklyEngine {
                 cb,
                 ca,
             } => {
+                // Dev instrumentation: this input sample is being applied to the
+                // stroke. The oldest sample of a coalesced burst this frame wins
+                // the latency measurement (see `InputLatencyMeter`).
+                self.input_meter.record_sample(time_ms);
                 self.brush_stroke_to(
                     layer_id,
                     x,
