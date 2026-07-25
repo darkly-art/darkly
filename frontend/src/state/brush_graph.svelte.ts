@@ -140,6 +140,22 @@ export class BrushGraphState {
      *  after every structural change; never sent to Rust. */
     nodePositions = $state<Record<string, [number, number]>>({});
 
+    /** Monotonic token identifying the current graph load. Bumped by
+     *  `beginLayoutGeneration` whenever the graph is replaced by a fresh
+     *  load/reset/import/tab-sync. Node positions and the one-shot layout
+     *  guard are scoped to it, so a freshly-loaded graph is always treated as
+     *  un-laid-out — even when it reuses the previous brush's node ids — and a
+     *  stale async layout write for a superseded generation is discarded.
+     *  Frontend-only, like `nodePositions`; never crosses to Rust. Distinct
+     *  from `lastTopologyVersion` (which preserves `activeBrush` across
+     *  scrubs and bumps on unrelated events like port expose/unexpose). */
+    layoutGeneration = $state(0);
+
+    /** The `layoutGeneration` value that positions were last laid out for.
+     *  `autoLayout` sets it on commit; `needsInitialLayout` compares against
+     *  it. A fresh generation is always > this, so the one-shot fires again. */
+    private lastLaidOutGeneration = -1;
+
     /** Registry of available node types (from WASM). */
     nodeTypes = $state<NodeTypeInfo[]>([]);
 
@@ -202,6 +218,13 @@ export class BrushGraphState {
      */
     private lastTopologyVersion = 0;
 
+    /** Guards `init()` against re-entrancy. `init()` is fired unawaited from
+     *  two `if (!brushGraph.graph)` sites (brush-tool activation and the
+     *  builder's `ensureInit`), and `graph` isn't set until its final
+     *  `loadBrush` resolves — so without this flag two callers can both pass
+     *  the guard and double-load the default brush. */
+    private initStarted = false;
+
 
     // --- WASM command helpers ---
 
@@ -250,11 +273,19 @@ export class BrushGraphState {
         this.lastTopologyVersion = (await app.engine.api.brushTopologyVersion()).value;
     }
 
-    /** Fetch the current graph snapshot from Rust. */
+    /** Fetch the current graph snapshot from Rust. Every caller is a
+     *  whole-graph replacement (fresh load / reset / import / tab-sync — never
+     *  an in-place mutation, which goes through `applyResult`), so this is the
+     *  single place a new layout generation begins. Clearing positions +
+     *  bumping the generation happens in the *same synchronous step* as the
+     *  graph assignment, so `needsInitialLayout` is never true against the
+     *  outgoing graph (which would lay out the wrong node set) and stale
+     *  in-flight layout writes for the previous graph are discarded. */
     private async fetchGraph() {
         if (!app.engine) return;
         const graph = (await app.engine.api.brushGraphActive()) as unknown as BrushGraph;
         if (graph && graph.nodes) {
+            this.beginLayoutGeneration();
             this.graph = graph;
         }
     }
@@ -276,6 +307,10 @@ export class BrushGraphState {
      *  per-tab or shell-global. */
     async syncFromActiveEngine() {
         if (!app.engine) return;
+        // `fetchGraph` begins a new layout generation atomically with the swap,
+        // so the incoming tab's graph lays out for its own topology instead of
+        // inheriting the previous tab's positions (node ids collide across
+        // graphs).
         await this.fetchGraph();
         await this.refreshExposedPorts();
         await this.refreshCapabilities();
@@ -284,7 +319,8 @@ export class BrushGraphState {
 
     /** Initialize from WASM — load node types, brushes, and default graph. */
     async init() {
-        if (!app.engine) return;
+        if (this.initStarted || !app.engine) return;
+        this.initStarted = true;
         const types = await app.engine.api.brushNodeTypes();
         this.nodeTypes = (Array.isArray(types) ? types : []) as unknown as NodeTypeInfo[];
         await this.refreshBrushes();
@@ -311,7 +347,6 @@ export class BrushGraphState {
     async resetToDefault() {
         if (!app.engine) return;
         app.engine.api.brushGraphReset();
-        this.nodePositions = {};
         await this.fetchGraph();
         await this.refreshExposedPorts();
         await this.refreshCapabilities();
@@ -342,7 +377,6 @@ export class BrushGraphState {
             return err;
         }
         // Same post-mutation refresh as loadBrush / resetToDefault.
-        this.nodePositions = {};
         await this.fetchGraph();
         await this.refreshExposedPorts();
         await this.refreshCapabilities();
@@ -431,8 +465,9 @@ export class BrushGraphState {
             return;
         }
         this.activeBrush = name;
-        // Clear positions so the canvas effect re-runs auto-layout.
-        this.nodePositions = {};
+        // `fetchGraph` begins a new layout generation atomically with the
+        // graph swap, so the canvas effect re-runs auto-layout for the
+        // freshly-loaded graph.
         await this.fetchGraph();
         await this.refreshExposedPorts();
         await this.refreshCapabilities();
@@ -442,26 +477,64 @@ export class BrushGraphState {
         await this.snapshotTopologyVersion();
     }
 
-    /** True only for a fresh graph where NO node has a UI position yet — i.e.
-     *  it was just loaded/reset/imported and the canvas should run its one-time
-     *  auto-layout. A graph that already has positioned nodes (e.g. one new node
-     *  awaiting placement mid-`addNode`) is deliberately excluded, so spawning a
-     *  node never triggers a full relayout that would move existing nodes. */
+    /** Begin a new layout generation: clear node positions and bump
+     *  `layoutGeneration`. Called by `fetchGraph` in the same synchronous step
+     *  as the graph swap (see there for why atomicity matters). Bumping the
+     *  generation makes `needsInitialLayout` fire again regardless of node-id
+     *  reuse, and causes any in-flight `autoLayout` write for the old
+     *  generation to be discarded on arrival. Public so tests can drive the
+     *  fresh-load transition without a live engine. */
+    beginLayoutGeneration() {
+        // Drop image-node thumbnails from the outgoing graph: they're keyed by
+        // `image_${nodeId}`, and node ids restart per brush, so a stale bitmap
+        // would alias onto a reused id under the new graph. `ImageBitmap` is
+        // GPU-backed and must be closed explicitly or it leaks.
+        for (const bmp of this.imageThumbnails.values()) bmp.close();
+        this.imageThumbnails.clear();
+        this.nodePositions = {};
+        this.layoutGeneration++;
+    }
+
+    /** True when the current layout generation has not been laid out yet —
+     *  i.e. the graph was just loaded/reset/imported/tab-synced and the canvas
+     *  should run its one-time auto-layout. Keyed on `layoutGeneration`, not on
+     *  which node ids happen to carry positions, so a fresh graph that reuses
+     *  the previous brush's ids is still recognized as needing layout. A graph
+     *  mutated in place without a fresh load (e.g. one new node awaiting
+     *  placement mid-`addNode`) keeps the same generation, so spawning a node
+     *  never triggers a full relayout that would move existing nodes. */
     get needsInitialLayout(): boolean {
         if (!this.graph) return false;
-        const ids = Object.keys(this.graph.nodes);
-        if (ids.length === 0) return false;
-        return ids.every((id) => !this.nodePositions[id]);
+        if (Object.keys(this.graph.nodes).length === 0) return false;
+        return this.layoutGeneration !== this.lastLaidOutGeneration;
+    }
+
+    /** Measure every node widget currently in the DOM and run auto-layout with
+     *  the real sizes. The single measure-and-place path shared by the canvas
+     *  one-shot (on a fresh load) and the toolbar Layout button. */
+    measureAndLayout() {
+        const sizes: Record<string, [number, number]> = {};
+        for (const el of document.querySelectorAll<HTMLElement>('[data-node-id]')) {
+            const id = el.dataset.nodeId;
+            if (id) sizes[id] = [el.offsetWidth, el.offsetHeight];
+        }
+        if (Object.keys(sizes).length > 0) void this.autoLayout(sizes);
     }
 
     /**
      * Run auto-layout on the active graph and store the result in
      * `nodePositions`. `sizes` maps node ID → `[width, height]` measured
      * from the DOM; when omitted, Rust estimates sizes from port counts.
+     *
+     * The layout is computed for the generation live at call time; if a fresh
+     * load supersedes it during the WASM round-trip, the result is discarded so
+     * a stale graph's positions never overwrite the current one.
      */
     async autoLayout(sizes?: Record<string, [number, number]>) {
         if (!app.engine) return;
+        const gen = this.layoutGeneration;
         const layout = await app.engine.api.brushGraphAutoLayout({ sizes: sizes ?? {} }) as Record<string, [number, number]>;
+        if (gen !== this.layoutGeneration) return; // superseded by a newer load
         if (layout && typeof layout === 'object') {
             const next: Record<string, [number, number]> = {};
             for (const [id, pos] of Object.entries(layout)) {
@@ -470,6 +543,7 @@ export class BrushGraphState {
                 }
             }
             this.nodePositions = next;
+            this.lastLaidOutGeneration = gen;
         }
     }
 

@@ -31,14 +31,7 @@
     // guard keeps this a one-shot per fresh graph.
     $effect(() => {
         if (!brushGraph.needsInitialLayout) return;
-        const sizes: Record<string, [number, number]> = {};
-        for (const el of document.querySelectorAll<HTMLElement>('[data-node-id]')) {
-            const id = el.dataset.nodeId;
-            if (id) sizes[id] = [el.offsetWidth, el.offsetHeight];
-        }
-        if (Object.keys(sizes).length > 0) {
-            brushGraph.autoLayout(sizes);
-        }
+        brushGraph.measureAndLayout();
     });
 
     // --- Pan / zoom ---
@@ -83,6 +76,21 @@
             portVersion++;
         },
         coords,
+    });
+
+    // Port offsets are keyed by node id, and node ids restart per brush. On a
+    // brush swap the `{#each …(node.id)}` reuses widgets for colliding ids, so
+    // PortWidget's mount-time `register()` never re-fires and stale offsets
+    // would persist. Clear on every fresh graph (tracked by `layoutGeneration`)
+    // so `portWorldPos`'s DOM-measure fallback re-derives them for the new nodes.
+    let lastLayoutGen = -1;
+    $effect(() => {
+        const gen = brushGraph.layoutGeneration;
+        if (gen !== lastLayoutGen) {
+            lastLayoutGen = gen;
+            portOffsets.clear();
+            portVersion++;
+        }
     });
 
     // --- Interaction state ---
