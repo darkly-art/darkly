@@ -131,6 +131,29 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description(
                     "Stroke stabilization strength (0 = off, 100% = maximum smoothing)",
                 ),
+            // Prediction horizon — input port read at stroke start, like
+            // `stabilize`. A look-ahead time in milliseconds: the stabilizer
+            // draws a short extrapolated tail this far ahead of the pen to
+            // hide pen-to-pixel latency. `0` = off. Only takes effect when a
+            // real stabilizer is active (strength > 0) — prediction
+            // extrapolates from the smoothed polyline.
+            //
+            // `preview_irrelevant_scrub` for the same reason `stabilize` is:
+            // the synthetic editor preview renders through `PassThrough`, so a
+            // predict scrub has no visible preview effect and must not
+            // invalidate the preview cache.
+            PortDef::input("predict", BrushWireType::Scalar)
+                .with_range(0.0, 50.0, 0.0)
+                .with_natural_range(0.0, 50.0)
+                .with_unit(UnitType::Raw)
+                .with_icon("fa6-solid:forward")
+                .with_label("Predict (ms)")
+                .preview_irrelevant_scrub()
+                .with_description(
+                    "Stroke prediction look-ahead in milliseconds (0 = off). \
+                     Draws a short extrapolated tail ahead of the pen to hide \
+                     input latency. Requires stabilization to be active.",
+                ),
             // Dab spacing — read at stroke start as a fraction of the dab
             // diameter. Like `stabilize`, this is brush-level config that
             // currently lives here because the engine reads pen_input port
