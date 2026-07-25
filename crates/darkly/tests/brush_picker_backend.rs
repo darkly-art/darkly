@@ -320,7 +320,7 @@ fn size_scrub_does_not_change_active_dab_pixels() {
         .expect("default brush exposes a `size` port");
     let topo_before_scrub = engine.brush_topology_version();
     engine
-        .brush_set_exposed_port(size.node_id, "size", 250.0)
+        .brush_set_exposed_port(&size.node_id, "size", 250.0)
         .expect("scrub set");
     assert_eq!(
         engine.brush_topology_version(),
@@ -345,7 +345,7 @@ fn size_scrub_does_not_change_active_dab_pixels() {
     // compile_active call), but still classified as topology.
     let topo_before_toggle = engine.brush_topology_version();
     engine
-        .brush_graph_unexpose_port(size.node_id, "size")
+        .brush_graph_unexpose_port(&size.node_id, "size")
         .expect("unexpose size port");
     assert_ne!(
         engine.brush_topology_version(),

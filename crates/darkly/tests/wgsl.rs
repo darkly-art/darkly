@@ -138,11 +138,16 @@ fn stamp_rotation_counteracts_view_rotation() {
     let stamp = graph.add_node("stamp", reg.get("stamp").unwrap().ports.clone());
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     let wires = [
-        (pen, "position", term, "position"),
-        (pen, "drawing_angle", shape, "rotation_input"),
-        (paint_color, "color", stamp, "color"),
-        (shape, "mask", stamp, "tip"),
-        (stamp, "dab", term, "rgba"),
+        (pen.clone(), "position", term.clone(), "position"),
+        (
+            pen.clone(),
+            "drawing_angle",
+            shape.clone(),
+            "rotation_input",
+        ),
+        (paint_color.clone(), "color", stamp.clone(), "color"),
+        (shape.clone(), "mask", stamp.clone(), "tip"),
+        (stamp.clone(), "dab", term.clone(), "rgba"),
     ];
     for (fnode, fport, tnode, tport) in wires {
         graph
@@ -229,16 +234,16 @@ fn extent_protocol_composes_along_chain() {
     let rand_amp = graph.add_node("random", reg.get("random").unwrap().ports.clone());
     let shape = graph.add_node("shape", reg.get("shape").unwrap().ports.clone());
     graph
-        .set_port_value(shape, "algorithm", InputValue::Int(1))
+        .set_port_value(&shape, "algorithm", InputValue::Int(1))
         .unwrap(); // Perlin
     let stamp = graph.add_node("stamp", reg.get("stamp").unwrap().ports.clone());
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     let wires = [
-        (rand_amp, "value", shape, "amplitude"),
-        (shape, "mask", stamp, "tip"),
-        (paint_color, "color", stamp, "color"),
-        (stamp, "dab", term, "rgba"),
-        (pen, "position", term, "position"),
+        (rand_amp.clone(), "value", shape.clone(), "amplitude"),
+        (shape.clone(), "mask", stamp.clone(), "tip"),
+        (paint_color.clone(), "color", stamp.clone(), "color"),
+        (stamp.clone(), "dab", term.clone(), "rgba"),
+        (pen.clone(), "position", term.clone(), "position"),
     ];
     for (fnode, fport, tnode, tport) in wires {
         graph
@@ -288,11 +293,11 @@ fn extent_grows_with_shape_aspect_anisotropy() {
     let stamp = graph.add_node("stamp", reg.get("stamp").unwrap().ports.clone());
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     let wires = [
-        (rand_aspect, "value", shape, "aspect"),
-        (shape, "mask", stamp, "tip"),
-        (paint_color, "color", stamp, "color"),
-        (stamp, "dab", term, "rgba"),
-        (pen, "position", term, "position"),
+        (rand_aspect.clone(), "value", shape.clone(), "aspect"),
+        (shape.clone(), "mask", stamp.clone(), "tip"),
+        (paint_color.clone(), "color", stamp.clone(), "color"),
+        (stamp.clone(), "dab", term.clone(), "rgba"),
+        (pen.clone(), "position", term.clone(), "position"),
     ];
     for (fnode, fport, tnode, tport) in wires {
         graph
@@ -338,11 +343,11 @@ fn extent_neutral_when_aspect_unwired() {
     let stamp = graph.add_node("stamp", reg.get("stamp").unwrap().ports.clone());
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     let wires = [
-        (rand_amp, "value", shape, "amplitude"),
-        (shape, "mask", stamp, "tip"),
-        (paint_color, "color", stamp, "color"),
-        (stamp, "dab", term, "rgba"),
-        (pen, "position", term, "position"),
+        (rand_amp.clone(), "value", shape.clone(), "amplitude"),
+        (shape.clone(), "mask", stamp.clone(), "tip"),
+        (paint_color.clone(), "color", stamp.clone(), "color"),
+        (stamp.clone(), "dab", term.clone(), "rgba"),
+        (pen.clone(), "position", term.clone(), "position"),
     ];
     for (fnode, fport, tnode, tport) in wires {
         graph
@@ -522,12 +527,12 @@ fn noise_node_emits_per_channel_fbm() {
         ("warp", InputValue::Scalar(0.6)),
         ("roughness", InputValue::Scalar(0.5)),
     ] {
-        graph.set_port_value(noise, name, v).unwrap();
+        graph.set_port_value(&noise, name, v).unwrap();
     }
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     let wires = [
-        (pen, "position", term, "position"),
-        (noise, "color", term, "rgba"),
+        (pen.clone(), "position", term.clone(), "position"),
+        (noise.clone(), "color", term.clone(), "rgba"),
     ];
     for (fnode, fport, tnode, tport) in wires {
         graph
@@ -644,7 +649,7 @@ fn static_texture_brush_preview_declares_single_graph_texture() {
 /// `space`/`scale_with_brush`. `space`: 0 = Canvas, 1 = Dab.
 fn apply_noise_inputs(
     graph: &mut Graph<BrushWireType>,
-    noise: NodeId,
+    noise: &NodeId,
     space: i32,
     scale_with_brush: bool,
 ) {
@@ -671,16 +676,16 @@ fn wire(
         &str,
     )],
 ) {
-    for &(fnode, fport, tnode, tport) in wires {
+    for (fnode, fport, tnode, tport) in wires {
         graph
             .connect(
                 PortRef {
-                    node: fnode,
-                    port: fport.into(),
+                    node: fnode.clone(),
+                    port: (*fport).into(),
                 },
                 PortRef {
-                    node: tnode,
-                    port: tport.into(),
+                    node: tnode.clone(),
+                    port: (*tport).into(),
                 },
             )
             .unwrap();
@@ -697,13 +702,13 @@ fn noise_canvas_space_is_byte_identical() {
     let mut graph = Graph::<BrushWireType>::new();
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
     let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
-    apply_noise_inputs(&mut graph, noise, 0, true);
+    apply_noise_inputs(&mut graph, &noise, 0, true);
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     wire(
         &mut graph,
         &[
-            (pen, "position", term, "position"),
-            (noise, "color", term, "rgba"),
+            (pen.clone(), "position", term.clone(), "position"),
+            (noise.clone(), "color", term.clone(), "rgba"),
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
@@ -744,17 +749,17 @@ fn settings_size_source_reaches_compiled_brush() {
     // A distinctive base size — packed per-dab at runtime, so it appears in the
     // shader as a `d.<field>` reference, never as a baked literal.
     graph
-        .set_port_default(settings, "size", 0.25)
+        .set_port_default(&settings, "size", 0.25)
         .expect("brush_settings has a size input");
     let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
-    apply_noise_inputs(&mut graph, noise, 0, true);
+    apply_noise_inputs(&mut graph, &noise, 0, true);
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     wire(
         &mut graph,
         &[
-            (settings, "size", noise, "scale"),
-            (pen, "position", term, "position"),
-            (noise, "color", term, "rgba"),
+            (settings.clone(), "size", noise.clone(), "scale"),
+            (pen.clone(), "position", term.clone(), "position"),
+            (noise.clone(), "color", term.clone(), "rgba"),
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
@@ -788,14 +793,14 @@ fn noise_scale_wired_emits_upstream_expr_and_validates() {
     let mut graph = Graph::<BrushWireType>::new();
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
     let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
-    apply_noise_inputs(&mut graph, noise, 0, true);
+    apply_noise_inputs(&mut graph, &noise, 0, true);
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     wire(
         &mut graph,
         &[
-            (pen, "position", term, "position"),
-            (pen, "pressure", noise, "scale"),
-            (noise, "color", term, "rgba"),
+            (pen.clone(), "position", term.clone(), "position"),
+            (pen.clone(), "pressure", noise.clone(), "scale"),
+            (noise.clone(), "color", term.clone(), "rgba"),
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
@@ -824,14 +829,14 @@ fn noise_octaves_wired_emits_i32_clamp_and_validates() {
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
     let rand = graph.add_node("random", reg.get("random").unwrap().ports.clone());
     let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
-    apply_noise_inputs(&mut graph, noise, 0, true);
+    apply_noise_inputs(&mut graph, &noise, 0, true);
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     wire(
         &mut graph,
         &[
-            (pen, "position", term, "position"),
-            (rand, "value", noise, "octaves"),
-            (noise, "color", term, "rgba"),
+            (pen.clone(), "position", term.clone(), "position"),
+            (rand.clone(), "value", noise.clone(), "octaves"),
+            (noise.clone(), "color", term.clone(), "rgba"),
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
@@ -853,13 +858,13 @@ fn noise_dab_space_emits_oriented_frame_and_variation() {
     let mut graph = Graph::<BrushWireType>::new();
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
     let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
-    apply_noise_inputs(&mut graph, noise, 1, true);
+    apply_noise_inputs(&mut graph, &noise, 1, true);
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     wire(
         &mut graph,
         &[
-            (pen, "position", term, "position"),
-            (noise, "color", term, "rgba"),
+            (pen.clone(), "position", term.clone(), "position"),
+            (noise.clone(), "color", term.clone(), "rgba"),
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
@@ -892,13 +897,13 @@ fn noise_scale_with_brush_picks_arm_at_compile_time() {
         let mut graph = Graph::<BrushWireType>::new();
         let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
         let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
-        apply_noise_inputs(&mut graph, noise, 1, swb);
+        apply_noise_inputs(&mut graph, &noise, 1, swb);
         let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
         wire(
             &mut graph,
             &[
-                (pen, "position", term, "position"),
-                (noise, "color", term, "rgba"),
+                (pen.clone(), "position", term.clone(), "position"),
+                (noise.clone(), "color", term.clone(), "rgba"),
             ],
         );
         let plan = compile(&graph, reg.as_map()).unwrap();
@@ -933,14 +938,14 @@ fn noise_rotation_input_wires_per_dab() {
     let mut graph = Graph::<BrushWireType>::new();
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
     let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
-    apply_noise_inputs(&mut graph, noise, 1, true);
+    apply_noise_inputs(&mut graph, &noise, 1, true);
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     wire(
         &mut graph,
         &[
-            (pen, "position", term, "position"),
-            (pen, "drawing_angle", noise, "rotation"),
-            (noise, "color", term, "rgba"),
+            (pen.clone(), "position", term.clone(), "position"),
+            (pen.clone(), "drawing_angle", noise.clone(), "rotation"),
+            (noise.clone(), "color", term.clone(), "rgba"),
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
@@ -973,15 +978,15 @@ fn image_dab_tip_needs_no_shape_node() {
         ("space", InputValue::Int(1)),
         ("scale_with_brush", InputValue::Bool(true)),
     ] {
-        graph.set_port_value(image, name, v).unwrap();
+        graph.set_port_value(&image, name, v).unwrap();
     }
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     wire(
         &mut graph,
         &[
-            (pen, "position", term, "position"),
-            (pen, "drawing_angle", image, "rotation"),
-            (image, "color", term, "rgba"),
+            (pen.clone(), "position", term.clone(), "position"),
+            (pen.clone(), "drawing_angle", image.clone(), "rotation"),
+            (image.clone(), "color", term.clone(), "rgba"),
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();

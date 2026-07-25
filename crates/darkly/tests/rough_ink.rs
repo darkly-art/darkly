@@ -82,35 +82,35 @@ fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWir
     let curve = graph.add_node("curve", registry.get("curve").unwrap().ports.clone());
     let shape = graph.add_node("shape", registry.get("shape").unwrap().ports.clone());
     graph
-        .set_port_value(shape, "algorithm", InputValue::Int(algorithm))
+        .set_port_value(&shape, "algorithm", InputValue::Int(algorithm))
         .unwrap();
     let stamp = graph.add_node("stamp", registry.get("stamp").unwrap().ports.clone());
     let terminal = graph.add_node("paint", registry.get("paint").unwrap().ports.clone());
 
     graph
-        .set_port_default(shape, "amplitude", amplitude)
+        .set_port_default(&shape, "amplitude", amplitude)
         .unwrap();
-    graph.set_port_default(shape, "softness", 0.0).unwrap();
+    graph.set_port_default(&shape, "softness", 0.0).unwrap();
     graph
         .set_port_default(
-            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
             "size",
             size,
         )
         .unwrap();
-    graph.set_port_default(terminal, "opacity", 1.0).unwrap();
-    graph.set_port_default(terminal, "flow", 1.0).unwrap();
+    graph.set_port_default(&terminal, "opacity", 1.0).unwrap();
+    graph.set_port_default(&terminal, "flow", 1.0).unwrap();
 
     // No `pen.pressure → terminal.flow` wire — tests that scale alpha by
     // flow rely on the per-test `set_port_default(terminal, "flow", …)`
     // override, which a wire would shadow.
     let wires = [
-        (pen, "pressure", curve, "input"),
-        (curve, "output", terminal, "size"),
-        (shape, "mask", stamp, "tip"),
-        (paint_color, "color", stamp, "color"),
-        (stamp, "dab", terminal, "rgba"),
-        (pen, "position", terminal, "position"),
+        (pen.clone(), "pressure", curve.clone(), "input"),
+        (curve.clone(), "output", terminal.clone(), "size"),
+        (shape.clone(), "mask", stamp.clone(), "tip"),
+        (paint_color.clone(), "color", stamp.clone(), "color"),
+        (stamp.clone(), "dab", terminal.clone(), "rgba"),
+        (pen.clone(), "position", terminal.clone(), "position"),
     ];
     for (fnode, fport, tnode, tport) in wires {
         graph
@@ -379,7 +379,7 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
     let _term_id = darkly::brush::find_terminal(&graph).unwrap();
     graph
         .set_port_default(
-            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
             "size",
             0.15,
         )
@@ -481,7 +481,7 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
     let _term_id = darkly::brush::find_terminal(&graph).unwrap();
     graph
         .set_port_default(
-            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
             "size",
             0.15,
         )
@@ -496,11 +496,11 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
         .nodes()
         .iter()
         .find(|(_, n)| n.type_id == darkly::brush::nodes::curve::TYPE_ID)
-        .map(|(id, _)| *id)
+        .map(|(id, _)| id.clone())
         .unwrap();
     graph
         .set_port_value(
-            curve_id,
+            &curve_id,
             "curve",
             InputValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]]),
         )
@@ -583,7 +583,7 @@ fn terminal_flow_scales_dab_alpha() {
         // Replace the terminal.flow default. build_test_graph hard-
         // sets it to 1.0 already; override here per-test.
         let term_id = darkly::brush::find_terminal(&graph).unwrap();
-        graph.set_port_default(term_id, "flow", flow).unwrap();
+        graph.set_port_default(&term_id, "flow", flow).unwrap();
         let mut h = harness(&black_canvas(), graph);
         h.begin_stroke();
         let info = PaintInformation {

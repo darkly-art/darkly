@@ -52,7 +52,7 @@ fn render_cursor_preview(brush_name: &str, size_override: f32, color: [f32; 4]) 
     let _term_id = darkly::brush::find_terminal(&graph).expect("brush has a terminal");
     graph
         .set_port_default(
-            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
             "size",
             size_override,
         )

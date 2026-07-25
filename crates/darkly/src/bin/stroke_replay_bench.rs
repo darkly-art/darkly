@@ -147,7 +147,7 @@ fn brush_graph_json(brush_name: &str, dab_size_px: Option<f32>) -> String {
         brush
             .metadata
             .graph
-            .set_port_default(pen_id, "size", size_port_value)
+            .set_port_default(&pen_id, "size", size_port_value)
             .expect("set size port default");
     }
 

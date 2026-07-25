@@ -88,7 +88,7 @@ pub trait ReadMirrorTerminal {
         &self,
         _ctx: &EvalContext,
         _gpu: &mut BrushGpuContext,
-        _node_id: u32,
+        _node_id: &str,
         _radius: f32,
     ) {
     }
@@ -337,7 +337,12 @@ pub fn effective_radius(ctx: &EvalContext) -> f32 {
 /// `pack_dab_record` picks it up via the matching [`DabField`] declared
 /// in [`compile_wgsl`]. Used for `copy_origin` (always) and any terminal
 /// extras (e.g. blur's `blur_px`, via [`ReadMirrorTerminal::pack_extra`]).
-pub fn insert_slot_output(gpu: &mut BrushGpuContext, node_id: u32, base: &str, value: ScalarValue) {
+pub fn insert_slot_output(
+    gpu: &mut BrushGpuContext,
+    node_id: &str,
+    base: &str,
+    value: ScalarValue,
+) {
     if let Some(outputs) = gpu.dab_batch.slot_outputs.as_mut() {
         outputs.insert(format!("n{}_{}", node_id, base), value);
     }
@@ -429,7 +434,7 @@ pub fn evaluate_gpu<T: ReadMirrorTerminal>(
     let read_x0 = (position[0] - read_half[0]).max(layer_x0);
     let read_y0 = (position[1] - read_half[1]).max(layer_y0);
     let copy_origin = [read_x0.floor(), read_y0.floor()];
-    let node_id = ctx.node_id.0 as u32;
+    let node_id = ctx.node_id.as_str();
     insert_slot_output(gpu, node_id, "copy_origin", ScalarValue::Vec2(copy_origin));
 
     // Extra per-dab slots (blur's kernel size, …) must be inserted before
@@ -677,6 +682,7 @@ mod tests {
     use crate::nodegraph::{NodeId, PortDef};
 
     fn ctx_with<'a>(port_defs: &'a [PortDef<BrushWireType>], base_size: f32) -> EvalContext<'a> {
+        static TEST_NODE_ID: std::sync::OnceLock<NodeId> = std::sync::OnceLock::new();
         EvalContext {
             input_slots: &[],
             input_values: &[],
@@ -685,7 +691,7 @@ mod tests {
             stroke_seed: 0,
             dab_index: 0,
             base_size,
-            node_id: NodeId(0),
+            node_id: TEST_NODE_ID.get_or_init(|| NodeId("test".into())),
         }
     }
 

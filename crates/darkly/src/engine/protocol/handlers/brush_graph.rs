@@ -10,7 +10,7 @@
 //!   `null | { error }` compile/validate result (`returns = ok_error` would fit,
 //!   but the kind/method mismatch keeps these hand-written anyway).
 //! - **input marshalling** — `brush_graph_set_input` (kind/value → `InputValue`)
-//!   and `brush_graph_auto_layout` (`HashMap<u64,…>` ↔ `NodeId` keys).
+//!   and `brush_graph_auto_layout` (`HashMap<String,…>` ↔ `NodeId` keys).
 //! - **`brush_upload_image`** — an always-`Err` stub with unused params.
 
 use serde::Deserialize;
@@ -43,7 +43,7 @@ pub struct BrushGraphYamlReq {
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct BrushGraphSetInputReq {
-    pub node_id: u64,
+    pub node_id: String,
     pub input_name: String,
     pub kind: String,
     #[cfg_attr(feature = "ts-export", ts(type = "JsonValue"))]
@@ -54,7 +54,7 @@ pub struct BrushGraphSetInputReq {
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct BrushGraphAutoLayoutReq {
-    pub sizes: std::collections::HashMap<u64, [f32; 2]>,
+    pub sizes: std::collections::HashMap<String, [f32; 2]>,
 }
 
 /// `{ resource_name, width, height }` — an uploaded image resource; pixels ride
@@ -114,7 +114,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
                     return graph_result(Err(format!("unknown input kind: {other}")));
                 }
             };
-            graph_result(engine.brush_graph_set_input(r.node_id, &r.input_name, iv))
+            graph_result(engine.brush_graph_set_input(&r.node_id, &r.input_name, iv))
         })
         .send()
         .req::<BrushGraphSetInputReq>()

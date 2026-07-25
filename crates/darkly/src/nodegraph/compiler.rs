@@ -59,7 +59,7 @@ pub fn compile<W: WireKind>(
     graph: &Graph<W>,
     registry: &HashMap<String, NodeRegistration<W>>,
 ) -> Result<ExecutionPlan, GraphError> {
-    let node_ids: Vec<NodeId> = graph.nodes().keys().copied().collect();
+    let node_ids: Vec<NodeId> = graph.nodes().keys().cloned().collect();
     if node_ids.is_empty() {
         return Ok(ExecutionPlan {
             steps: vec![],
@@ -70,23 +70,22 @@ pub fn compile<W: WireKind>(
     // ── Kahn's topological sort ──────────────────────────────────────
 
     // Build in-degree map from connections.
-    let mut in_degree: HashMap<NodeId, usize> = node_ids.iter().map(|&id| (id, 0)).collect();
+    let mut in_degree: HashMap<NodeId, usize> = node_ids.iter().map(|id| (id.clone(), 0)).collect();
     for conn in &graph.connections {
-        *in_degree.entry(conn.to.node).or_default() += 1;
+        *in_degree.entry(conn.to.node.clone()).or_default() += 1;
     }
 
     let mut queue: Vec<NodeId> = in_degree
         .iter()
         .filter(|(_, &deg)| deg == 0)
-        .map(|(&id, _)| id)
+        .map(|(id, _)| id.clone())
         .collect();
     // Sort for deterministic ordering.
-    queue.sort_by_key(|id| id.0);
+    queue.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut sorted = Vec::with_capacity(node_ids.len());
 
     while let Some(id) = queue.pop() {
-        sorted.push(id);
         // Decrement in-degree for each connection from this node.
         // Do NOT dedup: in-degree was counted per-connection, so we must
         // decrement once per connection too.
@@ -94,11 +93,12 @@ pub fn compile<W: WireKind>(
             .connections
             .iter()
             .filter(|c| c.from.node == id)
-            .map(|c| c.to.node)
+            .map(|c| c.to.node.clone())
             .collect();
-        downstream.sort_by_key(|id| id.0);
+        downstream.sort_by(|a, b| a.0.cmp(&b.0));
+        sorted.push(id);
 
-        for &next in &downstream {
+        for next in downstream {
             let deg = in_degree.get_mut(&next).unwrap();
             *deg -= 1;
             if *deg == 0 {
@@ -125,12 +125,12 @@ pub fn compile<W: WireKind>(
     // source). `is_source()` is the single predicate; keyed by
     // `PortRef { node, port }` with no direction, which stays collision-free
     // because no node carries a same-named input+output.
-    for &node_id in &sorted {
-        let node = &graph.nodes()[&node_id];
+    for node_id in &sorted {
+        let node = &graph.nodes()[node_id];
         for port in &node.ports {
             if port.is_source() {
                 let pr = PortRef {
-                    node: node_id,
+                    node: node_id.clone(),
                     port: port.name.clone(),
                 };
                 output_slot_map.insert(pr, next_slot);
@@ -159,8 +159,8 @@ pub fn compile<W: WireKind>(
     let mut steps = Vec::with_capacity(sorted.len());
     let mut phase: HashMap<NodeId, bool> = HashMap::new();
 
-    for &node_id in &sorted {
-        let node = &graph.nodes()[&node_id];
+    for node_id in &sorted {
+        let node = &graph.nodes()[node_id];
         let registration = registry.get(&node.type_id);
         let declared_gpu = registration.map(|r| r.is_gpu).unwrap_or(false);
         let is_terminal = registration.map(|r| r.is_terminal).unwrap_or(false);
@@ -171,7 +171,7 @@ pub fn compile<W: WireKind>(
                 return false;
             }
             let pr = PortRef {
-                node: node_id,
+                node: node_id.clone(),
                 port: p.name.clone(),
             };
             input_wire
@@ -181,7 +181,7 @@ pub fn compile<W: WireKind>(
                 .unwrap_or(false)
         });
         let is_gpu = declared_gpu || inherits_gpu;
-        phase.insert(node_id, is_gpu);
+        phase.insert(node_id.clone(), is_gpu);
 
         let mut input_slots = Vec::new();
         let mut output_slots = Vec::new();
@@ -190,7 +190,7 @@ pub fn compile<W: WireKind>(
             match port.dir {
                 PortDir::Input => {
                     let pr = PortRef {
-                        node: node_id,
+                        node: node_id.clone(),
                         port: port.name.clone(),
                     };
                     if let Some(src) = input_wire.get(&pr) {
@@ -215,7 +215,7 @@ pub fn compile<W: WireKind>(
                 }
                 PortDir::Output => {
                     let pr = PortRef {
-                        node: node_id,
+                        node: node_id.clone(),
                         port: port.name.clone(),
                     };
                     let slot = output_slot_map[&pr];
@@ -225,7 +225,7 @@ pub fn compile<W: WireKind>(
         }
 
         steps.push(ExecStep {
-            node_id,
+            node_id: node_id.clone(),
             type_id: node.type_id.clone(),
             is_gpu,
             is_terminal,
@@ -312,22 +312,22 @@ mod tests {
 
         g.connect(
             PortRef {
-                node: a,
+                node: a.clone(),
                 port: "out".into(),
             },
             PortRef {
-                node: b,
+                node: b.clone(),
                 port: "in".into(),
             },
         )
         .unwrap();
         g.connect(
             PortRef {
-                node: b,
+                node: b.clone(),
                 port: "out".into(),
             },
             PortRef {
-                node: c,
+                node: c.clone(),
                 port: "in".into(),
             },
         )
@@ -338,9 +338,9 @@ mod tests {
         assert_eq!(plan.steps.len(), 3);
 
         // a must come before b, b before c.
-        let pos = |id: NodeId| plan.steps.iter().position(|s| s.node_id == id).unwrap();
-        assert!(pos(a) < pos(b));
-        assert!(pos(b) < pos(c));
+        let pos = |id: &NodeId| plan.steps.iter().position(|s| &s.node_id == id).unwrap();
+        assert!(pos(&a) < pos(&b));
+        assert!(pos(&b) < pos(&c));
     }
 
     #[test]
@@ -351,11 +351,11 @@ mod tests {
 
         g.connect(
             PortRef {
-                node: a,
+                node: a.clone(),
                 port: "out".into(),
             },
             PortRef {
-                node: b,
+                node: b.clone(),
                 port: "in".into(),
             },
         )
@@ -389,11 +389,11 @@ mod tests {
 
         g.connect(
             PortRef {
-                node: knob,
+                node: knob.clone(),
                 port: "val".into(),
             },
             PortRef {
-                node: sink,
+                node: sink.clone(),
                 port: "in".into(),
             },
         )
@@ -445,44 +445,44 @@ mod tests {
 
         g.connect(
             PortRef {
-                node: a,
+                node: a.clone(),
                 port: "out".into(),
             },
             PortRef {
-                node: b,
+                node: b.clone(),
                 port: "in".into(),
             },
         )
         .unwrap();
         g.connect(
             PortRef {
-                node: a,
+                node: a.clone(),
                 port: "out".into(),
             },
             PortRef {
-                node: c,
+                node: c.clone(),
                 port: "in".into(),
             },
         )
         .unwrap();
         g.connect(
             PortRef {
-                node: b,
+                node: b.clone(),
                 port: "out".into(),
             },
             PortRef {
-                node: d,
+                node: d.clone(),
                 port: "in_a".into(),
             },
         )
         .unwrap();
         g.connect(
             PortRef {
-                node: c,
+                node: c.clone(),
                 port: "out".into(),
             },
             PortRef {
-                node: d,
+                node: d.clone(),
                 port: "in_b".into(),
             },
         )
@@ -491,11 +491,11 @@ mod tests {
         let plan = compile(&g, &test_registry()).unwrap();
         assert_eq!(plan.steps.len(), 4);
 
-        let pos = |id: NodeId| plan.steps.iter().position(|s| s.node_id == id).unwrap();
-        assert!(pos(a) < pos(b));
-        assert!(pos(a) < pos(c));
-        assert!(pos(b) < pos(d));
-        assert!(pos(c) < pos(d));
+        let pos = |id: &NodeId| plan.steps.iter().position(|s| &s.node_id == id).unwrap();
+        assert!(pos(&a) < pos(&b));
+        assert!(pos(&a) < pos(&c));
+        assert!(pos(&b) < pos(&d));
+        assert!(pos(&c) < pos(&d));
     }
 
     #[test]
@@ -528,22 +528,22 @@ mod tests {
 
         g.connect(
             PortRef {
-                node: a,
+                node: a.clone(),
                 port: "out1".into(),
             },
             PortRef {
-                node: b,
+                node: b.clone(),
                 port: "in1".into(),
             },
         )
         .unwrap();
         g.connect(
             PortRef {
-                node: a,
+                node: a.clone(),
                 port: "out2".into(),
             },
             PortRef {
-                node: b,
+                node: b.clone(),
                 port: "in2".into(),
             },
         )
@@ -588,7 +588,7 @@ mod tests {
         let plan = compile(&g, &reg).unwrap();
         assert_eq!(plan.steps.len(), 2);
 
-        let pos = |id: NodeId| plan.steps.iter().position(|s| s.node_id == id).unwrap();
-        assert!(pos(a) < pos(b));
+        let pos = |id: &NodeId| plan.steps.iter().position(|s| &s.node_id == id).unwrap();
+        assert!(pos(&a) < pos(&b));
     }
 }

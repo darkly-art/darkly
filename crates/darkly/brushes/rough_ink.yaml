@@ -1,15 +1,15 @@
 name: Rough Ink
 category: Basic
 nodes:
-  1:
+  pen_input:
     type: pen_input
-  100:
+  brush_settings:
     type: brush_settings
     inputs:
       stabilize: 0.6
-  2:
+  paint_color:
     type: paint_color
-  3:
+  curve:
     type: curve
     inputs:
       curve:
@@ -19,36 +19,36 @@ nodes:
         - 0.7
       - - 1.0
         - 1.0
-  4:
+  random:
     type: random
-  5:
+  random_2:
     type: random
-  6:
+  random_3:
     type: random
-  7:
+  shape:
     type: shape
     inputs:
       algorithm: 1
       frequency: 8.0
       octaves: 4.0
       softness: 0.1
-  8:
+  stamp:
     type: stamp
-  9:
+  paint:
     type: paint
 connections:
-- '1.position -> 9.position'
-- '1.pressure -> 3.input'
-- '1.pressure -> 9.flow'
-- '2.color -> 8.color'
-- '3.output -> 9.size'
-- '4.value -> 7.amplitude'
-- '5.value -> 7.rotation_input'
-- '6.value -> 7.seed'
-- '7.mask -> 8.tip'
-- '8.dab -> 9.rgba'
+- 'pen_input.position -> paint.position'
+- 'pen_input.pressure -> curve.input'
+- 'pen_input.pressure -> paint.flow'
+- 'paint_color.color -> stamp.color'
+- 'curve.output -> paint.size'
+- 'random.value -> shape.amplitude'
+- 'random_2.value -> shape.rotation_input'
+- 'random_3.value -> shape.seed'
+- 'shape.mask -> stamp.tip'
+- 'stamp.dab -> paint.rgba'
 exposed_ports:
-  "100.stabilize": {}
-  "100.size": {}
-  "9.flow": {}
-  "9.opacity": {}
+  "brush_settings.stabilize": {}
+  "brush_settings.size": {}
+  "paint.flow": {}
+  "paint.opacity": {}

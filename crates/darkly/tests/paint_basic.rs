@@ -64,7 +64,7 @@ fn render_single_dab_with_pressure(
         .unwrap_or_else(|err| panic!("brush `{brush_name}`: {err}"));
     graph
         .set_port_default(
-            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
             "size",
             size_override,
         )

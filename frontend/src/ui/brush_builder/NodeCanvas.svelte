@@ -59,8 +59,8 @@
     // know about `zoom` or `pan`; they ask the coord system instead.
 
     export interface NodeCanvasContext {
-        register(nodeId: number, portName: string, dir: string, offset: { x: number; y: number }): void;
-        unregister(nodeId: number, portName: string, dir: string): void;
+        register(nodeId: string, portName: string, dir: string, offset: { x: number; y: number }): void;
+        unregister(nodeId: string, portName: string, dir: string): void;
         coords: GraphCoords;
     }
 
@@ -113,8 +113,8 @@
 
     // --- Wire path computation ---
 
-    function portWorldPos(nodeId: number, portName: string, dir: string) {
-        const node = brushGraph.graph?.nodes[String(nodeId)];
+    function portWorldPos(nodeId: string, portName: string, dir: string) {
+        const node = brushGraph.graph?.nodes[nodeId];
         if (!node) return null;
         const pos = brushGraph.nodePositions[nodeId];
         if (!pos) return null;
@@ -264,7 +264,7 @@
             const portEl = target?.closest('[data-port-node]') as HTMLElement | null;
             if (portEl) {
                 const drag = brushGraph.draggingFrom;
-                const targetNode = Number(portEl.dataset.portNode);
+                const targetNode = portEl.dataset.portNode!;
                 const targetPort = portEl.dataset.portName!;
                 const targetDir = portEl.dataset.portDir as 'Input' | 'Output';
 
@@ -328,9 +328,9 @@
         e.preventDefault();
         if (!e.dataTransfer) return;
         // Drop targets the selected Image node, if any.
-        let nodeId: number | null = null;
+        let nodeId: string | null = null;
         if (brushGraph.selectedNode != null) {
-            const node = brushGraph.graph?.nodes[String(brushGraph.selectedNode)];
+            const node = brushGraph.graph?.nodes[brushGraph.selectedNode];
             if (node?.type_id === 'image') nodeId = brushGraph.selectedNode;
         }
         if (nodeId == null) return;

@@ -67,13 +67,13 @@ fn render_liquify_dabs(size_override: f32, dabs: &[([f32; 2], f32, f32)]) -> Vec
     let term_id = darkly::brush::find_terminal(&graph).expect("Liquify brush has a terminal");
     graph
         .set_port_default(
-            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
             "size",
             size_override,
         )
         .unwrap();
     // Push strength to max so the test's warp is unambiguous.
-    graph.set_port_default(term_id, "strength", 1.0).unwrap();
+    graph.set_port_default(&term_id, "strength", 1.0).unwrap();
 
     let (device, queue) = shared_device();
     let (layer_texture, layer_view) =

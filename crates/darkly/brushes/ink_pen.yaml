@@ -1,23 +1,23 @@
 name: Ink Pen
 category: Basic
 nodes:
-  1:
+  pen_input:
     type: pen_input
-  100:
+  brush_settings:
     type: brush_settings
     inputs:
       stabilize: 0.6
-  2:
+  paint_color:
     type: paint_color
-  3:
+  shape:
     type: shape
     inputs:
       softness: 0.1
-  4:
+  stamp:
     type: stamp
-  5:
+  paint:
     type: paint
-  6:
+  curve:
     type: curve
     inputs:
       curve:
@@ -28,16 +28,16 @@ nodes:
       - - 1.0
         - 1.0
 connections:
-- '1.position -> 5.position'
-- '1.pressure -> 5.flow'
-- '1.pressure -> 6.input'
-- '2.color -> 4.color'
-- '3.mask -> 4.tip'
-- '4.dab -> 5.rgba'
-- '6.output -> 5.size'
+- 'pen_input.position -> paint.position'
+- 'pen_input.pressure -> paint.flow'
+- 'pen_input.pressure -> curve.input'
+- 'paint_color.color -> stamp.color'
+- 'shape.mask -> stamp.tip'
+- 'stamp.dab -> paint.rgba'
+- 'curve.output -> paint.size'
 exposed_ports:
-  "100.stabilize": {}
-  "100.size": {}
-  "3.softness": {}
-  "5.flow": {}
-  "5.opacity": {}
+  "brush_settings.stabilize": {}
+  "brush_settings.size": {}
+  "shape.softness": {}
+  "paint.flow": {}
+  "paint.opacity": {}

@@ -52,7 +52,7 @@ fn render_one_dab(brush_name: &str, color: [f32; 4], canvas: &[u8]) -> Vec<u8> {
     // Small size keeps the dab footprint well clear of the corner pixel.
     graph
         .set_port_default(
-            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
             "size",
             0.05,
         )

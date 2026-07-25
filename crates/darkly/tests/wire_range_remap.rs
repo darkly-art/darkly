@@ -246,7 +246,7 @@ fn math_node_output_passes_through_to_ranged_input() {
                 port: "result".into(),
             },
             PortRef {
-                node: multiply_sink,
+                node: multiply_sink.clone(),
                 port: "a".into(),
             },
         )
@@ -260,7 +260,7 @@ fn math_node_output_passes_through_to_ranged_input() {
     // the evaluator after any wire remap). Read by node id to disambiguate
     // from the source multiply.
     let slot = runner
-        .find_node_output_slot(multiply_sink, "result")
+        .find_node_output_slot(&multiply_sink, "result")
         .expect("sink slot exists");
     let v = match runner.read_slot(slot).expect("slot has value") {
         ScalarValue::Scalar(v) => v,

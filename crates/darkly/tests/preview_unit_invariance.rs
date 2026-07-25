@@ -77,7 +77,7 @@ fn render_big_round() -> Out {
     // texture_half = 64).
     graph
         .set_port_default(
-            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
             "size",
             2.0,
         )

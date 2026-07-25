@@ -174,7 +174,7 @@ impl DarklyEngine {
                 if port.dir == PortDir::Input {
                     brush
                         .defaults
-                        .insert((node.id, port.name.clone()), port.value.as_f32());
+                        .insert((node.id.clone(), port.name.clone()), port.value.as_f32());
                 }
             }
         }
@@ -604,10 +604,10 @@ impl DarklyEngine {
     /// preview means a new arm in the type-id match below; nodes
     /// without a preview implementation return empty.
     #[handler(returns = bytes)]
-    pub fn brush_node_preview(&mut self, node_id: u64) -> Vec<u8> {
+    pub fn brush_node_preview(&mut self, node_id: &str) -> Vec<u8> {
         let tool = self.tool_session.read();
         let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
-        let Some(node) = brush.graph.nodes().get(&NodeId(node_id)) else {
+        let Some(node) = brush.graph.nodes().get(&NodeId(node_id.to_string())) else {
             return Vec::new();
         };
         match node.type_id.as_str() {
@@ -751,8 +751,19 @@ impl DarklyEngine {
     where
         F: FnOnce(&mut Graph<BrushWireType>) -> Result<(), String>,
     {
+        self.try_mutate_ret(kind, |g| mutation(g))
+            .map(|(json, ())| json)
+    }
+
+    /// Like [`Self::try_mutate`] but the mutation can hand back a value
+    /// (e.g. the id of a node it added). Returns `(graph_json, value)` on
+    /// success; the active graph is unchanged on any failure.
+    fn try_mutate_ret<F, T>(&mut self, kind: ChangeKind, mutation: F) -> Result<(String, T), String>
+    where
+        F: FnOnce(&mut Graph<BrushWireType>) -> Result<T, String>,
+    {
         let mut candidate = self.active_brush_graph();
-        mutation(&mut candidate)?;
+        let value = mutation(&mut candidate)?;
         // Validate by compiling — surfaces e.g. missing-WGSL upstream
         // nodes before we commit anything visible.
         crate::brush::compile_graph(&candidate)?;
@@ -765,30 +776,29 @@ impl DarklyEngine {
         // validation above) but it owns the version-bump + preview
         // regen rules — keep them in one place.
         self.compile_active(kind)?;
-        Ok(self.active_graph_json())
+        Ok((self.active_graph_json(), value))
     }
 
     /// Add a node to the active graph and compile.
-    /// Returns the updated graph JSON on success.
-    #[handler(returns = graph)]
-    pub fn brush_graph_add_node(&mut self, type_id: &str) -> Result<String, String> {
+    /// Returns the updated graph JSON plus the id the graph assigned to the
+    /// new node (kind-derived, so the caller can't compute it itself).
+    #[handler(returns = graph_node)]
+    pub fn brush_graph_add_node(&mut self, type_id: &str) -> Result<(String, String), String> {
         let registry = crate::brush::registry();
         let reg = registry
             .get(type_id)
             .ok_or_else(|| format!("unknown node type: {type_id}"))?;
         let ports = reg.ports.clone();
         let type_id = type_id.to_string();
-        self.try_mutate(ChangeKind::Topology, |g| {
-            g.add_node(type_id, ports);
-            Ok(())
-        })
+        self.try_mutate_ret(ChangeKind::Topology, |g| Ok(g.add_node(type_id, ports).0))
     }
 
     /// Remove a node from the active graph and compile.
     #[handler(returns = graph)]
-    pub fn brush_graph_remove_node(&mut self, node_id: u64) -> Result<String, String> {
+    pub fn brush_graph_remove_node(&mut self, node_id: &str) -> Result<String, String> {
         self.try_mutate(ChangeKind::Topology, |g| {
-            g.remove_node(NodeId(node_id)).map_err(|e| format!("{e}"))
+            g.remove_node(&NodeId(node_id.to_string()))
+                .map_err(|e| format!("{e}"))
         })
     }
 
@@ -796,17 +806,17 @@ impl DarklyEngine {
     #[handler(returns = graph)]
     pub fn brush_graph_connect(
         &mut self,
-        from_node: u64,
+        from_node: &str,
         from_port: &str,
-        to_node: u64,
+        to_node: &str,
         to_port: &str,
     ) -> Result<String, String> {
         let from_ref = PortRef {
-            node: NodeId(from_node),
+            node: NodeId(from_node.to_string()),
             port: from_port.into(),
         };
         let to_ref = PortRef {
-            node: NodeId(to_node),
+            node: NodeId(to_node.to_string()),
             port: to_port.into(),
         };
         self.try_mutate(ChangeKind::Topology, |g| {
@@ -820,17 +830,17 @@ impl DarklyEngine {
     #[handler(returns = graph)]
     pub fn brush_graph_disconnect(
         &mut self,
-        from_node: u64,
+        from_node: &str,
         from_port: &str,
-        to_node: u64,
+        to_node: &str,
         to_port: &str,
     ) -> Result<String, String> {
         let from_ref = PortRef {
-            node: NodeId(from_node),
+            node: NodeId(from_node.to_string()),
             port: from_port.into(),
         };
         let to_ref = PortRef {
-            node: NodeId(to_node),
+            node: NodeId(to_node.to_string()),
             port: to_port.into(),
         };
         self.try_mutate(ChangeKind::Topology, |g| {
@@ -845,12 +855,12 @@ impl DarklyEngine {
     /// `set_param` (by index) / `set_port_default` (by name) pair.
     pub fn brush_graph_set_input(
         &mut self,
-        node_id: u64,
+        node_id: &str,
         input_name: &str,
         value: InputValue,
     ) -> Result<String, String> {
         self.try_mutate(ChangeKind::Topology, |g| {
-            g.set_port_value(NodeId(node_id), input_name, value)
+            g.set_port_value(&NodeId(node_id.to_string()), input_name, value)
                 .map_err(|e| format!("{e}"))
         })
     }
@@ -915,10 +925,7 @@ impl DarklyEngine {
             let Some((nid_str, port_name)) = key.split_once('.') else {
                 continue;
             };
-            let Ok(node_id_raw) = nid_str.parse::<u64>() else {
-                continue;
-            };
-            let node_id = NodeId(node_id_raw);
+            let node_id = NodeId(nid_str.to_string());
             let Some(node) = brush.graph.nodes().get(&node_id) else {
                 continue;
             };
@@ -955,7 +962,7 @@ impl DarklyEngine {
                     let unit_type = reg_port.map_or(port.unit_type, |rp| rp.unit_type);
                     let reset_default = brush
                         .defaults
-                        .get(&(node_id, port_name.to_string()))
+                        .get(&(node_id.clone(), port_name.to_string()))
                         .copied()
                         .unwrap_or_else(|| {
                             reg_port
@@ -1000,7 +1007,7 @@ impl DarklyEngine {
 
             result.push(ExposedPortInfo {
                 key: key.clone(),
-                node_id: node_id.0,
+                node_id: node_id.0.clone(),
                 port_name: port_name.to_string(),
                 label,
                 icon,
@@ -1018,11 +1025,11 @@ impl DarklyEngine {
     #[handler(returns = graph)]
     pub fn brush_set_exposed_port(
         &mut self,
-        node_id: u64,
+        node_id: &str,
         port_name: &str,
         display_value: f32,
     ) -> Result<String, String> {
-        let nid = NodeId(node_id);
+        let nid = NodeId(node_id.to_string());
 
         // Snapshot the node's type_id under a brief read guard so the
         // registry lookup below doesn't have to re-acquire the lock.
@@ -1060,7 +1067,7 @@ impl DarklyEngine {
             ChangeKind::ScrubOnly
         };
         self.try_mutate(kind, |g| {
-            g.set_port_default(nid, port_name, port_value)
+            g.set_port_default(&nid, port_name, port_value)
                 .map_err(|e| format!("{e}"))
         })
     }
@@ -1071,7 +1078,7 @@ impl DarklyEngine {
     #[handler(returns = graph)]
     pub fn brush_graph_expose_port(
         &mut self,
-        node_id: u64,
+        node_id: &str,
         port_name: &str,
     ) -> Result<String, String> {
         self.tool_session
@@ -1079,7 +1086,7 @@ impl DarklyEngine {
             .get_mut::<BrushState>()
             .expect(NO_BRUSH_STATE)
             .graph
-            .expose_port(NodeId(node_id), port_name)
+            .expose_port(&NodeId(node_id.to_string()), port_name)
             .map_err(|e| format!("{e}"))?;
         self.bump_brush_topology_version();
         Ok(self.active_graph_json())
@@ -1091,7 +1098,7 @@ impl DarklyEngine {
     #[handler(returns = graph)]
     pub fn brush_graph_unexpose_port(
         &mut self,
-        node_id: u64,
+        node_id: &str,
         port_name: &str,
     ) -> Result<String, String> {
         self.tool_session
@@ -1099,7 +1106,7 @@ impl DarklyEngine {
             .get_mut::<BrushState>()
             .expect(NO_BRUSH_STATE)
             .graph
-            .unexpose_port(NodeId(node_id), port_name);
+            .unexpose_port(&NodeId(node_id.to_string()), port_name);
         self.bump_brush_topology_version();
         Ok(self.active_graph_json())
     }
@@ -1192,7 +1199,7 @@ pub struct ExposedPortInfo {
     /// `set_exposed_port_meta` / `reorder_exposed_port` without having
     /// to reconstruct the format.
     pub key: String,
-    pub node_id: u64,
+    pub node_id: String,
     pub port_name: String,
     pub label: String,
     pub icon: String,

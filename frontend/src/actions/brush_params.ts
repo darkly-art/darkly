@@ -40,7 +40,7 @@ function clamp(v: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, v));
 }
 
-function commit(nodeId: number, portName: string, value: number) {
+function commit(nodeId: string, portName: string, value: number) {
     brushGraph.setExposedPortValueLocal(nodeId, portName, value);
     brushGraph.setExposedPortValue(nodeId, portName, value);
 }

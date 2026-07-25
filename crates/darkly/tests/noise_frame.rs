@@ -69,13 +69,13 @@ fn build_dab_noise_graph() -> Graph<BrushWireType> {
         ("space", InputValue::Int(1)),
         ("scale_with_brush", InputValue::Bool(false)),
     ] {
-        graph.set_port_value(noise, name, v).unwrap();
+        graph.set_port_value(&noise, name, v).unwrap();
     }
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     let wires = [
-        (pen, "position", term, "position"),
-        (pen, "drawing_angle", noise, "rotation"),
-        (noise, "color", term, "rgba"),
+        (pen.clone(), "position", term.clone(), "position"),
+        (pen.clone(), "drawing_angle", noise.clone(), "rotation"),
+        (noise.clone(), "color", term.clone(), "rgba"),
     ];
     for (fnode, fport, tnode, tport) in wires {
         graph
@@ -94,7 +94,7 @@ fn build_dab_noise_graph() -> Graph<BrushWireType> {
     // Big dab so the grain fills most of the preview texture.
     graph
         .set_port_default(
-            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
             "size",
             0.45,
         )

@@ -58,20 +58,19 @@ export interface PortDef {
 }
 
 export interface NodeInstance {
-    id: number;         // NodeId(u64) — safe as f64 for small values
+    id: string;
     type_id: string;
     ports: PortDef[];   // the node's single, unified input/output list
 }
 
 export interface Connection {
-    from: { node: number; port: string };
-    to: { node: number; port: string };
+    from: { node: string; port: string };
+    to: { node: string; port: string };
 }
 
 export interface BrushGraph {
     nodes: Record<string, NodeInstance>;  // keyed by NodeId as string
     connections: Connection[];
-    next_id: number;
 }
 
 export interface NodeTypeInfo {
@@ -96,7 +95,7 @@ export interface ExposedPortInfo {
     /** `"<node_id>.<port_name>"` — passed back to setExposedPortMeta /
      *  reorderExposedPort to address the same entry. */
     key: string;
-    nodeId: number;
+    nodeId: string;
     portName: string;
     label: string;
     icon: string;
@@ -139,7 +138,7 @@ export class BrushGraphState {
 
     /** UI-only node positions, keyed by node id. Populated by `autoLayout`
      *  after every structural change; never sent to Rust. */
-    nodePositions = $state<Record<number, [number, number]>>({});
+    nodePositions = $state<Record<string, [number, number]>>({});
 
     /** Registry of available node types (from WASM). */
     nodeTypes = $state<NodeTypeInfo[]>([]);
@@ -158,13 +157,13 @@ export class BrushGraphState {
     fullscreen = $state(false);
 
     /** Node currently being dragged (for drag-to-connect). */
-    draggingFrom = $state<{ node: number; port: string; dir: 'Input' | 'Output' } | null>(null);
+    draggingFrom = $state<{ node: string; port: string; dir: 'Input' | 'Output' } | null>(null);
 
     /** Mouse position in graph coordinates during wire drag. */
     dragMouse = $state<{ x: number; y: number } | null>(null);
 
     /** Currently selected node ID. */
-    selectedNode = $state<number | null>(null);
+    selectedNode = $state<string | null>(null);
 
     /** Cached image thumbnails for Image nodes, keyed by resource_name. */
     imageThumbnails = new Map<string, ImageBitmap>();
@@ -368,13 +367,13 @@ export class BrushGraphState {
     }
 
     /** Set an exposed port's value (display-space) via Rust. */
-    async setExposedPortValue(nodeId: number, portName: string, displayValue: number) {
+    async setExposedPortValue(nodeId: string, portName: string, displayValue: number) {
         if (!app.engine) return;
         await this.applyResult(await app.engine.api.brushSetExposedPort({ node_id: nodeId, port_name: portName, display_value: displayValue }));
     }
 
     /** Optimistic local update for an exposed port's display value. */
-    setExposedPortValueLocal(nodeId: number, portName: string, displayValue: number) {
+    setExposedPortValueLocal(nodeId: string, portName: string, displayValue: number) {
         const port = this.exposedPorts.find(
             p => p.nodeId === nodeId && p.portName === portName
         );
@@ -384,19 +383,19 @@ export class BrushGraphState {
     }
 
     /** Append a brush-bar entry for an input port. Idempotent. */
-    async exposePort(nodeId: number, portName: string) {
+    async exposePort(nodeId: string, portName: string) {
         if (!app.engine) return;
         await this.applyResult(await app.engine.api.brushGraphExposePort({ node_id: nodeId, port_name: portName }));
     }
 
     /** Drop a brush-bar entry. Idempotent. */
-    async unexposePort(nodeId: number, portName: string) {
+    async unexposePort(nodeId: string, portName: string) {
         if (!app.engine) return;
         await this.applyResult(await app.engine.api.brushGraphUnexposePort({ node_id: nodeId, port_name: portName }));
     }
 
     /** Returns true when the named input port has a live brush-bar entry. */
-    isPortExposed(nodeId: number, portName: string): boolean {
+    isPortExposed(nodeId: string, portName: string): boolean {
         return this.exposedPorts.some(
             (p) => p.nodeId === nodeId && p.portName === portName,
         );
@@ -452,7 +451,7 @@ export class BrushGraphState {
         if (!this.graph) return false;
         const ids = Object.keys(this.graph.nodes);
         if (ids.length === 0) return false;
-        return ids.every((idStr) => !this.nodePositions[Number(idStr)]);
+        return ids.every((id) => !this.nodePositions[id]);
     }
 
     /**
@@ -464,10 +463,9 @@ export class BrushGraphState {
         if (!app.engine) return;
         const layout = await app.engine.api.brushGraphAutoLayout({ sizes: sizes ?? {} }) as Record<string, [number, number]>;
         if (layout && typeof layout === 'object') {
-            const next: Record<number, [number, number]> = {};
-            for (const [idStr, pos] of Object.entries(layout)) {
-                const id = Number(idStr);
-                if (Number.isFinite(id) && Array.isArray(pos)) {
+            const next: Record<string, [number, number]> = {};
+            for (const [id, pos] of Object.entries(layout)) {
+                if (Array.isArray(pos)) {
                     next[id] = [pos[0], pos[1]];
                 }
             }
@@ -478,14 +476,16 @@ export class BrushGraphState {
     /** Add a node of the given type. The new node is placed at `(x, y)` in
      *  the local positions map. Returns the new node's ID, or null if the
      *  add failed (e.g. the Rust compile step rejected the new graph). */
-    async addNode(typeId: string, x: number, y: number): Promise<number | null> {
+    async addNode(typeId: string, x: number, y: number): Promise<string | null> {
         if (!app.engine) return null;
-        await this.applyResult(await app.engine.api.brushGraphAddNode({ type_id: typeId }));
+        const result = await app.engine.api.brushGraphAddNode({ type_id: typeId });
+        await this.applyResult(result);
         // On failure `applyResult` records the error and leaves `this.graph`
-        // unchanged; bail before deriving an id from a stale `next_id`.
+        // unchanged; bail before reading the assigned id.
         if (this.error) return null;
         if (!this.graph) return null;
-        const id = this.graph.next_id - 1;
+        const id = (result as { added_node_id?: string }).added_node_id;
+        if (!id) return null;
         // Position assignment is local-only — auto-layout would
         // disturb the user's current arrangement.
         this.nodePositions[id] = [x, y];
@@ -493,7 +493,7 @@ export class BrushGraphState {
     }
 
     /** Remove a node and all its connections. */
-    async removeNode(nodeId: number) {
+    async removeNode(nodeId: string) {
         if (!app.engine) return;
         if (this.selectedNode === nodeId) this.selectedNode = null;
         await this.applyResult(await app.engine.api.brushGraphRemoveNode({ node_id: nodeId }));
@@ -502,27 +502,27 @@ export class BrushGraphState {
 
     /** Update a node's UI position (drag-to-move). Local-only — positions
      *  are not persisted to Rust. */
-    moveNode(nodeId: number, x: number, y: number) {
+    moveNode(nodeId: string, x: number, y: number) {
         this.nodePositions[nodeId] = [x, y];
     }
 
     /** Connect two ports. */
-    async connect(fromNode: number, fromPort: string, toNode: number, toPort: string) {
+    async connect(fromNode: string, fromPort: string, toNode: string, toPort: string) {
         if (!app.engine) return;
         await this.applyResult(await app.engine.api.brushGraphConnect({ from_node: fromNode, from_port: fromPort, to_node: toNode, to_port: toPort }));
     }
 
     /** Disconnect a specific wire. */
-    async disconnect(fromNode: number, fromPort: string, toNode: number, toPort: string) {
+    async disconnect(fromNode: string, fromPort: string, toNode: string, toPort: string) {
         if (!app.engine) return;
         await this.applyResult(await app.engine.api.brushGraphDisconnect({ from_node: fromNode, from_port: fromPort, to_node: toNode, to_port: toPort }));
     }
 
     /** Update an input's authored value locally (for responsive slider
      *  feedback). One setter for every input kind. */
-    setInputLocal(nodeId: number, inputName: string, value: InputValue) {
+    setInputLocal(nodeId: string, inputName: string, value: InputValue) {
         if (!this.graph) return;
-        const node = this.graph.nodes[String(nodeId)];
+        const node = this.graph.nodes[nodeId];
         if (!node) return;
         const port = node.ports.find(p => p.name === inputName && p.dir === 'Input');
         if (port) port.value = value;
@@ -532,7 +532,7 @@ export class BrushGraphState {
      *  setter for every input kind — the unified replacement for the former
      *  `setParam` (by index) / `setPortDefault` (by name) pair. `kind` is one
      *  of `float`/`int`/`enum`/`bool`/`string`/`curve`. */
-    async setInput(nodeId: number, inputName: string, kind: string, value: InputValue) {
+    async setInput(nodeId: string, inputName: string, kind: string, value: InputValue) {
         if (!app.engine) return;
         await this.applyResult(await app.engine.api.brushGraphSetInput({ node_id: nodeId, input_name: inputName, kind, value }));
     }
@@ -555,7 +555,7 @@ export class BrushGraphState {
     }
 
     /** Check if a port is connected. */
-    isPortConnected(nodeId: number, portName: string, dir: 'Input' | 'Output'): boolean {
+    isPortConnected(nodeId: string, portName: string, dir: 'Input' | 'Output'): boolean {
         if (!this.graph) return false;
         if (dir === 'Input') {
             return this.graph.connections.some(c => c.to.node === nodeId && c.to.port === portName);
@@ -567,7 +567,7 @@ export class BrushGraphState {
      * Upload an image to WASM, set it as the resource_name param on an
      * Image node, and cache a thumbnail for preview rendering.
      */
-    async uploadImageToNode(nodeId: number, resourceName: string, rgba: Uint8Array, width: number, height: number) {
+    async uploadImageToNode(nodeId: string, resourceName: string, rgba: Uint8Array, width: number, height: number) {
         if (!app.engine) return;
 
         // Upload to GPU via WASM.
@@ -592,7 +592,7 @@ export class BrushGraphState {
      * Upload an image from a Blob/File to an Image node.
      * Decodes via the browser, then calls uploadImageToNode.
      */
-    async uploadBlobToNode(nodeId: number, blob: Blob) {
+    async uploadBlobToNode(nodeId: string, blob: Blob) {
         const bitmap = await createImageBitmap(blob);
         const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
         const ctx = canvas.getContext('2d')!;
@@ -606,9 +606,9 @@ export class BrushGraphState {
     }
 
     /** Get the wire type of a port on a node. */
-    getPortWireType(nodeId: number, portName: string): string | null {
+    getPortWireType(nodeId: string, portName: string): string | null {
         if (!this.graph) return null;
-        const node = this.graph.nodes[String(nodeId)];
+        const node = this.graph.nodes[nodeId];
         if (!node) return null;
         const port = node.ports.find(p => p.name === portName);
         return port?.wire_type ?? null;

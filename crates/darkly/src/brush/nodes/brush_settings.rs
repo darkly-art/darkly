@@ -42,7 +42,7 @@ pub fn node_id(graph: &Graph<BrushWireType>) -> Option<NodeId> {
         .nodes()
         .iter()
         .find(|(_, n)| n.type_id == TYPE_ID)
-        .map(|(id, _)| *id)
+        .map(|(id, _)| id.clone())
 }
 
 /// Read a scalar input port default off the (first) `brush_settings` node in
@@ -192,7 +192,8 @@ impl BrushNodeEvaluator for BrushSettingsEvaluator {
                     bytes.extend_from_slice(bytemuck::bytes_of(&v));
                 }),
             });
-            wgsl.outputs.insert("size".into(), format!("d.{field_name}"));
+            wgsl.outputs
+                .insert("size".into(), format!("d.{field_name}"));
         }
         Ok(wgsl)
     }

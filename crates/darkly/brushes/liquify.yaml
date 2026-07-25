@@ -1,23 +1,23 @@
 name: Liquify
 category: Effects
 nodes:
-  1:
+  pen_input:
     type: pen_input
-  100:
+  brush_settings:
     type: brush_settings
     inputs:
       spacing: 0.0
       spacing_min_px: 4.0
       size: 0.3
-  2:
+  liquify:
     type: liquify
 connections:
-- '1.distance -> 2.distance'
-- '1.drawing_angle -> 2.direction'
-- '1.motion -> 2.motion'
-- '1.position -> 2.position'
+- 'pen_input.distance -> liquify.distance'
+- 'pen_input.drawing_angle -> liquify.direction'
+- 'pen_input.motion -> liquify.motion'
+- 'pen_input.position -> liquify.position'
 exposed_ports:
-  "100.stabilize": {}
-  "100.size": {}
-  "2.softness": {}
-  "2.strength": {}
+  "brush_settings.stabilize": {}
+  "brush_settings.size": {}
+  "liquify.softness": {}
+  "liquify.strength": {}

@@ -6,14 +6,14 @@ import { BrushGraphState, type BrushGraph, type NodeInstance } from '../brush_gr
 // placement mid-`addNode`, or it would relayout — and thus move — every
 // already-positioned node. `needsInitialLayout` encodes that distinction.
 
-function node(id: number): NodeInstance {
+function node(id: string): NodeInstance {
     return { id, type_id: 'test', ports: [] };
 }
 
-function graphWith(...ids: number[]): BrushGraph {
+function graphWith(...ids: string[]): BrushGraph {
     const nodes: Record<string, NodeInstance> = {};
-    for (const id of ids) nodes[String(id)] = node(id);
-    return { nodes, connections: [], next_id: Math.max(0, ...ids) + 1 };
+    for (const id of ids) nodes[id] = node(id);
+    return { nodes, connections: [] };
 }
 
 let state: BrushGraphState;
@@ -23,7 +23,7 @@ beforeEach(() => {
 
 describe('needsInitialLayout', () => {
     it('is true for a fresh graph where no node has a position', () => {
-        state.graph = graphWith(0, 1);
+        state.graph = graphWith('n0', 'n1');
         state.nodePositions = {};
         expect(state.needsInitialLayout).toBe(true);
     });
@@ -31,14 +31,14 @@ describe('needsInitialLayout', () => {
     it('is false when a node is already placed and a new one awaits placement', () => {
         // Regression: this is the transient mid-`addNode` state. Spawning a
         // node must not trigger a full relayout that moves the existing one.
-        state.graph = graphWith(0, 1);
-        state.nodePositions = { 0: [10, 20] };
+        state.graph = graphWith('n0', 'n1');
+        state.nodePositions = { n0: [10, 20] };
         expect(state.needsInitialLayout).toBe(false);
     });
 
     it('is false when every node is positioned', () => {
-        state.graph = graphWith(0, 1);
-        state.nodePositions = { 0: [10, 20], 1: [30, 40] };
+        state.graph = graphWith('n0', 'n1');
+        state.nodePositions = { n0: [10, 20], n1: [30, 40] };
         expect(state.needsInitialLayout).toBe(false);
     });
 

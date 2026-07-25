@@ -121,31 +121,31 @@ export type ExposedPortInfo = {
  * `set_exposed_port_meta` / `reorder_exposed_port` without having
  * to reconstruct the format.
  */
-key: string, nodeId: number, portName: string, label: string, icon: string, description: string, nodeDisplayName: string, data: ExposedValue, };
+key: string, nodeId: string, portName: string, label: string, icon: string, description: string, nodeDisplayName: string, data: ExposedValue, };
 
 export type BrushGraphAddNodeReq = { type_id: string, };
 
-export type BrushGraphAutoLayoutReq = { sizes: { [key in number]: [number, number] }, };
+export type BrushGraphAutoLayoutReq = { sizes: { [key in string]: [number, number] }, };
 
 export type BrushGraphJsonReq = { json: string, };
 
-export type BrushGraphConnectReq = { from_node: number, from_port: string, to_node: number, to_port: string, };
+export type BrushGraphConnectReq = { from_node: string, from_port: string, to_node: string, to_port: string, };
 
-export type BrushGraphDisconnectReq = { from_node: number, from_port: string, to_node: number, to_port: string, };
+export type BrushGraphDisconnectReq = { from_node: string, from_port: string, to_node: string, to_port: string, };
 
-export type BrushGraphExposePortReq = { node_id: number, port_name: string, };
+export type BrushGraphExposePortReq = { node_id: string, port_name: string, };
 
 export type BrushGraphYamlReq = { yaml: string, };
 
-export type BrushGraphRemoveNodeReq = { node_id: number, };
+export type BrushGraphRemoveNodeReq = { node_id: string, };
 
 export type BrushGraphReorderExposedPortReq = { key: string, new_index: number, };
 
 export type BrushGraphSetExposedPortMetaReq = { key: string, label: string, description: string, icon: string, };
 
-export type BrushGraphSetInputReq = { node_id: number, input_name: string, kind: string, value: JsonValue, };
+export type BrushGraphSetInputReq = { node_id: string, input_name: string, kind: string, value: JsonValue, };
 
-export type BrushGraphUnexposePortReq = { node_id: number, port_name: string, };
+export type BrushGraphUnexposePortReq = { node_id: string, port_name: string, };
 
 export type BrushInfo = { name: string, category: string, author: string, description: string, tags: Array<string>, 
 /**
@@ -158,13 +158,13 @@ icon: string | null, };
 
 export type BrushLoadReq = { name: string, };
 
-export type BrushNodePreviewReq = { node_id: number, };
+export type BrushNodePreviewReq = { node_id: string, };
 
-export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+export type PortDir = "Input" | "Output";
 
 export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
 
-export type PortDir = "Input" | "Output";
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -317,7 +317,21 @@ natural_range: [number, number] | null,
  * scrubbing this port bumps the topology version so the dab
  * thumbnail re-renders, not just the editor preview.
  */
-persist_in_thumbnail: boolean, };
+persist_in_thumbnail: boolean, 
+/**
+ * This input port is *also* a wire source: its resolved value (the
+ * wired value if driven, else the authored default) is available for
+ * other nodes to wire *from*, exactly like an output. Only meaningful
+ * on `dir == Input`; ignored on outputs (which are sources anyway).
+ *
+ * The editor shows the source handle only while the input is not
+ * itself wire-driven — a driven port's value is the driver's, so it
+ * should be tapped there instead. Consumers that resolve "which port a
+ * wire leaves from" must ask [`PortDef::is_source`], never
+ * `dir == Output`, or a settable-source is treated as a second-class
+ * source (skipped by wire-range remap, unreachable by `find_port`).
+ */
+source: boolean, };
 
 export type NodeRegistration = { 
 /**
@@ -378,7 +392,7 @@ preview_fallback_icon: string | null, };
 
 export type BrushSaveReq = { name: string, category: string, };
 
-export type BrushSetExposedPortReq = { node_id: number, port_name: string, display_value: number, };
+export type BrushSetExposedPortReq = { node_id: string, port_name: string, display_value: number, };
 
 export type BrushThumbnailReq = { name: string, };
 
@@ -414,14 +428,14 @@ export type FillBackgroundReq = { id: number, };
 
 export type FillBackgroundColorReq = { id: number, rgba: [number, number, number, number], };
 
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
 export type ParamInfo = { kind: string, name: string, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
 /**
  * Enum: `["Label1", "Label2", ...]`.
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
 options: JsonValue | null, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
 export type VeilTypeInfo = { type: string, displayName: string, 
 /**
@@ -1127,7 +1141,7 @@ export interface EngineApi {
     brushExport(req: BrushExportReq): Promise<{ bytes: Uint8Array }>;
     brushExposedPorts(): Promise<Array<ExposedPortInfo>>;
     brushGraphActive(): Promise<JsonValue>;
-    brushGraphAddNode(req: BrushGraphAddNodeReq): Promise<{ graph: JsonValue } | { error: string }>;
+    brushGraphAddNode(req: BrushGraphAddNodeReq): Promise<{ graph: JsonValue, added_node_id: string } | { error: string }>;
     brushGraphAutoLayout(req: BrushGraphAutoLayoutReq): Promise<Record<string, [number, number]>>;
     brushGraphCompile(req: BrushGraphJsonReq): Promise<null | { error: string }>;
     brushGraphConnect(req: BrushGraphConnectReq): Promise<{ graph: JsonValue } | { error: string }>;

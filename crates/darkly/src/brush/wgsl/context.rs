@@ -145,7 +145,7 @@ impl InputBinding {
 
 /// Per-node context passed to `compile_wgsl`.
 pub struct CompileWgslCtx<'a> {
-    pub node_id: NodeId,
+    pub node_id: &'a NodeId,
     pub port_defs: &'a [PortDef<BrushWireType>],
     pub inputs: HashMap<String, InputBinding>,
     /// Curve LUT, if this node has a `Curve` input.

@@ -87,7 +87,7 @@ fn render_clone(p: &CloneParams) -> Vec<u8> {
     // dab footprint samples red.
     graph
         .set_port_default(
-            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
             "size",
             0.15,
         )
@@ -255,7 +255,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 }
 
 /// Node id of the first node with `type_id` in the active brush graph.
-fn find_node_id(engine: &DarklyEngine, type_id: &str) -> u64 {
+fn find_node_id(engine: &DarklyEngine, type_id: &str) -> String {
     engine
         .active_brush_graph()
         .nodes()
@@ -264,6 +264,7 @@ fn find_node_id(engine: &DarklyEngine, type_id: &str) -> u64 {
         .unwrap_or_else(|| panic!("no '{type_id}' node in active graph"))
         .id
         .0
+        .clone()
 }
 
 /// Install the builtin Clone brush as the active graph, with the tip
@@ -279,7 +280,7 @@ fn install_clone_brush(engine: &mut DarklyEngine) {
     let term_id = find_node_id(engine, "paint");
     engine
         .brush_graph_set_input(
-            term_id,
+            &term_id,
             "size",
             darkly::brush::input_value::InputValue::Scalar(0.15),
         )
@@ -350,7 +351,7 @@ fn sample_merged_clones_composite() {
     install_clone_brush(&mut e);
     let clone_id = find_node_id(&e, "clone_source");
     e.brush_graph_set_input(
-        clone_id,
+        &clone_id,
         "merged",
         darkly::brush::input_value::InputValue::Scalar(1.0),
     )

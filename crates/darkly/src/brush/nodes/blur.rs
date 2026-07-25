@@ -140,7 +140,7 @@ impl ReadMirrorTerminal for BlurEvaluator {
         Some([half, half])
     }
 
-    fn pack_extra(&self, ctx: &EvalContext, gpu: &mut BrushGpuContext, node_id: u32, radius: f32) {
+    fn pack_extra(&self, ctx: &EvalContext, gpu: &mut BrushGpuContext, node_id: &str, radius: f32) {
         // Per-dab kernel radius, so a pressure-wired strength rides the
         // dab record. Inserted before `queue_dab` packs the record.
         let strength = ctx.input_f32("strength").clamp(0.0, 1.0);

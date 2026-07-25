@@ -53,7 +53,7 @@ pub enum ExtentContribution {
 /// plumbing: just port defs and a wired-input set so
 /// [`Self::port_max_value`] can pick the wire-aware max for each input.
 pub struct ExtentCtx<'a> {
-    pub node_id: NodeId,
+    pub node_id: &'a NodeId,
     pub port_defs: &'a [PortDef<BrushWireType>],
     /// Names of input ports on this node that have an inbound wire.
     /// Used by [`Self::port_max_value`] to decide whether to return
@@ -142,7 +142,7 @@ pub(crate) fn compose_brush_extent(
             .map(|s| s.port_name.clone())
             .collect();
         let ectx = ExtentCtx {
-            node_id: step.node_id,
+            node_id: &step.node_id,
             port_defs: &node.ports,
             wired_inputs,
         };

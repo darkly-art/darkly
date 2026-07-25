@@ -320,7 +320,7 @@ pub fn compile_brush_to_wgsl(
                 continue;
             };
             let remapped =
-                apply_wire_remap(expr, &src_port, step.node_id, &slot_info.port_name, graph);
+                apply_wire_remap(expr, &src_port, &step.node_id, &slot_info.port_name, graph);
             inputs.insert(slot_info.port_name.clone(), InputBinding::Wired(remapped));
         }
 
@@ -366,7 +366,7 @@ pub fn compile_brush_to_wgsl(
         };
 
         let cctx = CompileWgslCtx {
-            node_id: step.node_id,
+            node_id: &step.node_id,
             port_defs: &node.ports,
             inputs,
             lut: lut.as_ref(),
@@ -429,7 +429,7 @@ pub fn compile_brush_to_wgsl(
         {
             let (preview_node, preview_inputs, preview_consumed) = preview_cctx_parts;
             let preview_cctx = CompileWgslCtx {
-                node_id: step.node_id,
+                node_id: &step.node_id,
                 port_defs: &preview_node.ports,
                 inputs: preview_inputs,
                 lut: lut.as_ref(),
@@ -468,7 +468,7 @@ pub fn compile_brush_to_wgsl(
         // their wires.
         for (port_name, slot_idx) in &step.output_slots {
             let pr = PortRef {
-                node: step.node_id,
+                node: step.node_id.clone(),
                 port: port_name.clone(),
             };
             slot_to_port.insert(*slot_idx, pr.clone());
@@ -797,7 +797,7 @@ pub fn sample_graph_texture(slot: u32, uv_expr: &str) -> String {
 fn apply_wire_remap(
     expr: String,
     source: &PortRef,
-    dest_node: NodeId,
+    dest_node: &NodeId,
     dest_port: &str,
     graph: &crate::nodegraph::Graph<BrushWireType>,
 ) -> String {
@@ -812,7 +812,7 @@ fn apply_wire_remap(
         .and_then(|p| p.natural_range);
     let dst_range = graph
         .nodes()
-        .get(&dest_node)
+        .get(dest_node)
         .and_then(|n| {
             n.ports
                 .iter()
@@ -840,8 +840,8 @@ fn hash_graph_topology(graph: &crate::nodegraph::Graph<BrushWireType>) -> u64 {
     use std::hash::{Hash, Hasher};
 
     let mut hasher = DefaultHasher::new();
-    let mut node_ids: Vec<_> = graph.nodes().keys().copied().collect();
-    node_ids.sort_by_key(|n| n.0);
+    let mut node_ids: Vec<_> = graph.nodes().keys().cloned().collect();
+    node_ids.sort_by(|a, b| a.0.cmp(&b.0));
     for id in &node_ids {
         let node = &graph.nodes()[id];
         id.0.hash(&mut hasher);
@@ -859,9 +859,9 @@ fn hash_graph_topology(graph: &crate::nodegraph::Graph<BrushWireType>) -> u64 {
     let mut conns: Vec<_> = graph.connections.iter().collect();
     conns.sort_by_key(|c| {
         (
-            c.from.node.0,
+            c.from.node.0.clone(),
             c.from.port.clone(),
-            c.to.node.0,
+            c.to.node.0.clone(),
             c.to.port.clone(),
         )
     });

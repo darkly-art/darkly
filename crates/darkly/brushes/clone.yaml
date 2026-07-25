@@ -1,33 +1,33 @@
 name: Clone
 category: Misc
 nodes:
-  1:
+  pen_input:
     type: pen_input
-  100:
+  brush_settings:
     type: brush_settings
     inputs:
       spacing: 0.05
-  2:
+  shape:
     type: shape
     inputs:
       softness: 0.2
-  3:
+  clone_source:
     type: clone_source
-  4:
+  stamp:
     type: stamp
-  5:
+  paint:
     type: paint
 connections:
-- '1.position -> 3.center'
-- '1.position -> 5.position'
-- '1.pressure -> 5.size'
-- '2.mask -> 4.tip'
-- '3.color -> 4.color'
-- '4.dab -> 5.rgba'
+- 'pen_input.position -> clone_source.center'
+- 'pen_input.position -> paint.position'
+- 'pen_input.pressure -> paint.size'
+- 'shape.mask -> stamp.tip'
+- 'clone_source.color -> stamp.color'
+- 'stamp.dab -> paint.rgba'
 exposed_ports:
-  '100.size': {}
-  '5.opacity': {}
-  '2.softness': {}
-  '100.spacing': {}
-  '3.mode': {}
-  '3.merged': {}
+  'brush_settings.size': {}
+  'paint.opacity': {}
+  'shape.softness': {}
+  'brush_settings.spacing': {}
+  'clone_source.mode': {}
+  'clone_source.merged': {}

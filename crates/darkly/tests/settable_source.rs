@@ -36,7 +36,7 @@ fn builtins_own_base_size_on_brush_settings_and_preserve_its_value() {
 
         // (a) The size knob is exposed on brush_settings...
         assert!(
-            graph.is_port_exposed(settings_id, "size"),
+            graph.is_port_exposed(&settings_id, "size"),
             "{name}: brush_settings.size must be exposed in the brush bar",
         );
 
@@ -44,7 +44,7 @@ fn builtins_own_base_size_on_brush_settings_and_preserve_its_value() {
         // per-touch modulation now).
         let term_id = darkly::brush::find_terminal(graph).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(
-            !graph.is_port_exposed(term_id, "size"),
+            !graph.is_port_exposed(&term_id, "size"),
             "{name}: the terminal must not expose a size knob",
         );
 

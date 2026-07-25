@@ -7,7 +7,7 @@
     import CurveEditor from '../CurveEditor.svelte';
 
     interface Props {
-        nodeId: number;
+        nodeId: string;
         port: PortDef;
         side: 'left' | 'right';
     }
@@ -18,7 +18,7 @@
      *  Display metadata (unit_type, icon, label, description) comes from
      *  here — not the instance — so it stays current even for old graphs. */
     let regPort = $derived.by(() => {
-        const node = brushGraph.graph?.nodes[String(nodeId)];
+        const node = brushGraph.graph?.nodes[nodeId];
         if (!node) return null;
         const nodeType = brushGraph.getNodeType(node.type_id);
         return nodeType?.ports.find(p => p.name === port.name && p.dir === port.dir) ?? null;

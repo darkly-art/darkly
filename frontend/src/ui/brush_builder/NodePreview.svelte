@@ -6,7 +6,7 @@
     import { SignalCompressor } from '../../lib/signal_compressor';
 
     interface Props {
-        nodeId: number;
+        nodeId: string;
         width?: number;
         height?: number;
     }

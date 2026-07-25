@@ -68,7 +68,7 @@ fn render_dabs_on(
         .unwrap_or_else(|err| panic!("brush `{brush_name}`: {err}"));
     graph
         .set_port_default(
-            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
             "size",
             size_override,
         )
@@ -276,7 +276,7 @@ fn begin_stroke_clears_scratch_so_rewind_drops_defunct_pigment() {
     // below (40, 64) and (88, 64) are well isolated and don't overlap.
     graph
         .set_port_default(
-            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
             "size",
             0.05,
         )

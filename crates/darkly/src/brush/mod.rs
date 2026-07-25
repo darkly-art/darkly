@@ -179,9 +179,15 @@ pub fn graph_capabilities(
     let mut nodes: Vec<_> = graph
         .nodes()
         .values()
-        .filter_map(|n| registry.get(&n.type_id).map(|reg| (n.id, &reg.node)))
+        .filter_map(|n| {
+            registry
+                .get(&n.type_id)
+                .map(|reg| (n.id.clone(), &reg.node))
+        })
         .collect();
-    nodes.sort_by_key(|(id, reg)| (!reg.is_terminal, id.0));
+    nodes.sort_by(|(a_id, a_reg), (b_id, b_reg)| {
+        (!a_reg.is_terminal, &a_id.0).cmp(&(!b_reg.is_terminal, &b_id.0))
+    });
 
     let mut caps = BrushGraphCapabilities {
         supports_erase: true,
@@ -231,10 +237,10 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
     let terminal = graph.add_node("paint", registry.get("paint").unwrap().ports.clone());
 
     let wires = [
-        (pen, "pressure", terminal, "flow"),
-        (paint_color, "color", stamp, "color"),
-        (shape, "mask", stamp, "tip"),
-        (stamp, "dab", terminal, "rgba"),
+        (pen.clone(), "pressure", terminal.clone(), "flow"),
+        (paint_color, "color", stamp.clone(), "color"),
+        (shape, "mask", stamp.clone(), "tip"),
+        (stamp, "dab", terminal.clone(), "rgba"),
         (pen, "position", terminal, "position"),
     ];
     for (fnode, fport, tnode, tport) in wires {
@@ -338,12 +344,12 @@ pub fn reset_exposed_scrubs(graph: &mut crate::nodegraph::Graph<BrushWireType>) 
                 && port.dir == crate::nodegraph::PortDir::Input
                 && !port.persist_in_thumbnail
             {
-                resets.push((*id, port.name.clone(), port.value.as_f32()));
+                resets.push((id.clone(), port.name.clone(), port.value.as_f32()));
             }
         }
     }
     for (id, name, default) in resets {
-        let _ = graph.set_port_default(id, &name, default);
+        let _ = graph.set_port_default(&id, &name, default);
     }
 }
 
@@ -386,18 +392,18 @@ mod tests {
         graph
             .connect(
                 PortRef {
-                    node: pen,
+                    node: pen.clone(),
                     port: "pressure".into(),
                 },
                 PortRef {
-                    node: multiply,
+                    node: multiply.clone(),
                     port: "a".into(),
                 },
             )
             .unwrap();
 
         // multiply.b defaults to 0.5 — no wire, just a port default.
-        graph.set_port_default(multiply, "b", 0.5).unwrap();
+        graph.set_port_default(&multiply, "b", 0.5).unwrap();
 
         (graph, pen, multiply)
     }
@@ -419,7 +425,7 @@ mod tests {
         runner.execute_cpu();
 
         // multiply.result should be 0.8 * 0.5 = 0.4.
-        let slot = runner.find_node_output_slot(multiply, "result").unwrap();
+        let slot = runner.find_node_output_slot(&multiply, "result").unwrap();
         let result = runner.read_slot(slot).unwrap();
         match result {
             ScalarValue::Scalar(v) => assert!((v - 0.4).abs() < 1e-6, "expected 0.4, got {v}"),
@@ -446,7 +452,7 @@ mod tests {
                     port: "pressure".into(),
                 },
                 PortRef {
-                    node: curve,
+                    node: curve.clone(),
                     port: "input".into(),
                 },
             )
@@ -462,7 +468,7 @@ mod tests {
         runner.seed_sensors(&info, [0.0, 0.0, 0.0, 1.0], 42, 0);
         runner.execute_cpu();
 
-        let slot = runner.find_node_output_slot(curve, "output").unwrap();
+        let slot = runner.find_node_output_slot(&curve, "output").unwrap();
         let result = runner.read_slot(slot).unwrap();
         match result {
             ScalarValue::Scalar(v) => {
@@ -485,7 +491,7 @@ mod tests {
         let curve = graph.add_node("curve", curve_reg.ports.clone());
         graph
             .set_port_value(
-                curve,
+                &curve,
                 "curve",
                 crate::brush::input_value::InputValue::Curve(vec![
                     [0.0, 0.0],
@@ -502,7 +508,7 @@ mod tests {
                     port: "pressure".into(),
                 },
                 PortRef {
-                    node: curve,
+                    node: curve.clone(),
                     port: "input".into(),
                 },
             )
@@ -518,7 +524,7 @@ mod tests {
         runner.seed_sensors(&info, [0.0, 0.0, 0.0, 1.0], 42, 0);
         runner.execute_cpu();
 
-        let slot = runner.find_node_output_slot(curve, "output").unwrap();
+        let slot = runner.find_node_output_slot(&curve, "output").unwrap();
         let result = runner.read_slot(slot).unwrap();
         match result {
             ScalarValue::Scalar(v) => {
@@ -565,7 +571,7 @@ mod tests {
 
         runner.execute_cpu();
 
-        let slot = runner.find_node_output_slot(multiply, "result").unwrap();
+        let slot = runner.find_node_output_slot(&multiply, "result").unwrap();
         let result = runner.read_slot(slot).unwrap();
         match result {
             ScalarValue::Scalar(v) => {
@@ -594,7 +600,7 @@ mod tests {
         runner.seed_sensors(&info, fg_color, 42, 0);
         runner.execute_cpu();
 
-        let slot = runner.find_node_output_slot(color_node, "color").unwrap();
+        let slot = runner.find_node_output_slot(&color_node, "color").unwrap();
         let result = runner.read_slot(slot).unwrap();
         match result {
             ScalarValue::Vec4(c) => assert_eq!(c, fg_color),

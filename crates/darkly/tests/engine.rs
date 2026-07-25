@@ -775,7 +775,7 @@ fn lasso_selection_performance_and_correctness() {
     );
 }
 
-fn find_node_id(engine: &DarklyEngine, type_id: &str) -> u64 {
+fn find_node_id(engine: &DarklyEngine, type_id: &str) -> String {
     engine
         .active_brush_graph()
         .nodes()
@@ -784,6 +784,7 @@ fn find_node_id(engine: &DarklyEngine, type_id: &str) -> u64 {
         .unwrap_or_else(|| panic!("no '{type_id}' node in default graph"))
         .id
         .0
+        .clone()
 }
 
 // ============================================================================
@@ -839,7 +840,7 @@ fn brush_settings_spacing_port_controls_dab_density() {
     let settings_id = find_node_id(&engine, brush_settings::TYPE_ID);
     engine
         .brush_graph_set_input(
-            settings_id,
+            &settings_id,
             "spacing",
             darkly::brush::input_value::InputValue::Scalar(0.10),
         )
@@ -853,7 +854,7 @@ fn brush_settings_spacing_port_controls_dab_density() {
     let settings_id = find_node_id(&engine, brush_settings::TYPE_ID);
     engine
         .brush_graph_set_input(
-            settings_id,
+            &settings_id,
             "spacing",
             darkly::brush::input_value::InputValue::Scalar(1.0),
         )
@@ -895,7 +896,7 @@ fn small_brush_does_not_emit_subpixel_dab_spacing() {
     let settings_id = find_node_id(&engine, brush_settings::TYPE_ID);
     engine
         .brush_graph_set_input(
-            settings_id,
+            &settings_id,
             "spacing",
             darkly::brush::input_value::InputValue::Scalar(0.04),
         )
@@ -5268,7 +5269,7 @@ fn long_stabilized_stroke_no_fallback() {
     // + 1 from the influence-radius model). Spacing = 11 / 7 = 1.
     engine
         .brush_graph_set_input(
-            settings_id,
+            &settings_id,
             "stabilize",
             darkly::brush::input_value::InputValue::Scalar(1.0),
         )

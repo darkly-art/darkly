@@ -51,7 +51,7 @@ pub struct EvalContext<'a> {
     /// via [`Self::base_size`].
     pub base_size: f32,
     /// This node instance's ID (used to salt PRNG for independence).
-    pub node_id: NodeId,
+    pub node_id: &'a NodeId,
 }
 
 impl EvalContext<'_> {
@@ -104,10 +104,22 @@ impl EvalContext<'_> {
     /// `dab_index * 2 + 1` for its x and y offsets.
     #[inline]
     pub fn prng_at(&self, index: u32) -> f32 {
-        let salt = self.node_id.0 as u32;
+        let salt = node_salt(self.node_id);
         let seed = self.stroke_seed.wrapping_add(salt.wrapping_mul(0x9E3779B9));
         prng_f32(seed, index)
     }
+}
+
+/// A stable `u32` derived from a node's string id, used to salt per-node
+/// PRNG streams so multiple random-using nodes in one graph draw
+/// independent sequences. `"noise"` and `"noise_2"` hash to different
+/// salts; the same id always hashes to the same salt within a binary run
+/// (which is all a per-stroke seed needs).
+pub(crate) fn node_salt(id: &NodeId) -> u32 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    id.0.hash(&mut h);
+    h.finish() as u32
 }
 
 /// Gather a step's connected inputs from the slot table into `scratch`,
@@ -124,7 +136,7 @@ impl EvalContext<'_> {
 fn gather_inputs_into(
     slots: &[Option<ScalarValue>],
     input_slots: &[InputSlot],
-    dest_node: NodeId,
+    dest_node: &NodeId,
     node_data: &HashMap<NodeId, NodeData>,
     scratch: &mut Vec<Option<ScalarValue>>,
 ) {
@@ -151,7 +163,7 @@ fn gather_inputs_into(
 fn remap_for_wire(
     value: ScalarValue,
     source: &PortRef,
-    dest_node: NodeId,
+    dest_node: &NodeId,
     dest_port: &str,
     node_data: &HashMap<NodeId, NodeData>,
 ) -> ScalarValue {
@@ -164,7 +176,7 @@ fn remap_for_wire(
         })
         .and_then(|p| p.natural_range);
     let dst_range = node_data
-        .get(&dest_node)
+        .get(dest_node)
         .and_then(|n| {
             n.port_defs
                 .iter()
@@ -519,7 +531,7 @@ fn build_eval_ctx<'a>(
         stroke_seed,
         dab_index,
         base_size,
-        node_id: step.node_id,
+        node_id: &step.node_id,
     }
 }
 
@@ -569,7 +581,7 @@ impl BrushGraphRunner {
                     _ => None,
                 });
                 node_data.insert(
-                    step.node_id,
+                    step.node_id.clone(),
                     NodeData {
                         port_defs: node.ports.clone(),
                         lut,
@@ -599,7 +611,7 @@ impl BrushGraphRunner {
             .steps
             .iter()
             .find(|s| s.type_id == clone_source::TYPE_ID)
-            .map(|s| s.node_id);
+            .map(|s| s.node_id.clone());
 
         // Find the terminal's `dab_size` output slot. Whichever
         // terminal the graph uses owns the spacing unit; the first
@@ -712,7 +724,7 @@ impl BrushGraphRunner {
         // up. These aren't graph output slots — they're stroke-constant
         // engine session state, seeded the same way `paint_color` seeds
         // its color uniform.
-        if let (Some(node), Some(cs)) = (self.clone_source_node, self.clone_state) {
+        if let (Some(node), Some(cs)) = (self.clone_source_node.as_ref(), self.clone_state) {
             out.insert(
                 format!("n{}_source_anchor", node.0),
                 ScalarValue::Vec2(cs.source_anchor),
@@ -807,7 +819,7 @@ impl BrushGraphRunner {
             gather_inputs_into(
                 &self.slots,
                 &step.input_slots,
-                step.node_id,
+                &step.node_id,
                 &self.node_data,
                 &mut self.inputs_scratch,
             );
@@ -920,7 +932,7 @@ impl BrushGraphRunner {
             gather_inputs_into(
                 &self.slots,
                 &step.input_slots,
-                step.node_id,
+                &step.node_id,
                 &self.node_data,
                 &mut self.inputs_scratch,
             );
@@ -1041,7 +1053,7 @@ impl BrushGraphRunner {
                     gather_inputs_into(
                         &self.slots,
                         &step.input_slots,
-                        step.node_id,
+                        &step.node_id,
                         &self.node_data,
                         &mut self.inputs_scratch,
                     );
@@ -1101,11 +1113,11 @@ impl BrushGraphRunner {
     /// Find the slot index for a specific node's output port.
     ///
     /// Linear scan — intended for tests and debugging, not hot paths.
-    pub fn find_node_output_slot(&self, node_id: NodeId, port_name: &str) -> Option<usize> {
+    pub fn find_node_output_slot(&self, node_id: &NodeId, port_name: &str) -> Option<usize> {
         self.plan
             .steps
             .iter()
-            .find(|s| s.node_id == node_id)
+            .find(|s| &s.node_id == node_id)
             .and_then(|s| {
                 s.output_slots
                     .iter()
@@ -1145,6 +1157,18 @@ impl BrushGraphRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The salt is a pure function of the id string: the same id always
+    /// hashes to the same salt within a binary run, and distinct same-kind
+    /// instances (`noise` vs `noise_2`) get distinct salts so their PRNG
+    /// streams diverge.
+    #[test]
+    fn node_salt_is_stable_and_id_derived() {
+        let noise = NodeId("noise".into());
+        let noise_2 = NodeId("noise_2".into());
+        assert_eq!(node_salt(&noise), node_salt(&NodeId("noise".into())));
+        assert_ne!(node_salt(&noise), node_salt(&noise_2));
+    }
 
     #[test]
     fn remap_identity_when_ranges_match() {

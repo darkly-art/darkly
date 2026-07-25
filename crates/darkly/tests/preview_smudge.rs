@@ -54,7 +54,7 @@ fn smudge_preview_shows_neutral_gray_footprint() {
     let _term_id = darkly::brush::find_terminal(&graph).expect("brush has a terminal");
     graph
         .set_port_default(
-            darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
             "size",
             0.1,
         )

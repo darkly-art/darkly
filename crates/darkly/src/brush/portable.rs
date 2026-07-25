@@ -8,15 +8,18 @@
 //!
 //! Compared to the raw `Graph<W>` JSON, this representation drops
 //! everything that can be re-derived from the node registration — port
-//! definitions, registration metadata, monotonic id counters — and
+//! definitions, registration metadata — and
 //! presents input values by name. The result is something a human can
 //! read and an AI can describe.
 //!
 //! Round-trip rules:
-//! - Node ids are plain integers. Import assigns fresh internal ids and
-//!   translates the YAML's connection list through a small id map, so
-//!   contiguous ids (`1..=N`) round-trip byte-identically while gaps in
-//!   hand-edited YAML compact on the next export.
+//! - Node ids are kind-derived strings: the first node of a kind is its
+//!   `type_id` (`"noise"`), the Nth is `"<type_id>_<N>"` (`"noise_2"`).
+//!   Import assigns fresh internal ids via `Graph::add_node` and translates
+//!   the YAML's connection list through a small id map, so files authored in
+//!   this convention round-trip byte-identically. Same-kind disambiguation
+//!   follows the `BTreeMap` key order of the source file (lexicographic), so
+//!   a hand-edited file using arbitrary same-kind keys normalizes on export.
 //! - `inputs` is a single by-name map of every input whose authored value
 //!   differs from the node registration's default — one map for every
 //!   input kind (scalar default, enum index, texture name, curve points).
@@ -61,7 +64,7 @@ pub struct PortableBrush {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stabilizer: Option<StabilizerConfig>,
 
-    pub nodes: BTreeMap<u64, PortableNode>,
+    pub nodes: BTreeMap<String, PortableNode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub connections: Vec<PortableConnection>,
     /// Ordered brush-bar entries. Keys are `"<yaml_node_id>.<port_name>"`
@@ -94,9 +97,9 @@ pub struct PortableNode {
 /// emit. Round-trips through `Display`/`FromStr`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PortableConnection {
-    pub from_node: u64,
+    pub from_node: String,
     pub from_port: String,
-    pub to_node: u64,
+    pub to_node: String,
     pub to_port: String,
 }
 
@@ -116,16 +119,12 @@ impl std::str::FromStr for PortableConnection {
         let (lhs, rhs) = s.split_once("->").ok_or_else(|| {
             format!("connection '{s}': expected 'from_id.from_port -> to_id.to_port'")
         })?;
-        let parse_side = |side: &str, label: &str| -> Result<(u64, String), String> {
+        let parse_side = |side: &str, label: &str| -> Result<(String, String), String> {
             let (id, port) = side
                 .trim()
                 .split_once('.')
                 .ok_or_else(|| format!("connection '{s}': {label} side must be 'id.port'"))?;
-            let id: u64 = id
-                .trim()
-                .parse()
-                .map_err(|e| format!("connection '{s}': {label} id: {e}"))?;
-            Ok((id, port.trim().to_string()))
+            Ok((id.trim().to_string(), port.trim().to_string()))
         };
         let (from_node, from_port) = parse_side(lhs, "from")?;
         let (to_node, to_port) = parse_side(rhs, "to")?;
@@ -206,7 +205,7 @@ impl PortableBrush {
             }
 
             nodes.insert(
-                id.0,
+                id.0.clone(),
                 PortableNode {
                     type_id: node.type_id.clone(),
                     inputs,
@@ -218,18 +217,18 @@ impl PortableBrush {
             .connections
             .iter()
             .map(|c| PortableConnection {
-                from_node: c.from.node.0,
+                from_node: c.from.node.0.clone(),
                 from_port: c.from.port.clone(),
-                to_node: c.to.node.0,
+                to_node: c.to.node.0.clone(),
                 to_port: c.to.port.clone(),
             })
             .collect();
         // Sort so identical graphs serialize to byte-identical YAML.
         connections.sort_by(|a, b| {
-            (a.from_node, &a.from_port, a.to_node, &a.to_port).cmp(&(
-                b.from_node,
+            (&a.from_node, &a.from_port, &a.to_node, &a.to_port).cmp(&(
+                &b.from_node,
                 &b.from_port,
-                b.to_node,
+                &b.to_node,
                 &b.to_port,
             ))
         });
@@ -278,12 +277,12 @@ impl PortableBrush {
         let mut graph = Graph::<BrushWireType>::new();
 
         // YAML ids are local to the file; let `Graph::add_node` assign
-        // fresh internal ids and translate the connection list through
-        // this map. Iterating the BTreeMap in sorted order keeps the
-        // assignment deterministic, so contiguous YAML ids round-trip
-        // byte-identically.
-        let mut id_map: BTreeMap<u64, NodeId> = BTreeMap::new();
-        for (&yaml_id, pn) in &self.nodes {
+        // fresh kind-derived internal ids and translate the connection list
+        // through this map. Iterating the BTreeMap in lexicographic key order
+        // keeps same-kind disambiguation deterministic, so files authored in
+        // the `noise`/`noise_2` convention round-trip byte-identically.
+        let mut id_map: BTreeMap<String, NodeId> = BTreeMap::new();
+        for (yaml_id, pn) in &self.nodes {
             let reg = registry
                 .get(&pn.type_id)
                 .ok_or_else(|| format!("unknown node type '{}'", pn.type_id))?;
@@ -307,16 +306,18 @@ impl PortableBrush {
             }
 
             let new_id = graph.add_node(pn.type_id.clone(), ports);
-            id_map.insert(yaml_id, new_id);
+            id_map.insert(yaml_id.clone(), new_id);
         }
 
         for c in &self.connections {
-            let from = *id_map
+            let from = id_map
                 .get(&c.from_node)
-                .ok_or_else(|| format!("connection '{c}': unknown node id {}", c.from_node))?;
-            let to = *id_map
+                .ok_or_else(|| format!("connection '{c}': unknown node id {}", c.from_node))?
+                .clone();
+            let to = id_map
                 .get(&c.to_node)
-                .ok_or_else(|| format!("connection '{c}': unknown node id {}", c.to_node))?;
+                .ok_or_else(|| format!("connection '{c}': unknown node id {}", c.to_node))?
+                .clone();
             graph
                 .connect(
                     PortRef {
@@ -333,10 +334,10 @@ impl PortableBrush {
         // Sort `connections` so the in-memory graph matches the
         // round-trip output regardless of insertion order.
         graph.connections.sort_by(|a, b| {
-            (a.from.node.0, &a.from.port, a.to.node.0, &a.to.port).cmp(&(
-                b.from.node.0,
+            (&a.from.node.0, &a.from.port, &a.to.node.0, &a.to.port).cmp(&(
+                &b.from.node.0,
                 &b.from.port,
-                b.to.node.0,
+                &b.to.node.0,
                 &b.to.port,
             ))
         });
@@ -352,10 +353,7 @@ impl PortableBrush {
             let Some((yid_str, port_name)) = yaml_key.split_once('.') else {
                 continue;
             };
-            let Ok(yaml_id) = yid_str.parse::<u64>() else {
-                continue;
-            };
-            let Some(&new_id) = id_map.get(&yaml_id) else {
+            let Some(new_id) = id_map.get(yid_str) else {
                 continue;
             };
             let new_key = exposed_port_key(new_id, port_name);
@@ -420,15 +418,15 @@ mod tests {
     fn port_overrides_survive() {
         let registry = registry();
         let mut graph = crate::brush::default_graph();
-        let shape = *graph
+        let shape = graph
             .nodes()
             .iter()
             .find(|(_, n)| n.type_id == "shape")
-            .map(|(id, _)| id)
+            .map(|(id, _)| id.clone())
             .expect("default has a shape node");
-        graph.set_port_default(shape, "softness", 0.37).unwrap();
-        graph.expose_port(shape, "softness").unwrap();
-        let shape_key = exposed_port_key(shape, "softness");
+        graph.set_port_default(&shape, "softness", 0.37).unwrap();
+        graph.expose_port(&shape, "softness").unwrap();
+        let shape_key = exposed_port_key(&shape, "softness");
         graph
             .set_exposed_port_meta(
                 &shape_key,
@@ -455,8 +453,8 @@ mod tests {
             .find(|p| p.name == "softness")
             .unwrap();
         assert!((port.value.as_f32() - 0.37).abs() < 1e-6);
-        assert!(restored.is_port_exposed(restored_shape.id, "softness"));
-        let restored_key = exposed_port_key(restored_shape.id, "softness");
+        assert!(restored.is_port_exposed(&restored_shape.id, "softness"));
+        let restored_key = exposed_port_key(&restored_shape.id, "softness");
         let meta = &restored.exposed_ports[&restored_key];
         assert_eq!(meta.label, "Softness");
         assert_eq!(meta.description, "Edge falloff");
@@ -470,19 +468,19 @@ mod tests {
     fn enum_input_is_exposable_and_round_trips() {
         let registry = registry();
         let mut graph = crate::brush::default_graph();
-        let shape = *graph
+        let shape = graph
             .nodes()
             .iter()
             .find(|(_, n)| n.type_id == "shape")
-            .map(|(id, _)| id)
+            .map(|(id, _)| id.clone())
             .expect("default has a shape node");
 
         // Override the enum to Perlin (1) and expose it — neither was
         // possible under the old param system.
         graph
-            .set_port_value(shape, "algorithm", InputValue::Int(1))
+            .set_port_value(&shape, "algorithm", InputValue::Int(1))
             .unwrap();
-        graph.expose_port(shape, "algorithm").unwrap();
+        graph.expose_port(&shape, "algorithm").unwrap();
 
         let portable = PortableBrush::from_graph_only(&graph, registry).unwrap();
         let yaml = serde_yaml_ng::to_string(&portable).unwrap();
@@ -503,7 +501,7 @@ mod tests {
             .unwrap();
         assert_eq!(algo.value, InputValue::Int(1));
         assert!(!algo.wirable, "an enum input must not be wirable");
-        assert!(restored.is_port_exposed(restored_shape.id, "algorithm"));
+        assert!(restored.is_port_exposed(&restored_shape.id, "algorithm"));
     }
 
     /// Unknown node `type:` must fail import with a clear error,
@@ -598,5 +596,60 @@ nodes: {}
         let restored = parsed.into_brush(registry).unwrap();
         assert_eq!(restored.metadata.stabilizer.algorithm, "laplacian");
         assert_eq!(restored.metadata.stabilizer.params.len(), 1);
+    }
+
+    /// Two nodes of the same kind serialize to `random` + `random_2` YAML
+    /// keys, re-import to the same two ids, and re-serialize byte-identically
+    /// — locking the kind-derived id scheme through a full round trip.
+    #[test]
+    fn two_random_round_trip() {
+        let registry = registry();
+        let mut graph = Graph::<BrushWireType>::new();
+        let a = graph.add_node("random", registry.get("random").unwrap().ports.clone());
+        let b = graph.add_node("random", registry.get("random").unwrap().ports.clone());
+        assert_eq!(a, NodeId("random".into()));
+        assert_eq!(b, NodeId("random_2".into()));
+
+        let portable = PortableBrush::from_graph_only(&graph, registry).unwrap();
+        assert!(portable.nodes.contains_key("random"));
+        assert!(portable.nodes.contains_key("random_2"));
+
+        let yaml = serde_yaml_ng::to_string(&portable).unwrap();
+        let restored = serde_yaml_ng::from_str::<PortableBrush>(&yaml)
+            .unwrap()
+            .into_graph(registry)
+            .unwrap();
+        assert!(restored.nodes().contains_key(&NodeId("random".into())));
+        assert!(restored.nodes().contains_key(&NodeId("random_2".into())));
+
+        // Re-serialization is byte-identical.
+        let reyaml =
+            serde_yaml_ng::to_string(&PortableBrush::from_graph_only(&restored, registry).unwrap())
+                .unwrap();
+        assert_eq!(yaml, reyaml);
+    }
+
+    /// A hand-authored file whose same-kind keys don't follow the `_N`
+    /// convention normalizes on import: same-kind disambiguation is
+    /// BTreeMap-key-order-dependent, so the lexicographically-first key
+    /// (`randomA`) takes the bare `random` id and `randomB` becomes
+    /// `random_2`. Connections referencing the file keys still resolve.
+    #[test]
+    fn same_kind_keys_normalize_by_lexicographic_order() {
+        let registry = registry();
+        let yaml = "\
+nodes:
+  randomB:
+    type: random
+  randomA:
+    type: random
+";
+        let restored = serde_yaml_ng::from_str::<PortableBrush>(yaml)
+            .unwrap()
+            .into_graph(registry)
+            .unwrap();
+        // BTreeMap iterates randomA before randomB, so randomA → "random".
+        assert!(restored.nodes().contains_key(&NodeId("random".into())));
+        assert!(restored.nodes().contains_key(&NodeId("random_2".into())));
     }
 }

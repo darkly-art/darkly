@@ -111,3 +111,49 @@ impl BrushNodeEvaluator for RandomEvaluator {
         Ok(wgsl)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nodegraph::NodeId;
+
+    fn run_sequence(node_id: &NodeId, ports: &[PortDef<BrushWireType>]) -> Vec<f32> {
+        (0..8)
+            .map(|dab_index| {
+                let ctx = EvalContext {
+                    input_slots: &[],
+                    input_values: &[],
+                    port_defs: ports,
+                    lut: None,
+                    stroke_seed: 0x1234_5678,
+                    dab_index,
+                    base_size: 1.0,
+                    node_id,
+                };
+                match RandomEvaluator.evaluate_cpu(&ctx).into_iter().next() {
+                    Some((_, ScalarValue::Scalar(v))) => v,
+                    other => panic!("random produced {other:?}"),
+                }
+            })
+            .collect()
+    }
+
+    /// A `random` node produces a stable per-dab sequence, and two same-kind
+    /// instances (`random`, `random_2`) draw *different* sequences because
+    /// their string ids salt the PRNG differently.
+    #[test]
+    fn random_sequence_is_stable_and_id_disambiguated() {
+        let ports = register().node.ports.clone();
+        let a = NodeId("random".into());
+        let b = NodeId("random_2".into());
+
+        let seq_a = run_sequence(&a, &ports);
+        assert_eq!(seq_a, run_sequence(&a, &ports), "sequence must be stable");
+
+        let seq_b = run_sequence(&b, &ports);
+        assert_ne!(
+            seq_a, seq_b,
+            "distinct same-kind ids must draw distinct sequences"
+        );
+    }
+}

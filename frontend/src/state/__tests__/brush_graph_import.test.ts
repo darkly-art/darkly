@@ -8,7 +8,7 @@ import { BrushGraphState, type BrushGraph } from '../brush_graph.svelte';
 // `Cannot read properties of undefined (reading 'error')` when the boundary
 // delivered `undefined` instead of the declared `null`.
 
-const emptyGraph: BrushGraph = { nodes: {}, connections: [], next_id: 1 };
+const emptyGraph: BrushGraph = { nodes: {}, connections: [] };
 
 // Minimal engine stub covering `importYaml`'s success refresh chain.
 function fakeEngine(importResult: unknown) {
