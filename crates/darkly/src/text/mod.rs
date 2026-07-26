@@ -18,8 +18,8 @@ use std::collections::HashMap;
 
 use kurbo::Affine;
 use parley::{
-    Alignment, AlignmentOptions, FontContext, FontSettings, FontStack, FontStyle, FontWeight,
-    Layout, LayoutContext, LineHeight, PositionedLayoutItem, StyleProperty,
+    Alignment, AlignmentOptions, FontContext, FontFamily, FontFeatures, FontStyle, FontVariations,
+    FontWeight, Layout, LayoutContext, LineHeight, PositionedLayoutItem, StyleProperty,
 };
 use peniko::{Brush, Color, Fill};
 use vello::Scene;
@@ -249,7 +249,7 @@ impl FontRegistry {
         let mut builder =
             self.layout_cx
                 .ranged_builder(&mut self.font_cx, &text.content, 1.0, true);
-        builder.push_default(StyleProperty::FontStack(FontStack::Source(Cow::Owned(
+        builder.push_default(StyleProperty::FontFamily(FontFamily::Source(Cow::Owned(
             stack,
         ))));
         builder.push_default(StyleProperty::FontSize(text.size));
@@ -262,7 +262,7 @@ impl FontRegistry {
         // static face is a harmless no-op). The two agree rather than fight — see
         // `variations_and_font_weight_agree_on_coords`.
         if let Some(css) = variation_settings(&text.variations) {
-            builder.push_default(StyleProperty::FontVariations(FontSettings::Source(
+            builder.push_default(StyleProperty::FontVariations(FontVariations::Source(
                 Cow::Owned(css),
             )));
         }
@@ -270,7 +270,7 @@ impl FontRegistry {
             builder.push_default(StyleProperty::FontWeight(FontWeight::new(wght)));
         }
         if let Some(css) = feature_settings(&text.features) {
-            builder.push_default(StyleProperty::FontFeatures(FontSettings::Source(
+            builder.push_default(StyleProperty::FontFeatures(FontFeatures::Source(
                 Cow::Owned(css),
             )));
         }
@@ -290,12 +290,10 @@ impl FontRegistry {
         // one arm here; area/point both go through `area_size`.
         let max_adv = text.layout.area_size().map(|(w, _)| w);
         layout.break_all_lines(max_adv);
-        let align_width = max_adv.unwrap_or_else(|| layout.width());
-        layout.align(
-            Some(align_width),
-            to_parley_align(text.align),
-            AlignmentOptions::default(),
-        );
+        // With no `max_advance` from line breaking (point text), parley aligns
+        // relative to the longest line's natural width — the same reference the
+        // explicit width used to provide.
+        layout.align(to_parley_align(text.align), AlignmentOptions::default());
         layout
     }
 
@@ -626,7 +624,7 @@ mod tests {
             let mut builder =
                 reg.layout_cx
                     .ranged_builder(&mut reg.font_cx, &pure_weight.content, 1.0, true);
-            builder.push_default(StyleProperty::FontStack(FontStack::Source(Cow::Owned(
+            builder.push_default(StyleProperty::FontFamily(FontFamily::Source(Cow::Owned(
                 stack,
             ))));
             builder.push_default(StyleProperty::FontSize(pure_weight.size));
