@@ -545,9 +545,12 @@ fn create_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> Effec
     // with perspective, sharing one impl with the floating path) and the FBM
     // primitive. A future warp veil will assemble the same way.
     let proj_src = include_str!("../../../shaders/lib/projective.wgsl");
+    // `fbm.wgsl` (3D) depends on `fbm_pcg` from `fbm2d.wgsl`, so the 2D core
+    // must come first.
+    let fbm2d_src = include_str!("../../../shaders/lib/fbm2d.wgsl");
     let fbm_src = include_str!("../../../shaders/lib/fbm.wgsl");
     let void_src = include_str!("../../../shaders/voids/noise.wgsl");
-    let full_src = format!("{proj_src}\n{fbm_src}\n{void_src}");
+    let full_src = format!("{proj_src}\n{fbm2d_src}\n{fbm_src}\n{void_src}");
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("void-noise-shader"),

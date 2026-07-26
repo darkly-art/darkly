@@ -27,6 +27,7 @@ mod undo_dispatch;
 mod veils;
 mod voids;
 
+pub use brush_graph::{ExposedPortInfo, ExposedValue};
 pub use export::ExportImageResult;
 pub use load::LoadDocument;
 pub use process_recording::{ProcessRecorder, RecordedFrame};

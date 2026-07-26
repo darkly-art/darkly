@@ -6,7 +6,7 @@
 //! valid bytes, version + theme invalidation drop the cache — is asserted
 //! end-to-end via the test-only `test_flush_readbacks` helper.
 
-use darkly::engine::DarklyEngine;
+use darkly::engine::{DarklyEngine, ExposedValue};
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
 
@@ -320,7 +320,7 @@ fn size_scrub_does_not_change_active_dab_pixels() {
         .expect("default brush exposes a `size` port");
     let topo_before_scrub = engine.brush_topology_version();
     engine
-        .brush_set_exposed_port(size.node_id, "size", 250.0)
+        .brush_set_exposed_port(&size.node_id, "size", 250.0)
         .expect("scrub set");
     assert_eq!(
         engine.brush_topology_version(),
@@ -345,7 +345,7 @@ fn size_scrub_does_not_change_active_dab_pixels() {
     // compile_active call), but still classified as topology.
     let topo_before_toggle = engine.brush_topology_version();
     engine
-        .brush_graph_unexpose_port(size.node_id, "size")
+        .brush_graph_unexpose_port(&size.node_id, "size")
         .expect("unexpose size port");
     assert_ne!(
         engine.brush_topology_version(),
@@ -421,4 +421,38 @@ fn graph_change_triggers_active_dab_rebake() {
         after, before,
         "swapping Airbrush for Ink Pen should produce different dab pixels"
     );
+}
+
+#[test]
+fn exposed_enum_input_surfaces_as_dropdown_control() {
+    // A brush can expose an enum input (Rough Watercolor exposes
+    // `shape.algorithm`) so the brush bar renders a dropdown. The read
+    // builder must surface it as an `Enum` control carrying its option
+    // labels and current index — earlier it skipped every wire type but
+    // Scalar/Bool (`_ => continue`), so an exposed enum never reached the
+    // bar at all. This is the feature's end-to-end backend guard.
+    let mut engine = fresh_engine();
+    engine
+        .brush_load("Rough Watercolor")
+        .expect("Rough Watercolor is a built-in brush");
+
+    let algo = engine
+        .brush_exposed_ports()
+        .into_iter()
+        .find(|p| p.port_name == "algorithm")
+        .expect("Rough Watercolor exposes shape.algorithm");
+
+    match algo.data {
+        ExposedValue::Enum { value, options } => {
+            assert!(
+                options.len() >= 2,
+                "an enum control carries its dropdown labels; got {options:?}"
+            );
+            assert!(
+                value >= 0 && (value as usize) < options.len(),
+                "the current index {value} must address a real option in {options:?}"
+            );
+        }
+        other => panic!("shape.algorithm should surface as an Enum control, got {other:?}"),
+    }
 }

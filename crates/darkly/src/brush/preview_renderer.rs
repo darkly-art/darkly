@@ -15,7 +15,7 @@
 //! share a consistent palette.
 
 use super::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, StrokeResources};
-use super::nodes::pen_input;
+use super::nodes::brush_settings;
 use super::paint_info::PaintInformation;
 use super::pipeline::BrushPipelines;
 use super::stabilizer::PassThrough;
@@ -154,16 +154,18 @@ impl BrushStrokePreviewRenderer {
         // `brush_stroke_engine` would contaminate save-points and dab-size
         // state with the user's in-flight real stroke.
         //
-        // Spacing comes from the graph's pen_input node — same source the
+        // Spacing comes from the graph's brush_settings node — same source the
         // real stroke uses — so scrubbing the spacing slider actually moves
         // the dabs in the preview.
-        let spacing = pen_input::spacing_config(graph);
+        let spacing = brush_settings::spacing_config(graph);
+        let base_size = brush_settings::base_size(graph);
         // No clone source in the editor preview — a clone brush renders
         // its synthetic preview stroke without a set-source anchor.
         let mut engine = StrokeEngine::new(
             runner,
             fg_color,
             spacing,
+            base_size,
             Box::new(PassThrough::new()),
             None,
         );

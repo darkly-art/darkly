@@ -71,11 +71,17 @@ fn render_big_round() -> Out {
         .find(|b| b.metadata.name == "Round")
         .expect("Round brush is registered");
     let mut graph = brush.metadata.graph.clone();
-    let term_id = darkly::brush::find_terminal(&graph).expect("Round has a terminal");
+    let _term_id = darkly::brush::find_terminal(&graph).expect("Round has a terminal");
     // size 2.0 → effective_radius = 2.0 * 512 * 0.5 = 512 canvas px
     // (extent factor ≥ 1, so bbox_canvas_px is at least 512, far above
     // texture_half = 64).
-    graph.set_port_default(term_id, "size", 2.0).unwrap();
+    graph
+        .set_port_default(
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            2.0,
+        )
+        .unwrap();
 
     let (device, queue) = test_device();
     let device = Arc::new(device);

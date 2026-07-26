@@ -8,11 +8,17 @@
  * change, and never travel back to Rust.
  */
 import { app } from './app.svelte';
-import type { BrushInfo, JsonValue } from '../engine/protocol_gen';
+import type { BrushInfo, JsonValue, ExposedValue, ExposedPortInfo } from '../engine/protocol_gen';
 
 export type { BrushInfo };
 
 // --- Types mirroring Rust's nodegraph structures ---
+
+/** The authored value on a disconnected input, mirroring Rust's
+ *  `InputValue` (serde-untagged): a scalar/enum index is a `number`, a
+ *  bool is a `boolean`, a texture name is a `string`, curve points are an
+ *  array of `[x, y]` pairs. */
+export type InputValue = number | boolean | string | Array<[number, number]> | number[];
 
 export interface PortDef {
     name: string;
@@ -20,13 +26,27 @@ export interface PortDef {
     wire_type: string;  // BrushWireType variant name
     min: number;
     max: number;
-    default: number;
+    /** The authored value used when the input is disconnected — the full
+     *  typed value (scalar default, enum index, texture name, curve points).
+     *  Replaces the old scalar-only `default`. */
+    value: InputValue;
+    /** Dropdown labels in index order — non-empty only for `Enum` inputs. */
+    enum_options?: string[];
+    /** Whether an upstream wire may drive this input per-dab. Sourced from
+     *  `BrushWireType::is_wirable` in Rust and carried as data; the wire dot
+     *  is drawn only when true. */
+    wirable: boolean;
+    /** Whether a user may expose this input as a brush-bar control. Sourced
+     *  from `BrushWireType::is_user_exposable` in Rust and carried as data;
+     *  the expose eye toggle is shown only when true (so curves/strings,
+     *  which the brush bar can't render, offer no toggle). */
+    exposable: boolean;
     description: string;
     unit_type: string;  // "Normalized" | "Percent" | "Degrees" | "Raw"
     icon: string;
     label: string;
     exposed: boolean;
-    /** When set, the port is shown only when the named param's current
+    /** When set, the port is shown only when the named input's current
      *  integer value is in the allowed list. Tuple shape mirrors the
      *  Rust serialization of `(String, Vec<i32>)`. UI-only — the engine
      *  ignores this field. */
@@ -36,24 +56,26 @@ export interface PortDef {
      *  `min`. Used by integer-valued ports like the circle node's
      *  `frequency`. */
     step: number;
+    /** This input port is also a wire source (`PortDef::source` in Rust): its
+     *  value can be wired *from* into other nodes. The editor shows the
+     *  source handle only while the input is not itself driven. */
+    source: boolean;
 }
 
 export interface NodeInstance {
-    id: number;         // NodeId(u64) — safe as f64 for small values
+    id: string;
     type_id: string;
-    ports: PortDef[];
-    params: any[];      // ParamValue array
+    ports: PortDef[];   // the node's single, unified input/output list
 }
 
 export interface Connection {
-    from: { node: number; port: string };
-    to: { node: number; port: string };
+    from: { node: string; port: string };
+    to: { node: string; port: string };
 }
 
 export interface BrushGraph {
     nodes: Record<string, NodeInstance>;  // keyed by NodeId as string
     connections: Connection[];
-    next_id: number;
 }
 
 export interface NodeTypeInfo {
@@ -62,31 +84,15 @@ export interface NodeTypeInfo {
     display_name: string;
     description: string;
     ports: PortDef[];
-    params: any[];
     is_gpu: boolean;
 }
 
-// --- Wire type colors ---
-
-export type ExposedValue =
-    | { kind: 'scalar'; value: number; min: number; max: number; default: number; unitType: string }
-    | { kind: 'bool'; value: boolean }
-    // Future: | { kind: 'int'; value: number; min: number; max: number }
-    ;
-
-
-export interface ExposedPortInfo {
-    /** `"<node_id>.<port_name>"` — passed back to setExposedPortMeta /
-     *  reorderExposedPort to address the same entry. */
-    key: string;
-    nodeId: number;
-    portName: string;
-    label: string;
-    icon: string;
-    description: string;
-    nodeDisplayName: string;
-    data: ExposedValue;
-}
+// The exposed-control payload shapes are generated from the Rust
+// `ts_rs` derives (`ExposedValue` / `ExposedPortInfo` in
+// `engine/brush_graph.rs`). Re-export them so the brush bar has a single
+// source of truth — extending the control vocabulary (e.g. adding the
+// enum dropdown) happens once, on the Rust side, and flows here on regen.
+export type { ExposedValue, ExposedPortInfo };
 
 /** Display-pixels-per-unit for dragging an exposed port through its full
  *  range. ~400px of horizontal drag covers `[min, max]`. Shared by the
@@ -102,6 +108,11 @@ export const WIRE_COLORS: Record<string, string> = {
     Bool: '#ff6b6b',
     Vec2: '#6bff6b',
     Vec4: '#ffaa4a',
+    // Non-wirable data shapes — never drawn on a wire, but coloured for the
+    // editing widgets that show their swatch/label.
+    Enum: '#c58aff',
+    String: '#ffd24a',
+    Curve: '#4affd2',
 };
 
 // --- State ---
@@ -111,13 +122,29 @@ export const WIRE_COLORS: Record<string, string> = {
  *  dynamic (`JsonValue`) at the boundary and cast to [`BrushGraph`] here. */
 type GraphCommandResult = { graph: JsonValue } | { error: string };
 
-class BrushGraphState {
+export class BrushGraphState {
     /** Local view of the graph (snapshot from Rust). */
     graph = $state<BrushGraph | null>(null);
 
     /** UI-only node positions, keyed by node id. Populated by `autoLayout`
      *  after every structural change; never sent to Rust. */
-    nodePositions = $state<Record<number, [number, number]>>({});
+    nodePositions = $state<Record<string, [number, number]>>({});
+
+    /** Monotonic token identifying the current graph load. Bumped by
+     *  `beginLayoutGeneration` whenever the graph is replaced by a fresh
+     *  load/reset/import/tab-sync. Node positions and the one-shot layout
+     *  guard are scoped to it, so a freshly-loaded graph is always treated as
+     *  un-laid-out — even when it reuses the previous brush's node ids — and a
+     *  stale async layout write for a superseded generation is discarded.
+     *  Frontend-only, like `nodePositions`; never crosses to Rust. Distinct
+     *  from `lastTopologyVersion` (which preserves `activeBrush` across
+     *  scrubs and bumps on unrelated events like port expose/unexpose). */
+    layoutGeneration = $state(0);
+
+    /** The `layoutGeneration` value that positions were last laid out for.
+     *  `autoLayout` sets it on commit; `needsInitialLayout` compares against
+     *  it. A fresh generation is always > this, so the one-shot fires again. */
+    private lastLaidOutGeneration = -1;
 
     /** Registry of available node types (from WASM). */
     nodeTypes = $state<NodeTypeInfo[]>([]);
@@ -136,13 +163,13 @@ class BrushGraphState {
     fullscreen = $state(false);
 
     /** Node currently being dragged (for drag-to-connect). */
-    draggingFrom = $state<{ node: number; port: string; dir: 'Input' | 'Output' } | null>(null);
+    draggingFrom = $state<{ node: string; port: string; dir: 'Input' | 'Output' } | null>(null);
 
     /** Mouse position in graph coordinates during wire drag. */
     dragMouse = $state<{ x: number; y: number } | null>(null);
 
     /** Currently selected node ID. */
-    selectedNode = $state<number | null>(null);
+    selectedNode = $state<string | null>(null);
 
     /** Cached image thumbnails for Image nodes, keyed by resource_name. */
     imageThumbnails = new Map<string, ImageBitmap>();
@@ -180,6 +207,13 @@ class BrushGraphState {
      * changed shape (clear → "Custom").
      */
     private lastTopologyVersion = 0;
+
+    /** Guards `init()` against re-entrancy. `init()` is fired unawaited from
+     *  two `if (!brushGraph.graph)` sites (brush-tool activation and the
+     *  builder's `ensureInit`), and `graph` isn't set until its final
+     *  `loadBrush` resolves — so without this flag two callers can both pass
+     *  the guard and double-load the default brush. */
+    private initStarted = false;
 
 
     // --- WASM command helpers ---
@@ -229,11 +263,19 @@ class BrushGraphState {
         this.lastTopologyVersion = (await app.engine.api.brushTopologyVersion()).value;
     }
 
-    /** Fetch the current graph snapshot from Rust. */
+    /** Fetch the current graph snapshot from Rust. Every caller is a
+     *  whole-graph replacement (fresh load / reset / import / tab-sync — never
+     *  an in-place mutation, which goes through `applyResult`), so this is the
+     *  single place a new layout generation begins. Clearing positions +
+     *  bumping the generation happens in the *same synchronous step* as the
+     *  graph assignment, so `needsInitialLayout` is never true against the
+     *  outgoing graph (which would lay out the wrong node set) and stale
+     *  in-flight layout writes for the previous graph are discarded. */
     private async fetchGraph() {
         if (!app.engine) return;
         const graph = (await app.engine.api.brushGraphActive()) as unknown as BrushGraph;
         if (graph && graph.nodes) {
+            this.beginLayoutGeneration();
             this.graph = graph;
         }
     }
@@ -255,6 +297,10 @@ class BrushGraphState {
      *  per-tab or shell-global. */
     async syncFromActiveEngine() {
         if (!app.engine) return;
+        // `fetchGraph` begins a new layout generation atomically with the swap,
+        // so the incoming tab's graph lays out for its own topology instead of
+        // inheriting the previous tab's positions (node ids collide across
+        // graphs).
         await this.fetchGraph();
         await this.refreshExposedPorts();
         await this.refreshCapabilities();
@@ -263,7 +309,8 @@ class BrushGraphState {
 
     /** Initialize from WASM — load node types, brushes, and default graph. */
     async init() {
-        if (!app.engine) return;
+        if (this.initStarted || !app.engine) return;
+        this.initStarted = true;
         const types = await app.engine.api.brushNodeTypes();
         this.nodeTypes = (Array.isArray(types) ? types : []) as unknown as NodeTypeInfo[];
         await this.refreshBrushes();
@@ -290,7 +337,6 @@ class BrushGraphState {
     async resetToDefault() {
         if (!app.engine) return;
         app.engine.api.brushGraphReset();
-        this.nodePositions = {};
         await this.fetchGraph();
         await this.refreshExposedPorts();
         await this.refreshCapabilities();
@@ -312,13 +358,15 @@ class BrushGraphState {
     async importYaml(yaml: string): Promise<string | null> {
         if (!app.engine) return 'engine not ready';
         const result = await app.engine.api.brushGraphImportYaml({ yaml });
-        if (result !== null) {
+        // Success is a nullish sentinel (the protocol's `null`); a failure is an
+        // `{ error }` envelope. Match nullishly so a stray `undefined` can never
+        // be mistaken for a failure and dereferenced.
+        if (result != null) {
             const err = String(result.error ?? result);
             this.error = err;
             return err;
         }
         // Same post-mutation refresh as loadBrush / resetToDefault.
-        this.nodePositions = {};
         await this.fetchGraph();
         await this.refreshExposedPorts();
         await this.refreshCapabilities();
@@ -343,13 +391,13 @@ class BrushGraphState {
     }
 
     /** Set an exposed port's value (display-space) via Rust. */
-    async setExposedPortValue(nodeId: number, portName: string, displayValue: number) {
+    async setExposedPortValue(nodeId: string, portName: string, displayValue: number) {
         if (!app.engine) return;
         await this.applyResult(await app.engine.api.brushSetExposedPort({ node_id: nodeId, port_name: portName, display_value: displayValue }));
     }
 
     /** Optimistic local update for an exposed port's display value. */
-    setExposedPortValueLocal(nodeId: number, portName: string, displayValue: number) {
+    setExposedPortValueLocal(nodeId: string, portName: string, displayValue: number) {
         const port = this.exposedPorts.find(
             p => p.nodeId === nodeId && p.portName === portName
         );
@@ -359,19 +407,19 @@ class BrushGraphState {
     }
 
     /** Append a brush-bar entry for an input port. Idempotent. */
-    async exposePort(nodeId: number, portName: string) {
+    async exposePort(nodeId: string, portName: string) {
         if (!app.engine) return;
         await this.applyResult(await app.engine.api.brushGraphExposePort({ node_id: nodeId, port_name: portName }));
     }
 
     /** Drop a brush-bar entry. Idempotent. */
-    async unexposePort(nodeId: number, portName: string) {
+    async unexposePort(nodeId: string, portName: string) {
         if (!app.engine) return;
         await this.applyResult(await app.engine.api.brushGraphUnexposePort({ node_id: nodeId, port_name: portName }));
     }
 
     /** Returns true when the named input port has a live brush-bar entry. */
-    isPortExposed(nodeId: number, portName: string): boolean {
+    isPortExposed(nodeId: string, portName: string): boolean {
         return this.exposedPorts.some(
             (p) => p.nodeId === nodeId && p.portName === portName,
         );
@@ -407,8 +455,9 @@ class BrushGraphState {
             return;
         }
         this.activeBrush = name;
-        // Clear positions so the canvas effect re-runs auto-layout.
-        this.nodePositions = {};
+        // `fetchGraph` begins a new layout generation atomically with the
+        // graph swap, so the canvas effect re-runs auto-layout for the
+        // freshly-loaded graph.
         await this.fetchGraph();
         await this.refreshExposedPorts();
         await this.refreshCapabilities();
@@ -418,50 +467,89 @@ class BrushGraphState {
         await this.snapshotTopologyVersion();
     }
 
-    /** True when at least one node lacks a UI position — i.e. the graph
-     *  was just loaded/reset and the canvas should run auto-layout. */
-    get hasUnpositionedNodes(): boolean {
+    /** Begin a new layout generation: clear node positions and bump
+     *  `layoutGeneration`. Called by `fetchGraph` in the same synchronous step
+     *  as the graph swap (see there for why atomicity matters). Bumping the
+     *  generation makes `needsInitialLayout` fire again regardless of node-id
+     *  reuse, and causes any in-flight `autoLayout` write for the old
+     *  generation to be discarded on arrival. Public so tests can drive the
+     *  fresh-load transition without a live engine. */
+    beginLayoutGeneration() {
+        // Drop image-node thumbnails from the outgoing graph: they're keyed by
+        // `image_${nodeId}`, and node ids restart per brush, so a stale bitmap
+        // would alias onto a reused id under the new graph. `ImageBitmap` is
+        // GPU-backed and must be closed explicitly or it leaks.
+        for (const bmp of this.imageThumbnails.values()) bmp.close();
+        this.imageThumbnails.clear();
+        this.nodePositions = {};
+        this.layoutGeneration++;
+    }
+
+    /** True when the current layout generation has not been laid out yet —
+     *  i.e. the graph was just loaded/reset/imported/tab-synced and the canvas
+     *  should run its one-time auto-layout. Keyed on `layoutGeneration`, not on
+     *  which node ids happen to carry positions, so a fresh graph that reuses
+     *  the previous brush's ids is still recognized as needing layout. A graph
+     *  mutated in place without a fresh load (e.g. one new node awaiting
+     *  placement mid-`addNode`) keeps the same generation, so spawning a node
+     *  never triggers a full relayout that would move existing nodes. */
+    get needsInitialLayout(): boolean {
         if (!this.graph) return false;
-        for (const idStr of Object.keys(this.graph.nodes)) {
-            if (!this.nodePositions[Number(idStr)]) return true;
+        if (Object.keys(this.graph.nodes).length === 0) return false;
+        return this.layoutGeneration !== this.lastLaidOutGeneration;
+    }
+
+    /** Measure every node widget currently in the DOM and run auto-layout with
+     *  the real sizes. The single measure-and-place path shared by the canvas
+     *  one-shot (on a fresh load) and the toolbar Layout button. */
+    measureAndLayout() {
+        const sizes: Record<string, [number, number]> = {};
+        for (const el of document.querySelectorAll<HTMLElement>('[data-node-id]')) {
+            const id = el.dataset.nodeId;
+            if (id) sizes[id] = [el.offsetWidth, el.offsetHeight];
         }
-        return false;
+        if (Object.keys(sizes).length > 0) void this.autoLayout(sizes);
     }
 
     /**
      * Run auto-layout on the active graph and store the result in
      * `nodePositions`. `sizes` maps node ID → `[width, height]` measured
      * from the DOM; when omitted, Rust estimates sizes from port counts.
+     *
+     * The layout is computed for the generation live at call time; if a fresh
+     * load supersedes it during the WASM round-trip, the result is discarded so
+     * a stale graph's positions never overwrite the current one.
      */
     async autoLayout(sizes?: Record<string, [number, number]>) {
         if (!app.engine) return;
+        const gen = this.layoutGeneration;
         const layout = await app.engine.api.brushGraphAutoLayout({ sizes: sizes ?? {} }) as Record<string, [number, number]>;
+        if (gen !== this.layoutGeneration) return; // superseded by a newer load
         if (layout && typeof layout === 'object') {
-            const next: Record<number, [number, number]> = {};
-            for (const [idStr, pos] of Object.entries(layout)) {
-                const id = Number(idStr);
-                if (Number.isFinite(id) && Array.isArray(pos)) {
+            const next: Record<string, [number, number]> = {};
+            for (const [id, pos] of Object.entries(layout)) {
+                if (Array.isArray(pos)) {
                     next[id] = [pos[0], pos[1]];
                 }
             }
             this.nodePositions = next;
+            this.lastLaidOutGeneration = gen;
         }
     }
 
     /** Add a node of the given type. The new node is placed at `(x, y)` in
      *  the local positions map. Returns the new node's ID, or null if the
      *  add failed (e.g. the Rust compile step rejected the new graph). */
-    async addNode(typeId: string, x: number, y: number): Promise<number | null> {
+    async addNode(typeId: string, x: number, y: number): Promise<string | null> {
         if (!app.engine) return null;
-        await this.applyResult(await app.engine.api.brushGraphAddNode({ type_id: typeId }));
-        // applyResult records the error and leaves `this.graph` unchanged
-        // on failure. If we didn't bail here, the code below would write
-        // `(x, y)` into nodePositions[next_id - 1] — and that id still
-        // points at the *previously*-added node (typically Paint), making
-        // it visibly warp to the cursor.
+        const result = await app.engine.api.brushGraphAddNode({ type_id: typeId });
+        await this.applyResult(result);
+        // On failure `applyResult` records the error and leaves `this.graph`
+        // unchanged; bail before reading the assigned id.
         if (this.error) return null;
         if (!this.graph) return null;
-        const id = this.graph.next_id - 1;
+        const id = (result as { added_node_id?: string }).added_node_id;
+        if (!id) return null;
         // Position assignment is local-only — auto-layout would
         // disturb the user's current arrangement.
         this.nodePositions[id] = [x, y];
@@ -469,7 +557,7 @@ class BrushGraphState {
     }
 
     /** Remove a node and all its connections. */
-    async removeNode(nodeId: number) {
+    async removeNode(nodeId: string) {
         if (!app.engine) return;
         if (this.selectedNode === nodeId) this.selectedNode = null;
         await this.applyResult(await app.engine.api.brushGraphRemoveNode({ node_id: nodeId }));
@@ -478,51 +566,39 @@ class BrushGraphState {
 
     /** Update a node's UI position (drag-to-move). Local-only — positions
      *  are not persisted to Rust. */
-    moveNode(nodeId: number, x: number, y: number) {
+    moveNode(nodeId: string, x: number, y: number) {
         this.nodePositions[nodeId] = [x, y];
     }
 
     /** Connect two ports. */
-    async connect(fromNode: number, fromPort: string, toNode: number, toPort: string) {
+    async connect(fromNode: string, fromPort: string, toNode: string, toPort: string) {
         if (!app.engine) return;
         await this.applyResult(await app.engine.api.brushGraphConnect({ from_node: fromNode, from_port: fromPort, to_node: toNode, to_port: toPort }));
     }
 
     /** Disconnect a specific wire. */
-    async disconnect(fromNode: number, fromPort: string, toNode: number, toPort: string) {
+    async disconnect(fromNode: string, fromPort: string, toNode: string, toPort: string) {
         if (!app.engine) return;
         await this.applyResult(await app.engine.api.brushGraphDisconnect({ from_node: fromNode, from_port: fromPort, to_node: toNode, to_port: toPort }));
     }
 
-    /** Update a node's parameter value locally (for responsive slider feedback). */
-    setParamLocal(nodeId: number, paramIndex: number, value: any) {
+    /** Update an input's authored value locally (for responsive slider
+     *  feedback). One setter for every input kind. */
+    setInputLocal(nodeId: string, inputName: string, value: InputValue) {
         if (!this.graph) return;
-        const node = this.graph.nodes[String(nodeId)];
-        if (node && paramIndex < node.params.length) {
-            // Mutate in place — only consumers reading this param re-evaluate.
-            node.params[paramIndex] = value;
-        }
-    }
-
-    /** Update a node's parameter value via Rust (compiles the graph). */
-    async setParam(nodeId: number, paramIndex: number, kind: string, value: any) {
-        if (!app.engine) return;
-        await this.applyResult(await app.engine.api.brushGraphSetParam({ node_id: nodeId, param_index: paramIndex, kind, value }));
-    }
-
-    /** Update a port's default value locally (for responsive slider feedback). */
-    setPortDefaultLocal(nodeId: number, portName: string, value: number) {
-        if (!this.graph) return;
-        const node = this.graph.nodes[String(nodeId)];
+        const node = this.graph.nodes[nodeId];
         if (!node) return;
-        const port = node.ports.find(p => p.name === portName && p.dir === 'Input');
-        if (port) port.default = value;
+        const port = node.ports.find(p => p.name === inputName && p.dir === 'Input');
+        if (port) port.value = value;
     }
 
-    /** Update a port's default value via Rust (compiles the graph). */
-    async setPortDefault(nodeId: number, portName: string, value: number) {
+    /** Update an input's authored value via Rust (compiles the graph). One
+     *  setter for every input kind — the unified replacement for the former
+     *  `setParam` (by index) / `setPortDefault` (by name) pair. `kind` is one
+     *  of `float`/`int`/`enum`/`bool`/`string`/`curve`. */
+    async setInput(nodeId: string, inputName: string, kind: string, value: InputValue) {
         if (!app.engine) return;
-        await this.applyResult(await app.engine.api.brushGraphSetPortDefault({ node_id: nodeId, port_name: portName, value }));
+        await this.applyResult(await app.engine.api.brushGraphSetInput({ node_id: nodeId, input_name: inputName, kind, value }));
     }
 
     /** Get a flat array of all node instances. */
@@ -543,7 +619,7 @@ class BrushGraphState {
     }
 
     /** Check if a port is connected. */
-    isPortConnected(nodeId: number, portName: string, dir: 'Input' | 'Output'): boolean {
+    isPortConnected(nodeId: string, portName: string, dir: 'Input' | 'Output'): boolean {
         if (!this.graph) return false;
         if (dir === 'Input') {
             return this.graph.connections.some(c => c.to.node === nodeId && c.to.port === portName);
@@ -555,7 +631,7 @@ class BrushGraphState {
      * Upload an image to WASM, set it as the resource_name param on an
      * Image node, and cache a thumbnail for preview rendering.
      */
-    async uploadImageToNode(nodeId: number, resourceName: string, rgba: Uint8Array, width: number, height: number) {
+    async uploadImageToNode(nodeId: string, resourceName: string, rgba: Uint8Array, width: number, height: number) {
         if (!app.engine) return;
 
         // Upload to GPU via WASM.
@@ -565,8 +641,8 @@ class BrushGraphState {
             return;
         }
 
-        // Set the resource_name param (index 0) on the Image node.
-        await this.applyResult(await app.engine.api.brushGraphSetParam({ node_id: nodeId, param_index: 0, kind: 'string', value: resourceName }));
+        // Set the `texture_name` input on the Image node.
+        await this.applyResult(await app.engine.api.brushGraphSetInput({ node_id: nodeId, input_name: 'texture_name', kind: 'string', value: resourceName }));
 
         // Cache a thumbnail for canvas rendering.
         const clamped = new Uint8ClampedArray(rgba.length);
@@ -580,7 +656,7 @@ class BrushGraphState {
      * Upload an image from a Blob/File to an Image node.
      * Decodes via the browser, then calls uploadImageToNode.
      */
-    async uploadBlobToNode(nodeId: number, blob: Blob) {
+    async uploadBlobToNode(nodeId: string, blob: Blob) {
         const bitmap = await createImageBitmap(blob);
         const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
         const ctx = canvas.getContext('2d')!;
@@ -594,9 +670,9 @@ class BrushGraphState {
     }
 
     /** Get the wire type of a port on a node. */
-    getPortWireType(nodeId: number, portName: string): string | null {
+    getPortWireType(nodeId: string, portName: string): string | null {
         if (!this.graph) return null;
-        const node = this.graph.nodes[String(nodeId)];
+        const node = this.graph.nodes[nodeId];
         if (!node) return null;
         const port = node.ports.find(p => p.name === portName);
         return port?.wire_type ?? null;

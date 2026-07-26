@@ -168,6 +168,23 @@ pub fn graph_result(r: Result<String, String>) -> Result<Response, ProtocolError
     }
 }
 
+/// Encode a node-graph mutation that also reports the id of a node it added.
+/// The engine returns `(graph_json, added_node_id)` on success; handlers
+/// resolve with `{ graph, added_node_id }` or `{ error }`. Used by
+/// `brush_graph_add_node` so the frontend learns the assigned id (the graph
+/// derives it from the node kind, not a monotonic counter).
+pub fn graph_node_result(r: Result<(String, String), String>) -> Result<Response, ProtocolError> {
+    match r {
+        Ok((json, added_node_id)) => {
+            let graph: Value = serde_json::from_str(&json).map_err(bad_payload)?;
+            Ok(Response::json(
+                serde_json::json!({ "graph": graph, "added_node_id": added_node_id }),
+            ))
+        }
+        Err(e) => Ok(Response::json(serde_json::json!({ "error": e }))),
+    }
+}
+
 /// Encode a `Result<(), String>` as either `null` (success) or `{ error }` —
 /// the old `JsValue::NULL | from_str(e)` convention for brush compile/validate.
 pub fn ok_or_error(r: Result<(), String>) -> Response {

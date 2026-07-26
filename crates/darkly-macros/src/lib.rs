@@ -96,6 +96,9 @@ enum ReturnMode {
     Default,
     /// `Result<String, String>` recompiled-graph JSON → `{ graph } | { error }`.
     Graph,
+    /// `Result<(String, String), String>` = `(graph_json, node_id)` →
+    /// `{ graph, added_node_id } | { error }`.
+    GraphNode,
     /// `Vec<u8>` / `[u8; N]` → the binary side-channel (JSON value is `null`).
     Bytes,
     /// `Result<(), String>` → `null | { error }` as a *value* (not a reject).
@@ -127,10 +130,11 @@ fn parse_handler_args(attr: &syn::Attribute) -> syn::Result<HandlerArgs> {
                     out.returns =
                         match ident.to_string().as_str() {
                             "graph" => ReturnMode::Graph,
+                            "graph_node" => ReturnMode::GraphNode,
                             "bytes" => ReturnMode::Bytes,
                             "ok_error" => ReturnMode::OkError,
                             _ => return Err(meta.error(
-                                "unknown `returns` mode (expected `graph`, `bytes`, or `ok_error`)",
+                                "unknown `returns` mode (expected `graph`, `graph_node`, `bytes`, or `ok_error`)",
                             )),
                         };
                     Ok(())
@@ -251,6 +255,7 @@ fn build_handler(method: &syn::ImplItemFn, args: HandlerArgs) -> syn::Result<Bui
 
     let convert = match returns {
         ReturnMode::Graph => quote!(crate::engine::protocol::graph_result(__result)),
+        ReturnMode::GraphNode => quote!(crate::engine::protocol::graph_node_result(__result)),
         ReturnMode::Bytes => quote!(crate::engine::protocol::bytes_result(__result)),
         ReturnMode::OkError => quote!(Ok(crate::engine::protocol::ok_or_error(__result))),
         ReturnMode::Default => quote! {{
@@ -279,6 +284,9 @@ fn build_handler(method: &syn::ImplItemFn, args: HandlerArgs) -> syn::Result<Bui
     let is_unit = returns_unit(ret_ty);
     let resp_call = match returns {
         ReturnMode::Graph => quote!(.resp_literal("{ graph: JsonValue } | { error: string }")),
+        ReturnMode::GraphNode => quote!(.resp_literal(
+            "{ graph: JsonValue, added_node_id: string } | { error: string }"
+        )),
         ReturnMode::OkError => quote!(.resp_literal("null | { error: string }")),
         ReturnMode::Bytes => quote!(.bytes_out()),
         ReturnMode::Default => {

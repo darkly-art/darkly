@@ -116,23 +116,13 @@ pub fn register() -> BrushNodeRegistration {
                         "Per-dab cursor motion vector. Magnitude sets \
                          the per-dab displacement scale.",
                     ),
-                PortDef::input("size_input", BrushWireType::Scalar)
+                PortDef::input("size", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
                     .with_natural_range(0.0, 1.0)
-                    .with_label("Size Input")
-                    .with_unit(UnitType::Percent)
-                    .with_description(
-                        "Per-touch size multiplier (wire pressure here for pressure-sensitive size).",
-                    ),
-                PortDef::input("size", BrushWireType::Scalar)
-                    .with_range(0.0, 4.0, 0.3)
                     .with_label("Size")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa6-solid:up-right-and-down-left-from-center")
-                    .exposed()
-                    .with_preview_value(0.1)
                     .with_description(
-                        "Brush size. Can go above 100% for large-area warps (capped at 400%).",
+                        "Per-touch size multiplier (wire pressure here for pressure-sensitive size). Multiplies onto the brush's base size, owned by pen_input.",
                     ),
                 PortDef::input("strength", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 0.5)
@@ -163,7 +153,6 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::output("dab_size", BrushWireType::Vec2)
                     .with_description("Size of the affected area"),
             ],
-            params: &[],
             is_gpu: true,
             is_terminal: true,
             supports_erase: false,

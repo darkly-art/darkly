@@ -36,7 +36,6 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::output("dab", BrushWireType::Vec4)
                     .with_description("The stamped brush mark (premultiplied RGBA)"),
             ],
-            params: &[],
             is_gpu: true,
             is_terminal: false,
             supports_erase: true,

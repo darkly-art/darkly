@@ -15,16 +15,16 @@
 //!   - Builds a fresh `DarklyEngine` at the cell's canvas size.
 //!   - Loads the topology's brush (`Ink Pen` for paint-family
 //!     topologies, `Smooth Watercolor` for the watercolor topology),
-//!     sets `pen_input.stabilize = 1.0` and the terminal's `size`
-//!     port to the cell's dab radius.
+//!     sets `pen_input.stabilize = 1.0` and the `pen_input.size`
+//!     base-size knob to the cell's dab radius.
 //!   - Adds a raster layer.
 //!   - Replays the recording at `ReplayPacing::Realtime`.
 //!   - Records per-event CPU + per-flush workload counters.
 //!
-//! Note on `dab_radius_px`: this is the value of the brush graph's `size`
-//! port at port-default-pressure (1.0). Ink Pen modulates `size_input`
-//! through a pressure curve, so the *actual rendered* radius for the
-//! recording's mouse-only pen (constant pressure = 0.5) will be ~71 % of
+//! Note on `dab_radius_px`: this is the `pen_input.size` base value at
+//! terminal modulation = 1.0. Ink Pen modulates the terminal's `size`
+//! (per-touch multiplier) through a pressure curve, so the *actual rendered*
+//! radius for the recording's mouse-only pen (constant pressure = 0.5) will be ~71 % of
 //! the column value. The matrix axis is the configured cap.
 
 use std::fs;
@@ -202,21 +202,17 @@ fn brush_graph_json(topology: Topology, dab_radius_px: f32) -> String {
         .into_iter()
         .find(|b| b.metadata.name == brush_name)
         .unwrap_or_else(|| panic!("brush `{brush_name}` not found in builtin_brushes::all()"));
-    let term_id = darkly::brush::find_terminal(&brush.metadata.graph)
-        .unwrap_or_else(|err| panic!("brush `{brush_name}`: {err}"));
-    let graph = &mut brush.metadata.graph;
-    let pen_id = graph
-        .nodes()
-        .iter()
-        .find(|(_, n)| n.type_id == darkly::brush::nodes::pen_input::TYPE_ID)
-        .map(|(id, _)| *id)
+    let pen_id = darkly::brush::nodes::brush_settings::node_id(&brush.metadata.graph)
         .expect("brush must have a pen_input node");
+    let graph = &mut brush.metadata.graph;
+    // Base size and stabilize both live on `pen_input` now (the terminal's
+    // `size` is the per-touch modulation, default 1.0).
     let size_port = (2.0 * dab_radius_px) / DAB_REFERENCE_SIZE_PX;
     graph
-        .set_port_default(term_id, "size", size_port)
+        .set_port_default(&pen_id, "size", size_port)
         .expect("set size port default");
     graph
-        .set_port_default(pen_id, "stabilize", STABILIZE)
+        .set_port_default(&pen_id, "stabilize", STABILIZE)
         .expect("set stabilize port default");
     serde_json::to_string(graph).expect("serialize brush graph")
 }

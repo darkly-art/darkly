@@ -1,60 +1,61 @@
 name: Charcoal
 category: Dry Media
 nodes:
-  1:
+  pen_input:
     type: pen_input
-    port_defaults:
+  brush_settings:
+    type: brush_settings
+    inputs:
       spacing: 0.02
-  2:
+      size: 0.12
+  paint_color:
     type: paint_color
-  3:
+  split_color:
     type: split_color
-  4:
+  shape:
     type: shape
-    params:
+    inputs:
       algorithm: 2
-    port_defaults:
       amplitude: 0.5
       frequency: 3.0
       rotation: 5.750458
       softness: 0.32
-  5:
+  multiply:
     type: multiply
-  6:
+  stamp:
     type: stamp
-  7:
+  paint:
     type: paint
-    port_defaults:
+    inputs:
       flow: 0.5
-      size: 0.12
-  8:
+  image:
     type: image
-    params:
+    inputs:
       scale: 500.0
       texture_name: paper
-  9:
+  levels:
     type: levels
-    port_defaults:
+    inputs:
       in_low: 0.72
-  10:
+  curve:
     type: curve
-    params:
+    inputs:
       curve:
       - - 0.0
         - 0.8
       - - 1.0
         - 0.6
-  11:
+  curve_2:
     type: curve
-    params:
+    inputs:
       curve:
       - - 0.0
         - 0.0
       - - 1.0
         - 0.35
-  12:
+  curve_3:
     type: curve
-    params:
+    inputs:
       curve:
       - - 0.0
         - 0.0
@@ -62,36 +63,36 @@ nodes:
         - 0.53
       - - 1.0
         - 1.0
-  13:
+  switch:
     type: switch
-    port_defaults:
-      select: 1.0
+    inputs:
+      select: true
 connections:
-- '1.drawing_angle -> 13.in_0_scalar'
-- '1.position -> 7.position'
-- '1.pressure -> 10.input'
-- '1.pressure -> 11.input'
-- '2.color -> 6.color'
-- '3.luminance -> 12.input'
-- '4.mask -> 5.b'
-- '5.result -> 9.input'
-- '6.dab -> 7.rgba'
-- '8.color -> 3.color'
-- '9.output -> 6.tip'
-- '10.output -> 9.in_low'
-- '11.output -> 7.flow'
-- '12.output -> 5.a'
-- '13.out_scalar -> 4.rotation_input'
+- 'pen_input.drawing_angle -> switch.in_0_scalar'
+- 'pen_input.position -> paint.position'
+- 'pen_input.pressure -> curve.input'
+- 'pen_input.pressure -> curve_2.input'
+- 'paint_color.color -> stamp.color'
+- 'split_color.luminance -> curve_3.input'
+- 'shape.mask -> multiply.b'
+- 'multiply.result -> levels.input'
+- 'stamp.dab -> paint.rgba'
+- 'image.color -> split_color.color'
+- 'levels.output -> stamp.tip'
+- 'curve.output -> levels.in_low'
+- 'curve_2.output -> paint.flow'
+- 'curve_3.output -> multiply.a'
+- 'switch.out_scalar -> shape.rotation_input'
 exposed_ports:
-  '1.stabilize': {}
-  '7.size': {}
-  '7.opacity': {}
-  '4.rotation':
+  'brush_settings.stabilize': {}
+  'brush_settings.size': {}
+  'paint.opacity': {}
+  'shape.rotation':
     label: Rotation
     description: Spin the shape around its centre. Wire a changing signal into Rotation Input instead if you want it to move as you draw.
     icon: fa-solid fa-rotate
-  '13.select':
+  'switch.select':
     label: Lock Rotation
     description: Routes one of two inputs to the output. If the chosen input is unconnected, downstream falls back to its own port default.
     icon: fa-solid fa-lock
-  '7.flow': {}
+  'paint.flow': {}

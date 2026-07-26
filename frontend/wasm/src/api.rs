@@ -427,7 +427,12 @@ fn outcomes_to_js(outcomes: Vec<RequestOutcome>) -> js_sys::Array {
 /// keyed off `Some`, never off emptiness.
 fn outcome_to_js(outcome: RequestOutcome) -> JsValue {
     use serde::Serialize;
-    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+    let serializer = serde_wasm_bindgen::Serializer::new()
+        .serialize_maps_as_objects(true)
+        // `Value::Null` crosses as JS `null`, not `undefined`, so null-on-success
+        // handlers (`ok_or_error`) honor their declared `null | { error }` contract
+        // instead of resolving `undefined` and tripping `result.error` reads.
+        .serialize_missing_as_null(true);
     let obj = js_sys::Object::new();
     set(&obj, "id", JsValue::from_f64(outcome.id as f64));
     match outcome.result {

@@ -59,7 +59,7 @@ pub fn compile<W: WireKind>(
     graph: &Graph<W>,
     registry: &HashMap<String, NodeRegistration<W>>,
 ) -> Result<ExecutionPlan, GraphError> {
-    let node_ids: Vec<NodeId> = graph.nodes().keys().copied().collect();
+    let node_ids: Vec<NodeId> = graph.nodes().keys().cloned().collect();
     if node_ids.is_empty() {
         return Ok(ExecutionPlan {
             steps: vec![],
@@ -70,23 +70,22 @@ pub fn compile<W: WireKind>(
     // ── Kahn's topological sort ──────────────────────────────────────
 
     // Build in-degree map from connections.
-    let mut in_degree: HashMap<NodeId, usize> = node_ids.iter().map(|&id| (id, 0)).collect();
+    let mut in_degree: HashMap<NodeId, usize> = node_ids.iter().map(|id| (id.clone(), 0)).collect();
     for conn in &graph.connections {
-        *in_degree.entry(conn.to.node).or_default() += 1;
+        *in_degree.entry(conn.to.node.clone()).or_default() += 1;
     }
 
     let mut queue: Vec<NodeId> = in_degree
         .iter()
         .filter(|(_, &deg)| deg == 0)
-        .map(|(&id, _)| id)
+        .map(|(id, _)| id.clone())
         .collect();
     // Sort for deterministic ordering.
-    queue.sort_by_key(|id| id.0);
+    queue.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut sorted = Vec::with_capacity(node_ids.len());
 
     while let Some(id) = queue.pop() {
-        sorted.push(id);
         // Decrement in-degree for each connection from this node.
         // Do NOT dedup: in-degree was counted per-connection, so we must
         // decrement once per connection too.
@@ -94,11 +93,12 @@ pub fn compile<W: WireKind>(
             .connections
             .iter()
             .filter(|c| c.from.node == id)
-            .map(|c| c.to.node)
+            .map(|c| c.to.node.clone())
             .collect();
-        downstream.sort_by_key(|id| id.0);
+        downstream.sort_by(|a, b| a.0.cmp(&b.0));
+        sorted.push(id);
 
-        for &next in &downstream {
+        for next in downstream {
             let deg = in_degree.get_mut(&next).unwrap();
             *deg -= 1;
             if *deg == 0 {
@@ -120,13 +120,17 @@ pub fn compile<W: WireKind>(
     let mut next_slot: usize = 0;
     let mut output_slot_map: HashMap<PortRef, usize> = HashMap::new();
 
-    // First pass: assign slots to all output ports.
-    for &node_id in &sorted {
-        let node = &graph.nodes()[&node_id];
+    // First pass: assign a slot to every wire source — all outputs, plus
+    // settable-source inputs (whose resolved value is also readable as a
+    // source). `is_source()` is the single predicate; keyed by
+    // `PortRef { node, port }` with no direction, which stays collision-free
+    // because no node carries a same-named input+output.
+    for node_id in &sorted {
+        let node = &graph.nodes()[node_id];
         for port in &node.ports {
-            if port.dir == PortDir::Output {
+            if port.is_source() {
                 let pr = PortRef {
-                    node: node_id,
+                    node: node_id.clone(),
                     port: port.name.clone(),
                 };
                 output_slot_map.insert(pr, next_slot);
@@ -155,8 +159,8 @@ pub fn compile<W: WireKind>(
     let mut steps = Vec::with_capacity(sorted.len());
     let mut phase: HashMap<NodeId, bool> = HashMap::new();
 
-    for &node_id in &sorted {
-        let node = &graph.nodes()[&node_id];
+    for node_id in &sorted {
+        let node = &graph.nodes()[node_id];
         let registration = registry.get(&node.type_id);
         let declared_gpu = registration.map(|r| r.is_gpu).unwrap_or(false);
         let is_terminal = registration.map(|r| r.is_terminal).unwrap_or(false);
@@ -167,7 +171,7 @@ pub fn compile<W: WireKind>(
                 return false;
             }
             let pr = PortRef {
-                node: node_id,
+                node: node_id.clone(),
                 port: p.name.clone(),
             };
             input_wire
@@ -177,7 +181,7 @@ pub fn compile<W: WireKind>(
                 .unwrap_or(false)
         });
         let is_gpu = declared_gpu || inherits_gpu;
-        phase.insert(node_id, is_gpu);
+        phase.insert(node_id.clone(), is_gpu);
 
         let mut input_slots = Vec::new();
         let mut output_slots = Vec::new();
@@ -186,7 +190,7 @@ pub fn compile<W: WireKind>(
             match port.dir {
                 PortDir::Input => {
                     let pr = PortRef {
-                        node: node_id,
+                        node: node_id.clone(),
                         port: port.name.clone(),
                     };
                     if let Some(src) = input_wire.get(&pr) {
@@ -199,10 +203,19 @@ pub fn compile<W: WireKind>(
                     }
                     // Disconnected inputs use their default value — the
                     // evaluator handles that (no slot assigned).
+                    //
+                    // A settable-source input is also a source: it owns an
+                    // output slot (assigned in the first pass) that the runner
+                    // seeds with its resolved value, so downstream wires can
+                    // read it. Publish that slot so `build_slot_outputs` and
+                    // the seeding path find it.
+                    if port.is_source() {
+                        output_slots.push((port.name.clone(), output_slot_map[&pr]));
+                    }
                 }
                 PortDir::Output => {
                     let pr = PortRef {
-                        node: node_id,
+                        node: node_id.clone(),
                         port: port.name.clone(),
                     };
                     let slot = output_slot_map[&pr];
@@ -212,7 +225,7 @@ pub fn compile<W: WireKind>(
         }
 
         steps.push(ExecStep {
-            node_id,
+            node_id: node_id.clone(),
             type_id: node.type_id.clone(),
             is_gpu,
             is_terminal,
@@ -244,7 +257,6 @@ mod tests {
                 display_name: "Source",
                 description: "",
                 ports: vec![PortDef::output("out", TestWireKind::Scalar)],
-                params: &[],
                 is_gpu: false,
                 is_terminal: false,
                 supports_erase: true,
@@ -262,7 +274,6 @@ mod tests {
                     PortDef::input("in", TestWireKind::Scalar),
                     PortDef::output("out", TestWireKind::Scalar),
                 ],
-                params: &[],
                 is_gpu: false,
                 is_terminal: false,
                 supports_erase: true,
@@ -277,7 +288,6 @@ mod tests {
                 display_name: "Sink",
                 description: "",
                 ports: vec![PortDef::input("in", TestWireKind::Scalar)],
-                params: &[],
                 is_gpu: false,
                 is_terminal: false,
                 supports_erase: true,
@@ -290,43 +300,34 @@ mod tests {
     #[test]
     fn topological_sort_linear_chain() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node(
-            "source",
-            vec![PortDef::output("out", TestWireKind::Scalar)],
-            vec![],
-        );
+        let a = g.add_node("source", vec![PortDef::output("out", TestWireKind::Scalar)]);
         let b = g.add_node(
             "passthrough",
             vec![
                 PortDef::input("in", TestWireKind::Scalar),
                 PortDef::output("out", TestWireKind::Scalar),
             ],
-            vec![],
         );
-        let c = g.add_node(
-            "sink",
-            vec![PortDef::input("in", TestWireKind::Scalar)],
-            vec![],
-        );
+        let c = g.add_node("sink", vec![PortDef::input("in", TestWireKind::Scalar)]);
 
         g.connect(
             PortRef {
-                node: a,
+                node: a.clone(),
                 port: "out".into(),
             },
             PortRef {
-                node: b,
+                node: b.clone(),
                 port: "in".into(),
             },
         )
         .unwrap();
         g.connect(
             PortRef {
-                node: b,
+                node: b.clone(),
                 port: "out".into(),
             },
             PortRef {
-                node: c,
+                node: c.clone(),
                 port: "in".into(),
             },
         )
@@ -337,32 +338,24 @@ mod tests {
         assert_eq!(plan.steps.len(), 3);
 
         // a must come before b, b before c.
-        let pos = |id: NodeId| plan.steps.iter().position(|s| s.node_id == id).unwrap();
-        assert!(pos(a) < pos(b));
-        assert!(pos(b) < pos(c));
+        let pos = |id: &NodeId| plan.steps.iter().position(|s| &s.node_id == id).unwrap();
+        assert!(pos(&a) < pos(&b));
+        assert!(pos(&b) < pos(&c));
     }
 
     #[test]
     fn slot_indices_wired_correctly() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node(
-            "source",
-            vec![PortDef::output("out", TestWireKind::Scalar)],
-            vec![],
-        );
-        let b = g.add_node(
-            "sink",
-            vec![PortDef::input("in", TestWireKind::Scalar)],
-            vec![],
-        );
+        let a = g.add_node("source", vec![PortDef::output("out", TestWireKind::Scalar)]);
+        let b = g.add_node("sink", vec![PortDef::input("in", TestWireKind::Scalar)]);
 
         g.connect(
             PortRef {
-                node: a,
+                node: a.clone(),
                 port: "out".into(),
             },
             PortRef {
-                node: b,
+                node: b.clone(),
                 port: "in".into(),
             },
         )
@@ -382,22 +375,58 @@ mod tests {
         assert_eq!(b_step.input_slots[0].source.port, "out");
     }
 
+    /// A settable-source input owns an output slot and a wire leaving it
+    /// resolves to that slot — so a downstream node can read the source
+    /// input's value just like a real output.
+    #[test]
+    fn settable_source_input_owns_an_output_slot() {
+        let mut g = Graph::<TestWireKind>::new();
+        let knob = g.add_node(
+            "knob",
+            vec![PortDef::input("val", TestWireKind::Scalar).source()],
+        );
+        let sink = g.add_node("sink", vec![PortDef::input("in", TestWireKind::Scalar)]);
+
+        g.connect(
+            PortRef {
+                node: knob.clone(),
+                port: "val".into(),
+            },
+            PortRef {
+                node: sink.clone(),
+                port: "in".into(),
+            },
+        )
+        .unwrap();
+
+        let plan = compile(&g, &test_registry()).unwrap();
+        let knob_step = plan.steps.iter().find(|s| s.node_id == knob).unwrap();
+        let sink_step = plan.steps.iter().find(|s| s.node_id == sink).unwrap();
+
+        // The source input is published as an output slot...
+        let val_slot = knob_step
+            .output_slots
+            .iter()
+            .find(|(name, _)| name == "val")
+            .map(|(_, slot)| *slot)
+            .expect("settable-source input must own an output slot");
+        // ...and the downstream input resolves to it.
+        assert_eq!(sink_step.input_slots[0].slot, val_slot);
+        assert_eq!(sink_step.input_slots[0].source.node, knob);
+        assert_eq!(sink_step.input_slots[0].source.port, "val");
+    }
+
     #[test]
     fn diamond_graph() {
         // A → B, A → C, B → D, C → D
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node(
-            "source",
-            vec![PortDef::output("out", TestWireKind::Scalar)],
-            vec![],
-        );
+        let a = g.add_node("source", vec![PortDef::output("out", TestWireKind::Scalar)]);
         let b = g.add_node(
             "passthrough",
             vec![
                 PortDef::input("in", TestWireKind::Scalar),
                 PortDef::output("out", TestWireKind::Scalar),
             ],
-            vec![],
         );
         let c = g.add_node(
             "passthrough",
@@ -405,7 +434,6 @@ mod tests {
                 PortDef::input("in", TestWireKind::Scalar),
                 PortDef::output("out", TestWireKind::Scalar),
             ],
-            vec![],
         );
         let d = g.add_node(
             "sink",
@@ -413,49 +441,48 @@ mod tests {
                 PortDef::input("in_a", TestWireKind::Scalar),
                 PortDef::input("in_b", TestWireKind::Scalar),
             ],
-            vec![],
         );
 
         g.connect(
             PortRef {
-                node: a,
+                node: a.clone(),
                 port: "out".into(),
             },
             PortRef {
-                node: b,
+                node: b.clone(),
                 port: "in".into(),
             },
         )
         .unwrap();
         g.connect(
             PortRef {
-                node: a,
+                node: a.clone(),
                 port: "out".into(),
             },
             PortRef {
-                node: c,
+                node: c.clone(),
                 port: "in".into(),
             },
         )
         .unwrap();
         g.connect(
             PortRef {
-                node: b,
+                node: b.clone(),
                 port: "out".into(),
             },
             PortRef {
-                node: d,
+                node: d.clone(),
                 port: "in_a".into(),
             },
         )
         .unwrap();
         g.connect(
             PortRef {
-                node: c,
+                node: c.clone(),
                 port: "out".into(),
             },
             PortRef {
-                node: d,
+                node: d.clone(),
                 port: "in_b".into(),
             },
         )
@@ -464,11 +491,11 @@ mod tests {
         let plan = compile(&g, &test_registry()).unwrap();
         assert_eq!(plan.steps.len(), 4);
 
-        let pos = |id: NodeId| plan.steps.iter().position(|s| s.node_id == id).unwrap();
-        assert!(pos(a) < pos(b));
-        assert!(pos(a) < pos(c));
-        assert!(pos(b) < pos(d));
-        assert!(pos(c) < pos(d));
+        let pos = |id: &NodeId| plan.steps.iter().position(|s| &s.node_id == id).unwrap();
+        assert!(pos(&a) < pos(&b));
+        assert!(pos(&a) < pos(&c));
+        assert!(pos(&b) < pos(&d));
+        assert!(pos(&c) < pos(&d));
     }
 
     #[test]
@@ -490,7 +517,6 @@ mod tests {
                 PortDef::output("out1", TestWireKind::Scalar),
                 PortDef::output("out2", TestWireKind::Scalar),
             ],
-            vec![],
         );
         let b = g.add_node(
             "sink",
@@ -498,27 +524,26 @@ mod tests {
                 PortDef::input("in1", TestWireKind::Scalar),
                 PortDef::input("in2", TestWireKind::Scalar),
             ],
-            vec![],
         );
 
         g.connect(
             PortRef {
-                node: a,
+                node: a.clone(),
                 port: "out1".into(),
             },
             PortRef {
-                node: b,
+                node: b.clone(),
                 port: "in1".into(),
             },
         )
         .unwrap();
         g.connect(
             PortRef {
-                node: a,
+                node: a.clone(),
                 port: "out2".into(),
             },
             PortRef {
-                node: b,
+                node: b.clone(),
                 port: "in2".into(),
             },
         )
@@ -536,7 +561,6 @@ mod tests {
                     PortDef::output("out1", TestWireKind::Scalar),
                     PortDef::output("out2", TestWireKind::Scalar),
                 ],
-                params: &[],
                 is_gpu: false,
                 is_terminal: false,
                 supports_erase: true,
@@ -554,7 +578,6 @@ mod tests {
                     PortDef::input("in1", TestWireKind::Scalar),
                     PortDef::input("in2", TestWireKind::Scalar),
                 ],
-                params: &[],
                 is_gpu: false,
                 is_terminal: false,
                 supports_erase: true,
@@ -565,7 +588,7 @@ mod tests {
         let plan = compile(&g, &reg).unwrap();
         assert_eq!(plan.steps.len(), 2);
 
-        let pos = |id: NodeId| plan.steps.iter().position(|s| s.node_id == id).unwrap();
-        assert!(pos(a) < pos(b));
+        let pos = |id: &NodeId| plan.steps.iter().position(|s| &s.node_id == id).unwrap();
+        assert!(pos(&a) < pos(&b));
     }
 }

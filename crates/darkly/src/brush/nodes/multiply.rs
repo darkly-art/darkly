@@ -26,7 +26,6 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::output("result", BrushWireType::Scalar)
                     .with_description("Product of a \u{00d7} b"),
             ],
-            params: &[],
             is_gpu: false,
             is_terminal: false,
             supports_erase: true,
