@@ -8,7 +8,7 @@
  * change, and never travel back to Rust.
  */
 import { app } from './app.svelte';
-import type { BrushInfo, JsonValue } from '../engine/protocol_gen';
+import type { BrushInfo, JsonValue, ExposedValue, ExposedPortInfo } from '../engine/protocol_gen';
 
 export type { BrushInfo };
 
@@ -82,27 +82,12 @@ export interface NodeTypeInfo {
     is_gpu: boolean;
 }
 
-// --- Wire type colors ---
-
-export type ExposedValue =
-    | { kind: 'scalar'; value: number; min: number; max: number; default: number; unitType: string }
-    | { kind: 'bool'; value: boolean }
-    // Future: | { kind: 'int'; value: number; min: number; max: number }
-    ;
-
-
-export interface ExposedPortInfo {
-    /** `"<node_id>.<port_name>"` — passed back to setExposedPortMeta /
-     *  reorderExposedPort to address the same entry. */
-    key: string;
-    nodeId: string;
-    portName: string;
-    label: string;
-    icon: string;
-    description: string;
-    nodeDisplayName: string;
-    data: ExposedValue;
-}
+// The exposed-control payload shapes are generated from the Rust
+// `ts_rs` derives (`ExposedValue` / `ExposedPortInfo` in
+// `engine/brush_graph.rs`). Re-export them so the brush bar has a single
+// source of truth — extending the control vocabulary (e.g. adding the
+// enum dropdown) happens once, on the Rust side, and flows here on regen.
+export type { ExposedValue, ExposedPortInfo };
 
 /** Display-pixels-per-unit for dragging an exposed port through its full
  *  range. ~400px of horizontal drag covers `[min, max]`. Shared by the

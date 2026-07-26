@@ -955,8 +955,8 @@ impl DarklyEngine {
             });
 
             // Build the type-specific payload. Wire types without a
-            // toolbar widget (Int/Vec2/Vec4) are skipped — the entry
-            // stays in the dict but doesn't render until a widget exists.
+            // toolbar widget (Int/Vec2/Vec4/String/Curve) are skipped — the
+            // entry stays in the dict but doesn't render until a widget exists.
             let data = match port.wire_type {
                 BrushWireType::Scalar => {
                     let unit_type = reg_port.map_or(port.unit_type, |rp| rp.unit_type);
@@ -980,6 +980,19 @@ impl DarklyEngine {
                 BrushWireType::Bool => ExposedValue::Bool {
                     value: port.value.as_bool(),
                 },
+                BrushWireType::Enum => {
+                    // Option labels come from the registration (the schema's
+                    // source of truth), falling back to the instance's own
+                    // `enum_options` if the registration is unavailable.
+                    let options = reg_port
+                        .map(|rp| rp.enum_options.clone())
+                        .filter(|o| !o.is_empty())
+                        .unwrap_or_else(|| port.enum_options.clone());
+                    ExposedValue::Enum {
+                        value: port.value.as_enum_index(),
+                        options,
+                    }
+                }
                 _ => continue,
             };
 
@@ -1184,8 +1197,20 @@ pub enum ExposedValue {
         /// Current value.
         value: bool,
     },
+    /// Enum dropdown — a compile-time branch selector (shape's
+    /// `algorithm`, noise/image `space`, random's `mode`). The frontend
+    /// renders a `<select>` of `options` and writes the chosen index
+    /// back through the ordinary `set_input` path (enum values are just
+    /// an `Int` index; the `Enum` wire type carries the interpretation).
+    Enum {
+        /// Current selected index into `options`.
+        value: i32,
+        /// Dropdown labels in index order.
+        options: Vec<String>,
+    },
     // Future variants:
     // Int { value: i32, min: i32, max: i32 },
+    // Curve { points: Vec<[f32; 2]> },
     // Color { value: [f32; 4] },
 }
 

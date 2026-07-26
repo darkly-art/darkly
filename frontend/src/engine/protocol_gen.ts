@@ -110,7 +110,15 @@ unitType: UnitType, } | { "kind": "bool",
 /**
  * Current value.
  */
-value: boolean, };
+value: boolean, } | { "kind": "enum", 
+/**
+ * Current selected index into `options`.
+ */
+value: number, 
+/**
+ * Dropdown labels in index order.
+ */
+options: Array<string>, };
 
 export type UnitType = "Normalized" | "Percent" | "Degrees" | "Raw" | "Pixels";
 
@@ -159,12 +167,6 @@ icon: string | null, };
 export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
-
-export type PortDir = "Input" | "Output";
-
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
-
-export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -333,6 +335,12 @@ persist_in_thumbnail: boolean,
  */
 source: boolean, };
 
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+
+export type PortDir = "Input" | "Output";
+
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+
 export type NodeRegistration = { 
 /**
  * Unique identifier (e.g. "pen_input", "multiply").
@@ -428,14 +436,14 @@ export type FillBackgroundReq = { id: number, };
 
 export type FillBackgroundColorReq = { id: number, rgba: [number, number, number, number], };
 
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
 export type ParamInfo = { kind: string, name: string, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
 /**
  * Enum: `["Label1", "Label2", ...]`.
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
 options: JsonValue | null, };
-
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
 export type VeilTypeInfo = { type: string, displayName: string, 
 /**
