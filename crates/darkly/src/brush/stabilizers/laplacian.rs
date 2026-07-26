@@ -11,11 +11,10 @@
 //! the pen continuously reshapes as direction changes — the "taffy" feel.
 
 use crate::brush::paint_info::PaintInformation;
-use crate::brush::stabilizer::{StabilizeResult, StabilizerAlgorithm, StabilizerRegistration};
+use crate::brush::stabilizer::{
+    find_divergence, StabilizeResult, StabilizerAlgorithm, StabilizerRegistration,
+};
 use crate::gpu::params::{ParamDef, ParamValue};
-
-/// Threshold in pixels below which a point is considered unchanged.
-const DIVERGENCE_EPSILON: f32 = 0.5;
 
 const PARAMS: &[ParamDef] = &[ParamDef::Float {
     name: "strength",
@@ -113,58 +112,16 @@ impl LaplacianStabilizer {
     /// share the same Laplacian-relaxation influence model, so the bound is
     /// enforced by construction rather than by clamping a wider scan. See
     /// `max_divergence_window` for the derivation.
+    ///
+    /// The diff itself is the shared [`find_divergence`] free function — the
+    /// same detector the [`PredictingStabilizer`](crate::brush::stabilizer::PredictingStabilizer)
+    /// runs over its combined real+predicted polyline.
     fn find_divergence(&self) -> Option<usize> {
-        let len = self.stabilized.len();
-        if len == 0 {
-            return None;
-        }
-
-        // `earliest` is the lowest index whose stabilized position could
-        // possibly differ from the previous frame given the influence radius.
-        // Walking past it is wasted work and risks reporting spurious
-        // divergence at indices the model says cannot have moved.
-        let max_back = self.max_divergence_window();
-        let earliest = len.saturating_sub(max_back + 1);
-        let eps2 = DIVERGENCE_EPSILON * DIVERGENCE_EPSILON;
-
-        // Helper: squared position delta at index `i` (always within bounds
-        // of both arrays here — callers ensure that).
-        let delta2 = |i: usize| -> f32 {
-            let cur = self.stabilized[i].pos;
-            let prev = self.prev_positions[i];
-            let dx = cur[0] - prev[0];
-            let dy = cur[1] - prev[1];
-            dx * dx + dy * dy
-        };
-
-        if self.prev_positions.len() == len {
-            // Same length — walk backward from tip to `earliest`.
-            for i in (earliest..len).rev() {
-                if delta2(i) < eps2 {
-                    return if i + 1 < len { Some(i + 1) } else { None };
-                }
-            }
-            Some(earliest)
-        } else {
-            // Polyline grew (typically by exactly one). New indices
-            // `[prev_positions.len(), len-1]` are by definition new and
-            // cannot be compared. Existing indices that overlap with
-            // `prev_positions` are in `[0, overlap_end)` — walk those,
-            // descending, bounded below by `earliest`.
-            let overlap_end = self.prev_positions.len().min(len);
-            if earliest >= overlap_end {
-                // No overlap to check (e.g., first push of a stroke). The
-                // divergence index is `earliest` itself, which equals 0
-                // when there is nothing prior to compare against.
-                return Some(earliest);
-            }
-            for i in (earliest..overlap_end).rev() {
-                if delta2(i) < eps2 {
-                    return Some(i + 1);
-                }
-            }
-            Some(earliest)
-        }
+        find_divergence(
+            &self.stabilized,
+            &self.prev_positions,
+            self.max_divergence_window(),
+        )
     }
 }
 
