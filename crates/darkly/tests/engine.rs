@@ -5334,9 +5334,13 @@ fn run_predicted_l_stroke(
     layer_id: LayerId,
     predict_ms: f32,
 ) -> Vec<u8> {
-    let pen_id = find_node_id(engine, pen_input::TYPE_ID);
+    let settings_id = find_node_id(engine, brush_settings::TYPE_ID);
     engine
-        .brush_graph_set_port_default(pen_id, "stabilize", 1.0)
+        .brush_graph_set_input(
+            &settings_id,
+            "stabilize",
+            darkly::brush::input_value::InputValue::Scalar(1.0),
+        )
         .unwrap();
     // Prediction horizon is a global config pref, not a per-brush port.
     darkly::config::set(
@@ -5445,9 +5449,13 @@ fn predicted_stroke_keeps_checkpoint_coverage() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
 
-    let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
+    let settings_id = find_node_id(&engine, brush_settings::TYPE_ID);
     engine
-        .brush_graph_set_port_default(pen_id, "stabilize", 1.0)
+        .brush_graph_set_input(
+            &settings_id,
+            "stabilize",
+            darkly::brush::input_value::InputValue::Scalar(1.0),
+        )
         .unwrap();
     // Prediction horizon is a global config pref, not a per-brush port.
     darkly::config::set(
