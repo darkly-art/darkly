@@ -5257,6 +5257,12 @@ fn long_stabilized_stroke_no_fallback() {
     engine
         .brush_graph_set_port_default(pen_id, "stabilize", 1.0)
         .unwrap();
+    // Prediction is a thread-global config pref; pin it off so a prior
+    // prediction test leaking a nonzero horizon can't widen the window here.
+    darkly::config::set(
+        "input.predictionHorizon",
+        darkly::config::ConfigValue::Float(0.0),
+    );
 
     engine.begin_stroke(layer_id);
     // 400 samples along a slow spiral — enough to push the ring well past
@@ -5295,6 +5301,176 @@ fn long_stabilized_stroke_no_fallback() {
         "long stabilized stroke must not trigger any mid-stroke full \
          re-render fallback — the coverage invariant guarantees \
          `restore_before` succeeds for every reachable divergence index"
+    );
+}
+
+// ============================================================================
+// Stroke prediction — coupled-to-stabilization look-ahead tail
+// ============================================================================
+
+/// Drive an L-shaped stabilized stroke (rightward, then upward) on `layer_id`
+/// at full stabilization strength with the given prediction horizon (ms),
+/// returning the committed layer pixels. Samples are 16 ms apart so the mean
+/// Δt is measurable and prediction engages.
+fn run_predicted_l_stroke(
+    engine: &mut DarklyEngine,
+    layer_id: LayerId,
+    predict_ms: f32,
+) -> Vec<u8> {
+    let pen_id = find_node_id(engine, pen_input::TYPE_ID);
+    engine
+        .brush_graph_set_port_default(pen_id, "stabilize", 1.0)
+        .unwrap();
+    // Prediction horizon is a global config pref, not a per-brush port.
+    darkly::config::set(
+        "input.predictionHorizon",
+        darkly::config::ConfigValue::Float(predict_ms as f64),
+    );
+
+    engine.begin_stroke(layer_id);
+    let mut t = 0.0f64;
+    let mut sample = |engine: &mut DarklyEngine, x: f32, y: f32| {
+        engine.stroke_to(StrokeOp::BrushStroke {
+            x,
+            y,
+            pressure: 1.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
+            time_ms: t,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
+        });
+        t += 16.0;
+    };
+    // Rightward: (60, 128) → (180, 128).
+    for i in 0..=12 {
+        sample(engine, 60.0 + i as f32 * 10.0, 128.0);
+    }
+    // Upward: (180, 128) → (180, 40).
+    for i in 1..=9 {
+        sample(engine, 180.0, 128.0 - i as f32 * 10.0);
+    }
+    engine.end_stroke();
+    engine.render(0.0);
+    engine.test_readback_layer(layer_id)
+}
+
+/// T-F: prediction leaves no stale committed dab. The same stabilized stroke
+/// is drawn with prediction off and on; because mid-stroke predictions live in
+/// the diffed buffer, the existing rewind rewrites them every frame, so the
+/// two committed layers must be pixel-identical everywhere except a bounded
+/// disk around the final pen tip (the accepted end-of-stroke leak).
+///
+/// If self-correction were broken (predictions appended without a
+/// combined-polyline rewind), the interior — e.g. the rightward-then-up corner
+/// where the straight-phase prediction overshot — would carry leftover ink and
+/// this test would fail.
+#[test]
+fn prediction_leaves_no_stale_committed_dab() {
+    let (w, h) = (256u32, 256u32);
+
+    let mut e_off = test_engine(w, h);
+    let l_off = e_off.add_raster_layer(None);
+    let off = run_predicted_l_stroke(&mut e_off, l_off, 0.0);
+
+    let mut e_on = test_engine(w, h);
+    let l_on = e_on.add_raster_layer(None);
+    let on = run_predicted_l_stroke(&mut e_on, l_on, 30.0);
+
+    // The accepted leak is bounded to a disk around the last real point. A
+    // *stale dab* is the signature we hunt: opaque prediction ink committed
+    // where the baseline stroke left the canvas empty (e.g. the straight-phase
+    // overshoot past the corner). Soft-edge shape differences at the
+    // heavily-smoothed corner — where both layers carry substantial ink — are
+    // not leaks and are expected under full stabilization.
+    let (ex, ey) = (180.0f32, 40.0f32);
+    let excl_r2 = 55.0f32 * 55.0;
+    let mut differs_in_end = false;
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            let (on_a, off_a) = (on[i + 3] as i32, off[i + 3] as i32);
+            let dx = x as f32 - ex;
+            let dy = y as f32 - ey;
+            if dx * dx + dy * dy <= excl_r2 {
+                if (on_a - off_a).abs() > 32 {
+                    differs_in_end = true;
+                }
+            } else {
+                assert!(
+                    !(off_a < 8 && on_a > 40),
+                    "stale predicted dab leaked into empty canvas at ({x},{y}) \
+                     outside the end region: on α={on_a} off α={off_a}"
+                );
+            }
+        }
+    }
+    assert!(
+        differs_in_end,
+        "prediction must add a bounded tail near the stroke end — otherwise \
+         the test isn't actually exercising prediction"
+    );
+}
+
+/// T-G: with prediction on, the divergence window widened by the predicted
+/// count keeps the checkpoint ring's coverage invariant. A long curving stroke
+/// at full stabilization + prediction must trigger no mid-stroke full re-render
+/// fallback, and (in debug builds) the painting.rs `debug_assert!(k >= earliest)`
+/// coverage guard must not fire — the forced divergence at the prediction
+/// boundary stays inside the widened window by construction.
+#[test]
+fn predicted_stroke_keeps_checkpoint_coverage() {
+    let (w, h) = (512, 512);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+
+    let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
+    engine
+        .brush_graph_set_port_default(pen_id, "stabilize", 1.0)
+        .unwrap();
+    // Prediction horizon is a global config pref, not a per-brush port.
+    darkly::config::set(
+        "input.predictionHorizon",
+        darkly::config::ConfigValue::Float(30.0),
+    );
+
+    engine.begin_stroke(layer_id);
+    let samples = 400usize;
+    let cx = (w / 2) as f32;
+    let cy = (h / 2) as f32;
+    for i in 0..samples {
+        let t = i as f32 / samples as f32;
+        let theta = t * std::f32::consts::TAU * 3.0;
+        let r = 20.0 + t * 200.0;
+        let x = cx + r * theta.cos();
+        let y = cy + r * theta.sin();
+        engine.stroke_to(StrokeOp::BrushStroke {
+            x,
+            y,
+            pressure: 1.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
+            time_ms: i as f64 * 16.0,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
+        });
+    }
+    engine.end_stroke();
+
+    assert_eq!(
+        engine.test_stroke_full_rerender_events(),
+        0,
+        "prediction widens max_divergence_window by the predicted count, so \
+         the checkpoint ring must still cover every reachable divergence \
+         index — no mid-stroke full re-render fallback"
     );
 }
 

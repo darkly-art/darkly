@@ -31,6 +31,13 @@ impl DarklyEngine {
         crate::brush::nodes::pen_input::read_scalar_input(&brush.graph, "stabilize").unwrap_or(0.0)
     }
 
+    /// Read the global prediction horizon (ms of look-ahead) from config.
+    /// `0` = off. Prediction is a global editor preference, not per-brush —
+    /// see `config/sections/input.rs`.
+    fn prediction_horizon_ms(&self) -> f32 {
+        crate::config::get_f64("input.predictionHorizon") as f32
+    }
+
     /// Build the `SpacingConfig` for the active brush graph. Reads pen_input
     /// port defaults — the same source the editor preview reads — so a real
     /// stroke and its preview stamp at the same intervals.
@@ -901,9 +908,23 @@ impl DarklyEngine {
             } else {
                 crate::brush::stabilizer::StabilizerConfig::default()
             };
-            let stabilizer = self
+            let inner = self
                 .stabilizer_registry
                 .create_from_config(&stabilizer_config);
+
+            // Prediction is coupled to stabilization: it extrapolates from the
+            // smoothed polyline, so it only engages when a real stabilizer is
+            // active AND a look-ahead horizon is configured. Otherwise the
+            // inner stabilizer is used bare.
+            let horizon_ms = self.prediction_horizon_ms();
+            let stabilizer: Box<dyn crate::brush::stabilizer::StabilizerAlgorithm> =
+                if strength > 0.0 && horizon_ms > 0.0 {
+                    Box::new(crate::brush::stabilizer::PredictingStabilizer::new(
+                        inner, horizon_ms,
+                    ))
+                } else {
+                    inner
+                };
 
             self.brush_stroke_engine = Some(StrokeEngine::new(
                 runner,
