@@ -150,6 +150,17 @@ pub struct PortDef<W: WireKind> {
     /// `add_node` / portable import) sets it correctly; serde round-trips it.
     #[serde(default)]
     pub wirable: bool,
+    /// Whether a user may *expose* this input as a brush-bar control.
+    /// Computed from `wire_type.is_user_exposable()` at construction and
+    /// carried as data so the frontend gates its expose affordance directly
+    /// off one value rather than re-deriving the type rule — the single
+    /// source of truth is [`WireKind::is_user_exposable`]. Orthogonal to
+    /// `wirable`: an enum is exposable but not wirable; a wired scalar is
+    /// wirable but (while connected) not user-scrubbable. `expose_port`
+    /// enforces it, so a control the brush bar can't render can never be
+    /// surfaced. Serde round-trips it.
+    #[serde(default)]
+    pub exposable: bool,
     /// Quantization step. `0.0` (the default) means continuous; any positive
     /// value snaps the slider, scrub, and typed-value commits to multiples of
     /// `step` from `min`. Used when the wire takes a value but only certain
@@ -284,6 +295,7 @@ impl<W: WireKind> PortDef<W> {
             value: InputValue::Scalar(0.0),
             enum_options: Vec::new(),
             wirable: wire_type.is_wirable(),
+            exposable: wire_type.is_user_exposable(),
             description: String::new(),
             unit_type: UnitType::default(),
             icon: String::new(),
@@ -309,6 +321,7 @@ impl<W: WireKind> PortDef<W> {
             value: InputValue::Scalar(0.0),
             enum_options: Vec::new(),
             wirable: wire_type.is_wirable(),
+            exposable: wire_type.is_user_exposable(),
             description: String::new(),
             unit_type: UnitType::default(),
             icon: String::new(),
@@ -517,6 +530,15 @@ pub enum GraphError {
         node: NodeId,
         port: String,
     },
+    /// The input can't be surfaced as a brush-bar control because its wire
+    /// type has no editing widget (`Curve`, `String`, …). Makes "exposable"
+    /// a structural invariant the expose path enforces, mirroring how
+    /// `InputNotWirable` guards `connect` — a control the bar can't render
+    /// can never be exposed in the first place.
+    PortNotExposable {
+        node: NodeId,
+        port: String,
+    },
     /// `exposed_ports` lookup by key (`"<node_id>.<port>"`) failed.
     ExposedPortNotFound {
         key: String,
@@ -555,6 +577,9 @@ impl std::fmt::Display for GraphError {
             }
             Self::InputNotWirable { node, port } => {
                 write!(f, "input '{}' on {:?} is not wirable", port, node)
+            }
+            Self::PortNotExposable { node, port } => {
+                write!(f, "input '{}' on {:?} is not user-exposable", port, node)
             }
             Self::ExposedPortNotFound { key } => {
                 write!(f, "exposed-port entry '{}' not found", key)
@@ -676,7 +701,7 @@ impl<W: WireKind> Graph<W> {
         // Walk before move: every input port flagged exposed gets a
         // default brush-bar entry.
         for port in ports.iter() {
-            if port.dir == PortDir::Input && port.exposed {
+            if port.dir == PortDir::Input && port.exposed && port.exposable {
                 let key = exposed_port_key(&id, &port.name);
                 self.exposed_ports.insert(key, ExposedPortMeta::default());
             }
@@ -741,12 +766,18 @@ impl<W: WireKind> Graph<W> {
             .nodes
             .get(id)
             .ok_or_else(|| GraphError::NodeNotFound(id.clone()))?;
-        if !node
+        let port = node
             .ports
             .iter()
-            .any(|p| p.name == port_name && p.dir == PortDir::Input)
-        {
-            return Err(GraphError::PortNotFound {
+            .find(|p| p.name == port_name && p.dir == PortDir::Input)
+            .ok_or_else(|| GraphError::PortNotFound {
+                node: id.clone(),
+                port: port_name.to_string(),
+            })?;
+        // Only controls the brush bar can render may be exposed — enforce it
+        // here so an un-renderable entry can never reach the read builder.
+        if !port.exposable {
+            return Err(GraphError::PortNotExposable {
                 node: id.clone(),
                 port: port_name.to_string(),
             });
@@ -1499,6 +1530,32 @@ mod tests {
         let id = g.add_node("node", vec![scalar_out("out")]);
         let err = g.expose_port(&id, "out").unwrap_err();
         assert!(matches!(err, GraphError::PortNotFound { .. }));
+    }
+
+    #[test]
+    fn expose_port_rejects_non_exposable_input() {
+        // `Data` is a compile-time shape with no editing widget
+        // (`is_user_exposable() == false`). Exposing it is rejected at the
+        // model boundary, so a control the brush bar can't render can never
+        // land in `exposed_ports`.
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node("node", vec![PortDef::input("d", TestWireKind::Data)]);
+        let err = g.expose_port(&id, "d").unwrap_err();
+        assert!(matches!(err, GraphError::PortNotExposable { .. }));
+        assert!(!g.is_port_exposed(&id, "d"));
+    }
+
+    #[test]
+    fn add_node_does_not_auto_expose_non_exposable_port() {
+        // Even a registration that flags a non-exposable input `.exposed()`
+        // must not seed a brush-bar entry — the exposability invariant holds
+        // by construction, not just at the interactive expose call.
+        let mut g = Graph::<TestWireKind>::new();
+        let mut d = PortDef::input("d", TestWireKind::Data);
+        d.exposed = true;
+        let id = g.add_node("node", vec![d]);
+        assert!(!g.is_port_exposed(&id, "d"));
+        assert!(g.exposed_ports.is_empty());
     }
 
     #[test]

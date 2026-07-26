@@ -168,6 +168,12 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
 
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+
+export type PortDir = "Input" | "Output";
+
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
  * Slider min when the port is disconnected (UI metadata only).
@@ -201,6 +207,18 @@ enum_options?: Array<string>,
  * `add_node` / portable import) sets it correctly; serde round-trips it.
  */
 wirable: boolean, 
+/**
+ * Whether a user may *expose* this input as a brush-bar control.
+ * Computed from `wire_type.is_user_exposable()` at construction and
+ * carried as data so the frontend gates its expose affordance directly
+ * off one value rather than re-deriving the type rule — the single
+ * source of truth is [`WireKind::is_user_exposable`]. Orthogonal to
+ * `wirable`: an enum is exposable but not wirable; a wired scalar is
+ * wirable but (while connected) not user-scrubbable. `expose_port`
+ * enforces it, so a control the brush bar can't render can never be
+ * surfaced. Serde round-trips it.
+ */
+exposable: boolean, 
 /**
  * Quantization step. `0.0` (the default) means continuous; any positive
  * value snaps the slider, scrub, and typed-value commits to multiples of
@@ -335,12 +353,6 @@ persist_in_thumbnail: boolean,
  */
 source: boolean, };
 
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
-
-export type PortDir = "Input" | "Output";
-
-export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
-
 export type NodeRegistration = { 
 /**
  * Unique identifier (e.g. "pen_input", "multiply").
@@ -436,14 +448,14 @@ export type FillBackgroundReq = { id: number, };
 
 export type FillBackgroundColorReq = { id: number, rgba: [number, number, number, number], };
 
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
 export type ParamInfo = { kind: string, name: string, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
 /**
  * Enum: `["Label1", "Label2", ...]`.
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
 options: JsonValue | null, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
 export type VeilTypeInfo = { type: string, displayName: string, 
 /**
@@ -486,17 +498,6 @@ export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 export type LayerKindTypeInfo = { type: string, displayName: string, };
 
 export type LayerTransformCapabilityReq = { id: number, };
-
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
-/**
- * Whether this modifier participates in transforms with its host.
- */
-linkedToHost: boolean, 
-/**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
 
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
@@ -549,6 +550,17 @@ pipeline: string,
  * uses.
  */
 params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
+
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * Whether this modifier participates in transforms with its host.
+ */
+linkedToHost: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 

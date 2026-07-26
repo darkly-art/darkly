@@ -73,6 +73,16 @@ impl WireKind for BrushWireType {
     fn is_wirable(self) -> bool {
         !matches!(self, Self::Enum | Self::String | Self::Curve)
     }
+
+    /// The brush bar can render a scrub (`Scalar`), a toggle (`Bool`), and
+    /// a dropdown (`Enum`). Every other shape — `Int`, `String`, `Curve`,
+    /// `Vec2`, `Vec4` — has no brush-bar widget, so it is *not*
+    /// user-exposable: an exposed control the bar can't draw would be a
+    /// dead end. This is an explicit allow-list (not an opt-out) so a new
+    /// wire type stays non-exposable until its widget lands.
+    fn is_user_exposable(self) -> bool {
+        matches!(self, Self::Scalar | Self::Bool | Self::Enum)
+    }
 }
 
 // ── Scalar value ────────────────────────────────────────────────────
@@ -192,6 +202,34 @@ mod tests {
             BrushWireType::Curve,
         ] {
             assert!(!ty.is_wirable(), "{ty:?} should not be wirable");
+        }
+    }
+
+    #[test]
+    fn is_user_exposable_truth_table() {
+        // The brush bar has a widget for these — a scrub, a toggle, a
+        // dropdown — so they may be exposed as user controls.
+        for ty in [
+            BrushWireType::Scalar,
+            BrushWireType::Bool,
+            BrushWireType::Enum,
+        ] {
+            assert!(ty.is_user_exposable(), "{ty:?} should be user-exposable");
+        }
+        // No brush-bar widget yet — exposing these would be a dead end, so
+        // they are non-exposable (allow-list, orthogonal to wirability:
+        // `Enum` is exposable-not-wirable, `Int` is wirable-not-exposable).
+        for ty in [
+            BrushWireType::Int,
+            BrushWireType::String,
+            BrushWireType::Curve,
+            BrushWireType::Vec2,
+            BrushWireType::Vec4,
+        ] {
+            assert!(
+                !ty.is_user_exposable(),
+                "{ty:?} should not be user-exposable"
+            );
         }
     }
 

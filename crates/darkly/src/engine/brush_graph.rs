@@ -954,9 +954,10 @@ impl DarklyEngine {
                     .find(|rp| rp.name == port.name && rp.dir == port.dir)
             });
 
-            // Build the type-specific payload. Wire types without a
-            // toolbar widget (Int/Vec2/Vec4/String/Curve) are skipped — the
-            // entry stays in the dict but doesn't render until a widget exists.
+            // Build the type-specific payload. `expose_port` rejects any
+            // wire type that isn't user-exposable, so only Scalar/Bool/Enum
+            // reach here; the trailing skip is a defensive backstop that
+            // keeps a hand-edited graph from surfacing an un-renderable entry.
             let data = match port.wire_type {
                 BrushWireType::Scalar => {
                     let unit_type = reg_port.map_or(port.unit_type, |rp| rp.unit_type);

@@ -263,8 +263,10 @@
         if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
     }
 
-    /** Every disconnected input is exposable to the brush bar. */
-    let canExpose = $derived(port.dir === 'Input' && !connected);
+    /** A disconnected input can be exposed to the brush bar only if its
+     *  type has a brush-bar widget (`port.exposable`, computed in Rust from
+     *  `WireKind::is_user_exposable`) — so curves/strings show no eye toggle. */
+    let canExpose = $derived(port.dir === 'Input' && !connected && port.exposable);
     let isExposed = $derived(brushGraph.isPortExposed(nodeId, port.name));
 
     function toggleExposed(e: MouseEvent) {

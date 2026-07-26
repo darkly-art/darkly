@@ -37,6 +37,20 @@ pub trait WireKind:
     fn is_wirable(self) -> bool {
         true
     }
+
+    /// Returns `true` if a user may *expose* an input of this type as a
+    /// brush-bar control (a scrub, toggle, dropdown, …). Orthogonal to
+    /// [`is_wirable`](Self::is_wirable): a value can be user-facing without
+    /// being per-dab wirable (an enum dropdown) and vice versa. A type is
+    /// exposable only when the properties panel has a widget that can
+    /// render and edit it, so this is an explicit allow-list per domain —
+    /// a new type is *not* exposable until its widget exists, which keeps
+    /// an un-renderable control from being surfaced into a dead end.
+    /// Defaulted to `true` for domains that don't distinguish; consumers
+    /// call this and never `matches!` on the variant (type-owned dispatch).
+    fn is_user_exposable(self) -> bool {
+        true
+    }
 }
 
 pub use compiler::compile;
@@ -62,6 +76,13 @@ pub(crate) mod tests {
         }
 
         fn is_wirable(self) -> bool {
+            !matches!(self, Self::Data)
+        }
+
+        /// `Data` is a compile-time shape with no editing widget, so it also
+        /// exercises the exposability guard: same type on both ends (type
+        /// check passes) but neither wirable nor user-exposable.
+        fn is_user_exposable(self) -> bool {
             !matches!(self, Self::Data)
         }
     }

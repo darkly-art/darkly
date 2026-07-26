@@ -36,6 +36,11 @@ export interface PortDef {
      *  `BrushWireType::is_wirable` in Rust and carried as data; the wire dot
      *  is drawn only when true. */
     wirable: boolean;
+    /** Whether a user may expose this input as a brush-bar control. Sourced
+     *  from `BrushWireType::is_user_exposable` in Rust and carried as data;
+     *  the expose eye toggle is shown only when true (so curves/strings,
+     *  which the brush bar can't render, offer no toggle). */
+    exposable: boolean;
     description: string;
     unit_type: string;  // "Normalized" | "Percent" | "Degrees" | "Raw"
     icon: string;
