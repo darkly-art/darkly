@@ -669,6 +669,7 @@ impl DarklyEngine {
         height: u32,
         fg: [f32; 4],
         bg: [f32; 4],
+        base_size_override: Option<f32>,
         context: ReadbackContext,
     ) {
         let Some(texture) = self.brush_stroke_preview_renderer.render_stroke(
@@ -681,6 +682,7 @@ impl DarklyEngine {
             bg,
             width,
             height,
+            base_size_override,
         ) else {
             return;
         };
@@ -739,6 +741,7 @@ impl DarklyEngine {
             rh,
             fg,
             bg,
+            None,
             make_context(rw, rh),
         );
     }
@@ -768,6 +771,7 @@ impl DarklyEngine {
             rh,
             fg,
             bg,
+            Some(super::brush_library::DAB_PREVIEW_BASE_SIZE),
             make_context(rw, rh),
         );
     }

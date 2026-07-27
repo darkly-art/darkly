@@ -32,7 +32,7 @@ fn renders_s_curve_over_black_background() {
 
     let texture = renderer
         .render_stroke(
-            &device, &queue, &pipelines, &graph, &path, fg, bg, width, height,
+            &device, &queue, &pipelines, &graph, &path, fg, bg, width, height, None,
         )
         .expect("render_stroke should return a texture for the default graph");
 
@@ -116,6 +116,7 @@ fn renderer_reuses_target_across_renders_of_same_size() {
         [0.0, 0.0, 0.0, 1.0],
         320,
         120,
+        None,
     );
     assert_eq!(renderer.current_size(), Some((320, 120)));
     let first_ptr = renderer.current_texture().map(|t| t as *const _);
@@ -130,6 +131,7 @@ fn renderer_reuses_target_across_renders_of_same_size() {
         [1.0, 1.0, 1.0, 1.0],
         320,
         120,
+        None,
     );
     let second_ptr = renderer.current_texture().map(|t| t as *const _);
 
@@ -621,6 +623,7 @@ fn empty_path_returns_none() {
         [0.0, 0.0, 0.0, 1.0],
         320,
         120,
+        None,
     );
     assert!(result.is_none());
 }

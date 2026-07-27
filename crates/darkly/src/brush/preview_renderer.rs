@@ -92,6 +92,7 @@ impl BrushStrokePreviewRenderer {
         bg_color: [f32; 4],
         width: u32,
         height: u32,
+        base_size_override: Option<f32>,
     ) -> Option<&wgpu::Texture> {
         if path.is_empty() || width == 0 || height == 0 {
             return None;
@@ -158,7 +159,11 @@ impl BrushStrokePreviewRenderer {
         // real stroke uses — so scrubbing the spacing slider actually moves
         // the dabs in the preview.
         let spacing = brush_settings::spacing_config(graph);
-        let base_size = brush_settings::base_size(graph);
+        // Dab previews render at a fixed, larger canonical size than the brush's
+        // own `brush_settings.size` so the rasterized tip carries enough detail
+        // to survive the crop-and-downscale to the thumbnail. The stroke
+        // preview passes `None` and keeps the graph-driven size.
+        let base_size = base_size_override.unwrap_or_else(|| brush_settings::base_size(graph));
         // No clone source in the editor preview — a clone brush renders
         // its synthetic preview stroke without a set-source anchor.
         let mut engine = StrokeEngine::new(

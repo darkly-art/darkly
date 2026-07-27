@@ -1188,8 +1188,9 @@ fn generate_rgba_thumbnail_from_pixels(
 /// are tiny or off-center have enough headroom; the framer below crops
 /// to the actual content and downscales here so picker tiles always
 /// see a stably-sized PNG regardless of how the brush graph chose to
-/// place its stamp.
-const DAB_THUMBNAIL_OUTPUT_SIZE: u32 = 96;
+/// place its stamp. Sized for a crisp render on a 96 px CSS box at 2×
+/// device-pixel-ratio (the node-preview and picker displays).
+const DAB_THUMBNAIL_OUTPUT_SIZE: u32 = 192;
 
 /// Target mean luminance the cursor-preview mask gets normalized to,
 /// expressed in the 0..1 range the GPU mask uses (130/255 ≈ 0.51).
