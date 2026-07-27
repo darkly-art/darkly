@@ -2,6 +2,7 @@
     import { app } from '../state/app.svelte';
     import { brushGraph } from '../state/brush_graph.svelte';
     import type { BrushInfo, ExposedPortInfo } from '../state/brush_graph.svelte';
+    import { unitFor } from '../lib/units';
     import { brushSession } from '../tools/brush.svelte';
     import BrushPicker from './brush_picker/BrushPicker.svelte';
     import LiveBrushPreviewStrip from './brush_picker/LiveBrushPreviewStrip.svelte';
@@ -52,16 +53,6 @@
     function handleExposedEnum(port: ExposedPortInfo, index: number) {
         if (port.data.kind === 'enum') port.data.value = index;
         brushGraph.setInput(port.nodeId, port.portName, 'enum', index);
-    }
-
-    /** Format an exposed scalar value based on its unit type. */
-    function formatExposedValue(unitType: string): (v: number) => string {
-        switch (unitType) {
-            case 'Percent': return (v) => `${Math.round(v)}%`;
-            case 'Degrees': return (v) => `${Math.round(v)}°`;
-            case 'Raw': return (v) => v.toFixed(2);
-            default: return (v) => v.toFixed(2); // Normalized
-        }
     }
 
     // A pointerdown outside the brush picker (trigger + panel, both tagged
@@ -132,7 +123,7 @@
                     min={d.min}
                     max={d.max}
                     default={d.default}
-                    formatValue={formatExposedValue(d.unitType)}
+                    formatValue={(v) => unitFor(d.unitType).format(v)}
                     onChange={(v) => handleExposedPort(port.nodeId, port.portName, v)}
                     title={port.description || undefined}
                 />
