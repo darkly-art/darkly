@@ -621,12 +621,8 @@ fn polygon_node_compiles_and_emits_sdf() {
             "{label} must feather the SDF with smoothstep",
         );
         assert!(
-            w.contains("_sd_raw"),
-            "{label} must compute the base SDF before normalizing",
-        );
-        assert!(
-            w.contains("_df: f32 = length("),
-            "{label} must gradient-normalize the SDF so the band is isotropic under squeeze",
+            w.contains("_tinv: mat2x2"),
+            "{label} must build the inverse squeeze transform that places the polygon vertices",
         );
         assert!(
             w.contains("_beta: f32 ="),
@@ -645,26 +641,11 @@ fn polygon_node_compiles_and_emits_sdf() {
 /// circumradius `1.0` (the constant extent bound).
 #[test]
 fn polygon_sdf_geometry() {
-    // Circumradius-`r` regular n-gon SDF — iq's `sdRegularPolygon`, transcribed
-    // to match `polygon.rs`'s emitted WGSL byte-for-byte.
-    fn poly_sdf(p: [f32; 2], n: f32, r: f32) -> f32 {
-        let an = std::f32::consts::PI / n;
-        let acs = [an.cos(), an.sin()];
-        let a0 = p[0].atan2(p[1]);
-        let two_an = 2.0 * an;
-        let bn = (a0 - two_an * (a0 / two_an).floor()) - an;
-        let len = (p[0] * p[0] + p[1] * p[1]).sqrt();
-        let mut q = [len * bn.cos(), len * bn.sin().abs()];
-        q[0] -= r * acs[0];
-        q[1] -= r * acs[1];
-        q[1] += (-q[1]).clamp(0.0, r * acs[1]);
-        let ql = (q[0] * q[0] + q[1] * q[1]).sqrt();
-        ql * q[0].signum()
-    }
-    // The node's composition: circumradius `1 - ρ`, then round by `ρ`.
-    fn rounded(p: [f32; 2], n: f32, rounding: f32) -> f32 {
-        poly_sdf(p, n, 1.0 - rounding) - rounding
-    }
+    // Unsqueezed (a=1, no rotation) the exact SDF is the regular n-gon: a vertex
+    // on +y at the circumradius, the edge midpoint at the apothem, negative
+    // inside, and rounding morphs it toward the unit disc while staying within
+    // circumradius 1 (the constant extent bound).
+    let sd = |p: [f32; 2], n: f32, round: f32| poly_sd_exact(p, n, round, 1.0, 0.0, 0.0);
 
     for &n in &[3.0_f32, 4.0, 5.0, 6.0, 12.0] {
         let an = std::f32::consts::PI / n;
@@ -676,50 +657,42 @@ fn polygon_sdf_geometry() {
 
         // Sharp polygon (ρ = 0): negative inside, vertex on the unit circle,
         // edge midpoint on the boundary at the apothem.
+        assert!(sd([0.0, 0.0], n, 0.0) < 0.0, "n={n}: centre must be inside");
         assert!(
-            rounded([0.0, 0.0], n, 0.0) < 0.0,
-            "n={n}: centre must be inside",
-        );
-        assert!(
-            rounded(vertex_dir, n, 0.0).abs() < 1e-3,
+            sd(vertex_dir, n, 0.0).abs() < 2e-3,
             "n={n}: a vertex sits on the unit circumcircle (sd≈0)",
         );
         let edge_mid = [edge_dir[0] * apothem, edge_dir[1] * apothem];
         assert!(
-            rounded(edge_mid, n, 0.0).abs() < 1e-3,
+            sd(edge_mid, n, 0.0).abs() < 2e-3,
             "n={n}: the edge midpoint sits on the boundary at the apothem",
         );
         // A radius-1 point in the edge direction is outside the sharp polygon.
         assert!(
-            rounded(edge_dir, n, 0.0) > 1e-3,
+            sd(edge_dir, n, 0.0) > 1e-3,
             "n={n}: radius-1 in the edge direction is outside the sharp polygon",
         );
 
-        // Rounding morphs toward the unit disc: at ρ = 1 the field is exactly
-        // `|p| - 1` (isotropic), so the edge direction that was outside at ρ = 0
-        // now sits on the boundary, and every direction has radius 1.
-        assert!(
-            rounded(edge_dir, n, 1.0).abs() < 1e-3,
-            "n={n}: full rounding pushes the boundary out to the unit disc",
-        );
+        // Rounding morphs toward the unit disc: at ρ = 1 the base polygon
+        // collapses to a point and the field is exactly `|p| - 1`.
         for i in 0..16 {
             let a = (i as f32) * std::f32::consts::TAU / 16.0;
             let p = [0.5 * a.cos(), 0.5 * a.sin()];
             assert!(
-                (rounded(p, n, 1.0) - (-0.5)).abs() < 1e-3,
+                (sd(p, n, 1.0) - (-0.5)).abs() < 2e-3,
                 "n={n}: at ρ=1 the field is the unit disc (sd = |p| - 1)",
             );
         }
 
         // The circumradius bound `1.0` holds for every rounding: no point
         // beyond radius 1 is ever inside.
-        for &rounding in &[0.0_f32, 0.5, 1.0] {
+        for &round in &[0.0_f32, 0.5, 1.0] {
             for i in 0..64 {
                 let a = (i as f32) * std::f32::consts::TAU / 64.0;
-                let p = [1.001 * a.cos(), 1.001 * a.sin()];
+                let p = [1.04 * a.cos(), 1.04 * a.sin()];
                 assert!(
-                    rounded(p, n, rounding) > 0.0,
-                    "n={n} ρ={rounding}: nothing past the circumradius may be inside",
+                    sd(p, n, round) > 0.0,
+                    "n={n} ρ={round}: nothing past the circumradius may be inside",
                 );
             }
         }
@@ -847,75 +820,61 @@ fn polygon_is_view_rotation_invariant() {
 }
 
 // ---------------------------------------------------------------------------
-// Rust mirrors of the polygon node's emitted coverage, for the isotropy tests.
-// `poly_sd_true` is the shipped gradient-normalized composition; `poly_sd_old`
-// is the pre-normalization composition, kept only as a cross-check baseline to
-// show what the normalization buys.
+// Rust mirror of the polygon node's emitted coverage: the exact screen-space
+// signed distance to the squeezed polygon, `poly_sd_exact`.
 // ---------------------------------------------------------------------------
 
-/// Mirror of the node's emitted `polygon_sdf` helper (iq `sdRegularPolygon`,
-/// circumradius `r`, negative inside, unit gradient away from vertices).
-fn poly_sdf_ref(p: [f32; 2], n: f32, r: f32) -> f32 {
-    let an = std::f32::consts::PI / n;
-    let acs = [an.cos(), an.sin()];
-    let a0 = p[0].atan2(p[1]);
-    let two_an = 2.0 * an;
-    let bn = (a0 - two_an * (a0 / two_an).floor()) - an;
-    let len = (p[0] * p[0] + p[1] * p[1]).sqrt();
-    let mut q = [len * bn.cos(), len * bn.sin().abs()];
-    q[0] -= r * acs[0];
-    q[1] -= r * acs[1];
-    q[1] += (-q[1]).clamp(0.0, r * acs[1]);
-    let ql = (q[0] * q[0] + q[1] * q[1]).sqrt();
-    ql * q[0].signum()
-}
-
-/// Rotate `uv` into the squeeze-aligned frame (φ − β), squash by semi-axis `a`,
-/// then rotate back by β — the node's input transform (`β` = squeeze angle).
-fn poly_to_pspace(uv: [f32; 2], a: f32, phi: f32, beta: f32) -> [f32; 2] {
-    let a1 = phi - beta;
-    let (c, s) = (a1.cos(), a1.sin());
-    let rot = [uv[0] * c - uv[1] * s, uv[0] * s + uv[1] * c];
-    let aa = a.clamp(0.01, 1.0);
-    let sq = [rot[0] / aa, rot[1] * aa];
+/// Map a base circumradius-`r` vertex from the polygon's own frame into screen
+/// space: `screen = R(β−φ)·diag(a,1/a)·R(−β)·p` — the inverse of the node's
+/// forward squeeze transform.
+fn poly_to_screen(p: [f32; 2], a: f32, phi: f32, beta: f32) -> [f32; 2] {
     let (cb, sb) = (beta.cos(), beta.sin());
-    [sq[0] * cb - sq[1] * sb, sq[0] * sb + sq[1] * cb]
+    let r1 = [p[0] * cb + p[1] * sb, -p[0] * sb + p[1] * cb]; // R(−β)·p
+    let d = [r1[0] * a, r1[1] / a]; // diag(a, 1/a)
+    let ang = beta - phi;
+    let (c, s) = (ang.cos(), ang.sin());
+    [d[0] * c - d[1] * s, d[0] * s + d[1] * c] // R(β−φ)
 }
 
-/// The shipped composition: `sd_raw / (|D·R(−β)·f| / |f|) - round`, a
-/// screen-space signed distance (`D = diag(1/a, a)`), so the softness band is a
-/// uniform width on every edge under squeeze. The anisotropy factor is exactly 1
-/// when `a = 1`.
-fn poly_sd_true(uv: [f32; 2], n: f32, round: f32, a: f32, phi: f32, beta: f32) -> f32 {
+/// Mirror of the node's emitted exact polygon SDF: generate the (squeezed)
+/// polygon's screen-space vertices, take the min distance to its edges with a
+/// winding sign, then round by `round`. Negative inside; a true Euclidean field.
+fn poly_sd_exact(uv: [f32; 2], n: f32, round: f32, a: f32, phi: f32, beta: f32) -> f32 {
     let aa = a.clamp(0.01, 1.0);
     let cr = 1.0 - round;
-    let p = poly_to_pspace(uv, aa, phi, beta);
-    let sd_raw = poly_sdf_ref(p, n, cr);
-    let h = 1e-3;
-    let gx = poly_sdf_ref([p[0] + h, p[1]], n, cr) - poly_sdf_ref([p[0] - h, p[1]], n, cr);
-    let gy = poly_sdf_ref([p[0], p[1] + h], n, cr) - poly_sdf_ref([p[0], p[1] - h], n, cr);
-    let f = [gx / (2.0 * h), gy / (2.0 * h)];
-    let (cb, sb) = (beta.cos(), beta.sin());
-    let fr = [f[0] * cb + f[1] * sb, -f[0] * sb + f[1] * cb]; // R(−β)·f
-    let df = ((fr[0] / aa) * (fr[0] / aa) + (fr[1] * aa) * (fr[1] * aa)).sqrt();
-    let g = (df / (f[0] * f[0] + f[1] * f[1]).sqrt().max(1e-3)).max(1e-4);
-    sd_raw / g - round
+    let ni = n.max(3.0) as i32;
+    let vert = |k: i32| {
+        let ak = std::f32::consts::TAU * (k as f32) / n;
+        poly_to_screen([cr * ak.sin(), cr * ak.cos()], aa, phi, beta)
+    };
+    let mut vj = vert(ni - 1);
+    let mut d2 = f32::INFINITY;
+    let mut s = 1.0_f32;
+    for i in 0..ni {
+        let vi = vert(i);
+        let e = [vj[0] - vi[0], vj[1] - vi[1]];
+        let w = [uv[0] - vi[0], uv[1] - vi[1]];
+        let t =
+            ((w[0] * e[0] + w[1] * e[1]) / (e[0] * e[0] + e[1] * e[1]).max(1e-12)).clamp(0.0, 1.0);
+        let b = [w[0] - e[0] * t, w[1] - e[1] * t];
+        d2 = d2.min(b[0] * b[0] + b[1] * b[1]);
+        let c0 = uv[1] >= vi[1];
+        let c1 = uv[1] < vj[1];
+        let c2 = e[0] * w[1] > e[1] * w[0];
+        if (c0 && c1 && c2) || (!c0 && !c1 && !c2) {
+            s = -s;
+        }
+        vj = vi;
+    }
+    s * d2.sqrt() - round
 }
 
-/// The pre-normalization composition (`sd_raw - round`, in the squashed
-/// p-space). Baseline only — this is the anisotropic band the fix removes.
-fn poly_sd_old(uv: [f32; 2], n: f32, round: f32, a: f32, phi: f32, beta: f32) -> f32 {
-    let cr = 1.0 - round;
-    poly_sdf_ref(poly_to_pspace(uv, a, phi, beta), n, cr) - round
-}
-
-/// Feature: normalization makes the softness band a uniform screen-space width
-/// on every edge under squeeze. The band width perpendicular to an edge is
-/// `band / |∇_screen sd|`, so isotropy ⇔ `|∇_screen sd| ≈ 1` on every edge. We
-/// march to the boundary along many directions and measure the screen-space
-/// gradient magnitude there: the normalized field holds ≈1 on the flat edges
-/// (dipping only in the measure-zero corner wedges), while the un-normalized
-/// field swings widely with edge orientation — the anisotropic band removed.
+/// Feature: the exact Euclidean distance makes the softness band a uniform
+/// screen-space width on every edge under squeeze. Band width perpendicular to
+/// an edge is `band / |∇_screen sd|`, so isotropy ⇔ `|∇_screen sd| ≈ 1`. We march
+/// to the boundary along many directions and measure the screen-space gradient
+/// there; an exact SDF holds it ≈1 everywhere (dipping only at the measure-zero
+/// corner points).
 #[test]
 fn polygon_softness_band_isotropic_under_squeeze() {
     let n = 6.0_f32;
@@ -929,55 +888,36 @@ fn polygon_softness_band_isotropic_under_squeeze() {
         let dy = field([uv[0], uv[1] + e]) - field([uv[0], uv[1] - e]);
         (dx * dx + dy * dy).sqrt() / (2.0 * e)
     }
-    // Gradient magnitude at the boundary along many rays from the (inside) origin.
-    fn boundary_grads(field: &dyn Fn([f32; 2]) -> f32) -> Vec<f32> {
-        let mut out = Vec::new();
-        for i in 0..180 {
-            let ang = (i as f32) * std::f32::consts::TAU / 180.0;
-            let dir = [ang.cos(), ang.sin()];
-            let (mut lo, mut hi) = (0.0_f32, 4.0_f32);
-            if field([dir[0] * hi, dir[1] * hi]) <= 0.0 {
-                continue; // ray never exits (shouldn't happen)
+    let field = |uv: [f32; 2]| poly_sd_exact(uv, n, 0.0, a, phi, beta);
+
+    let mut grads = Vec::new();
+    for i in 0..180 {
+        let ang = (i as f32) * std::f32::consts::TAU / 180.0;
+        let dir = [ang.cos(), ang.sin()];
+        let (mut lo, mut hi) = (0.0_f32, 4.0_f32);
+        for _ in 0..40 {
+            let mid = 0.5 * (lo + hi);
+            if field([dir[0] * mid, dir[1] * mid]) < 0.0 {
+                lo = mid;
+            } else {
+                hi = mid;
             }
-            for _ in 0..40 {
-                let mid = 0.5 * (lo + hi);
-                if field([dir[0] * mid, dir[1] * mid]) < 0.0 {
-                    lo = mid;
-                } else {
-                    hi = mid;
-                }
-            }
-            let r = 0.5 * (lo + hi);
-            out.push(grad_mag(field, [dir[0] * r, dir[1] * r]));
         }
-        out
+        let r = 0.5 * (lo + hi);
+        grads.push(grad_mag(&field, [dir[0] * r, dir[1] * r]));
     }
-    let tight_frac =
-        |v: &[f32]| v.iter().filter(|&&x| (x - 1.0).abs() < 0.15).count() as f32 / v.len() as f32;
 
-    let new_field = |uv: [f32; 2]| poly_sd_true(uv, n, 0.0, a, phi, beta);
-    let old_field = |uv: [f32; 2]| poly_sd_old(uv, n, 0.0, a, phi, beta);
-    let mut new_g = boundary_grads(&new_field);
-    let old_g = boundary_grads(&old_field);
-
-    // Normalized: the flat-edge majority sits at |∇|≈1 (a uniform band); corners
-    // are the minority that dip below.
-    new_g.sort_by(|x, y| x.partial_cmp(y).unwrap());
-    let median = new_g[new_g.len() / 2];
+    grads.sort_by(|x, y| x.partial_cmp(y).unwrap());
+    let median = grads[grads.len() / 2];
     assert!(
-        (median - 1.0).abs() < 0.08,
-        "normalized band gradient should be ≈1 (isotropic); median = {median}",
+        (median - 1.0).abs() < 0.02,
+        "exact SDF should give a unit-gradient (uniform) band; median = {median}",
     );
+    let tight =
+        grads.iter().filter(|&&x| (x - 1.0).abs() < 0.1).count() as f32 / grads.len() as f32;
     assert!(
-        tight_frac(&new_g) > 0.7,
-        "most edges should have a uniform-width band; tight fraction = {}",
-        tight_frac(&new_g),
-    );
-    // Un-normalized: the band gradient is anisotropic — few edges near |∇|=1.
-    assert!(
-        tight_frac(&old_g) < 0.4,
-        "un-normalized band should be markedly anisotropic; tight fraction = {}",
-        tight_frac(&old_g),
+        tight > 0.9,
+        "the band should be uniform on essentially every edge; tight fraction = {tight}",
     );
 }
 
@@ -1004,7 +944,7 @@ fn polygon_squeeze_angle_steers_independently() {
         0.5 * (lo + hi)
     }
     let along = |beta: f32, dir: [f32; 2]| {
-        radius(&|uv: [f32; 2]| poly_sd_true(uv, n, 0.0, a, phi, beta), dir)
+        radius(&|uv: [f32; 2]| poly_sd_exact(uv, n, 0.0, a, phi, beta), dir)
     };
 
     // β = 0: squeeze along the shape's x-axis → tip narrow in x, wide in y.
@@ -1021,77 +961,94 @@ fn polygon_squeeze_angle_steers_independently() {
     );
 }
 
-/// Feature invariant: at ρ=0 the normalization only rescales the field's
-/// magnitude, so the zero-set (silhouette, and hence the `extent()` bound) is
-/// unchanged, and no coverage blooms outside the boundary.
+/// Feature (the reported bug): squeezing a square and rounding it must produce a
+/// proper rounded rectangle — a **convex** outline — not a shape whose corners
+/// balloon outward. We march the boundary all the way around and assert the
+/// turning is monotone (every consecutive cross-product keeps one sign), which a
+/// ballooned, non-convex corner would violate.
 #[test]
-fn polygon_silhouette_unchanged_by_normalization() {
-    fn coverage(sd: f32, softness: f32) -> f32 {
-        let band = softness.clamp(0.0, 1.0).max(0.004);
-        let t = ((-sd) / band).clamp(0.0, 1.0);
-        t * t * (3.0 - 2.0 * t)
+fn polygon_rounded_rectangle_stays_convex() {
+    let n = 4.0_f32;
+    let round = 0.4_f32;
+    let a = 0.35_f32; // heavily squeezed square → rectangle
+    let phi = 0.0_f32;
+    let beta = 0.0_f32;
+    let field = |uv: [f32; 2]| poly_sd_exact(uv, n, round, a, phi, beta);
+
+    // Boundary point along a ray from the (interior) origin.
+    let boundary = |dir: [f32; 2]| {
+        let (mut lo, mut hi) = (0.0_f32, 6.0_f32);
+        for _ in 0..48 {
+            let mid = 0.5 * (lo + hi);
+            if field([dir[0] * mid, dir[1] * mid]) < 0.0 {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let r = 0.5 * (lo + hi);
+        [dir[0] * r, dir[1] * r]
+    };
+    let m = 240;
+    let pts: Vec<[f32; 2]> = (0..m)
+        .map(|i| {
+            let ang = (i as f32) * std::f32::consts::TAU / (m as f32);
+            boundary([ang.cos(), ang.sin()])
+        })
+        .collect();
+
+    // Signed area (shoelace) is positive for a CCW simple polygon; the boundary
+    // points are generated in CCW angular order, so use it to fix the expected
+    // turn sign, then assert every corner turns the same way (convex).
+    let mut area = 0.0_f32;
+    for i in 0..m {
+        let p = pts[i];
+        let q = pts[(i + 1) % m];
+        area += p[0] * q[1] - q[0] * p[1];
     }
-    for &n in &[3.0_f32, 5.0, 6.0] {
-        for &a in &[0.3_f32, 0.7, 1.0] {
-            for &phi in &[0.0_f32, 0.7] {
-                for &beta in &[0.0_f32, 0.5] {
-                    for gx in -12..=12 {
-                        for gy in -12..=12 {
-                            let uv = [gx as f32 / 8.0, gy as f32 / 8.0];
-                            let o = poly_sd_old(uv, n, 0.0, a, phi, beta);
-                            if o.abs() < 2e-3 {
-                                continue; // on the boundary: sign is float-noise sensitive
-                            }
-                            let t = poly_sd_true(uv, n, 0.0, a, phi, beta);
-                            assert_eq!(
-                                t < 0.0,
-                                o < 0.0,
-                                "n={n} a={a} phi={phi} beta={beta} uv={uv:?}: \
-                                 normalization must not move the silhouette at ρ=0",
+    let want = area.signum();
+    for i in 0..m {
+        let a0 = pts[i];
+        let a1 = pts[(i + 1) % m];
+        let a2 = pts[(i + 2) % m];
+        let e0 = [a1[0] - a0[0], a1[1] - a0[1]];
+        let e1 = [a2[0] - a1[0], a2[1] - a1[1]];
+        let cross = e0[0] * e1[1] - e0[1] * e1[0];
+        assert!(
+            cross * want >= -1e-4,
+            "rounded rectangle must stay convex (no ballooning corner); \
+             reversed turn at point {i}: cross={cross}",
+        );
+    }
+}
+
+/// Feature invariant: for every squeeze / angle / rounding, nothing beyond the
+/// tip's screen-space footprint bound (`1/a`, matching `extent()`) is inside —
+/// the rounding never grows the tip past its budgeted extent.
+#[test]
+fn polygon_within_extent_bound() {
+    for &n in &[3.0_f32, 4.0, 5.0, 6.0] {
+        for &a in &[0.2_f32, 0.5, 1.0] {
+            for &round in &[0.0_f32, 0.5, 1.0] {
+                for &phi in &[0.0_f32, 0.7] {
+                    for &beta in &[0.0_f32, 0.9] {
+                        let bound = 1.0 / a;
+                        for i in 0..96 {
+                            let ang = (i as f32) * std::f32::consts::TAU / 96.0;
+                            // Just outside the footprint bound (+2%).
+                            let r = bound * 1.02;
+                            let uv = [r * ang.cos(), r * ang.sin()];
+                            assert!(
+                                poly_sd_exact(uv, n, round, a, phi, beta) > 0.0,
+                                "n={n} a={a} round={round} phi={phi} beta={beta}: \
+                                 nothing past the extent bound may be inside",
                             );
-                            if t >= 0.0 {
-                                assert_eq!(
-                                    coverage(t, 0.5),
-                                    0.0,
-                                    "coverage must be 0 outside the boundary (no outward bloom)",
-                                );
-                            }
                         }
                     }
                 }
             }
         }
     }
-}
-
-/// Feature: at `squeeze = 0` (semi-axis `a = 1`) the anisotropy factor is
-/// exactly 1, so the normalized field equals the un-normalized one everywhere —
-/// the un-squeezed round tip is provably untouched.
-#[test]
-fn polygon_round_tip_unchanged_without_squeeze() {
-    let mut max_diff = 0.0_f32;
-    for &n in &[4.0_f32, 6.0] {
-        for gx in -12..=12 {
-            for gy in -12..=12 {
-                let uv = [gx as f32 / 8.0, gy as f32 / 8.0];
-                let o = poly_sd_old(uv, n, 0.0, 1.0, 0.0, 0.0);
-                // Compare on the boundary shell, where the SDF gradient is well
-                // defined (|f|≈1). Deep inside, the central difference vanishes at
-                // the medial axis / centre, where `sd/g` is ill-conditioned but
-                // the coverage is a saturated 1 either way.
-                if !(0.05..0.4).contains(&o.abs()) {
-                    continue;
-                }
-                let t = poly_sd_true(uv, n, 0.0, 1.0, 0.0, 0.0);
-                max_diff = max_diff.max((t - o).abs());
-            }
-        }
-    }
-    assert!(
-        max_diff < 1e-3,
-        "at squeeze=0 the normalized field must equal the un-normalized one, \
-         max diff = {max_diff}",
-    );
 }
 
 /// Parse + validate a fully assembled brush shader under naga (the same

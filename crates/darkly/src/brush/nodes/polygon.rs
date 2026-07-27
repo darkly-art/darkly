@@ -7,13 +7,14 @@
 //!
 //! Unlike the [`super::circle`] family, which measures coverage from a
 //! polar radius `r(θ)` corrected by a per-angle gradient, polygon coverage
-//! is a **true signed-distance field**. A polar approximation folds its
-//! level sets into a caustic at a rounded corner (the iso-distance contours
-//! there are arcs about the fillet centre, not radial from the dab centre);
-//! an exact SDF has parallel iso-contours everywhere, so rounding and
-//! softness compose cleanly at any values.
+//! is a **true signed-distance field** — the exact screen distance to the
+//! (squeezed) polygon. That is what makes the softness band a uniform width
+//! and lets `squeeze` and rounding compose cleanly: an exact SDF has parallel
+//! iso-contours everywhere, so the corner fillet is a real circular arc
+//! tangent to the edges rather than a stretched, ballooning approximation.
 //!
-//! Credit: the regular-polygon SDF is Inigo Quilez's `sdRegularPolygon`,
+//! Credit: the per-edge min-distance + winding-sign polygon SDF is Inigo
+//! Quilez's "distance to a polygon" (`sdPoly`),
 //! <https://iquilezles.org/articles/distfunctions2d/>. The corner radius
 //! is applied with the standard SDF rounding operator (`sd - ρ`).
 
@@ -159,25 +160,40 @@ impl BrushNodeEvaluator for PolygonEvaluator {
         let squeeze = cctx.input("squeeze").as_f32();
         let squeeze_angle = cctx.input("squeeze_angle").as_f32();
 
-        // Signed distance to a regular n-gon of circumradius `r`, negative
-        // inside, unit-gradient Euclidean field. Vertices sit on radius `r`.
-        // Credit: Inigo Quilez, sdRegularPolygon
-        // (https://iquilezles.org/articles/distfunctions2d/).
+        // Exact signed distance to the squeezed regular n-gon, in screen space:
+        // negative inside, unit-gradient Euclidean field. `tinv` maps a base
+        // circumradius-`r` vertex (regular, vertex on +y) into screen space, so
+        // the polygon is generated already squeezed and oriented — the distance
+        // is then a *true* screen distance, which is what makes the softness band
+        // uniform and lets the rounding operator carve real circular fillets.
+        // Credit: Inigo Quilez, "distance to a polygon" (sdPoly, the per-edge
+        // min-distance + winding-sign form), https://iquilezles.org/articles/distfunctions2d/.
         let sdf = cctx.ident("polygon_sdf");
         wgsl.decls = format!(
-            "fn {sdf}(p: vec2<f32>, n: f32, r: f32) -> f32 {{\n\
-             \x20   let an = 3.14159265358979323846 / n;\n\
-             \x20   let acs = vec2<f32>(cos(an), sin(an));\n\
-             \x20   // Fold the point into one sector (angle measured from +y),\n\
-             \x20   // reflecting about the bisector so distance reduces to\n\
-             \x20   // distance-to-one-edge. `floor` gives a non-negative mod.\n\
-             \x20   let a0 = atan2(p.x, p.y);\n\
-             \x20   let two_an = 2.0 * an;\n\
-             \x20   let bn = (a0 - two_an * floor(a0 / two_an)) - an;\n\
-             \x20   var q = length(p) * vec2<f32>(cos(bn), abs(sin(bn)));\n\
-             \x20   q = q - r * acs;\n\
-             \x20   q.y = q.y + clamp(-q.y, 0.0, r * acs.y);\n\
-             \x20   return length(q) * sign(q.x);\n\
+            "fn {sdf}(uv: vec2<f32>, tinv: mat2x2<f32>, n: f32, r: f32) -> f32 {{\n\
+             \x20   let ni = i32(n);\n\
+             \x20   let two_pi = 6.28318530717958647692;\n\
+             \x20   // Previous vertex (k = n-1), in screen space.\n\
+             \x20   let ak0 = two_pi * f32(ni - 1) / n;\n\
+             \x20   var vj = tinv * (r * vec2<f32>(sin(ak0), cos(ak0)));\n\
+             \x20   var d2 = 1e18;\n\
+             \x20   var s = 1.0;\n\
+             \x20   for (var i = 0; i < ni; i = i + 1) {{\n\
+             \x20       let ak = two_pi * f32(i) / n;\n\
+             \x20       let vi = tinv * (r * vec2<f32>(sin(ak), cos(ak)));\n\
+             \x20       // Distance to edge (vi → vj), clamped to the segment.\n\
+             \x20       let e = vj - vi;\n\
+             \x20       let w = uv - vi;\n\
+             \x20       let b = w - e * clamp(dot(w, e) / max(dot(e, e), 1e-12), 0.0, 1.0);\n\
+             \x20       d2 = min(d2, dot(b, b));\n\
+             \x20       // Winding: flip sign on each edge the +x ray crosses.\n\
+             \x20       let c0 = uv.y >= vi.y;\n\
+             \x20       let c1 = uv.y < vj.y;\n\
+             \x20       let c2 = (e.x * w.y) > (e.y * w.x);\n\
+             \x20       if ((c0 && c1 && c2) || (!c0 && !c1 && !c2)) {{ s = -s; }}\n\
+             \x20       vj = vi;\n\
+             \x20   }}\n\
+             \x20   return s * sqrt(d2);\n\
              }}\n"
         );
 
@@ -188,72 +204,45 @@ impl BrushNodeEvaluator for PolygonEvaluator {
         // polygon would spin with the canvas view).
         //
         // `squeeze` flattens the tip; `squeeze_angle` (β) aims that squash
-        // independently of the polygon's rotation. The input transform rotates
-        // `local_uv` into the squeeze-aligned frame (φ − β), scales x/y
-        // (area-preserving), then rotates back by β — so the polygon sits at φ
-        // while its squash axis sits at β from it. `squeeze` maps to a
-        // semi-axis `a = 1 − 0.9·squeeze` (0% ⇒ round, 100% ⇒ a = 0.1).
+        // independently of the polygon's rotation. Rather than squash the query
+        // point and measure distance in the distorted space (which stretches the
+        // band and the corner fillets), the polygon's vertices are generated
+        // *already squeezed and oriented* in screen space via the inverse
+        // transform `T⁻¹ = R(β−φ)·diag(a,1/a)·R(−β)`, and the SDF returns a true
+        // screen distance. `squeeze` maps to a semi-axis `a = 1 − 0.9·squeeze`
+        // (0% ⇒ round, 100% ⇒ a = 0.1).
         //
-        // The squash is a non-uniform scale, so `sd_raw` measured in that space
-        // is not a true screen distance — feeding it straight to the feather and
-        // the rounding offset would stretch the softness band along the squash
-        // axis. So it is divided by the squash's anisotropy factor
-        // `|D·R(−β)·f| / |f|` (D = diag(1/a, a); f is the SDF gradient by central
-        // difference — the same technique the circle family's `shape_coverage`
-        // uses). That factor is exactly 1 when `a = 1`, so the un-squeezed tip is
-        // untouched; under squash it rescales the band to a uniform screen-space
-        // width on every edge. The zero-set (silhouette / extent) is untouched,
-        // since dividing a signed distance by a positive scalar never moves its
-        // sign change; the `max(…, 1e-3)` floors are divide-by-zero backstops.
+        // Because the distance is exact and Euclidean, the softness band is a
+        // uniform width on every edge under any squeeze, and the rounding
+        // operator `sd − ρ` carves true circular corner fillets tangent to the
+        // edges — a squeezed square rounds into a proper rounded rectangle
+        // (stadium ends when ρ exceeds the short half-side), never a balloon. The
+        // base polygon is generated at circumradius `1 − ρ` so the ρ-radius
+        // fillet keeps the tip within its nominal footprint (extent bound).
         let ident = cctx.ident("polygon");
         wgsl.body = format!(
             "    let {ident}_beta: f32 = ({squeeze_angle});\n\
              \x20   let {ident}_phi: f32 = -(({rotation}) + ({rotation_input}) + u.intrinsic.view_rotation);\n\
-             \x20   // Rotate local_uv into the squeeze-aligned frame (φ − β).\n\
-             \x20   let {ident}_a1: f32 = {ident}_phi - {ident}_beta;\n\
-             \x20   let {ident}_c: f32 = cos({ident}_a1);\n\
-             \x20   let {ident}_s: f32 = sin({ident}_a1);\n\
-             \x20   let {ident}_rot: vec2<f32> = vec2<f32>(\n\
-             \x20       local_uv.x * {ident}_c - local_uv.y * {ident}_s,\n\
-             \x20       local_uv.x * {ident}_s + local_uv.y * {ident}_c,\n\
-             \x20   );\n\
-             \x20   // Semi-axis from squeeze (0% ⇒ round, 100% ⇒ 0.1); squash x/y.\n\
+             \x20   // Semi-axis from squeeze (0% ⇒ round, 100% ⇒ 0.1).\n\
              \x20   let {ident}_a: f32 = clamp(1.0 - 0.9 * clamp(({squeeze}), 0.0, 1.0), 0.01, 1.0);\n\
-             \x20   let {ident}_sq: vec2<f32> = vec2<f32>({ident}_rot.x / {ident}_a, {ident}_rot.y * {ident}_a);\n\
-             \x20   // Rotate back by β so the polygon sits at φ, its squash axis at β.\n\
+             \x20   // Inverse squeeze transform: screen = R(β−φ)·diag(a,1/a)·R(−β)·p,\n\
+             \x20   // used to place each base vertex already squeezed and oriented.\n\
              \x20   let {ident}_cb: f32 = cos({ident}_beta);\n\
              \x20   let {ident}_sb: f32 = sin({ident}_beta);\n\
-             \x20   let {ident}_p: vec2<f32> = vec2<f32>(\n\
-             \x20       {ident}_sq.x * {ident}_cb - {ident}_sq.y * {ident}_sb,\n\
-             \x20       {ident}_sq.x * {ident}_sb + {ident}_sq.y * {ident}_cb,\n\
-             \x20   );\n\
+             \x20   let {ident}_cbp: f32 = cos({ident}_beta - {ident}_phi);\n\
+             \x20   let {ident}_sbp: f32 = sin({ident}_beta - {ident}_phi);\n\
+             \x20   let {ident}_tinv: mat2x2<f32> =\n\
+             \x20       mat2x2<f32>({ident}_cbp, {ident}_sbp, -{ident}_sbp, {ident}_cbp)\n\
+             \x20       * mat2x2<f32>({ident}_a, 0.0, 0.0, 1.0 / {ident}_a)\n\
+             \x20       * mat2x2<f32>({ident}_cb, -{ident}_sb, {ident}_sb, {ident}_cb);\n\
              \x20   let {ident}_n: f32 = max(round(({points})), 3.0);\n\
              \x20   let {ident}_round: f32 = clamp(({rounding}), 0.0, 1.0);\n\
-             \x20   // Circumradius `1 - ρ`: the base polygon shrinks so the fillet\n\
-             \x20   // (added after normalization) keeps the tip within circumradius 1.\n\
              \x20   let {ident}_cr: f32 = 1.0 - {ident}_round;\n\
-             \x20   let {ident}_sd_raw: f32 = {sdf}({ident}_p, {ident}_n, {ident}_cr);\n\
-             \x20   // Central-difference gradient of the SDF in the squashed p-space.\n\
-             \x20   let {ident}_h: f32 = 1e-3;\n\
-             \x20   let {ident}_gx: f32 = {sdf}({ident}_p + vec2<f32>({ident}_h, 0.0), {ident}_n, {ident}_cr)\n\
-             \x20                       - {sdf}({ident}_p - vec2<f32>({ident}_h, 0.0), {ident}_n, {ident}_cr);\n\
-             \x20   let {ident}_gy: f32 = {sdf}({ident}_p + vec2<f32>(0.0, {ident}_h), {ident}_n, {ident}_cr)\n\
-             \x20                       - {sdf}({ident}_p - vec2<f32>(0.0, {ident}_h), {ident}_n, {ident}_cr);\n\
-             \x20   let {ident}_f: vec2<f32> = vec2<f32>({ident}_gx, {ident}_gy) / (2.0 * {ident}_h);\n\
-             \x20   // Anisotropy factor |D·R(−β)·f| / |f|: how much the squeeze\n\
-             \x20   // stretches the SDF gradient. Exactly 1 when a = 1 (un-squeezed);\n\
-             \x20   // dividing by it rescales the band to a uniform screen-space width.\n\
-             \x20   let {ident}_fr: vec2<f32> = vec2<f32>(\n\
-             \x20       {ident}_f.x * {ident}_cb + {ident}_f.y * {ident}_sb,\n\
-             \x20       -{ident}_f.x * {ident}_sb + {ident}_f.y * {ident}_cb,\n\
-             \x20   );\n\
-             \x20   let {ident}_df: f32 = length(vec2<f32>({ident}_fr.x / {ident}_a, {ident}_fr.y * {ident}_a));\n\
-             \x20   let {ident}_g: f32 = max({ident}_df / max(length({ident}_f), 1e-3), 1e-4);\n\
-             \x20   // True screen-space signed distance, then the corner fillet.\n\
-             \x20   // Feather *inward* from the boundary like the circle family's\n\
-             \x20   // `shape_coverage`: coverage reaches 0 at the nominal edge, so\n\
-             \x20   // softness never blooms past the disc-clip and flattens the tip.\n\
-             \x20   let {ident}_sd: f32 = {ident}_sd_raw / {ident}_g - {ident}_round;\n\
+             \x20   // Exact screen distance to the squeezed polygon, then a real\n\
+             \x20   // circular corner fillet. Feather *inward* from the boundary\n\
+             \x20   // (coverage reaches 0 at the edge), like the circle family's\n\
+             \x20   // `shape_coverage`, so softness never blooms past the disc-clip.\n\
+             \x20   let {ident}_sd: f32 = {sdf}(local_uv, {ident}_tinv, {ident}_n, {ident}_cr) - {ident}_round;\n\
              \x20   let {ident}_band: f32 = max(clamp(({softness}), 0.0, 1.0), 0.004);\n\
              \x20   let {ident}: f32 = smoothstep(0.0, {ident}_band, -{ident}_sd);\n"
         );
