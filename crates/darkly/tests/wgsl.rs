@@ -714,6 +714,42 @@ fn polygon_sdf_geometry() {
     }
 }
 
+/// Regression: the polygon softness feather must stay *inside* the boundary
+/// (the circumradius), like the circle family's `shape_coverage`. An earlier
+/// symmetric feather (`1 - smoothstep(-band, band, sd)`) bloomed *outward* past
+/// the circumradius, where the skeleton's disc clip (`local_dist >=
+/// bbox_target_px`) hard-cut it — filling the gaps between the vertices out to
+/// the circumcircle and flattening a soft polygon into a plain circle. The
+/// inward feather has zero coverage the moment `sd >= 0`, so nothing ever
+/// reaches the clip.
+#[test]
+fn polygon_softness_feathers_inward() {
+    // Mirror of the node's emitted coverage: `smoothstep(0.0, band, -sd)`.
+    fn coverage(sd: f32, softness: f32) -> f32 {
+        let band = softness.clamp(0.0, 1.0).max(0.004);
+        let t = ((-sd) / band).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+    for &softness in &[0.0_f32, 0.5, 1.0] {
+        // Outside the boundary (sd > 0) coverage is exactly 0 for any softness —
+        // the feather never blooms past the circumradius into the disc clip.
+        assert_eq!(
+            coverage(0.01, softness),
+            0.0,
+            "softness={softness}: no coverage outside the boundary",
+        );
+        // The soft edge is entirely inside: ~0 at the boundary, full deep inside.
+        assert!(
+            coverage(-1e-4, softness) < 0.5,
+            "softness={softness}: coverage fades to ~0 at the boundary",
+        );
+        assert!(
+            coverage(-1.0, softness) > 0.99,
+            "softness={softness}: full coverage well inside the boundary",
+        );
+    }
+}
+
 /// The `polygon` node opts into per-node previews by flagging its `mask`
 /// output as a spatial image.
 #[test]

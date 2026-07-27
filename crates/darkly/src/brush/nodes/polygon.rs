@@ -186,8 +186,13 @@ impl BrushNodeEvaluator for PolygonEvaluator {
              \x20   // Circumradius `1 - ρ` plus SDF rounding `- ρ` keeps the\n\
              \x20   // rounded corners within a constant circumradius of 1.\n\
              \x20   let {ident}_sd: f32 = {sdf}({ident}_p, {ident}_n, 1.0 - {ident}_round) - {ident}_round;\n\
+             \x20   // Feather *inward* from the boundary (`perp = -sd` is the\n\
+             \x20   // signed distance inside), like the circle family's\n\
+             \x20   // `shape_coverage`: coverage reaches 0 at the nominal edge and\n\
+             \x20   // the soft band stays within the circumradius, so softness\n\
+             \x20   // never blooms past the disc-clip and flattens into a circle.\n\
              \x20   let {ident}_band: f32 = max(clamp(({softness}), 0.0, 1.0), 0.004);\n\
-             \x20   let {ident}: f32 = 1.0 - smoothstep(-{ident}_band, {ident}_band, {ident}_sd);\n"
+             \x20   let {ident}: f32 = smoothstep(0.0, {ident}_band, -{ident}_sd);\n"
         );
         wgsl.outputs.insert("mask".into(), ident);
         Ok(wgsl)
