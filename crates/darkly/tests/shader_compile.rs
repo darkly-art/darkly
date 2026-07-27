@@ -103,3 +103,110 @@ fn all_wgsl_shaders_compile() {
         preambles.len()
     );
 }
+
+/// Split the top-level (paren-depth-0) comma-separated arguments of a call,
+/// starting just after the opening `(`. Returns the argument substrings and
+/// the index of the matching closing `)`.
+fn split_call_args(src: &str, open_paren: usize) -> (Vec<String>, usize) {
+    let bytes = src.as_bytes();
+    let mut depth = 1i32;
+    let mut args = Vec::new();
+    let mut start = open_paren + 1;
+    let mut i = start;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    args.push(src[start..i].trim().to_string());
+                    return (args, i);
+                }
+            }
+            b',' if depth == 1 => {
+                args.push(src[start..i].trim().to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    (args, bytes.len())
+}
+
+/// Parse a WGSL numeric literal (`0.4`, `-0.5`, `1.0f`, `2`, `.3h`) to f64,
+/// or `None` if the text is anything other than a bare numeric literal (e.g.
+/// an expression like `0.2 * r` or a variable).
+fn parse_wgsl_number(s: &str) -> Option<f64> {
+    let s = s.trim();
+    // Strip the WGSL float/int type suffix if present.
+    let s = s
+        .strip_suffix('f')
+        .or_else(|| s.strip_suffix('h'))
+        .unwrap_or(s);
+    if s.is_empty() {
+        return None;
+    }
+    s.parse::<f64>().ok()
+}
+
+/// Regression: no shader may call `smoothstep(low, high, x)` with **constant**
+/// edges where `low >= high` (a reversed-edge constant smoothstep).
+///
+/// naga (the native/Firefox front-end, used by `all_wgsl_shaders_compile`) is
+/// lenient and accepts it, but the browser's WGSL validator (Tint) const-
+/// evaluates the edges and rejects `low >= high` as a hard compile error,
+/// invalidating the whole shader module → the render pipeline → every command
+/// buffer that binds it. This is what broke all the veils (rainy_glass, vhs)
+/// in the shipped desktop build: they compiled in dev (naga) but every
+/// `*-pipeline` came back invalid under the AppImage's Chromium/Dawn.
+///
+/// The fix is the algebraic identity `smoothstep(hi, lo, x)` ≡
+/// `1.0 - smoothstep(lo, hi, x)` (smoothstep is symmetric about its midpoint),
+/// which is bit-identical on every platform and conformant everywhere.
+///
+/// Only *constant* edges are checked: Tint only rejects what it can const-
+/// evaluate, so a runtime-reversed `smoothstep(0.2 * r, 0.0, x)` compiles fine
+/// (it computes the well-defined clamp formula) and is intentionally allowed.
+#[test]
+fn no_reversed_edge_constant_smoothstep() {
+    let shader_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders");
+    let files = find_wgsl_files(&shader_dir);
+    let mut violations = Vec::new();
+
+    for path in &files {
+        let source = std::fs::read_to_string(path).unwrap();
+        let name = path.strip_prefix(&shader_dir).unwrap_or(path);
+        for (idx, _) in source.match_indices("smoothstep") {
+            // Only a real call: the next non-space char after the name is `(`.
+            let after = &source[idx + "smoothstep".len()..];
+            let paren_rel = match after.find(|c: char| !c.is_whitespace()) {
+                Some(p) if after.as_bytes()[p] == b'(' => idx + "smoothstep".len() + p,
+                _ => continue,
+            };
+            let (args, _) = split_call_args(&source, paren_rel);
+            if args.len() < 2 {
+                continue;
+            }
+            let (Some(lo), Some(hi)) = (parse_wgsl_number(&args[0]), parse_wgsl_number(&args[1]))
+            else {
+                continue; // one or both edges are runtime expressions — allowed
+            };
+            if lo >= hi {
+                let line = source[..idx].bytes().filter(|&b| b == b'\n').count() + 1;
+                violations.push(format!(
+                    "{}:{line}: smoothstep({lo}, {hi}, …) has low >= high — \
+                     rewrite as 1.0 - smoothstep({hi}, {lo}, …)",
+                    name.display()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "reversed-edge constant smoothstep is rejected by the browser's WGSL \
+         validator (Tint) and breaks the shader in packaged builds:\n\n{}",
+        violations.join("\n")
+    );
+}

@@ -92,7 +92,7 @@ fn noise2(v: vec2f) -> f32 {
     uvn.x = uvn.x - tc_noise * tc_phase;
 
     // switching noise
-    let sn_phase = smoothstep(0.03, 0.0, uvn.y) * params.switching;
+    let sn_phase = (1.0 - smoothstep(0.0, 0.03, uvn.y)) * params.switching;
     uvn.y += sn_phase * 0.3;
     uvn.x += sn_phase * ((noise2(vec2f(uv.y * 100.0, t * 10.0)) - 0.5) * 0.2);
 
