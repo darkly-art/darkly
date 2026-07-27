@@ -15,6 +15,11 @@ function fakeEngine() {
 
 describe('freshDocument recipes', () => {
     describe('demo', () => {
+        it('boots the watercolor brush with a black foreground', () => {
+            expect(RECIPES.demo.defaultBrushName).toBe('Rough Watercolor');
+            expect(RECIPES.demo.foreground).toEqual({ r: 0, g: 0, b: 0, a: 255 });
+        });
+
         it('fills the initial layer from the background image', () => {
             const { engine, api } = fakeEngine();
             RECIPES.demo.fillInitialLayer(engine, 7);
@@ -39,6 +44,11 @@ describe('freshDocument recipes', () => {
     });
 
     describe('app', () => {
+        it('boots the ink pen with a white foreground', () => {
+            expect(RECIPES.app.defaultBrushName).toBe('Ink Pen');
+            expect(RECIPES.app.foreground).toEqual({ r: 255, g: 255, b: 255, a: 255 });
+        });
+
         it('fills the initial layer with opaque black', () => {
             const { engine, api } = fakeEngine();
             RECIPES.app.fillInitialLayer(engine, 3);

@@ -1,5 +1,5 @@
 import type { Engine } from '../engine/protocol';
-import type { DarklyInstance } from './app.svelte';
+import type { Color, DarklyInstance } from './app.svelte';
 
 /** Which deploy flavor this build was compiled for. Selected at build time by
  *  Vite's `--mode` and injected as `__DARKLY_APP_MODE__` (see vite.config.ts). */
@@ -12,6 +12,11 @@ export const deployMode: DeployMode = __DARKLY_APP_MODE__;
  *  the two hooks without knowing which flavor they got; a new mode is a purely
  *  additive entry in {@link RECIPES}. */
 interface FreshDocumentRecipe {
+    /** The brush preset selected on boot, and the default this build's
+     *  "reset colors" returns to. */
+    defaultBrushName: string;
+    /** The initial foreground paint color for this build. */
+    foreground: Color;
     /** Fill the freshly-created initial background layer. */
     fillInitialLayer(engine: Engine, layerId: number): void;
     /** Seed default veils / extras after the initial layer is filled. */
@@ -24,6 +29,8 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
     // Demo: the night-sky background image plus the four hidden veils new users
     // discover the feature through.
     demo: {
+        defaultBrushName: 'Rough Watercolor',
+        foreground: { r: 0, g: 0, b: 0, a: 255 },
         fillInitialLayer: (engine, id) => engine.api.fillBackground({ id }),
         seedVeils: (instance, w, h) => {
             // The veil chain needs a non-zero viewport before `add_veil` will
@@ -38,9 +45,12 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
             instance.addVeil('vhs', { visible: false });
         },
     },
-    // App: a clean editor — a single opaque black layer and no pre-seeded veils.
-    // The veil feature still exists; it is simply not pre-populated.
+    // App: a clean editor — an opaque black layer painted with a white ink pen,
+    // and no pre-seeded veils. The veil feature still exists; it is simply not
+    // pre-populated.
     app: {
+        defaultBrushName: 'Ink Pen',
+        foreground: { r: 255, g: 255, b: 255, a: 255 },
         fillInitialLayer: (engine, id) => engine.api.fillBackgroundColor({ id, rgba: [0, 0, 0, 255] }),
         seedVeils: () => {},
     },

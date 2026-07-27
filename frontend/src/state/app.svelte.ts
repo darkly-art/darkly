@@ -11,6 +11,7 @@ import { MediaStreamSource, describeMediaError } from '../lib/mediaStreamSource'
 import { HttpStreamSource } from '../lib/httpStreamSource';
 import type { FrameSource, CaptureKind } from '../lib/frameSource';
 import { processRecording } from '../recording/recorder.svelte';
+import { freshDocument } from './freshDocument';
 
 export interface Color {
     r: number; g: number; b: number; a: number;
@@ -119,7 +120,7 @@ export class DarklyInstance {
     engineState = $state<EngineState | null>(null);
 
     // Colors
-    foreground = $state<Color>({ r: 0, g: 0, b: 0, a: 255 });
+    foreground = $state<Color>({ ...freshDocument.foreground });
     background = $state<Color>({ r: 255, g: 255, b: 255, a: 255 });
 
     // Active tool
@@ -932,7 +933,7 @@ export class DarklyInstance {
     }
 
     resetColors() {
-        this.foreground = { r: 0, g: 0, b: 0, a: 255 };
+        this.foreground = { ...freshDocument.foreground };
         this.background = { r: 255, g: 255, b: 255, a: 255 };
     }
 

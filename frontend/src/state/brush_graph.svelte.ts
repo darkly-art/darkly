@@ -8,6 +8,7 @@
  * change, and never travel back to Rust.
  */
 import { app } from './app.svelte';
+import { freshDocument } from './freshDocument';
 import type { BrushInfo, JsonValue, ExposedValue, ExposedPortInfo } from '../engine/protocol_gen';
 
 export type { BrushInfo };
@@ -320,7 +321,7 @@ export class BrushGraphState {
         // brush to render. The engine's procedural default graph would
         // leave `activeBrush` null and the trigger would fall back to "Custom".
         const defaultBrush =
-            this.brushes.find(b => b.name === 'Rough Watercolor') ?? this.brushes[0];
+            this.brushes.find(b => b.name === freshDocument.defaultBrushName) ?? this.brushes[0];
         if (defaultBrush) {
             await this.loadBrush(defaultBrush.name);
         } else {
