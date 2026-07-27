@@ -134,6 +134,21 @@ fn shape_r_superformula(p: ShapeParams, theta: f32) -> f32 {
     return pow(s, -1.0 / p.n1);
 }
 
+/// Regular convex N-gon polar radius. `cos(π/n)` is the apothem of a
+/// unit-circumradius N-gon; folding `theta` into one sector `[−sector/2,
+/// sector/2)` and dividing by `cos` of the folded angle gives the
+/// perpendicular distance to that sector's edge. Peaks at the circumradius
+/// (`= 1`, at vertices) and dips to the apothem between them.
+fn shape_r_polygon(p: ShapeParams, theta: f32) -> f32 {
+    // `frequency` is the shared "Points" knob; for a polygon it is the side
+    // count, floored to a valid convex minimum of 3.
+    let n = max(p.frequency, 3.0);
+    let sector = SHAPE_TAU / n;
+    // Fold to [-sector/2, sector/2): distance to the nearest sector centre.
+    let a = theta - floor(theta / sector) * sector - 0.5 * sector;
+    return cos(0.5 * sector) / max(cos(a), 1e-4);
+}
+
 /// Polar radius `r(θ)` in the shape's natural units (unmodulated disc has
 /// `r = 1`). Branches on `p.algorithm`. Same dispatch table as
 /// `shape.rs::r_theta`.
@@ -143,6 +158,7 @@ fn shape_r_theta(p: ShapeParams, theta: f32) -> f32 {
     switch p.algorithm {
         case 1u: { r_base = shape_r_perlin(p, phased); }
         case 2u: { r_base = shape_r_superformula(p, phased); }
+        case 3u: { r_base = shape_r_polygon(p, phased); }
         default: { r_base = shape_r_sine(p, phased); }
     }
     // Area-preserving elliptical squash about the (rotated) local axes.

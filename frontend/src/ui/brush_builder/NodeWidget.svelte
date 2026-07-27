@@ -17,13 +17,17 @@
     let isSelected = $derived(brushGraph.selectedNode === node.id);
     let outputPorts = $derived(node.ports.filter(p => p.dir === 'Output'));
     let position = $derived(brushGraph.nodePositions[node.id] ?? [0, 0]);
-    /** Nodes opt in to an in-card preview thumbnail by type id. The
-     *  engine's `brush_node_preview` matches on the same id and returns
-     *  PNG bytes (or an empty Vec, which the NodePreview component
-     *  treats as "no preview"). Add new entries here as their backend
-     *  arm in `brush_graph.rs::brush_node_preview` lands. */
-    const PREVIEWABLE_NODE_TYPES = new Set(['noise']);
-    let isPreviewable = $derived(PREVIEWABLE_NODE_TYPES.has(node.type_id));
+    /** A node shows an in-card preview thumbnail iff one of its outputs is
+     *  flagged `preview_image` — a spatial coverage mask or colour field
+     *  (`shape.mask`, `image.color`, …). Read straight off the port data (like
+     *  `wirable` / `exposable`), the same flag the engine's
+     *  `BrushNodeRegistration::preview_output` picks. Per-dab constants and
+     *  sensor/math outputs leave it off, so `random` / `paint_color` don't show
+     *  a meaningless flat blob. New nodes opt in by flagging their image
+     *  output — no allowlist on either side. The engine's `brush_node_preview`
+     *  renders a subgraph rooted at that output; an empty Vec means "no
+     *  preview yet". */
+    let isPreviewable = $derived(outputPorts.some(p => p.preview_image));
 
     // Node type info for display name.
     let typeInfo = $derived(brushGraph.getNodeType(node.type_id));

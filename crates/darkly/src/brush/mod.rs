@@ -12,6 +12,7 @@ pub mod input_value;
 pub mod interpolation;
 pub mod library;
 pub mod node;
+pub mod node_preview_subgraph;
 pub mod nodes;
 pub mod paint_info;
 pub mod paint_target_ext;

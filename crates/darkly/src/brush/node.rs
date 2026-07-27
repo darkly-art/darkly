@@ -77,6 +77,20 @@ impl BrushNodeRegistration {
             lifecycle: Lifecycle::None,
         }
     }
+
+    /// The output port a per-node preview should visualise, if any — the
+    /// first output the node declares as a spatial image via
+    /// [`PortDef::preview_image`] (`shape.mask`, `image.color`, `noise.color`,
+    /// `stamp.dab`). Sensor/math/constant outputs (`random.value`,
+    /// `paint_color.color`, `multiply.result`, `pen_input.*`) leave the flag
+    /// off and return `None` — they carry no spatial field a thumbnail could
+    /// show. The node-preview subgraph builder
+    /// ([`crate::brush::node_preview_subgraph`]) uses this to pick which
+    /// output to wire into the terminal chain; a new node opts into previews
+    /// by flagging its image output, no consumer edits.
+    pub fn preview_output(&self) -> Option<&crate::nodegraph::PortDef<BrushWireType>> {
+        self.node.ports.iter().find(|p| p.preview_image)
+    }
 }
 
 impl std::ops::Deref for BrushNodeRegistration {

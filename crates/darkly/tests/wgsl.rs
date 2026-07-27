@@ -582,6 +582,90 @@ fn noise_node_emits_per_channel_fbm() {
     naga_validate(&compiled.cursor_preview_wgsl, "noise cursor_preview_wgsl");
 }
 
+/// Feature test: the shape node's Polygon algorithm compiles and emits the
+/// `shape_r_polygon` radius function in both shader variants, with a clamped
+/// `sides` literal baked into the `ShapeParams` constructor.
+#[test]
+fn polygon_mode_compiles_and_emits_polygon_radius() {
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let paint_color = graph.add_node("paint_color", reg.get("paint_color").unwrap().ports.clone());
+    let shape = graph.add_node("shape", reg.get("shape").unwrap().ports.clone());
+    // Polygon algorithm (index 3), pentagon via the shared "Points"
+    // (frequency) knob.
+    graph
+        .set_port_value(&shape, "algorithm", InputValue::Int(3))
+        .unwrap();
+    graph
+        .set_port_value(&shape, "frequency", InputValue::Scalar(5.0))
+        .unwrap();
+    let stamp = graph.add_node("stamp", reg.get("stamp").unwrap().ports.clone());
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
+    wire(
+        &mut graph,
+        &[
+            (pen.clone(), "position", term.clone(), "position"),
+            (paint_color.clone(), "color", stamp.clone(), "color"),
+            (shape.clone(), "mask", stamp.clone(), "tip"),
+            (stamp.clone(), "dab", term.clone(), "rgba"),
+        ],
+    );
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("polygon compiles");
+    for (label, w) in [
+        ("stroke_wgsl", &compiled.stroke_wgsl),
+        ("cursor_preview_wgsl", &compiled.cursor_preview_wgsl),
+    ] {
+        assert!(
+            w.contains("shape_r_polygon"),
+            "{label} must emit the polygon radius function",
+        );
+    }
+    naga_validate(&compiled.stroke_wgsl, "polygon stroke_wgsl");
+    naga_validate(&compiled.cursor_preview_wgsl, "polygon cursor_preview_wgsl");
+}
+
+/// The polygon polar radius closed form: a Rust mirror of `shape_r_polygon`
+/// in `_shape.wgsl`. Confirms the vertex radius is the circumradius (`= 1`,
+/// validating the constant `1.0` extent bound) and the edge-midpoint radius
+/// is the apothem `cos(π/n)`, proving the form is a regular N-gon.
+#[test]
+fn polygon_radius_peaks_at_unit_circumradius() {
+    fn polygon_r(theta: f32, sides: f32) -> f32 {
+        let n = sides.max(3.0);
+        let sector = std::f32::consts::TAU / n;
+        let a = theta - (theta / sector).floor() * sector - 0.5 * sector;
+        (0.5 * sector).cos() / a.cos().max(1e-4)
+    }
+    for &sides in &[3.0_f32, 5.0, 6.0, 12.0] {
+        let sector = std::f32::consts::TAU / sides;
+        // θ = 0 folds to the sector edge (a = −sector/2) — a vertex, r = 1.
+        let vertex = polygon_r(0.0, sides);
+        assert!(
+            (vertex - 1.0).abs() < 1e-4,
+            "n={sides}: vertex radius must equal circumradius 1.0, got {vertex}",
+        );
+        // θ = sector/2 folds to the sector centre (a = 0) — an edge midpoint,
+        // r = apothem = cos(π/n).
+        let apothem = polygon_r(sector * 0.5, sides);
+        let expected = (std::f32::consts::PI / sides).cos();
+        assert!(
+            (apothem - expected).abs() < 1e-4,
+            "n={sides}: edge-midpoint radius must equal apothem {expected}, got {apothem}",
+        );
+        // The circumradius is the maximum — no θ exceeds 1.0, so the extent
+        // bound of 1.0 is safe.
+        for i in 0..128 {
+            let theta = (i as f32) * std::f32::consts::TAU / 128.0;
+            assert!(
+                polygon_r(theta, sides) <= 1.0 + 1e-4,
+                "n={sides}: radius must never exceed the circumradius 1.0",
+            );
+        }
+    }
+}
+
 /// Parse + validate a fully assembled brush shader under naga (the same
 /// front-end wgpu uses in-app), panicking with the diagnostic on failure.
 fn naga_validate(src: &str, label: &str) {

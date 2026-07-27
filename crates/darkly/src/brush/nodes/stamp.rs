@@ -34,6 +34,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_description("Per-fragment tip coverage (0..1)"),
                 PortDef::input("color", BrushWireType::Vec4).with_description("Brush color (RGBA)"),
                 PortDef::output("dab", BrushWireType::Vec4)
+                    .preview_image()
                     .with_description("The stamped brush mark (premultiplied RGBA)"),
             ],
             is_gpu: true,

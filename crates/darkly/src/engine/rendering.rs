@@ -546,6 +546,23 @@ impl DarklyEngine {
                     }
                 }
             }
+            ReadbackContext::NodePreview {
+                node_id,
+                topology_version,
+            } => {
+                // Drop stale results — key off topology, like ActiveBrushDab:
+                // scrub-only changes don't alter the rendered output thanks to
+                // `reset_exposed_scrubs`, so a readback queued before a scrub
+                // change is still valid.
+                if topology_version == self.brush_topology_version() {
+                    let (w, h) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
+                    let png_bytes = frame_dab_thumbnail(&pixels, w, h, self.preview_theme_bg);
+                    if !png_bytes.is_empty() {
+                        self.node_preview_cache
+                            .insert(node_id, (topology_version, png_bytes));
+                    }
+                }
+            }
         }
     }
 

@@ -91,6 +91,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_label("Scale With Brush")
                     .with_description("Dab space only: scale the picture with the brush size."),
                 PortDef::output("color", BrushWireType::Vec4)
+                    .preview_image()
                     .with_description("RGBA value sampled from the named texture at the fragment's sample position"),
             ],
             is_gpu: false,

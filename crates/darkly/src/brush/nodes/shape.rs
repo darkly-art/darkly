@@ -14,6 +14,8 @@
 //!   `octaves` with `persistence` falloff. Organic blobs.
 //! - **Gielis Superformula** — single closed-form spanning circles, polygons,
 //!   stars, flowers, and asteroids.
+//! - **Polygon** — a regular convex N-gon (`Points` = side count), via the
+//!   apothem polar-radius closed form.
 //!
 //! Algorithms documented in `docs/brush/stamp-generation-algos.md`. The
 //! shared `r(θ)` math lives in `shaders/brush/_shape.wgsl` and is
@@ -33,6 +35,7 @@ use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 const ALGO_SINE: u32 = 0;
 const ALGO_PERLIN: u32 = 1;
 const ALGO_SUPERFORMULA: u32 = 2;
+const ALGO_POLYGON: u32 = 3;
 
 pub const TYPE_ID: &str = "shape";
 
@@ -51,7 +54,7 @@ pub fn register() -> BrushNodeRegistration {
             // Not wirable (an enum can't be driven per-dab); exposable like
             // every other input.
             PortDef::input("algorithm", BrushWireType::Enum)
-                .with_enum_options(["Sine Harmonic", "Perlin Noise", "Superformula"])
+                .with_enum_options(["Sine Harmonic", "Perlin Noise", "Superformula", "Polygon"])
                 .with_value(InputValue::Int(0))
                 .with_label("Algorithm")
                 .with_description("Silhouette generator: bumpy sine, organic Perlin, or Gielis superformula."),
@@ -75,17 +78,20 @@ pub fn register() -> BrushNodeRegistration {
             // Frequency / rotation are universal: the bump count, period, or
             // symmetry order — and the rotation around the shape's centre —
             // matter for every algorithm.
+            // The count of features around the shape — bumps, lobes, or sides.
+            // One integer knob shared across every algorithm.
             PortDef::input("frequency", BrushWireType::Scalar)
                 .with_range(1.0, 16.0, 6.0)
                 .with_natural_range(1.0, 16.0)
                 .with_step(1.0)
-                .with_label("Frequency")
+                .with_label("Points")
                 .with_unit(UnitType::Raw)
                 .with_description(
-                    "Sine: number of bumps (n). Perlin: base period in cells per revolution. \
-                     Superformula: symmetry order m. Must be an integer — \
-                     non-integer values would create a seam at θ = ±π where the \
-                     shape fails to close.",
+                    "Number of features around the shape. Sine: bumps (n). \
+                     Perlin: base period in cells per revolution. Superformula: \
+                     symmetry order m. Polygon: number of sides (min 3). Must be \
+                     an integer — non-integer values would create a seam at \
+                     θ = ±π where the shape fails to close.",
                 ),
             // No `natural_range`: radians are a unit, not a normalized
             // signal. `pen.drawing_angle → rotation_input` is a unit-
@@ -168,6 +174,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Shape of bump fall."),
             PortDef::output("mask", BrushWireType::Scalar)
                 .with_natural_range(0.0, 1.0)
+                .preview_image()
                 .with_description("Per-fragment mask value (0..1) — the procedural shape's alpha at this fragment"),
         ],
         is_gpu: true,
@@ -217,7 +224,7 @@ impl BrushNodeEvaluator for ShapeEvaluator {
             return Ok(wgsl);
         }
 
-        let algorithm = (cctx.input("algorithm").enum_index().max(0) as u32).min(2);
+        let algorithm = (cctx.input("algorithm").enum_index().max(0) as u32).min(3);
         let amplitude = cctx.input("amplitude").as_f32();
         let frequency = cctx.input("frequency").as_f32();
         let rotation = cctx.input("rotation").as_f32();
@@ -283,7 +290,7 @@ impl BrushNodeEvaluator for ShapeEvaluator {
     /// [`ExtentCtx::port_max_value`] so the bound covers every value
     /// any wire can deliver, not just the per-dab realisation.
     fn extent(&self, ctx: &ExtentCtx) -> ExtentContribution {
-        let algorithm = (ctx.port_enum("algorithm").max(0) as u32).min(2);
+        let algorithm = (ctx.port_enum("algorithm").max(0) as u32).min(3);
         let base = match algorithm {
             // r(θ) = 1 + A·sin(...) for sine, and 1 + A·(2·fbm - 1)
             // for perlin (fbm ∈ [0, 1] → swing in [-1, 1]) — both
@@ -306,6 +313,13 @@ impl BrushNodeEvaluator for ShapeEvaluator {
                 }
                 max_r.max(1.0)
             }
+            // A convex regular N-gon's polar radius peaks at the
+            // circumradius (= 1, at the vertices) and dips to the apothem
+            // between them, so its worst-case radius is exactly the unit
+            // disc's. No CPU `polygon_r` mirror is needed — the bound is a
+            // constant, so there is nothing to keep byte-equivalent with the
+            // WGSL `shape_r_polygon` (unlike superformula's numerical scan).
+            ALGO_POLYGON => 1.0,
             _ => 1.0,
         };
         // Anisotropy is a multiplicative ellipse factor in `shape_r_theta`
