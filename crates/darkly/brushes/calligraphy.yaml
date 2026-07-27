@@ -1,16 +1,19 @@
 name: Calligraphy
 category: Basic
 nodes:
-  1:
+  pen_input:
     type: pen_input
-    port_defaults:
+  brush_settings:
+    type: brush_settings
+    inputs:
       spacing: 0.046481613
       stabilize: 0.6
-  2:
+      size: 0.05
+  paint_color:
     type: paint_color
-  7:
+  shape:
     type: shape
-    port_defaults:
+    inputs:
       softness: 0.15
       # Plain disc (sine, amplitude 0 ⇒ r ≡ 1) squashed by `aspect` into the
       # elliptical broad-nib tip. `aspect` is area-preserving, so the nib is
@@ -18,21 +21,19 @@ nodes:
       # (e.g. the classic ~45° angle).
       aspect: 0.4
       rotation: 0.7853982
-  8:
+  stamp:
     type: stamp
-  9:
+  paint:
     type: paint
-    port_defaults:
-      size: 0.05
 connections:
-- 1.position -> 9.position
-- 2.color -> 8.color
-- 7.mask -> 8.tip
-- 8.dab -> 9.rgba
+- pen_input.position -> paint.position
+- paint_color.color -> stamp.color
+- shape.mask -> stamp.tip
+- stamp.dab -> paint.rgba
 exposed_ports:
-  1.stabilize: {}
-  9.size: {}
-  7.rotation: {}
-  7.aspect: {}
-  9.flow: {}
-  9.opacity: {}
+  brush_settings.stabilize: {}
+  brush_settings.size: {}
+  shape.rotation: {}
+  shape.aspect: {}
+  paint.flow: {}
+  paint.opacity: {}

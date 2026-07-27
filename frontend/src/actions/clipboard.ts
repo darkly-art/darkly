@@ -112,9 +112,9 @@ export function registerClipboardActions(): void {
             // instead of the main canvas.  Fill the selected Image node
             // when there is one; otherwise spawn a new Image node.
             if (brushGraph.isOpen) {
-                let nodeId: number | null = null;
+                let nodeId: string | null = null;
                 if (brushGraph.selectedNode != null) {
-                    const node = brushGraph.graph?.nodes[String(brushGraph.selectedNode)];
+                    const node = brushGraph.graph?.nodes[brushGraph.selectedNode];
                     if (node?.type_id === 'image') nodeId = brushGraph.selectedNode;
                 }
                 if (nodeId == null) {

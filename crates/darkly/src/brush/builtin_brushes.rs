@@ -49,6 +49,31 @@ mod tests {
         }
     }
 
+    /// Node ids are interpolated directly into WGSL symbols (`n{id}_{port}`,
+    /// `{base}_{id}`), so every id in every built-in brush must be a valid
+    /// WGSL identifier fragment: `[A-Za-z_][A-Za-z0-9_]*`. Kind-derived ids
+    /// (`noise`, `noise_2`, `brush_settings`) satisfy this by construction;
+    /// this guards the invariant against a future node kind whose `type_id`
+    /// carries an illegal character.
+    #[test]
+    fn builtin_brush_node_ids_are_valid_wgsl_identifiers() {
+        fn valid(id: &str) -> bool {
+            let mut chars = id.chars();
+            matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+        for brush in all() {
+            for id in brush.metadata.graph.nodes().keys() {
+                assert!(
+                    valid(id.as_str()),
+                    "brush '{}' node id '{}' is not a valid WGSL identifier",
+                    brush.metadata.name,
+                    id,
+                );
+            }
+        }
+    }
+
     #[test]
     fn builtin_brushes_round_trip() {
         for brush in all() {
@@ -132,22 +157,14 @@ mod tests {
             .into_iter()
             .find(|b| b.metadata.name == "Liquify")
             .expect("Liquify built-in must exist");
-        let pen = brush
-            .metadata
-            .graph
-            .nodes()
-            .values()
-            .find(|n| n.type_id == crate::brush::nodes::pen_input::TYPE_ID)
-            .expect("liquify brush has a pen_input node");
-        let spacing = pen
-            .ports
-            .iter()
-            .find(|p| p.name == "spacing")
-            .expect("pen_input has a spacing port");
+        let spacing = crate::brush::nodes::brush_settings::read_scalar_input(
+            &brush.metadata.graph,
+            "spacing",
+        )
+        .expect("liquify brush_settings has a spacing port");
         assert!(
-            spacing.default <= 0.05,
-            "liquify spacing default is {}, expected <= 5% for smooth warps",
-            spacing.default
+            spacing <= 0.05,
+            "liquify spacing default is {spacing}, expected <= 5% for smooth warps",
         );
     }
 }

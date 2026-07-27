@@ -44,7 +44,6 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(0.0, 1.0)
                     .with_description("Rec.601 luminance (0.299 R + 0.587 G + 0.114 B)"),
             ],
-            params: &[],
             is_gpu: false,
             is_terminal: false,
             supports_erase: true,

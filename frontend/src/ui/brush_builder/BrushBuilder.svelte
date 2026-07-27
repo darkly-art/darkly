@@ -113,15 +113,6 @@
         }
     }
 
-    /** Measure all node widgets in the DOM and run auto-layout with real sizes. */
-    function handleAutoLayout() {
-        const sizes: Record<string, [number, number]> = {};
-        for (const el of document.querySelectorAll<HTMLElement>('[data-node-id]')) {
-            const id = el.dataset.nodeId;
-            if (id) sizes[id] = [el.offsetWidth, el.offsetHeight];
-        }
-        brushGraph.autoLayout(sizes);
-    }
 
     /** Brush preview visibility. Persisted via the unified config store
      *  (`ui.brushBuilder.previewVisible` — declared as `Hidden` in the Rust
@@ -257,7 +248,7 @@
             title={tooltipForAction('Add node', 'addBrushNode')}
         >+ Add Node</button>
         <button class="toolbar-btn" onclick={handleReset} title="Reset to default">Reset</button>
-        <button class="toolbar-btn" onclick={handleAutoLayout} title="Auto-layout nodes">Layout</button>
+        <button class="toolbar-btn" onclick={() => brushGraph.measureAndLayout()} title="Auto-layout nodes">Layout</button>
         <div class="spacer"></div>
         <button class="toolbar-btn" onclick={handleCopy} title="Copy graph as YAML to clipboard">Copy</button>
         <button class="toolbar-btn" onclick={handlePaste} title="Replace graph with YAML from clipboard">Paste</button>

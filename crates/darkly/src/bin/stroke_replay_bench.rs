@@ -19,7 +19,7 @@
 //!
 //! - `--input <path>` (required) — recording file produced by the frontend recorder.
 //! - `--brush <name>` (default `round`) — name from `builtin_brushes::all()`.
-//! - `--dab-size <px>` — override the terminal's `size` port for the replay.
+//! - `--dab-size <px>` — override the `pen_input.size` base knob for the replay.
 //! - `--canvas <WxH>` — override the engine canvas dims; recorded `(x, y)`
 //!   are scaled by `target / recording.canvas_*` so the stroke fills the
 //!   same fraction of the canvas.
@@ -38,9 +38,9 @@ use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
 
 /// Kept in lockstep with `crates/darkly/src/brush/dab_pool.rs::DAB_REFERENCE_SIZE`.
-/// The terminal node's `size` port is the dab radius expressed as a fraction
-/// of this reference: `radius_px = size_port * DAB_REFERENCE_SIZE_PX * 0.5`,
-/// so `--dab-size <px>` inverts to `size_port = 2 * px / DAB_REFERENCE_SIZE_PX`.
+/// The `pen_input.size` base knob is the dab radius expressed as a fraction
+/// of this reference: `radius_px = size * DAB_REFERENCE_SIZE_PX * 0.5`,
+/// so `--dab-size <px>` inverts to `size = 2 * px / DAB_REFERENCE_SIZE_PX`.
 const DAB_REFERENCE_SIZE_PX: f32 = 512.0;
 
 #[derive(Debug)]
@@ -139,13 +139,15 @@ fn brush_graph_json(brush_name: &str, dab_size_px: Option<f32>) -> String {
         });
 
     if let Some(radius_px) = dab_size_px {
+        // Base size is the `pen_input.size` knob (the terminal's `size` is now
+        // the per-touch modulation, default 1.0), so override it on pen_input.
         let size_port_value = (2.0 * radius_px) / DAB_REFERENCE_SIZE_PX;
-        let terminal_id = darkly::brush::find_terminal(&brush.metadata.graph)
-            .unwrap_or_else(|err| panic!("brush `{brush_name}`: {err}"));
+        let pen_id = darkly::brush::nodes::brush_settings::node_id(&brush.metadata.graph)
+            .expect("brush must have a pen_input node");
         brush
             .metadata
             .graph
-            .set_port_default(terminal_id, "size", size_port_value)
+            .set_port_default(&pen_id, "size", size_port_value)
             .expect("set size port default");
     }
 

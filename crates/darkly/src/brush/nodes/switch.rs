@@ -23,6 +23,7 @@
 //! actually wires it dynamically.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::input_value::InputValue;
 use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wgsl::{CompileWgslCtx, NodeWgsl};
 use crate::brush::wire::{BrushWireType, ScalarValue};
@@ -78,8 +79,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_description("Routed to out_vec4 when select=1"),
                 PortDef::output("out_vec4", BrushWireType::Vec4).with_description("Selected vec4"),
                 PortDef::input(SELECT_PORT, BrushWireType::Bool)
-                    .with_range(0.0, 1.0, 0.0)
-                    .with_step(1.0)
+                    .with_value(InputValue::Bool(false))
                     .with_label("Select")
                     .with_description(
                         "Routes one of two inputs to the output. If the \
@@ -87,7 +87,6 @@ pub fn register() -> BrushNodeRegistration {
                          to its own port default.",
                     ),
             ],
-            params: &[],
             is_gpu: false,
             is_terminal: false,
             supports_erase: true,
@@ -140,7 +139,7 @@ pub(crate) fn apply_to(graph: &mut Graph<BrushWireType>) {
         .nodes()
         .iter()
         .filter(|(_, n)| n.type_id == TYPE_ID)
-        .map(|(id, _)| *id)
+        .map(|(id, _)| id.clone())
         .collect();
 
     for switch_id in switch_ids {
@@ -161,7 +160,7 @@ pub(crate) fn apply_to(graph: &mut Graph<BrushWireType>) {
             node.ports
                 .iter()
                 .find(|p| p.name == SELECT_PORT && p.dir == PortDir::Input)
-                .map(|p| p.default >= 0.5)
+                .map(|p| p.value.as_f32() >= 0.5)
                 .unwrap_or(false)
         };
 
@@ -206,7 +205,7 @@ pub(crate) fn apply_to(graph: &mut Graph<BrushWireType>) {
         // remove_node also drops any stray edges still touching the switch
         // (e.g. anyone wiring `out_X` after we cleared it — shouldn't
         // happen, but cheap insurance).
-        let _ = graph.remove_node(switch_id);
+        let _ = graph.remove_node(&switch_id);
     }
 }
 
@@ -214,23 +213,22 @@ pub(crate) fn apply_to(graph: &mut Graph<BrushWireType>) {
 mod tests {
     use super::*;
     use crate::brush;
-    use crate::gpu::params::ParamValue;
     use crate::nodegraph::{Connection, Graph, NodeId, PortRef};
 
     /// Helper: instantiate a node of `type_id` from the live registry,
-    /// using the registration's default params.
+    /// cloning the registration's input/output ports (which carry each
+    /// input's default value).
     fn add_node(graph: &mut Graph<BrushWireType>, type_id: &str) -> NodeId {
         let registry = brush::registry();
         let reg = registry
             .get(type_id)
             .unwrap_or_else(|| panic!("no registration for {type_id}"));
-        let params: Vec<ParamValue> = reg.params.iter().map(|p| p.default_value()).collect();
-        graph.add_node(type_id, reg.ports.clone(), params)
+        graph.add_node(type_id, reg.ports.clone())
     }
 
-    fn pr(node: NodeId, port: &str) -> PortRef {
+    fn pr(node: &NodeId, port: &str) -> PortRef {
         PortRef {
-            node,
+            node: node.clone(),
             port: port.into(),
         }
     }
@@ -245,10 +243,10 @@ mod tests {
         let stamp = add_node(&mut graph, "stamp");
 
         graph
-            .connect(pr(paint_color, "color"), pr(switch_id, "in_0_vec4"))
+            .connect(pr(&paint_color, "color"), pr(&switch_id, "in_0_vec4"))
             .unwrap();
         graph
-            .connect(pr(switch_id, "out_vec4"), pr(stamp, "color"))
+            .connect(pr(&switch_id, "out_vec4"), pr(&stamp, "color"))
             .unwrap();
 
         apply_to(&mut graph);
@@ -263,7 +261,7 @@ mod tests {
             graph
                 .connections
                 .iter()
-                .any(|c| c.from == pr(paint_color, "color") && c.to == pr(stamp, "color")),
+                .any(|c| c.from == pr(&paint_color, "color") && c.to == pr(&stamp, "color")),
             "expected paint_color → stamp.color after splice; got {:?}",
             graph.connections
         );
@@ -279,20 +277,25 @@ mod tests {
         let stamp = add_node(&mut graph, "stamp");
 
         graph
-            .connect(pr(paint_color, "color"), pr(switch_id, "in_0_vec4"))
+            .connect(pr(&paint_color, "color"), pr(&switch_id, "in_0_vec4"))
             .unwrap();
         graph
-            .connect(pr(switch_id, "out_vec4"), pr(stamp, "color"))
+            .connect(pr(&switch_id, "out_vec4"), pr(&stamp, "color"))
             .unwrap();
 
         // Flip select to 1 — `in_1_vec4` is unconnected so the wire is dropped.
-        graph.set_port_default(switch_id, SELECT_PORT, 1.0).unwrap();
+        graph
+            .set_port_default(&switch_id, SELECT_PORT, 1.0)
+            .unwrap();
 
         apply_to(&mut graph);
 
         assert!(graph.nodes().get(&switch_id).is_none());
         assert!(
-            !graph.connections.iter().any(|c| c.to == pr(stamp, "color")),
+            !graph
+                .connections
+                .iter()
+                .any(|c| c.to == pr(&stamp, "color")),
             "stamp.color should be unconnected after rewrite; got {:?}",
             graph.connections
         );
@@ -313,13 +316,13 @@ mod tests {
             // so we fake it by leaving in_1 connected to a second paint_color.
             let paint_color_b = add_node(&mut graph, "paint_color");
             graph
-                .connect(pr(paint_color, "color"), pr(switch_id, "in_0_vec4"))
+                .connect(pr(&paint_color, "color"), pr(&switch_id, "in_0_vec4"))
                 .unwrap();
             graph
-                .connect(pr(paint_color_b, "color"), pr(switch_id, "in_1_vec4"))
+                .connect(pr(&paint_color_b, "color"), pr(&switch_id, "in_1_vec4"))
                 .unwrap();
             graph
-                .connect(pr(switch_id, "out_vec4"), pr(stamp, "color"))
+                .connect(pr(&switch_id, "out_vec4"), pr(&stamp, "color"))
                 .unwrap();
 
             apply_to(&mut graph);
@@ -329,14 +332,14 @@ mod tests {
                 graph
                     .connections
                     .iter()
-                    .any(|c| c.from == pr(paint_color, "color") && c.to == pr(stamp, "color")),
+                    .any(|c| c.from == pr(&paint_color, "color") && c.to == pr(&stamp, "color")),
                 "select=0 should route paint_color (in_0) → stamp.color"
             );
             assert!(
                 !graph
                     .connections
                     .iter()
-                    .any(|c| c.from == pr(paint_color_b, "color")),
+                    .any(|c| c.from == pr(&paint_color_b, "color")),
                 "paint_color_b (in_1) should be disconnected"
             );
         }
@@ -349,16 +352,18 @@ mod tests {
             let stamp = add_node(&mut graph, "stamp");
             let paint_color_b = add_node(&mut graph, "paint_color");
             graph
-                .connect(pr(paint_color, "color"), pr(switch_id, "in_0_vec4"))
+                .connect(pr(&paint_color, "color"), pr(&switch_id, "in_0_vec4"))
                 .unwrap();
             graph
-                .connect(pr(paint_color_b, "color"), pr(switch_id, "in_1_vec4"))
+                .connect(pr(&paint_color_b, "color"), pr(&switch_id, "in_1_vec4"))
                 .unwrap();
             graph
-                .connect(pr(switch_id, "out_vec4"), pr(stamp, "color"))
+                .connect(pr(&switch_id, "out_vec4"), pr(&stamp, "color"))
                 .unwrap();
 
-            graph.set_port_default(switch_id, SELECT_PORT, 1.0).unwrap();
+            graph
+                .set_port_default(&switch_id, SELECT_PORT, 1.0)
+                .unwrap();
 
             apply_to(&mut graph);
 
@@ -367,14 +372,14 @@ mod tests {
                 graph
                     .connections
                     .iter()
-                    .any(|c| c.from == pr(paint_color_b, "color") && c.to == pr(stamp, "color")),
+                    .any(|c| c.from == pr(&paint_color_b, "color") && c.to == pr(&stamp, "color")),
                 "select=1 should route paint_color_b (in_1) → stamp.color"
             );
             assert!(
                 !graph
                     .connections
                     .iter()
-                    .any(|c| c.from == pr(paint_color, "color")),
+                    .any(|c| c.from == pr(&paint_color, "color")),
                 "paint_color (in_0) should be disconnected"
             );
         }
@@ -391,15 +396,15 @@ mod tests {
         let switch_id = add_node(&mut graph, TYPE_ID);
         let stamp = add_node(&mut graph, "stamp");
         graph
-            .connect(pr(paint_color, "color"), pr(switch_id, "in_0_vec4"))
+            .connect(pr(&paint_color, "color"), pr(&switch_id, "in_0_vec4"))
             .unwrap();
         graph
-            .connect(pr(switch_id, "out_vec4"), pr(stamp, "color"))
+            .connect(pr(&switch_id, "out_vec4"), pr(&stamp, "color"))
             .unwrap();
         // Synthetic dynamic-select wire (no real Bool source exists yet).
         graph.connections.push(Connection {
-            from: pr(paint_color, "color"),
-            to: pr(switch_id, SELECT_PORT),
+            from: pr(&paint_color, "color"),
+            to: pr(&switch_id, SELECT_PORT),
         });
 
         apply_to(&mut graph);
@@ -412,7 +417,7 @@ mod tests {
             graph
                 .connections
                 .iter()
-                .any(|c| c.to == pr(switch_id, SELECT_PORT)),
+                .any(|c| c.to == pr(&switch_id, SELECT_PORT)),
             "dynamic select wire should still be present"
         );
     }

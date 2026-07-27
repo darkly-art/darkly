@@ -212,7 +212,7 @@ fn round_trip_every_brush_node() {
         let reg = registry
             .get(type_id)
             .unwrap_or_else(|| panic!("missing registration for '{type_id}'"));
-        let id = graph.add_node(reg.type_id, reg.ports.clone(), defaults_of(reg.params));
+        let id = graph.add_node(reg.type_id, reg.ports.clone());
 
         let json = serde_json::to_string(&graph)
             .unwrap_or_else(|e| panic!("serialize graph with '{type_id}' failed: {e}"));
@@ -224,7 +224,7 @@ fn round_trip_every_brush_node() {
             .get(&id)
             .unwrap_or_else(|| panic!("node lost across round-trip for '{type_id}'"));
         assert_eq!(node.type_id, type_id);
-        assert_eq!(node.params.len(), reg.params.len());
+        assert_eq!(node.ports.len(), reg.ports.len());
     }
 }
 

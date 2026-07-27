@@ -47,10 +47,16 @@ fn render_one_dab(brush_name: &str, color: [f32; 4], canvas: &[u8]) -> Vec<u8> {
         .unwrap_or_else(|| panic!("builtin brush `{brush_name}` not registered"));
 
     let mut graph = brush.metadata.graph.clone();
-    let term_id = darkly::brush::find_terminal(&graph)
+    let _term_id = darkly::brush::find_terminal(&graph)
         .unwrap_or_else(|err| panic!("brush `{brush_name}`: {err}"));
     // Small size keeps the dab footprint well clear of the corner pixel.
-    graph.set_port_default(term_id, "size", 0.05).unwrap();
+    graph
+        .set_port_default(
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            0.05,
+        )
+        .unwrap();
 
     let (device, queue) = shared_device();
     let (layer_texture, layer_view) = create_test_texture(&device, &queue, CANVAS, CANVAS, canvas);

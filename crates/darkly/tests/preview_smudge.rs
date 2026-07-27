@@ -51,8 +51,14 @@ fn smudge_preview_shows_neutral_gray_footprint() {
         .find(|b| b.metadata.name == "Smudge")
         .expect("Smudge brush registered");
     let mut graph = brush.metadata.graph.clone();
-    let term_id = darkly::brush::find_terminal(&graph).expect("brush has a terminal");
-    graph.set_port_default(term_id, "size", 0.1).unwrap();
+    let _term_id = darkly::brush::find_terminal(&graph).expect("brush has a terminal");
+    graph
+        .set_port_default(
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            0.1,
+        )
+        .unwrap();
 
     let (device, queue) = test_device();
     let device = Arc::new(device);

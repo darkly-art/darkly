@@ -170,8 +170,9 @@ Delegate planning to a fresh, isolated agent with only the repository instructio
 - Problem and root cause or feature semantics
 - Architectural impact and implementation steps
 - Tests, risks, and unresolved questions
-- A rough LOC estimate, split into production, tests, and generated/docs changes.
-  This estimate is a primary scope and complexity signal, not optional metadata.
+- A rough LOC estimate — lines added or lines removed, not lines touched — split
+  into production, tests, and generated/docs changes. This estimate is a primary
+  scope and complexity signal, not optional metadata.
 - For bugs, a regression test that will fail before the fix
 
 The planning agent must not modify production code. If isolated agents are unavailable, ask the user to run this step in a fresh session.
@@ -192,9 +193,9 @@ The orchestrator addresses every substantive finding in the plan or records an e
 
 Give the user:
 
-- **First:** the estimated LOC range, split into production and tests. Lead the
-  approval summary with this because it is the clearest signal of implementation
-  size and possible over-design.
+- **First:** the estimated LOC range from the plan. Lead the approval summary with
+  this because it is the clearest signal of implementation size and possible
+  over-design.
 - The plan path and review verdict
 - The proposed approach, tradeoffs, and unresolved questions
 - Confirmation that implementation has not begun
@@ -231,8 +232,6 @@ Every system must be implemented properly. No hacks, no hardcoding, no shortcuts
 **Every bug is a signal that something nearby is awkward or overcomplicated.** Before patching, ask: "is this an elegant solution?" If the answer is no, the bug is telling you the code wants to be restructured — propose a refactor instead of layering a fix on top. The cleanest fix is often the one that makes the bug impossible to express, not the one that handles it.
 
 **Comments describe the code, not the plan that produced it.** Write comments about what the code does and why it's there as it stands — never about the process that got it there. Do not reference ephemeral planning artifacts: step or phase numbers, plan-list items, "TODO from the plan", "as decided in step 3", or before/after framing ("new", "now", "previously", "used to") that only makes sense relative to a change in flight. A comment that would be meaningless to someone reading the file fresh — with no knowledge of the task that introduced it — is in the wrong register; rewrite it to stand on its own, or delete it.
-
-**Keep the README "Features & Roadmap" checklist in sync with the codebase.** When you ship, remove, or rename a user-visible feature (one with a button and, where appropriate, a hotkey in the frontend) in the same change update the checklist in `README.md` — flip `[ ]` to `[x]`, or add a new line. A Rust helper without a frontend surface does not count as shipped.
 
 ## No Migrations / No Backwards Compatibility (pre-release)
 

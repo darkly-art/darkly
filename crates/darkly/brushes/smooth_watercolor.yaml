@@ -1,33 +1,35 @@
 name: Smooth Watercolor
 category: Wet Media
 nodes:
-  1:
+  pen_input:
     type: pen_input
-    port_defaults:
+  brush_settings:
+    type: brush_settings
+    inputs:
       stabilize: 0.5
-  2:
+  paint_color:
     type: paint_color
-  3:
+  shape:
     type: shape
-    port_defaults:
+    inputs:
       amplitude: 0.05
       frequency: 5.0
-  4:
+  watercolor:
     type: watercolor
-  5:
+  random:
     type: random
 connections:
-- '1.position -> 4.position'
-- '1.pressure -> 4.flow'
-- '2.color -> 4.color'
-- '3.mask -> 4.mask'
-- '5.value -> 3.rotation_input'
+- 'pen_input.position -> watercolor.position'
+- 'pen_input.pressure -> watercolor.flow'
+- 'paint_color.color -> watercolor.color'
+- 'shape.mask -> watercolor.mask'
+- 'random.value -> shape.rotation_input'
 exposed_ports:
-  "1.stabilize": {}
-  "4.size": {}
-  "3.softness": {}
-  "4.deposit": {}
-  "4.flow": {}
-  "4.opacity": {}
-  "4.wetness": {}
-  "4.pickup_size": {}
+  "brush_settings.stabilize": {}
+  "brush_settings.size": {}
+  "shape.softness": {}
+  "watercolor.deposit": {}
+  "watercolor.flow": {}
+  "watercolor.opacity": {}
+  "watercolor.wetness": {}
+  "watercolor.pickup_size": {}

@@ -106,7 +106,6 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::output("color", BrushWireType::Vec4)
                     .with_description("RGBA sampled from the frozen source snapshot at the clone offset"),
             ],
-            params: &[],
             is_gpu: false,
             is_terminal: false,
             supports_erase: true,
@@ -297,7 +296,6 @@ mod tests {
         assert!(reg.node.ports.iter().any(|p| p.name == "color"));
         assert!(reg.node.ports.iter().any(|p| p.name == "center"));
         assert!(!reg.node.ports.iter().any(|p| p.name == "angle"));
-        assert!(reg.node.params.is_empty());
 
         // Anchored `mode` is a Bool toggle defaulting to aligned (0.0).
         let mode = reg
@@ -307,8 +305,8 @@ mod tests {
             .find(|p| p.name == "mode")
             .expect("mode port");
         assert_eq!(mode.wire_type, BrushWireType::Bool);
-        assert_eq!(mode.default, 0.0);
-        assert!(!mode_default_is_anchored(mode.default));
+        assert_eq!(mode.value.as_f32(), 0.0);
+        assert!(!mode_default_is_anchored(mode.value.as_f32()));
 
         // Sample-merged `merged` is a Bool toggle defaulting to off
         // (clone from the source layer).
@@ -319,8 +317,8 @@ mod tests {
             .find(|p| p.name == "merged")
             .expect("merged port");
         assert_eq!(merged.wire_type, BrushWireType::Bool);
-        assert_eq!(merged.default, 0.0);
-        assert!(!merged_default_is_on(merged.default));
+        assert_eq!(merged.value.as_f32(), 0.0);
+        assert!(!merged_default_is_on(merged.value.as_f32()));
     }
 
     /// The two-mode offset formula: aligned is a stroke-constant shift

@@ -8,13 +8,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::gpu::params::ParamValue;
 use crate::nodegraph::{
     ExecStep, ExecutionPlan, Graph, InputSlot, NodeId, NodeRegistration, PortDef, PortDir, PortRef,
 };
 
 use super::curve_math::CurveLut;
-use super::nodes::{clone_source, paint_color, pen_input};
+use super::nodes::{brush_settings, clone_source, paint_color, pen_input};
 
 use super::gpu_context::BrushGpuContext;
 use super::wgsl::CompiledBrush;
@@ -38,18 +37,21 @@ pub struct EvalContext<'a> {
     /// the upstream slot held no value (the named input then resolves to
     /// the port default, same as if it were disconnected).
     pub input_values: &'a [Option<ScalarValue>],
-    /// Per-instance parameter overrides from the graph.
-    pub params: &'a [ParamValue],
     /// Port definitions for this node instance (for reading defaults).
     pub port_defs: &'a [PortDef<BrushWireType>],
-    /// Precomputed curve LUT, if this node has a Curve parameter.
+    /// Precomputed curve LUT, if this node has a Curve-typed input.
     pub lut: Option<&'a CurveLut>,
     /// PRNG seed for this stroke (deterministic per-stroke randomness).
     pub stroke_seed: u32,
     /// Index of the current dab within the stroke (0-based).
     pub dab_index: u32,
+    /// Stroke base size — the ambient `pen_input.size` knob value, read
+    /// out-of-band at stroke start (see [`super::nodes::brush_settings::base_size`]).
+    /// Stroke-constant. Terminals multiply their per-touch modulation onto it
+    /// via [`Self::base_size`].
+    pub base_size: f32,
     /// This node instance's ID (used to salt PRNG for independence).
-    pub node_id: NodeId,
+    pub node_id: &'a NodeId,
 }
 
 impl EvalContext<'_> {
@@ -63,10 +65,10 @@ impl EvalContext<'_> {
                 break;
             }
         }
-        // Fall back to port default.
+        // Fall back to the port's authored value.
         for port in self.port_defs {
             if port.name == name && port.dir == PortDir::Input {
-                return ScalarValue::Scalar(port.default);
+                return port.value.as_scalar_value();
             }
         }
         ScalarValue::default()
@@ -77,29 +79,9 @@ impl EvalContext<'_> {
         self.input(name).as_f32()
     }
 
-    /// Read a parameter by index as f32.
-    pub fn param_f32(&self, index: usize) -> f32 {
-        match self.params.get(index) {
-            Some(ParamValue::Float(v)) => *v,
-            Some(ParamValue::Int(v)) => *v as f32,
-            _ => 0.0,
-        }
-    }
-
-    /// Read a parameter by index as &str.
-    pub fn param_str(&self, index: usize) -> &str {
-        match self.params.get(index) {
-            Some(ParamValue::String(s)) => s.as_str(),
-            _ => "",
-        }
-    }
-
-    /// Read a parameter by index as curve control points.
-    pub fn param_curve(&self, index: usize) -> &[[f32; 2]] {
-        match self.params.get(index) {
-            Some(ParamValue::Curve(pts)) => pts.as_slice(),
-            _ => &[[0.0, 0.0], [1.0, 1.0]],
-        }
+    /// Stroke base size — the ambient `pen_input.size` knob (see the field).
+    pub fn base_size(&self) -> f32 {
+        self.base_size
     }
 
     /// O(1) curve lookup using the precomputed LUT.
@@ -122,10 +104,22 @@ impl EvalContext<'_> {
     /// `dab_index * 2 + 1` for its x and y offsets.
     #[inline]
     pub fn prng_at(&self, index: u32) -> f32 {
-        let salt = self.node_id.0 as u32;
+        let salt = node_salt(self.node_id);
         let seed = self.stroke_seed.wrapping_add(salt.wrapping_mul(0x9E3779B9));
         prng_f32(seed, index)
     }
+}
+
+/// A stable `u32` derived from a node's string id, used to salt per-node
+/// PRNG streams so multiple random-using nodes in one graph draw
+/// independent sequences. `"noise"` and `"noise_2"` hash to different
+/// salts; the same id always hashes to the same salt within a binary run
+/// (which is all a per-stroke seed needs).
+pub(crate) fn node_salt(id: &NodeId) -> u32 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    id.0.hash(&mut h);
+    h.finish() as u32
 }
 
 /// Gather a step's connected inputs from the slot table into `scratch`,
@@ -142,7 +136,7 @@ impl EvalContext<'_> {
 fn gather_inputs_into(
     slots: &[Option<ScalarValue>],
     input_slots: &[InputSlot],
-    dest_node: NodeId,
+    dest_node: &NodeId,
     node_data: &HashMap<NodeId, NodeData>,
     scratch: &mut Vec<Option<ScalarValue>>,
 ) {
@@ -169,7 +163,7 @@ fn gather_inputs_into(
 fn remap_for_wire(
     value: ScalarValue,
     source: &PortRef,
-    dest_node: NodeId,
+    dest_node: &NodeId,
     dest_port: &str,
     node_data: &HashMap<NodeId, NodeData>,
 ) -> ScalarValue {
@@ -178,11 +172,11 @@ fn remap_for_wire(
         .and_then(|n| {
             n.port_defs
                 .iter()
-                .find(|p| p.name == source.port && p.dir == PortDir::Output)
+                .find(|p| p.name == source.port && p.is_source())
         })
         .and_then(|p| p.natural_range);
     let dst_range = node_data
-        .get(&dest_node)
+        .get(dest_node)
         .and_then(|n| {
             n.port_defs
                 .iter()
@@ -498,6 +492,13 @@ pub struct BrushGraphRunner {
     stroke_seed: u32,
     /// Index of the current dab, set by `seed_sensors()`.
     dab_index: u32,
+    /// Stroke base size — the ambient `pen_input.size` knob, set once per
+    /// stroke by [`Self::set_base_size`] before the first dab. Threaded into
+    /// every `EvalContext` (terminals read it via `EvalContext::base_size`)
+    /// The terminals read it via `EvalContext::base_size`; the
+    /// `brush_settings.size` graph signal is published on its slot by the
+    /// runner's generic settable-source seeding, not here.
+    base_size: f32,
     /// Compiled WGSL for this brush, populated by `compile_graph` when
     /// the graph terminates in `paint`. `None` for per-dab
     /// dispatch brushes. The runner copies this into the
@@ -507,11 +508,11 @@ pub struct BrushGraphRunner {
 }
 
 struct NodeData {
-    params: Vec<ParamValue>,
     port_defs: Vec<PortDef<BrushWireType>>,
     lut: Option<CurveLut>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_eval_ctx<'a>(
     step: &'a ExecStep,
     input_slots: &'a [InputSlot],
@@ -519,17 +520,18 @@ fn build_eval_ctx<'a>(
     node_data: &'a HashMap<NodeId, NodeData>,
     stroke_seed: u32,
     dab_index: u32,
+    base_size: f32,
 ) -> EvalContext<'a> {
     let node = node_data.get(&step.node_id);
     EvalContext {
         input_slots,
         input_values,
-        params: node.map(|n| n.params.as_slice()).unwrap_or(&[]),
         port_defs: node.map(|n| n.port_defs.as_slice()).unwrap_or(&[]),
         lut: node.and_then(|n| n.lut.as_ref()),
         stroke_seed,
         dab_index,
-        node_id: step.node_id,
+        base_size,
+        node_id: &step.node_id,
     }
 }
 
@@ -572,14 +574,15 @@ impl BrushGraphRunner {
         let mut node_data = HashMap::new();
         for step in &plan.steps {
             if let Some(node) = graph.nodes().get(&step.node_id) {
-                let lut = node.params.iter().find_map(|p| match p {
-                    ParamValue::Curve(pts) if pts.len() >= 2 => Some(CurveLut::from_points(pts)),
+                let lut = node.ports.iter().find_map(|p| match &p.value {
+                    crate::brush::input_value::InputValue::Curve(pts) if pts.len() >= 2 => {
+                        Some(CurveLut::from_points(pts))
+                    }
                     _ => None,
                 });
                 node_data.insert(
-                    step.node_id,
+                    step.node_id.clone(),
                     NodeData {
-                        params: node.params.clone(),
                         port_defs: node.ports.clone(),
                         lut,
                     },
@@ -608,7 +611,7 @@ impl BrushGraphRunner {
             .steps
             .iter()
             .find(|s| s.type_id == clone_source::TYPE_ID)
-            .map(|s| s.node_id);
+            .map(|s| s.node_id.clone());
 
         // Find the terminal's `dab_size` output slot. Whichever
         // terminal the graph uses owns the spacing unit; the first
@@ -644,8 +647,21 @@ impl BrushGraphRunner {
             dab_size_slot,
             stroke_seed: 0,
             dab_index: 0,
+            // Initialise from the graph's `brush_settings.size` knob so a runner
+            // built straight from a graph (tests, first stroke) has the right
+            // base size without a separate call. Live painting refreshes it
+            // per stroke via `set_base_size`.
+            base_size: brush_settings::base_size(graph),
             compiled: None,
         })
+    }
+
+    /// Set the stroke's base size — the ambient `pen_input.size` value the
+    /// stroke engine reads out-of-band at stroke start. Call once before the
+    /// first dab; it feeds every terminal's `effective_radius` and seeds
+    /// `pen_input`'s `size` source slot in `seed_sensors`.
+    pub fn set_base_size(&mut self, base_size: f32) {
+        self.base_size = base_size;
     }
 
     /// Attach a pre-built [`CompiledBrush`] to this runner. Called by
@@ -708,7 +724,7 @@ impl BrushGraphRunner {
         // up. These aren't graph output slots — they're stroke-constant
         // engine session state, seeded the same way `paint_color` seeds
         // its color uniform.
-        if let (Some(node), Some(cs)) = (self.clone_source_node, self.clone_state) {
+        if let (Some(node), Some(cs)) = (self.clone_source_node.as_ref(), self.clone_state) {
             out.insert(
                 format!("n{}_source_anchor", node.0),
                 ScalarValue::Vec2(cs.source_anchor),
@@ -803,7 +819,7 @@ impl BrushGraphRunner {
             gather_inputs_into(
                 &self.slots,
                 &step.input_slots,
-                step.node_id,
+                &step.node_id,
                 &self.node_data,
                 &mut self.inputs_scratch,
             );
@@ -815,6 +831,7 @@ impl BrushGraphRunner {
                 &self.node_data,
                 self.stroke_seed,
                 self.dab_index,
+                self.base_size,
             );
 
             let outputs = evaluator.evaluate_cpu(&ctx);
@@ -828,6 +845,21 @@ impl BrushGraphRunner {
                     if *name == port_name {
                         self.slots[*slot_idx] = Some(value);
                         break;
+                    }
+                }
+            }
+
+            // Settable-source inputs republish their resolved value (wired
+            // value or authored default) onto their own output slot, so a
+            // `node.<source-input> → …` wire reads it. Generic across nodes;
+            // `pen_input` is `continue`d above and seeded in `seed_sensors`
+            // instead, so this only fires for non-pen_input sources.
+            for port in ctx.port_defs {
+                if port.dir == PortDir::Input && port.source {
+                    if let Some((_, slot_idx)) =
+                        step.output_slots.iter().find(|(n, _)| *n == port.name)
+                    {
+                        self.slots[*slot_idx] = Some(ctx.input(&port.name));
                     }
                 }
             }
@@ -900,7 +932,7 @@ impl BrushGraphRunner {
             gather_inputs_into(
                 &self.slots,
                 &step.input_slots,
-                step.node_id,
+                &step.node_id,
                 &self.node_data,
                 &mut self.inputs_scratch,
             );
@@ -912,6 +944,7 @@ impl BrushGraphRunner {
                 &self.node_data,
                 self.stroke_seed,
                 self.dab_index,
+                self.base_size,
             );
 
             // Pure-math nodes promoted to the GPU phase (because an input
@@ -1020,7 +1053,7 @@ impl BrushGraphRunner {
                     gather_inputs_into(
                         &self.slots,
                         &step.input_slots,
-                        step.node_id,
+                        &step.node_id,
                         &self.node_data,
                         &mut self.inputs_scratch,
                     );
@@ -1035,6 +1068,7 @@ impl BrushGraphRunner {
                 &self.node_data,
                 self.stroke_seed,
                 self.dab_index,
+                self.base_size,
             );
             f(&step.type_id, evaluator.as_ref(), &ctx, gpu);
         }
@@ -1079,11 +1113,11 @@ impl BrushGraphRunner {
     /// Find the slot index for a specific node's output port.
     ///
     /// Linear scan — intended for tests and debugging, not hot paths.
-    pub fn find_node_output_slot(&self, node_id: NodeId, port_name: &str) -> Option<usize> {
+    pub fn find_node_output_slot(&self, node_id: &NodeId, port_name: &str) -> Option<usize> {
         self.plan
             .steps
             .iter()
-            .find(|s| s.node_id == node_id)
+            .find(|s| &s.node_id == node_id)
             .and_then(|s| {
                 s.output_slots
                     .iter()
@@ -1123,6 +1157,18 @@ impl BrushGraphRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The salt is a pure function of the id string: the same id always
+    /// hashes to the same salt within a binary run, and distinct same-kind
+    /// instances (`noise` vs `noise_2`) get distinct salts so their PRNG
+    /// streams diverge.
+    #[test]
+    fn node_salt_is_stable_and_id_derived() {
+        let noise = NodeId("noise".into());
+        let noise_2 = NodeId("noise_2".into());
+        assert_eq!(node_salt(&noise), node_salt(&NodeId("noise".into())));
+        assert_ne!(node_salt(&noise), node_salt(&noise_2));
+    }
 
     #[test]
     fn remap_identity_when_ranges_match() {

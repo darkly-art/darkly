@@ -22,12 +22,12 @@ use std::sync::{Arc, OnceLock};
 use darkly::brush::compile_graph;
 use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, StrokeResources};
+use darkly::brush::input_value::InputValue;
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::brush::registry;
 use darkly::brush::stroke_buffer::StrokeBuffer;
 use darkly::brush::wire::BrushWireType;
-use darkly::gpu::params::ParamValue;
 use darkly::gpu::test_utils::{create_test_texture, readback_texture, test_device};
 use darkly::nodegraph::{Graph, PortRef};
 
@@ -70,52 +70,47 @@ fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWir
     let pen = graph.add_node(
         "pen_input",
         registry.get("pen_input").unwrap().ports.clone(),
-        vec![],
+    );
+    graph.add_node(
+        "brush_settings",
+        registry.get("brush_settings").unwrap().ports.clone(),
     );
     let paint_color = graph.add_node(
         "paint_color",
         registry.get("paint_color").unwrap().ports.clone(),
-        vec![],
     );
-    let curve = graph.add_node(
-        "curve",
-        registry.get("curve").unwrap().ports.clone(),
-        vec![ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]])],
-    );
-    let shape = graph.add_node(
-        "shape",
-        registry.get("shape").unwrap().ports.clone(),
-        vec![ParamValue::Int(algorithm)],
-    );
-    let stamp = graph.add_node(
-        "stamp",
-        registry.get("stamp").unwrap().ports.clone(),
-        vec![ParamValue::Int(0)], // Alpha Mask
-    );
-    let terminal = graph.add_node(
-        "paint",
-        registry.get("paint").unwrap().ports.clone(),
-        vec![],
-    );
+    let curve = graph.add_node("curve", registry.get("curve").unwrap().ports.clone());
+    let shape = graph.add_node("shape", registry.get("shape").unwrap().ports.clone());
+    graph
+        .set_port_value(&shape, "algorithm", InputValue::Int(algorithm))
+        .unwrap();
+    let stamp = graph.add_node("stamp", registry.get("stamp").unwrap().ports.clone());
+    let terminal = graph.add_node("paint", registry.get("paint").unwrap().ports.clone());
 
     graph
-        .set_port_default(shape, "amplitude", amplitude)
+        .set_port_default(&shape, "amplitude", amplitude)
         .unwrap();
-    graph.set_port_default(shape, "softness", 0.0).unwrap();
-    graph.set_port_default(terminal, "size", size).unwrap();
-    graph.set_port_default(terminal, "opacity", 1.0).unwrap();
-    graph.set_port_default(terminal, "flow", 1.0).unwrap();
+    graph.set_port_default(&shape, "softness", 0.0).unwrap();
+    graph
+        .set_port_default(
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            size,
+        )
+        .unwrap();
+    graph.set_port_default(&terminal, "opacity", 1.0).unwrap();
+    graph.set_port_default(&terminal, "flow", 1.0).unwrap();
 
     // No `pen.pressure → terminal.flow` wire — tests that scale alpha by
     // flow rely on the per-test `set_port_default(terminal, "flow", …)`
     // override, which a wire would shadow.
     let wires = [
-        (pen, "pressure", curve, "input"),
-        (curve, "output", terminal, "size_input"),
-        (shape, "mask", stamp, "tip"),
-        (paint_color, "color", stamp, "color"),
-        (stamp, "dab", terminal, "rgba"),
-        (pen, "position", terminal, "position"),
+        (pen.clone(), "pressure", curve.clone(), "input"),
+        (curve.clone(), "output", terminal.clone(), "size"),
+        (shape.clone(), "mask", stamp.clone(), "tip"),
+        (paint_color.clone(), "color", stamp.clone(), "color"),
+        (stamp.clone(), "dab", terminal.clone(), "rgba"),
+        (pen.clone(), "position", terminal.clone(), "position"),
     ];
     for (fnode, fport, tnode, tport) in wires {
         graph
@@ -381,8 +376,14 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
     // Override the brush's size port so the dab fits in the test
     // canvas — the builtin's exposed size is small by default.
     let mut graph = rough_ink.metadata.graph.clone();
-    let term_id = darkly::brush::find_terminal(&graph).unwrap();
-    graph.set_port_default(term_id, "size", 0.15).unwrap();
+    let _term_id = darkly::brush::find_terminal(&graph).unwrap();
+    graph
+        .set_port_default(
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            0.15,
+        )
+        .unwrap();
 
     let runner = compile_graph(&graph).expect("Rough Ink compiles");
     let compiled = runner.compiled_brush().expect("compiled brush attached");
@@ -477,8 +478,14 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
         .find(|b| b.metadata.name == "Rough Ink")
         .expect("Rough Ink registered");
     let mut graph = rough_ink.metadata.graph.clone();
-    let term_id = darkly::brush::find_terminal(&graph).unwrap();
-    graph.set_port_default(term_id, "size", 0.15).unwrap();
+    let _term_id = darkly::brush::find_terminal(&graph).unwrap();
+    graph
+        .set_port_default(
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            0.15,
+        )
+        .unwrap();
     // Replace the builtin's pressure-shaping curve (a monotone Hermite
     // spline through `(0,0), (0.4,0.7), (1,1)`) with the identity curve
     // so this test's `r_a` / `r_b` math (radius ∝ pressure) lines up
@@ -489,10 +496,14 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
         .nodes()
         .iter()
         .find(|(_, n)| n.type_id == darkly::brush::nodes::curve::TYPE_ID)
-        .map(|(id, _)| *id)
+        .map(|(id, _)| id.clone())
         .unwrap();
     graph
-        .set_param(curve_id, 0, ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]]))
+        .set_port_value(
+            &curve_id,
+            "curve",
+            InputValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]]),
+        )
         .unwrap();
 
     let mut h = harness(&black_canvas(), graph);
@@ -572,7 +583,7 @@ fn terminal_flow_scales_dab_alpha() {
         // Replace the terminal.flow default. build_test_graph hard-
         // sets it to 1.0 already; override here per-test.
         let term_id = darkly::brush::find_terminal(&graph).unwrap();
-        graph.set_port_default(term_id, "flow", flow).unwrap();
+        graph.set_port_default(&term_id, "flow", flow).unwrap();
         let mut h = harness(&black_canvas(), graph);
         h.begin_stroke();
         let info = PaintInformation {

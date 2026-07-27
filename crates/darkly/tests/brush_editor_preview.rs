@@ -400,7 +400,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
         .find(|p| p.port_name == "stabilize")
         .expect("Ink Pen exposes a `stabilize` port");
     engine
-        .brush_set_exposed_port(stabilize.node_id, "stabilize", 90.0)
+        .brush_set_exposed_port(&stabilize.node_id, "stabilize", 90.0)
         .expect("scrub set");
 
     assert_eq!(
@@ -426,7 +426,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
         .expect("Ink Pen exposes a `softness` port (on shape after migration)");
     let v_before_softness = engine.brush_graph_version();
     engine
-        .brush_set_exposed_port(softness.node_id, "softness", 0.5)
+        .brush_set_exposed_port(&softness.node_id, "softness", 0.5)
         .expect("scrub set");
     assert_ne!(
         engine.brush_graph_version(),
@@ -476,7 +476,7 @@ fn size_scrub_does_not_bump_editor_preview_version() {
         .find(|p| p.port_name == "size")
         .expect("Ink Pen exposes a `size` port");
     engine
-        .brush_set_exposed_port(size.node_id, "size", 90.0)
+        .brush_set_exposed_port(&size.node_id, "size", 90.0)
         .expect("scrub set");
 
     assert_eq!(
@@ -543,7 +543,7 @@ fn squash_active_brush_to_extreme_nib(engine: &mut darkly::engine::DarklyEngine)
         .expect("Calligraphy exposes an `aspect` port");
     // Percent unit: display 10 → port 0.1 (the port's minimum, ~10× stretch).
     engine
-        .brush_set_exposed_port(aspect.node_id, "aspect", 10.0)
+        .brush_set_exposed_port(&aspect.node_id, "aspect", 10.0)
         .expect("scrub aspect to 10%");
 }
 

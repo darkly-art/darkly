@@ -19,7 +19,6 @@ use std::collections::{HashMap, HashSet};
 
 use crate::brush::eval::BrushNodeEvaluator;
 use crate::brush::wire::BrushWireType;
-use crate::gpu::params::ParamValue;
 use crate::nodegraph::{ExecutionPlan, NodeId, PortDef, PortDir};
 
 /// One node's contribution to the per-brush dab bounding-box extent.
@@ -51,11 +50,10 @@ pub enum ExtentContribution {
 
 /// Per-node context passed to `BrushNodeEvaluator::extent`. Mirrors the
 /// shape of [`crate::brush::wgsl::CompileWgslCtx`] minus the WGSL
-/// plumbing: just port defs, params, and a wired-input set so
+/// plumbing: just port defs and a wired-input set so
 /// [`Self::port_max_value`] can pick the wire-aware max for each input.
 pub struct ExtentCtx<'a> {
-    pub node_id: NodeId,
-    pub params: &'a [ParamValue],
+    pub node_id: &'a NodeId,
     pub port_defs: &'a [PortDef<BrushWireType>],
     /// Names of input ports on this node that have an inbound wire.
     /// Used by [`Self::port_max_value`] to decide whether to return
@@ -82,8 +80,19 @@ impl ExtentCtx<'_> {
         if self.wired_inputs.contains(port_name) {
             port.natural_range.map(|(_, max)| max).unwrap_or(port.max)
         } else {
-            port.default
+            port.value.as_f32()
         }
+    }
+
+    /// Read a compile-time enum input's selected index — the branch selector
+    /// (e.g. `shape.algorithm`). Enum inputs are non-wirable, so this always
+    /// reflects the authored value. Unknown ports return `0`.
+    pub fn port_enum(&self, port_name: &str) -> i32 {
+        self.port_defs
+            .iter()
+            .find(|p| p.name == port_name && p.dir == PortDir::Input)
+            .map(|p| p.value.as_enum_index())
+            .unwrap_or(0)
     }
 
     /// Minimum value the named input port can take, given the wire graph —
@@ -101,7 +110,7 @@ impl ExtentCtx<'_> {
         if self.wired_inputs.contains(port_name) {
             port.natural_range.map(|(min, _)| min).unwrap_or(port.min)
         } else {
-            port.default
+            port.value.as_f32()
         }
     }
 }
@@ -133,8 +142,7 @@ pub(crate) fn compose_brush_extent(
             .map(|s| s.port_name.clone())
             .collect();
         let ectx = ExtentCtx {
-            node_id: step.node_id,
-            params: &node.params,
+            node_id: &step.node_id,
             port_defs: &node.ports,
             wired_inputs,
         };

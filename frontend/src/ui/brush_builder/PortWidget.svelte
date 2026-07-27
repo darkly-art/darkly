@@ -4,9 +4,10 @@
     import { app } from '../../state/app.svelte';
     import type { NodeCanvasContext } from './NodeCanvas.svelte';
     import Icon from '../../icons/Icon.svelte';
+    import CurveEditor from '../CurveEditor.svelte';
 
     interface Props {
-        nodeId: number;
+        nodeId: string;
         port: PortDef;
         side: 'left' | 'right';
     }
@@ -17,7 +18,7 @@
      *  Display metadata (unit_type, icon, label, description) comes from
      *  here — not the instance — so it stays current even for old graphs. */
     let regPort = $derived.by(() => {
-        const node = brushGraph.graph?.nodes[String(nodeId)];
+        const node = brushGraph.graph?.nodes[nodeId];
         if (!node) return null;
         const nodeType = brushGraph.getNodeType(node.type_id);
         return nodeType?.ports.find(p => p.name === port.name && p.dir === port.dir) ?? null;
@@ -26,10 +27,36 @@
     let color = $derived(WIRE_COLORS[port.wire_type] ?? '#888');
     let connected = $derived(brushGraph.isPortConnected(nodeId, port.name, port.dir));
 
-    /** Whether this port should show an inline slider when disconnected. */
+    /** Numeric view of the input's value for the slider path (Scalar/Int/Bool).
+     *  A bool value may arrive as a real boolean or a number. */
+    let numValue = $derived(
+        typeof port.value === 'number'
+            ? port.value
+            : (typeof port.value === 'boolean' ? (port.value ? 1 : 0) : 0)
+    );
+
+    /** Wire-type sets driving the widget branch for disconnected inputs. */
     const SLIDER_TYPES = new Set(['Scalar', 'Int', 'Bool']);
-    let showSlider = $derived(
-        port.dir === 'Input' && !connected && SLIDER_TYPES.has(port.wire_type)
+    let isInput = $derived(port.dir === 'Input');
+    let showSlider = $derived(isInput && !connected && SLIDER_TYPES.has(port.wire_type));
+    let showEnum = $derived(isInput && !connected && port.wire_type === 'Enum');
+    let showString = $derived(isInput && !connected && port.wire_type === 'String');
+    let showCurve = $derived(isInput && !connected && port.wire_type === 'Curve');
+
+    /** A wire endpoint gets a connector dot: outputs always, inputs only when
+     *  the wire type is wirable (non-wirable inputs like Enum/String/Curve
+     *  show their widget + expose button but no dot). */
+    let showDot = $derived(port.dir === 'Output' || port.wirable);
+
+    /** A settable-source input (`port.source`) also offers a right-edge source
+     *  handle to wire *from* — but only while the input itself is undriven. Once
+     *  a wire drives the port its value is the driver's, so the source handle
+     *  hides (mirror of `showSlider` hiding the value widget when connected). */
+    let showSourceHandle = $derived(port.dir === 'Input' && port.source && !connected);
+
+    /** Commit kind for the slider path, keyed off the wire type. */
+    let sliderKind = $derived(
+        port.wire_type === 'Int' ? 'int' : port.wire_type === 'Bool' ? 'bool' : 'float'
     );
 
     // --- Port offset registration ---
@@ -62,6 +89,43 @@
         });
         return () => untrack(() => unregister(nodeId, portName, portDir));
     });
+
+    // A settable-source input carries a *second* wire endpoint on the same row:
+    // an `Output`-role source handle on the right edge. Registered under the
+    // `(node, name, 'Output')` key (distinct from the left `Input` dot), so the
+    // wire renderer resolves wires leaving `node.name` to this offset.
+    let sourceDotEl: HTMLDivElement | undefined;
+    $effect(() => {
+        const portName = port.name;
+        const shown = showSourceHandle;
+        untrack(() => {
+            if (!shown || !sourceDotEl) return;
+            const nodeEl = sourceDotEl.closest('[data-node-id]') as HTMLElement;
+            if (!nodeEl) return;
+            register(nodeId, portName, 'Output', coords.elementCenterInParent(sourceDotEl, nodeEl));
+        });
+        return () => untrack(() => unregister(nodeId, portName, 'Output'));
+    });
+
+    /** Start dragging a wire *from* this settable-source's source handle. */
+    function onSourceDown(e: PointerEvent) {
+        e.preventDefault();
+        brushGraph.draggingFrom = { node: nodeId, port: port.name, dir: 'Output' };
+    }
+
+    /** Drop onto the source handle: accept a wire dragged from an input, same
+     *  as dropping on a real output. */
+    function onSourceUp(e: PointerEvent) {
+        e.stopPropagation();
+        e.preventDefault();
+        const drag = brushGraph.draggingFrom;
+        if (!drag) return;
+        if (drag.dir === 'Input' && !(drag.node === nodeId && drag.port === port.name)) {
+            brushGraph.connect(nodeId, port.name, drag.node, drag.port);
+        }
+        brushGraph.draggingFrom = null;
+        brushGraph.dragMouse = null;
+    }
 
     function onPointerDown(e: PointerEvent) {
         // Don't stopPropagation — the container needs to see this event
@@ -114,7 +178,7 @@
         brushGraph.dragMouse = null;
     }
 
-    // --- Inline slider for disconnected inputs ---
+    // --- Inline slider for disconnected Scalar/Int/Bool inputs ---
 
     let sliderEl = $state<HTMLDivElement>();
     let sliding = false;
@@ -141,6 +205,13 @@
         return snapToStep(raw);
     }
 
+    /** Commit a slider value, mapping Bool's numeric slider value to a real
+     *  boolean and passing Int/Scalar as numbers. */
+    function commitSlider(value: number) {
+        const committed = port.wire_type === 'Bool' ? Number(value) >= 0.5 : value;
+        brushGraph.setInput(nodeId, port.name, sliderKind, committed);
+    }
+
     function onSliderDown(e: PointerEvent) {
         if (!sliderEl) return;
         // Stop propagation so the node doesn't start dragging.
@@ -150,20 +221,20 @@
         sliderEl.setPointerCapture(e.pointerId);
         app.beginInteraction();
         const value = valueFromFraction(sliderFraction(e));
-        brushGraph.setPortDefaultLocal(nodeId, port.name, value);
+        brushGraph.setInputLocal(nodeId, port.name, value);
     }
 
     function onSliderMove(e: PointerEvent) {
         if (!sliding) return;
         const value = valueFromFraction(sliderFraction(e));
-        brushGraph.setPortDefaultLocal(nodeId, port.name, value);
+        brushGraph.setInputLocal(nodeId, port.name, value);
     }
 
     function onSliderUp(e: PointerEvent) {
         if (!sliding || !sliderEl) return;
         sliding = false;
         sliderEl.releasePointerCapture(e.pointerId);
-        brushGraph.setPortDefault(nodeId, port.name, port.default);
+        commitSlider(numValue);
     }
 
     function onSliderLostCapture() {
@@ -171,11 +242,31 @@
         app.endInteraction();
     }
 
-    /** Whether this port can be exposed in the brush bar. */
-    const EXPOSABLE_TYPES = new Set(['Scalar', 'Bool']);
-    let canExpose = $derived(
-        port.dir === 'Input' && !connected && EXPOSABLE_TYPES.has(port.wire_type)
-    );
+    // --- Enum dropdown ---
+
+    function onEnumChange(e: Event) {
+        e.stopPropagation();
+        const idx = parseInt((e.target as HTMLSelectElement).value);
+        brushGraph.setInputLocal(nodeId, port.name, idx);
+        brushGraph.setInput(nodeId, port.name, 'enum', idx);
+    }
+
+    // --- String text field ---
+
+    function onStringCommit(e: Event) {
+        const value = (e.target as HTMLInputElement).value;
+        brushGraph.setInputLocal(nodeId, port.name, value);
+        brushGraph.setInput(nodeId, port.name, 'string', value);
+    }
+
+    function onStringKeyDown(e: KeyboardEvent) {
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+    }
+
+    /** A disconnected input can be exposed to the brush bar only if its
+     *  type has a brush-bar widget (`port.exposable`, computed in Rust from
+     *  `WireKind::is_user_exposable`) — so curves/strings show no eye toggle. */
+    let canExpose = $derived(port.dir === 'Input' && !connected && port.exposable);
     let isExposed = $derived(brushGraph.isPortExposed(nodeId, port.name));
 
     function toggleExposed(e: MouseEvent) {
@@ -189,7 +280,7 @@
 
     let sliderPercent = $derived(
         port.max > port.min
-            ? ((port.default - port.min) / (port.max - port.min)) * 100
+            ? ((numValue - port.min) / (port.max - port.min)) * 100
             : 0
     );
 
@@ -214,10 +305,10 @@
 
     let displayValue = $derived(
         port.wire_type === 'Bool'
-            ? (port.default >= 0.5 ? 'on' : 'off')
+            ? (numValue >= 0.5 ? 'on' : 'off')
             : port.wire_type === 'Int'
-                ? String(Math.round(port.default))
-                : `${Math.round(toDisplay(port.default))}${unitSuffix()}`
+                ? String(Math.round(numValue))
+                : `${Math.round(toDisplay(numValue))}${unitSuffix()}`
     );
 
     // --- Double-click to type a value ---
@@ -244,36 +335,39 @@
         if (isNaN(parsed)) return;
         const clamped = Math.max(port.min, Math.min(port.max, parsed));
         const value = port.wire_type === 'Int' ? Math.round(clamped) : snapToStep(clamped);
-        brushGraph.setPortDefaultLocal(nodeId, port.name, value);
-        brushGraph.setPortDefault(nodeId, port.name, value);
+        brushGraph.setInputLocal(nodeId, port.name, value);
+        commitSlider(value);
     }
 </script>
 
 <div
     class="port-row"
     class:port-right={side === 'right'}
+    class:port-block={showCurve}
     title={regPort?.description || ''}
 >
-    <div
-        class="port-dot"
-        class:connected
-        style="background: {connected ? color : 'var(--bg-active)'}; border-color: {color};"
-        role="button"
-        tabindex="-1"
-        onpointerdown={onPointerDown}
-        onpointerup={onPointerUp}
-        bind:this={dotEl}
-        data-port-node={nodeId}
-        data-port-name={port.name}
-        data-port-dir={port.dir}
-    ></div>
+    {#if showDot}
+        <div
+            class="port-dot"
+            class:connected
+            style="background: {connected ? color : 'var(--bg-active)'}; border-color: {color};"
+            role="button"
+            tabindex="-1"
+            onpointerdown={onPointerDown}
+            onpointerup={onPointerUp}
+            bind:this={dotEl}
+            data-port-node={nodeId}
+            data-port-name={port.name}
+            data-port-dir={port.dir}
+        ></div>
+    {/if}
     {#if showSlider}
         {#if editing}
             <!-- svelte-ignore a11y_autofocus -->
             <input
                 class="port-slider-edit"
                 type="text"
-                value={port.wire_type === 'Int' ? Math.round(port.default) : port.default}
+                value={port.wire_type === 'Int' ? Math.round(numValue) : numValue}
                 autofocus
                 onkeydown={onEditKeyDown}
                 onblur={onEditBlur}
@@ -298,20 +392,72 @@
                 <span class="port-slider-value">{displayValue}</span>
             </div>
         {/if}
+    {:else if showEnum}
+        <span class="port-label">{regPort?.label || port.name}</span>
+        <select
+            class="port-select"
+            value={Number(port.value)}
+            onchange={onEnumChange}
+            onclick={(e) => e.stopPropagation()}
+        >
+            {#each (port.enum_options ?? []) as option, oi}
+                <option value={oi}>{option}</option>
+            {/each}
+        </select>
+    {:else if showString}
+        <span class="port-label">{regPort?.label || port.name}</span>
+        <input
+            class="port-text-input"
+            type="text"
+            value={String(port.value)}
+            onblur={onStringCommit}
+            onkeydown={onStringKeyDown}
+            onclick={(e) => e.stopPropagation()}
+        />
+    {:else if showCurve}
+        <!-- A curve is a full-height block widget, so it gets its own header
+             row (label + expose) with the editor stacked below — it can't sit
+             inside the fixed-height inline row the scalar widgets use. -->
+        <div class="port-block-head">
+            <span class="port-label">{regPort?.label || port.name}</span>
+            {#if canExpose}{@render exposeBtn()}{/if}
+        </div>
+        <CurveEditor
+            points={port.value as Array<[number, number]>}
+            oninput={(pts) => brushGraph.setInputLocal(nodeId, port.name, pts)}
+            onchange={(pts) => brushGraph.setInput(nodeId, port.name, 'curve', JSON.stringify(pts))}
+        />
     {:else}
         <span class="port-label">{regPort?.label || port.name}</span>
     {/if}
-    {#if canExpose}
-        <button
-            class="expose-toggle"
-            class:exposed={isExposed}
-            title={isExposed ? 'Hide from brush bar' : 'Expose in brush bar'}
-            onclick={toggleExposed}
-        >
-            <Icon name="fa6-solid:eye" />
-        </button>
+    {#if canExpose && !showCurve}{@render exposeBtn()}{/if}
+    {#if showSourceHandle}
+        <div
+            class="port-dot port-source-dot"
+            title="Wire this control into another node"
+            style="background: var(--bg-active); border-color: {color};"
+            role="button"
+            tabindex="-1"
+            onpointerdown={onSourceDown}
+            onpointerup={onSourceUp}
+            bind:this={sourceDotEl}
+            data-port-node={nodeId}
+            data-port-name={port.name}
+            data-port-dir="Output"
+        ></div>
     {/if}
 </div>
+
+{#snippet exposeBtn()}
+    <button
+        class="expose-toggle"
+        class:exposed={isExposed}
+        title={isExposed ? 'Hide from brush bar' : 'Expose in brush bar'}
+        onclick={toggleExposed}
+    >
+        <Icon name="fa6-solid:eye" />
+    </button>
+{/snippet}
 
 <style>
     .port-row {
@@ -326,6 +472,25 @@
         flex-direction: row-reverse;
         padding-left: 0;
         padding-right: 10px;
+    }
+    /* Block widgets (curve editor) can't live in the fixed-height inline
+       row — stack a header + the editor vertically and let the node grow to
+       contain it, so it's neither clipped nor mis-measured by auto-layout. */
+    .port-block {
+        height: auto;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 3px;
+        padding: 4px 6px;
+    }
+    .port-block-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 4px;
+    }
+    .port-block :global(.curve-editor) {
+        align-self: center;
     }
     .port-dot {
         position: absolute;
@@ -344,6 +509,14 @@
         left: -5px;
     }
     .port-right .port-dot {
+        right: -5px;
+    }
+    /* The settable-source handle always sits on the node's right (output)
+       edge, even though it lives inside a left-side input row. Selector
+       specificity matches the `:not(.port-right) .port-dot` rule above and
+       comes later, so `left` is overridden back to the right edge. */
+    .port-row:not(.port-right) .port-source-dot {
+        left: auto;
         right: -5px;
     }
     .port-dot:hover {
@@ -405,6 +578,43 @@
         padding: 0 4px;
         outline: none;
         font-family: inherit;
+    }
+
+    /* --- Enum dropdown --- */
+    .port-select {
+        flex: 1;
+        height: 16px;
+        border: 1px solid color-mix(in srgb, var(--text) 20%, transparent);
+        border-radius: 3px;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 8px;
+        padding: 0 2px;
+        outline: none;
+        font-family: inherit;
+        cursor: pointer;
+        min-width: 0;
+    }
+    .port-select:focus {
+        border-color: var(--accent);
+    }
+
+    /* --- Text input for string inputs --- */
+    .port-text-input {
+        flex: 1;
+        height: 16px;
+        border: 1px solid color-mix(in srgb, var(--text) 20%, transparent);
+        border-radius: 3px;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 9px;
+        padding: 0 4px;
+        outline: none;
+        font-family: inherit;
+        min-width: 0;
+    }
+    .port-text-input:focus {
+        border-color: var(--accent);
     }
 
     /* --- Expose toggle --- */

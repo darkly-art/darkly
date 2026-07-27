@@ -110,7 +110,15 @@ unitType: UnitType, } | { "kind": "bool",
 /**
  * Current value.
  */
-value: boolean, };
+value: boolean, } | { "kind": "enum", 
+/**
+ * Current selected index into `options`.
+ */
+value: number, 
+/**
+ * Dropdown labels in index order.
+ */
+options: Array<string>, };
 
 export type UnitType = "Normalized" | "Percent" | "Degrees" | "Raw" | "Pixels";
 
@@ -121,33 +129,31 @@ export type ExposedPortInfo = {
  * `set_exposed_port_meta` / `reorder_exposed_port` without having
  * to reconstruct the format.
  */
-key: string, nodeId: number, portName: string, label: string, icon: string, description: string, nodeDisplayName: string, data: ExposedValue, };
+key: string, nodeId: string, portName: string, label: string, icon: string, description: string, nodeDisplayName: string, data: ExposedValue, };
 
 export type BrushGraphAddNodeReq = { type_id: string, };
 
-export type BrushGraphAutoLayoutReq = { sizes: { [key in number]: [number, number] }, };
+export type BrushGraphAutoLayoutReq = { sizes: { [key in string]: [number, number] }, };
 
 export type BrushGraphJsonReq = { json: string, };
 
-export type BrushGraphConnectReq = { from_node: number, from_port: string, to_node: number, to_port: string, };
+export type BrushGraphConnectReq = { from_node: string, from_port: string, to_node: string, to_port: string, };
 
-export type BrushGraphDisconnectReq = { from_node: number, from_port: string, to_node: number, to_port: string, };
+export type BrushGraphDisconnectReq = { from_node: string, from_port: string, to_node: string, to_port: string, };
 
-export type BrushGraphExposePortReq = { node_id: number, port_name: string, };
+export type BrushGraphExposePortReq = { node_id: string, port_name: string, };
 
 export type BrushGraphYamlReq = { yaml: string, };
 
-export type BrushGraphRemoveNodeReq = { node_id: number, };
+export type BrushGraphRemoveNodeReq = { node_id: string, };
 
 export type BrushGraphReorderExposedPortReq = { key: string, new_index: number, };
 
 export type BrushGraphSetExposedPortMetaReq = { key: string, label: string, description: string, icon: string, };
 
-export type BrushGraphSetParamReq = { node_id: number, param_index: number, kind: string, value: JsonValue, };
+export type BrushGraphSetInputReq = { node_id: string, input_name: string, kind: string, value: JsonValue, };
 
-export type BrushGraphSetPortDefaultReq = { node_id: number, port_name: string, value: number, };
-
-export type BrushGraphUnexposePortReq = { node_id: number, port_name: string, };
+export type BrushGraphUnexposePortReq = { node_id: string, port_name: string, };
 
 export type BrushInfo = { name: string, category: string, author: string, description: string, tags: Array<string>, 
 /**
@@ -160,11 +166,13 @@ icon: string | null, };
 
 export type BrushLoadReq = { name: string, };
 
-export type BrushNodePreviewReq = { node_id: number, };
+export type BrushNodePreviewReq = { node_id: string, };
 
-export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "levels", name: string, default: [number, number, number, number, number], } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, } | { "kind": "color", name: string, default: [number, number, number], } | { "kind": "vec2", name: string, max: number, default: [number, number], } | { "kind": "list", name: string, item: Array<ParamDef>, max_len: number, default: Array<Array<[string, ConstParamValue]>>, };
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
 
-export type ConstParamValue = boolean | number | number | string | [number, number, number] | [number, number];
+export type PortDir = "Input" | "Output";
+
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -176,9 +184,41 @@ min: number,
  */
 max: number, 
 /**
- * Default value when the port is disconnected.
+ * The authored value used when this input port is disconnected — the
+ * full typed value (scalar slider value, enum-dropdown index, texture
+ * name, curve points, color). Wired inputs ignore it and take the
+ * upstream expression. For output ports it stays the neutral scalar
+ * default and is unused. Replaces the old scalar-only `default: f32`;
+ * numeric inputs carry [`InputValue::Scalar`].
  */
-default: number, 
+value: InputValue, 
+/**
+ * Enum-dropdown labels, in index order — non-empty only for
+ * [`WireKind`]-`Enum` inputs (shape's `algorithm`, noise/image `space`,
+ * random's `mode`). Empty for every other input kind.
+ */
+enum_options?: Array<string>, 
+/**
+ * Whether an upstream wire may drive this input per-dab. Computed from
+ * `wire_type.is_wirable()` at construction and carried as data so the
+ * frontend reads it directly rather than re-deriving the rule — the
+ * single source of truth is [`WireKind::is_wirable`]. Every port built
+ * from a registration (`PortDef::input`/`output`, and the clones in
+ * `add_node` / portable import) sets it correctly; serde round-trips it.
+ */
+wirable: boolean, 
+/**
+ * Whether a user may *expose* this input as a brush-bar control.
+ * Computed from `wire_type.is_user_exposable()` at construction and
+ * carried as data so the frontend gates its expose affordance directly
+ * off one value rather than re-deriving the type rule — the single
+ * source of truth is [`WireKind::is_user_exposable`]. Orthogonal to
+ * `wirable`: an enum is exposable but not wirable; a wired scalar is
+ * wirable but (while connected) not user-scrubbable. `expose_port`
+ * enforces it, so a control the brush bar can't render can never be
+ * surfaced. Serde round-trips it.
+ */
+exposable: boolean, 
 /**
  * Quantization step. `0.0` (the default) means continuous; any positive
  * value snaps the slider, scrub, and typed-value commits to multiples of
@@ -297,11 +337,21 @@ natural_range: [number, number] | null,
  * scrubbing this port bumps the topology version so the dab
  * thumbnail re-renders, not just the editor preview.
  */
-persist_in_thumbnail: boolean, };
-
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
-
-export type PortDir = "Input" | "Output";
+persist_in_thumbnail: boolean, 
+/**
+ * This input port is *also* a wire source: its resolved value (the
+ * wired value if driven, else the authored default) is available for
+ * other nodes to wire *from*, exactly like an output. Only meaningful
+ * on `dir == Input`; ignored on outputs (which are sources anyway).
+ *
+ * The editor shows the source handle only while the input is not
+ * itself wire-driven — a driven port's value is the driver's, so it
+ * should be tapped there instead. Consumers that resolve "which port a
+ * wire leaves from" must ask [`PortDef::is_source`], never
+ * `dir == Output`, or a settable-source is treated as a second-class
+ * source (skipped by wire-range remap, unreachable by `find_port`).
+ */
+source: boolean, };
 
 export type NodeRegistration = { 
 /**
@@ -327,13 +377,12 @@ display_name: string,
  */
 description: string, 
 /**
- * Port definitions for this node type.
+ * Port definitions for this node type — the node's single, unified
+ * input/output list. Every input carries its own authored value and
+ * widget metadata on the [`PortDef`]; there is no separate parameter
+ * system.
  */
 ports: Array<PortDef>, 
-/**
- * Parameter definitions (for inline UI sliders).
- */
-params: Array<ParamDef>, 
 /**
  * Whether this node requires GPU execution.
  */
@@ -363,7 +412,7 @@ preview_fallback_icon: string | null, };
 
 export type BrushSaveReq = { name: string, category: string, };
 
-export type BrushSetExposedPortReq = { node_id: number, port_name: string, display_value: number, };
+export type BrushSetExposedPortReq = { node_id: string, port_name: string, display_value: number, };
 
 export type BrushThumbnailReq = { name: string, };
 
@@ -733,8 +782,7 @@ export type RequestKind =
     | 'brush_graph_reorder_exposed_port'
     | 'brush_graph_reset'
     | 'brush_graph_set_exposed_port_meta'
-    | 'brush_graph_set_param'
-    | 'brush_graph_set_port_default'
+    | 'brush_graph_set_input'
     | 'brush_graph_unexpose_port'
     | 'brush_graph_validate'
     | 'brush_import'
@@ -926,8 +974,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'brush_graph_reorder_exposed_port',
     'brush_graph_reset',
     'brush_graph_set_exposed_port_meta',
-    'brush_graph_set_param',
-    'brush_graph_set_port_default',
+    'brush_graph_set_input',
     'brush_graph_unexpose_port',
     'brush_graph_validate',
     'brush_import',
@@ -1114,7 +1161,7 @@ export interface EngineApi {
     brushExport(req: BrushExportReq): Promise<{ bytes: Uint8Array }>;
     brushExposedPorts(): Promise<Array<ExposedPortInfo>>;
     brushGraphActive(): Promise<JsonValue>;
-    brushGraphAddNode(req: BrushGraphAddNodeReq): Promise<{ graph: JsonValue } | { error: string }>;
+    brushGraphAddNode(req: BrushGraphAddNodeReq): Promise<{ graph: JsonValue, added_node_id: string } | { error: string }>;
     brushGraphAutoLayout(req: BrushGraphAutoLayoutReq): Promise<Record<string, [number, number]>>;
     brushGraphCompile(req: BrushGraphJsonReq): Promise<null | { error: string }>;
     brushGraphConnect(req: BrushGraphConnectReq): Promise<{ graph: JsonValue } | { error: string }>;
@@ -1127,8 +1174,7 @@ export interface EngineApi {
     brushGraphReorderExposedPort(req: BrushGraphReorderExposedPortReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphReset(): void;
     brushGraphSetExposedPortMeta(req: BrushGraphSetExposedPortMetaReq): Promise<{ graph: JsonValue } | { error: string }>;
-    brushGraphSetParam(req: BrushGraphSetParamReq): Promise<{ graph: JsonValue } | { error: string }>;
-    brushGraphSetPortDefault(req: BrushGraphSetPortDefaultReq): Promise<{ graph: JsonValue } | { error: string }>;
+    brushGraphSetInput(req: BrushGraphSetInputReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphUnexposePort(req: BrushGraphUnexposePortReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphValidate(req: BrushGraphJsonReq): Promise<null | { error: string }>;
     brushImport(bytes: Uint8Array): Promise<string>;
@@ -1322,8 +1368,7 @@ export function makeApi(t: Transport): EngineApi {
         brushGraphReorderExposedPort: (req) => t.request('brush_graph_reorder_exposed_port', req),
         brushGraphReset: () => t.postFF('brush_graph_reset'),
         brushGraphSetExposedPortMeta: (req) => t.request('brush_graph_set_exposed_port_meta', req),
-        brushGraphSetParam: (req) => t.request('brush_graph_set_param', req),
-        brushGraphSetPortDefault: (req) => t.request('brush_graph_set_port_default', req),
+        brushGraphSetInput: (req) => t.request('brush_graph_set_input', req),
         brushGraphUnexposePort: (req) => t.request('brush_graph_unexpose_port', req),
         brushGraphValidate: (req) => t.request('brush_graph_validate', req),
         brushImport: (bytes) => t.request('brush_import', {}, bytes),

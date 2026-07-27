@@ -22,6 +22,7 @@ use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::gpu_context::{
     BrushGpuContext, BrushPerfCounters, CursorPreviewState, DabBatch,
 };
+use darkly::brush::input_value::InputValue;
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::brush::registry;
@@ -62,38 +63,36 @@ fn build_graph_with_rotation_wire() -> Graph<BrushWireType> {
     let pen = graph.add_node(
         "pen_input",
         registry.get("pen_input").unwrap().ports.clone(),
-        vec![],
+    );
+    graph.add_node(
+        "brush_settings",
+        registry.get("brush_settings").unwrap().ports.clone(),
     );
     let paint_color = graph.add_node(
         "paint_color",
         registry.get("paint_color").unwrap().ports.clone(),
-        vec![],
     );
-    let shape = graph.add_node(
-        "shape",
-        registry.get("shape").unwrap().ports.clone(),
-        // Algorithm = 2 (Superformula).
-        vec![darkly::gpu::params::ParamValue::Int(2)],
-    );
-    let stamp = graph.add_node(
-        "stamp",
-        registry.get("stamp").unwrap().ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Int(0)],
-    );
-    let term = graph.add_node(
-        "paint",
-        registry.get("paint").unwrap().ports.clone(),
-        vec![],
-    );
+    let shape = graph.add_node("shape", registry.get("shape").unwrap().ports.clone());
+    // Algorithm = 2 (Superformula).
+    graph
+        .set_port_value(&shape, "algorithm", InputValue::Int(2))
+        .unwrap();
+    let stamp = graph.add_node("stamp", registry.get("stamp").unwrap().ports.clone());
+    let term = graph.add_node("paint", registry.get("paint").unwrap().ports.clone());
 
     let wires = [
-        (pen, "position", term, "position"),
+        (pen.clone(), "position", term.clone(), "position"),
         // Canonical stroke-follow wire — what users wire when they want
         // the dab to face the stroke direction.
-        (pen, "drawing_angle", shape, "rotation_input"),
-        (paint_color, "color", stamp, "color"),
-        (shape, "mask", stamp, "tip"),
-        (stamp, "dab", term, "rgba"),
+        (
+            pen.clone(),
+            "drawing_angle",
+            shape.clone(),
+            "rotation_input",
+        ),
+        (paint_color.clone(), "color", stamp.clone(), "color"),
+        (shape.clone(), "mask", stamp.clone(), "tip"),
+        (stamp.clone(), "dab", term.clone(), "rgba"),
     ];
     for (from_node, from_port, to_node, to_port) in wires {
         graph
@@ -110,14 +109,20 @@ fn build_graph_with_rotation_wire() -> Graph<BrushWireType> {
             .unwrap();
     }
     // Big size so the mask occupies most of the preview texture.
-    graph.set_port_default(term, "size", 0.4).unwrap();
+    graph
+        .set_port_default(
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            0.4,
+        )
+        .unwrap();
     // Superformula with a 4-pointed silhouette so rotation moves the
     // shape's lobes from axes to diagonals (and vice versa).
-    graph.set_port_default(shape, "frequency", 4.0).unwrap();
-    graph.set_port_default(shape, "amplitude", 0.8).unwrap();
-    graph.set_port_default(shape, "n1", 1.0).unwrap();
-    graph.set_port_default(shape, "n2", 1.0).unwrap();
-    graph.set_port_default(shape, "n3", 1.0).unwrap();
+    graph.set_port_default(&shape, "frequency", 4.0).unwrap();
+    graph.set_port_default(&shape, "amplitude", 0.8).unwrap();
+    graph.set_port_default(&shape, "n1", 1.0).unwrap();
+    graph.set_port_default(&shape, "n2", 1.0).unwrap();
+    graph.set_port_default(&shape, "n3", 1.0).unwrap();
     graph
 }
 

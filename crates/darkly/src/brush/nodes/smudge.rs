@@ -52,22 +52,14 @@ pub fn register() -> BrushNodeRegistration {
                     .with_description("Canvas-pixel pen tip for this dab"),
                 PortDef::input("motion", BrushWireType::Vec2)
                     .with_description("Per-dab motion vector — the offset to sample from"),
-                PortDef::input("size_input", BrushWireType::Scalar)
+                PortDef::input("size", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
                     .with_natural_range(0.0, 1.0)
-                    .with_label("Size Input")
-                    .with_unit(UnitType::Percent)
-                    .with_description(
-                        "Per-touch size multiplier (wire pressure here for pressure-sensitive size).",
-                    ),
-                PortDef::input("size", BrushWireType::Scalar)
-                    .with_range(0.0, 4.0, 0.1)
                     .with_label("Size")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa6-solid:up-right-and-down-left-from-center")
-                    .exposed()
-                    .with_preview_value(0.1)
-                    .with_description("Overall brush size"),
+                    .with_description(
+                        "Per-touch size multiplier (wire pressure here for pressure-sensitive size). Multiplies onto the brush's base size, owned by pen_input.",
+                    ),
                 PortDef::input("rate", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 0.6)
                     .with_natural_range(0.0, 1.0)
@@ -96,7 +88,6 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::output("dab_size", BrushWireType::Vec2)
                     .with_description("Brush mark size in canvas pixels"),
             ],
-            params: &[],
             is_gpu: true,
             is_terminal: true,
             supports_erase: false,

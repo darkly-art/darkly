@@ -5,7 +5,7 @@
 //! exercise the same code paths that users hit.
 //! Run with: `cargo test -p darkly --test engine`
 
-use darkly::brush::nodes::pen_input;
+use darkly::brush::nodes::brush_settings;
 use darkly::brush::wire::BrushWireType;
 use darkly::document::SelectionMode;
 use darkly::engine::types::StrokeOp;
@@ -775,7 +775,7 @@ fn lasso_selection_performance_and_correctness() {
     );
 }
 
-fn find_node_id(engine: &DarklyEngine, type_id: &str) -> u64 {
+fn find_node_id(engine: &DarklyEngine, type_id: &str) -> String {
     engine
         .active_brush_graph()
         .nodes()
@@ -784,10 +784,11 @@ fn find_node_id(engine: &DarklyEngine, type_id: &str) -> u64 {
         .unwrap_or_else(|| panic!("no '{type_id}' node in default graph"))
         .id
         .0
+        .clone()
 }
 
 // ============================================================================
-// pen_input.spacing port controls dab spacing
+// brush_settings.spacing port controls dab spacing
 // ============================================================================
 
 /// Sum of alpha across the canvas — proxy for "amount of paint deposited."
@@ -826,19 +827,23 @@ fn paint_horizontal_stroke(engine: &mut DarklyEngine, layer_id: LayerId, w: u32,
     engine.render(0.0);
 }
 
-/// Setting `pen_input.spacing` to a larger ratio drops fewer dabs along the
+/// Setting `brush_settings.spacing` to a larger ratio drops fewer dabs along the
 /// stroke, so total deposited alpha is lower than at the default 10%.
-/// Guards the wiring from `pen_input.spacing` port → `SpacingConfig.ratio`.
+/// Guards the wiring from `brush_settings.spacing` port → `SpacingConfig.ratio`.
 #[test]
-fn pen_input_spacing_port_controls_dab_density() {
+fn brush_settings_spacing_port_controls_dab_density() {
     let (w, h) = (256, 256);
 
     // Baseline: default spacing (port default = 0.10).
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
-    let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
+    let settings_id = find_node_id(&engine, brush_settings::TYPE_ID);
     engine
-        .brush_graph_set_port_default(pen_id, "spacing", 0.10)
+        .brush_graph_set_input(
+            &settings_id,
+            "spacing",
+            darkly::brush::input_value::InputValue::Scalar(0.10),
+        )
         .expect("default spacing port must exist");
     paint_horizontal_stroke(&mut engine, layer_id, w, h);
     let dense_alpha = alpha_sum(&engine.test_readback_layer(layer_id), w, h);
@@ -846,9 +851,13 @@ fn pen_input_spacing_port_controls_dab_density() {
     // Sparse: 100% spacing — dabs separated by a full diameter.
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
-    let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
+    let settings_id = find_node_id(&engine, brush_settings::TYPE_ID);
     engine
-        .brush_graph_set_port_default(pen_id, "spacing", 1.0)
+        .brush_graph_set_input(
+            &settings_id,
+            "spacing",
+            darkly::brush::input_value::InputValue::Scalar(1.0),
+        )
         .expect("spacing port must exist");
     paint_horizontal_stroke(&mut engine, layer_id, w, h);
     let sparse_alpha = alpha_sum(&engine.test_readback_layer(layer_id), w, h);
@@ -884,9 +893,13 @@ fn small_brush_does_not_emit_subpixel_dab_spacing() {
     // its 4 % floor (any lower swamps the stabilizer). With a normal
     // dab size, 4 % spacing falls below the absolute 1 px floor — so
     // this exercises the spacing-floor path end-to-end.
-    let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
+    let settings_id = find_node_id(&engine, brush_settings::TYPE_ID);
     engine
-        .brush_graph_set_port_default(pen_id, "spacing", 0.04)
+        .brush_graph_set_input(
+            &settings_id,
+            "spacing",
+            darkly::brush::input_value::InputValue::Scalar(0.04),
+        )
         .expect("spacing port must exist");
 
     // Horizontal stroke from x=16 to x=(w-16) at y = h/2. Same shape
@@ -5251,11 +5264,15 @@ fn long_stabilized_stroke_no_fallback() {
     // Default brush (shape + stamp + color_output) is enough to exercise
     // the checkpoint ring's coverage invariant — this test is about the
     // stabilizer's full-rerender fallback, not anything scatter-specific.
-    let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
+    let settings_id = find_node_id(&engine, brush_settings::TYPE_ID);
     // Full-strength stabilization → max_divergence_window = 11 (iterations=10
     // + 1 from the influence-radius model). Spacing = 11 / 7 = 1.
     engine
-        .brush_graph_set_port_default(pen_id, "stabilize", 1.0)
+        .brush_graph_set_input(
+            &settings_id,
+            "stabilize",
+            darkly::brush::input_value::InputValue::Scalar(1.0),
+        )
         .unwrap();
     // Prediction is a thread-global config pref; pin it off so a prior
     // prediction test leaking a nonzero horizon can't widen the window here.
@@ -5317,9 +5334,13 @@ fn run_predicted_l_stroke(
     layer_id: LayerId,
     predict_ms: f32,
 ) -> Vec<u8> {
-    let pen_id = find_node_id(engine, pen_input::TYPE_ID);
+    let settings_id = find_node_id(engine, brush_settings::TYPE_ID);
     engine
-        .brush_graph_set_port_default(pen_id, "stabilize", 1.0)
+        .brush_graph_set_input(
+            &settings_id,
+            "stabilize",
+            darkly::brush::input_value::InputValue::Scalar(1.0),
+        )
         .unwrap();
     // Prediction horizon is a global config pref, not a per-brush port.
     darkly::config::set(
@@ -5428,9 +5449,13 @@ fn predicted_stroke_keeps_checkpoint_coverage() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
 
-    let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
+    let settings_id = find_node_id(&engine, brush_settings::TYPE_ID);
     engine
-        .brush_graph_set_port_default(pen_id, "stabilize", 1.0)
+        .brush_graph_set_input(
+            &settings_id,
+            "stabilize",
+            darkly::brush::input_value::InputValue::Scalar(1.0),
+        )
         .unwrap();
     // Prediction horizon is a global config pref, not a per-brush port.
     darkly::config::set(

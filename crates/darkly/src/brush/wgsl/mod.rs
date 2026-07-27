@@ -59,6 +59,7 @@ pub mod context;
 pub mod dab_record;
 pub mod extent;
 pub mod intrinsics;
+pub mod sample_frame;
 pub mod type_system;
 
 pub use context::{CompileWgslCtx, InputBinding, NodeWgsl, ShaderMode};
@@ -67,6 +68,7 @@ pub use dab_record::{
 };
 pub use extent::{ExtentContribution, ExtentCtx};
 pub use intrinsics::{pack_intrinsic_uniforms, IntrinsicUniforms, INTRINSIC_UNIFORMS_SIZE};
+pub use sample_frame::{frame_sample_coord_expr, SampleFrame};
 pub use type_system::{DabField, DabPacker, UniformField, UniformPacker, ValuePacker, WgslType};
 
 use std::collections::{HashMap, HashSet};
@@ -318,14 +320,14 @@ pub fn compile_brush_to_wgsl(
                 continue;
             };
             let remapped =
-                apply_wire_remap(expr, &src_port, step.node_id, &slot_info.port_name, graph);
+                apply_wire_remap(expr, &src_port, &step.node_id, &slot_info.port_name, graph);
             inputs.insert(slot_info.port_name.clone(), InputBinding::Wired(remapped));
         }
 
-        // Curve LUT (only present on nodes with a Curve param).
+        // Curve LUT (only present on nodes with a Curve-typed input).
         let lut: Option<crate::brush::curve_math::CurveLut> =
-            node.params.iter().find_map(|p| match p {
-                crate::gpu::params::ParamValue::Curve(pts) if pts.len() >= 2 => {
+            node.ports.iter().find_map(|p| match &p.value {
+                crate::brush::input_value::InputValue::Curve(pts) if pts.len() >= 2 => {
                     Some(crate::brush::curve_math::CurveLut::from_points(pts))
                 }
                 _ => None,
@@ -364,8 +366,7 @@ pub fn compile_brush_to_wgsl(
         };
 
         let cctx = CompileWgslCtx {
-            node_id: step.node_id,
-            params: &node.params,
+            node_id: &step.node_id,
             port_defs: &node.ports,
             inputs,
             lut: lut.as_ref(),
@@ -428,8 +429,7 @@ pub fn compile_brush_to_wgsl(
         {
             let (preview_node, preview_inputs, preview_consumed) = preview_cctx_parts;
             let preview_cctx = CompileWgslCtx {
-                node_id: step.node_id,
-                params: &preview_node.params,
+                node_id: &step.node_id,
                 port_defs: &preview_node.ports,
                 inputs: preview_inputs,
                 lut: lut.as_ref(),
@@ -468,7 +468,7 @@ pub fn compile_brush_to_wgsl(
         // their wires.
         for (port_name, slot_idx) in &step.output_slots {
             let pr = PortRef {
-                node: step.node_id,
+                node: step.node_id.clone(),
                 port: port_name.clone(),
             };
             slot_to_port.insert(*slot_idx, pr.clone());
@@ -797,7 +797,7 @@ pub fn sample_graph_texture(slot: u32, uv_expr: &str) -> String {
 fn apply_wire_remap(
     expr: String,
     source: &PortRef,
-    dest_node: NodeId,
+    dest_node: &NodeId,
     dest_port: &str,
     graph: &crate::nodegraph::Graph<BrushWireType>,
 ) -> String {
@@ -807,12 +807,12 @@ fn apply_wire_remap(
         .and_then(|n| {
             n.ports
                 .iter()
-                .find(|p| p.name == source.port && p.dir == PortDir::Output)
+                .find(|p| p.name == source.port && p.is_source())
         })
         .and_then(|p| p.natural_range);
     let dst_range = graph
         .nodes()
-        .get(&dest_node)
+        .get(dest_node)
         .and_then(|n| {
             n.ports
                 .iter()
@@ -840,29 +840,28 @@ fn hash_graph_topology(graph: &crate::nodegraph::Graph<BrushWireType>) -> u64 {
     use std::hash::{Hash, Hasher};
 
     let mut hasher = DefaultHasher::new();
-    let mut node_ids: Vec<_> = graph.nodes().keys().copied().collect();
-    node_ids.sort_by_key(|n| n.0);
+    let mut node_ids: Vec<_> = graph.nodes().keys().cloned().collect();
+    node_ids.sort_by(|a, b| a.0.cmp(&b.0));
     for id in &node_ids {
         let node = &graph.nodes()[id];
         id.0.hash(&mut hasher);
         node.type_id.hash(&mut hasher);
-        // Hash params by serialising — order is stable; values that
-        // affect compilation (algorithm enum, curve points) end up in
-        // the hash.
-        if let Ok(s) = serde_json::to_string(&node.params) {
-            s.hash(&mut hasher);
-        }
+        // Hash each input's authored value by serialising — order is
+        // stable; every value that affects compilation (scalar defaults,
+        // algorithm enum, texture name, curve points) rides along.
         for port in &node.ports {
             port.name.hash(&mut hasher);
-            port.default.to_bits().hash(&mut hasher);
+            if let Ok(s) = serde_json::to_string(&port.value) {
+                s.hash(&mut hasher);
+            }
         }
     }
     let mut conns: Vec<_> = graph.connections.iter().collect();
     conns.sort_by_key(|c| {
         (
-            c.from.node.0,
+            c.from.node.0.clone(),
             c.from.port.clone(),
-            c.to.node.0,
+            c.to.node.0.clone(),
             c.to.port.clone(),
         )
     });
@@ -895,7 +894,9 @@ fn assemble_shader(
     out.push('\n');
     out.push_str(include_str!("../../../shaders/brush/_shape.wgsl"));
     out.push('\n');
-    out.push_str(include_str!("../../../shaders/brush/_noise.wgsl"));
+    // Binding-free 2D fBm core (`fbm_value_noise`, `fbm_rot`, hash, fade) —
+    // the `noise` node compiles calls into these. Dead-stripped when unused.
+    out.push_str(include_str!("../../../shaders/lib/fbm2d.wgsl"));
     out.push('\n');
     out.push_str(include_str!("../../../shaders/brush/_prelude.wgsl"));
     out.push('\n');

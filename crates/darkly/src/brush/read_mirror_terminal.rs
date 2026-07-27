@@ -88,7 +88,7 @@ pub trait ReadMirrorTerminal {
         &self,
         _ctx: &EvalContext,
         _gpu: &mut BrushGpuContext,
-        _node_id: u32,
+        _node_id: &str,
         _radius: f32,
     ) {
     }
@@ -321,13 +321,15 @@ pub fn read_mirror_pipeline_reg(id: &'static str) -> BrushPipelineRegistration {
 
 // ── Shared helpers ───────────────────────────────────────────────────────
 
-/// Effective dab radius in canvas pixels from the `size_input` × `size`
-/// inputs. Floored at 0.5 px so a dab always has positive area.
+/// Effective dab radius in canvas pixels: the stroke's ambient base size
+/// (`pen_input.size`, via [`EvalContext::base_size`]) times this terminal's
+/// per-touch `size` modulation. Floored at 0.5 px so a dab always has
+/// positive area. Shared by every terminal — `paint` and `watercolor`
+/// delegate to it, and the read-mirror terminals (blur/smudge/liquify) call
+/// it through this module.
 pub fn effective_radius(ctx: &EvalContext) -> f32 {
-    let size_input = ctx.input_f32("size_input").max(0.0);
-    let size = ctx.input_f32("size").max(0.0);
-    let effective_size = size_input * size;
-    (effective_size * SIZE_REFERENCE_PX * 0.5).max(0.5)
+    let modulation = ctx.input_f32("size").max(0.0);
+    (ctx.base_size() * modulation * SIZE_REFERENCE_PX * 0.5).max(0.5)
 }
 
 /// Insert a per-dab value into `dab_batch.slot_outputs` under this node's
@@ -335,7 +337,12 @@ pub fn effective_radius(ctx: &EvalContext) -> f32 {
 /// `pack_dab_record` picks it up via the matching [`DabField`] declared
 /// in [`compile_wgsl`]. Used for `copy_origin` (always) and any terminal
 /// extras (e.g. blur's `blur_px`, via [`ReadMirrorTerminal::pack_extra`]).
-pub fn insert_slot_output(gpu: &mut BrushGpuContext, node_id: u32, base: &str, value: ScalarValue) {
+pub fn insert_slot_output(
+    gpu: &mut BrushGpuContext,
+    node_id: &str,
+    base: &str,
+    value: ScalarValue,
+) {
     if let Some(outputs) = gpu.dab_batch.slot_outputs.as_mut() {
         outputs.insert(format!("n{}_{}", node_id, base), value);
     }
@@ -427,7 +434,7 @@ pub fn evaluate_gpu<T: ReadMirrorTerminal>(
     let read_x0 = (position[0] - read_half[0]).max(layer_x0);
     let read_y0 = (position[1] - read_half[1]).max(layer_y0);
     let copy_origin = [read_x0.floor(), read_y0.floor()];
-    let node_id = ctx.node_id.0 as u32;
+    let node_id = ctx.node_id.as_str();
     insert_slot_output(gpu, node_id, "copy_origin", ScalarValue::Vec2(copy_origin));
 
     // Extra per-dab slots (blur's kernel size, …) must be inserted before
@@ -665,4 +672,56 @@ fn ensure_per_brush_pipeline(
         texture_registry: gpu.pipelines.texture_registry(),
     };
     pipe.ensure_pipeline(&ctx, compiled, label);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effective_radius;
+    use crate::brush::eval::EvalContext;
+    use crate::brush::wire::BrushWireType;
+    use crate::nodegraph::{NodeId, PortDef};
+
+    fn ctx_with<'a>(port_defs: &'a [PortDef<BrushWireType>], base_size: f32) -> EvalContext<'a> {
+        static TEST_NODE_ID: std::sync::OnceLock<NodeId> = std::sync::OnceLock::new();
+        EvalContext {
+            input_slots: &[],
+            input_values: &[],
+            port_defs,
+            lut: None,
+            stroke_seed: 0,
+            dab_index: 0,
+            base_size,
+            node_id: TEST_NODE_ID.get_or_init(|| NodeId("test".into())),
+        }
+    }
+
+    /// Behavior-preservation regression: `effective_radius` is exactly
+    /// `base_size × modulation × DAB_REFERENCE_SIZE × 0.5` (floored 0.5) — the
+    /// same product the old `size_input × size` model produced, with the base
+    /// now supplied by the ambient `pen_input.size` and the terminal port
+    /// carrying only the per-touch modulation.
+    #[test]
+    fn effective_radius_is_base_times_modulation() {
+        let ref_px = crate::brush::DAB_REFERENCE_SIZE as f32;
+
+        // Modulation defaults to 1.0 (unwired terminal `size` port).
+        let mod_default = [PortDef::input("size", BrushWireType::Scalar).with_range(0.0, 1.0, 1.0)];
+        for base in [0.1_f32, 0.3, 2.0] {
+            let got = effective_radius(&ctx_with(&mod_default, base));
+            assert!(
+                (got - (base * ref_px * 0.5).max(0.5)).abs() < 1e-3,
+                "base {base}: got {got}",
+            );
+        }
+
+        // A modulation ≠ 1.0 multiplies onto the base: base 0.4 × mod 0.5 must
+        // equal the old `size=0.4, size_input=0.5`.
+        let mod_half = [PortDef::input("size", BrushWireType::Scalar).with_range(0.0, 1.0, 0.5)];
+        let got = effective_radius(&ctx_with(&mod_half, 0.4));
+        assert!((got - (0.4 * 0.5 * ref_px * 0.5)).abs() < 1e-3, "got {got}");
+
+        // Floor at 0.5 px so a zero-size dab still has positive area.
+        let mod_zero = [PortDef::input("size", BrushWireType::Scalar).with_range(0.0, 1.0, 0.0)];
+        assert_eq!(effective_radius(&ctx_with(&mod_zero, 0.0)), 0.5);
+    }
 }

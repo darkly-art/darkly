@@ -3,6 +3,7 @@
 // that exports `pub fn register() -> crate::brush::BrushNodeRegistration`.
 
 pub mod blur;
+pub mod brush_settings;
 pub mod clone_source;
 pub mod curve;
 pub mod image;
@@ -27,6 +28,7 @@ use crate::brush::BrushNodeRegistration;
 pub fn registrations() -> Vec<BrushNodeRegistration> {
     vec![
         blur::register(),
+        brush_settings::register(),
         clone_source::register(),
         curve::register(),
         image::register(),

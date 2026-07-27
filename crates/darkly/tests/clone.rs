@@ -82,10 +82,16 @@ fn render_clone(p: &CloneParams) -> Vec<u8> {
         .expect("Clone builtin registered");
 
     let mut graph = brush.metadata.graph.clone();
-    let term_id = darkly::brush::find_terminal(&graph).expect("clone has a terminal");
+    let _term_id = darkly::brush::find_terminal(&graph).expect("clone has a terminal");
     // Force a size that fits inside the half-canvas patch so the whole
     // dab footprint samples red.
-    graph.set_port_default(term_id, "size", 0.15).unwrap();
+    graph
+        .set_port_default(
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            0.15,
+        )
+        .unwrap();
 
     let (device, queue) = shared_device();
     let (layer_texture, layer_view) =
@@ -249,7 +255,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 }
 
 /// Node id of the first node with `type_id` in the active brush graph.
-fn find_node_id(engine: &DarklyEngine, type_id: &str) -> u64 {
+fn find_node_id(engine: &DarklyEngine, type_id: &str) -> String {
     engine
         .active_brush_graph()
         .nodes()
@@ -258,6 +264,7 @@ fn find_node_id(engine: &DarklyEngine, type_id: &str) -> u64 {
         .unwrap_or_else(|| panic!("no '{type_id}' node in active graph"))
         .id
         .0
+        .clone()
 }
 
 /// Install the builtin Clone brush as the active graph, with the tip
@@ -272,7 +279,11 @@ fn install_clone_brush(engine: &mut DarklyEngine) {
     engine.set_brush_graph(&json).expect("clone graph compiles");
     let term_id = find_node_id(engine, "paint");
     engine
-        .brush_graph_set_port_default(term_id, "size", 0.15)
+        .brush_graph_set_input(
+            &term_id,
+            "size",
+            darkly::brush::input_value::InputValue::Scalar(0.15),
+        )
         .expect("paint size port");
 }
 
@@ -339,8 +350,12 @@ fn sample_merged_clones_composite() {
 
     install_clone_brush(&mut e);
     let clone_id = find_node_id(&e, "clone_source");
-    e.brush_graph_set_port_default(clone_id, "merged", 1.0)
-        .expect("merged port");
+    e.brush_graph_set_input(
+        &clone_id,
+        "merged",
+        darkly::brush::input_value::InputValue::Scalar(1.0),
+    )
+    .expect("merged port");
     // Pin the red bottom layer to prove merged overrides the pin.
     e.set_clone_source(32.0, 64.0, Some(bottom));
     paint_dab(&mut e, dest, 96.0, 64.0, [1.0, 1.0, 1.0]);
