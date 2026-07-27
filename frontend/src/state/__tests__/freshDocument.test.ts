@@ -15,9 +15,10 @@ function fakeEngine() {
 
 describe('freshDocument recipes', () => {
     describe('demo', () => {
-        it('boots the watercolor brush with a black foreground', () => {
+        it('boots the watercolor brush with a black foreground on a white background', () => {
             expect(RECIPES.demo.defaultBrushName).toBe('Rough Watercolor');
             expect(RECIPES.demo.foreground).toEqual({ r: 0, g: 0, b: 0, a: 255 });
+            expect(RECIPES.demo.background).toEqual({ r: 255, g: 255, b: 255, a: 255 });
         });
 
         it('fills the initial layer from the background image', () => {
@@ -44,9 +45,14 @@ describe('freshDocument recipes', () => {
     });
 
     describe('app', () => {
-        it('boots the ink pen with a white foreground', () => {
+        it('boots the ink pen with a white foreground on a black background', () => {
             expect(RECIPES.app.defaultBrushName).toBe('Ink Pen');
             expect(RECIPES.app.foreground).toEqual({ r: 255, g: 255, b: 255, a: 255 });
+            // Regression: the background swatch was hardcoded to white in app
+            // state, so the `app` build shipped white-on-white — an invisible
+            // foreground/background pair.
+            expect(RECIPES.app.background).toEqual({ r: 0, g: 0, b: 0, a: 255 });
+            expect(RECIPES.app.background).not.toEqual(RECIPES.app.foreground);
         });
 
         it('fills the initial layer with opaque black', () => {

@@ -17,6 +17,10 @@ interface FreshDocumentRecipe {
     defaultBrushName: string;
     /** The initial foreground paint color for this build. */
     foreground: Color;
+    /** The initial background swatch color for this build — the other half of
+     *  the foreground/background pair "reset colors" returns to and "swap"
+     *  toggles into. */
+    background: Color;
     /** Fill the freshly-created initial background layer. */
     fillInitialLayer(engine: Engine, layerId: number): void;
     /** Seed default veils / extras after the initial layer is filled. */
@@ -31,6 +35,7 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
     demo: {
         defaultBrushName: 'Rough Watercolor',
         foreground: { r: 0, g: 0, b: 0, a: 255 },
+        background: { r: 255, g: 255, b: 255, a: 255 },
         fillInitialLayer: (engine, id) => engine.api.fillBackground({ id }),
         seedVeils: (instance, w, h) => {
             // The veil chain needs a non-zero viewport before `add_veil` will
@@ -51,6 +56,7 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
     app: {
         defaultBrushName: 'Ink Pen',
         foreground: { r: 255, g: 255, b: 255, a: 255 },
+        background: { r: 0, g: 0, b: 0, a: 255 },
         fillInitialLayer: (engine, id) => engine.api.fillBackgroundColor({ id, rgba: [0, 0, 0, 255] }),
         seedVeils: () => {},
     },

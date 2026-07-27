@@ -121,7 +121,7 @@ export class DarklyInstance {
 
     // Colors
     foreground = $state<Color>({ ...freshDocument.foreground });
-    background = $state<Color>({ r: 255, g: 255, b: 255, a: 255 });
+    background = $state<Color>({ ...freshDocument.background });
 
     // Active tool
     activeToolId = $state<string>('brush');
@@ -934,7 +934,7 @@ export class DarklyInstance {
 
     resetColors() {
         this.foreground = { ...freshDocument.foreground };
-        this.background = { r: 255, g: 255, b: 255, a: 255 };
+        this.background = { ...freshDocument.background };
     }
 
     /** Sync the JS canvas-window mirror (`docW`/`docH`/`canvasOriginX`/
