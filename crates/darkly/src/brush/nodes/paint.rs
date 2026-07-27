@@ -14,7 +14,7 @@
 //! - **The uniform buffer carries stroke-constant values** from any
 //!   upstream nodes that declared `uniform_fields` (e.g. `paint_color`).
 //!
-//! Upstream nodes (`shape`, `stamp`, etc.) compile inline into the
+//! Upstream nodes (`circle`, `stamp`, etc.) compile inline into the
 //! fragment shader and evaluate per-fragment-per-dab — no intermediate
 //! textures.
 //!

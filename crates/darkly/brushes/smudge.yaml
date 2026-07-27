@@ -8,8 +8,8 @@ nodes:
     inputs:
       spacing: 0.01
       stabilize: 0.4
-  shape:
-    type: shape
+  circle:
+    type: circle
     inputs:
       softness: 0.4
   smudge:
@@ -18,10 +18,10 @@ connections:
 - 'pen_input.motion -> smudge.motion'
 - 'pen_input.position -> smudge.position'
 - 'pen_input.pressure -> smudge.size'
-- 'shape.mask -> smudge.mask'
+- 'circle.mask -> smudge.mask'
 exposed_ports:
   "brush_settings.stabilize": {}
   "brush_settings.size": {}
-  "shape.softness": {}
+  "circle.softness": {}
   "smudge.opacity": {}
   "smudge.rate": {}

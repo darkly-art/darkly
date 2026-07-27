@@ -1,5 +1,5 @@
 // Procedural `r(θ)` shape prelude — shared by compute-path brushes that
-// stamp the same family of polar-radius silhouettes the `shape` fragment
+// stamp the same family of polar-radius silhouettes the `circle` fragment
 // node produces.
 //
 // Functions here are parameterised on a `ShapeParams` struct so the same
@@ -8,11 +8,11 @@
 // responsible for building a `ShapeParams` for each dab (typically from
 // its own dab record).
 //
-// **Bit-exact parity with `crates/darkly/src/brush/nodes/shape.rs`** is
+// **Bit-exact parity with `crates/darkly/src/brush/nodes/circle.rs`** is
 // load-bearing — the CPU-side `integrate_centroid` walks the same `r(θ)`
 // at a finer resolution, and per-pixel render tests catch drift as a
 // mismatch. Keep the `hash1d` / `fbm_1d` / `r_sine` / `r_perlin` /
-// `r_superformula` formulas here byte-equivalent to `shape.rs`.
+// `r_superformula` formulas here byte-equivalent to `circle.rs`.
 //
 // Include via `concat!()` at the consumer site:
 //
@@ -36,7 +36,7 @@
 
 struct ShapeParams {
     /// 0 = sine harmonic, 1 = periodic 1D Perlin fBm, 2 = Gielis
-    /// superformula. Matches `ALGO_*` constants in `nodes/shape.rs`.
+    /// superformula. Matches `ALGO_*` constants in `nodes/circle.rs`.
     algorithm: u32,
     /// Modulation strength on top of the unit-radius reference disc.
     amplitude: f32,
@@ -134,31 +134,15 @@ fn shape_r_superformula(p: ShapeParams, theta: f32) -> f32 {
     return pow(s, -1.0 / p.n1);
 }
 
-/// Regular convex N-gon polar radius. `cos(π/n)` is the apothem of a
-/// unit-circumradius N-gon; folding `theta` into one sector `[−sector/2,
-/// sector/2)` and dividing by `cos` of the folded angle gives the
-/// perpendicular distance to that sector's edge. Peaks at the circumradius
-/// (`= 1`, at vertices) and dips to the apothem between them.
-fn shape_r_polygon(p: ShapeParams, theta: f32) -> f32 {
-    // `frequency` is the shared "Points" knob; for a polygon it is the side
-    // count, floored to a valid convex minimum of 3.
-    let n = max(p.frequency, 3.0);
-    let sector = SHAPE_TAU / n;
-    // Fold to [-sector/2, sector/2): distance to the nearest sector centre.
-    let a = theta - floor(theta / sector) * sector - 0.5 * sector;
-    return cos(0.5 * sector) / max(cos(a), 1e-4);
-}
-
 /// Polar radius `r(θ)` in the shape's natural units (unmodulated disc has
 /// `r = 1`). Branches on `p.algorithm`. Same dispatch table as
-/// `shape.rs::r_theta`.
+/// `circle.rs::r_theta`.
 fn shape_r_theta(p: ShapeParams, theta: f32) -> f32 {
     let phased = theta - p.rotation;
     var r_base: f32;
     switch p.algorithm {
         case 1u: { r_base = shape_r_perlin(p, phased); }
         case 2u: { r_base = shape_r_superformula(p, phased); }
-        case 3u: { r_base = shape_r_polygon(p, phased); }
         default: { r_base = shape_r_sine(p, phased); }
     }
     // Area-preserving elliptical squash about the (rotated) local axes.
@@ -168,4 +152,29 @@ fn shape_r_theta(p: ShapeParams, theta: f32) -> f32 {
     let s = sin(phased);
     let inv = sqrt((c / p.aspect) * (c / p.aspect) + (s * p.aspect) * (s * p.aspect));
     return r_base / inv;
+}
+
+/// Feathered coverage for a shape at a fragment `local_dist` from centre,
+/// along angle `theta`. `band` is the softness feather width (unit-disc
+/// units, with a small AA floor already applied by the caller).
+///
+/// The feather is applied *perpendicular* to the boundary, not radially. The
+/// naive `smoothstep(r_at - band, r_at, local_dist)` measures the band along
+/// the radius, but a constant radial band bows a sloped boundary inward:
+/// where the radius varies with angle, subtracting a fixed radius makes the
+/// steeper stretches cave in (visible concavity). Dividing the radial
+/// distance-to-edge by the boundary's gradient magnitude
+/// `|∇| = sqrt(1 + (r'/r)²)` converts it to an approximate perpendicular
+/// distance, giving a uniform-width feather along every edge. `r'(θ)` is a
+/// central finite difference of `shape_r_theta` — general across all
+/// algorithms, no per-algorithm derivative. The approximation holds for the
+/// smooth, low-curvature silhouettes this family produces.
+fn shape_coverage(p: ShapeParams, theta: f32, local_dist: f32, band: f32) -> f32 {
+    let r_at = shape_r_theta(p, theta);
+    let eps = 1e-3;
+    let dr = (shape_r_theta(p, theta + eps) - shape_r_theta(p, theta - eps)) / (2.0 * eps);
+    let grad = sqrt(1.0 + (dr / r_at) * (dr / r_at));
+    // Signed perpendicular distance inside the boundary (0 on the edge).
+    let perp = (r_at - local_dist) / grad;
+    return smoothstep(0.0, band, perp);
 }

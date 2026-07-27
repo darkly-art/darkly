@@ -1,4 +1,4 @@
-//! End-to-end verification that `pen.drawing_angle → shape.rotation_input`
+//! End-to-end verification that `pen.drawing_angle → circle.rotation_input`
 //! actually rotates the **rendered mask** in the cursor preview pipeline.
 //!
 //! The previous version of this test asserted on
@@ -6,7 +6,7 @@
 //! only affected the cursor halo, not the painted dab. That port was removed
 //! because it produced "rotation that only the cursor sees, not the paint",
 //! which surprised users. Rotation now lives in the WGSL pipeline (sum of
-//! `shape.rotation` + `shape.rotation_input`, minus `view_rotation`), so
+//! `circle.rotation` + `circle.rotation_input`, minus `view_rotation`), so
 //! the cursor preview and the stroke deposit always agree.
 //!
 //! This test renders an asymmetric superformula shape twice — once
@@ -53,7 +53,7 @@ fn preview_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
     (tex, view)
 }
 
-/// Build a minimal paint graph with `pen.drawing_angle → shape.rotation_input`.
+/// Build a minimal paint graph with `pen.drawing_angle → circle.rotation_input`.
 /// Shape is set to the superformula algorithm so the silhouette has a four-fold
 /// symmetry whose orientation reads cleanly off rotation_input.
 fn build_graph_with_rotation_wire() -> Graph<BrushWireType> {
@@ -72,7 +72,7 @@ fn build_graph_with_rotation_wire() -> Graph<BrushWireType> {
         "paint_color",
         registry.get("paint_color").unwrap().ports.clone(),
     );
-    let shape = graph.add_node("shape", registry.get("shape").unwrap().ports.clone());
+    let shape = graph.add_node("circle", registry.get("circle").unwrap().ports.clone());
     // Algorithm = 2 (Superformula).
     graph
         .set_port_value(&shape, "algorithm", InputValue::Int(2))
@@ -170,7 +170,7 @@ fn render_at_angle(angle_rad: f32) -> Vec<u8> {
 
     // Seed `drawing_angle` directly — `seed_sensors` writes the raw
     // `info.drawing_angle` into the pen_input slot, which the wire then
-    // feeds into `shape.rotation_input` via the compiled WGSL.
+    // feeds into `circle.rotation_input` via the compiled WGSL.
     let mut info = PaintInformation {
         pos: [PREVIEW_SIDE as f32 * 0.5, PREVIEW_SIDE as f32 * 0.5],
         pressure: 1.0,
@@ -229,7 +229,7 @@ fn drawing_angle_rotates_preview_mask() {
     let diff = (sum_baseline as i32 - sum_rotated as i32).unsigned_abs();
     assert!(
         diff > 64,
-        "drawing_angle wired to shape.rotation_input should rotate the \
+        "drawing_angle wired to circle.rotation_input should rotate the \
          rendered shape; baseline on-axis alpha={sum_baseline}, rotated \
          on-axis alpha={sum_rotated} (diff={diff}). If these are equal, \
          the rotation wire is dead.",

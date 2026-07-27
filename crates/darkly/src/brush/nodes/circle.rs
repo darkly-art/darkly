@@ -1,4 +1,4 @@
-//! Procedural shape coverage GPU node — the brush-tip silhouette.
+//! Procedural circle coverage GPU node — the brush-tip silhouette.
 //!
 //! Compile-only: contributes a per-fragment scalar coverage expression
 //! (`f32` in `[0, 1]`) to the brush's compiled WGSL via [`compile_wgsl`].
@@ -7,19 +7,20 @@
 //! the expression directly into their fragment body — no dab texture,
 //! no separate render pass.
 //!
-//! Three shape algorithms are exposed via the `algorithm` enum param:
+//! A polar-`r(θ)` family — a disc and its smooth bumpy variants — exposed
+//! via the `algorithm` enum param:
 //!
 //! - **Sine harmonic** — `r(θ) = 1 + A·sin(n·θ + φ)`. Symmetric bumps.
 //! - **1D Perlin / value-noise fBm** — periodic value-noise summed over
 //!   `octaves` with `persistence` falloff. Organic blobs.
-//! - **Gielis Superformula** — single closed-form spanning circles, polygons,
+//! - **Gielis Superformula** — single closed-form spanning circles,
 //!   stars, flowers, and asteroids.
-//! - **Polygon** — a regular convex N-gon (`Points` = side count), via the
-//!   apothem polar-radius closed form.
 //!
-//! Algorithms documented in `docs/brush/stamp-generation-algos.md`. The
-//! shared `r(θ)` math lives in `shaders/brush/_shape.wgsl` and is
-//! spliced into every compiled brush that consumes a shape.
+//! Straight-edged polygons live in the separate [`super::polygon`] node,
+//! which uses a true signed-distance field rather than the polar
+//! coverage this family shares. The shared `r(θ)` math lives in
+//! `shaders/brush/_shape.wgsl` and is spliced into every compiled brush
+//! that consumes a silhouette.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::input_value::InputValue;
@@ -35,9 +36,8 @@ use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 const ALGO_SINE: u32 = 0;
 const ALGO_PERLIN: u32 = 1;
 const ALGO_SUPERFORMULA: u32 = 2;
-const ALGO_POLYGON: u32 = 3;
 
-pub const TYPE_ID: &str = "shape";
+pub const TYPE_ID: &str = "circle";
 
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
@@ -47,14 +47,14 @@ pub fn register() -> BrushNodeRegistration {
         node: NodeRegistration {
         type_id: TYPE_ID,
         category: "shape",
-        display_name: "Shape",
+        display_name: "Circle",
         description: "Procedural brush-tip silhouette — disc, bumpy circle, or superformula.",
         ports: vec![
             // Compile-time branch selector — picks the silhouette algorithm.
             // Not wirable (an enum can't be driven per-dab); exposable like
             // every other input.
             PortDef::input("algorithm", BrushWireType::Enum)
-                .with_enum_options(["Sine Harmonic", "Perlin Noise", "Superformula", "Polygon"])
+                .with_enum_options(["Sine Harmonic", "Perlin Noise", "Superformula"])
                 .with_value(InputValue::Int(0))
                 .with_label("Algorithm")
                 .with_description("Silhouette generator: bumpy sine, organic Perlin, or Gielis superformula."),
@@ -78,20 +78,17 @@ pub fn register() -> BrushNodeRegistration {
             // Frequency / rotation are universal: the bump count, period, or
             // symmetry order — and the rotation around the shape's centre —
             // matter for every algorithm.
-            // The count of features around the shape — bumps, lobes, or sides.
-            // One integer knob shared across every algorithm.
             PortDef::input("frequency", BrushWireType::Scalar)
                 .with_range(1.0, 16.0, 6.0)
                 .with_natural_range(1.0, 16.0)
                 .with_step(1.0)
-                .with_label("Points")
+                .with_label("Frequency")
                 .with_unit(UnitType::Raw)
                 .with_description(
-                    "Number of features around the shape. Sine: bumps (n). \
-                     Perlin: base period in cells per revolution. Superformula: \
-                     symmetry order m. Polygon: number of sides (min 3). Must be \
-                     an integer — non-integer values would create a seam at \
-                     θ = ±π where the shape fails to close.",
+                    "Sine: number of bumps (n). Perlin: base period in cells per revolution. \
+                     Superformula: symmetry order m. Must be an integer — \
+                     non-integer values would create a seam at θ = ±π where the \
+                     shape fails to close.",
                 ),
             // No `natural_range`: radians are a unit, not a normalized
             // signal. `pen.drawing_angle → rotation_input` is a unit-
@@ -224,7 +221,7 @@ impl BrushNodeEvaluator for ShapeEvaluator {
             return Ok(wgsl);
         }
 
-        let algorithm = (cctx.input("algorithm").enum_index().max(0) as u32).min(3);
+        let algorithm = (cctx.input("algorithm").enum_index().max(0) as u32).min(2);
         let amplitude = cctx.input("amplitude").as_f32();
         let frequency = cctx.input("frequency").as_f32();
         let rotation = cctx.input("rotation").as_f32();
@@ -245,19 +242,14 @@ impl BrushNodeEvaluator for ShapeEvaluator {
         // block-let preserves a single `let` binding name downstream
         // nodes can substitute.
         //
-        // Edge coverage: smoothstep over a constant softness band
-        // (in unit-disc /
-        // natural units, independent of `r_at`), with a 0.004 AA
-        // floor so softness == 0 still produces a one-pixel-ish
-        // anti-aliased boundary instead of jagged stair-steps.
-        //
-        // A linear ramp scaled by `r_at` (what the original draft did)
-        // makes the falloff width vary along the perlin edge —
-        // outward bumps get softer than inward dips — which reads as
-        // "wonky" and exaggerates the noise band when the dab is
-        // large.
-        let params_ident = cctx.ident("shape_params");
-        let shape_ident = cctx.ident("shape");
+        // Coverage feathering lives in `shape_coverage` (see
+        // `_shape.wgsl`): the softness band is applied *perpendicular* to
+        // the edge, not radially, so the bumpy silhouettes feather with a
+        // uniform-width band along every edge instead of caving in. The
+        // `0.004` floor keeps a one-pixel-ish anti-aliased boundary at
+        // softness == 0.
+        let params_ident = cctx.ident("circle_params");
+        let circle_ident = cctx.ident("circle");
         let body = format!(
             "    let {params_ident}: ShapeParams = ShapeParams(\n\
              \x20       {algorithm}u,\n\
@@ -272,12 +264,11 @@ impl BrushNodeEvaluator for ShapeEvaluator {
              \x20       max(({n3}), 0.05),\n\
              \x20       max(({aspect}), 0.01),\n\
              \x20   );\n\
-             \x20   let {shape_ident}_r_at: f32 = shape_r_theta({params_ident}, theta);\n\
-             \x20   let {shape_ident}_band: f32 = max(clamp(({softness}), 0.0, 1.0), 0.004);\n\
-             \x20   let {shape_ident}: f32 = 1.0 - smoothstep({shape_ident}_r_at - {shape_ident}_band, {shape_ident}_r_at, local_dist);\n",
+             \x20   let {circle_ident}_band: f32 = max(clamp(({softness}), 0.0, 1.0), 0.004);\n\
+             \x20   let {circle_ident}: f32 = shape_coverage({params_ident}, theta, local_dist, {circle_ident}_band);\n",
         );
         wgsl.body = body;
-        wgsl.outputs.insert("mask".into(), shape_ident);
+        wgsl.outputs.insert("mask".into(), circle_ident);
         Ok(wgsl)
     }
 
@@ -290,7 +281,7 @@ impl BrushNodeEvaluator for ShapeEvaluator {
     /// [`ExtentCtx::port_max_value`] so the bound covers every value
     /// any wire can deliver, not just the per-dab realisation.
     fn extent(&self, ctx: &ExtentCtx) -> ExtentContribution {
-        let algorithm = (ctx.port_enum("algorithm").max(0) as u32).min(3);
+        let algorithm = (ctx.port_enum("algorithm").max(0) as u32).min(2);
         let base = match algorithm {
             // r(θ) = 1 + A·sin(...) for sine, and 1 + A·(2·fbm - 1)
             // for perlin (fbm ∈ [0, 1] → swing in [-1, 1]) — both
@@ -313,13 +304,6 @@ impl BrushNodeEvaluator for ShapeEvaluator {
                 }
                 max_r.max(1.0)
             }
-            // A convex regular N-gon's polar radius peaks at the
-            // circumradius (= 1, at the vertices) and dips to the apothem
-            // between them, so its worst-case radius is exactly the unit
-            // disc's. No CPU `polygon_r` mirror is needed — the bound is a
-            // constant, so there is nothing to keep byte-equivalent with the
-            // WGSL `shape_r_polygon` (unlike superformula's numerical scan).
-            ALGO_POLYGON => 1.0,
             _ => 1.0,
         };
         // Anisotropy is a multiplicative ellipse factor in `shape_r_theta`

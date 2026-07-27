@@ -13,7 +13,7 @@
 //!    atlas_w)`.
 //! 2. **Composite pass.** One instanced draw, N quads. The fragment
 //!    shader is the framework-assembled per-brush WGSL: upstream
-//!    nodes (`shape`, `paint_color`, etc.) compile inline; this
+//!    nodes (`circle`, `paint_color`, etc.) compile inline; this
 //!    terminal contributes the watercolor blend math (atlas pickup +
 //!    deposit/wetness load) and the extra atlas bind group.
 //!
@@ -23,12 +23,12 @@
 //!   `amplitude`, `frequency`, etc. as ports on the terminal and
 //!   evaluated the procedural shape inline. Here the upstream graph
 //!   provides a scalar `mask` input (typically wired from
-//!   `shape.mask`), and the composite's fragment shader inlines
-//!   whatever WGSL the shape node emits.
+//!   `circle.mask`), and the composite's fragment shader inlines
+//!   whatever WGSL the circle node emits.
 //! - **No CPU centroid integration.** `watercolor_batched` integrated
 //!   the asymmetric shape's centroid on the CPU and packed it into
 //!   the dab record to pin the shape to the pen tip. The compiled
-//!   `shape` currently emits its silhouette centered on the local origin
+//!   `circle` currently emits its silhouette centered on the local origin
 //!   without translation. If the compiled shape's centroid drifts off
 //!   the pen tip noticeably, restoring a centroid step is a focused
 //!   follow-up.
@@ -612,7 +612,7 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::input("color", BrushWireType::Vec4)
                     .with_description("Brush color (typically wired from paint_color)"),
                 PortDef::input("mask", BrushWireType::Scalar).with_description(
-                    "Per-fragment shape mask (typically wired from shape.mask)",
+                    "Per-fragment shape mask (typically wired from circle.mask)",
                 ),
                 PortDef::output("dab_size", BrushWireType::Vec2)
                     .with_description("Brush mark size in canvas pixels"),

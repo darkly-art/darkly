@@ -18,7 +18,7 @@
 //!
 //! - `Vec4` (a color field — `image.color`, `noise.color`, `stamp.dab`) →
 //!   straight into `paint.rgba`. The dab shows the color.
-//! - `Scalar` (a coverage mask — `shape.mask`) → through the canonical
+//! - `Scalar` (a coverage mask — `circle.mask`) → through the canonical
 //!   `paint_color → stamp.color`, `mask → stamp.tip`, `stamp.dab → paint.rgba`
 //!   chain, so the mask reads as a silhouette in the preview's foreground
 //!   colour — exactly as the brush's own dab thumbnail renders it.
@@ -190,8 +190,8 @@ mod tests {
     fn scalar_output_includes_predecessors_and_appends_stamp_chain() {
         let mut graph = Graph::new();
         let pen = add(&mut graph, "pen_input");
-        let shape = add(&mut graph, "shape");
-        // shape.rotation_input ← pen.drawing_angle, so pen is a predecessor.
+        let shape = add(&mut graph, "circle");
+        // circle.rotation_input ← pen.drawing_angle, so pen is a predecessor.
         graph
             .connect(
                 PortRef {
@@ -205,7 +205,7 @@ mod tests {
             )
             .unwrap();
 
-        let sub = build_node_preview_graph(&graph, &shape).expect("shape has a Scalar output");
+        let sub = build_node_preview_graph(&graph, &shape).expect("circle has a Scalar output");
 
         assert!(sub.nodes().contains_key(&shape));
         // The original pen predecessor is kept.
@@ -214,7 +214,7 @@ mod tests {
         assert_eq!(count_type(&sub, "stamp"), 1);
         assert_eq!(count_type(&sub, "paint"), 1);
         assert_eq!(count_type(&sub, "paint_color"), 1);
-        // shape.mask → stamp.tip is wired.
+        // circle.mask → stamp.tip is wired.
         assert!(sub
             .connections
             .iter()
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn preview_output_reflects_declared_image_flag() {
         let reg = registry();
-        for id in ["shape", "image", "noise", "stamp"] {
+        for id in ["circle", "polygon", "image", "noise", "stamp"] {
             assert!(
                 reg.get(id).unwrap().preview_output().is_some(),
                 "{id} declares a spatial image output and should be previewable",
@@ -282,10 +282,10 @@ mod tests {
     #[test]
     fn prunes_unrelated_nodes() {
         let mut graph = Graph::new();
-        let shape = add(&mut graph, "shape");
+        let shape = add(&mut graph, "circle");
         let _unrelated = add(&mut graph, "noise"); // not connected to anything
 
-        let sub = build_node_preview_graph(&graph, &shape).expect("shape previews");
+        let sub = build_node_preview_graph(&graph, &shape).expect("circle previews");
         assert_eq!(count_type(&sub, "noise"), 0, "unrelated noise is pruned");
         assert!(sub.nodes().contains_key(&shape));
     }

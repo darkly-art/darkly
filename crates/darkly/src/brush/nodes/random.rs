@@ -3,7 +3,7 @@
 //! Outputs a single scalar random value in `[0, 1)` — the raw PRNG natural
 //! range. Declares this as its wire-side `natural_range` so the runner
 //! remaps to whichever range the downstream port wants (e.g. `[0, 1024]`
-//! for `shape.seed`, `[-TAU, TAU]` for `shape.rotation`). A consumer that
+//! for `circle.seed`, `[-TAU, TAU]` for `circle.rotation`). A consumer that
 //! wants bipolar values just declares a `[-x, x]` natural range on its
 //! input — no special casing in this node.
 //!

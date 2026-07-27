@@ -80,7 +80,7 @@ impl BrushNodeRegistration {
 
     /// The output port a per-node preview should visualise, if any — the
     /// first output the node declares as a spatial image via
-    /// [`PortDef::preview_image`] (`shape.mask`, `image.color`, `noise.color`,
+    /// [`PortDef::preview_image`] (`circle.mask`, `image.color`, `noise.color`,
     /// `stamp.dab`). Sensor/math/constant outputs (`random.value`,
     /// `paint_color.color`, `multiply.result`, `pen_input.*`) leave the flag
     /// off and return `None` — they carry no spatial field a thumbnail could

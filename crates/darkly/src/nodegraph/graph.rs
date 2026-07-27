@@ -271,7 +271,7 @@ pub struct PortDef<W: WireKind> {
     pub persist_in_thumbnail: bool,
     /// This output port emits a *spatial, per-fragment image* — a coverage
     /// mask or colour field that varies across the dab — so a node carrying it
-    /// is worth a preview thumbnail (`shape.mask`, `image.color`,
+    /// is worth a preview thumbnail (`circle.mask`, `image.color`,
     /// `noise.color`, `stamp.dab`). Declared per port rather than inferred
     /// from `wire_type`, because wire type can't tell a spatial field from a
     /// per-dab constant: `random.value` and `paint_color.color` share the
@@ -461,7 +461,7 @@ impl<W: WireKind> PortDef<W> {
 
     /// Declare that this output port emits a spatial per-fragment image worth
     /// previewing. See [`PortDef::preview_image`] for the contract. Set it on
-    /// coverage/colour-field outputs (`shape.mask`, `image.color`, …); leave
+    /// coverage/colour-field outputs (`circle.mask`, `image.color`, …); leave
     /// it off for per-dab constants and sensor/math outputs.
     pub fn preview_image(mut self) -> Self {
         self.preview_image = true;

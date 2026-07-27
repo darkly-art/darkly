@@ -34,7 +34,7 @@ use crate::nodegraph::{ExecutionPlan, NodeId, PortDef, PortDir};
 pub enum ExtentContribution {
     /// No effect — bbox passes through unchanged from upstream.
     Identity,
-    /// Multiplier on upstream extent. `shape` uses `1 + amp_max` for
+    /// Multiplier on upstream extent. `circle` uses `1 + amp_max` for
     /// sine/perlin (or the superformula's `r_max`) so the bbox covers
     /// the silhouette's worst-case rasterized footprint.
     Multiply(f32),
@@ -85,7 +85,7 @@ impl ExtentCtx<'_> {
     }
 
     /// Read a compile-time enum input's selected index — the branch selector
-    /// (e.g. `shape.algorithm`). Enum inputs are non-wirable, so this always
+    /// (e.g. `circle.algorithm`). Enum inputs are non-wirable, so this always
     /// reflects the authored value. Unknown ports return `0`.
     pub fn port_enum(&self, port_name: &str) -> i32 {
         self.port_defs
@@ -97,7 +97,7 @@ impl ExtentCtx<'_> {
 
     /// Minimum value the named input port can take, given the wire graph —
     /// the mirror of [`Self::port_max_value`]. Needed when *smaller* port
-    /// values grow the extent (e.g. `shape`'s `aspect`, where a thinner nib
+    /// values grow the extent (e.g. `circle`'s `aspect`, where a thinner nib
     /// has a longer perpendicular axis). Unknown ports return `0.0`.
     pub fn port_min_value(&self, port_name: &str) -> f32 {
         let Some(port) = self

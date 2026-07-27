@@ -74,7 +74,7 @@ fn rough_ink_brush_compiles_to_nonempty_wgsl() {
 /// argument rotates the geometry CCW in this frame; subtracting rotates
 /// it CW. The user-facing semantic is "rotation = α (radians) points the
 /// shape's θ=0 reference ray at screen angle α," which makes
-/// `pen.drawing_angle → shape.rotation_input` an identity wire that
+/// `pen.drawing_angle → circle.rotation_input` an identity wire that
 /// orients the shape along the stroke direction. That semantic requires
 /// subtraction. If a future reader is tempted to "clean up" the operator
 /// back to `+`, this test will catch it.
@@ -106,7 +106,7 @@ fn shape_rotation_subtracts_from_theta_for_drawing_angle_compatibility() {
 /// Regression test: brush stamp rotation must counteract view rotation,
 /// so the on-screen orientation is invariant under the user spinning
 /// the canvas. The implementation places this correction at two
-/// places in the compiled WGSL — every shape node and the canonical
+/// places in the compiled WGSL — every circle node and the canonical
 /// stroke-follow wire share these two intercepts, no per-node code.
 ///
 /// 1. The per-fragment skeleton subtracts `u.intrinsic.view_rotation`
@@ -121,7 +121,7 @@ fn shape_rotation_subtracts_from_theta_for_drawing_angle_compatibility() {
 ///    `drawing_angle`'s wire output. `drawing_angle` is
 ///    `atan2(canvas_dy, canvas_dx)` — a canvas-frame angle. The
 ///    subtraction lifts it to screen-frame so the canonical
-///    `pen.drawing_angle → shape.rotation_input` wire keeps following
+///    `pen.drawing_angle → circle.rotation_input` wire keeps following
 ///    the on-screen stroke direction after the skeleton's
 ///    counteraction.
 ///
@@ -134,7 +134,7 @@ fn stamp_rotation_counteracts_view_rotation() {
     let mut graph = Graph::<BrushWireType>::new();
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
     let paint_color = graph.add_node("paint_color", reg.get("paint_color").unwrap().ports.clone());
-    let shape = graph.add_node("shape", reg.get("shape").unwrap().ports.clone());
+    let shape = graph.add_node("circle", reg.get("circle").unwrap().ports.clone());
     let stamp = graph.add_node("stamp", reg.get("stamp").unwrap().ports.clone());
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     let wires = [
@@ -223,7 +223,7 @@ fn topology_hash_is_stable_for_identical_graphs() {
 #[test]
 fn extent_protocol_composes_along_chain() {
     // Build the same skeleton the test harness builds for Perlin:
-    // pen + shape(perlin) + stamp + paint with a wire on
+    // pen + circle(perlin) + stamp + paint with a wire on
     // `amplitude` so it counts as wired. shape's extent must report
     // `1 + amplitude.natural_range.max = 1.5`, and the framework's
     // compose pass must surface it on the CompiledBrush.
@@ -232,7 +232,7 @@ fn extent_protocol_composes_along_chain() {
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
     let paint_color = graph.add_node("paint_color", reg.get("paint_color").unwrap().ports.clone());
     let rand_amp = graph.add_node("random", reg.get("random").unwrap().ports.clone());
-    let shape = graph.add_node("shape", reg.get("shape").unwrap().ports.clone());
+    let shape = graph.add_node("circle", reg.get("circle").unwrap().ports.clone());
     graph
         .set_port_value(&shape, "algorithm", InputValue::Int(1))
         .unwrap(); // Perlin
@@ -280,7 +280,7 @@ fn extent_grows_with_shape_aspect_anisotropy() {
     // The `aspect` knob squashes the tip into an ellipse; a thinner nib
     // (smaller aspect) has a longer perpendicular axis, so the dab bbox must
     // grow by the worst-case anisotropy factor `1 / aspect_min`. Build
-    // pen + shape(sine, amplitude unwired ⇒ base radius 1) + stamp + paint
+    // pen + circle(sine, amplitude unwired ⇒ base radius 1) + stamp + paint
     // with a wire on `aspect` so its natural-range minimum (0.1) counts:
     // factor must reach 1/0.1 = 10. Without folding `aspect` into the extent,
     // the tall nib would be clipped to the round bbox on save-point rewind.
@@ -289,7 +289,7 @@ fn extent_grows_with_shape_aspect_anisotropy() {
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
     let paint_color = graph.add_node("paint_color", reg.get("paint_color").unwrap().ports.clone());
     let rand_aspect = graph.add_node("random", reg.get("random").unwrap().ports.clone());
-    let shape = graph.add_node("shape", reg.get("shape").unwrap().ports.clone());
+    let shape = graph.add_node("circle", reg.get("circle").unwrap().ports.clone());
     let stamp = graph.add_node("stamp", reg.get("stamp").unwrap().ports.clone());
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     let wires = [
@@ -331,7 +331,7 @@ fn extent_grows_with_shape_aspect_anisotropy() {
 #[test]
 fn extent_neutral_when_aspect_unwired() {
     // Regression: the default `aspect` (1.0) must leave the bbox unchanged so
-    // every existing round brush keeps its footprint. pen + shape(sine,
+    // every existing round brush keeps its footprint. pen + circle(sine,
     // amplitude wired ⇒ 1.5) + stamp + paint with `aspect` left unwired: the
     // factor must stay at the pre-anisotropy 1.5, not grow.
     let reg = registry();
@@ -339,7 +339,7 @@ fn extent_neutral_when_aspect_unwired() {
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
     let paint_color = graph.add_node("paint_color", reg.get("paint_color").unwrap().ports.clone());
     let rand_amp = graph.add_node("random", reg.get("random").unwrap().ports.clone());
-    let shape = graph.add_node("shape", reg.get("shape").unwrap().ports.clone());
+    let shape = graph.add_node("circle", reg.get("circle").unwrap().ports.clone());
     let stamp = graph.add_node("stamp", reg.get("stamp").unwrap().ports.clone());
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     let wires = [
@@ -374,7 +374,7 @@ fn extent_neutral_when_aspect_unwired() {
 
 #[test]
 fn extent_default_identity_when_no_shape() {
-    // pen → paint with no upstream shape node — every node
+    // pen → paint with no upstream circle node — every node
     // returns the trait-default `Identity`, so the brush extent
     // collapses to (factor=1.0, extra_px=0.0). bbox_radius then
     // equals the dab's effective_radius, matching the existing
@@ -582,23 +582,18 @@ fn noise_node_emits_per_channel_fbm() {
     naga_validate(&compiled.cursor_preview_wgsl, "noise cursor_preview_wgsl");
 }
 
-/// Feature test: the shape node's Polygon algorithm compiles and emits the
-/// `shape_r_polygon` radius function in both shader variants, with a clamped
-/// `sides` literal baked into the `ShapeParams` constructor.
+/// Feature test: the `polygon` node compiles and emits its signed-distance
+/// helper plus a `smoothstep` feather in both shader variants, and both
+/// validate under naga.
 #[test]
-fn polygon_mode_compiles_and_emits_polygon_radius() {
+fn polygon_node_compiles_and_emits_sdf() {
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
     let paint_color = graph.add_node("paint_color", reg.get("paint_color").unwrap().ports.clone());
-    let shape = graph.add_node("shape", reg.get("shape").unwrap().ports.clone());
-    // Polygon algorithm (index 3), pentagon via the shared "Points"
-    // (frequency) knob.
+    let poly = graph.add_node("polygon", reg.get("polygon").unwrap().ports.clone());
     graph
-        .set_port_value(&shape, "algorithm", InputValue::Int(3))
-        .unwrap();
-    graph
-        .set_port_value(&shape, "frequency", InputValue::Scalar(5.0))
+        .set_port_value(&poly, "points", InputValue::Int(5))
         .unwrap();
     let stamp = graph.add_node("stamp", reg.get("stamp").unwrap().ports.clone());
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
@@ -607,7 +602,7 @@ fn polygon_mode_compiles_and_emits_polygon_radius() {
         &[
             (pen.clone(), "position", term.clone(), "position"),
             (paint_color.clone(), "color", stamp.clone(), "color"),
-            (shape.clone(), "mask", stamp.clone(), "tip"),
+            (poly.clone(), "mask", stamp.clone(), "tip"),
             (stamp.clone(), "dab", term.clone(), "rgba"),
         ],
     );
@@ -618,51 +613,188 @@ fn polygon_mode_compiles_and_emits_polygon_radius() {
         ("cursor_preview_wgsl", &compiled.cursor_preview_wgsl),
     ] {
         assert!(
-            w.contains("shape_r_polygon"),
-            "{label} must emit the polygon radius function",
+            w.contains("polygon_sdf"),
+            "{label} must emit the node-id-suffixed SDF helper",
+        );
+        assert!(
+            w.contains("smoothstep("),
+            "{label} must feather the SDF with smoothstep",
         );
     }
     naga_validate(&compiled.stroke_wgsl, "polygon stroke_wgsl");
     naga_validate(&compiled.cursor_preview_wgsl, "polygon cursor_preview_wgsl");
 }
 
-/// The polygon polar radius closed form: a Rust mirror of `shape_r_polygon`
-/// in `_shape.wgsl`. Confirms the vertex radius is the circumradius (`= 1`,
-/// validating the constant `1.0` extent bound) and the edge-midpoint radius
-/// is the apothem `cos(π/n)`, proving the form is a regular N-gon.
+/// The rounded regular-polygon SDF (a Rust mirror of the node's emitted
+/// `polygon_sdf` helper, plus the `sd - ρ` rounding operator it composes).
+/// Confirms the exact contract: negative inside, the vertices on the unit
+/// circumcircle, the edge midpoint on the boundary at the apothem, and that
+/// rounding morphs the tip toward the unit disc while never exceeding the
+/// circumradius `1.0` (the constant extent bound).
 #[test]
-fn polygon_radius_peaks_at_unit_circumradius() {
-    fn polygon_r(theta: f32, sides: f32) -> f32 {
-        let n = sides.max(3.0);
-        let sector = std::f32::consts::TAU / n;
-        let a = theta - (theta / sector).floor() * sector - 0.5 * sector;
-        (0.5 * sector).cos() / a.cos().max(1e-4)
+fn polygon_sdf_geometry() {
+    // Circumradius-`r` regular n-gon SDF — iq's `sdRegularPolygon`, transcribed
+    // to match `polygon.rs`'s emitted WGSL byte-for-byte.
+    fn poly_sdf(p: [f32; 2], n: f32, r: f32) -> f32 {
+        let an = std::f32::consts::PI / n;
+        let acs = [an.cos(), an.sin()];
+        let a0 = p[0].atan2(p[1]);
+        let two_an = 2.0 * an;
+        let bn = (a0 - two_an * (a0 / two_an).floor()) - an;
+        let len = (p[0] * p[0] + p[1] * p[1]).sqrt();
+        let mut q = [len * bn.cos(), len * bn.sin().abs()];
+        q[0] -= r * acs[0];
+        q[1] -= r * acs[1];
+        q[1] += (-q[1]).clamp(0.0, r * acs[1]);
+        let ql = (q[0] * q[0] + q[1] * q[1]).sqrt();
+        ql * q[0].signum()
     }
-    for &sides in &[3.0_f32, 5.0, 6.0, 12.0] {
-        let sector = std::f32::consts::TAU / sides;
-        // θ = 0 folds to the sector edge (a = −sector/2) — a vertex, r = 1.
-        let vertex = polygon_r(0.0, sides);
+    // The node's composition: circumradius `1 - ρ`, then round by `ρ`.
+    fn rounded(p: [f32; 2], n: f32, rounding: f32) -> f32 {
+        poly_sdf(p, n, 1.0 - rounding) - rounding
+    }
+
+    for &n in &[3.0_f32, 4.0, 5.0, 6.0, 12.0] {
+        let an = std::f32::consts::PI / n;
+        let apothem = an.cos();
+        // A vertex points straight up (+y); the edge midpoint bisects the
+        // sector at angle `an` from +y.
+        let vertex_dir = [0.0_f32, 1.0];
+        let edge_dir = [an.sin(), an.cos()];
+
+        // Sharp polygon (ρ = 0): negative inside, vertex on the unit circle,
+        // edge midpoint on the boundary at the apothem.
         assert!(
-            (vertex - 1.0).abs() < 1e-4,
-            "n={sides}: vertex radius must equal circumradius 1.0, got {vertex}",
+            rounded([0.0, 0.0], n, 0.0) < 0.0,
+            "n={n}: centre must be inside",
         );
-        // θ = sector/2 folds to the sector centre (a = 0) — an edge midpoint,
-        // r = apothem = cos(π/n).
-        let apothem = polygon_r(sector * 0.5, sides);
-        let expected = (std::f32::consts::PI / sides).cos();
         assert!(
-            (apothem - expected).abs() < 1e-4,
-            "n={sides}: edge-midpoint radius must equal apothem {expected}, got {apothem}",
+            rounded(vertex_dir, n, 0.0).abs() < 1e-3,
+            "n={n}: a vertex sits on the unit circumcircle (sd≈0)",
         );
-        // The circumradius is the maximum — no θ exceeds 1.0, so the extent
-        // bound of 1.0 is safe.
-        for i in 0..128 {
-            let theta = (i as f32) * std::f32::consts::TAU / 128.0;
+        let edge_mid = [edge_dir[0] * apothem, edge_dir[1] * apothem];
+        assert!(
+            rounded(edge_mid, n, 0.0).abs() < 1e-3,
+            "n={n}: the edge midpoint sits on the boundary at the apothem",
+        );
+        // A radius-1 point in the edge direction is outside the sharp polygon.
+        assert!(
+            rounded(edge_dir, n, 0.0) > 1e-3,
+            "n={n}: radius-1 in the edge direction is outside the sharp polygon",
+        );
+
+        // Rounding morphs toward the unit disc: at ρ = 1 the field is exactly
+        // `|p| - 1` (isotropic), so the edge direction that was outside at ρ = 0
+        // now sits on the boundary, and every direction has radius 1.
+        assert!(
+            rounded(edge_dir, n, 1.0).abs() < 1e-3,
+            "n={n}: full rounding pushes the boundary out to the unit disc",
+        );
+        for i in 0..16 {
+            let a = (i as f32) * std::f32::consts::TAU / 16.0;
+            let p = [0.5 * a.cos(), 0.5 * a.sin()];
             assert!(
-                polygon_r(theta, sides) <= 1.0 + 1e-4,
-                "n={sides}: radius must never exceed the circumradius 1.0",
+                (rounded(p, n, 1.0) - (-0.5)).abs() < 1e-3,
+                "n={n}: at ρ=1 the field is the unit disc (sd = |p| - 1)",
             );
         }
+
+        // The circumradius bound `1.0` holds for every rounding: no point
+        // beyond radius 1 is ever inside.
+        for &rounding in &[0.0_f32, 0.5, 1.0] {
+            for i in 0..64 {
+                let a = (i as f32) * std::f32::consts::TAU / 64.0;
+                let p = [1.001 * a.cos(), 1.001 * a.sin()];
+                assert!(
+                    rounded(p, n, rounding) > 0.0,
+                    "n={n} ρ={rounding}: nothing past the circumradius may be inside",
+                );
+            }
+        }
+    }
+}
+
+/// The `polygon` node opts into per-node previews by flagging its `mask`
+/// output as a spatial image.
+#[test]
+fn polygon_node_previewable() {
+    let reg = registry();
+    assert!(
+        reg.get("polygon").unwrap().preview_output().is_some(),
+        "polygon.mask is a spatial coverage field and must be previewable",
+    );
+}
+
+/// The polygon node folds `aspect` into its footprint the same way the circle
+/// family does: a wired `aspect` (natural-range min 0.1) must inflate the dab
+/// bbox ×10 so a thin nib isn't clipped on save-point rewind.
+#[test]
+fn polygon_extent_grows_with_aspect() {
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let paint_color = graph.add_node("paint_color", reg.get("paint_color").unwrap().ports.clone());
+    let rand_aspect = graph.add_node("random", reg.get("random").unwrap().ports.clone());
+    let poly = graph.add_node("polygon", reg.get("polygon").unwrap().ports.clone());
+    let stamp = graph.add_node("stamp", reg.get("stamp").unwrap().ports.clone());
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
+    wire(
+        &mut graph,
+        &[
+            (rand_aspect.clone(), "value", poly.clone(), "aspect"),
+            (poly.clone(), "mask", stamp.clone(), "tip"),
+            (paint_color.clone(), "color", stamp.clone(), "color"),
+            (stamp.clone(), "dab", term.clone(), "rgba"),
+            (pen.clone(), "position", term.clone(), "position"),
+        ],
+    );
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
+    assert!(
+        (compiled.brush_extent_factor - 10.0).abs() < 1e-3,
+        "wired aspect (min 0.1) must inflate the bbox ×10, got {}",
+        compiled.brush_extent_factor,
+    );
+}
+
+/// Coordinate-frame guard: the polygon tip must be screen-relative like every
+/// theta-based tip. Because it works from raw `local_uv`, it has to fold
+/// `view_rotation` into its own rotation — otherwise the dab spins as the user
+/// rotates the canvas view. Assert both variants build the rotation angle with
+/// `view_rotation` folded in.
+#[test]
+fn polygon_is_view_rotation_invariant() {
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let paint_color = graph.add_node("paint_color", reg.get("paint_color").unwrap().ports.clone());
+    let poly = graph.add_node("polygon", reg.get("polygon").unwrap().ports.clone());
+    let stamp = graph.add_node("stamp", reg.get("stamp").unwrap().ports.clone());
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
+    wire(
+        &mut graph,
+        &[
+            (pen.clone(), "position", term.clone(), "position"),
+            (paint_color.clone(), "color", stamp.clone(), "color"),
+            (poly.clone(), "mask", stamp.clone(), "tip"),
+            (stamp.clone(), "dab", term.clone(), "rgba"),
+        ],
+    );
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("polygon compiles");
+    for (label, w) in [
+        ("stroke_wgsl", &compiled.stroke_wgsl),
+        ("cursor_preview_wgsl", &compiled.cursor_preview_wgsl),
+    ] {
+        assert!(
+            w.contains("_phi: f32"),
+            "{label} polygon must build a rotation angle",
+        );
+        assert!(
+            w.contains("+ u.intrinsic.view_rotation);"),
+            "{label} polygon rotation must fold in view_rotation — without it the \
+             tip spins with the canvas view (coordinate-frame regression)",
+        );
     }
 }
 
@@ -1050,7 +1182,7 @@ fn noise_rotation_input_wires_per_dab() {
 #[test]
 fn image_dab_tip_needs_no_shape_node() {
     // The finding-#2 case: an image tip in its default Dab space, oriented by
-    // pen.drawing_angle, with NO shape node present. Both shader variants must
+    // pen.drawing_angle, with NO circle node present. Both shader variants must
     // compile and sample in the oriented frame.
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();

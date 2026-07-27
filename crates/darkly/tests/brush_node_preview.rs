@@ -3,7 +3,7 @@
 //! Before the WGSL node-system overhaul, the brush builder previewed *any*
 //! node with a renderable output via a GPU subgraph render. The overhaul left
 //! a stub that special-cased `noise` with a CPU renderer and returned an empty
-//! `Vec` for every other node — so `shape`, `image`, and the rest lost their
+//! `Vec` for every other node — so `circle`, `image`, and the rest lost their
 //! preview.
 //!
 //! This drives the engine handler exactly as the frontend does: add a node,
@@ -26,18 +26,18 @@ fn new_engine() -> DarklyEngine {
 
 const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
-/// A `shape` node (renderable `Scalar` mask output, no texture dependency)
+/// A `circle` node (renderable `Scalar` mask output, no texture dependency)
 /// must produce a non-empty preview through the async engine path. On the
-/// stubbed handler this returns empty because `shape` is not `noise`.
+/// stubbed handler this returns empty because `circle` is not `noise`.
 #[test]
 fn shape_node_produces_non_empty_preview() {
     let mut engine = new_engine();
 
-    // Add a shape node to the active brush graph and take the id the graph
+    // Add a circle node to the active brush graph and take the id the graph
     // assigned it.
     let (_json, node_id) = engine
-        .brush_graph_add_node("shape")
-        .expect("shape node added to active graph");
+        .brush_graph_add_node("circle")
+        .expect("circle node added to active graph");
 
     // First call kicks off the async GPU render + readback; it returns empty
     // while the render is pending (by design — no blocking readback).

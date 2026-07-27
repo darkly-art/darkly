@@ -421,9 +421,9 @@ mod tests {
         let shape = graph
             .nodes()
             .iter()
-            .find(|(_, n)| n.type_id == "shape")
+            .find(|(_, n)| n.type_id == "circle")
             .map(|(id, _)| id.clone())
-            .expect("default has a shape node");
+            .expect("default has a circle node");
         graph.set_port_default(&shape, "softness", 0.37).unwrap();
         graph.expose_port(&shape, "softness").unwrap();
         let shape_key = exposed_port_key(&shape, "softness");
@@ -445,8 +445,8 @@ mod tests {
         let restored_shape = restored
             .nodes()
             .values()
-            .find(|n| n.type_id == "shape")
-            .expect("restored graph has a shape node");
+            .find(|n| n.type_id == "circle")
+            .expect("restored graph has a circle node");
         let port = restored_shape
             .ports
             .iter()
@@ -462,7 +462,7 @@ mod tests {
     }
 
     /// The unified model's headline guarantee: a non-wirable input (here
-    /// the shape node's `algorithm` Enum) is fully *exposable*, and both the
+    /// the circle node's `algorithm` Enum) is fully *exposable*, and both the
     /// exposure and a non-default enum value survive a YAML round trip.
     #[test]
     fn enum_input_is_exposable_and_round_trips() {
@@ -471,9 +471,9 @@ mod tests {
         let shape = graph
             .nodes()
             .iter()
-            .find(|(_, n)| n.type_id == "shape")
+            .find(|(_, n)| n.type_id == "circle")
             .map(|(id, _)| id.clone())
-            .expect("default has a shape node");
+            .expect("default has a circle node");
 
         // Override the enum to Perlin (1) and expose it — neither was
         // possible under the old param system.
@@ -492,8 +492,8 @@ mod tests {
         let restored_shape = restored
             .nodes()
             .values()
-            .find(|n| n.type_id == "shape")
-            .expect("restored graph has a shape node");
+            .find(|n| n.type_id == "circle")
+            .expect("restored graph has a circle node");
         let algo = restored_shape
             .ports
             .iter()
@@ -528,7 +528,7 @@ nodes:
         let yaml = "\
 nodes:
   1:
-    type: shape
+    type: circle
     inputs:
       this_input_does_not_exist: 1
 ";
@@ -545,7 +545,7 @@ nodes:
         let yaml = "\
 nodes:
   1:
-    type: shape
+    type: circle
     inputs:
       algorithm: [[0.0, 0.0], [1.0, 1.0]]
 ";

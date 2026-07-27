@@ -4,6 +4,7 @@
 
 pub mod blur;
 pub mod brush_settings;
+pub mod circle;
 pub mod clone_source;
 pub mod curve;
 pub mod image;
@@ -14,8 +15,8 @@ pub mod noise;
 pub mod paint;
 pub mod paint_color;
 pub mod pen_input;
+pub mod polygon;
 pub mod random;
-pub mod shape;
 pub mod smudge;
 pub mod split_color;
 pub mod stamp;
@@ -29,6 +30,7 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
     vec![
         blur::register(),
         brush_settings::register(),
+        circle::register(),
         clone_source::register(),
         curve::register(),
         image::register(),
@@ -39,8 +41,8 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         paint::register(),
         paint_color::register(),
         pen_input::register(),
+        polygon::register(),
         random::register(),
-        shape::register(),
         smudge::register(),
         split_color::register(),
         stamp::register(),

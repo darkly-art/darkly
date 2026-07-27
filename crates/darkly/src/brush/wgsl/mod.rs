@@ -8,7 +8,7 @@
 //! ## Two execution models, chosen per brush at the terminal
 //!
 //! A brush graph compiles its entire upstream chain into one fragment
-//! shader per terminal — `shape`, `stamp`, `paint_color`, etc. fuse
+//! shader per terminal — `circle`, `stamp`, `paint_color`, etc. fuse
 //! inline, evaluated per-fragment-per-dab. No upstream per-dab GPU
 //! dispatch happens.
 //!
@@ -660,7 +660,7 @@ pub fn pack_uniforms(
 /// dispatched identically across paint / watercolor / smudge /
 /// liquify — the only caller-supplied difference is `effective_radius`.
 /// Rotation lives entirely in the rendered mask (via the skeleton's
-/// `theta - view_rotation` and any wired `shape.rotation_input`), so
+/// `theta - view_rotation` and any wired `circle.rotation_input`), so
 /// the overlay quad samples a pre-oriented mask without a CPU-side
 /// rotation. Returns `Some(())` on success, `None` when the brush has
 /// no compiled state or the preview mask refuses to allocate.
@@ -1017,7 +1017,7 @@ fn assemble_shader(
     out.push_str("    }\n");
     out.push_str("    let local_uv = local * d.inv_radius_target_px;\n");
     out.push_str("    let local_dist = length(local_uv);\n");
-    // Brush stamp rotation counteracts view rotation: shape nodes use
+    // Brush stamp rotation counteracts view rotation: circle nodes use
     // `theta - p.rotation`, so subtracting `view_rotation` from `theta`
     // here makes the shader render the stamp at canvas-rotation
     // `p.rotation + view_rotation`. The present shader's canvas → screen

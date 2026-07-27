@@ -25,8 +25,8 @@ nodes:
     type: random
   random_3:
     type: random
-  shape:
-    type: shape
+  circle:
+    type: circle
     inputs:
       algorithm: 1
       frequency: 8.0
@@ -42,10 +42,10 @@ connections:
 - 'pen_input.pressure -> paint.flow'
 - 'paint_color.color -> stamp.color'
 - 'curve.output -> paint.size'
-- 'random.value -> shape.amplitude'
-- 'random_2.value -> shape.rotation_input'
-- 'random_3.value -> shape.seed'
-- 'shape.mask -> stamp.tip'
+- 'random.value -> circle.amplitude'
+- 'random_2.value -> circle.rotation_input'
+- 'random_3.value -> circle.seed'
+- 'circle.mask -> stamp.tip'
 - 'stamp.dab -> paint.rgba'
 exposed_ports:
   "brush_settings.stabilize": {}

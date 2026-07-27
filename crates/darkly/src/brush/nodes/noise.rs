@@ -49,7 +49,7 @@ pub fn register() -> BrushNodeRegistration {
             description: "Procedural noise sampled where the brush touches the canvas — for grain, jitter, and texture.",
             ports: vec![
                 // Per-dab orientation and decorrelation for Dab-space
-                // sampling — the same input-port path `shape.rotation_input`
+                // sampling — the same input-port path `circle.rotation_input`
                 // uses. Hidden in Canvas mode, where the grain is pinned to
                 // the canvas and neither applies.
                 PortDef::input("rotation", BrushWireType::Scalar)

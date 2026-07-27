@@ -58,7 +58,7 @@ struct Harness {
 ///   pen_input.position → paint.position
 ///   pen_input.pressure → curve → paint.size_input
 ///   paint_color.color  → stamp.color
-///   shape.mask    → stamp.tip       (per-dab shape feed)
+///   circle.mask    → stamp.tip       (per-dab shape feed)
 ///   stamp.dab          → paint.rgba
 ///
 /// `algorithm` selects the shape's silhouette function. `amplitude`
@@ -80,7 +80,7 @@ fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWir
         registry.get("paint_color").unwrap().ports.clone(),
     );
     let curve = graph.add_node("curve", registry.get("curve").unwrap().ports.clone());
-    let shape = graph.add_node("shape", registry.get("shape").unwrap().ports.clone());
+    let shape = graph.add_node("circle", registry.get("circle").unwrap().ports.clone());
     graph
         .set_port_value(&shape, "algorithm", InputValue::Int(algorithm))
         .unwrap();
@@ -387,7 +387,7 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
 
     let runner = compile_graph(&graph).expect("Rough Ink compiles");
     let compiled = runner.compiled_brush().expect("compiled brush attached");
-    // Rough Ink wires `random → shape.amplitude` (natural_range max
+    // Rough Ink wires `random → circle.amplitude` (natural_range max
     // = 0.5) so the brush extent factor composes to 1.5.
     assert!(
         (compiled.brush_extent_factor - 1.5).abs() < 1e-4,

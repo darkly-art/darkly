@@ -147,7 +147,7 @@ pub fn register() -> BrushNodeRegistration {
                 // strength multiplies by the upstream coverage. If
                 // unwired, defaults to 1.0 (uniform inside the disc).
                 PortDef::input("mask", BrushWireType::Scalar).with_description(
-                    "Per-fragment shape mask (typically wired from shape.mask); \
+                    "Per-fragment shape mask (typically wired from circle.mask); \
                      defaults to 1.0 (uniform inside the disc) when unwired.",
                 ),
                 PortDef::output("dab_size", BrushWireType::Vec2)
