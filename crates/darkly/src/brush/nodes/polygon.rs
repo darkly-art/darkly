@@ -87,17 +87,36 @@ pub fn register() -> BrushNodeRegistration {
                     .with_description(
                         "Spin the shape around its centre. Wire a changing signal into Rotation Input instead if you want it to move as you draw.",
                     ),
-                PortDef::input("aspect", BrushWireType::Scalar)
-                    .with_range(0.1, 1.0, 1.0)
-                    .with_natural_range(0.1, 1.0)
-                    .with_label("Aspect")
+                // Amount of anisotropic squash. 0% = round; higher flattens the
+                // tip into an ellipse. Paired with `squeeze_angle` (magnitude +
+                // direction of the same squash).
+                PortDef::input("squeeze", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 0.0)
+                    .with_natural_range(0.0, 1.0)
+                    .with_label("Squeeze")
                     .with_unit(UnitType::Percent)
                     .with_icon("fa6-solid:pen-nib")
                     // Squash is part of shape identity, like rotation; the dab
                     // thumbnail should show the ellipse.
                     .persist_in_thumbnail()
                     .with_description(
-                        "Squash the tip into an ellipse: 100% = round, lower = thinner. Rotates with the shape — set Rotation for a fixed-angle calligraphy nib.",
+                        "Squeeze the tip into an ellipse: 0% = round, higher = thinner. Aim it with Squeeze Angle.",
+                    ),
+                // Direction of the squeeze, independent of `rotation`: lets you
+                // aim the nib's flat one way and the polygon's vertices another.
+                // Measured relative to the (pre-rotation) shape frame, so it
+                // co-rotates with the tip under canvas view rotation like every
+                // other angle here.
+                PortDef::input("squeeze_angle", BrushWireType::Scalar)
+                    .with_range(-std::f32::consts::PI, std::f32::consts::PI, 0.0)
+                    .with_label("Squeeze Angle")
+                    .with_unit(UnitType::Degrees)
+                    .with_icon("fa6-solid:angles-left-right")
+                    // Squeeze direction is part of shape identity, like rotation
+                    // and squeeze; the dab thumbnail should follow it.
+                    .persist_in_thumbnail()
+                    .with_description(
+                        "Direction of the Squeeze, independent of Rotation. Aim a calligraphy nib's flat separately from where the polygon's corners point.",
                     ),
                 PortDef::output("mask", BrushWireType::Scalar)
                     .with_natural_range(0.0, 1.0)
@@ -137,7 +156,8 @@ impl BrushNodeEvaluator for PolygonEvaluator {
         let softness = cctx.input("softness").as_f32();
         let rotation = cctx.input("rotation").as_f32();
         let rotation_input = cctx.input("rotation_input").as_f32();
-        let aspect = cctx.input("aspect").as_f32();
+        let squeeze = cctx.input("squeeze").as_f32();
+        let squeeze_angle = cctx.input("squeeze_angle").as_f32();
 
         // Signed distance to a regular n-gon of circumradius `r`, negative
         // inside, unit-gradient Euclidean field. Vertices sit on radius `r`.
@@ -161,36 +181,79 @@ impl BrushNodeEvaluator for PolygonEvaluator {
              }}\n"
         );
 
-        // φ folds in `view_rotation` so the tip is screen-relative like every
-        // theta-based tip: the skeleton subtracts `view_rotation` from `theta`
-        // (`wgsl/mod.rs`); working from raw `local_uv`, this node must apply
-        // the same compensation itself or the polygon would spin with the
-        // canvas view. Rotate `local_uv` by φ, then squash by `aspect`
-        // (area-preserving, matching the circle family's ellipse). The
-        // non-uniform aspect scale makes the field non-metric, so the softness
-        // band is mildly anisotropic under squash — the same physics the
-        // circle family's ellipse squash already lives with, not a new defect.
+        // φ orients the polygon and folds in `view_rotation` so the tip is
+        // screen-relative like every theta-based tip (the skeleton subtracts
+        // `view_rotation` from `theta` in `wgsl/mod.rs`; working from raw
+        // `local_uv`, this node re-applies that compensation itself, or the
+        // polygon would spin with the canvas view).
+        //
+        // `squeeze` flattens the tip; `squeeze_angle` (β) aims that squash
+        // independently of the polygon's rotation. The input transform rotates
+        // `local_uv` into the squeeze-aligned frame (φ − β), scales x/y
+        // (area-preserving), then rotates back by β — so the polygon sits at φ
+        // while its squash axis sits at β from it. `squeeze` maps to a
+        // semi-axis `a = 1 − 0.9·squeeze` (0% ⇒ round, 100% ⇒ a = 0.1).
+        //
+        // The squash is a non-uniform scale, so `sd_raw` measured in that space
+        // is not a true screen distance — feeding it straight to the feather and
+        // the rounding offset would stretch the softness band along the squash
+        // axis. So it is divided by the squash's anisotropy factor
+        // `|D·R(−β)·f| / |f|` (D = diag(1/a, a); f is the SDF gradient by central
+        // difference — the same technique the circle family's `shape_coverage`
+        // uses). That factor is exactly 1 when `a = 1`, so the un-squeezed tip is
+        // untouched; under squash it rescales the band to a uniform screen-space
+        // width on every edge. The zero-set (silhouette / extent) is untouched,
+        // since dividing a signed distance by a positive scalar never moves its
+        // sign change; the `max(…, 1e-3)` floors are divide-by-zero backstops.
         let ident = cctx.ident("polygon");
         wgsl.body = format!(
-            "    let {ident}_phi: f32 = -(({rotation}) + ({rotation_input}) + u.intrinsic.view_rotation);\n\
-             \x20   let {ident}_c: f32 = cos({ident}_phi);\n\
-             \x20   let {ident}_s: f32 = sin({ident}_phi);\n\
+            "    let {ident}_beta: f32 = ({squeeze_angle});\n\
+             \x20   let {ident}_phi: f32 = -(({rotation}) + ({rotation_input}) + u.intrinsic.view_rotation);\n\
+             \x20   // Rotate local_uv into the squeeze-aligned frame (φ − β).\n\
+             \x20   let {ident}_a1: f32 = {ident}_phi - {ident}_beta;\n\
+             \x20   let {ident}_c: f32 = cos({ident}_a1);\n\
+             \x20   let {ident}_s: f32 = sin({ident}_a1);\n\
              \x20   let {ident}_rot: vec2<f32> = vec2<f32>(\n\
              \x20       local_uv.x * {ident}_c - local_uv.y * {ident}_s,\n\
              \x20       local_uv.x * {ident}_s + local_uv.y * {ident}_c,\n\
              \x20   );\n\
-             \x20   let {ident}_aspect: f32 = clamp(({aspect}), 0.01, 1.0);\n\
-             \x20   let {ident}_p: vec2<f32> = vec2<f32>({ident}_rot.x / {ident}_aspect, {ident}_rot.y * {ident}_aspect);\n\
+             \x20   // Semi-axis from squeeze (0% ⇒ round, 100% ⇒ 0.1); squash x/y.\n\
+             \x20   let {ident}_a: f32 = clamp(1.0 - 0.9 * clamp(({squeeze}), 0.0, 1.0), 0.01, 1.0);\n\
+             \x20   let {ident}_sq: vec2<f32> = vec2<f32>({ident}_rot.x / {ident}_a, {ident}_rot.y * {ident}_a);\n\
+             \x20   // Rotate back by β so the polygon sits at φ, its squash axis at β.\n\
+             \x20   let {ident}_cb: f32 = cos({ident}_beta);\n\
+             \x20   let {ident}_sb: f32 = sin({ident}_beta);\n\
+             \x20   let {ident}_p: vec2<f32> = vec2<f32>(\n\
+             \x20       {ident}_sq.x * {ident}_cb - {ident}_sq.y * {ident}_sb,\n\
+             \x20       {ident}_sq.x * {ident}_sb + {ident}_sq.y * {ident}_cb,\n\
+             \x20   );\n\
              \x20   let {ident}_n: f32 = max(round(({points})), 3.0);\n\
              \x20   let {ident}_round: f32 = clamp(({rounding}), 0.0, 1.0);\n\
-             \x20   // Circumradius `1 - ρ` plus SDF rounding `- ρ` keeps the\n\
-             \x20   // rounded corners within a constant circumradius of 1.\n\
-             \x20   let {ident}_sd: f32 = {sdf}({ident}_p, {ident}_n, 1.0 - {ident}_round) - {ident}_round;\n\
-             \x20   // Feather *inward* from the boundary (`perp = -sd` is the\n\
-             \x20   // signed distance inside), like the circle family's\n\
-             \x20   // `shape_coverage`: coverage reaches 0 at the nominal edge and\n\
-             \x20   // the soft band stays within the circumradius, so softness\n\
-             \x20   // never blooms past the disc-clip and flattens into a circle.\n\
+             \x20   // Circumradius `1 - ρ`: the base polygon shrinks so the fillet\n\
+             \x20   // (added after normalization) keeps the tip within circumradius 1.\n\
+             \x20   let {ident}_cr: f32 = 1.0 - {ident}_round;\n\
+             \x20   let {ident}_sd_raw: f32 = {sdf}({ident}_p, {ident}_n, {ident}_cr);\n\
+             \x20   // Central-difference gradient of the SDF in the squashed p-space.\n\
+             \x20   let {ident}_h: f32 = 1e-3;\n\
+             \x20   let {ident}_gx: f32 = {sdf}({ident}_p + vec2<f32>({ident}_h, 0.0), {ident}_n, {ident}_cr)\n\
+             \x20                       - {sdf}({ident}_p - vec2<f32>({ident}_h, 0.0), {ident}_n, {ident}_cr);\n\
+             \x20   let {ident}_gy: f32 = {sdf}({ident}_p + vec2<f32>(0.0, {ident}_h), {ident}_n, {ident}_cr)\n\
+             \x20                       - {sdf}({ident}_p - vec2<f32>(0.0, {ident}_h), {ident}_n, {ident}_cr);\n\
+             \x20   let {ident}_f: vec2<f32> = vec2<f32>({ident}_gx, {ident}_gy) / (2.0 * {ident}_h);\n\
+             \x20   // Anisotropy factor |D·R(−β)·f| / |f|: how much the squeeze\n\
+             \x20   // stretches the SDF gradient. Exactly 1 when a = 1 (un-squeezed);\n\
+             \x20   // dividing by it rescales the band to a uniform screen-space width.\n\
+             \x20   let {ident}_fr: vec2<f32> = vec2<f32>(\n\
+             \x20       {ident}_f.x * {ident}_cb + {ident}_f.y * {ident}_sb,\n\
+             \x20       -{ident}_f.x * {ident}_sb + {ident}_f.y * {ident}_cb,\n\
+             \x20   );\n\
+             \x20   let {ident}_df: f32 = length(vec2<f32>({ident}_fr.x / {ident}_a, {ident}_fr.y * {ident}_a));\n\
+             \x20   let {ident}_g: f32 = max({ident}_df / max(length({ident}_f), 1e-3), 1e-4);\n\
+             \x20   // True screen-space signed distance, then the corner fillet.\n\
+             \x20   // Feather *inward* from the boundary like the circle family's\n\
+             \x20   // `shape_coverage`: coverage reaches 0 at the nominal edge, so\n\
+             \x20   // softness never blooms past the disc-clip and flattens the tip.\n\
+             \x20   let {ident}_sd: f32 = {ident}_sd_raw / {ident}_g - {ident}_round;\n\
              \x20   let {ident}_band: f32 = max(clamp(({softness}), 0.0, 1.0), 0.004);\n\
              \x20   let {ident}: f32 = smoothstep(0.0, {ident}_band, -{ident}_sd);\n"
         );
@@ -200,12 +263,13 @@ impl BrushNodeEvaluator for PolygonEvaluator {
 
     /// The polygon's circumradius is a constant `1.0` (vertices on the unit
     /// circle; rounding stays within that circumradius), stretched by the
-    /// worst-case anisotropy the `aspect` knob can deliver. Mirrors the
-    /// circle family's aspect handling.
+    /// worst-case anisotropy the `squeeze` knob can deliver — the tip grows by
+    /// `1/a` along the stretched axis, where `a = 1 − 0.9·squeeze` is the
+    /// semi-axis (matching the emitted body).
     fn extent(&self, ctx: &ExtentCtx) -> ExtentContribution {
-        let aspect_min = ctx.port_min_value("aspect").max(0.01);
-        let aspect_max = ctx.port_max_value("aspect").max(0.01);
-        let aniso_max = (1.0 / aspect_min).max(aspect_max).max(1.0);
+        let squeeze_max = ctx.port_max_value("squeeze").clamp(0.0, 1.0);
+        let a_min = (1.0 - 0.9 * squeeze_max).max(0.01);
+        let aniso_max = (1.0 / a_min).max(1.0);
         ExtentContribution::Multiply(aniso_max)
     }
 }
