@@ -23,6 +23,6 @@ pub fn register() -> BrushNodeRegistration {
 fn evaluator() -> Box<dyn BrushNodeEvaluator> {
     Box::new(ScalarBinaryOp {
         apply: |a, b| a + b,
-        wgsl_op: "+",
+        wgsl: |a, b| format!("(({a}) + ({b}))"),
     })
 }

@@ -1,7 +1,8 @@
 //! CPU-evaluation tests for the scalar binary-math nodes (add, subtract,
-//! multiply). They share one implementation ([`darkly::brush::scalar_binary`]),
-//! so these pin the per-operator behavior — the operator token and identity
-//! default that distinguish the three.
+//! multiply, divide). They share one implementation
+//! ([`darkly::brush::scalar_binary`]), so these pin the per-operator behavior —
+//! the operator, identity default, and divide's zero guard that distinguish
+//! them.
 
 use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::paint_info::PaintInformation;
@@ -51,14 +52,27 @@ fn multiply_products_inputs() {
     assert!((eval_binary("multiply", 0.5, 0.5) - 0.25).abs() < 1e-6);
 }
 
+#[test]
+fn divide_quotients_inputs() {
+    assert!((eval_binary("divide", 0.6, 0.5) - 1.2).abs() < 1e-6);
+}
+
+/// Dividing by zero yields zero rather than inf/NaN, keeping downstream nodes
+/// numerically well-behaved.
+#[test]
+fn divide_by_zero_is_zero() {
+    assert_eq!(eval_binary("divide", 0.6, 0.0), 0.0);
+}
+
 /// Each operator's identity element is both ports' default, so an
 /// unconnected node is a no-op: `a` alone passes through unchanged.
 #[test]
 fn identity_defaults_pass_a_through() {
-    // add/subtract identity is 0 (a + 0 == a - 0 == a); multiply is 1.
+    // add/subtract identity is 0 (a + 0 == a - 0 == a); multiply/divide is 1.
     assert!((eval_binary_a_only("add", 0.6) - 0.6).abs() < 1e-6);
     assert!((eval_binary_a_only("subtract", 0.6) - 0.6).abs() < 1e-6);
     assert!((eval_binary_a_only("multiply", 0.6) - 0.6).abs() < 1e-6);
+    assert!((eval_binary_a_only("divide", 0.6) - 0.6).abs() < 1e-6);
 }
 
 /// Set only `a`, leaving `b` at its registration default (the identity).
