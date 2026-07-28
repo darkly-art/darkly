@@ -1147,6 +1147,27 @@ impl DarklyEngine {
         Ok(self.active_graph_json())
     }
 
+    /// Set (or clear, with an empty string) a node's author comment.
+    /// Deliberately bumps no version: a comment is inert w.r.t. render
+    /// output and preset identity, so it must not clear the active preset
+    /// name or invalidate the dab-thumbnail cache. `applyResult` refreshes
+    /// the frontend graph from the returned JSON regardless.
+    #[handler(returns = graph)]
+    pub fn brush_graph_set_node_comment(
+        &mut self,
+        node_id: &str,
+        comment: String,
+    ) -> Result<String, String> {
+        self.tool_session
+            .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE)
+            .graph
+            .set_node_comment(&NodeId(node_id.to_string()), comment)
+            .map_err(|e| format!("{e}"))?;
+        Ok(self.active_graph_json())
+    }
+
     /// Remove a brush-bar entry. Idempotent (missing entries aren't an
     /// error). Bumps the topology version so the frontend clears the
     /// active preset name.

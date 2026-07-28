@@ -8,6 +8,7 @@
  * change, and never travel back to Rust.
  */
 import { app } from './app.svelte';
+import { freshDocument } from './freshDocument';
 import type { BrushInfo, JsonValue, ExposedValue, ExposedPortInfo } from '../engine/protocol_gen';
 
 export type { BrushInfo };
@@ -71,6 +72,9 @@ export interface NodeInstance {
     id: string;
     type_id: string;
     ports: PortDef[];   // the node's single, unified input/output list
+    /** Free-form author annotation. Optional: Rust elides it when empty, so
+     *  the JSON snapshot omits it for un-annotated nodes. */
+    comment?: string;
 }
 
 export interface Connection {
@@ -325,7 +329,7 @@ export class BrushGraphState {
         // brush to render. The engine's procedural default graph would
         // leave `activeBrush` null and the trigger would fall back to "Custom".
         const defaultBrush =
-            this.brushes.find(b => b.name === 'Rough Watercolor') ?? this.brushes[0];
+            this.brushes.find(b => b.name === freshDocument.defaultBrushName) ?? this.brushes[0];
         if (defaultBrush) {
             await this.loadBrush(defaultBrush.name);
         } else {
@@ -604,6 +608,20 @@ export class BrushGraphState {
     async setInput(nodeId: string, inputName: string, kind: string, value: InputValue) {
         if (!app.engine) return;
         await this.applyResult(await app.engine.api.brushGraphSetInput({ node_id: nodeId, input_name: inputName, kind, value }));
+    }
+
+    /** Update a node's author comment locally (for responsive typing). */
+    setNodeCommentLocal(nodeId: string, comment: string) {
+        if (!this.graph) return;
+        const node = this.graph.nodes[nodeId];
+        if (node) node.comment = comment;
+    }
+
+    /** Commit a node's author comment via Rust. Bumps no version — a comment
+     *  is inert w.r.t. render output and preset identity. */
+    async setNodeComment(nodeId: string, comment: string) {
+        if (!app.engine) return;
+        await this.applyResult(await app.engine.api.brushGraphSetNodeComment({ node_id: nodeId, comment }));
     }
 
     /** Get a flat array of all node instances. */

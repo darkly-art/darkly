@@ -58,10 +58,42 @@
     let nodeEl: HTMLDivElement;
 
     /** Returns true if the event target is an interactive child that should
-     *  handle its own pointer events (port dots, sliders, buttons). */
+     *  handle its own pointer events (port dots, sliders, buttons, the
+     *  comment editor). */
     function isInteractiveTarget(e: PointerEvent): boolean {
         const t = e.target as HTMLElement;
-        return !!t.closest('.port-dot, .port-slider, .curve-editor, input, button, select');
+        return !!t.closest('.port-dot, .port-slider, .curve-editor, input, button, select, textarea');
+    }
+
+    // --- Author comment (inline note beneath the header) ---
+    let editingComment = $state(false);
+    let commentDraft = $state('');
+    let commentOriginal = '';
+
+    function startEditComment(e: MouseEvent) {
+        e.stopPropagation();
+        commentOriginal = node.comment ?? '';
+        commentDraft = commentOriginal;
+        editingComment = true;
+    }
+
+    /** Live local feedback while typing — no engine round-trip per keystroke. */
+    function onCommentInput() {
+        brushGraph.setNodeCommentLocal(node.id, commentDraft);
+    }
+
+    /** Commit on blur. Trims, reflects locally, and only hits the engine when
+     *  the value actually changed since editing began. */
+    function commitComment() {
+        editingComment = false;
+        const next = commentDraft.trim();
+        brushGraph.setNodeCommentLocal(node.id, next);
+        if (next !== commentOriginal) brushGraph.setNodeComment(node.id, next);
+    }
+
+    /** Focus the textarea as soon as it mounts (avoids the autofocus lint). */
+    function focusOnMount(el: HTMLTextAreaElement) {
+        el.focus();
     }
 
     function onNodeDown(e: PointerEvent) {
@@ -138,6 +170,23 @@
             <NodePreview nodeId={node.id} width={96} height={96} />
         {/if}
     </div>
+
+    {#if editingComment}
+        <textarea
+            class="node-comment-edit"
+            bind:value={commentDraft}
+            oninput={onCommentInput}
+            onblur={commitComment}
+            use:focusOnMount
+            placeholder="Note…"
+            maxlength={500}
+            rows={2}
+        ></textarea>
+    {:else if node.comment}
+        <button class="node-comment" onclick={startEditComment} title="Edit note">{node.comment}</button>
+    {:else}
+        <button class="add-note-btn" onclick={startEditComment} title="Add a note">+ note</button>
+    {/if}
 </div>
 
 <style>
@@ -185,6 +234,61 @@
     .remove-btn:hover {
         color: var(--danger);
     }
+    /* Inline author note, pinned to the bottom of the card. A top separator
+       divides it from the ports above; it inherits the card's rounded
+       bottom corners. */
+    .node-comment,
+    .add-note-btn,
+    .node-comment-edit {
+        display: block;
+        box-sizing: border-box;
+        width: 100%;
+        font-size: 10px;
+        text-align: left;
+        border-top: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+        border-radius: 0 0 5px 5px;
+    }
+    .node-comment {
+        background: none;
+        border-left: none;
+        border-right: none;
+        border-bottom: none;
+        padding: 4px 6px;
+        color: color-mix(in srgb, var(--text) 70%, transparent);
+        font-style: italic;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        cursor: text;
+        line-height: 1.3;
+    }
+    .add-note-btn {
+        background: none;
+        border-left: none;
+        border-right: none;
+        border-bottom: none;
+        padding: 3px 6px;
+        color: color-mix(in srgb, var(--text) 35%, transparent);
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 0.1s;
+    }
+    .node-widget:hover .add-note-btn,
+    .node-widget.selected .add-note-btn {
+        opacity: 1;
+    }
+    .add-note-btn:hover {
+        color: var(--accent);
+    }
+    .node-comment-edit {
+        padding: 4px 6px;
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--accent);
+        font-family: inherit;
+        line-height: 1.3;
+        resize: vertical;
+    }
+
     .node-body {
         padding: 4px 0;
     }

@@ -82,6 +82,10 @@ pub struct PortableBrush {
 pub struct PortableNode {
     #[serde(rename = "type")]
     pub type_id: String,
+    /// Free-form author annotation on this node. Empty is elided so
+    /// un-annotated nodes stay a bare `type`/`inputs` entry.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub comment: String,
     /// Input values that differ from the node registration's defaults, keyed
     /// by input name. One unified map — every input kind (scalar default,
     /// enum index, texture name, curve points, …) rides the same
@@ -208,6 +212,7 @@ impl PortableBrush {
                 id.0.clone(),
                 PortableNode {
                     type_id: node.type_id.clone(),
+                    comment: node.comment.clone(),
                     inputs,
                 },
             );
@@ -306,6 +311,11 @@ impl PortableBrush {
             }
 
             let new_id = graph.add_node(pn.type_id.clone(), ports);
+            if !pn.comment.is_empty() {
+                graph
+                    .set_node_comment(&new_id, pn.comment.clone())
+                    .expect("node just added by add_node must exist");
+            }
             id_map.insert(yaml_id.clone(), new_id);
         }
 
@@ -627,6 +637,48 @@ nodes: {}
             serde_yaml_ng::to_string(&PortableBrush::from_graph_only(&restored, registry).unwrap())
                 .unwrap();
         assert_eq!(yaml, reyaml);
+    }
+
+    /// A node comment survives the full YAML round trip (including multi-line
+    /// text, which YAML emits as a block scalar), is emitted only for the
+    /// node that has one, and re-lands on the correct id after same-kind
+    /// normalization.
+    #[test]
+    fn node_comment_round_trips() {
+        let registry = registry();
+        let mut graph = Graph::<BrushWireType>::new();
+        let a = graph.add_node("random", registry.get("random").unwrap().ports.clone());
+        let _b = graph.add_node("random", registry.get("random").unwrap().ports.clone());
+        graph
+            .set_node_comment(&a, "roughness source\nkeep frequency low".into())
+            .unwrap();
+
+        let yaml =
+            serde_yaml_ng::to_string(&PortableBrush::from_graph_only(&graph, registry).unwrap())
+                .unwrap();
+        // Only the annotated node emits `comment:`.
+        assert_eq!(yaml.matches("comment:").count(), 1);
+
+        let restored = serde_yaml_ng::from_str::<PortableBrush>(&yaml)
+            .unwrap()
+            .into_graph(registry)
+            .unwrap();
+        assert_eq!(
+            restored
+                .nodes()
+                .get(&NodeId("random".into()))
+                .unwrap()
+                .comment,
+            "roughness source\nkeep frequency low"
+        );
+        assert_eq!(
+            restored
+                .nodes()
+                .get(&NodeId("random_2".into()))
+                .unwrap()
+                .comment,
+            ""
+        );
     }
 
     /// A hand-authored file whose same-kind keys don't follow the `_N`

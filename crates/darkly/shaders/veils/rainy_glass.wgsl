@@ -101,7 +101,7 @@ fn DropLayer2(uv_in: vec2f, t: f32) -> vec2f {
 
     let d = length((st - p) * a.yx);
 
-    let mainDrop = smoothstep(0.4, 0.0, d);
+    let mainDrop = 1.0 - smoothstep(0.0, 0.4, d);
 
     let r = sqrt(smoothstep(1.0, y_drop, st.y));
     let cd = abs(st.x - x);
@@ -113,7 +113,7 @@ fn DropLayer2(uv_in: vec2f, t: f32) -> vec2f {
     let trail2 = smoothstep(0.2 * r, 0.0, cd);
     let y_frac = fract(y_uv * 10.0) + (st.y - 0.5);
     let dd = length(st - vec2f(x, y_frac));
-    let droplets = smoothstep(0.3, 0.0, dd);
+    let droplets = 1.0 - smoothstep(0.0, 0.3, dd);
     let m = mainDrop + droplets * r * trailFront;
 
     return vec2f(m, trail);
@@ -131,7 +131,7 @@ fn StaticDrops(uv_in: vec2f, t: f32) -> f32 {
     let d = length(uv - p);
 
     let fade = Saw(0.025, fract(t + n.z));
-    let c = smoothstep(0.3, 0.0, d) * fract(n.z * 10.0) * fade;
+    let c = (1.0 - smoothstep(0.0, 0.3, d)) * fract(n.z * 10.0) * fade;
     return c;
 }
 

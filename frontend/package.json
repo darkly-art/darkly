@@ -10,6 +10,7 @@
         "gen:icons": "node scripts/gen-icon-bundle.mjs",
         "dev": "vite",
         "start": "npm run wasm:build-dev && vite",
+        "start:app": "npm run wasm:build-dev && vite --mode app",
         "start:profile": "npm run wasm:build-dev-profile && vite",
         "build": "npm run wasm:build && vite build --mode app",
         "build:demo": "npm run wasm:build && vite build --mode demo",
