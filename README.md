@@ -14,7 +14,7 @@
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
-[Darkly](https://darkly.art) is a GPU-native editor written in Rust and geared towards digital artists. It aims to have everything you expect from a paint program, plus some special **[dark arts](#dark-arts)** to help you rage against the machine.
+Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), the home of happy accidents and beautiful catastrophies. Harness the **[dark arts](#dark-arts)** to craft a masterpiece that will turn your graphic design professor purple with envy. Madness isn't a bug, it's a feature.
 
 ### Darkly pledges to:
 
@@ -22,8 +22,6 @@
 - ⚛️ Run offline and without a login
 - ☯️ Never [steal or license](https://x.com/SamSantala/status/1798292952219091042) your art
 - ☮️ Stay free and open source forever
-
-Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructive workflows? Break free with Darkly, where messes are made and happy accidents emerge. Madness isn't a bug, it's a feature.
 
 **Try the demo [here](https://demo.darkly.art).**
 

@@ -29,6 +29,7 @@ pub mod stabilizers;
 pub mod state;
 pub mod stroke_buffer;
 pub mod stroke_engine;
+pub mod texture_source;
 pub mod wgsl;
 pub mod wire;
 

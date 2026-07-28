@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use darkly::brush::eval::BrushNodeEvaluator;
 use darkly::brush::input_value::InputValue;
+use darkly::brush::texture_source::{BakeChannels, ResolvedSource};
 use darkly::brush::wgsl::{compile_brush_to_wgsl, CompileError};
 use darkly::brush::wire::BrushWireType;
 use darkly::brush::BrushNodeRegistry;
@@ -457,7 +458,7 @@ fn clone_brush_compiles_with_samples_source() {
 
     assert!(compiled.samples_source, "clone must set samples_source");
     assert!(
-        compiled.graph_texture_names.is_empty(),
+        compiled.graph_sources.is_empty(),
         "clone source is not a named registry texture"
     );
     // Stroke shader declares the @group(3) source texture and samples it.
@@ -510,12 +511,13 @@ fn clone_brush_compiles_with_samples_source() {
     naga_validate(&compiled.cursor_preview_wgsl, "clone cursor_preview_wgsl");
 }
 
-/// The noise node compiles to smooth, per-channel fBm: three independent
-/// seeds drive `fbm_rot` (interpolated value noise), NOT the old blocky
-/// `node_noise_value` cell hash, and no 3D texture binding leaks in from the
-/// lib split. The fully assembled shader validates under naga.
+/// With a static field, the noise node **bakes**: its `color` output compiles
+/// to a single `textureSample` of a cached RGBA tile — not three per-fragment
+/// `fbm_tile` calls. This is the complexity-class win: the ~80-hash kernel runs
+/// once per texel at bake time, not per fragment per overlapping dab. The 3D
+/// noise lib path must not leak in, and the shader validates under naga.
 #[test]
-fn noise_node_emits_per_channel_fbm() {
+fn noise_static_color_bakes_to_single_sample() {
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
@@ -551,44 +553,89 @@ fn noise_node_emits_per_channel_fbm() {
     let plan = compile(&graph, reg.as_map()).unwrap();
     let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("noise compiles");
 
-    // Smooth, interpolated fBm — not the old blocky cell hash.
+    // Baked: no per-fragment fBm call site (the lib's `fn fbm_tile`
+    // definition is always concatenated, so match the call prefix).
     assert!(
-        compiled.stroke_wgsl.contains("fbm_rot("),
-        "noise must call the interpolated fBm helper; not found in:\n{}",
+        !compiled.stroke_wgsl.contains("fbm_tile(noise"),
+        "static noise must bake, not call fbm_tile; found it in:\n{}",
         compiled.stroke_wgsl,
     );
+    let samples = compiled
+        .stroke_wgsl
+        .matches("textureSampleLevel(graph_tex_")
+        .count();
+    assert_eq!(samples, 1, "baked color is a single RGBA tile sample");
+    // The slot is a Baked RGBA source.
+    assert_eq!(compiled.graph_sources.len(), 1);
     assert!(
-        !compiled.stroke_wgsl.contains("node_noise_value"),
-        "noise must not emit the old cell-noise call",
+        matches!(
+            &compiled.graph_sources[0],
+            ResolvedSource::Baked(spec) if spec.channels == BakeChannels::Rgba
+        ),
+        "color output must bake an RGBA tile, got {:?}",
+        compiled.graph_sources,
     );
-    // Three channels off consecutive seeds (7, 8, 9) — independent R/G/B.
-    for seed_lit in ["7u", "8u", "9u"] {
-        assert!(
-            compiled.stroke_wgsl.contains(seed_lit),
-            "noise must drive channel seed {seed_lit}; not found in:\n{}",
-            compiled.stroke_wgsl,
-        );
-    }
-    // The 2D/3D lib split must not leak the 3D texture path into the brush
-    // shader (which has no such binding) — a re-merge would fail here and also
-    // fail naga with a `@group(0)` collision.
+    // The 2D/3D lib split must not leak the 3D texture path in.
     assert!(
         !compiled.stroke_wgsl.contains("texture_3d")
             && !compiled.stroke_wgsl.contains("fbm_noise3d"),
         "brush shader must not include the 3D fbm bindings",
     );
-    // Fully assembled shader is valid under the same front-end wgpu uses.
     naga_validate(&compiled.stroke_wgsl, "noise stroke_wgsl");
     naga_validate(&compiled.cursor_preview_wgsl, "noise cursor_preview_wgsl");
 }
 
-/// Feature test: a consumer that wires only the scalar `value` output pays a
-/// **single** `fbm_rot` — the three-channel chromatic field is not emitted.
-/// This is the whole point of the monochrome output: a grain/mask brush (like
-/// `sponge`) that only needs one scalar field no longer computes three fBm
-/// fields and averages two of them away.
+/// A wired field input (here `octaves`, driven per-dab) can't be baked, so the
+/// node falls back to the live per-fragment `fbm_tile` kernel and requests no
+/// baked source. This is the other half of the static-vs-wired gate.
 #[test]
-fn noise_value_output_emits_single_fbm() {
+fn noise_wired_field_falls_back_to_live_kernel() {
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let rand = graph.add_node("random", reg.get("random").unwrap().ports.clone());
+    let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
+    let wires = [
+        (pen.clone(), "position", term.clone(), "position"),
+        (rand.clone(), "value", noise.clone(), "octaves"),
+        (noise.clone(), "color", term.clone(), "rgba"),
+    ];
+    for (fnode, fport, tnode, tport) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: fnode,
+                    port: fport.into(),
+                },
+                PortRef {
+                    node: tnode,
+                    port: tport.into(),
+                },
+            )
+            .unwrap();
+    }
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("wired noise compiles");
+
+    assert!(
+        compiled.stroke_wgsl.contains("fbm_tile(noise"),
+        "wired-field noise must emit the live fBm kernel",
+    );
+    assert!(
+        compiled.graph_sources.is_empty(),
+        "wired-field noise must not bake a tile, got {:?}",
+        compiled.graph_sources,
+    );
+    naga_validate(&compiled.stroke_wgsl, "wired noise stroke_wgsl");
+}
+
+/// A consumer that wires only the scalar `value` output bakes a single
+/// **grayscale** (R8) tile and samples it once — no chromatic RGBA tile, no
+/// per-fragment fBm. This is the monochrome grain path a brush like `sponge`
+/// takes.
+#[test]
+fn noise_static_value_bakes_grayscale() {
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
@@ -622,16 +669,22 @@ fn noise_value_output_emits_single_fbm() {
     let plan = compile(&graph, reg.as_map()).unwrap();
     let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("noise value compiles");
 
-    // Exactly one call site (calls read `fbm_rot(noise_c…_p, …)`; the lib's
-    // `fn fbm_rot(p: …)` definition is excluded by the `noise_c` prefix).
-    let calls = compiled.stroke_wgsl.matches("fbm_rot(noise_c").count();
-    assert_eq!(
-        calls, 1,
-        "value-only noise must emit exactly one fbm_rot, found {calls} in:\n{}",
-        compiled.stroke_wgsl,
+    // Baked: one grayscale tile, one sample, no live fBm kernel.
+    assert!(!compiled.stroke_wgsl.contains("fbm_tile(noise"));
+    let samples = compiled
+        .stroke_wgsl
+        .matches("textureSampleLevel(graph_tex_")
+        .count();
+    assert_eq!(samples, 1, "value-only noise samples one baked tile");
+    assert_eq!(compiled.graph_sources.len(), 1);
+    assert!(
+        matches!(
+            &compiled.graph_sources[0],
+            ResolvedSource::Baked(spec) if spec.channels == BakeChannels::Grayscale
+        ),
+        "value output must bake a grayscale tile, got {:?}",
+        compiled.graph_sources,
     );
-    // One call (not three) is itself the proof the chromatic `vec4` path was
-    // not emitted — the value output stands alone off the shared coordinate.
     naga_validate(&compiled.stroke_wgsl, "noise value stroke_wgsl");
     naga_validate(
         &compiled.cursor_preview_wgsl,
@@ -639,10 +692,9 @@ fn noise_value_output_emits_single_fbm() {
     );
 }
 
-/// Feature test: when a graph consumes **both** `value` and `color`, the
-/// sampled coordinate/frame is emitted **once** and shared — four `fbm_rot`
-/// calls (one scalar + three channels) all read the same `…_p` binding, so
-/// there's no duplicated coordinate setup.
+/// When a graph consumes **both** `value` and `color`, two tiles bake (one
+/// grayscale, one RGBA) and both sample off the **one** shared coordinate
+/// binding — no duplicated coordinate setup.
 #[test]
 fn noise_both_outputs_share_one_coord() {
     let reg = registry();
@@ -675,15 +727,28 @@ fn noise_both_outputs_share_one_coord() {
     let plan = compile(&graph, reg.as_map()).unwrap();
     let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("noise both compiles");
 
-    // One scalar + three channels = four calls, all off one coordinate binding.
-    let calls = compiled.stroke_wgsl.matches("fbm_rot(noise_c").count();
-    assert_eq!(calls, 4, "value + color must emit four fbm_rot calls");
+    // Two baked tiles (grayscale + RGBA), each sampled once, off one coord.
+    assert!(!compiled.stroke_wgsl.contains("fbm_tile(noise"));
+    let samples = compiled
+        .stroke_wgsl
+        .matches("textureSampleLevel(graph_tex_")
+        .count();
+    assert_eq!(samples, 2, "value + color sample two baked tiles");
     let coords = compiled.stroke_wgsl.matches("_p = ").count();
     assert_eq!(
         coords, 1,
         "the sampled coordinate must be bound once and shared, found {coords} in:\n{}",
         compiled.stroke_wgsl,
     );
+    assert_eq!(compiled.graph_sources.len(), 2, "one grayscale + one RGBA");
+    let has_gray = compiled.graph_sources.iter().any(
+        |s| matches!(s, ResolvedSource::Baked(spec) if spec.channels == BakeChannels::Grayscale),
+    );
+    let has_rgba = compiled
+        .graph_sources
+        .iter()
+        .any(|s| matches!(s, ResolvedSource::Baked(spec) if spec.channels == BakeChannels::Rgba));
+    assert!(has_gray && has_rgba, "both a grayscale and an RGBA tile");
     naga_validate(&compiled.stroke_wgsl, "noise both stroke_wgsl");
 }
 
@@ -1191,7 +1256,7 @@ fn static_texture_brush_preview_declares_single_graph_texture() {
         .expect("charcoal has a compiled terminal");
 
     assert_eq!(
-        compiled.graph_texture_names.len(),
+        compiled.graph_sources.len(),
         1,
         "charcoal declares one graph texture (paper)"
     );
@@ -1394,7 +1459,7 @@ fn noise_scale_wired_emits_upstream_expr_and_validates() {
 }
 
 /// A wired `octaves` input must emit the `clamp(i32(round(..)), 1, 8)` guard
-/// (i32, not u32 — `fbm_rot`'s octave arg is i32) and validate on both
+/// (i32, not u32 — `fbm_tile`'s octave arg is i32) and validate on both
 /// variants — the naga-riskiest arm of the subsumed conversion.
 #[test]
 fn noise_octaves_wired_emits_i32_clamp_and_validates() {

@@ -26,7 +26,7 @@
 //! chooses whether Dab-frame grain scales with the brush or stays
 //! pixel-locked.
 //!
-//! The math (`fbm_value_noise`, `fbm_seed_xform`, `fbm_rot`, hash, fade)
+//! The math (`fbm_value_noise`, `fbm_seed_xform`, `fbm_tile`, hash, fade)
 //! lives in the shared `shaders/lib/fbm2d.wgsl`, concatenated into every
 //! assembled brush shader; the WGSL compiler dead-strips it when no node
 //! calls through. See that file for credits.
@@ -34,7 +34,10 @@
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::input_value::InputValue;
 use crate::brush::node::BrushNodeRegistration;
-use crate::brush::wgsl::{frame_sample_coord_expr, CompileWgslCtx, NodeWgsl, SampleFrame};
+use crate::brush::texture_source::{BakeChannels, BakeKind, BakeSpec, ResolvedSource};
+use crate::brush::wgsl::{
+    frame_sample_coord_expr, sample_graph_texture, CompileWgslCtx, NodeWgsl, SampleFrame,
+};
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -134,7 +137,7 @@ pub fn register() -> BrushNodeRegistration {
                 // Monochrome scalar field — a single fBm evaluation at the base
                 // seed (`color.r`'s field), for grain / masks that only need one
                 // channel. Emitted independently of `color`, so a value-only
-                // consumer pays one `fbm_rot`, not three.
+                // consumer pays one `fbm_tile`, not three.
                 PortDef::output("value", BrushWireType::Scalar)
                     .with_natural_range(0.0, 1.0)
                     .with_description(
@@ -170,23 +173,12 @@ impl BrushNodeEvaluator for NoiseEvaluator {
         if !want_color && !want_value {
             return Ok(wgsl);
         }
-        // `scale`/`octaves`/`warp`/`roughness` are wirable Scalar inputs, so
-        // each resolves to a WGSL expression — a `{:.6}` literal when unwired,
-        // an upstream expr when wired. The runtime clamps that used to be
-        // applied to compile-time literals now live in the emitted WGSL so
-        // they hold for a wired value too.
+        // The sampling frame is shared by the baked and the live path.
+        // `scale`/`space`/`scale_with_brush`/`rotation`/`variation` shape the
+        // sample *coordinate*, not the field content — so they are applied
+        // here at sample time and one baked tile serves Canvas and Dab, every
+        // scale and every per-dab variation.
         let scale_expr = cctx.input("scale").as_f32();
-        let octaves_expr = format!(
-            "clamp(i32(round(({}))), 1, 8)",
-            cctx.input("octaves").as_f32()
-        );
-        let warp_expr = format!("max(({}), 0.0)", cctx.input("warp").as_f32());
-        let gain_expr = format!("clamp(({}), 0.0, 1.0)", cctx.input("roughness").as_f32());
-        // `seed` is baked as a `{seed}u` literal (per-channel/per-octave
-        // offsets are folded in at compile time), so it's read as a
-        // compile-time integer, not an expression.
-        let seed = cctx.input("seed").enum_index().max(0) as u32;
-
         let space = SampleFrame::from_index(cctx.input("space").enum_index().max(0) as u32);
         let scale_with_brush = cctx.input("scale_with_brush").boolean();
         let rotation = cctx.input("rotation").as_f32();
@@ -199,19 +191,97 @@ impl BrushNodeEvaluator for NoiseEvaluator {
             &variation,
             &cctx.ident("noise"),
         );
-
-        // The sampled coordinate and its frame preamble are shared by both
-        // outputs — emit them once, then let each consumed output reference
-        // `{var}_p`. A value-only consumer emits a single `fbm_rot`; a
-        // color-only consumer the three-channel field; both, four calls off
-        // one coordinate.
+        // `seed` is a compile-time integer in both paths (a wired `Int`
+        // degrades to `0` via `enum_index`).
+        let seed = cctx.input("seed").enum_index().max(0) as u32;
         let var = cctx.ident("noise_c");
+
+        // Bake the field into a cached tile when every field-defining input
+        // is static — turning the ~80-hash fBm kernel (re-run per fragment
+        // per overlapping dab) into a single `textureSample`. Any wired field
+        // input falls through to the live kernel below.
+        let field_static = ["octaves", "warp", "roughness"]
+            .iter()
+            .all(|p| !cctx.input_is_wired(p));
+
+        if field_static {
+            // Read the concrete field params and re-apply the node's exact
+            // clamps in Rust, so the baked tile matches the live path at the
+            // clamp boundaries (the bake shader must not re-clamp).
+            let octaves = cctx
+                .input("octaves")
+                .as_f32_literal()
+                .unwrap_or(4.0)
+                .round()
+                .clamp(1.0, 8.0) as i32;
+            let warp = cctx.input("warp").as_f32_literal().unwrap_or(0.6).max(0.0);
+            let gain = cctx
+                .input("roughness")
+                .as_f32_literal()
+                .unwrap_or(0.5)
+                .clamp(0.0, 1.0);
+            let kind = BakeKind::Noise {
+                seed,
+                octaves,
+                warp_q: BakeKind::quantize(warp),
+                roughness_q: BakeKind::quantize(gain),
+            };
+            let resolution = BakeSpec::resolution_for_octaves(octaves);
+
+            // The tile packs `TILE_SPAN` field units across its `[0,1)` uv, so
+            // the sample coordinate is divided by `TILE_SPAN` (and wrapped):
+            // feature size then matches the live path, and the field repeats
+            // once per `TILE_SPAN` field units — the seam lever (§ plan).
+            let mut body = format!("{frame_pre}    let {var}_p = {coord};\n");
+            let uv = format!("fract(({var}_p) / {:.1})", BakeSpec::TILE_SPAN);
+            if want_value {
+                let slot = cctx.request_source(ResolvedSource::Baked(BakeSpec {
+                    kind,
+                    channels: BakeChannels::Grayscale,
+                    resolution,
+                }));
+                let val = cctx.ident("noise_v");
+                let sample = sample_graph_texture(slot, &uv);
+                body.push_str(&format!("    let {val} = ({sample}).r;\n"));
+                wgsl.outputs.insert("value".into(), val);
+            }
+            if want_color {
+                let slot = cctx.request_source(ResolvedSource::Baked(BakeSpec {
+                    kind,
+                    channels: BakeChannels::Rgba,
+                    resolution,
+                }));
+                let cvar = cctx.ident("noise_rgba");
+                let sample = sample_graph_texture(slot, &uv);
+                body.push_str(&format!("    let {cvar} = {sample};\n"));
+                wgsl.outputs.insert("color".into(), cvar);
+            }
+            wgsl.body = body;
+            return Ok(wgsl);
+        }
+
+        // Live fallback — a wired field input means the tile can't be
+        // precomputed. `octaves`/`warp`/`roughness` resolve to WGSL
+        // expressions; the clamps live in the emitted WGSL so they hold for
+        // the wired value too.
+        let octaves_expr = format!(
+            "clamp(i32(round(({}))), 1, 8)",
+            cctx.input("octaves").as_f32()
+        );
+        let warp_expr = format!("max(({}), 0.0)", cctx.input("warp").as_f32());
+        let gain_expr = format!("clamp(({}), 0.0, 1.0)", cctx.input("roughness").as_f32());
+
+        // The sampled coordinate is shared by both outputs — emit it once,
+        // then let each consumed output reference `{var}_p`. The live field
+        // uses the same tileable `fbm_tile` and the same period the baked path
+        // does, so a wired-param brush and a static one look identical.
+        let period = BakeSpec::TILE_SPAN as i32;
         let mut body = format!("{frame_pre}    let {var}_p = {coord};\n");
 
         if want_value {
             let val = cctx.ident("noise_v");
             body.push_str(&format!(
-                "    let {val} = fbm_rot({var}_p, {seed}u, {octaves_expr}, {gain_expr}, {warp_expr});\n"
+                "    let {val} = fbm_tile({var}_p, {seed}u, {octaves_expr}, {gain_expr}, {warp_expr}, {period});\n"
             ));
             wgsl.outputs.insert("value".into(), val);
         }
@@ -219,9 +289,9 @@ impl BrushNodeEvaluator for NoiseEvaluator {
             let [r_seed, g_seed, b_seed] = CHANNEL_SEED_OFFSETS.map(|o| seed.wrapping_add(o));
             body.push_str(&format!(
                 "    let {var} = vec4<f32>(\n\
-                 \x20       fbm_rot({var}_p, {r_seed}u, {octaves_expr}, {gain_expr}, {warp_expr}),\n\
-                 \x20       fbm_rot({var}_p, {g_seed}u, {octaves_expr}, {gain_expr}, {warp_expr}),\n\
-                 \x20       fbm_rot({var}_p, {b_seed}u, {octaves_expr}, {gain_expr}, {warp_expr}),\n\
+                 \x20       fbm_tile({var}_p, {r_seed}u, {octaves_expr}, {gain_expr}, {warp_expr}, {period}),\n\
+                 \x20       fbm_tile({var}_p, {g_seed}u, {octaves_expr}, {gain_expr}, {warp_expr}, {period}),\n\
+                 \x20       fbm_tile({var}_p, {b_seed}u, {octaves_expr}, {gain_expr}, {warp_expr}, {period}),\n\
                  \x20       1.0);\n"
             ));
             wgsl.outputs.insert("color".into(), var);

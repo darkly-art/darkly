@@ -1,7 +1,7 @@
 //! Sampling-frame coordinate emitter shared by the spatial-sampling brush
 //! nodes (`noise`, `image`).
 //!
-//! Both nodes sample a field (`fbm_rot` / `textureSample`) at a `vec2<f32>`
+//! Both nodes sample a field (`fbm_tile` / `textureSample`) at a `vec2<f32>`
 //! coordinate. Historically that coordinate was always `target_pos / scale`
 //! — canvas-global pixels — so the pattern stayed pinned to the canvas and
 //! the grain "swam" under a rotating stamp. This module folds a `space`

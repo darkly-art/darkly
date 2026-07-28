@@ -139,6 +139,9 @@ pub struct BuildContext<'a> {
     /// similar assets sampled by `image` nodes). Brushes resolve their
     /// `@group(3)` bind group through this at pipeline-build time.
     pub texture_registry: &'a crate::gpu::texture_registry::TextureRegistry,
+    /// Cache of baked procedural tiles (the `noise` node's static-field
+    /// path). Baked `@group(3)` slots resolve through this at build time.
+    pub baked_sources: &'a crate::gpu::baked_source_cache::BakedSourceCache,
 }
 
 impl<'a> BuildContext<'a> {
@@ -272,6 +275,13 @@ pub struct BrushPipelines {
     /// `image` nodes bind through this at per-brush pipeline-build
     /// time. See [`crate::gpu::texture_registry::TextureRegistry`].
     texture_registry: crate::gpu::texture_registry::TextureRegistry,
+
+    // ── Engine-owned baked procedural-source cache ───────────────────
+    /// Baked tiles for the `noise` node's static-field path — the
+    /// procedural field is rendered once into a texture and sampled like
+    /// any graph texture. See
+    /// [`crate::gpu::baked_source_cache::BakedSourceCache`].
+    baked_sources: crate::gpu::baked_source_cache::BakedSourceCache,
 
     // ── Shared compiled-brush preview pipeline cache ─────────────────
     /// One cache for every compiled terminal's hover-cursor preview.
@@ -546,6 +556,7 @@ impl BrushPipelines {
         // borrow it for pipelines that need to declare graph-texture
         // bind-group layouts at build time.
         let texture_registry = crate::gpu::texture_registry::TextureRegistry::new(device, queue);
+        let baked_sources = crate::gpu::baked_source_cache::BakedSourceCache::new();
 
         // ── Per-node pipelines: harvested from node registrations ──
         let build_ctx = BuildContext {
@@ -557,6 +568,7 @@ impl BrushPipelines {
             canvas_copy_sampler: &canvas_copy_sampler,
             min_uniform_align,
             texture_registry: &texture_registry,
+            baked_sources: &baked_sources,
         };
         let mut entries: HashMap<&'static str, Box<dyn BrushPipelineEntry>> = HashMap::new();
         let pipeline_regs = crate::brush::nodes::registrations()
@@ -588,6 +600,7 @@ impl BrushPipelines {
             scratch_blit_r8_pipeline,
             entries,
             texture_registry,
+            baked_sources,
             cursor_preview_pipeline_cache,
         }
     }
@@ -597,6 +610,12 @@ impl BrushPipelines {
     /// build resolves textures here.
     pub fn texture_registry(&self) -> &crate::gpu::texture_registry::TextureRegistry {
         &self.texture_registry
+    }
+
+    /// Cache of baked procedural noise tiles. Resolved alongside the
+    /// texture registry when a brush's `@group(3)` bind group is built.
+    pub fn baked_sources(&self) -> &crate::gpu::baked_source_cache::BakedSourceCache {
+        &self.baked_sources
     }
 
     /// BGL used by every per-node pipeline's dynamic-offset uniform
@@ -763,10 +782,12 @@ impl BrushPipelines {
         let min_align = device.limits().min_uniform_buffer_offset_alignment;
         self.cursor_preview_pipeline_cache.with_pipeline(
             device,
+            queue,
             &self.uniform_bgl,
             min_align,
             compiled,
             &self.texture_registry,
+            &self.baked_sources,
             |pp| {
                 pp.render(
                     queue,
@@ -928,13 +949,16 @@ impl CursorPreviewPipelineCache {
     /// given `topology_hash`; later calls reuse. Per-brush double
     /// compile cost (stroke + preview WGSL) lives at brush *load*
     /// time, not preview time.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_pipeline<R>(
         &self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         uniform_bgl: &wgpu::BindGroupLayout,
         min_uniform_align: u32,
         compiled: &crate::brush::wgsl::CompiledBrush,
         texture_registry: &crate::gpu::texture_registry::TextureRegistry,
+        baked_sources: &crate::gpu::baked_source_cache::BakedSourceCache,
         f: impl FnOnce(&PreviewPipeline) -> R,
     ) -> R {
         let key = compiled.topology_hash;
@@ -942,6 +966,7 @@ impl CursorPreviewPipelineCache {
         let entry = pipelines.entry(key).or_insert_with(|| {
             build_cursor_preview_pipeline(
                 device,
+                queue,
                 uniform_bgl,
                 &self.dabs_bgl,
                 &self.empty_bgl,
@@ -949,6 +974,7 @@ impl CursorPreviewPipelineCache {
                 min_uniform_align,
                 compiled,
                 texture_registry,
+                baked_sources,
             )
         });
         f(entry)
@@ -965,6 +991,7 @@ impl CursorPreviewPipelineCache {
 #[allow(clippy::too_many_arguments)]
 fn build_cursor_preview_pipeline(
     device: &wgpu::Device,
+    queue: &wgpu::Queue,
     uniform_bgl: &wgpu::BindGroupLayout,
     dabs_bgl: &wgpu::BindGroupLayout,
     empty_bgl: &wgpu::BindGroupLayout,
@@ -972,6 +999,7 @@ fn build_cursor_preview_pipeline(
     min_uniform_align: u32,
     compiled: &crate::brush::wgsl::CompiledBrush,
     texture_registry: &crate::gpu::texture_registry::TextureRegistry,
+    baked_sources: &crate::gpu::baked_source_cache::BakedSourceCache,
 ) -> PreviewPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("brush-preview-shader"),
@@ -983,9 +1011,11 @@ fn build_cursor_preview_pipeline(
     // registry `_fallback` tile — the shader body samples it and the
     // cursor thumbnail comes out neutral. Named graph textures resolve
     // normally; the source slot sits after them (see `assemble_shader`).
-    let mut preview_texture_names = compiled.graph_texture_names.clone();
+    let mut preview_sources = compiled.graph_sources.clone();
     if compiled.samples_source {
-        preview_texture_names.push(crate::gpu::texture_registry::FALLBACK_TEXTURE.to_string());
+        preview_sources.push(crate::brush::texture_source::ResolvedSource::Named(
+            crate::gpu::texture_registry::FALLBACK_TEXTURE.to_string(),
+        ));
     }
 
     // Pipeline layout. When the brush samples graph textures, slot 3
@@ -993,10 +1023,10 @@ fn build_cursor_preview_pipeline(
     // doesn't reference `@group(2)` (no selection in preview), so an
     // empty placeholder BGL fills that slot to keep `@group(3)`
     // positionally correct.
-    let graph_layout = if preview_texture_names.is_empty() {
+    let graph_layout = if preview_sources.is_empty() {
         None
     } else {
-        Some(texture_registry.layout_for_count(device, preview_texture_names.len()))
+        Some(texture_registry.layout_for_count(device, preview_sources.len()))
     };
     let layout = match &graph_layout {
         None => device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1085,10 +1115,11 @@ fn build_cursor_preview_pipeline(
         }],
     });
 
-    let graph_textures = if preview_texture_names.is_empty() {
+    let graph_textures = if preview_sources.is_empty() {
         None
     } else {
-        let (_layout, bg) = texture_registry.make_bind_group(device, &preview_texture_names);
+        let (_layout, bg) =
+            texture_registry.make_bind_group(device, queue, baked_sources, &preview_sources);
         // Per-pipeline empty bind group bound at @group(2) (matches
         // the cache's `empty_bgl`). Cheap to create — no GPU
         // resources — and keeps `render` self-contained without

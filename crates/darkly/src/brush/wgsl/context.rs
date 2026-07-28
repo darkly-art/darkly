@@ -12,6 +12,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::brush::input_value::InputValue;
+use crate::brush::texture_source::ResolvedSource;
 use crate::brush::wgsl::type_system::{DabField, UniformField};
 use crate::brush::wire::BrushWireType;
 use crate::nodegraph::{NodeId, PortDef, PortDir};
@@ -79,6 +80,17 @@ impl InputBinding {
         match self {
             Self::Wired(expr) => expr.clone(),
             Self::Default(v) => format!("{:.6}", v.as_f32()),
+        }
+    }
+
+    /// The concrete `f32` value of an unwired (default) binding, or `None`
+    /// when the input is wired (a per-dab expression with no compile-time
+    /// value). Use to read a static parameter as an actual number — e.g. to
+    /// build a compile-time bake-spec key — rather than as a WGSL string.
+    pub fn as_f32_literal(&self) -> Option<f32> {
+        match self {
+            Self::Wired(_) => None,
+            Self::Default(v) => Some(v.as_f32()),
         }
     }
 
@@ -155,21 +167,23 @@ pub struct CompileWgslCtx<'a> {
     /// record (pen_input, random) only need to emit fields for
     /// consumed ports — unwired outputs cost nothing.
     pub consumed_outputs: HashSet<String>,
-    /// Shared accumulator of named graph textures requested by
-    /// `image`-style nodes. Mutated through
-    /// [`Self::request_texture`]; the compiler reads the final
-    /// list out after walking every node and copies it onto
-    /// [`crate::brush::wgsl::CompiledBrush::graph_texture_names`].
-    /// `RefCell` so `compile_wgsl(&self)` can append without forcing
-    /// a `&mut CompileWgslCtx` rewrite across every existing node.
-    pub graph_textures: &'a RefCell<Vec<String>>,
+    /// Shared, ordered, deduped accumulator of the `@group(3)` texture
+    /// slots the graph's nodes request. Each entry is a
+    /// [`ResolvedSource`] — a named registry texture (`image`) or a
+    /// baked procedural tile (`noise`). Mutated through
+    /// [`Self::request_source`] / [`Self::request_texture`]; the compiler
+    /// reads the final list out after walking every node and copies it
+    /// onto [`crate::brush::wgsl::CompiledBrush::graph_sources`].
+    /// `RefCell` so `compile_wgsl(&self)` can append without forcing a
+    /// `&mut CompileWgslCtx` rewrite across every existing node.
+    pub graph_sources: &'a RefCell<Vec<ResolvedSource>>,
     /// Set to `true` by [`Self::request_source_texture`] when a node
     /// (currently `clone_source`) asks to sample the frozen pre-stroke
     /// snapshot at `@group(3)`. The compiler copies the final value onto
     /// [`crate::brush::wgsl::CompiledBrush::samples_source`]; the terminal
     /// pipeline (`paint`) reads it to bind the snapshot per flush, and the
     /// engine reads it for the no-op / gesture-arming gate. `RefCell` for
-    /// the same `&self`-append reason as `graph_textures`.
+    /// the same `&self`-append reason as `graph_sources`.
     pub samples_source: &'a RefCell<bool>,
 }
 
@@ -214,24 +228,33 @@ impl CompileWgslCtx<'_> {
         format!("n{}_{}", self.node_id.0, base)
     }
 
-    /// Reserve (or look up) a `@group(3)` binding slot for the named
-    /// graph texture. Returns the slot index — `0` for the first
-    /// distinct texture in the graph, `1` for the second, and so on.
-    /// Re-requesting the same name returns the existing slot.
+    /// Reserve (or look up) a `@group(3)` binding slot for a resolved
+    /// texture source. Returns the slot index — `0` for the first
+    /// distinct source in the graph, `1` for the second, and so on.
+    /// Re-requesting an equal source (same name, or same [`BakeSpec`])
+    /// returns the existing slot, so brushes that reference one field
+    /// twice bind it once.
     ///
-    /// Use the returned index to reference the texture in emitted
-    /// WGSL as `graph_tex_{slot}` (the shared sampler is always
-    /// `graph_smp`). The compiler resolves the textures against
-    /// [`crate::gpu::texture_registry::TextureRegistry`] at
-    /// per-brush pipeline-build time.
-    pub fn request_texture(&self, name: &str) -> u32 {
-        let mut list = self.graph_textures.borrow_mut();
-        if let Some(idx) = list.iter().position(|n| n == name) {
+    /// Use the returned index to reference the texture in emitted WGSL
+    /// as `graph_tex_{slot}` (the shared sampler is always `graph_smp`).
+    /// The compiler resolves each source at per-brush pipeline-build
+    /// time — [`ResolvedSource::Named`] against the
+    /// [`crate::gpu::texture_registry::TextureRegistry`],
+    /// [`ResolvedSource::Baked`] against the bake cache.
+    pub fn request_source(&self, source: ResolvedSource) -> u32 {
+        let mut list = self.graph_sources.borrow_mut();
+        if let Some(idx) = list.iter().position(|s| *s == source) {
             return idx as u32;
         }
         let idx = list.len() as u32;
-        list.push(name.to_string());
+        list.push(source);
         idx
+    }
+
+    /// Reserve (or look up) a slot for a named registry texture — the
+    /// [`ResolvedSource::Named`] shim over [`Self::request_source`].
+    pub fn request_texture(&self, name: &str) -> u32 {
+        self.request_source(ResolvedSource::Named(name.to_string()))
     }
 
     /// Reserve the `@group(3)` slot holding the frozen pre-stroke source
@@ -248,7 +271,7 @@ impl CompileWgslCtx<'_> {
     /// slot is always `0` today.
     pub fn request_source_texture(&self) -> u32 {
         *self.samples_source.borrow_mut() = true;
-        self.graph_textures.borrow().len() as u32
+        self.graph_sources.borrow().len() as u32
     }
 }
 
