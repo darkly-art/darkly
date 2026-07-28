@@ -62,7 +62,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_icon("fa6-solid:circle-notch")
                     .with_description("Round the corners: 0% = sharp, 100% = circle."),
                 PortDef::input("softness", BrushWireType::Scalar)
-                    .with_range(0.0, 1.0, 0.5)
+                    .with_range(0.0, 1.0, 0.0)
                     .with_natural_range(0.0, 1.0)
                     .with_label("Softness")
                     .with_unit(UnitType::Percent)
@@ -222,7 +222,13 @@ impl BrushNodeEvaluator for PolygonEvaluator {
         let ident = cctx.ident("polygon");
         wgsl.body = format!(
             "    let {ident}_beta: f32 = ({squeeze_angle});\n\
-             \x20   let {ident}_phi: f32 = -(({rotation}) + ({rotation_input}) + u.intrinsic.view_rotation);\n\
+             \x20   let {ident}_n: f32 = max(round(({points})), 3.0);\n\
+             \x20   // Base orientation: half the angular step (π/n) rotates the\n\
+             \x20   // vertex-up polygon so a flat edge sits horizontal — the natural\n\
+             \x20   // \"resting on a base\" look. Reduces to +45° for a square (n=4),\n\
+             \x20   // 60° for a triangle, 30° for a hexagon. Rotation inputs and view\n\
+             \x20   // compensation add on top.\n\
+             \x20   let {ident}_phi: f32 = -(3.14159265358979323846 / {ident}_n + ({rotation}) + ({rotation_input}) + u.intrinsic.view_rotation);\n\
              \x20   // Semi-axis from squeeze (0% ⇒ round, 100% ⇒ 0.1).\n\
              \x20   let {ident}_a: f32 = clamp(1.0 - 0.9 * clamp(({squeeze}), 0.0, 1.0), 0.01, 1.0);\n\
              \x20   // Inverse squeeze transform: screen = R(β−φ)·diag(a,1/a)·R(−β)·p,\n\
@@ -235,7 +241,6 @@ impl BrushNodeEvaluator for PolygonEvaluator {
              \x20       mat2x2<f32>({ident}_cbp, {ident}_sbp, -{ident}_sbp, {ident}_cbp)\n\
              \x20       * mat2x2<f32>({ident}_a, 0.0, 0.0, 1.0 / {ident}_a)\n\
              \x20       * mat2x2<f32>({ident}_cb, -{ident}_sb, {ident}_sb, {ident}_cb);\n\
-             \x20   let {ident}_n: f32 = max(round(({points})), 3.0);\n\
              \x20   let {ident}_round: f32 = clamp(({rounding}), 0.0, 1.0);\n\
              \x20   let {ident}_cr: f32 = 1.0 - {ident}_round;\n\
              \x20   // Exact screen distance to the squeezed polygon, then a real\n\
