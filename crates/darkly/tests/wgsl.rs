@@ -582,6 +582,111 @@ fn noise_node_emits_per_channel_fbm() {
     naga_validate(&compiled.cursor_preview_wgsl, "noise cursor_preview_wgsl");
 }
 
+/// Feature test: a consumer that wires only the scalar `value` output pays a
+/// **single** `fbm_rot` — the three-channel chromatic field is not emitted.
+/// This is the whole point of the monochrome output: a grain/mask brush (like
+/// `sponge`) that only needs one scalar field no longer computes three fBm
+/// fields and averages two of them away.
+#[test]
+fn noise_value_output_emits_single_fbm() {
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
+    graph
+        .set_port_value(&noise, "seed", InputValue::Int(7))
+        .unwrap();
+    let paint_color = graph.add_node("paint_color", reg.get("paint_color").unwrap().ports.clone());
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
+    // `noise.value` drives a scalar terminal input (`flow`); `color` is left
+    // unconsumed so only the monochrome path should be emitted.
+    let wires = [
+        (pen.clone(), "position", term.clone(), "position"),
+        (paint_color.clone(), "color", term.clone(), "rgba"),
+        (noise.clone(), "value", term.clone(), "flow"),
+    ];
+    for (fnode, fport, tnode, tport) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: fnode,
+                    port: fport.into(),
+                },
+                PortRef {
+                    node: tnode,
+                    port: tport.into(),
+                },
+            )
+            .unwrap();
+    }
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("noise value compiles");
+
+    // Exactly one call site (calls read `fbm_rot(noise_c…_p, …)`; the lib's
+    // `fn fbm_rot(p: …)` definition is excluded by the `noise_c` prefix).
+    let calls = compiled.stroke_wgsl.matches("fbm_rot(noise_c").count();
+    assert_eq!(
+        calls, 1,
+        "value-only noise must emit exactly one fbm_rot, found {calls} in:\n{}",
+        compiled.stroke_wgsl,
+    );
+    // One call (not three) is itself the proof the chromatic `vec4` path was
+    // not emitted — the value output stands alone off the shared coordinate.
+    naga_validate(&compiled.stroke_wgsl, "noise value stroke_wgsl");
+    naga_validate(
+        &compiled.cursor_preview_wgsl,
+        "noise value cursor_preview_wgsl",
+    );
+}
+
+/// Feature test: when a graph consumes **both** `value` and `color`, the
+/// sampled coordinate/frame is emitted **once** and shared — four `fbm_rot`
+/// calls (one scalar + three channels) all read the same `…_p` binding, so
+/// there's no duplicated coordinate setup.
+#[test]
+fn noise_both_outputs_share_one_coord() {
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
+    graph
+        .set_port_value(&noise, "seed", InputValue::Int(7))
+        .unwrap();
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
+    let wires = [
+        (pen.clone(), "position", term.clone(), "position"),
+        (noise.clone(), "color", term.clone(), "rgba"),
+        (noise.clone(), "value", term.clone(), "flow"),
+    ];
+    for (fnode, fport, tnode, tport) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: fnode,
+                    port: fport.into(),
+                },
+                PortRef {
+                    node: tnode,
+                    port: tport.into(),
+                },
+            )
+            .unwrap();
+    }
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("noise both compiles");
+
+    // One scalar + three channels = four calls, all off one coordinate binding.
+    let calls = compiled.stroke_wgsl.matches("fbm_rot(noise_c").count();
+    assert_eq!(calls, 4, "value + color must emit four fbm_rot calls");
+    let coords = compiled.stroke_wgsl.matches("_p = ").count();
+    assert_eq!(
+        coords, 1,
+        "the sampled coordinate must be bound once and shared, found {coords} in:\n{}",
+        compiled.stroke_wgsl,
+    );
+    naga_validate(&compiled.stroke_wgsl, "noise both stroke_wgsl");
+}
+
 /// Feature test: the `polygon` node compiles and emits its signed-distance
 /// helper plus a `smoothstep` feather in both shader variants, and both
 /// validate under naga.

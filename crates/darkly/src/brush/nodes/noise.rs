@@ -4,8 +4,9 @@
 //! Outputs a chromatic RGBA `color`: each channel is an independent fBm
 //! field driven by `seed + {0,1,2}`, so R, G, and B carry uncorrelated
 //! noise — genuine color grain / cloud. For a monochrome field (paper
-//! grain, scatter masks) desaturate downstream via `noise → split_color
-//! → luminance`, which averages the three channels back into one scalar.
+//! grain, scatter masks) take the scalar `value` output instead — a single
+//! fBm field at the base seed, one third the per-fragment cost of computing
+//! three channels and averaging them back down.
 //!
 //! The field is **interpolated value noise** (bilinear blend of corner
 //! hashes through a quintic fade — smooth and resolution-independent, not
@@ -130,6 +131,15 @@ pub fn register() -> BrushNodeRegistration {
                     .with_description(
                     "Chromatic RGBA fBm noise at the fragment's sample position — each channel an independent field",
                 ),
+                // Monochrome scalar field — a single fBm evaluation at the base
+                // seed (`color.r`'s field), for grain / masks that only need one
+                // channel. Emitted independently of `color`, so a value-only
+                // consumer pays one `fbm_rot`, not three.
+                PortDef::output("value", BrushWireType::Scalar)
+                    .with_natural_range(0.0, 1.0)
+                    .with_description(
+                        "Monochrome fBm noise at the sample position — a single scalar field for grain and masks",
+                    ),
             ],
             is_gpu: false,
             is_terminal: false,
@@ -147,12 +157,17 @@ impl BrushNodeEvaluator for NoiseEvaluator {
     /// meaningful per-fragment. Same shape as [`super::image`]'s CPU
     /// stub for the same reason.
     fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
-        vec![("color".into(), ScalarValue::Vec4([0.5, 0.5, 0.5, 1.0]))]
+        vec![
+            ("color".into(), ScalarValue::Vec4([0.5, 0.5, 0.5, 1.0])),
+            ("value".into(), ScalarValue::Scalar(0.5)),
+        ]
     }
 
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
-        if !cctx.consumed_outputs.contains("color") {
+        let want_color = cctx.consumed_outputs.contains("color");
+        let want_value = cctx.consumed_outputs.contains("value");
+        if !want_color && !want_value {
             return Ok(wgsl);
         }
         // `scale`/`octaves`/`warp`/`roughness` are wirable Scalar inputs, so
@@ -185,18 +200,33 @@ impl BrushNodeEvaluator for NoiseEvaluator {
             &cctx.ident("noise"),
         );
 
-        let [r_seed, g_seed, b_seed] = CHANNEL_SEED_OFFSETS.map(|o| seed.wrapping_add(o));
+        // The sampled coordinate and its frame preamble are shared by both
+        // outputs — emit them once, then let each consumed output reference
+        // `{var}_p`. A value-only consumer emits a single `fbm_rot`; a
+        // color-only consumer the three-channel field; both, four calls off
+        // one coordinate.
         let var = cctx.ident("noise_c");
-        wgsl.body = format!(
-            "{frame_pre}\
-             \x20   let {var}_p = {coord};\n\
-             \x20   let {var} = vec4<f32>(\n\
-             \x20       fbm_rot({var}_p, {r_seed}u, {octaves_expr}, {gain_expr}, {warp_expr}),\n\
-             \x20       fbm_rot({var}_p, {g_seed}u, {octaves_expr}, {gain_expr}, {warp_expr}),\n\
-             \x20       fbm_rot({var}_p, {b_seed}u, {octaves_expr}, {gain_expr}, {warp_expr}),\n\
-             \x20       1.0);\n"
-        );
-        wgsl.outputs.insert("color".into(), var);
+        let mut body = format!("{frame_pre}    let {var}_p = {coord};\n");
+
+        if want_value {
+            let val = cctx.ident("noise_v");
+            body.push_str(&format!(
+                "    let {val} = fbm_rot({var}_p, {seed}u, {octaves_expr}, {gain_expr}, {warp_expr});\n"
+            ));
+            wgsl.outputs.insert("value".into(), val);
+        }
+        if want_color {
+            let [r_seed, g_seed, b_seed] = CHANNEL_SEED_OFFSETS.map(|o| seed.wrapping_add(o));
+            body.push_str(&format!(
+                "    let {var} = vec4<f32>(\n\
+                 \x20       fbm_rot({var}_p, {r_seed}u, {octaves_expr}, {gain_expr}, {warp_expr}),\n\
+                 \x20       fbm_rot({var}_p, {g_seed}u, {octaves_expr}, {gain_expr}, {warp_expr}),\n\
+                 \x20       fbm_rot({var}_p, {b_seed}u, {octaves_expr}, {gain_expr}, {warp_expr}),\n\
+                 \x20       1.0);\n"
+            ));
+            wgsl.outputs.insert("color".into(), var);
+        }
+        wgsl.body = body;
         Ok(wgsl)
     }
 }
@@ -217,9 +247,10 @@ mod tests {
         assert_eq!(reg.node.type_id, "noise");
         assert_eq!(reg.node.category, "texture");
         // rotation, variation, scale, seed, octaves, warp, roughness, space,
-        // scale_with_brush inputs plus the color output — all unified.
-        assert_eq!(reg.node.ports.len(), 10);
+        // scale_with_brush inputs plus the color and value outputs — all unified.
+        assert_eq!(reg.node.ports.len(), 11);
         assert!(reg.node.ports.iter().any(|p| p.name == "color"));
+        assert!(reg.node.ports.iter().any(|p| p.name == "value"));
         assert!(reg.node.ports.iter().any(|p| p.name == "rotation"));
         assert!(reg.node.ports.iter().any(|p| p.name == "variation"));
         for name in [
