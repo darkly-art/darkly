@@ -191,8 +191,6 @@
         left: 0;
         top: 0;
         min-width: 140px;
-        /* Cap the width so a long note wraps instead of swelling the node. */
-        max-width: 220px;
         background: var(--bg-active);
         border: 1px solid color-mix(in srgb, var(--text) 15%, transparent);
         border-radius: 6px;
@@ -240,7 +238,11 @@
     .node-comment-edit {
         display: block;
         box-sizing: border-box;
-        width: 100%;
+        /* Fill the node's width (set by its ports) but contribute nothing to
+           it: `width: 0; min-width: 100%` lets the note stretch to the card
+           edge while a long note wraps instead of swelling the node. */
+        width: 0;
+        min-width: 100%;
         font-size: 10px;
         text-align: left;
         border-top: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
