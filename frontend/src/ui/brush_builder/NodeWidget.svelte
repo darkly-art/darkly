@@ -195,6 +195,8 @@
         left: 0;
         top: 0;
         min-width: 140px;
+        /* Cap the width so a long note wraps instead of swelling the node. */
+        max-width: 220px;
         background: var(--bg-active);
         border: 1px solid color-mix(in srgb, var(--text) 15%, transparent);
         border-radius: 6px;
