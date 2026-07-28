@@ -27,6 +27,17 @@
     let color = $derived(WIRE_COLORS[port.wire_type] ?? '#888');
     let connected = $derived(brushGraph.isPortConnected(nodeId, port.name, port.dir));
 
+    /** The port label to display, or '' when it merely repeats the node's
+     *  title — redundant text the node header already conveys (e.g. the Curve
+     *  node's sole "Curve" input). Meaningful labels like "Pressure Curve"
+     *  survive. */
+    let labelText = $derived.by(() => {
+        const raw = regPort?.label || port.name;
+        const node = brushGraph.graph?.nodes[nodeId];
+        const title = node ? (brushGraph.getNodeType(node.type_id)?.display_name ?? node.type_id) : '';
+        return raw.toLowerCase() === title.toLowerCase() ? '' : raw;
+    });
+
     /** Numeric view of the input's value for the slider path (Scalar/Int/Bool).
      *  A bool value may arrive as a real boolean or a number. */
     let numValue = $derived(
@@ -388,12 +399,12 @@
                     class="port-slider-fill"
                     style="width: {sliderPercent}%; background: {color};"
                 ></div>
-                <span class="port-slider-label">{regPort?.label || port.name}</span>
+                <span class="port-slider-label">{labelText}</span>
                 <span class="port-slider-value">{displayValue}</span>
             </div>
         {/if}
     {:else if showEnum}
-        <span class="port-label">{regPort?.label || port.name}</span>
+        {#if labelText}<span class="port-label">{labelText}</span>{/if}
         <select
             class="port-select"
             value={Number(port.value)}
@@ -405,7 +416,7 @@
             {/each}
         </select>
     {:else if showString}
-        <span class="port-label">{regPort?.label || port.name}</span>
+        {#if labelText}<span class="port-label">{labelText}</span>{/if}
         <input
             class="port-text-input"
             type="text"
@@ -417,18 +428,22 @@
     {:else if showCurve}
         <!-- A curve is a full-height block widget, so it gets its own header
              row (label + expose) with the editor stacked below — it can't sit
-             inside the fixed-height inline row the scalar widgets use. -->
-        <div class="port-block-head">
-            <span class="port-label">{regPort?.label || port.name}</span>
-            {#if canExpose}{@render exposeBtn()}{/if}
-        </div>
+             inside the fixed-height inline row the scalar widgets use. The row
+             is dropped entirely when it would hold nothing (a redundant label
+             and no expose toggle, as on the Curve node). -->
+        {#if labelText || canExpose}
+            <div class="port-block-head">
+                {#if labelText}<span class="port-label">{labelText}</span>{/if}
+                {#if canExpose}{@render exposeBtn()}{/if}
+            </div>
+        {/if}
         <CurveEditor
             points={port.value as Array<[number, number]>}
             oninput={(pts) => brushGraph.setInputLocal(nodeId, port.name, pts)}
             onchange={(pts) => brushGraph.setInput(nodeId, port.name, 'curve', JSON.stringify(pts))}
         />
     {:else}
-        <span class="port-label">{regPort?.label || port.name}</span>
+        {#if labelText}<span class="port-label">{labelText}</span>{/if}
     {/if}
     {#if canExpose && !showCurve}{@render exposeBtn()}{/if}
     {#if showSourceHandle}

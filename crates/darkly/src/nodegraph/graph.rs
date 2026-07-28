@@ -501,6 +501,12 @@ pub struct NodeInstance<W: WireKind> {
     /// node's single, unified input/output list — the per-instance authored
     /// value of every input lives on its [`PortDef::value`].
     pub ports: Vec<PortDef<W>>,
+    /// Free-form author annotation on this node instance. Empty means none.
+    /// Inert w.r.t. compilation and render output; carried purely so a brush
+    /// author can leave explanatory notes on a node. Serializable graph state
+    /// (survives save/load through both the portable YAML and the bundle).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub comment: String,
 }
 
 // ── Errors ───────────────────────────────────────────────────────────
@@ -712,6 +718,7 @@ impl<W: WireKind> Graph<W> {
                 id: id.clone(),
                 type_id,
                 ports,
+                comment: String::new(),
             },
         );
         id
@@ -978,6 +985,16 @@ impl<W: WireKind> Graph<W> {
                 port: port_name.to_string(),
             })?;
         port.value = value;
+        Ok(())
+    }
+
+    /// Set (or clear, with an empty string) a node's author comment.
+    pub fn set_node_comment(&mut self, id: &NodeId, comment: String) -> Result<(), GraphError> {
+        let node = self
+            .nodes
+            .get_mut(id)
+            .ok_or_else(|| GraphError::NodeNotFound(id.clone()))?;
+        node.comment = comment;
         Ok(())
     }
 
@@ -1400,6 +1417,45 @@ mod tests {
         let g2: Graph<TestWireKind> = serde_json::from_str(&json).unwrap();
         assert_eq!(g2.nodes.len(), 2);
         assert_eq!(g2.connections.len(), 1);
+    }
+
+    #[test]
+    fn set_node_comment_sets_and_clears() {
+        let mut g = Graph::<TestWireKind>::new();
+        let a = g.add_node("source", vec![scalar_out("out")]);
+        assert_eq!(g.nodes[&a].comment, "");
+
+        g.set_node_comment(&a, "explanatory wisdom".into()).unwrap();
+        assert_eq!(g.nodes[&a].comment, "explanatory wisdom");
+
+        g.set_node_comment(&a, String::new()).unwrap();
+        assert_eq!(g.nodes[&a].comment, "");
+    }
+
+    #[test]
+    fn set_node_comment_unknown_node_errors() {
+        let mut g = Graph::<TestWireKind>::new();
+        let err = g
+            .set_node_comment(&NodeId("ghost".into()), "hi".into())
+            .unwrap_err();
+        assert_eq!(err, GraphError::NodeNotFound(NodeId("ghost".into())));
+    }
+
+    /// A comment is inert but must survive the raw-`Graph` serde that backs
+    /// the `.darkly-brush` bundle. Empty comments are elided from the JSON.
+    #[test]
+    fn comment_survives_serde_and_elides_when_empty() {
+        let mut g = Graph::<TestWireKind>::new();
+        let a = g.add_node("source", vec![scalar_out("out")]);
+        let b = g.add_node("sink", vec![scalar_in("in")]);
+        g.set_node_comment(&a, "keep me".into()).unwrap();
+
+        let json = serde_json::to_string(&g).unwrap();
+        assert_eq!(json.matches("\"comment\"").count(), 1);
+
+        let g2: Graph<TestWireKind> = serde_json::from_str(&json).unwrap();
+        assert_eq!(g2.nodes[&a].comment, "keep me");
+        assert_eq!(g2.nodes[&b].comment, "");
     }
 
     // ── UnitType tests ──────────────────────────────────────────────
