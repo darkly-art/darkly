@@ -27,15 +27,17 @@
     let color = $derived(WIRE_COLORS[port.wire_type] ?? '#888');
     let connected = $derived(brushGraph.isPortConnected(nodeId, port.name, port.dir));
 
-    /** The port label to display, or '' when it merely repeats the node's
-     *  title — redundant text the node header already conveys (e.g. the Curve
-     *  node's sole "Curve" input). Meaningful labels like "Pressure Curve"
-     *  survive. */
-    let labelText = $derived.by(() => {
-        const raw = regPort?.label || port.name;
+    let label = $derived(regPort?.label || port.name);
+
+    /** A block widget (curve) gets its own standalone header row. When that
+     *  lone label merely repeats the node's title it's pure redundancy — the
+     *  node header already says it — so we suppress it and drop the empty row.
+     *  Inline labels (sliders/enums) are NOT suppressed even when they match
+     *  the title: there they disambiguate one control among sibling ports. */
+    let blockLabelRedundant = $derived.by(() => {
         const node = brushGraph.graph?.nodes[nodeId];
         const title = node ? (brushGraph.getNodeType(node.type_id)?.display_name ?? node.type_id) : '';
-        return raw.toLowerCase() === title.toLowerCase() ? '' : raw;
+        return label.toLowerCase() === title.toLowerCase();
     });
 
     /** Numeric view of the input's value for the slider path (Scalar/Int/Bool).
@@ -399,12 +401,12 @@
                     class="port-slider-fill"
                     style="width: {sliderPercent}%; background: {color};"
                 ></div>
-                <span class="port-slider-label">{labelText}</span>
+                <span class="port-slider-label">{label}</span>
                 <span class="port-slider-value">{displayValue}</span>
             </div>
         {/if}
     {:else if showEnum}
-        {#if labelText}<span class="port-label">{labelText}</span>{/if}
+        <span class="port-label">{label}</span>
         <select
             class="port-select"
             value={Number(port.value)}
@@ -416,7 +418,7 @@
             {/each}
         </select>
     {:else if showString}
-        {#if labelText}<span class="port-label">{labelText}</span>{/if}
+        <span class="port-label">{label}</span>
         <input
             class="port-text-input"
             type="text"
@@ -431,9 +433,9 @@
              inside the fixed-height inline row the scalar widgets use. The row
              is dropped entirely when it would hold nothing (a redundant label
              and no expose toggle, as on the Curve node). -->
-        {#if labelText || canExpose}
+        {#if !blockLabelRedundant || canExpose}
             <div class="port-block-head">
-                {#if labelText}<span class="port-label">{labelText}</span>{/if}
+                {#if !blockLabelRedundant}<span class="port-label">{label}</span>{/if}
                 {#if canExpose}{@render exposeBtn()}{/if}
             </div>
         {/if}
@@ -443,7 +445,7 @@
             onchange={(pts) => brushGraph.setInput(nodeId, port.name, 'curve', JSON.stringify(pts))}
         />
     {:else}
-        {#if labelText}<span class="port-label">{labelText}</span>{/if}
+        <span class="port-label">{label}</span>
     {/if}
     {#if canExpose && !showCurve}{@render exposeBtn()}{/if}
     {#if showSourceHandle}
