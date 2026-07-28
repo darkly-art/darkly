@@ -21,6 +21,7 @@ pub mod portable;
 pub mod preview_renderer;
 pub mod read_mirror_terminal;
 pub mod save_points;
+pub mod scalar_binary;
 pub mod scratch;
 pub mod spacing;
 pub mod stabilizer;
