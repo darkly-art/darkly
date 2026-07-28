@@ -4,31 +4,39 @@ nodes:
   brush_settings:
     type: brush_settings
     inputs:
-      size: 0.5685366988182068
-      spacing: 0.009999999776482582
+      size: 0.4
+      spacing: 0.01
       stabilize: 1.0
   circle:
     type: circle
   curve:
     type: curve
+    comment: pen pressure affects the threshold of hair volume
     inputs:
       curve:
       - - 0.0
         - 1.0
-      - - 0.6688293
-        - 0.49044272
+      - - 0.682973
+        - 0.5305826
       - - 1.0
         - 0.0
+  divide:
+    type: divide
+    comment: we have to divide the distance factor by the brush size, to keep the 'twirl' setting consistent
   levels:
     type: levels
   multiply:
     type: multiply
     inputs:
-      b: 0.010228337720036507
+      b: 0.005
+  multiply_2:
+    type: multiply
+    inputs:
+      a: 0.5
   noise:
     type: noise
     inputs:
-      scale: 12.040367126464844
+      scale: 12
       scale_with_brush: false
       space: 1
   paint:
@@ -45,13 +53,16 @@ nodes:
       a: 0.11924592405557632
 connections:
 - add.result -> levels.input
+- brush_settings.size -> divide.b
 - circle.mask -> add.b
 - curve.output -> levels.in_low
+- divide.result -> multiply.a
 - levels.output -> stamp.tip
-- multiply.result -> noise.rotation
+- multiply.result -> multiply_2.b
+- multiply_2.result -> noise.rotation
 - noise.value -> subtract.b
 - paint_color.color -> stamp.color
-- pen_input.distance -> multiply.a
+- pen_input.distance -> divide.a
 - pen_input.position -> paint.position
 - pen_input.pressure -> curve.input
 - stamp.dab -> paint.rgba
@@ -59,5 +70,9 @@ connections:
 exposed_ports:
   brush_settings.stabilize: {}
   brush_settings.size: {}
+  multiply_2.a:
+    label: Twirl
+    description: Twirliness factor
+    icon: tabler:galaxy
   paint.flow: {}
   paint.opacity: {}
