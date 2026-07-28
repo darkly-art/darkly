@@ -354,6 +354,38 @@ fn size_scrub_does_not_change_active_dab_pixels() {
     );
 }
 
+#[test]
+fn set_node_comment_does_not_advance_topology_version() {
+    // A node comment is inert w.r.t. render output and preset identity, so
+    // setting one must NOT advance `brush_topology_version` — otherwise the
+    // brush bar would flip the active preset name to "Custom" the moment a
+    // user annotated a node. The comment must still land on the graph.
+    let mut engine = fresh_engine();
+
+    let target = engine
+        .brush_exposed_ports()
+        .into_iter()
+        .next()
+        .expect("default brush exposes at least one port");
+
+    let topo_before = engine.brush_topology_version();
+    engine
+        .brush_graph_set_node_comment(&target.node_id, "words of explanatory wisdom".to_string())
+        .expect("set comment");
+    assert_eq!(
+        engine.brush_topology_version(),
+        topo_before,
+        "setting a node comment must not advance the topology version"
+    );
+
+    let graph = engine.active_brush_graph();
+    let node = graph
+        .nodes()
+        .get(&darkly::nodegraph::NodeId(target.node_id.clone()))
+        .expect("target node exists in the active graph");
+    assert_eq!(node.comment, "words of explanatory wisdom");
+}
+
 /// The active-brush capabilities drive two frontend behaviours: the
 /// erase toggle in the brush-tool options bar (`supports_erase`) and
 /// the live preview strips' iconify fallback (`preview_fallback_icon`,
