@@ -457,22 +457,28 @@ fn graph_change_triggers_active_dab_rebake() {
 
 #[test]
 fn exposed_enum_input_surfaces_as_dropdown_control() {
-    // A brush can expose an enum input (Rough Watercolor exposes
-    // `circle.algorithm`) so the brush bar renders a dropdown. The read
-    // builder must surface it as an `Enum` control carrying its option
-    // labels and current index — earlier it skipped every wire type but
-    // Scalar/Bool (`_ => continue`), so an exposed enum never reached the
-    // bar at all. This is the feature's end-to-end backend guard.
+    // An exposed enum input must surface as an `Enum` control carrying its
+    // option labels and current index — earlier the read builder skipped
+    // every wire type but Scalar/Bool (`_ => continue`), so an exposed enum
+    // never reached the bar at all. This is the feature's end-to-end backend
+    // guard.
+    //
+    // `circle.algorithm` is an enum input but is deliberately not a brush-bar
+    // control on any builtin, so expose it here: the guard covers the read
+    // builder's wire-type handling, not which ports a brush chooses to expose.
     let mut engine = fresh_engine();
     engine
         .brush_load("Rough Watercolor")
         .expect("Rough Watercolor is a built-in brush");
+    engine
+        .brush_graph_expose_port("circle", "algorithm")
+        .expect("circle.algorithm is an exposable enum input");
 
     let algo = engine
         .brush_exposed_ports()
         .into_iter()
         .find(|p| p.port_name == "algorithm")
-        .expect("Rough Watercolor exposes circle.algorithm");
+        .expect("exposing circle.algorithm surfaces it on the bar");
 
     match algo.data {
         ExposedValue::Enum { value, options } => {
