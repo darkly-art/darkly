@@ -14,7 +14,9 @@
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
-[Darkly](https://darkly.art) is a GPU-native editor written in Rust and geared towards digital artists. It aims to have everything you expect from a paint program, plus some special **[dark arts](#dark-arts)** to help you rage against the machine.
+Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophies. Harness the **[dark arts](#dark-arts)**, and craft a chaotic masterpiece that will make your graphic design professor roll over in his grave. Madness isn't a bug, it's a feature.
+
+Darkly is a graphical editor for digital artists and painters. It's GPU-native, written in Rust, and runs on all platforms. It has Photoshop-like features - layers, masks, and a powerful brush engine, plus some unique features like native Blender integration. 
 
 ### Darkly pledges to:
 
@@ -23,17 +25,15 @@
 - ☯️ Never [steal or license](https://x.com/SamSantala/status/1798292952219091042) your art
 - ☮️ Stay free and open source forever
 
-Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructive workflows? Break free with Darkly, where messes are made and happy accidents emerge. Madness isn't a bug, it's a feature.
-
 **Try the demo [here](https://demo.darkly.art).**
 
-[![darkly](https://github.com/user-attachments/assets/647404d5-c2fe-4f9f-a1f9-7b532c3a3cd0)](https://demo.darkly.art)
+https://github.com/user-attachments/assets/1fc0632d-5846-4c64-bac8-e39b0794b8b5
 
 ## Features
 
 ### Node-Based Brush Engine
 
-![brush-engine-screenshot](https://github.com/user-attachments/assets/28baa4dc-9cf1-4d9f-b1e3-4ccbe5943171)
+![brush-engine-screenshot](https://github.com/user-attachments/assets/67f8826e-a5b5-4cbe-83e1-3e29246c293c)
 
 Darkly features a unified node-based brush system. Every brush type -- clone, liquify, watercolor, etc. -- all live in a single engine. This enables infinite customizability, mixing and matching of brush features, and on-the-fly creation of custom brushes.
 
@@ -45,9 +45,14 @@ On first launch, Darkly will ask you which editor preset you want.  Currently we
 
 ### Hotkey Cheatsheet
 
+Full documentation is on the way; however, Darkly is mostly self-documenting, meaning if you can't find something, you can quickly search with `CTRL+F` and immediately see its hotkey, description, etc. - without leaving the app.
+
+<img src="https://github.com/user-attachments/assets/370043b6-24a7-4a73-8816-ed58ce9108c4" width="500"/>
+
+If you like using hotkeys, we also have a cheat sheet just for you. You can print it or put it on a second screen.
+
 <img src="https://github.com/user-attachments/assets/2bb1737b-169b-4ca2-9687-2c54fbc07a6b" width="500"/>
 
-Darkly also comes with a searchable hotkey cheatsheet, which opens in a separate window, handy for printing or putting on a second screen.
 
 ## Dark Arts
 
@@ -68,11 +73,11 @@ Veils have practical uses too:
 
 ### Voids
 
-https://github.com/user-attachments/assets/43dac748-d79f-403f-8456-10dad779a6f9
+https://github.com/user-attachments/assets/a9ac3819-7209-442b-a8ba-93f567a7506e
 
 Voids are a type of layer that specializes in pulling inspiration from outside sources.
 
-You can use the `Noise` void to inject entropy, or `Screenshare` to stream another app (3D software, movie, or video game) directly into a layer. This is great for hybrid workflows, and situations where you want to try out different lighting or camera angles, without having to pose, render and paste over and over.
+You can use the `Noise` void to inject entropy, or `Screenshare` to stream another app (3D software, movie, or video game) directly into a layer. This is great for hybrid workflows, and situations where you need a quick reference, or want to try out different lighting or camera angles, without having to pose, render and paste over and over.
 
 Voids can live anywhere in your layer stack -- over or underneath any other layer. They support masks and blend modes. They are the natural compliment to veils, and a natural integration point for other art programs like Blender, which has its own [dedicated void](https://extensions.blender.org/add-ons/darkly-stream/) 🧡
 
@@ -117,6 +122,7 @@ For a feature to count, it must be:
 - [x] Save / Open native `.darkly` document
 - [x] Export to PNG / JPEG / WebP file
 - [x] Clipboard copy / cut / paste
+- [ ] Documentation
 
 ### Important — expected for serious work
 - [x] Generic transform tool
@@ -208,6 +214,9 @@ wasm-pack build frontend/wasm --target web
 
 # Start the frontend dev server
 npm --prefix frontend run dev
+
+# ...or expose it on your LAN (binds all interfaces, 0.0.0.0)
+npm --prefix frontend run dev -- --host
 ```
 
 Open the URL printed by vite (typically `https://localhost:5173`). Requires a browser with WebGPU support (Chrome 113+, Edge 113+, Firefox Nightly with flag).
@@ -243,7 +252,7 @@ I (TheTechromancer) learned to code before AI, and have spent much of my career 
 
 Great care is being taken to keep Darkly lean and clean. This means enforcing modularity, guarding vigilantly against duplicate/dead code, and writing a *shit ton* of unit tests, including at least one regression test for every bug. See [AGENTS.md](AGENTS.md) for how we avoid AI slop.
 
-Note that while we allow AI for coding, we are **unlikely to accept any PR implementing generative AI in Darkly itself**. AI features are not off the table; however they must run fully offline and without any reliance on third party APIs. Additionally, any feature that speeds up generation while sacrificing creative input or control from the artist, will be immediately rejected.
+Note that while we allow AI for coding, we are **unlikely to accept any PR implementing generative AI in Darkly itself**. AI features are not off the table; however they must run fully offline and without any reliance on third party APIs. Additionally, any feature that speeds up generation while sacrificing creative input or control from the artist, will likely be rejected.
 
 **Every PR must open with a short human-written description explaining _why_ the effort was undertaken and who it's useful to**, above the AI-generated technical description. PRs that look entirely machine-generated will be closed.
 

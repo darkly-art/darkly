@@ -1,4 +1,4 @@
-//! Procedural shape coverage GPU node — the brush-tip silhouette.
+//! Procedural circle coverage GPU node — the brush-tip silhouette.
 //!
 //! Compile-only: contributes a per-fragment scalar coverage expression
 //! (`f32` in `[0, 1]`) to the brush's compiled WGSL via [`compile_wgsl`].
@@ -7,17 +7,20 @@
 //! the expression directly into their fragment body — no dab texture,
 //! no separate render pass.
 //!
-//! Three shape algorithms are exposed via the `algorithm` enum param:
+//! A polar-`r(θ)` family — a disc and its smooth bumpy variants — exposed
+//! via the `algorithm` enum param:
 //!
 //! - **Sine harmonic** — `r(θ) = 1 + A·sin(n·θ + φ)`. Symmetric bumps.
 //! - **1D Perlin / value-noise fBm** — periodic value-noise summed over
 //!   `octaves` with `persistence` falloff. Organic blobs.
-//! - **Gielis Superformula** — single closed-form spanning circles, polygons,
+//! - **Gielis Superformula** — single closed-form spanning circles,
 //!   stars, flowers, and asteroids.
 //!
-//! Algorithms documented in `docs/brush/stamp-generation-algos.md`. The
-//! shared `r(θ)` math lives in `shaders/brush/_shape.wgsl` and is
-//! spliced into every compiled brush that consumes a shape.
+//! Straight-edged polygons live in the separate [`super::polygon`] node,
+//! which uses a true signed-distance field rather than the polar
+//! coverage this family shares. The shared `r(θ)` math lives in
+//! `shaders/brush/_shape.wgsl` and is spliced into every compiled brush
+//! that consumes a silhouette.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::input_value::InputValue;
@@ -34,7 +37,7 @@ const ALGO_SINE: u32 = 0;
 const ALGO_PERLIN: u32 = 1;
 const ALGO_SUPERFORMULA: u32 = 2;
 
-pub const TYPE_ID: &str = "shape";
+pub const TYPE_ID: &str = "circle";
 
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
@@ -44,7 +47,7 @@ pub fn register() -> BrushNodeRegistration {
         node: NodeRegistration {
         type_id: TYPE_ID,
         category: "shape",
-        display_name: "Shape",
+        display_name: "Circle",
         description: "Procedural brush-tip silhouette — disc, bumpy circle, or superformula.",
         ports: vec![
             // Compile-time branch selector — picks the silhouette algorithm.
@@ -168,6 +171,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Shape of bump fall."),
             PortDef::output("mask", BrushWireType::Scalar)
                 .with_natural_range(0.0, 1.0)
+                .preview_image()
                 .with_description("Per-fragment mask value (0..1) — the procedural shape's alpha at this fragment"),
         ],
         is_gpu: true,
@@ -238,19 +242,14 @@ impl BrushNodeEvaluator for ShapeEvaluator {
         // block-let preserves a single `let` binding name downstream
         // nodes can substitute.
         //
-        // Edge coverage: smoothstep over a constant softness band
-        // (in unit-disc /
-        // natural units, independent of `r_at`), with a 0.004 AA
-        // floor so softness == 0 still produces a one-pixel-ish
-        // anti-aliased boundary instead of jagged stair-steps.
-        //
-        // A linear ramp scaled by `r_at` (what the original draft did)
-        // makes the falloff width vary along the perlin edge —
-        // outward bumps get softer than inward dips — which reads as
-        // "wonky" and exaggerates the noise band when the dab is
-        // large.
-        let params_ident = cctx.ident("shape_params");
-        let shape_ident = cctx.ident("shape");
+        // Coverage feathering lives in `shape_coverage` (see
+        // `_shape.wgsl`): the softness band is applied *perpendicular* to
+        // the edge, not radially, so the bumpy silhouettes feather with a
+        // uniform-width band along every edge instead of caving in. The
+        // `0.004` floor keeps a one-pixel-ish anti-aliased boundary at
+        // softness == 0.
+        let params_ident = cctx.ident("circle_params");
+        let circle_ident = cctx.ident("circle");
         let body = format!(
             "    let {params_ident}: ShapeParams = ShapeParams(\n\
              \x20       {algorithm}u,\n\
@@ -265,12 +264,11 @@ impl BrushNodeEvaluator for ShapeEvaluator {
              \x20       max(({n3}), 0.05),\n\
              \x20       max(({aspect}), 0.01),\n\
              \x20   );\n\
-             \x20   let {shape_ident}_r_at: f32 = shape_r_theta({params_ident}, theta);\n\
-             \x20   let {shape_ident}_band: f32 = max(clamp(({softness}), 0.0, 1.0), 0.004);\n\
-             \x20   let {shape_ident}: f32 = 1.0 - smoothstep({shape_ident}_r_at - {shape_ident}_band, {shape_ident}_r_at, local_dist);\n",
+             \x20   let {circle_ident}_band: f32 = max(clamp(({softness}), 0.0, 1.0), 0.004);\n\
+             \x20   let {circle_ident}: f32 = shape_coverage({params_ident}, theta, local_dist, {circle_ident}_band);\n",
         );
         wgsl.body = body;
-        wgsl.outputs.insert("mask".into(), shape_ident);
+        wgsl.outputs.insert("mask".into(), circle_ident);
         Ok(wgsl)
     }
 

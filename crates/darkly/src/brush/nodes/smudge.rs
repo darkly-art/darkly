@@ -83,7 +83,7 @@ pub fn register() -> BrushNodeRegistration {
                         "Overall stroke strength. Lower values reduce how much the smudge affects the canvas.",
                     ),
                 PortDef::input("mask", BrushWireType::Scalar).with_description(
-                    "Per-fragment shape mask (typically wired from shape.mask)",
+                    "Per-fragment shape mask (typically wired from circle.mask)",
                 ),
                 PortDef::output("dab_size", BrushWireType::Vec2)
                     .with_description("Brush mark size in canvas pixels"),

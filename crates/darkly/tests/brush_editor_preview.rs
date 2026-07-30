@@ -32,7 +32,7 @@ fn renders_s_curve_over_black_background() {
 
     let texture = renderer
         .render_stroke(
-            &device, &queue, &pipelines, &graph, &path, fg, bg, width, height,
+            &device, &queue, &pipelines, &graph, &path, fg, bg, width, height, None,
         )
         .expect("render_stroke should return a texture for the default graph");
 
@@ -116,6 +116,7 @@ fn renderer_reuses_target_across_renders_of_same_size() {
         [0.0, 0.0, 0.0, 1.0],
         320,
         120,
+        None,
     );
     assert_eq!(renderer.current_size(), Some((320, 120)));
     let first_ptr = renderer.current_texture().map(|t| t as *const _);
@@ -130,6 +131,7 @@ fn renderer_reuses_target_across_renders_of_same_size() {
         [1.0, 1.0, 1.0, 1.0],
         320,
         120,
+        None,
     );
     let second_ptr = renderer.current_texture().map(|t| t as *const _);
 
@@ -414,7 +416,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
 
     // Negative control: scrubbing a port the preview *does* read must
     // still bump the version. After the compiled-WGSL migration
-    // `softness` lives on the upstream `shape` node (the
+    // `softness` lives on the upstream `circle` node (the
     // `paint` terminal has no softness port). It has no
     // `preview_irrelevant_scrub` flag, is read by the preview shader,
     // and is unwired — the perfect canary for "rule too broad". Find
@@ -621,6 +623,7 @@ fn empty_path_returns_none() {
         [0.0, 0.0, 0.0, 1.0],
         320,
         120,
+        None,
     );
     assert!(result.is_none());
 }

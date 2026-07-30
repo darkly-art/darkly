@@ -251,7 +251,7 @@ fn prng_f32(seed: u32, index: u32) -> f32 {
 /// overlay to place the `KIND_MASKED_STAMP` primitive (the cursor halo)
 /// — the cursor-preview mask texture itself is bound to the overlay
 /// separately. Rotation lives in the mask texture, not on the primitive:
-/// the compiled brush pipeline bakes `shape.rotation_input` and
+/// the compiled brush pipeline bakes `circle.rotation_input` and
 /// `view_rotation` into the rendered mask via the skeleton's `theta`,
 /// so the overlay quad samples an already-oriented mask.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

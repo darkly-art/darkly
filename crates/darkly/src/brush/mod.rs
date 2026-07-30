@@ -12,6 +12,7 @@ pub mod input_value;
 pub mod interpolation;
 pub mod library;
 pub mod node;
+pub mod node_preview_subgraph;
 pub mod nodes;
 pub mod paint_info;
 pub mod paint_target_ext;
@@ -20,6 +21,7 @@ pub mod portable;
 pub mod preview_renderer;
 pub mod read_mirror_terminal;
 pub mod save_points;
+pub mod scalar_binary;
 pub mod scratch;
 pub mod spacing;
 pub mod stabilizer;
@@ -27,6 +29,7 @@ pub mod stabilizers;
 pub mod state;
 pub mod stroke_buffer;
 pub mod stroke_engine;
+pub mod texture_source;
 pub mod wgsl;
 pub mod wire;
 
@@ -206,7 +209,7 @@ pub fn graph_capabilities(
 
 /// Build the default brush graph: pressure-sensitive disc through the
 /// compiled `paint` terminal. Same shape as Round in
-/// [`builtin_brushes`] — `pen → paint_color → shape (sine, amplitude 0)
+/// [`builtin_brushes`] — `pen → paint_color → circle (sine, amplitude 0)
 /// → stamp → paint` — minus the per-brush configuration
 /// closure (no exposed softness, no flow wire).
 pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
@@ -230,16 +233,16 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
         "paint_color",
         registry.get("paint_color").unwrap().ports.clone(),
     );
-    // Shape node defaults to the Sine algorithm (index 0) with amplitude 0 →
+    // Circle node defaults to the Sine algorithm (index 0) with amplitude 0 →
     // a plain disc; no input override needed.
-    let shape = graph.add_node("shape", registry.get("shape").unwrap().ports.clone());
+    let circle = graph.add_node("circle", registry.get("circle").unwrap().ports.clone());
     let stamp = graph.add_node("stamp", registry.get("stamp").unwrap().ports.clone());
     let terminal = graph.add_node("paint", registry.get("paint").unwrap().ports.clone());
 
     let wires = [
         (pen.clone(), "pressure", terminal.clone(), "flow"),
         (paint_color, "color", stamp.clone(), "color"),
-        (shape, "mask", stamp.clone(), "tip"),
+        (circle, "mask", stamp.clone(), "tip"),
         (stamp, "dab", terminal.clone(), "rgba"),
         (pen, "position", terminal, "position"),
     ];

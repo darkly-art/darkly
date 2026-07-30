@@ -8,7 +8,7 @@
 //! ## Two execution models, chosen per brush at the terminal
 //!
 //! A brush graph compiles its entire upstream chain into one fragment
-//! shader per terminal — `shape`, `stamp`, `paint_color`, etc. fuse
+//! shader per terminal — `circle`, `stamp`, `paint_color`, etc. fuse
 //! inline, evaluated per-fragment-per-dab. No upstream per-dab GPU
 //! dispatch happens.
 //!
@@ -129,13 +129,14 @@ pub struct CompiledBrush {
     /// contributions (displacement / warp nodes). `0.0` for the
     /// current node set.
     pub brush_extent_extra_px: f32,
-    /// Names of textures sampled by `image`-style nodes in this
-    /// graph, in `@group(3) @binding(1+N)` order. Empty for graphs
-    /// without graph-texture nodes. Resolved against
-    /// [`crate::gpu::texture_registry::TextureRegistry`] at
-    /// pipeline-build time; deduplicated by the compiler so two
-    /// nodes sampling the same paper texture share one binding.
-    pub graph_texture_names: Vec<String>,
+    /// The `@group(3)` texture slots this graph requests, in
+    /// `@binding(1+N)` order. Each is a [`crate::brush::texture_source::ResolvedSource`]
+    /// — a named registry texture (`image`) or a baked procedural tile
+    /// (`noise`). Empty for graphs without graph-texture nodes. Resolved
+    /// at pipeline-build time (named → `TextureRegistry`, baked → the
+    /// bake cache); deduplicated by the compiler so two nodes sampling
+    /// the same texture or baking the same field share one binding.
+    pub graph_sources: Vec<crate::brush::texture_source::ResolvedSource>,
     /// `true` when a node in this graph (`clone_source`) requested the
     /// frozen pre-stroke source snapshot via
     /// [`CompileWgslCtx::request_source_texture`]. Drives three
@@ -252,7 +253,8 @@ pub fn compile_brush_to_wgsl(
     // this through `CompileWgslCtx::request_texture`; sharing the
     // accumulator across the walk gives stable, dedup'd slot indices
     // so two nodes sampling the same paper share a binding.
-    let graph_textures_cell: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+    let graph_sources_cell: std::cell::RefCell<Vec<crate::brush::texture_source::ResolvedSource>> =
+        std::cell::RefCell::new(Vec::new());
 
     // Flagged by `clone_source` through `CompileWgslCtx::request_source_texture`
     // during the walk; read out onto `CompiledBrush::samples_source` after.
@@ -267,8 +269,9 @@ pub fn compile_brush_to_wgsl(
     // what keeps a preview body that re-requests a texture (e.g. `image`'s
     // default preview, which delegates to `compile_wgsl`) from
     // double-counting into the stroke layout.
-    let preview_graph_textures_cell: std::cell::RefCell<Vec<String>> =
-        std::cell::RefCell::new(Vec::new());
+    let preview_graph_sources_cell: std::cell::RefCell<
+        Vec<crate::brush::texture_source::ResolvedSource>,
+    > = std::cell::RefCell::new(Vec::new());
     let preview_samples_source_cell: std::cell::RefCell<bool> = std::cell::RefCell::new(false);
 
     // Track each output port's emitted expression so downstream nodes
@@ -371,7 +374,7 @@ pub fn compile_brush_to_wgsl(
             inputs,
             lut: lut.as_ref(),
             consumed_outputs,
-            graph_textures: &graph_textures_cell,
+            graph_sources: &graph_sources_cell,
             samples_source: &samples_source_cell,
         };
 
@@ -434,7 +437,7 @@ pub fn compile_brush_to_wgsl(
                 inputs: preview_inputs,
                 lut: lut.as_ref(),
                 consumed_outputs: preview_consumed,
-                graph_textures: &preview_graph_textures_cell,
+                graph_sources: &preview_graph_sources_cell,
                 samples_source: &preview_samples_source_cell,
             };
             let preview_result = evaluator
@@ -503,20 +506,20 @@ pub fn compile_brush_to_wgsl(
     // terminal bindings).
     let stroke_body = format!("{shared_body}{stroke_terminal_body}");
     let preview_body = format!("{preview_shared_body}{preview_terminal_body}");
-    let graph_texture_names = graph_textures_cell.into_inner();
+    let graph_sources = graph_sources_cell.into_inner();
     let samples_source = samples_source_cell.into_inner();
     // The preview cells only exist to give preview bodies correct slot
     // numbering during the walk; the stroke pass owns the actual layout
     // (Approach A — the preview shader declares the same `@group(3)`
     // bindings the stroke shader does, per `assemble_shader` below). In a
     // correct compile they mirror the stroke cells exactly.
-    let preview_graph_texture_names = preview_graph_textures_cell.into_inner();
+    let preview_graph_sources = preview_graph_sources_cell.into_inner();
     debug_assert_eq!(
-        preview_graph_texture_names.len(),
-        graph_texture_names.len(),
+        preview_graph_sources.len(),
+        graph_sources.len(),
         "preview graph-texture allocation diverged from the stroke pass",
     );
-    let _ = preview_graph_texture_names;
+    let _ = preview_graph_sources;
     let _ = preview_samples_source_cell.into_inner();
     // A source-sampling node (`clone_source`) owns `@group(3)` for the
     // frozen pre-stroke snapshot, the same slot named graph textures and
@@ -524,13 +527,13 @@ pub fn compile_brush_to_wgsl(
     // failure mode is "brush won't load" rather than a runtime binding
     // mismatch; today `clone.yaml` uses neither, and the slot the source
     // reserves is always 0.
-    if samples_source && !graph_texture_names.is_empty() {
+    if samples_source && !graph_sources.is_empty() {
         return Err(CompileError::NodeNotCompilable {
             type_id: "clone_source".into(),
             reason: format!(
                 "graph combines a source-sampling node with `image` graph textures \
                  ({}); this combination is not yet supported",
-                graph_texture_names.join(", ")
+                source_labels(&graph_sources)
             ),
         });
     }
@@ -551,13 +554,13 @@ pub fn compile_brush_to_wgsl(
     // higher device limit). Reject the combination now so the
     // failure mode is "brush won't load" rather than a runtime
     // shader-binding mismatch.
-    if !terminal_bindings.is_empty() && !graph_texture_names.is_empty() {
+    if !terminal_bindings.is_empty() && !graph_sources.is_empty() {
         return Err(CompileError::NodeNotCompilable {
             type_id: "image".into(),
             reason: format!(
                 "graph combines an `image` node with a terminal that owns @group(3) \
                  bindings ({} requested); this combination is not yet supported",
-                graph_texture_names.join(", ")
+                source_labels(&graph_sources)
             ),
         });
     }
@@ -568,7 +571,7 @@ pub fn compile_brush_to_wgsl(
         &decls,
         &stroke_body,
         &terminal_bindings,
-        &graph_texture_names,
+        &graph_sources,
         samples_source,
     );
     let cursor_preview_wgsl = assemble_shader(
@@ -578,7 +581,7 @@ pub fn compile_brush_to_wgsl(
         &decls,
         &preview_body,
         "",
-        &graph_texture_names,
+        &graph_sources,
         samples_source,
     );
 
@@ -599,9 +602,19 @@ pub fn compile_brush_to_wgsl(
         topology_hash,
         brush_extent_factor,
         brush_extent_extra_px,
-        graph_texture_names,
+        graph_sources,
         samples_source,
     })
+}
+
+/// Comma-joined human-readable labels for a graph's texture sources, for
+/// the "unsupported combination" compile errors above.
+fn source_labels(sources: &[crate::brush::texture_source::ResolvedSource]) -> String {
+    sources
+        .iter()
+        .map(|s| s.binding_label())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Pack one dab's worth of per-node values into the byte buffer the
@@ -660,7 +673,7 @@ pub fn pack_uniforms(
 /// dispatched identically across paint / watercolor / smudge /
 /// liquify — the only caller-supplied difference is `effective_radius`.
 /// Rotation lives entirely in the rendered mask (via the skeleton's
-/// `theta - view_rotation` and any wired `shape.rotation_input`), so
+/// `theta - view_rotation` and any wired `circle.rotation_input`), so
 /// the overlay quad samples a pre-oriented mask without a CPU-side
 /// rotation. Returns `Some(())` on success, `None` when the brush has
 /// no compiled state or the preview mask refuses to allocate.
@@ -884,7 +897,7 @@ fn assemble_shader(
     node_decls: &str,
     fs_body: &str,
     terminal_bindings: &str,
-    graph_texture_names: &[String],
+    graph_sources: &[crate::brush::texture_source::ResolvedSource],
     samples_source: bool,
 ) -> String {
     let mut out = String::new();
@@ -894,7 +907,7 @@ fn assemble_shader(
     out.push('\n');
     out.push_str(include_str!("../../../shaders/brush/_shape.wgsl"));
     out.push('\n');
-    // Binding-free 2D fBm core (`fbm_value_noise`, `fbm_rot`, hash, fade) —
+    // Binding-free 2D fBm core (`fbm_value_noise`, `fbm_tile`, hash, fade) —
     // the `noise` node compiles calls into these. Dead-stripped when unused.
     out.push_str(include_str!("../../../shaders/lib/fbm2d.wgsl"));
     out.push('\n');
@@ -963,10 +976,10 @@ fn assemble_shader(
     // The stroke pipeline binds the live per-stroke snapshot; the
     // preview pipeline binds the registry's `_fallback` tile (hover has
     // no snapshot), giving a neutral cursor thumbnail.
-    let source_slot = graph_texture_names.len();
-    if !graph_texture_names.is_empty() || samples_source {
+    let source_slot = graph_sources.len();
+    if !graph_sources.is_empty() || samples_source {
         out.push_str("@group(3) @binding(0) var graph_smp: sampler;\n");
-        for (i, _) in graph_texture_names.iter().enumerate() {
+        for (i, _) in graph_sources.iter().enumerate() {
             out.push_str(&format!(
                 "@group(3) @binding({}) var graph_tex_{}: texture_2d<f32>;\n",
                 1 + i,
@@ -1017,7 +1030,7 @@ fn assemble_shader(
     out.push_str("    }\n");
     out.push_str("    let local_uv = local * d.inv_radius_target_px;\n");
     out.push_str("    let local_dist = length(local_uv);\n");
-    // Brush stamp rotation counteracts view rotation: shape nodes use
+    // Brush stamp rotation counteracts view rotation: circle nodes use
     // `theta - p.rotation`, so subtracting `view_rotation` from `theta`
     // here makes the shader render the stamp at canvas-rotation
     // `p.rotation + view_rotation`. The present shader's canvas → screen

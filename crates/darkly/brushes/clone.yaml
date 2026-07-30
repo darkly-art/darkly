@@ -7,8 +7,8 @@ nodes:
     type: brush_settings
     inputs:
       spacing: 0.05
-  shape:
-    type: shape
+  circle:
+    type: circle
     inputs:
       softness: 0.2
   clone_source:
@@ -21,13 +21,13 @@ connections:
 - 'pen_input.position -> clone_source.center'
 - 'pen_input.position -> paint.position'
 - 'pen_input.pressure -> paint.size'
-- 'shape.mask -> stamp.tip'
+- 'circle.mask -> stamp.tip'
 - 'clone_source.color -> stamp.color'
 - 'stamp.dab -> paint.rgba'
 exposed_ports:
   'brush_settings.size': {}
   'paint.opacity': {}
-  'shape.softness': {}
+  'circle.softness': {}
   'brush_settings.spacing': {}
   'clone_source.mode': {}
   'clone_source.merged': {}

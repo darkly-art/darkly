@@ -61,6 +61,11 @@ export interface PortDef {
      *  value can be wired *from* into other nodes. The editor shows the
      *  source handle only while the input is not itself driven. */
     source: boolean;
+    /** This output emits a spatial image (`PortDef::preview_image` in Rust) —
+     *  a coverage mask or colour field worth a preview thumbnail. Carried as
+     *  data; the node card shows an in-card preview only when an output has
+     *  it set. Off for per-dab constants and sensor/math outputs. */
+    preview_image: boolean;
 }
 
 export interface NodeInstance {

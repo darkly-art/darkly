@@ -28,7 +28,7 @@ enum ChangeKind {
     /// Exposed-port scrub on a port marked `persist_in_thumbnail` — its
     /// value bleeds through to the dab thumbnail render, so both
     /// version counters need to bump to invalidate both preview caches.
-    /// Used for orientation knobs like `shape.rotation`.
+    /// Used for orientation knobs like `circle.rotation`.
     ThumbnailRelevantScrub,
     /// User-facing exposed-port scrub on a port the editor preview
     /// pipeline actually reads (size, opacity, hardness, …). Bumps only
@@ -598,24 +598,61 @@ impl DarklyEngine {
         cached.unwrap_or_default()
     }
 
-    /// Per-node preview thumbnail. Synchronous PNG render — the caller
-    /// (brush-builder NodePreview component) treats an empty Vec as
-    /// "no preview" and shows the placeholder. Adding a new node type's
-    /// preview means a new arm in the type-id match below; nodes
-    /// without a preview implementation return empty.
+    /// Per-node preview thumbnail. Returns the most recent cached PNG bytes
+    /// synchronously; pixels update on a later frame once the async GPU
+    /// render + readback completes — same shape as `brush_active_dab_preview`.
+    /// The caller (brush-builder NodePreview component) treats an empty Vec as
+    /// "no fresh bytes" and preserves the last successful render.
+    ///
+    /// Any node with a renderable output previews, with no per-type
+    /// special-casing: [`build_node_preview_graph`] builds a subgraph rooted
+    /// at the node's renderable output and renders it through the same preview
+    /// path the dab thumbnail uses. Nodes without a renderable output return
+    /// empty.
     #[handler(returns = bytes)]
     pub fn brush_node_preview(&mut self, node_id: &str) -> Vec<u8> {
-        let tool = self.tool_session.read();
-        let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
-        let Some(node) = brush.graph.nodes().get(&NodeId(node_id.to_string())) else {
-            return Vec::new();
-        };
-        match node.type_id.as_str() {
-            crate::brush::nodes::noise::TYPE_ID => {
-                crate::brush::nodes::noise::render_preview_png(&node.ports, 96)
-            }
-            _ => Vec::new(),
+        // Guard against painting while a real stroke is in flight — the
+        // preview shares GPU state with the engine (see
+        // `brush_active_dab_preview`).
+        let in_stroke = self.brush_stroke_engine.is_some();
+        let current_topology = self.brush_topology_version();
+
+        let cached_bytes = self.node_preview_cache.get(node_id).map(|(_, b)| b.clone());
+        let fresh = self
+            .node_preview_cache
+            .get(node_id)
+            .is_some_and(|(v, _)| *v == current_topology);
+
+        // Nothing to do when the cache is current, or a stroke is in flight —
+        // return the most recent bytes without clobbering GPU state.
+        if in_stroke || fresh {
+            return cached_bytes.unwrap_or_default();
         }
+
+        // Don't queue a second readback on top of an in-flight one for this
+        // node.
+        let already_pending = self
+            .readbacks
+            .any(|c| matches!(c, ReadbackContext::NodePreview { node_id: n, .. } if n == node_id));
+        if already_pending {
+            return cached_bytes.unwrap_or_default();
+        }
+
+        let graph = self.active_brush_graph();
+        let Some(sub) = crate::brush::node_preview_subgraph::build_node_preview_graph(
+            &graph,
+            &NodeId(node_id.to_string()),
+        ) else {
+            return cached_bytes.unwrap_or_default();
+        };
+
+        let node_id = node_id.to_string();
+        self.request_dab_preview_readback(sub, move |_w, _h| ReadbackContext::NodePreview {
+            node_id,
+            topology_version: current_topology,
+        });
+
+        cached_bytes.unwrap_or_default()
     }
 
     /// Shared helper: render a preview path into the preview renderer's
@@ -632,6 +669,7 @@ impl DarklyEngine {
         height: u32,
         fg: [f32; 4],
         bg: [f32; 4],
+        base_size_override: Option<f32>,
         context: ReadbackContext,
     ) {
         let Some(texture) = self.brush_stroke_preview_renderer.render_stroke(
@@ -644,6 +682,7 @@ impl DarklyEngine {
             bg,
             width,
             height,
+            base_size_override,
         ) else {
             return;
         };
@@ -702,6 +741,7 @@ impl DarklyEngine {
             rh,
             fg,
             bg,
+            None,
             make_context(rw, rh),
         );
     }
@@ -731,6 +771,7 @@ impl DarklyEngine {
             rh,
             fg,
             bg,
+            Some(super::brush_library::DAB_PREVIEW_BASE_SIZE),
             make_context(rw, rh),
         );
     }

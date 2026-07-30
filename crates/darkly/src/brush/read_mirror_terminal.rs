@@ -670,6 +670,7 @@ fn ensure_per_brush_pipeline(
         canvas_copy_sampler: gpu.pipelines.canvas_copy_sampler(),
         min_uniform_align: gpu.device.limits().min_uniform_buffer_offset_alignment,
         texture_registry: gpu.pipelines.texture_registry(),
+        baked_sources: gpu.pipelines.baked_sources(),
     };
     pipe.ensure_pipeline(&ctx, compiled, label);
 }

@@ -14,7 +14,7 @@
 //! - **The uniform buffer carries stroke-constant values** from any
 //!   upstream nodes that declared `uniform_fields` (e.g. `paint_color`).
 //!
-//! Upstream nodes (`shape`, `stamp`, etc.) compile inline into the
+//! Upstream nodes (`circle`, `stamp`, etc.) compile inline into the
 //! fragment shader and evaluate per-fragment-per-dab — no intermediate
 //! textures.
 //!
@@ -123,8 +123,7 @@ impl PerBrushPipeline {
         // the `clone_source` frozen snapshot, when present. `samples_source`
         // brushes carry no named textures today (the compiler rejects the
         // combination), so the source sits at slot 0.
-        let graph_tex_count =
-            compiled.graph_texture_names.len() + usize::from(compiled.samples_source);
+        let graph_tex_count = compiled.graph_sources.len() + usize::from(compiled.samples_source);
         let graph_layout = if graph_tex_count == 0 {
             None
         } else {
@@ -262,12 +261,15 @@ impl PerBrushPipeline {
         // is `None` here. Static named textures (paper grain) build once
         // and cache.
         let graph_textures_bind_group =
-            if compiled.samples_source || compiled.graph_texture_names.is_empty() {
+            if compiled.samples_source || compiled.graph_sources.is_empty() {
                 None
             } else {
-                let (_layout, bg) = ctx
-                    .texture_registry
-                    .make_bind_group(ctx.device, &compiled.graph_texture_names);
+                let (_layout, bg) = ctx.texture_registry.make_bind_group(
+                    ctx.device,
+                    ctx.queue,
+                    ctx.baked_sources,
+                    &compiled.graph_sources,
+                );
                 Some(bg)
             };
 
@@ -723,6 +725,7 @@ fn ensure_per_brush_pipeline(
         canvas_copy_sampler: gpu.pipelines.canvas_copy_sampler(),
         min_uniform_align: gpu.device.limits().min_uniform_buffer_offset_alignment,
         texture_registry: gpu.pipelines.texture_registry(),
+        baked_sources: gpu.pipelines.baked_sources(),
     };
     pipe.ensure_pipeline(&ctx, compiled);
 }

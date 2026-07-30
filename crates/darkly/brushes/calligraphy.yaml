@@ -11,8 +11,8 @@ nodes:
       size: 0.05
   paint_color:
     type: paint_color
-  shape:
-    type: shape
+  circle:
+    type: circle
     inputs:
       softness: 0.15
       # Plain disc (sine, amplitude 0 ⇒ r ≡ 1) squashed by `aspect` into the
@@ -28,12 +28,12 @@ nodes:
 connections:
 - pen_input.position -> paint.position
 - paint_color.color -> stamp.color
-- shape.mask -> stamp.tip
+- circle.mask -> stamp.tip
 - stamp.dab -> paint.rgba
 exposed_ports:
   brush_settings.stabilize: {}
   brush_settings.size: {}
-  shape.rotation: {}
-  shape.aspect: {}
+  circle.rotation: {}
+  circle.aspect: {}
   paint.flow: {}
   paint.opacity: {}

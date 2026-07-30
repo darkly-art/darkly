@@ -269,6 +269,18 @@ pub struct PortDef<W: WireKind> {
     /// thumbnail re-renders, not just the editor preview.
     #[serde(default)]
     pub persist_in_thumbnail: bool,
+    /// This output port emits a *spatial, per-fragment image* — a coverage
+    /// mask or colour field that varies across the dab — so a node carrying it
+    /// is worth a preview thumbnail (`circle.mask`, `image.color`,
+    /// `noise.color`, `stamp.dab`). Declared per port rather than inferred
+    /// from `wire_type`, because wire type can't tell a spatial field from a
+    /// per-dab constant: `random.value` and `paint_color.color` share the
+    /// `Scalar`/`Vec4` types with the real image outputs but render as flat
+    /// blobs. The node-preview builder wires the first port carrying this flag;
+    /// the brush-builder's preview gate reads it directly (like `wirable` /
+    /// `exposable`). Meaningless on inputs; only set on outputs.
+    #[serde(default)]
+    pub preview_image: bool,
     /// This input port is *also* a wire source: its resolved value (the
     /// wired value if driven, else the authored default) is available for
     /// other nodes to wire *from*, exactly like an output. Only meaningful
@@ -307,6 +319,7 @@ impl<W: WireKind> PortDef<W> {
             step: 0.0,
             natural_range: None,
             persist_in_thumbnail: false,
+            preview_image: false,
             source: false,
         }
     }
@@ -333,6 +346,7 @@ impl<W: WireKind> PortDef<W> {
             step: 0.0,
             natural_range: None,
             persist_in_thumbnail: false,
+            preview_image: false,
             source: false,
         }
     }
@@ -442,6 +456,15 @@ impl<W: WireKind> PortDef<W> {
     /// available as a wire source. See [`PortDef::source`] / [`PortDef::is_source`].
     pub fn source(mut self) -> Self {
         self.source = true;
+        self
+    }
+
+    /// Declare that this output port emits a spatial per-fragment image worth
+    /// previewing. See [`PortDef::preview_image`] for the contract. Set it on
+    /// coverage/colour-field outputs (`circle.mask`, `image.color`, …); leave
+    /// it off for per-dab constants and sensor/math outputs.
+    pub fn preview_image(mut self) -> Self {
+        self.preview_image = true;
         self
     }
 

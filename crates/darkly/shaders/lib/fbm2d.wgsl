@@ -1,22 +1,21 @@
 // 2D fractional Brownian motion core — shared, binding-free GPU helpers.
 //
-// The interpolated value-noise primitive, the octave loop, domain warp, and
-// the per-octave-rotated variant used by the brush `noise` node. No `@group`
-// declarations, so this file is safe to concatenate into ANY shader via Rust's
-// `include_str!` (WGSL has no native #include). The 3D texture-sampled variants
-// live in `fbm.wgsl`, which depends on `fbm_pcg` from here and must be
-// concatenated AFTER this file.
+// The interpolated value-noise primitive, its wrapping (tileable) variant, the
+// octave loop, and domain warp — the `fbm_tile` field used by the brush
+// `noise` node. No `@group` declarations, so this file is safe to concatenate
+// into ANY shader via Rust's `include_str!` (WGSL has no native #include). The
+// 3D texture-sampled variants live in `fbm.wgsl`, which depends on `fbm_pcg`
+// from here and must be concatenated AFTER this file.
 //
 // Credits:
 //
 // • Domain-warp algorithm: Inigo Quilez, "Domain warping",
 //   https://iquilezles.org/articles/warp/
 //
-// • Per-octave rotation in `fbm_rot`: standard practice for breaking the
-//   axis-aligned value-noise lattice — Inigo Quilez, "fbm",
-//   https://iquilezles.org/articles/fbm/. The specific seed transform and
-//   rotate-and-translate constants mirror the design prototype in
-//   docs/plans/noise-preview.html.
+// • fBm (summed octaves of value noise): Inigo Quilez, "fbm",
+//   https://iquilezles.org/articles/fbm/. Octaves are decorrelated by a
+//   seed-derived per-octave translation rather than rotation, so the wrapping
+//   lattice stays exactly periodic and the baked tile is seamless.
 
 /// Integer PCG hash. Fast, well-distributed, no visible patterns.
 fn fbm_pcg(n: u32) -> u32 {
@@ -50,6 +49,30 @@ fn fbm_value_noise(p: vec2f, seed: u32) -> f32 {
     let b = fbm_hash2(pi + vec2i(1, 0), seed);
     let c = fbm_hash2(pi + vec2i(0, 1), seed);
     let d = fbm_hash2(pi + vec2i(1, 1), seed);
+    let ab = mix(a, b, w.x);
+    let cd = mix(c, d, w.x);
+    return mix(ab, cd, w.y);
+}
+
+/// Wrap an integer lattice coordinate into `[0, period)` on both axes. WGSL's
+/// `%` is a remainder (can be negative), so the `((x % p) + p) % p` form keeps
+/// the result non-negative.
+fn fbm_wrap2(c: vec2i, period: i32) -> vec2i {
+    return vec2i(((c.x % period) + period) % period, ((c.y % period) + period) % period);
+}
+
+/// 2D value noise whose lattice **wraps** at `period` cells on both axes:
+/// cell `period` hashes to the same value as cell `0`, so the field is exactly
+/// periodic (tileable) with period `period`. Same bilinear blend as
+/// [`fbm_value_noise`]; the only difference is the wrapped corner lookups.
+fn fbm_value_noise_tiled(p: vec2f, seed: u32, period: i32) -> f32 {
+    let pi = vec2i(floor(p));
+    let pf = fract(p);
+    let w = fbm_fade(pf);
+    let a = fbm_hash2(fbm_wrap2(pi + vec2i(0, 0), period), seed);
+    let b = fbm_hash2(fbm_wrap2(pi + vec2i(1, 0), period), seed);
+    let c = fbm_hash2(fbm_wrap2(pi + vec2i(0, 1), period), seed);
+    let d = fbm_hash2(fbm_wrap2(pi + vec2i(1, 1), period), seed);
     let ab = mix(a, b, w.x);
     let cd = mix(c, d, w.x);
     return mix(ab, cd, w.y);
@@ -120,9 +143,10 @@ fn fbm_warp(
     return fbm(q, seed + 31u, octaves, lacunarity, gain);
 }
 
-/// Seed → (base rotation angle, base 2D offset), packed `(angle, ox, oy)`.
-/// PCG-hashed so adjacent seeds give uncorrelated fields rather than shifted
-/// copies. Any CPU preview must mirror these exact constants.
+/// Seed → a base 2D translation offset, packed `(_, ox, oy)`. PCG-hashed so
+/// adjacent seeds give uncorrelated fields rather than shifted copies. The `.x`
+/// slot is unused (it once carried a rotation angle; rotation was dropped so
+/// the field stays tileable — see `fbm_tile`).
 fn fbm_seed_xform(seed: u32) -> vec3f {
     let a = f32(fbm_pcg(seed)) / 4294967295.0 * 6.28318530718;
     let ox = f32(fbm_pcg(seed + 101u)) / 4294967295.0 * 64.0;
@@ -130,38 +154,40 @@ fn fbm_seed_xform(seed: u32) -> vec3f {
     return vec3f(a, ox, oy);
 }
 
-/// Per-octave rotated, domain-warped fBm of value noise. Each octave's sample
-/// coordinate is rotated by a seed-derived base angle plus `i*0.9` and
-/// translated, decorrelating the octaves' lattices so the axis-aligned
-/// value-noise grid never lines up across scales — the artifact plain `fbm`
-/// retains. A single-octave value-noise domain warp is applied once up front.
-/// Lacunarity is fixed at 2.0; `gain` and `warp` are caller-controlled.
-/// Output is roughly [0, 1].
-fn fbm_rot(p: vec2f, seed: u32, octaves: i32, gain: f32, warp: f32) -> f32 {
+/// Domain-warped, **tileable** fBm of value noise. The lattice wraps at
+/// `base_period` cells (and `base_period * 2^i` per octave, so every octave is
+/// co-periodic), giving a field that is exactly seamless with period
+/// `base_period` — sampled through a repeat-wrapped texture it has no seam.
+///
+/// Unlike the earlier rotated variant, octaves are **not** rotated: an
+/// arbitrary per-octave rotation maps the periodic lattice onto a tilted one
+/// that an axis-aligned tile can't wrap, which reintroduces the seam. Octaves
+/// are instead decorrelated by a seed-derived per-octave *translation*
+/// (`fbm_seed_xform` + `i * {13.7, 7.1}`), which preserves periodicity. The
+/// domain warp is kept — it reads the same wrapped value noise, so the warp
+/// offset is itself periodic and the field stays tileable. Lacunarity is fixed
+/// at 2.0; `gain` and `warp` are caller-controlled. Output is roughly [0, 1].
+fn fbm_tile(p: vec2f, seed: u32, octaves: i32, gain: f32, warp: f32, base_period: i32) -> f32 {
     let xf = fbm_seed_xform(seed);
     var c = p;
     if (warp > 0.0) {
-        let wx = fbm_value_noise(c + vec2f(11.5, 3.7), seed);
-        let wy = fbm_value_noise(c + vec2f(5.2, 1.3), seed);
+        let wx = fbm_value_noise_tiled(c + vec2f(11.5, 3.7), seed, base_period);
+        let wy = fbm_value_noise_tiled(c + vec2f(5.2, 1.3), seed, base_period);
         c = c + warp * vec2f(wx - 0.5, wy - 0.5);
     }
     var sum = 0.0;
     var amp = 1.0;
     var freq = 1.0;
     var norm = 0.0;
+    var period = base_period;
     let n = max(octaves, 1);
     for (var i = 0; i < n; i = i + 1) {
-        let ang = xf.x + f32(i) * 0.9;
-        let ca = cos(ang);
-        let sa = sin(ang);
         let s = c * freq;
-        let r = vec2f(
-            s.x * ca - s.y * sa + xf.y + f32(i) * 13.7,
-            s.x * sa + s.y * ca + xf.z + f32(i) * 7.1,
-        );
-        sum = sum + amp * fbm_value_noise(r, seed + u32(i) * 1013u);
+        let r = vec2f(s.x + xf.y + f32(i) * 13.7, s.y + xf.z + f32(i) * 7.1);
+        sum = sum + amp * fbm_value_noise_tiled(r, seed + u32(i) * 1013u, period);
         norm = norm + amp;
         freq = freq * 2.0;
+        period = period * 2;
         amp = amp * gain;
     }
     return sum / norm;

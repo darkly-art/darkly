@@ -3,7 +3,7 @@
 //! rendered noise pattern with the dab, instead of leaving it pinned to the
 //! canvas (the reported "grain swims under the rotating stamp" bug).
 //!
-//! The graph has no shape node, so the dab silhouette (a full disc) is
+//! The graph has no circle node, so the dab silhouette (a full disc) is
 //! identical between the two renders — only the interior grain differs. The
 //! probe therefore compares **RGB** (the noise color), not alpha coverage.
 //! At the dab centre the oriented frame is invariant, so probes are taken

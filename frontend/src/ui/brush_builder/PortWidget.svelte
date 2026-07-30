@@ -1,6 +1,7 @@
 <script lang="ts">
     import { getContext, untrack } from 'svelte';
     import { brushGraph, WIRE_COLORS, type PortDef } from '../../state/brush_graph.svelte';
+    import { unitFor } from '../../lib/units';
     import { app } from '../../state/app.svelte';
     import type { NodeCanvasContext } from './NodeCanvas.svelte';
     import Icon from '../../icons/Icon.svelte';
@@ -297,31 +298,16 @@
             : 0
     );
 
-    /** Convert a port-space value to display using unit_type from the registration. */
-    function toDisplay(value: number): number {
-        switch (regPort?.unit_type) {
-            case 'Percent': return value * 100;
-            // Wire unit for angle ports is radians; display in degrees.
-            case 'Degrees': return value * (180 / Math.PI);
-            default: return value;
-        }
-    }
-
-    /** Unit suffix string. */
-    function unitSuffix(): string {
-        switch (regPort?.unit_type) {
-            case 'Percent': return '%';
-            case 'Degrees': return '°';
-            default: return '';
-        }
-    }
+    /** Display-unit conversion + formatting for the raw port value, resolved
+     *  from the registration's `unit_type` (radians→degrees, ×100 percent, …). */
+    let unit = $derived(unitFor(regPort?.unit_type));
 
     let displayValue = $derived(
         port.wire_type === 'Bool'
             ? (numValue >= 0.5 ? 'on' : 'off')
             : port.wire_type === 'Int'
                 ? String(Math.round(numValue))
-                : `${Math.round(toDisplay(numValue))}${unitSuffix()}`
+                : unit.format(unit.toDisplay(numValue))
     );
 
     // --- Double-click to type a value ---
@@ -344,9 +330,13 @@
 
     function commitEdit(input: HTMLInputElement) {
         editing = false;
-        const parsed = parseFloat(input.value);
+        const parsed = parseFloat(input.value);   // display units (degrees / percent / …)
         if (isNaN(parsed)) return;
-        const clamped = Math.max(port.min, Math.min(port.max, parsed));
+        // Convert display → port space *before* clamping: port.min/max/step are
+        // all port-space, so clamping a display value against them would compare
+        // e.g. degrees to radian bounds.
+        const portValue = unit.toPort(parsed);
+        const clamped = Math.max(port.min, Math.min(port.max, portValue));
         const value = port.wire_type === 'Int' ? Math.round(clamped) : snapToStep(clamped);
         brushGraph.setInputLocal(nodeId, port.name, value);
         commitSlider(value);
@@ -380,7 +370,7 @@
             <input
                 class="port-slider-edit"
                 type="text"
-                value={port.wire_type === 'Int' ? Math.round(numValue) : numValue}
+                value={port.wire_type === 'Int' ? Math.round(numValue) : unit.toDisplay(numValue)}
                 autofocus
                 onkeydown={onEditKeyDown}
                 onblur={onEditBlur}

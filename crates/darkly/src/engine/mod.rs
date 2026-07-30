@@ -258,6 +258,18 @@ pub(crate) enum ReadbackContext {
     ActiveBrushDab {
         topology_version: u64,
     },
+    /// Async readback of a single-node preview rendered from a subgraph rooted
+    /// at one node's renderable output (see
+    /// [`crate::brush::node_preview_subgraph::build_node_preview_graph`]).
+    /// Completion frames the pixels through the same dab-thumbnail framer and
+    /// stores the PNG bytes in `node_preview_cache` keyed by node id, so the
+    /// next `brush_node_preview(node_id)` call returns them synchronously. The
+    /// topology version travels with the request so stale results from a
+    /// superseded graph edit are dropped.
+    NodePreview {
+        node_id: String,
+        topology_version: u64,
+    },
     /// Async readback of the freshly-rendered `cursor_preview_mask` (the GPU
     /// texture sampled by the overlay's KIND_MASKED_STAMP) used to derive
     /// the cursor-preview coverage scale. Completion measures mean alpha
@@ -495,6 +507,12 @@ pub struct DarklyEngine {
     /// Topology version at the last time we issued a dab render. Compared
     /// against `brush_topology_version` to skip redundant dab renders.
     pub(crate) last_rendered_dab_topology_version: u64,
+    /// Cached per-node preview PNG bytes, keyed by node id. Each entry stores
+    /// the topology version the render was issued at alongside the bytes, so
+    /// `brush_node_preview` can serve a fresh cache hit synchronously and skip
+    /// re-issuing a readback while the graph is unchanged. Refreshed
+    /// asynchronously via `ReadbackContext::NodePreview`.
+    pub(crate) node_preview_cache: std::collections::HashMap<String, (u64, Vec<u8>)>,
     /// Topology version of the brush whose cursor-preview coverage scale
     /// we last requested a readback for. Compared against the current
     /// topology to skip re-issuing the readback when the brush hasn't
@@ -717,6 +735,7 @@ impl DarklyEngine {
             brush_stroke_preview_cache: None,
             last_rendered_stroke_preview_version: 0,
             active_dab_preview_cache: None,
+            node_preview_cache: std::collections::HashMap::new(),
             last_rendered_dab_topology_version: 0,
             last_requested_cursor_scale_topology_version: 0,
             // Default theme: dark (white on dark). Frontend overrides via
@@ -1200,7 +1219,7 @@ impl DarklyEngine {
         let inset = rw.min(rh) as f32 * brush_library::BRUSH_STROKE_PATH_INSET_FRACTION;
         let path =
             crate::brush::preview_renderer::synthesize_stroke_path(rw as f32, rh as f32, 30, inset);
-        self.test_render_preview_canvas(&graph, &path, rw, rh)
+        self.test_render_preview_canvas(&graph, &path, rw, rh, None)
     }
 
     /// Blocking readback of the raw dab-preview **render canvas** for the
@@ -1213,7 +1232,13 @@ impl DarklyEngine {
         crate::brush::reset_exposed_scrubs(&mut graph);
         let (rw, rh) = brush_library::BRUSH_DAB_RENDER_SIZE;
         let path = crate::brush::preview_renderer::synthesize_dab_path(rw as f32, rh as f32);
-        self.test_render_preview_canvas(&graph, &path, rw, rh)
+        self.test_render_preview_canvas(
+            &graph,
+            &path,
+            rw,
+            rh,
+            Some(brush_library::DAB_PREVIEW_BASE_SIZE),
+        )
     }
 
     /// Shared body of the two preview-canvas test accessors: render the given
@@ -1226,6 +1251,7 @@ impl DarklyEngine {
         path: &[crate::brush::paint_info::PaintInformation],
         rw: u32,
         rh: u32,
+        base_size_override: Option<f32>,
     ) -> (Vec<u8>, u32, u32) {
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
@@ -1241,6 +1267,7 @@ impl DarklyEngine {
                 bg,
                 rw,
                 rh,
+                base_size_override,
             )
             .expect("preview render should return a texture");
         let pixels = crate::gpu::test_utils::readback_texture(

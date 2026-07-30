@@ -22,6 +22,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::brush::texture_source::ResolvedSource;
+use crate::gpu::baked_source_cache::BakedSourceCache;
+
 // `BUILTIN_TEXTURES: &[(&str, &[u8])]` — auto-generated at build time
 // from every image under `crates/darkly/resources/textures/`. See
 // `build.rs::generate_texture_registry`.
@@ -201,32 +204,41 @@ impl TextureRegistry {
     }
 
     /// Build the `@group(3)` bind group for a compiled brush's
-    /// `graph_texture_names`. Missing names — typing in the editor,
-    /// a brush referencing a yet-to-be-registered texture — fall
-    /// back to the built-in `_fallback` 1×1 white tile so the
-    /// brush keeps rendering something coherent and pipelines never
-    /// fail to build. A `log::warn` records the miss so authors see
-    /// what happened in the console.
+    /// `graph_sources`. A [`ResolvedSource::Named`] slot resolves against
+    /// this registry — a missing name (typing in the editor, a brush
+    /// referencing a yet-to-be-registered texture) falls back to the
+    /// built-in `_fallback` 1×1 white tile so the pipeline still builds.
+    /// A [`ResolvedSource::Baked`] slot resolves through the bake cache,
+    /// baking the procedural tile on first use. A `log::warn` records
+    /// named misses so authors see what happened in the console.
     pub fn make_bind_group(
         &self,
         device: &wgpu::Device,
-        names: &[String],
+        queue: &wgpu::Queue,
+        baked: &BakedSourceCache,
+        sources: &[ResolvedSource],
     ) -> (Arc<wgpu::BindGroupLayout>, wgpu::BindGroup) {
         let fallback = self
             .textures
             .get(FALLBACK_TEXTURE)
-            .expect("TextureRegistry must register _fallback at init");
-        let textures: Vec<&Arc<GpuTexture>> = names
+            .expect("TextureRegistry must register _fallback at init")
+            .clone();
+        let textures: Vec<Arc<GpuTexture>> = sources
             .iter()
-            .map(|n| {
-                self.textures.get(n).unwrap_or_else(|| {
-                    log::warn!("TextureRegistry: no texture `{n}`, substituting `_fallback`",);
-                    fallback
-                })
+            .map(|s| match s {
+                ResolvedSource::Named(name) => {
+                    self.textures.get(name).cloned().unwrap_or_else(|| {
+                        log::warn!(
+                            "TextureRegistry: no texture `{name}`, substituting `_fallback`",
+                        );
+                        fallback.clone()
+                    })
+                }
+                ResolvedSource::Baked(spec) => baked.get_or_bake(device, queue, spec),
             })
             .collect();
-        let layout = self.layout_for_count(device, names.len());
-        let mut entries: Vec<wgpu::BindGroupEntry> = Vec::with_capacity(names.len() + 1);
+        let layout = self.layout_for_count(device, sources.len());
+        let mut entries: Vec<wgpu::BindGroupEntry> = Vec::with_capacity(sources.len() + 1);
         entries.push(wgpu::BindGroupEntry {
             binding: 0,
             resource: wgpu::BindingResource::Sampler(&self.sampler),

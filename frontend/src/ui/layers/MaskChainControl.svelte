@@ -72,7 +72,7 @@
                 width={THUMB_SIZE}
                 height={THUMB_SIZE}
                 draggable="false"
-                use:bindingSite={{ name: 'maskThumb', ctx: () => ({ layerId: mask.id }) }}
+                use:bindingSite={{ name: 'maskThumb', ctx: () => ({ layerId: mask.id, maskId: mask.id }) }}
             />
         </button>
     {/if}

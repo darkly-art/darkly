@@ -9,8 +9,8 @@ nodes:
       stabilize: 0.6
   paint_color:
     type: paint_color
-  shape:
-    type: shape
+  circle:
+    type: circle
     inputs:
       softness: 0.1
   stamp:
@@ -32,12 +32,12 @@ connections:
 - 'pen_input.pressure -> paint.flow'
 - 'pen_input.pressure -> curve.input'
 - 'paint_color.color -> stamp.color'
-- 'shape.mask -> stamp.tip'
+- 'circle.mask -> stamp.tip'
 - 'stamp.dab -> paint.rgba'
 - 'curve.output -> paint.size'
 exposed_ports:
   "brush_settings.stabilize": {}
   "brush_settings.size": {}
-  "shape.softness": {}
+  "circle.softness": {}
   "paint.flow": {}
   "paint.opacity": {}

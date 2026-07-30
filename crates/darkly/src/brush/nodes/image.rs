@@ -45,7 +45,7 @@ pub fn register() -> BrushNodeRegistration {
             description: "Uses a picture from the brush bundle as the brush tip shape.",
             ports: vec![
                 // Per-dab orientation and decorrelation for Dab-space
-                // sampling — the same input-port path `shape.rotation_input`
+                // sampling — the same input-port path `circle.rotation_input`
                 // uses. Hidden in Canvas mode.
                 PortDef::input("rotation", BrushWireType::Scalar)
                     .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
@@ -91,6 +91,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_label("Scale With Brush")
                     .with_description("Dab space only: scale the picture with the brush size."),
                 PortDef::output("color", BrushWireType::Vec4)
+                    .preview_image()
                     .with_description("RGBA value sampled from the named texture at the fragment's sample position"),
             ],
             is_gpu: false,

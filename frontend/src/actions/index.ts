@@ -251,7 +251,7 @@ export function registerActions() {
     sites.register({ name: 'keyboard',   provides: ['layerId'], displayName: 'Anywhere' });
     sites.register({ name: 'layerEye',   provides: ['layerId'], displayName: 'Layer Eye' });
     sites.register({ name: 'layerThumb', provides: ['layerId'], displayName: 'Layer Thumbnail' });
-    sites.register({ name: 'maskThumb',  provides: ['layerId', 'maskIndex'], displayName: 'Mask Thumbnail' });
+    sites.register({ name: 'maskThumb',  provides: ['layerId', 'maskIndex', 'maskId'], displayName: 'Mask Thumbnail' });
     sites.register({ name: 'canvas',     provides: ['x', 'y'], displayName: 'Canvas' });
     sites.register({ name: 'layerPanel', provides: ['layerId'], displayName: 'Layer Panel' });
 
@@ -335,6 +335,27 @@ export function registerActions() {
         icon: 'tabler:flip-horizontal',
         menuPath: ['Select:30'],
         handler: () => app.engine?.api.invertSelection(),
+    });
+    actions.register({
+        id: 'maskToSelection',
+        displayName: 'Mask to Selection',
+        category: 'selection',
+        description: "Load the active layer's mask as the selection.",
+        icon: 'radix-icons:mask-off',
+        menuPath: ['Select:35'],
+        // The engine op takes the mask filter's id, not the host's. Both
+        // call sites (the mask context menu and the maskThumb $mod+click
+        // gesture) pass it under `maskId`; the enabled-guard fallback
+        // resolves it from the active node when dispatched keyboard-only.
+        accepts: ['maskId'],
+        enabled: () => app.activeMaskId != null || 'No mask on the active layer',
+        handler: (ctx) => {
+            const engine = app.engine;
+            const maskId = ctx.maskId ?? app.activeMaskId;
+            if (!engine || maskId == null) return;
+            engine.api.maskToSelection({ id: maskId });
+            app.requestFrame();
+        },
     });
     actions.register({
         id: 'growSelection',

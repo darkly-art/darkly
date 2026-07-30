@@ -9,8 +9,8 @@ nodes:
       spacing: 0.01
       stabilize: 0.4
       size: 0.2
-  shape:
-    type: shape
+  circle:
+    type: circle
     inputs:
       softness: 1.0
   blur:
@@ -18,10 +18,10 @@ nodes:
 connections:
 - 'pen_input.position -> blur.position'
 - 'pen_input.pressure -> blur.size'
-- 'shape.mask -> blur.mask'
+- 'circle.mask -> blur.mask'
 exposed_ports:
   "brush_settings.stabilize": {}
   "brush_settings.size": {}
-  "shape.softness": {}
+  "circle.softness": {}
   "blur.strength": {}
   "blur.opacity": {}
