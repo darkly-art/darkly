@@ -27,7 +27,7 @@ Darkly is a graphical editor for digital artists and painters. It's GPU-native, 
 
 **Try the demo [here](https://demo.darkly.art).**
 
-https://github.com/user-attachments/assets/5b8cf211-7fce-4555-bc1a-eae5d3a19cdf
+https://github.com/user-attachments/assets/1fc0632d-5846-4c64-bac8-e39b0794b8b5
 
 ## Features
 
