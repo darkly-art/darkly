@@ -1,3 +1,5 @@
+name: Hair
+category: Dry Media
 nodes:
   add:
     type: add
