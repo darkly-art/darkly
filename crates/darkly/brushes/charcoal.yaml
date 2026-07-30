@@ -1,3 +1,5 @@
+name: Charcoal
+category: Dry Media
 nodes:
   brush_settings:
     type: brush_settings
