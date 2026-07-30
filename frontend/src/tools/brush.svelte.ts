@@ -2,7 +2,6 @@ import { ToolBase, type ToolDescriptor } from './registry';
 import { getActiveInstance, type DarklyInstance, type Color } from '../state/app.svelte';
 import { runHook } from './tool_session';
 import { brushGraph } from '../state/brush_graph.svelte';
-import { srgbToLinear } from '../lib/color';
 import { effectivePressure } from '../lib/pressure';
 import { strokeRecorder, currentCanvasDimensions } from '../lib/strokeRecorder';
 import {
@@ -89,7 +88,7 @@ export const INITIAL_SIZE = 24;
 export const INITIAL_OPACITY = 1.0;
 
 /** Build a brush_stroke params object from a PointerEvent + the active foreground. */
-function brushStrokeParams(e: PointerEvent, cx: number, cy: number, c: Color) {
+export function brushStrokeParams(e: PointerEvent, cx: number, cy: number, c: Color) {
     return {
         x: cx,
         y: cy,
@@ -99,9 +98,9 @@ function brushStrokeParams(e: PointerEvent, cx: number, cy: number, c: Color) {
         rotation: (e.twist ?? 0) / 360, // normalize 0..359 → 0..1
         tangential_pressure: (e as any).tangentialPressure ?? 0,
         time_ms: e.timeStamp,
-        cr: srgbToLinear(c.r),
-        cg: srgbToLinear(c.g),
-        cb: srgbToLinear(c.b),
+        cr: c.r / 255,
+        cg: c.g / 255,
+        cb: c.b / 255,
         ca: c.a / 255,
     };
 }

@@ -93,7 +93,7 @@ impl StrokeEngine {
     /// Create a new stroke engine.
     ///
     /// `runner` is a pre-compiled brush graph.  `color` is the foreground
-    /// color (linear RGBA).  `spacing` controls dab placement.
+    /// color (raw sRGB RGBA, as picked).  `spacing` controls dab placement.
     /// `stabilizer` is the stroke stabilization algorithm.
     pub fn new(
         mut runner: BrushGraphRunner,

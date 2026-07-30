@@ -497,7 +497,8 @@ pub enum StrokeOp {
         rotation: f32,
         tangential_pressure: f32,
         time_ms: f64,
-        /// Foreground color as linear RGBA floats (0-1).
+        /// Foreground color as raw sRGB RGBA floats (0-1), as picked — the
+        /// compositor is display-referred, so no gamma conversion is applied.
         cr: f32,
         cg: f32,
         cb: f32,
