@@ -56,6 +56,10 @@ beforeEach(() => {
     maskToSelection = vi.fn();
     const instance = new DarklyInstance();
     instance.engine = { api: { setMaskLinkedToHost, maskToSelection } } as never;
+    // The maskToSelection action requests a repaint; rAF + engine.render
+    // neither exist nor are stubbed in the node test env, so a leaked frame
+    // callback would throw asynchronously. Stub the frame request out.
+    instance.requestFrame = vi.fn();
     setActiveInstance(instance);
 });
 
