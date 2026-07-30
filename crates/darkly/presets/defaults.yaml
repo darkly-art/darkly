@@ -71,8 +71,11 @@ hotkeys:
   addBrushNode: Shift+KeyA
   # Darkly-original (command palette). No Krita/PS/GIMP prior art, so it
   # belongs here rather than a per-editor overlay. Follows the VS Code
-  # convention for a command palette.
-  commandPalette: $mod+Shift+KeyP
+  # convention for a command palette ($mod+Shift+P), plus $mod+F as a
+  # find-style alias for reaching any action by name.
+  commandPalette:
+    - $mod+Shift+KeyP
+    - $mod+KeyF
   # PS + Krita both bind Quick Group to Ctrl+G. GIMP has no default
   # (the Layer menu's group commands aren't bound). With layers
   # selected, the action handler wraps them in the new group; with

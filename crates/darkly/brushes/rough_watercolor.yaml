@@ -31,7 +31,6 @@ connections:
 exposed_ports:
   "brush_settings.stabilize": {}
   "brush_settings.size": {}
-  "circle.algorithm": {}
   "circle.softness": {}
   "watercolor.deposit": {}
   "watercolor.flow": {}
