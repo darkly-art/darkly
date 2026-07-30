@@ -73,11 +73,11 @@ Veils have practical uses too:
 
 ### Voids
 
-https://github.com/user-attachments/assets/43dac748-d79f-403f-8456-10dad779a6f9
+https://github.com/user-attachments/assets/a9ac3819-7209-442b-a8ba-93f567a7506e
 
 Voids are a type of layer that specializes in pulling inspiration from outside sources.
 
-You can use the `Noise` void to inject entropy, or `Screenshare` to stream another app (3D software, movie, or video game) directly into a layer. This is great for hybrid workflows, and situations where you want to try out different lighting or camera angles, without having to pose, render and paste over and over.
+You can use the `Noise` void to inject entropy, or `Screenshare` to stream another app (3D software, movie, or video game) directly into a layer. This is great for hybrid workflows, and situations where you need a quick reference, or want to try out different lighting or camera angles, without having to pose, render and paste over and over.
 
 Voids can live anywhere in your layer stack -- over or underneath any other layer. They support masks and blend modes. They are the natural compliment to veils, and a natural integration point for other art programs like Blender, which has its own [dedicated void](https://extensions.blender.org/add-ons/darkly-stream/) 🧡
 
