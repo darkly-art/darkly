@@ -52,7 +52,7 @@ zip = { version = "8.6", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 png = "0.18"
 quick-xml = "0.41"
-base64 = "0.22"
+base64 = "0.23"
 thiserror = "2.0"
 # `serde` feature intentionally off: slotmap's derived key serde encodes the
 # generational key as a `{ idx, version }` struct, but `LayerId` crosses the
