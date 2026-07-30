@@ -20,6 +20,8 @@ const { engine, fakeApp, gizmo, TransformGizmoMock, resolveHasFloating } = vi.ho
     };
     const fakeApp = {
         engine,
+        session: null as unknown,
+        canvasEl: {} as unknown,
         activeLayerId: 1 as number | null,
         requestFrame: vi.fn(),
     };
@@ -37,14 +39,23 @@ vi.mock('../transform_bindings', () => ({
 }));
 
 import { transformTool } from '../transform.svelte';
-import { beginToolSession, killToolSession, runHook, ToolSessionCancelled } from '../tool_session';
+import { SessionEngine, runHook, ToolSessionCancelled } from '../tool_session';
 
 // Attach a real transport + typed api over the fake engine's send/post spies so
 // a `SessionEngine` can be begun over it (the bindings reach the engine only
 // through the live session).
 withApi(engine);
 
-const ctx = { canvasEl: {} } as never;
+const tool = transformTool.create(fakeApp as never);
+
+function beginSession() {
+    (fakeApp.session as SessionEngine | null)?.kill();
+    fakeApp.session = new SessionEngine(engine as never);
+}
+function killSession() {
+    (fakeApp.session as SessionEngine | null)?.kill();
+    fakeApp.session = null;
+}
 
 async function flush() {
     for (let i = 0; i < 5; i++) await Promise.resolve();
@@ -54,7 +65,7 @@ beforeEach(() => {
     gizmo.commit.mockClear();
     engine.send.mockClear();
     fakeApp.activeLayerId = 1;
-    beginToolSession(engine as never);
+    beginSession();
 });
 
 /**
@@ -67,15 +78,15 @@ beforeEach(() => {
  */
 describe('transform dismissOverlay race with session teardown', () => {
     it('rejects with ToolSessionCancelled instead of double-committing', async () => {
-        transformTool.onActivate?.(ctx);
+        tool.onActivate?.();
 
         // Start the dismissal; it parks on the deferred has_floating.
-        const pending = transformTool.dismissOverlay!() as unknown as Promise<void>;
+        const pending = tool.dismissOverlay!() as unknown as Promise<void>;
 
         // Tool torn down before the await resolves: onDeactivate commits once and
         // nulls the gizmo; the session dies alongside it.
-        transformTool.onDeactivate?.(ctx);
-        killToolSession();
+        tool.onDeactivate?.();
+        killSession();
         expect(gizmo.commit).toHaveBeenCalledTimes(1); // onDeactivate's own commit
 
         // The deferred read now resolves — but on a dead session, so the resumed

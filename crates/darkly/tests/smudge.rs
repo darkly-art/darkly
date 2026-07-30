@@ -72,10 +72,14 @@ fn render_smudge_dabs(size_override: f32, dabs: &[([f32; 2], [f32; 2])]) -> Vec<
     let mut graph = brush.metadata.graph.clone();
     let term_id = darkly::brush::find_terminal(&graph).expect("Smudge brush has a terminal");
     graph
-        .set_port_default(term_id, "size", size_override)
+        .set_port_default(
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            size_override,
+        )
         .unwrap();
     // Push rate up so the test's red-transfer is unambiguous.
-    graph.set_port_default(term_id, "rate", 0.85).unwrap();
+    graph.set_port_default(&term_id, "rate", 0.85).unwrap();
 
     let (device, queue) = shared_device();
     let (layer_texture, layer_view) =

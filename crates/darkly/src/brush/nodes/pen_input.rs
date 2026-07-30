@@ -1,53 +1,23 @@
 //! Pen Input sensor node — source of all tablet data.
 //!
-//! Outputs 14 sensor values.  This node is special-cased in the runner:
-//! `seed_sensors()` writes directly to its output slots (no virtual
-//! dispatch).  The evaluator is a no-op.
+//! Outputs 14 live sensor values.  This node is special-cased in the runner:
+//! `seed_sensors()` writes directly to its output slots (no virtual dispatch).
+//! The evaluator is a no-op.
+//!
+//! Brush-level settings that aren't stylus data — `size`, `stabilize`,
+//! `spacing`, `spacing_min_px` — live on the separate
+//! [`super::brush_settings`] node, not here.
 
 use std::sync::Arc;
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
-use crate::brush::spacing::SpacingConfig;
 use crate::brush::wgsl::{CompileWgslCtx, DabField, NodeWgsl, WgslType};
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
-use crate::nodegraph::{Graph, NodeRegistration, PortDef, PortDir, UnitType};
+use crate::nodegraph::{NodeRegistration, PortDef};
 
 pub const TYPE_ID: &str = "pen_input";
-
-/// Read a scalar input port default off the (first) pen_input node in `graph`.
-/// Returns `None` when no pen_input node is present or the named port isn't
-/// on it (e.g. an older brush from before the port was added).
-pub fn read_scalar_input(graph: &Graph<BrushWireType>, port_name: &str) -> Option<f32> {
-    for node in graph.nodes().values() {
-        if node.type_id == TYPE_ID {
-            for port in &node.ports {
-                if port.name == port_name && port.dir == PortDir::Input {
-                    return Some(port.default);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Build the `SpacingConfig` the stroke engine should run with for `graph`,
-/// reading the pen_input node's `spacing` and `spacing_min_px` port defaults.
-/// Falls back to `SpacingConfig::default()` for graphs that predate either
-/// port. A `spacing_min_px` of 0 (the registration default) also falls back —
-/// it means "use the ratio alone, with the absolute floor".
-pub fn spacing_config(graph: &Graph<BrushWireType>) -> SpacingConfig {
-    let default = SpacingConfig::default();
-    let ratio = read_scalar_input(graph, "spacing").unwrap_or(default.ratio);
-    let min_px_raw = read_scalar_input(graph, "spacing_min_px").unwrap_or(0.0);
-    let min_px = if min_px_raw > 0.0 {
-        min_px_raw
-    } else {
-        default.min_px
-    };
-    SpacingConfig { ratio, min_px }
-}
 
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration::compute(
@@ -112,66 +82,7 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::output("fade", BrushWireType::Scalar)
                 .with_natural_range(0.0, 1.0)
                 .with_description("Stroke fade-out (0 at start, 1 at stroke end)"),
-            // Stabilization strength — input port read at stroke start,
-            // not per-dab.  Exposed via the eye toggle like any other port.
-            //
-            // `preview_irrelevant_scrub` marks this port as not affecting
-            // editor-preview output: the synthetic preview stroke is a
-            // pre-cooked Bezier rendered through `PassThrough` regardless
-            // of the graph's stabilize value. Declaring it here keeps the
-            // editor preview's cache valid when the user scrubs stabilize,
-            // instead of re-rendering a full stroke for no visible effect.
-            PortDef::input("stabilize", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.0)
-                .with_natural_range(0.0, 1.0)
-                .with_unit(UnitType::Percent)
-                .with_icon("fa6-solid:wave-square")
-                .with_label("Stabilize")
-                .preview_irrelevant_scrub()
-                .with_description(
-                    "Stroke stabilization strength (0 = off, 100% = maximum smoothing)",
-                ),
-            // Dab spacing — read at stroke start as a fraction of the dab
-            // diameter. Like `stabilize`, this is brush-level config that
-            // currently lives here because the engine reads pen_input port
-            // defaults out-of-band; both move together when the brush
-            // settings bar gets redesigned.
-            //
-            // No `preview_value` — spacing visibly affects the rendered
-            // stroke (dab density along the path) and a spacing scrub
-            // *should* re-render the preview.
-            PortDef::input("spacing", BrushWireType::Scalar)
-                .with_range(0.01, 1.0, 0.10)
-                .with_natural_range(0.01, 1.0)
-                .with_unit(UnitType::Percent)
-                .with_icon("fa6-solid:grip-lines-vertical")
-                .with_label("Spacing")
-                .with_description(
-                    "Distance between dabs as a fraction of dab diameter. \
-                     10% is the paint default; warp/smudge brushes typically want 1\u{2013}5%. \
-                     The single-pass WGSL-compiled brush pipeline keeps even 1% spacing within frame budget.",
-                ),
-            // Absolute-pixel spacing floor. The effective spacing per
-            // dab is `max(diameter × ratio, spacing_min_px,
-            // ABSOLUTE_MIN_SPACING_PX)`. Set this above zero — and
-            // ratio to a small value — to pin dab spacing in canvas
-            // pixels regardless of brush size. Liquify uses this so
-            // its per-dab displacement (= strength × spacing) stays
-            // size-invariant: the strength slider names a fixed pixel
-            // amount, not a fraction of brush radius.
-            PortDef::input("spacing_min_px", BrushWireType::Scalar)
-                .with_range(0.0, 64.0, 0.0)
-                .with_natural_range(0.0, 32.0)
-                .with_unit(UnitType::Pixels)
-                .with_icon("fa6-solid:ruler-horizontal")
-                .with_label("Spacing min (px)")
-                .with_description(
-                    "Absolute-pixel floor for dab spacing. 0 = use the \
-                     ratio above; non-zero pins spacing to at least \
-                     this many canvas pixels regardless of brush size.",
-                ),
         ],
-        params: &[],
         is_gpu: false,
         is_terminal: false,
         supports_erase: true,
@@ -257,7 +168,7 @@ impl BrushNodeEvaluator for PenInputEvaluator {
             });
             // `drawing_angle` is `atan2(canvas_dy, canvas_dx)` — a
             // canvas-frame angle. The skeleton subtracts `view_rotation`
-            // from `theta`, so to keep `pen.drawing_angle → shape.rotation_input`
+            // from `theta`, so to keep `pen.drawing_angle → circle.rotation_input`
             // (the canonical stroke-follow wire) aligned with the on-
             // screen stroke direction, subtract `view_rotation` here too:
             // canvas-frame angle minus V = screen-frame angle. Both
@@ -272,82 +183,5 @@ impl BrushNodeEvaluator for PenInputEvaluator {
         }
 
         Ok(wgsl)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::brush::spacing::ABSOLUTE_MIN_SPACING_PX;
-
-    fn graph_with_pen_input(
-        spacing: Option<f32>,
-        spacing_min_px: Option<f32>,
-    ) -> Graph<BrushWireType> {
-        let reg = register();
-        let mut ports = reg.ports.clone();
-        if let Some(v) = spacing {
-            ports
-                .iter_mut()
-                .find(|p| p.name == "spacing")
-                .expect("spacing port present")
-                .default = v;
-        }
-        if let Some(v) = spacing_min_px {
-            ports
-                .iter_mut()
-                .find(|p| p.name == "spacing_min_px")
-                .expect("spacing_min_px port present")
-                .default = v;
-        }
-        let mut graph = Graph::<BrushWireType>::new();
-        graph.add_node(TYPE_ID, ports, vec![]);
-        graph
-    }
-
-    /// Regression: scrubbing the pen_input "spacing" port must change the
-    /// SpacingConfig the preview renderer feeds to the stroke engine.
-    /// Previously the editor preview hardcoded `SpacingConfig::default()`,
-    /// so spacing scrubs produced no visible change in the preview.
-    #[test]
-    fn spacing_config_reads_scrubbed_value() {
-        let graph = graph_with_pen_input(Some(0.5), None);
-        let cfg = spacing_config(&graph);
-        assert!((cfg.ratio - 0.5).abs() < 1e-6, "got ratio {}", cfg.ratio);
-        // Distance scales with the user-set ratio, not the 10% default.
-        assert!((cfg.distance(100.0) - 50.0).abs() < 1e-6);
-    }
-
-    /// `spacing_min_px = 0` is the registration default and means
-    /// "use the ratio alone, with the absolute floor". Must NOT clobber
-    /// the spacing engine's default min_px down to zero.
-    #[test]
-    fn spacing_config_zero_min_px_falls_back_to_default() {
-        let graph = graph_with_pen_input(Some(0.1), Some(0.0));
-        let cfg = spacing_config(&graph);
-        assert!(cfg.min_px >= ABSOLUTE_MIN_SPACING_PX);
-    }
-
-    /// A non-zero `spacing_min_px` scrub must pin the absolute spacing
-    /// floor — Liquify and similar brushes rely on this.
-    #[test]
-    fn spacing_config_honors_min_px_override() {
-        let graph = graph_with_pen_input(Some(0.05), Some(8.0));
-        let cfg = spacing_config(&graph);
-        assert!((cfg.ratio - 0.05).abs() < 1e-6);
-        assert!((cfg.min_px - 8.0).abs() < 1e-6);
-        // 50px diameter × 5% = 2.5px, clamped up to the 8px min.
-        assert!((cfg.distance(50.0) - 8.0).abs() < 1e-6);
-    }
-
-    /// Graphs that predate either port (older saved brushes) fall back
-    /// cleanly to the engine's defaults instead of e.g. zeroing the ratio.
-    #[test]
-    fn spacing_config_falls_back_when_pen_input_missing() {
-        let graph = Graph::<BrushWireType>::new();
-        let cfg = spacing_config(&graph);
-        let default = SpacingConfig::default();
-        assert!((cfg.ratio - default.ratio).abs() < 1e-6);
-        assert!((cfg.min_px - default.min_px).abs() < 1e-6);
     }
 }

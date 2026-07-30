@@ -94,7 +94,9 @@ pub fn blit_region(
 
 pub mod apply_mask;
 pub mod atlas;
+pub mod baked_source_cache;
 pub mod bbox;
+pub mod black_and_white;
 pub mod blend;
 pub mod blend_mode;
 pub mod blend_modes;

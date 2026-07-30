@@ -30,6 +30,7 @@ pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "painting",
         display_name: "Painting",
+        description: "Smooth the view into painterly, brush-like daubs.",
         params: PARAMS,
         create_pipeline: create_painting_pipeline,
         from_params: |params, shared| {

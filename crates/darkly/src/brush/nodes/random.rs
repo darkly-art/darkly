@@ -3,7 +3,7 @@
 //! Outputs a single scalar random value in `[0, 1)` — the raw PRNG natural
 //! range. Declares this as its wire-side `natural_range` so the runner
 //! remaps to whichever range the downstream port wants (e.g. `[0, 1024]`
-//! for `shape.seed`, `[-TAU, TAU]` for `shape.rotation`). A consumer that
+//! for `circle.seed`, `[-TAU, TAU]` for `circle.rotation`). A consumer that
 //! wants bipolar values just declares a `[-x, x]` natural range on its
 //! input — no special casing in this node.
 //!
@@ -15,10 +15,10 @@
 use std::sync::Arc;
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::input_value::InputValue;
 use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wgsl::{CompileWgslCtx, DabField, NodeWgsl, UniformField, WgslType};
 use crate::brush::wire::{BrushWireType, ScalarValue};
-use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef};
 
 pub const TYPE_ID: &str = "random";
@@ -30,18 +30,20 @@ pub fn register() -> BrushNodeRegistration {
             category: "input",
             display_name: "Random",
             description: "A new random value for every brush mark — useful for jittering size, color, angle, etc.",
-            ports: vec![PortDef::output("value", BrushWireType::Scalar)
-                .with_natural_range(0.0, 1.0)
-                .with_description("Random value in [0, 1)")],
-            params: &[
-                // Enum stored as Int — 0 = per-dab, 1 = per-stroke. Surfaced
-                // as a labeled dropdown so users don't have to memorize
-                // indices; the evaluator's match arms read the same i32.
-                ParamDef::Enum {
-                    name: "mode",
-                    options: &["Per-Dab", "Per-Stroke"],
-                    default: 0,
-                },
+            ports: vec![
+                // Compile-time branch selector — 0 = per-dab, 1 = per-stroke.
+                // A labeled dropdown; not wirable (an enum can't be driven
+                // per-dab), exposable like any input.
+                PortDef::input("mode", BrushWireType::Enum)
+                    .with_enum_options(["Per-Dab", "Per-Stroke"])
+                    .with_value(InputValue::Int(0))
+                    .with_label("Mode")
+                    .with_description(
+                        "Per-Dab changes the value every brush mark; Per-Stroke holds it constant for the stroke.",
+                    ),
+                PortDef::output("value", BrushWireType::Scalar)
+                    .with_natural_range(0.0, 1.0)
+                    .with_description("Random value in [0, 1)"),
             ],
             is_gpu: false,
             is_terminal: false,
@@ -56,10 +58,7 @@ pub struct RandomEvaluator;
 
 impl BrushNodeEvaluator for RandomEvaluator {
     fn evaluate_cpu(&self, ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
-        let mode = match ctx.params.first() {
-            Some(crate::gpu::params::ParamValue::Int(v)) => *v,
-            _ => 0,
-        };
+        let mode = ctx.input("mode").as_f32() as i32;
 
         let value = match mode {
             1 => ctx.prng_at(0),             // per-stroke: constant
@@ -79,10 +78,7 @@ impl BrushNodeEvaluator for RandomEvaluator {
         if !cctx.consumed_outputs.contains("value") {
             return Ok(wgsl);
         }
-        let mode = match cctx.params.first() {
-            Some(crate::gpu::params::ParamValue::Int(v)) => *v,
-            _ => 0,
-        };
+        let mode = cctx.input("mode").enum_index();
         let per_stroke = mode == 1;
 
         if per_stroke {
@@ -113,5 +109,51 @@ impl BrushNodeEvaluator for RandomEvaluator {
                 .insert("value".into(), format!("d.{}", field_name));
         }
         Ok(wgsl)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nodegraph::NodeId;
+
+    fn run_sequence(node_id: &NodeId, ports: &[PortDef<BrushWireType>]) -> Vec<f32> {
+        (0..8)
+            .map(|dab_index| {
+                let ctx = EvalContext {
+                    input_slots: &[],
+                    input_values: &[],
+                    port_defs: ports,
+                    lut: None,
+                    stroke_seed: 0x1234_5678,
+                    dab_index,
+                    base_size: 1.0,
+                    node_id,
+                };
+                match RandomEvaluator.evaluate_cpu(&ctx).into_iter().next() {
+                    Some((_, ScalarValue::Scalar(v))) => v,
+                    other => panic!("random produced {other:?}"),
+                }
+            })
+            .collect()
+    }
+
+    /// A `random` node produces a stable per-dab sequence, and two same-kind
+    /// instances (`random`, `random_2`) draw *different* sequences because
+    /// their string ids salt the PRNG differently.
+    #[test]
+    fn random_sequence_is_stable_and_id_disambiguated() {
+        let ports = register().node.ports.clone();
+        let a = NodeId("random".into());
+        let b = NodeId("random_2".into());
+
+        let seq_a = run_sequence(&a, &ports);
+        assert_eq!(seq_a, run_sequence(&a, &ports), "sequence must be stable");
+
+        let seq_b = run_sequence(&b, &ports);
+        assert_ne!(
+            seq_a, seq_b,
+            "distinct same-kind ids must draw distinct sequences"
+        );
     }
 }

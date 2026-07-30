@@ -9,12 +9,15 @@ mod export;
 mod filters;
 mod flatten;
 mod floating;
+#[cfg(any(test, feature = "testing"))]
+pub use floating::TransformCommitFailurePoint;
 mod image_rescale;
 mod layer_flip;
 mod layers;
 mod load;
 mod merge;
 mod painting;
+pub mod process_recording;
 pub mod protocol;
 pub mod rendering;
 pub mod save;
@@ -24,8 +27,10 @@ mod undo_dispatch;
 mod veils;
 mod voids;
 
+pub use brush_graph::{ExposedPortInfo, ExposedValue};
 pub use export::ExportImageResult;
 pub use load::LoadDocument;
+pub use process_recording::{ProcessRecorder, RecordedFrame};
 pub use rendering::{PickSource, DEFAULT_THUMB_SIZE};
 pub use save::{SaveError, SaveJob, SavePurpose, SaveReadbackKind};
 pub use types::{
@@ -72,7 +77,8 @@ use std::collections::HashMap;
 /// `node_id` may refer to a raster layer or a mask filter; the format is
 /// derived from the node's [`PixelBuffer`].
 pub(crate) struct PendingTransform {
-    pub node_id: LayerId,
+    pub setup_generation: u64,
+    pub plan: crate::document::PixelTransformPlan,
 }
 
 /// Deferred layer/selection flip — waiting for the selection CPU cache (the
@@ -252,6 +258,18 @@ pub(crate) enum ReadbackContext {
     ActiveBrushDab {
         topology_version: u64,
     },
+    /// Async readback of a single-node preview rendered from a subgraph rooted
+    /// at one node's renderable output (see
+    /// [`crate::brush::node_preview_subgraph::build_node_preview_graph`]).
+    /// Completion frames the pixels through the same dab-thumbnail framer and
+    /// stores the PNG bytes in `node_preview_cache` keyed by node id, so the
+    /// next `brush_node_preview(node_id)` call returns them synchronously. The
+    /// topology version travels with the request so stale results from a
+    /// superseded graph edit are dropped.
+    NodePreview {
+        node_id: String,
+        topology_version: u64,
+    },
     /// Async readback of the freshly-rendered `cursor_preview_mask` (the GPU
     /// texture sampled by the overlay's KIND_MASKED_STAMP) used to derive
     /// the cursor-preview coverage scale. Completion measures mean alpha
@@ -288,6 +306,15 @@ pub(crate) enum ReadbackContext {
         type_id: &'static str,
         frame_idx: u32,
         total: u32,
+    },
+    /// Async readback of one process-recording capture (the downscaled,
+    /// letterboxed composite). Completion pushes a
+    /// [`process_recording::RecordedFrame`] onto the recorder's completed
+    /// queue, drained by `poll_recording_frame`.
+    RecordingFrame {
+        width: u32,
+        height: u32,
+        frame_index: u64,
     },
 }
 
@@ -402,8 +429,10 @@ pub struct DarklyEngine {
     pub(crate) overlays: [Vec<OverlayPrimitive>; OverlayChannel::COUNT],
     /// Internal clipboard — holds typed content for copy/paste within Darkly.
     pub(crate) clipboard: Option<Clipboard>,
-    /// Active floating content (paste-in-place or interactive transform).
+    /// Active paste compatibility session.
     pub(crate) floating: Option<FloatingContent>,
+    /// Active destructive pixel-transform operation, independent from paste.
+    pub(crate) transform_session: Option<floating::TransformSession>,
 
     // --- GPU Paint Infrastructure ---
     pub(crate) region_scratch: RegionScratch,
@@ -478,6 +507,12 @@ pub struct DarklyEngine {
     /// Topology version at the last time we issued a dab render. Compared
     /// against `brush_topology_version` to skip redundant dab renders.
     pub(crate) last_rendered_dab_topology_version: u64,
+    /// Cached per-node preview PNG bytes, keyed by node id. Each entry stores
+    /// the topology version the render was issued at alongside the bytes, so
+    /// `brush_node_preview` can serve a fresh cache hit synchronously and skip
+    /// re-issuing a readback while the graph is unchanged. Refreshed
+    /// asynchronously via `ReadbackContext::NodePreview`.
+    pub(crate) node_preview_cache: std::collections::HashMap<String, (u64, Vec<u8>)>,
     /// Topology version of the brush whose cursor-preview coverage scale
     /// we last requested a readback for. Compared against the current
     /// topology to skip re-issuing the readback when the brush hasn't
@@ -554,6 +589,11 @@ pub struct DarklyEngine {
     // --- Deferred operations ---
     /// Pending transform waiting for content bounds computation.
     pub(crate) pending_transform: Option<PendingTransform>,
+    /// Monotonic cancellation token for asynchronous transform setup.
+    pub(crate) transform_setup_generation: u64,
+    pub(crate) transform_setup_error: Option<crate::document::TransformCapabilityError>,
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) transform_commit_failure: Option<floating::TransformCommitFailurePoint>,
     /// Pending layer/selection flip waiting for the selection CPU cache.
     pub(crate) pending_flip: Option<PendingFlip>,
     /// Pending destructive filter waiting for the selection CPU cache.
@@ -620,6 +660,10 @@ pub struct DarklyEngine {
     /// Most recent `render()` sub-phase timings. Overwritten every frame;
     /// read by the WASM bridge when it logs a slow frame.
     pub(crate) last_frame_phases: FrameRenderPhases,
+
+    /// Passive process-recording (timelapse) capture state. Session-only;
+    /// the persistent recording is a frontend-owned artifact.
+    pub(crate) recorder: ProcessRecorder,
 }
 
 impl DarklyEngine {
@@ -677,6 +721,7 @@ impl DarklyEngine {
             overlays: Default::default(),
             clipboard: None,
             floating: None,
+            transform_session: None,
             region_scratch,
             paint_pipelines,
             scratch_snapshot: None,
@@ -690,6 +735,7 @@ impl DarklyEngine {
             brush_stroke_preview_cache: None,
             last_rendered_stroke_preview_version: 0,
             active_dab_preview_cache: None,
+            node_preview_cache: std::collections::HashMap::new(),
             last_rendered_dab_topology_version: 0,
             last_requested_cursor_scale_topology_version: 0,
             // Default theme: dark (white on dark). Frontend overrides via
@@ -716,6 +762,10 @@ impl DarklyEngine {
             pending_undo_commit: None,
             selection_pipelines,
             pending_transform: None,
+            transform_setup_generation: 0,
+            transform_setup_error: None,
+            #[cfg(any(test, feature = "testing"))]
+            transform_commit_failure: None,
             pending_flip: None,
             pending_filter: None,
             filter_preview: None,
@@ -734,6 +784,7 @@ impl DarklyEngine {
             brush_full_rerender_events: 0,
             last_brush_perf: BrushPerfCounters::default(),
             last_frame_phases: FrameRenderPhases::default(),
+            recorder: ProcessRecorder::new(),
         };
 
         // Snapshot the default graph's port defaults so reset-to-default
@@ -1168,7 +1219,7 @@ impl DarklyEngine {
         let inset = rw.min(rh) as f32 * brush_library::BRUSH_STROKE_PATH_INSET_FRACTION;
         let path =
             crate::brush::preview_renderer::synthesize_stroke_path(rw as f32, rh as f32, 30, inset);
-        self.test_render_preview_canvas(&graph, &path, rw, rh)
+        self.test_render_preview_canvas(&graph, &path, rw, rh, None)
     }
 
     /// Blocking readback of the raw dab-preview **render canvas** for the
@@ -1181,7 +1232,13 @@ impl DarklyEngine {
         crate::brush::reset_exposed_scrubs(&mut graph);
         let (rw, rh) = brush_library::BRUSH_DAB_RENDER_SIZE;
         let path = crate::brush::preview_renderer::synthesize_dab_path(rw as f32, rh as f32);
-        self.test_render_preview_canvas(&graph, &path, rw, rh)
+        self.test_render_preview_canvas(
+            &graph,
+            &path,
+            rw,
+            rh,
+            Some(brush_library::DAB_PREVIEW_BASE_SIZE),
+        )
     }
 
     /// Shared body of the two preview-canvas test accessors: render the given
@@ -1194,6 +1251,7 @@ impl DarklyEngine {
         path: &[crate::brush::paint_info::PaintInformation],
         rw: u32,
         rh: u32,
+        base_size_override: Option<f32>,
     ) -> (Vec<u8>, u32, u32) {
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
@@ -1209,6 +1267,7 @@ impl DarklyEngine {
                 bg,
                 rw,
                 rh,
+                base_size_override,
             )
             .expect("preview render should return a texture");
         let pixels = crate::gpu::test_utils::readback_texture(

@@ -39,6 +39,11 @@ export default defineConfig(({ mode }) => ({
         // 'demo', so `npm run dev` keeps the decorative demo experience.
         __DARKLY_APP_MODE__: JSON.stringify(mode === 'app' ? 'app' : 'demo'),
     },
+    resolve: {
+        // Component tests run in jsdom and must load Svelte's browser runtime;
+        // production browser builds use the same condition.
+        conditions: ['browser'],
+    },
     plugins: [
         // Regenerates src/icons/bundle.generated.ts from the icon names found in
         // source — on buildStart (dev + prod) and live on file change in dev.

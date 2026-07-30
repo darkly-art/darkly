@@ -178,6 +178,8 @@ pub struct ModifierInfo {
     pub name: String,
     pub visible: bool,
     pub locked: bool,
+    /// Whether this modifier participates in transforms with its host.
+    pub linked_to_host: bool,
     /// See [`LayerInfo::Raster::editable`] — a modifier is editable when
     /// neither it nor its host (nor any ancestor of the host) is locked.
     pub editable: bool,
@@ -190,14 +192,22 @@ pub struct VeilTypeInfo {
     #[serde(rename = "type")]
     pub type_id: &'static str,
     pub display_name: &'static str,
+    /// Iconify name shown for this type. Filters carry a per-variant icon so
+    /// each reads distinctly in the Colors menu and the Add Filter Layer picker;
+    /// veils leave it empty (their UI renders a live preview, not an icon).
+    pub icon: &'static str,
+    /// One-sentence summary from the registration — picker tooltips, and (for
+    /// filters) folded into the Colors-menu action description where the
+    /// command palette's search indexes it.
+    pub description: &'static str,
     pub params: Vec<ParamInfo>,
 }
 
 /// Registry view of a void type for the "Add Void" picker. Mirrors
-/// [`VeilTypeInfo`] but additionally carries the void's iconify `icon` (always
-/// present — the picker's fallback when there's no rendered preview) and
-/// `supportsPreview` (whether to render a live thumbnail at all). `icon` is
-/// void-only and intentionally not symmetrized onto [`VeilTypeInfo`].
+/// [`VeilTypeInfo`] but additionally carries `supportsPreview` (whether to
+/// render a live thumbnail at all) and the browser `captureKind`. The void's
+/// iconify `icon` is always present — the picker's fallback when there's no
+/// rendered preview.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -487,7 +497,8 @@ pub enum StrokeOp {
         rotation: f32,
         tangential_pressure: f32,
         time_ms: f64,
-        /// Foreground color as linear RGBA floats (0-1).
+        /// Foreground color as raw sRGB RGBA floats (0-1), as picked — the
+        /// compositor is display-referred, so no gamma conversion is applied.
         cr: f32,
         cg: f32,
         cb: f32,
@@ -580,6 +591,7 @@ pub(crate) fn node_to_layer_info(
                     .enumerate()
                     .map(|(j, def)| ParamInfo::from_def(def, f.params.get(j)))
                     .collect();
+                let pipeline_icon = filter_registry.icon(&f.pipeline);
                 LayerInfo::Filter {
                     id: f.id.to_ffi() as f64,
                     name: f.common.name.clone(),
@@ -589,7 +601,11 @@ pub(crate) fn node_to_layer_info(
                     can_have_mask: kind.can_have_mask,
                     can_rename: kind.can_rename,
                     has_thumbnail: kind.has_thumbnail,
-                    icon: kind.icon,
+                    icon: if pipeline_icon.is_empty() {
+                        kind.icon
+                    } else {
+                        pipeline_icon
+                    },
                     kind_name: kind.display_name,
                     opacity: f.blend.opacity,
                     blend_mode: f.blend.blend_mode.type_id,
@@ -663,6 +679,10 @@ pub(crate) fn modifier_to_info(
         name: modifier.common.name.clone(),
         visible: modifier.common.visible,
         locked: modifier.common.locked,
+        linked_to_host: match &modifier.kind {
+            crate::document::FilterKind::Mask(mask) => mask.linked_to_host,
+            crate::document::FilterKind::Selection(_) => false,
+        },
         editable: doc.is_node_editable(modifier.id),
     }
 }

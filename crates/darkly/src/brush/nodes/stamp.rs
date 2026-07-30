@@ -2,7 +2,7 @@
 //!
 //! Inlines `color × mask` into the brush's WGSL via [`compile_wgsl`].
 //! The upstream `tip` input is a scalar coverage expression (typically
-//! from `shape.mask`'s compile output); the emitted `dab` output is
+//! from `circle.mask`'s compile output); the emitted `dab` output is
 //! premultiplied RGBA that downstream paint terminals consume.
 //!
 //! Flow lives on the `paint` terminal — that is the single, authoritative
@@ -34,9 +34,9 @@ pub fn register() -> BrushNodeRegistration {
                     .with_description("Per-fragment tip coverage (0..1)"),
                 PortDef::input("color", BrushWireType::Vec4).with_description("Brush color (RGBA)"),
                 PortDef::output("dab", BrushWireType::Vec4)
+                    .preview_image()
                     .with_description("The stamped brush mark (premultiplied RGBA)"),
             ],
-            params: &[],
             is_gpu: true,
             is_terminal: false,
             supports_erase: true,

@@ -84,6 +84,12 @@ mouse_clicks:
   # isolateLayer mouse_click: GIMP has no thumbnail-modifier equivalent,
   # so intentionally unbound here. The hotkey form (KeyI above) is the
   # GIMP-native path.
+  # maskToSelection mouse_click: GIMP's native gesture is Alt+click
+  # (gimpitemtreeview.c → gimp_modifiers_to_channel_op), but Darkly's
+  # alt+click thumbnail slot is isolate's. GIMP itself ships no keyboard
+  # accelerator for Mask→Selection (layers-actions.c: NULL accel), so this
+  # is intentionally unbound here — reachable via the mask context menu and
+  # the command palette, faithful to GIMP's menu-only surface.
 
 settings:
   tools.colorPickerSampleSource: merged

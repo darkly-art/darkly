@@ -64,10 +64,14 @@ fn render_dabs_on(
         .unwrap_or_else(|| panic!("builtin brush `{brush_name}` not registered"));
 
     let mut graph = brush.metadata.graph.clone();
-    let term_id = darkly::brush::find_terminal(&graph)
+    let _term_id = darkly::brush::find_terminal(&graph)
         .unwrap_or_else(|err| panic!("brush `{brush_name}`: {err}"));
     graph
-        .set_port_default(term_id, "size", size_override)
+        .set_port_default(
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            size_override,
+        )
         .unwrap();
 
     let (device, queue) = shared_device();
@@ -266,11 +270,17 @@ fn begin_stroke_clears_scratch_so_rewind_drops_defunct_pigment() {
         .expect("Smooth Watercolor brush registered");
 
     let mut graph = brush.metadata.graph.clone();
-    let term_id = darkly::brush::find_terminal(&graph).expect("watercolor terminal");
+    let _term_id = darkly::brush::find_terminal(&graph).expect("watercolor terminal");
     // Small dab — at `size = 0.05` the dab radius is ~13 px (size *
     // DAB_REFERENCE_SIZE / 2 ≈ 12.8), so the two dab positions chosen
     // below (40, 64) and (88, 64) are well isolated and don't overlap.
-    graph.set_port_default(term_id, "size", 0.05).unwrap();
+    graph
+        .set_port_default(
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            0.05,
+        )
+        .unwrap();
 
     let canvas = light_blue_canvas();
     let (device, queue) = shared_device();

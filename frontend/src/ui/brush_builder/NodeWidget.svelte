@@ -3,8 +3,6 @@
     import { brushGraph, type NodeInstance, type PortDef } from '../../state/brush_graph.svelte';
     import { app } from '../../state/app.svelte';
     import PortWidget from './PortWidget.svelte';
-    import CurveEditor from '../CurveEditor.svelte';
-    import Icon from '../../icons/Icon.svelte';
     import NodePreview from './NodePreview.svelte';
     import type { NodeCanvasContext } from './NodeCanvas.svelte';
 
@@ -19,29 +17,31 @@
     let isSelected = $derived(brushGraph.selectedNode === node.id);
     let outputPorts = $derived(node.ports.filter(p => p.dir === 'Output'));
     let position = $derived(brushGraph.nodePositions[node.id] ?? [0, 0]);
-    /** Nodes opt in to an in-card preview thumbnail by type id. The
-     *  engine's `brush_node_preview` matches on the same id and returns
-     *  PNG bytes (or an empty Vec, which the NodePreview component
-     *  treats as "no preview"). Add new entries here as their backend
-     *  arm in `brush_graph.rs::brush_node_preview` lands. */
-    const PREVIEWABLE_NODE_TYPES = new Set(['noise']);
-    let isPreviewable = $derived(PREVIEWABLE_NODE_TYPES.has(node.type_id));
+    /** A node shows an in-card preview thumbnail iff one of its outputs is
+     *  flagged `preview_image` — a spatial coverage mask or colour field
+     *  (`shape.mask`, `image.color`, …). Read straight off the port data (like
+     *  `wirable` / `exposable`), the same flag the engine's
+     *  `BrushNodeRegistration::preview_output` picks. Per-dab constants and
+     *  sensor/math outputs leave it off, so `random` / `paint_color` don't show
+     *  a meaningless flat blob. New nodes opt in by flagging their image
+     *  output — no allowlist on either side. The engine's `brush_node_preview`
+     *  renders a subgraph rooted at that output; an empty Vec means "no
+     *  preview yet". */
+    let isPreviewable = $derived(outputPorts.some(p => p.preview_image));
 
-    // Node type info for display name and params.
+    // Node type info for display name.
     let typeInfo = $derived(brushGraph.getNodeType(node.type_id));
     let displayName = $derived(typeInfo?.display_name ?? node.type_id);
-    let paramDefs = $derived(typeInfo?.params ?? []);
 
-    /** Apply the port's `visible_when` rule against the current params.
-     *  Engine-side the port still works regardless — this is purely UI. */
+    /** Apply the port's `visible_when` rule against the referenced sibling
+     *  input's current value. Engine-side the port still works regardless —
+     *  this is purely UI. */
     function isPortVisible(port: PortDef): boolean {
         if (!port.visible_when) return true;
-        const [paramName, allowed] = port.visible_when;
-        const idx = paramDefs.findIndex((d: any) => d.name === paramName);
-        if (idx < 0) return true; // misconfigured rule — fall back to visible
-        const def = paramDefs[idx] as any;
-        const raw = node.params[idx] ?? def?.default ?? 0;
-        return allowed.includes(Number(raw));
+        const [inputName, allowed] = port.visible_when;
+        const src = node.ports.find(p => p.name === inputName && p.dir === 'Input');
+        if (!src) return true;
+        return allowed.includes(Number(src.value));
     }
     let inputPorts = $derived(
         node.ports.filter(p => p.dir === 'Input' && isPortVisible(p))
@@ -58,10 +58,42 @@
     let nodeEl: HTMLDivElement;
 
     /** Returns true if the event target is an interactive child that should
-     *  handle its own pointer events (port dots, sliders, buttons). */
+     *  handle its own pointer events (port dots, sliders, buttons, the
+     *  comment editor). */
     function isInteractiveTarget(e: PointerEvent): boolean {
         const t = e.target as HTMLElement;
-        return !!t.closest('.port-dot, .port-slider, .param-scrub, .curve-editor, .param-text-input, input, button, select');
+        return !!t.closest('.port-dot, .port-slider, .curve-editor, input, button, select, textarea');
+    }
+
+    // --- Author comment (inline note beneath the header) ---
+    let editingComment = $state(false);
+    let commentDraft = $state('');
+    let commentOriginal = '';
+
+    function startEditComment(e: MouseEvent) {
+        e.stopPropagation();
+        commentOriginal = node.comment ?? '';
+        commentDraft = commentOriginal;
+        editingComment = true;
+    }
+
+    /** Live local feedback while typing — no engine round-trip per keystroke. */
+    function onCommentInput() {
+        brushGraph.setNodeCommentLocal(node.id, commentDraft);
+    }
+
+    /** Commit on blur. Trims, reflects locally, and only hits the engine when
+     *  the value actually changed since editing began. */
+    function commitComment() {
+        editingComment = false;
+        const next = commentDraft.trim();
+        brushGraph.setNodeCommentLocal(node.id, next);
+        if (next !== commentOriginal) brushGraph.setNodeComment(node.id, next);
+    }
+
+    /** Focus the textarea as soon as it mounts (avoids the autofocus lint). */
+    function focusOnMount(el: HTMLTextAreaElement) {
+        el.focus();
     }
 
     function onNodeDown(e: PointerEvent) {
@@ -95,159 +127,6 @@
         app.endInteraction();
     }
 
-    /** Commit param to Rust on checkbox change. */
-    function onParamChange(index: number, e: Event) {
-        const target = e.target as HTMLInputElement;
-        const def = paramDefs[index] as any;
-        if (!def) return;
-        if (def.kind === 'bool') {
-            brushGraph.setParam(node.id, index, def.kind, target.checked);
-        }
-    }
-
-    // --- Param scrub (Blender-style drag bar for float/int params) ---
-
-    let scrubIndex = -1;
-    let scrubEl: HTMLDivElement | null = null;
-
-    function paramScrubFraction(e: PointerEvent): number {
-        if (!scrubEl) return 0;
-        const local = coords.clientToElementLocal(scrubEl, e.clientX, e.clientY);
-        return Math.max(0, Math.min(1, local.x / scrubEl.clientWidth));
-    }
-
-    function paramValueFromFraction(frac: number, def: any): number {
-        const raw = def.min + frac * (def.max - def.min);
-        return def.kind === 'int' ? Math.round(raw) : raw;
-    }
-
-    function paramScrubPercent(index: number): number {
-        const def = paramDefs[index] as any;
-        if (!def || def.max <= def.min) return 0;
-        const val = node.params[index] ?? def.default;
-        return ((val - def.min) / (def.max - def.min)) * 100;
-    }
-
-    function paramDisplayValue(index: number): string {
-        const def = paramDefs[index] as any;
-        if (!def) return '';
-        const val = node.params[index] ?? def.default;
-        return def.kind === 'int' ? String(Math.round(val)) : val.toFixed(2);
-    }
-
-    function onParamScrubDown(e: PointerEvent, index: number) {
-        e.stopPropagation();
-        e.preventDefault();
-        scrubIndex = index;
-        scrubEl = e.currentTarget as HTMLDivElement;
-        scrubEl.setPointerCapture(e.pointerId);
-        app.beginInteraction();
-        const def = paramDefs[index] as any;
-        const value = paramValueFromFraction(paramScrubFraction(e), def);
-        brushGraph.setParamLocal(node.id, index, value);
-    }
-
-    function onParamScrubMove(e: PointerEvent, index: number) {
-        if (scrubIndex !== index) return;
-        const def = paramDefs[index] as any;
-        const value = paramValueFromFraction(paramScrubFraction(e), def);
-        brushGraph.setParamLocal(node.id, index, value);
-    }
-
-    function onParamScrubUp(e: PointerEvent, index: number) {
-        if (scrubIndex !== index) return;
-        scrubIndex = -1;
-        const el = e.currentTarget as HTMLDivElement;
-        el.releasePointerCapture(e.pointerId);
-        const def = paramDefs[index] as any;
-        const value = node.params[index] ?? def.default;
-        brushGraph.setParam(node.id, index, def.kind, value);
-    }
-
-    function onParamScrubLostCapture() {
-        scrubIndex = -1;
-        scrubEl = null;
-        app.endInteraction();
-    }
-
-    // --- Double-click to type a param value ---
-    let editingParam = $state(-1);
-
-    function onParamDblClick(e: MouseEvent, index: number) {
-        e.stopPropagation();
-        e.preventDefault();
-        editingParam = index;
-    }
-
-    function onParamEditKeyDown(e: KeyboardEvent, index: number) {
-        if (e.key === 'Enter') commitParamEdit(e.currentTarget as HTMLInputElement, index);
-        if (e.key === 'Escape') editingParam = -1;
-    }
-
-    function onParamEditBlur(e: FocusEvent, index: number) {
-        commitParamEdit(e.currentTarget as HTMLInputElement, index);
-    }
-
-    function commitParamEdit(input: HTMLInputElement, index: number) {
-        editingParam = -1;
-        const def = paramDefs[index] as any;
-        if (!def) return;
-        const parsed = parseFloat(input.value);
-        if (isNaN(parsed)) return;
-        const clamped = Math.max(def.min, Math.min(def.max, parsed));
-        const value = def.kind === 'int' ? Math.round(clamped) : clamped;
-        brushGraph.setParamLocal(node.id, index, value);
-        brushGraph.setParam(node.id, index, def.kind, value);
-    }
-
-    // --- Enum dropdown ---
-
-    function onEnumChange(index: number, e: Event) {
-        e.stopPropagation();
-        const value = parseInt((e.target as HTMLSelectElement).value);
-        brushGraph.setParamLocal(node.id, index, value);
-        brushGraph.setParam(node.id, index, 'int', value);
-    }
-
-    // --- Icon picker (custom dropdown) ---
-
-    let iconPickerOpen = $state(-1);
-
-    function toggleIconPicker(e: MouseEvent, index: number) {
-        e.stopPropagation();
-        iconPickerOpen = iconPickerOpen === index ? -1 : index;
-    }
-
-    function selectIcon(index: number, value: string) {
-        iconPickerOpen = -1;
-        brushGraph.setParamLocal(node.id, index, value);
-        brushGraph.setParam(node.id, index, 'string', value);
-    }
-
-    // --- String / FloatInput text fields ---
-
-    function onStringCommit(index: number, e: Event) {
-        const value = (e.target as HTMLInputElement).value;
-        brushGraph.setParamLocal(node.id, index, value);
-        brushGraph.setParam(node.id, index, 'string', value);
-    }
-
-    function onFloatInputCommit(index: number, e: Event) {
-        const def = paramDefs[index] as any;
-        if (!def) return;
-        const parsed = parseFloat((e.target as HTMLInputElement).value);
-        if (isNaN(parsed)) return;
-        const clamped = Math.max(def.min, Math.min(def.max, parsed));
-        brushGraph.setParamLocal(node.id, index, clamped);
-        brushGraph.setParam(node.id, index, 'float', clamped);
-    }
-
-    function onTextKeyDown(e: KeyboardEvent, index: number, kind: string) {
-        if (e.key === 'Enter') {
-            (e.target as HTMLInputElement).blur();
-        }
-    }
-
     function onRemove(e: MouseEvent) {
         e.stopPropagation();
         brushGraph.removeNode(node.id);
@@ -272,132 +151,6 @@
     </div>
 
     <div class="node-body">
-        {#if paramDefs.length > 0}
-            <div class="params params-top">
-                {#each paramDefs as pdef, i}
-                    {#if pdef.kind === 'curve'}
-                        <CurveEditor
-                            points={node.params[i] ?? pdef.default}
-                            oninput={(pts) => brushGraph.setParamLocal(node.id, i, pts)}
-                            onchange={(pts) => brushGraph.setParam(node.id, i, 'curve', JSON.stringify(pts))}
-                        />
-                    {:else if pdef.kind === 'bool'}
-                        <div class="param-row">
-                            <span class="param-label">{pdef.name}</span>
-                            <input
-                                type="checkbox"
-                                checked={node.params[i]}
-                                onchange={(e) => onParamChange(i, e)}
-                            />
-                        </div>
-                    {:else if pdef.kind === 'float' || pdef.kind === 'int'}
-                        {#if editingParam === i}
-                            <!-- svelte-ignore a11y_autofocus -->
-                            <input
-                                class="param-scrub-edit"
-                                type="text"
-                                value={node.params[i] ?? pdef.default}
-                                autofocus
-                                onkeydown={(e) => onParamEditKeyDown(e, i)}
-                                onblur={(e) => onParamEditBlur(e, i)}
-                                onclick={(e) => e.stopPropagation()}
-                            />
-                        {:else}
-                            <!-- svelte-ignore a11y_no_static_element_interactions -->
-                            <div
-                                class="param-scrub"
-                                onpointerdown={(e) => onParamScrubDown(e, i)}
-                                onpointermove={(e) => onParamScrubMove(e, i)}
-                                onpointerup={(e) => onParamScrubUp(e, i)}
-                                onlostpointercapture={onParamScrubLostCapture}
-                                ondblclick={(e) => onParamDblClick(e, i)}
-                            >
-                                <div
-                                    class="param-scrub-fill"
-                                    style="width: {paramScrubPercent(i)}%;"
-                                ></div>
-                                <span class="param-scrub-label">{pdef.name}</span>
-                                <span class="param-scrub-value">{paramDisplayValue(i)}</span>
-                            </div>
-                        {/if}
-                    {:else if pdef.kind === 'enum'}
-                        <div class="param-row">
-                            <span class="param-label">{pdef.name}</span>
-                            <select
-                                class="param-select"
-                                value={node.params[i] ?? pdef.default}
-                                onchange={(e) => onEnumChange(i, e)}
-                                onclick={(e) => e.stopPropagation()}
-                            >
-                                {#each pdef.options as option, oi}
-                                    <option value={oi}>{option}</option>
-                                {/each}
-                            </select>
-                        </div>
-                    {:else if pdef.kind === 'string'}
-                        <div class="param-row">
-                            <span class="param-label">{pdef.name}</span>
-                            <input
-                                class="param-text-input"
-                                type="text"
-                                value={node.params[i] ?? pdef.default}
-                                onblur={(e) => onStringCommit(i, e)}
-                                onkeydown={(e) => onTextKeyDown(e, i, 'string')}
-                                onclick={(e) => e.stopPropagation()}
-                            />
-                        </div>
-                    {:else if pdef.kind === 'floatInput'}
-                        <div class="param-row">
-                            <span class="param-label">{pdef.name}</span>
-                            <input
-                                class="param-text-input"
-                                type="text"
-                                value={node.params[i] ?? pdef.default}
-                                onblur={(e) => onFloatInputCommit(i, e)}
-                                onkeydown={(e) => onTextKeyDown(e, i, 'float')}
-                                onclick={(e) => e.stopPropagation()}
-                            />
-                        </div>
-                    {:else if pdef.kind === 'icon'}
-                        <div class="param-row icon-picker-row">
-                            <span class="param-label">{pdef.name}</span>
-                            <button
-                                class="icon-picker-trigger"
-                                onclick={(e) => toggleIconPicker(e, i)}
-                            >
-                                {#if node.params[i]}
-                                    <Icon name={node.params[i]} class="icon-picker-current" />
-                                {:else}
-                                    <span class="icon-picker-none">None</span>
-                                {/if}
-                                <svg class="chevron" width="8" height="5" viewBox="0 0 10 6">
-                                    <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/>
-                                </svg>
-                            </button>
-                            {#if iconPickerOpen === i}
-                                <div class="icon-picker-dropdown dropdown-surface">
-                                    {#each pdef.options as [iconClass, iconLabel]}
-                                        <button
-                                            class="icon-picker-item"
-                                            class:active={(node.params[i] ?? pdef.default) === iconClass}
-                                            onclick={(e) => { e.stopPropagation(); selectIcon(i, iconClass); }}
-                                        >
-                                            {#if iconClass}
-                                                <Icon name={iconClass} class="icon-picker-item-icon" />
-                                            {:else}
-                                                <span class="icon-picker-item-icon" style="width:14px"></span>
-                                            {/if}
-                                            <span>{iconLabel}</span>
-                                        </button>
-                                    {/each}
-                                </div>
-                            {/if}
-                        </div>
-                    {/if}
-                {/each}
-            </div>
-        {/if}
-
         {#if outputPorts.length > 0}
             <div class="ports-outputs">
                 {#each outputPorts as port}
@@ -417,6 +170,23 @@
             <NodePreview nodeId={node.id} width={96} height={96} />
         {/if}
     </div>
+
+    {#if editingComment}
+        <textarea
+            class="node-comment-edit"
+            bind:value={commentDraft}
+            oninput={onCommentInput}
+            onblur={commitComment}
+            use:focusOnMount
+            placeholder="Note…"
+            maxlength={500}
+            rows={2}
+        ></textarea>
+    {:else if node.comment}
+        <button class="node-comment" onclick={startEditComment} title="Edit note">{node.comment}</button>
+    {:else}
+        <button class="add-note-btn" onclick={startEditComment} title="Add a note">+ note</button>
+    {/if}
 </div>
 
 <style>
@@ -464,6 +234,65 @@
     .remove-btn:hover {
         color: var(--danger);
     }
+    /* Inline author note, pinned to the bottom of the card. A top separator
+       divides it from the ports above; it inherits the card's rounded
+       bottom corners. */
+    .node-comment,
+    .add-note-btn,
+    .node-comment-edit {
+        display: block;
+        box-sizing: border-box;
+        /* Fill the node's width (set by its ports) but contribute nothing to
+           it: `width: 0; min-width: 100%` lets the note stretch to the card
+           edge while a long note wraps instead of swelling the node. */
+        width: 0;
+        min-width: 100%;
+        font-size: 10px;
+        text-align: left;
+        border-top: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+        border-radius: 0 0 5px 5px;
+    }
+    .node-comment {
+        background: none;
+        border-left: none;
+        border-right: none;
+        border-bottom: none;
+        padding: 4px 6px;
+        color: color-mix(in srgb, var(--text) 70%, transparent);
+        font-style: italic;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        cursor: text;
+        line-height: 1.3;
+    }
+    .add-note-btn {
+        background: none;
+        border-left: none;
+        border-right: none;
+        border-bottom: none;
+        padding: 3px 6px;
+        color: color-mix(in srgb, var(--text) 35%, transparent);
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 0.1s;
+    }
+    .node-widget:hover .add-note-btn,
+    .node-widget.selected .add-note-btn {
+        opacity: 1;
+    }
+    .add-note-btn:hover {
+        color: var(--accent);
+    }
+    .node-comment-edit {
+        padding: 4px 6px;
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--accent);
+        font-family: inherit;
+        line-height: 1.3;
+        resize: vertical;
+    }
+
     .node-body {
         padding: 4px 0;
     }
@@ -472,191 +301,5 @@
         display: flex;
         flex-direction: column;
         gap: 2px;
-    }
-    .params {
-        padding: 4px 6px;
-    }
-    /* When the params block sits at the top of the node body, draw the
-       divider below it (separating sticky config from per-dab data ports)
-       instead of the previous "params at the bottom" layout's top divider. */
-    .params-top {
-        border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
-        margin-bottom: 4px;
-    }
-    .param-row {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        margin-top: 2px;
-    }
-    .param-label {
-        font-size: 9px;
-        color: var(--text);
-        cursor: default;
-    }
-
-    /* --- Param scrub bar (Blender-style) --- */
-    .param-scrub {
-        position: relative;
-        height: 14px;
-        background: color-mix(in srgb, var(--text) 8%, transparent);
-        border-radius: 3px;
-        overflow: hidden;
-        cursor: ew-resize;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 0 4px;
-        margin-top: 2px;
-    }
-    .param-scrub-fill {
-        position: absolute;
-        left: 0;
-        top: 0;
-        bottom: 0;
-        background: var(--accent);
-        opacity: 0.3;
-        border-radius: 3px;
-        pointer-events: none;
-    }
-    .param-scrub-label {
-        font-size: 8px;
-        color: var(--text);
-        position: relative;
-        pointer-events: none;
-        white-space: nowrap;
-    }
-    .param-scrub-value {
-        font-size: 8px;
-        color: var(--text);
-        position: relative;
-        pointer-events: none;
-        white-space: nowrap;
-        opacity: 0.7;
-    }
-    .param-scrub-edit {
-        height: 14px;
-        border: 1px solid var(--accent);
-        border-radius: 3px;
-        background: var(--bg);
-        color: var(--text);
-        font-size: 9px;
-        padding: 0 4px;
-        outline: none;
-        font-family: inherit;
-        margin-top: 2px;
-        width: 100%;
-        box-sizing: border-box;
-    }
-
-    /* --- Text input for string/floatInput params --- */
-    .param-text-input {
-        flex: 1;
-        height: 16px;
-        border: 1px solid color-mix(in srgb, var(--text) 20%, transparent);
-        border-radius: 3px;
-        background: var(--bg);
-        color: var(--text);
-        font-size: 9px;
-        padding: 0 4px;
-        outline: none;
-        font-family: inherit;
-        min-width: 0;
-    }
-    .param-text-input:focus {
-        border-color: var(--accent);
-    }
-
-    /* --- Enum dropdown & Icon picker --- */
-    .param-select {
-        flex: 1;
-        height: 16px;
-        border: 1px solid color-mix(in srgb, var(--text) 20%, transparent);
-        border-radius: 3px;
-        background: var(--bg);
-        color: var(--text);
-        font-size: 8px;
-        padding: 0 2px;
-        outline: none;
-        font-family: inherit;
-        cursor: pointer;
-    }
-    .param-select:focus {
-        border-color: var(--accent);
-    }
-    /* --- Icon picker --- */
-    .icon-picker-row {
-        position: relative;
-    }
-    .icon-picker-trigger {
-        flex: 1;
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        height: 16px;
-        border: 1px solid color-mix(in srgb, var(--text) 20%, transparent);
-        border-radius: 3px;
-        background: var(--bg);
-        color: var(--text);
-        font-size: 9px;
-        padding: 0 4px;
-        cursor: pointer;
-        font-family: inherit;
-    }
-    .icon-picker-trigger:hover {
-        border-color: var(--accent);
-    }
-    :global(.icon-picker-current) {
-        font-size: 10px;
-    }
-    .icon-picker-none {
-        opacity: 0.5;
-        font-size: 8px;
-    }
-    .icon-picker-trigger .chevron {
-        margin-left: auto;
-        color: var(--text-muted);
-        flex-shrink: 0;
-    }
-    .icon-picker-dropdown {
-        position: absolute;
-        top: 100%;
-        left: 0;
-        right: 0;
-        min-width: 120px;
-        max-height: 160px;
-        overflow-y: auto;
-        z-index: 100;
-        padding: 2px 0;
-        background: var(--bg-raised);
-        border: 1px solid color-mix(in srgb, var(--text) 15%, transparent);
-        border-radius: 4px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-    }
-    .icon-picker-item {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        width: 100%;
-        border: none;
-        background: none;
-        color: var(--text);
-        font-size: 9px;
-        padding: 3px 6px;
-        cursor: pointer;
-        font-family: inherit;
-        text-align: left;
-    }
-    .icon-picker-item:hover {
-        background: var(--bg-hover);
-    }
-    .icon-picker-item.active {
-        color: var(--accent);
-    }
-    :global(.icon-picker-item-icon) {
-        font-size: 11px;
-        width: 14px;
-        text-align: center;
-        flex-shrink: 0;
     }
 </style>

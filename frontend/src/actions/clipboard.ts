@@ -3,31 +3,19 @@ import { app } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { copyToSystemClipboard, readImageFromClipboard, readLayerFromClipboard } from '../clipboard';
-import { toolRegistry, type ToolContext } from '../tools/registry';
-import { beginToolSession } from '../tools/tool_session';
-import { screenToCanvas } from '../canvas/coordinates';
 
 /** Switch to the transform tool after a paste so the freshly-floated layer is
- *  immediately draggable. When transform is already active we re-activate
- *  manually (the CanvasView `$effect` skips a no-op tool change) but never
- *  deactivate — that would commit the floating we just set up. */
+ *  immediately draggable. When transform is already active we ask the
+ *  CanvasView transition effect to reactivate it (rebind session + re-run
+ *  onActivate, no deactivate) so it picks up the just-pasted floating — a plain
+ *  same-tool assignment would be a no-op and would never begin a fresh
+ *  activation. See `planToolTransition` in tool_session.ts. */
 function enterTransformTool() {
     if (!app.engine || !app.canvasEl) return;
-    const wasTransform = app.activeToolId === 'transform';
-    app.activeToolId = 'transform';
-    if (wasTransform && app.engine && app.canvasEl) {
-        const canvasEl = app.canvasEl;
-        // The CanvasView tool-change effect no-ops on a same-tool switch, so it
-        // won't begin a fresh session for us. Begin one here so transform's
-        // onActivate → activate() runs against a live session and picks up the
-        // just-pasted floating (see tool_session.ts).
-        const engine = beginToolSession(app.engine);
-        const ctx: ToolContext = {
-            engine,
-            canvasEl,
-            screenToCanvas: (sx: number, sy: number) => screenToCanvas(sx, sy, canvasEl),
-        };
-        toolRegistry.get('transform')?.onActivate?.(ctx);
+    if (app.activeToolId === 'transform') {
+        app.requestToolReactivation();
+    } else {
+        app.activeToolId = 'transform';
     }
 }
 
@@ -124,9 +112,9 @@ export function registerClipboardActions(): void {
             // instead of the main canvas.  Fill the selected Image node
             // when there is one; otherwise spawn a new Image node.
             if (brushGraph.isOpen) {
-                let nodeId: number | null = null;
+                let nodeId: string | null = null;
                 if (brushGraph.selectedNode != null) {
-                    const node = brushGraph.graph?.nodes[String(brushGraph.selectedNode)];
+                    const node = brushGraph.graph?.nodes[brushGraph.selectedNode];
                     if (node?.type_id === 'image') nodeId = brushGraph.selectedNode;
                 }
                 if (nodeId == null) {

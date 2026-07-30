@@ -1,4 +1,4 @@
-import { app } from '../state/app.svelte';
+import { getActiveInstance, type DarklyInstance } from '../state/app.svelte';
 import { toolRegistry } from './registry';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { dragModifierActions } from '../actions/triggers';
@@ -23,20 +23,15 @@ import {
 // — while armed, the brush's dab preview is suspended so it can't fight the
 // crosshair, and disarming restores it immediately.
 //
-// Armed condition (crosshair shown): a paint tool is active, the active
-// brush needs a source (`activeBrushNeedsSource`, cached async), and the
-// held modifier resolves to `setCloneSource` — a transient sample-mode
-// indicator, exactly like the color picker's dropper. Otherwise the dab
-// preview is the default state, source or no source (with no source set,
-// the preview renders in neutral grey and the Rust no-op gate skips the
-// stroke).
-//
-// The gesture itself is dispatched by the brush-scoped chord binding
-// through `dispatchDrag`; this module only owns the arming decision, the
-// cached "needs source" flag, and the on-canvas source marker.
+// The engine-backed mirror (source anchor, needs-source cache, per-stroke
+// tracking) is per-document, so it's keyed per `DarklyInstance` — switching
+// tabs shows each tab's own clone source, and one tab's stroke never drives
+// another's marker. The engagement state itself is a pointer singleton (one
+// pointer, one modifier chord) and stays module-global, always evaluated
+// against the *focused* instance.
 
 // ---------------------------------------------------------------------------
-// Engine-backed anchor + needs-source cache
+// Per-instance engine-backed anchor + needs-source cache
 // ---------------------------------------------------------------------------
 
 interface Pt {
@@ -44,24 +39,57 @@ interface Pt {
     y: number;
 }
 
-let hasSource = false;
-let needsSource = false;
-/** Aligned (false) vs anchored (true), cached from the engine alongside
- *  `needsSource`. Drives the on-canvas marker's stroke tracking. */
-let anchoredMode = false;
-/** The set source anchor in canvas / plane pixels — a local mirror of the
- *  engine's `clone_source_anchor` (the engine exposes no getter). */
-let sourceAnchor: Pt | null = null;
-/** Destination anchor captured at `pointerdown` (canvas pixels), mirroring
- *  the engine's per-stroke first-dab `dest_anchor`. Non-null only while a
- *  clone stroke is in flight. */
-let destAnchor: Pt | null = null;
-/** Live dab centre while a clone stroke is in flight (owned by the
- *  `onCloneStroke*` hooks); null otherwise. Drives the aligned-mode
- *  source-marker tracking. */
-let cursorPos: Pt | null = null;
-let lastBrush: string | null | undefined = undefined;
-let needsQueryInFlight = false;
+/** Per-document mirror of the engine's clone state + on-canvas marker memo. */
+interface CloneState {
+    hasSource: boolean;
+    needsSource: boolean;
+    /** Aligned (false) vs anchored (true), cached from the engine alongside
+     *  `needsSource`. Drives the on-canvas marker's stroke tracking. */
+    anchoredMode: boolean;
+    /** The set source anchor in canvas / plane pixels — a local mirror of the
+     *  engine's `clone_source_anchor` (the engine exposes no getter). */
+    sourceAnchor: Pt | null;
+    /** Destination anchor captured at `pointerdown` (canvas pixels), mirroring
+     *  the engine's per-stroke first-dab `dest_anchor`. Non-null only while a
+     *  clone stroke is in flight. */
+    destAnchor: Pt | null;
+    /** Live dab centre while a clone stroke is in flight; null otherwise. */
+    cursorPos: Pt | null;
+    lastBrush: string | null | undefined;
+    needsQueryInFlight: boolean;
+    /** Memo key of the last-pushed marker so a static view doesn't re-upload
+     *  every frame; `null` means the channel is currently cleared. */
+    lastMarkerKey: string | null;
+}
+
+const states = new WeakMap<DarklyInstance, CloneState>();
+
+function stateFor(inst: DarklyInstance): CloneState {
+    let s = states.get(inst);
+    if (!s) {
+        s = {
+            hasSource: false,
+            needsSource: false,
+            anchoredMode: false,
+            sourceAnchor: null,
+            destAnchor: null,
+            cursorPos: null,
+            lastBrush: undefined,
+            needsQueryInFlight: false,
+            lastMarkerKey: null,
+        };
+        states.set(inst, s);
+    }
+    return s;
+}
+
+/** The focused instance's clone state, or null when there's no focused
+ *  instance. */
+function focusedState(): { inst: DarklyInstance; st: CloneState } | null {
+    const inst = getActiveInstance();
+    if (!inst) return null;
+    return { inst, st: stateFor(inst) };
+}
 
 /** Where the source marker sits for a given cursor position. Anchored mode
  *  pins it at the set source; aligned mode slides it by the same offset the
@@ -78,17 +106,19 @@ export function trackedSourcePos(
     return { x: anchor.x + (cursor.x - dest.x), y: anchor.y + (cursor.y - dest.y) };
 }
 
-/** Record the clone source anchor in the engine (plane / canvas pixels),
- *  pinning the currently active layer as the clone source (null = clone
- *  from the painted layer), and mark that a source now exists so the
+/** Record the clone source anchor in the (focused) engine (plane / canvas
+ *  pixels), pinning the currently active layer as the clone source (null =
+ *  clone from the painted layer), and mark that a source now exists so the
  *  marker can draw at it. */
 export function setCloneSourceAnchor(cx: number, cy: number): void {
-    app.engine?.api.setCloneSource({ x: cx, y: cy, layer: app.activeLayerId });
-    hasSource = true;
-    sourceAnchor = { x: cx, y: cy };
+    const f = focusedState();
+    if (!f) return;
+    f.inst.engine?.api.setCloneSource({ x: cx, y: cy, layer: f.inst.activeLayerId });
+    f.st.hasSource = true;
+    f.st.sourceAnchor = { x: cx, y: cy };
     refreshEngagement();
-    rebuildCloneMarker();
-    app.requestFrame();
+    rebuildCloneMarker(f.inst, f.st);
+    f.inst.requestFrame();
 }
 
 /** Re-query whether the active brush needs a source (and its aligned /
@@ -96,23 +126,23 @@ export function setCloneSourceAnchor(cx: number, cy: number): void {
  *  round-trip); the cached result drives arming + the marker. Switching
  *  brushes does not clear the engine anchor — it persists as session state,
  *  so a clone brush reselected mid-session keeps its source. */
-function syncNeedsSource(): void {
+function syncNeedsSource(inst: DarklyInstance, st: CloneState): void {
     const brush = brushGraph.activeBrush ?? null;
-    if (brush === lastBrush) return;
-    lastBrush = brush;
-    const engine = app.engine;
-    if (!engine || needsQueryInFlight) return;
-    needsQueryInFlight = true;
+    if (brush === st.lastBrush) return;
+    st.lastBrush = brush;
+    const engine = inst.engine;
+    if (!engine || st.needsQueryInFlight) return;
+    st.needsQueryInFlight = true;
     Promise.all([engine.api.activeBrushNeedsSource(), engine.api.cloneSourceAnchored()])
         .then(([needs, anchored]: [boolean, boolean]) => {
-            needsSource = needs;
-            anchoredMode = anchored;
+            st.needsSource = needs;
+            st.anchoredMode = anchored;
             refreshEngagement();
-            rebuildCloneMarker();
-            app.requestFrame();
+            rebuildCloneMarker(inst, st);
+            inst.requestFrame();
         })
         .finally(() => {
-            needsQueryInFlight = false;
+            st.needsQueryInFlight = false;
         });
 }
 
@@ -120,37 +150,32 @@ function syncNeedsSource(): void {
 // On-canvas source marker (persistent 'clone' overlay channel)
 // ---------------------------------------------------------------------------
 
-/** Memo key of the last-pushed marker so a static view doesn't re-upload
- *  every frame. Encodes the marker's screen position + kind; `null` means
- *  the channel is currently cleared. */
-let lastMarkerKey: string | null = null;
-
-function clearCloneMarker(): void {
-    if (lastMarkerKey === null) return;
-    app.engine?.api.clearCloneOverlay();
-    lastMarkerKey = null;
-    app.requestFrame();
+function clearCloneMarker(inst: DarklyInstance, st: CloneState): void {
+    if (st.lastMarkerKey === null) return;
+    inst.engine?.api.clearCloneOverlay();
+    st.lastMarkerKey = null;
+    inst.requestFrame();
 }
 
 /** Rebuild the clone marker on the persistent `'clone'` channel: a crosshair
  *  at the (tracked) source when one is set. Screen-space, so it re-pushes
  *  on view pan/zoom via the per-frame tick — but only when its screen
  *  position actually changed (memoized). */
-function rebuildCloneMarker(): void {
-    const engine = app.engine;
-    const canvasEl = app.canvasEl;
+function rebuildCloneMarker(inst: DarklyInstance, st: CloneState): void {
+    const engine = inst.engine;
+    const canvasEl = inst.canvasEl;
     if (!engine || !canvasEl) return;
 
-    if (!needsSource || !isPaintToolActive() || !hasSource || !sourceAnchor) {
-        clearCloneMarker();
+    if (!st.needsSource || !isPaintToolActive() || !st.hasSource || !st.sourceAnchor) {
+        clearCloneMarker(inst, st);
         return;
     }
 
-    const pos = trackedSourcePos(sourceAnchor, destAnchor, cursorPos, anchoredMode);
+    const pos = trackedSourcePos(st.sourceAnchor, st.destAnchor, st.cursorPos, st.anchoredMode);
     const sp = canvasToScreen(pos.x, pos.y, canvasEl);
     const key = `src:${Math.round(sp.x)},${Math.round(sp.y)}`;
-    if (key === lastMarkerKey) return;
-    lastMarkerKey = key;
+    if (key === st.lastMarkerKey) return;
+    st.lastMarkerKey = key;
     const b = new OverlayBuilder(canvasEl);
     // Snapshot-invert arms so the marker stays legible over any content.
     b.crosshair([pos.x, pos.y], { invert: true, size: 8, gap: 2, thickness: 1.5 });
@@ -165,26 +190,30 @@ function rebuildCloneMarker(): void {
  *  captures the same first-dab position) so aligned-mode tracking slides the
  *  source marker with the cursor. No-op unless a clone source is set. */
 export function onCloneStrokeStart(cx: number, cy: number): void {
-    if (!needsSource) return;
-    destAnchor = { x: cx, y: cy };
-    cursorPos = { x: cx, y: cy };
-    rebuildCloneMarker();
+    const f = focusedState();
+    if (!f || !f.st.needsSource) return;
+    f.st.destAnchor = { x: cx, y: cy };
+    f.st.cursorPos = { x: cx, y: cy };
+    rebuildCloneMarker(f.inst, f.st);
 }
 
 /** Clone stroke moved to `(cx, cy)` — update the tracked marker. */
 export function onCloneStrokeMove(cx: number, cy: number): void {
-    if (!needsSource) return;
-    cursorPos = { x: cx, y: cy };
-    rebuildCloneMarker();
+    const f = focusedState();
+    if (!f || !f.st.needsSource) return;
+    f.st.cursorPos = { x: cx, y: cy };
+    rebuildCloneMarker(f.inst, f.st);
 }
 
 /** Clone stroke ended — drop the dest anchor (the engine re-anchors `dest`
  *  at each stroke's first dab) and the dab centre with it, so the marker
  *  snaps back to the set source. */
 export function onCloneStrokeEnd(): void {
-    destAnchor = null;
-    cursorPos = null;
-    rebuildCloneMarker();
+    const f = focusedState();
+    if (!f) return;
+    f.st.destAnchor = null;
+    f.st.cursorPos = null;
+    rebuildCloneMarker(f.inst, f.st);
 }
 
 // ---------------------------------------------------------------------------
@@ -194,7 +223,8 @@ export function onCloneStrokeEnd(): void {
 let engaged = false;
 
 function isPaintToolActive(): boolean {
-    return toolRegistry.get(app.activeToolId)?.group === 'paint';
+    const id = getActiveInstance()?.activeToolId;
+    return id != null && toolRegistry.get(id)?.group === 'paint';
 }
 
 /** Pure engagement decision: the crosshair arms while the active paint brush
@@ -218,34 +248,39 @@ export function cloneEngages(
 /** Re-check engagement and drive the arm/disarm transitions through the
  *  shared machinery: arming suspends the active tool's hover (so the dab
  *  preview can't stomp the crosshair) and takes the cursor slot; disarming
- *  releases both and restores the hover immediately. */
+ *  releases both and restores the hover immediately. Always evaluated against
+ *  the focused instance's needs-source cache (the pointer singleton). */
 function refreshEngagement(): void {
+    const needs = focusedState()?.st.needsSource ?? false;
     if (engaged) {
         // Staying engaged ignores pointer state (a set-source drag in
         // flight stays armed until the modifier lifts).
         if (!cloneEngages(
             dragModifierActions('canvas', heldMods()),
-            isPaintToolActive(), needsSource, false,
+            isPaintToolActive(), needs, false,
         )) {
             engaged = false;
             disengageModifierCursor('cloneSource');
         }
     } else if (cloneEngages(
         dragModifierActions('canvas', heldMods()),
-        isPaintToolActive(), needsSource, isPointerDown(),
+        isPaintToolActive(), needs, isPointerDown(),
     )) {
         engaged = true;
         engageModifierCursor('cloneSource', 'crosshair');
     }
 }
 
-/** Per-frame tick — refreshes the needs-source cache on brush change,
- *  re-evaluates engagement, and rebuilds the on-canvas marker so it tracks
- *  view pan/zoom. Cheap when nothing changed (memo guards on each step). */
+/** Per-frame tick — refreshes the (focused instance's) needs-source cache on
+ *  brush change, re-evaluates engagement, and rebuilds the on-canvas marker so
+ *  it tracks view pan/zoom. Cheap when nothing changed (memo guards on each
+ *  step). Called only from the focused instance's frame loop. */
 export function tickCloneSourceCursor(): void {
-    syncNeedsSource();
+    const f = focusedState();
+    if (!f) return;
+    syncNeedsSource(f.inst, f.st);
     refreshEngagement();
-    rebuildCloneMarker();
+    rebuildCloneMarker(f.inst, f.st);
 }
 
 /** Drop the on-canvas clone marker and any engagement — called when the
@@ -253,7 +288,8 @@ export function tickCloneSourceCursor(): void {
  *  suppression can outlive the tool that owns them. The engine anchor
  *  persists (session state); only the overlay + arming are cleared. */
 export function clearCloneSourceCursor(): void {
-    clearCloneMarker();
+    const f = focusedState();
+    if (f) clearCloneMarker(f.inst, f.st);
     if (engaged) {
         engaged = false;
         disengageModifierCursor('cloneSource');

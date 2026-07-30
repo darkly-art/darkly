@@ -15,7 +15,7 @@
 //! share a consistent palette.
 
 use super::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, StrokeResources};
-use super::nodes::pen_input;
+use super::nodes::brush_settings;
 use super::paint_info::PaintInformation;
 use super::pipeline::BrushPipelines;
 use super::stabilizer::PassThrough;
@@ -92,6 +92,7 @@ impl BrushStrokePreviewRenderer {
         bg_color: [f32; 4],
         width: u32,
         height: u32,
+        base_size_override: Option<f32>,
     ) -> Option<&wgpu::Texture> {
         if path.is_empty() || width == 0 || height == 0 {
             return None;
@@ -154,16 +155,22 @@ impl BrushStrokePreviewRenderer {
         // `brush_stroke_engine` would contaminate save-points and dab-size
         // state with the user's in-flight real stroke.
         //
-        // Spacing comes from the graph's pen_input node — same source the
+        // Spacing comes from the graph's brush_settings node — same source the
         // real stroke uses — so scrubbing the spacing slider actually moves
         // the dabs in the preview.
-        let spacing = pen_input::spacing_config(graph);
+        let spacing = brush_settings::spacing_config(graph);
+        // Dab previews render at a fixed, larger canonical size than the brush's
+        // own `brush_settings.size` so the rasterized tip carries enough detail
+        // to survive the crop-and-downscale to the thumbnail. The stroke
+        // preview passes `None` and keeps the graph-driven size.
+        let base_size = base_size_override.unwrap_or_else(|| brush_settings::base_size(graph));
         // No clone source in the editor preview — a clone brush renders
         // its synthetic preview stroke without a set-source anchor.
         let mut engine = StrokeEngine::new(
             runner,
             fg_color,
             spacing,
+            base_size,
             Box::new(PassThrough::new()),
             None,
         );

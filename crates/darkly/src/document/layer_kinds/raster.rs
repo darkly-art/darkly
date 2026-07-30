@@ -19,6 +19,14 @@ use crate::layer::{BlendProps, Layer, LayerId, LayerNode, NodeCommon, PixelBuffe
 /// uses — no parallel string literal anywhere.
 pub const TYPE_ID: &str = "raster";
 
+pub static PIXEL_TRANSFORM_SEMANTICS: crate::document::PixelTransformSemantics =
+    crate::document::PixelTransformSemantics {
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        uncovered_value: crate::document::PixelValue::Transparent,
+        bounds_policy: crate::document::PixelTransformBoundsPolicy::AlphaContent,
+        sampling: crate::document::PixelTransformSampling::PremultipliedRgba,
+    };
+
 /// On-disk shape for a raster layer. The central save/load code never
 /// names this struct — it crosses the wire as `serde_json::Value` inside
 /// a [`crate::format::manifest::ManifestEntry`] envelope.

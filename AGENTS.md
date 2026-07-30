@@ -159,6 +159,58 @@ We do not blindly copy prior art; we use it to inform our own decisions. Our imp
 
 When an idea, algorithm, shader, or implementation comes from an external source — open source code, Shadertoy, papers, blog posts, video tutorials, etc. — credit the source and author at the top of the file (or inline next to the borrowed fragment, if it's smaller than file-scope). Include the author's name or handle and a link to the original.
 
+## Planning and Independent Review Workflow
+
+Unless the user explicitly waives it, every bug fix and feature follows this workflow. Production code may not change before step 5.
+
+### 1. Draft
+
+Delegate planning to a fresh, isolated agent with only the repository instructions and user request. It must investigate the code and required prior art, then write a self-contained plan to `docs/plans/<name>.md` covering:
+
+- Problem and root cause or feature semantics
+- Architectural impact and implementation steps
+- Tests, risks, and unresolved questions
+- A rough LOC estimate — lines added or lines removed, not lines touched — split
+  into production, tests, and generated/docs changes. This estimate is a primary
+  scope and complexity signal, not optional metadata.
+- For bugs, a regression test that will fail before the fix
+
+The planning agent must not modify production code. If isolated agents are unavailable, ask the user to run this step in a fresh session.
+
+### 2. Review
+
+Have a different fresh, isolated agent independently investigate the repository and review the plan. Give it only the repository instructions, plan path, and review task.
+
+The reviewer must challenge the diagnosis, scope, architecture, ownership, authority, modularity, duplication, complexity, prior-art support, and test coverage. It should seek the simplest general solution, including removing machinery or relocating behavior to its proper owner, and ensure bug tests reproduce the reported failure.
+
+Add concrete, file-referenced findings under `## Independent Review` at the top of the plan and give a verdict: `accept`, `revise`, or `rethink`. Do not modify production code. If isolated agents are unavailable, ask the user to run this step in a fresh session.
+
+### 3. Revise
+
+The orchestrator addresses every substantive finding in the plan or records an evidence-backed reason for rejecting it. A `rethink` verdict requires re-investigation and a rewritten approach, not an incremental patch. Preserve the review.
+
+### 4. Approve
+
+Give the user:
+
+- **First:** the estimated LOC range from the plan. Lead the approval summary with
+  this because it is the clearest signal of implementation size and possible
+  over-design.
+- The plan path and review verdict
+- The proposed approach, tradeoffs, and unresolved questions
+- Confirmation that implementation has not begun
+
+Then stop and request explicit approval. Plan changes require revision and, when material, another independent review and approval.
+
+### 5. Implement
+
+After approval, the orchestrator implements and verifies the plan. For bugs, first demonstrate the regression test failing, then make it pass.
+
+Keep the plan synchronized with material discoveries. If the implementation's
+expected LOC materially exceeds the approved estimate, stop and explain why
+before continuing. If implementation requires a material redesign, stop and
+return to review, revision, and user approval.
+
 ## Testing Principle
 
 **Every feature must have a test.** Verify the feature works. The test exists; it passes. That's it.
@@ -180,8 +232,6 @@ Every system must be implemented properly. No hacks, no hardcoding, no shortcuts
 **Every bug is a signal that something nearby is awkward or overcomplicated.** Before patching, ask: "is this an elegant solution?" If the answer is no, the bug is telling you the code wants to be restructured — propose a refactor instead of layering a fix on top. The cleanest fix is often the one that makes the bug impossible to express, not the one that handles it.
 
 **Comments describe the code, not the plan that produced it.** Write comments about what the code does and why it's there as it stands — never about the process that got it there. Do not reference ephemeral planning artifacts: step or phase numbers, plan-list items, "TODO from the plan", "as decided in step 3", or before/after framing ("new", "now", "previously", "used to") that only makes sense relative to a change in flight. A comment that would be meaningless to someone reading the file fresh — with no knowledge of the task that introduced it — is in the wrong register; rewrite it to stand on its own, or delete it.
-
-**Keep the README "Features & Roadmap" checklist in sync with the codebase.** When you ship, remove, or rename a user-visible feature (one with a button and, where appropriate, a hotkey in the frontend) in the same change update the checklist in `README.md` — flip `[ ]` to `[x]`, or add a new line. A Rust helper without a frontend surface does not count as shipped.
 
 ## No Migrations / No Backwards Compatibility (pre-release)
 

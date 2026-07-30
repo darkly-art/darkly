@@ -9,9 +9,10 @@ import { selectionModify } from '../state/selectionModify.svelte';
 import { filterModal } from '../state/filterModal.svelte';
 import type { FilterParam } from '../ui/filters/filterParams';
 import { exportImage } from '../state/exportImage.svelte';
+import { exportTimelapse } from '../state/exportTimelapse.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
 import { toast } from '../state/toast.svelte';
-import { toolRegistry, type Tool } from '../tools/registry';
+import { toolRegistry, type ToolDescriptor } from '../tools/registry';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { brushSession } from '../tools/brush.svelte';
 import { registerBrushParamActions } from './brush_params';
@@ -22,6 +23,7 @@ import { pickOpenFile, type OpenedFile } from '../storage/fileHandle';
 import { detectKind, isImageKind, type FileKind } from '../storage/detectKind';
 import { saveDocument } from '../storage/saveDocument';
 import { fontLibrary } from '../state/font_library.svelte';
+import { processRecording } from '../recording/recorder.svelte';
 import { canSave } from '../storage/fileHandle';
 import { shell } from '../multi_tab/shell.svelte';
 import { about } from '../state/about.svelte';
@@ -61,7 +63,7 @@ function tabNameFromFile(fileName: string): string {
 /** The Iconify icon name for a tool-switch action — the tool's own `icon`,
  *  falling back to a generic glyph for the (now hypothetical) tool that ships
  *  none. Every tool currently declares one. */
-function glyphFromTool(tool: Tool): string {
+function glyphFromTool(tool: ToolDescriptor): string {
     return tool.icon ?? 'fa6-solid:wrench';
 }
 
@@ -109,6 +111,11 @@ export function openDarklyAsTab(picked: OpenedFile): void {
     // initial display before handle bootstrap finishes).
     const inst = shell.open(tabNameFromFile(picked.name));
     inst.fileHandle = picked.handle;
+    // Seed the tab's recording scratch from the file's embedded recording
+    // now, while the async engine bootstrap runs — the scratch lock orders
+    // this ahead of the recorder's segment scan, so this session's capture
+    // appends after the absorbed segments.
+    void processRecording.absorbDarkly(inst, picked.bytes);
     inst.onHandleReady = async (engine) => {
         try {
             await engine.api.openDocument(picked.bytes);
@@ -244,7 +251,7 @@ export function registerActions() {
     sites.register({ name: 'keyboard',   provides: ['layerId'], displayName: 'Anywhere' });
     sites.register({ name: 'layerEye',   provides: ['layerId'], displayName: 'Layer Eye' });
     sites.register({ name: 'layerThumb', provides: ['layerId'], displayName: 'Layer Thumbnail' });
-    sites.register({ name: 'maskThumb',  provides: ['layerId', 'maskIndex'], displayName: 'Mask Thumbnail' });
+    sites.register({ name: 'maskThumb',  provides: ['layerId', 'maskIndex', 'maskId'], displayName: 'Mask Thumbnail' });
     sites.register({ name: 'canvas',     provides: ['x', 'y'], displayName: 'Canvas' });
     sites.register({ name: 'layerPanel', provides: ['layerId'], displayName: 'Layer Panel' });
 
@@ -328,6 +335,27 @@ export function registerActions() {
         icon: 'tabler:flip-horizontal',
         menuPath: ['Select:30'],
         handler: () => app.engine?.api.invertSelection(),
+    });
+    actions.register({
+        id: 'maskToSelection',
+        displayName: 'Mask to Selection',
+        category: 'selection',
+        description: "Load the active layer's mask as the selection.",
+        icon: 'radix-icons:mask-off',
+        menuPath: ['Select:35'],
+        // The engine op takes the mask filter's id, not the host's. Both
+        // call sites (the mask context menu and the maskThumb $mod+click
+        // gesture) pass it under `maskId`; the enabled-guard fallback
+        // resolves it from the active node when dispatched keyboard-only.
+        accepts: ['maskId'],
+        enabled: () => app.activeMaskId != null || 'No mask on the active layer',
+        handler: (ctx) => {
+            const engine = app.engine;
+            const maskId = ctx.maskId ?? app.activeMaskId;
+            if (!engine || maskId == null) return;
+            engine.api.maskToSelection({ id: maskId });
+            app.requestFrame();
+        },
     });
     actions.register({
         id: 'growSelection',
@@ -567,6 +595,18 @@ export function registerActions() {
         handler: () => {
             if (!app.engine) return;
             exportImage.open = true;
+        },
+    });
+    actions.register({
+        id: 'exportTimelapse',
+        displayName: 'Export Timelapse…',
+        category: 'file',
+        description: 'Export the process recording as an MP4 or GIF timelapse.',
+        icon: 'fa6-solid:video',
+        menuPath: ['File:51'],
+        handler: () => {
+            if (!app.engine) return;
+            exportTimelapse.open = true;
         },
     });
     // -- Floating content / transform --
@@ -857,8 +897,11 @@ export function registerActions() {
             id: `filter${filterType.charAt(0).toUpperCase()}${filterType.slice(1)}`,
             displayName: parametric ? `${flt.displayName}…` : flt.displayName,
             category: 'layers',
-            description: `Apply "${flt.displayName}" to the active layer or mask (respecting any selection).`,
-            icon: 'fa6-solid:circle-half-stroke',
+            // Lead with the registry's own summary — the command palette's
+            // substring search indexes descriptions, so its keywords (e.g.
+            // "desaturate" for Black and White) keep the filter findable.
+            description: `${flt.description} Applies to the active layer or mask (respecting any selection).`,
+            icon: flt.icon,
             menuPath: ['Colors:10'],
             enabled: () => app.activeLayerId !== null || 'No active layer',
             handler: async () => {
@@ -1117,12 +1160,9 @@ export function registerActions() {
 // while soloed and those changes persist after un-solo.
 
 function toggleIsolation(targetId: number) {
-    const engine = app.engine;
-    if (!engine) return;
+    if (!app.engine) return;
     const next = app.isolatedNodeId === targetId ? null : targetId;
-    engine.api.setIsolatedNode({ id: next });
-    app.isolatedNodeId = next;
-    app.requestFrame();
+    void app.setIsolatedNode(next);
 }
 
 /** Find a layer by id in the tree (recursive search). */

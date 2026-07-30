@@ -60,14 +60,15 @@ fn round_trip_every_veil() {
     let format = gpu.surface_format();
     let mut registry = VeilRegistry::new();
 
-    // `VeilRegistry::types()` returns (type_id, display_name, params). The
-    // params shape comes from the static `&[ParamDef]` in each registration.
-    // Cloning into a Vec keeps the borrow scoped so `create_veil` can take
-    // `&mut registry` below without contention with the iteration.
+    // `VeilRegistry::types()` returns (type_id, display_name, description,
+    // params). The params shape comes from the static `&[ParamDef]` in each
+    // registration. Cloning into a Vec keeps the borrow scoped so
+    // `create_veil` can take `&mut registry` below without contention with
+    // the iteration.
     let types: Vec<(&'static str, &'static [ParamDef])> = registry
         .types()
         .into_iter()
-        .map(|(id, _name, params)| (id, params))
+        .map(|(id, _name, _description, params)| (id, params))
         .collect();
     assert!(
         !types.is_empty(),
@@ -211,7 +212,7 @@ fn round_trip_every_brush_node() {
         let reg = registry
             .get(type_id)
             .unwrap_or_else(|| panic!("missing registration for '{type_id}'"));
-        let id = graph.add_node(reg.type_id, reg.ports.clone(), defaults_of(reg.params));
+        let id = graph.add_node(reg.type_id, reg.ports.clone());
 
         let json = serde_json::to_string(&graph)
             .unwrap_or_else(|e| panic!("serialize graph with '{type_id}' failed: {e}"));
@@ -223,7 +224,7 @@ fn round_trip_every_brush_node() {
             .get(&id)
             .unwrap_or_else(|| panic!("node lost across round-trip for '{type_id}'"));
         assert_eq!(node.type_id, type_id);
-        assert_eq!(node.params.len(), reg.params.len());
+        assert_eq!(node.ports.len(), reg.ports.len());
     }
 }
 
@@ -455,7 +456,7 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
         .registry()
         .types()
         .into_iter()
-        .map(|(id, _name, params)| (id, params))
+        .map(|(id, _name, _description, params)| (id, params))
         .collect();
     for (type_id, schema) in veil_types {
         let defaults = defaults_of(schema);
@@ -487,7 +488,7 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
         .filter_pipeline_registry()
         .types()
         .into_iter()
-        .map(|(id, _name)| id.to_string())
+        .map(|(id, _name, _icon, _description)| id.to_string())
         .collect();
     for pipeline in filter_types {
         engine.add_filter_layer(&pipeline, Vec::new(), None);
@@ -1280,7 +1281,7 @@ fn legacy_type_id_migration() {
     // registry — confirms the registry interface is the dispatch
     // surface the migration will plug into.
     let registry = VeilRegistry::new();
-    for (type_id, _name, _params) in registry.types() {
+    for (type_id, _name, _description, _params) in registry.types() {
         assert!(
             registry.has(type_id),
             "legacy migration scaffold: registry must resolve every registered \

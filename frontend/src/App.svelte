@@ -5,6 +5,7 @@
     import PresetPicker from './ui/PresetPicker.svelte';
     import SettingsModal from './ui/settings/SettingsModal.svelte';
     import ExportImageModal from './ui/ExportImageModal.svelte';
+    import ExportTimelapseModal from './ui/ExportTimelapseModal.svelte';
     import NewDocumentModal from './ui/NewDocumentModal.svelte';
     import ResizeCanvasModal from './ui/ResizeCanvasModal.svelte';
     import ImageRescaleModal from './ui/ImageRescaleModal.svelte';
@@ -60,6 +61,7 @@
 <PresetPicker />
 <SettingsModal />
 <ExportImageModal />
+<ExportTimelapseModal />
 <NewDocumentModal />
 <ResizeCanvasModal />
 <ImageRescaleModal />

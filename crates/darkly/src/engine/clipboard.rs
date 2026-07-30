@@ -174,17 +174,24 @@ impl DarklyEngine {
             .expect("has_selection true → selection_state allocated")
             .selection_bind_group();
 
-        self.gpu.encode("copy-gpu-extract", |encoder| {
+        let mut encoder = crate::gpu::paint_target::PaintCommandEncoder::new(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &self.paint_pipelines,
+            "copy-gpu-extract",
+            if is_cut { 2 } else { 1 },
+        );
+        encoder.with_raw(|raw| {
             // 1. Copy the layer's covered portion of the selected region into
             //    the staging texture. Clear first so any part of the region the
             //    layer does NOT cover stays transparent (else the masked
             //    multiply below would scale uninitialized texels).
-            crate::gpu::clear_view_transparent(encoder, &staging_view, "copy-staging-clear");
+            crate::gpu::clear_view_transparent(raw, &staging_view, "copy-staging-clear");
             if let Some((ov, lr)) = layer_copy {
                 // Staging is indexed by the selection region, so the destination
                 // is the overlap's offset within it.
                 crate::gpu::blit_region(
-                    encoder,
+                    raw,
                     layer_tex,
                     (lr.x0(), lr.y0()),
                     &staging_tex,
@@ -196,56 +203,59 @@ impl DarklyEngine {
                     ov.height,
                 );
             }
+        });
 
-            // 2. Multiply staging alpha by cropped selection: staging.a *= sel.
-            //    RGB stays unchanged — straight-alpha convention (see
-            //    docs/lessons-learned/compositing-lessons-learned.md §1).
-            let staging_target = GpuPaintTarget::from_canvas_texture(
-                &staging_tex,
-                &staging_view,
-                format,
-                crate::coord::CanvasRect::from_xywh(0, 0, rw, rh),
-            );
-            staging_target.multiply_alpha_by_mask(
-                encoder,
+        // 2. Multiply staging alpha by cropped selection: staging.a *= sel.
+        //    RGB stays unchanged — straight-alpha convention (see
+        //    docs/lessons-learned/compositing-lessons-learned.md §1).
+        let staging_target = GpuPaintTarget::from_canvas_texture(
+            &staging_tex,
+            &staging_view,
+            format,
+            crate::coord::CanvasRect::from_xywh(0, 0, rw, rh),
+        );
+        staging_target.multiply_alpha_by_mask(
+            &mut encoder,
+            &self.paint_pipelines,
+            &self.gpu.queue,
+            &sel_crop_bg,
+        );
+
+        // 3. If cut: reduce layer alpha by selection on selected pixels.
+        //    layer.a *= (1 - sel), layer.rgb unchanged (straight alpha).
+        if is_cut {
+            let layer_target = self
+                .compositor
+                .node_texture(layer_id)
+                .map(|t| GpuPaintTarget::from_node(t, self.doc.canvas_rect()))
+                .expect("node texture missing for cut target");
+            layer_target.multiply_alpha_by_inverse_mask(
+                &mut encoder,
                 &self.paint_pipelines,
                 &self.gpu.queue,
-                &sel_crop_bg,
+                sel_paint_bg,
             );
+        }
 
-            // 3. If cut: reduce layer alpha by selection on selected pixels.
-            //    layer.a *= (1 - sel), layer.rgb unchanged (straight alpha).
-            if is_cut {
-                let layer_target = self
-                    .compositor
-                    .node_texture(layer_id)
-                    .map(|t| GpuPaintTarget::from_node(t, self.doc.canvas_rect()))
-                    .expect("node texture missing for cut target");
-                layer_target.multiply_alpha_by_inverse_mask(
-                    encoder,
-                    &self.paint_pipelines,
-                    &self.gpu.queue,
-                    sel_paint_bg,
-                );
-            }
-
-            // 4. Kick async readback of the masked staging texture.
-            let request = readback::request_readback(
+        // 4. Kick async readback of the masked staging texture.
+        let request = encoder.with_raw(|raw| {
+            readback::request_readback(
                 &self.gpu.device,
-                encoder,
+                raw,
                 &staging_tex,
                 format,
                 crate::coord::LayerRect::from_xywh(0, 0, rw, rh),
-            );
-            self.readbacks.submit(
-                request,
-                ReadbackContext::Copy {
-                    node_id: layer_id,
-                    region,
-                    is_cut,
-                },
-            );
+            )
         });
+        self.readbacks.submit(
+            request,
+            ReadbackContext::Copy {
+                node_id: layer_id,
+                region,
+                is_cut,
+            },
+        );
+        encoder.submit();
 
         // Commit undo for cut.
         if let (Some(snap), Some(frame)) = (cut_snapshot, target_frame) {

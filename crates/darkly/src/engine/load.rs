@@ -791,6 +791,7 @@ mod tests {
                     "name": "Mask",
                     "visible": true,
                     "locked": false,
+                    "linked_to_host": true,
                     "pixels": {
                         "format": "r8unorm",
                         "pixels": "layers/4.mask.pixels",

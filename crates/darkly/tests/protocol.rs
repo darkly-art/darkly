@@ -78,6 +78,25 @@ fn add_void_unknown_type_returns_null_id() {
 }
 
 #[test]
+fn set_isolated_node_returns_the_installed_session_value() {
+    let reg = RequestRegistry::new();
+    let mut engine = test_engine(64, 64);
+    let layer = engine.add_raster_layer(None);
+
+    let resp = reg
+        .dispatch(
+            &mut engine,
+            "set_isolated_node",
+            json!({ "id": layer.to_ffi() }),
+            &[],
+        )
+        .expect("set isolation dispatch");
+
+    assert_eq!(resp.value, json!(layer.to_ffi()));
+    assert_eq!(engine.isolated_node(), Some(layer));
+}
+
+#[test]
 fn layer_tree_query_round_trips_to_an_array() {
     let reg = RequestRegistry::new();
     let mut engine = test_engine(64, 64);
@@ -273,4 +292,19 @@ fn binary_side_channel_round_trips() {
     let resp = Response::binary(json!({ "len": payload.len() }), payload.clone());
     assert_eq!(resp.bytes, Some(payload));
     assert_eq!(resp.value.get("len").and_then(|v| v.as_u64()), Some(5));
+}
+
+#[test]
+fn poll_recording_frame_reports_canvas_dims_when_empty() {
+    let reg = RequestRegistry::new();
+    let mut engine = test_engine(64, 64);
+    let resp = reg
+        .dispatch(&mut engine, "poll_recording_frame", json!(null), &[])
+        .expect("poll_recording_frame dispatch");
+    // No frame pending, but the envelope still carries the live canvas
+    // dimensions — the poll doubles as the frontend's resize signal.
+    assert_eq!(resp.value["canvasWidth"], json!(64));
+    assert_eq!(resp.value["canvasHeight"], json!(64));
+    assert!(resp.value["frame"].is_null());
+    assert!(resp.bytes.is_none());
 }

@@ -6,7 +6,7 @@
 //! valid bytes, version + theme invalidation drop the cache — is asserted
 //! end-to-end via the test-only `test_flush_readbacks` helper.
 
-use darkly::engine::DarklyEngine;
+use darkly::engine::{DarklyEngine, ExposedValue};
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
 
@@ -320,7 +320,7 @@ fn size_scrub_does_not_change_active_dab_pixels() {
         .expect("default brush exposes a `size` port");
     let topo_before_scrub = engine.brush_topology_version();
     engine
-        .brush_set_exposed_port(size.node_id, "size", 250.0)
+        .brush_set_exposed_port(&size.node_id, "size", 250.0)
         .expect("scrub set");
     assert_eq!(
         engine.brush_topology_version(),
@@ -345,13 +345,45 @@ fn size_scrub_does_not_change_active_dab_pixels() {
     // compile_active call), but still classified as topology.
     let topo_before_toggle = engine.brush_topology_version();
     engine
-        .brush_graph_unexpose_port(size.node_id, "size")
+        .brush_graph_unexpose_port(&size.node_id, "size")
         .expect("unexpose size port");
     assert_ne!(
         engine.brush_topology_version(),
         topo_before_toggle,
         "exposing/unexposing a port is a structural change and must advance the topology version"
     );
+}
+
+#[test]
+fn set_node_comment_does_not_advance_topology_version() {
+    // A node comment is inert w.r.t. render output and preset identity, so
+    // setting one must NOT advance `brush_topology_version` — otherwise the
+    // brush bar would flip the active preset name to "Custom" the moment a
+    // user annotated a node. The comment must still land on the graph.
+    let mut engine = fresh_engine();
+
+    let target = engine
+        .brush_exposed_ports()
+        .into_iter()
+        .next()
+        .expect("default brush exposes at least one port");
+
+    let topo_before = engine.brush_topology_version();
+    engine
+        .brush_graph_set_node_comment(&target.node_id, "words of explanatory wisdom".to_string())
+        .expect("set comment");
+    assert_eq!(
+        engine.brush_topology_version(),
+        topo_before,
+        "setting a node comment must not advance the topology version"
+    );
+
+    let graph = engine.active_brush_graph();
+    let node = graph
+        .nodes()
+        .get(&darkly::nodegraph::NodeId(target.node_id.clone()))
+        .expect("target node exists in the active graph");
+    assert_eq!(node.comment, "words of explanatory wisdom");
 }
 
 /// The active-brush capabilities drive two frontend behaviours: the
@@ -421,4 +453,44 @@ fn graph_change_triggers_active_dab_rebake() {
         after, before,
         "swapping Airbrush for Ink Pen should produce different dab pixels"
     );
+}
+
+#[test]
+fn exposed_enum_input_surfaces_as_dropdown_control() {
+    // An exposed enum input must surface as an `Enum` control carrying its
+    // option labels and current index — earlier the read builder skipped
+    // every wire type but Scalar/Bool (`_ => continue`), so an exposed enum
+    // never reached the bar at all. This is the feature's end-to-end backend
+    // guard.
+    //
+    // `circle.algorithm` is an enum input but is deliberately not a brush-bar
+    // control on any builtin, so expose it here: the guard covers the read
+    // builder's wire-type handling, not which ports a brush chooses to expose.
+    let mut engine = fresh_engine();
+    engine
+        .brush_load("Rough Watercolor")
+        .expect("Rough Watercolor is a built-in brush");
+    engine
+        .brush_graph_expose_port("circle", "algorithm")
+        .expect("circle.algorithm is an exposable enum input");
+
+    let algo = engine
+        .brush_exposed_ports()
+        .into_iter()
+        .find(|p| p.port_name == "algorithm")
+        .expect("exposing circle.algorithm surfaces it on the bar");
+
+    match algo.data {
+        ExposedValue::Enum { value, options } => {
+            assert!(
+                options.len() >= 2,
+                "an enum control carries its dropdown labels; got {options:?}"
+            );
+            assert!(
+                value >= 0 && (value as usize) < options.len(),
+                "the current index {value} must address a real option in {options:?}"
+            );
+        }
+        other => panic!("circle.algorithm should surface as an Enum control, got {other:?}"),
+    }
 }

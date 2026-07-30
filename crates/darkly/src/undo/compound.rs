@@ -53,6 +53,24 @@ impl UndoAction for CompoundAction {
             .collect()
     }
 
+    fn selection_region_entry_mut(&mut self) -> Option<&mut UndoRegionEntry> {
+        self.actions
+            .iter_mut()
+            .find_map(|action| action.selection_region_entry_mut())
+    }
+
+    fn swap_selection_active(&mut self, current_active: bool) -> Option<bool> {
+        self.actions
+            .iter_mut()
+            .find_map(|action| action.swap_selection_active(current_active))
+    }
+
+    fn restores_selection_metadata(&self) -> bool {
+        self.actions
+            .iter()
+            .any(|action| action.restores_selection_metadata())
+    }
+
     fn on_evict(&mut self, compositor: &mut Compositor) {
         for action in self.actions.iter_mut() {
             action.on_evict(compositor);

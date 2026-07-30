@@ -1,12 +1,10 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
+    import { onMount, onDestroy } from 'svelte';
     import { initEditor, createInstance, ensureProcessInit, seedFreshDocument } from '../editor';
     import { config } from '../config/store.svelte';
     import { app, type DarklyInstance } from '../state/app.svelte';
     import { nav } from './navigation.svelte';
-    import { toolRegistry } from '../tools/registry';
-    import type { ToolContext } from '../tools/registry';
-    import { beginToolSession, toolEngine, runHook } from '../tools/tool_session';
+    import { runHook, planToolTransition, type ToolTransitionState } from '../tools/tool_session';
     import { screenToCanvas } from './coordinates';
     import { toast } from '../state/toast.svelte';
     import { theme } from '../state/theme.svelte';
@@ -162,22 +160,6 @@
     });
 
 
-    function getToolContext(): ToolContext | null {
-        // Tool code reaches the engine only through the live tool session, never
-        // `inst.engine` directly — so a request that resolves after the session
-        // dies (tool switch, layer change, tab swap) rejects instead of touching
-        // stale state. See `tools/tool_session.ts`.
-        const engine = toolEngine();
-        if (!engine) return null;
-        return {
-            engine,
-            canvasEl: canvas,
-            screenToCanvas(sx: number, sy: number) {
-                return screenToCanvas(sx, sy, canvas);
-            }
-        };
-    }
-
     function getCanvasCoords(e: PointerEvent): { x: number; y: number } {
         if (inst.engine) {
             return screenToCanvas(e.clientX, e.clientY, canvas);
@@ -208,10 +190,8 @@
             canvas.setPointerCapture(e.pointerId);
             if (nav.onTouchPointerDown(e)) {
                 // Touch consumed by navigation — end any in-progress tool stroke
-                const ctx = getToolContext();
-                if (ctx) {
-                    const tool = toolRegistry.get(inst.activeToolId);
-                    void runHook(tool?.onPointerUp(ctx, e));
+                if (inst.session) {
+                    void runHook(inst.tool(inst.activeToolId)?.onPointerUp?.(e));
                 }
                 return;
             }
@@ -221,13 +201,12 @@
         if (nav.onPointerDown(e, canvas)) return;
 
         const pos = getCanvasCoords(e);
-        const ctx = getToolContext();
-        const tool = toolRegistry.get(inst.activeToolId);
+        const tool = inst.tool(inst.activeToolId);
 
         // Active tool may claim the pointer before global drag chords
         // (e.g. shift+drag → brush-size scrub) get a shot at it. Used
         // by modal tools whose UI owns the canvas while active.
-        const claimed = !!(ctx && tool?.claimsPointer?.(ctx, e, pos.x, pos.y));
+        const claimed = !!(inst.session && tool?.claimsPointer?.(e, pos.x, pos.y));
 
         // Drag-bound actions consume the pointer lifecycle before the
         // active tool sees it — unless the tool claimed it.
@@ -235,8 +214,8 @@
 
         canvas.setPointerCapture(e.pointerId);
 
-        if (!ctx) return;
-        void runHook(tool?.onPointerDown(ctx, e, pos.x, pos.y));
+        if (!inst.session) return;
+        void runHook(tool?.onPointerDown?.(e, pos.x, pos.y));
         // Mark a tool interaction in flight so autosave doesn't snapshot
         // mid-stroke. Released in onPointerUp / onPointerCancel (pointer
         // capture guarantees one of them fires on this element).
@@ -276,8 +255,7 @@
             return;
         }
 
-        const ctx = getToolContext();
-        if (!ctx) return;
+        if (!inst.session) return;
         const pos = getCanvasCoords(e);
         // While a modifier cursor is engaged (the picker's dropper, the
         // clone brush's set-source crosshair), suppress the active tool's
@@ -287,8 +265,7 @@
         // case. Still request a frame — a chord's onMove may have queued
         // work (e.g. a pick that needs `pollPick` to commit next frame).
         if (!isToolHoverSuppressed()) {
-            const tool = toolRegistry.get(inst.activeToolId);
-            void runHook(tool?.onPointerMove(ctx, e, pos.x, pos.y));
+            void runHook(inst.tool(inst.activeToolId)?.onPointerMove?.(e, pos.x, pos.y));
         }
         inst.requestFrame();
     }
@@ -309,10 +286,8 @@
         }
 
         inst.pointerActive = false;
-        const ctx = getToolContext();
-        if (!ctx) return;
-        const tool = toolRegistry.get(inst.activeToolId);
-        void runHook(tool?.onPointerUp(ctx, e));
+        if (!inst.session) return;
+        void runHook(inst.tool(inst.activeToolId)?.onPointerUp?.(e));
         inst.requestFrame();
     }
 
@@ -330,18 +305,14 @@
             nav.onPointerUp();
             return;
         }
-        const ctx = getToolContext();
-        if (!ctx) return;
-        const tool = toolRegistry.get(inst.activeToolId);
-        void runHook(tool?.onPointerUp(ctx, e));
+        if (!inst.session) return;
+        void runHook(inst.tool(inst.activeToolId)?.onPointerUp?.(e));
         inst.requestFrame();
     }
 
     function onPointerLeave() {
-        const ctx = getToolContext();
-        if (!ctx) return;
-        const tool = toolRegistry.get(inst.activeToolId);
-        void runHook(tool?.onPointerLeave?.(ctx));
+        if (!inst.session) return;
+        void runHook(inst.tool(inst.activeToolId)?.onPointerLeave?.());
         inst.requestFrame();
     }
 
@@ -376,59 +347,67 @@
         nav.onKeyDown(e);
         // Don't dismiss overlay for navigation or bare modifier keys
         if (nav.spaceHeld || MODIFIER_KEYS.has(e.key)) return;
-        const tool = toolRegistry.get(inst.activeToolId);
+        const tool = inst.tool(inst.activeToolId);
         if (tool?.onKeyDown?.(e)) return;
         void runHook(tool?.dismissOverlay?.());
         inst.requestFrame();
     }
 
-    // Call onDeactivate/onActivate when the active tool changes. This is one of
-    // the ~3 sites that own the tool session's lifecycle (see tool_session.ts):
-    // the outgoing tool is deactivated through its still-alive session, then a
-    // fresh session is begun for the incoming tool. `inst.engine` is read
-    // directly so the effect re-runs once the engine finishes async init.
-    let prevToolId = '';
+    // The single owner of this instance's tool-session lifecycle. Every session
+    // input — engine/canvas readiness, tool change, active-layer change, an
+    // explicit reactivation request — flows through here in one $effect, so all
+    // deltas coalesce into ONE {@link planToolTransition} (at most one rebind).
+    // The plan is applied in order: deactivate the outgoing tool through its
+    // still-alive session, rebind (begin a fresh session), then activate /
+    // dismiss the incoming tool through it. Because the session is per-instance,
+    // there is no focus dimension — each tab drives its own session, and a
+    // background tab finishing init can never steal the focused tab's session.
+    // See `tools/tool_session.ts`.
+    let prevTransition: ToolTransitionState = {
+        hasEngine: false, hasCanvas: false, toolId: '', layerId: null, reactivations: 0,
+    };
     $effect(() => {
-        const id = inst.activeToolId;
-        const engine = inst.engine;
-        if (id === prevToolId || !engine) return;
-        // Reset before deactivate so a tool's onDeactivate can still override;
-        // whatever the new tool's onActivate sets wins.
-        inst.toolCursor = null;
-        // Deactivate through the outgoing session (its synchronous commit/detach
-        // posts must land on the session that's still alive).
-        const prevCtx = getToolContext();
-        if (prevCtx) toolRegistry.get(prevToolId)?.onDeactivate?.(prevCtx);
-        // Begin a fresh session for the incoming tool, killing the old one — any
-        // op parked on an await from the previous tool now rejects on resume.
-        beginToolSession(engine);
-        const nextCtx = getToolContext();
-        // `onActivate` is async and awaits engine round-trips through the live
-        // session, so wrap it like every other hook call site: if the session
-        // dies mid-activate (the initial-load race where the active-layer effect
-        // rebinds the session while a fresh tool's onActivate is parked on an
-        // await), the resumed op rejects with ToolSessionCancelled — a no-op to
+        const next: ToolTransitionState = {
+            hasEngine: !!inst.engine,
+            hasCanvas: !!inst.canvasEl,
+            toolId: inst.activeToolId,
+            layerId: inst.activeLayerId,
+            reactivations: inst.toolReactivations,
+        };
+        const plan = planToolTransition(prevTransition, next);
+        if (plan.kill) {
+            // `?.()` for the single-instance boot window: `inst` is the `app`
+            // proxy and resolves methods to `undefined` until `setActiveInstance`
+            // runs. `kill` fires precisely when there's no engine yet, which
+            // overlaps that window.
+            inst.killToolSession?.();
+            // Blank the tool id so the incoming tool re-activates fresh once the
+            // engine + canvas appear (the effect re-fires then).
+            prevTransition = { ...next, toolId: '' };
+            return;
+        }
+        if (plan.deactivate) {
+            // Reset before deactivate so a tool's onDeactivate can still
+            // override; whatever the new tool's onActivate sets wins.
+            inst.toolCursor = null;
+            // Deactivate through the still-alive outgoing session.
+            inst.tool(prevTransition.toolId)?.onDeactivate?.();
+        }
+        // Begin a fresh session for the incoming activation, killing the old one
+        // — any op parked on an await from before now rejects on resume.
+        if (plan.rebind) inst.beginToolSession();
+        // `onActivate` / `dismissOverlay` are async and await engine round-trips
+        // through the live session, so wrap them like every hook call site: a
+        // mid-await session death rejects with ToolSessionCancelled — a no-op to
         // swallow, not an unhandled rejection.
-        if (nextCtx) void runHook(toolRegistry.get(id)?.onActivate?.(nextCtx));
-        prevToolId = id;
+        if (plan.activate) void runHook(inst.tool(next.toolId)?.onActivate?.());
+        if (plan.dismiss) void runHook(inst.tool(next.toolId)?.dismissOverlay?.());
+        prevTransition = next;
     });
 
-    // Dismiss tool overlay when the active layer changes. Rebinding the session
-    // first kills the outgoing one, so an op parked on an await from before the
-    // change rejects instead of resuming against the new layer; dismissOverlay
-    // then runs on the fresh (alive) session and can still finalize in-flight
-    // work (e.g. commit a floating being moved). This is what makes wrong-layer
-    // resumption unrepresentable too.
-    let prevLayerId: number | null = null;
-    $effect(() => {
-        const id = inst.activeLayerId;
-        if (id !== prevLayerId) {
-            prevLayerId = id;
-            if (inst.engine) beginToolSession(inst.engine);
-            const tool = toolRegistry.get(inst.activeToolId);
-            void runHook(tool?.dismissOverlay?.());
-        }
-    });
+    // Tab close: cancel any hook parked on this instance's session so it can't
+    // land on a torn-down tab.
+    onDestroy(() => inst.killToolSession?.());
 
     // Sync view transform whenever pan/zoom/rotation changes.
     // Pan is stored in CSS pixels; the shader operates in buffer pixels.

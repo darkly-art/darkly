@@ -57,9 +57,9 @@ parley = { workspace = true }
 syn = { workspace = true }
 
 [dev-dependencies]
-pollster = "0.4"
+pollster = "1.0"
 naga = { version = "29.0", features = ["wgsl-in"] }
-syn = { version = "2", features = ["visit", "full"] }
+syn = { version = "3", features = ["visit", "full"] }
 
 [[bin]]
 name = "stroke_replay_bench"

@@ -18,6 +18,8 @@ pub use mat3::{
     MAT3_IDENTITY,
 };
 
+use crate::coord::{CanvasPoint, CanvasRect};
+
 // ---------------------------------------------------------------------------
 // Affine math  ([a, b, tx, c, d, ty], row-major)
 // ---------------------------------------------------------------------------
@@ -153,6 +155,18 @@ impl Transform {
         }
     }
 
+    /// Whether this is the exact canonical identity for its mode.
+    ///
+    /// This intentionally performs no epsilon comparison: callers use it to
+    /// distinguish a semantic no-op from an operation that must still be
+    /// evaluated, however small its effect.
+    pub fn is_identity(&self) -> bool {
+        match self {
+            Transform::Basic(m) => *m == IDENTITY,
+            Transform::Perspective(m) => *m == MAT3_IDENTITY,
+        }
+    }
+
     /// Stable numeric mode tag for the WASM boundary / gizmo mode registry.
     pub fn mode_tag(&self) -> u32 {
         match self {
@@ -208,6 +222,90 @@ impl Transform {
             scale: (sx, sy),
         }
     }
+}
+
+/// Map a plane-space point through an operation expressed relative to the
+/// origin of `operation_frame`.
+///
+/// Darkly stores matrices row-major and applies them to column vectors, giving
+/// `p' = O + M × (p - O)`.
+pub fn map_in_operation_frame(
+    transform: &Transform,
+    operation_frame: CanvasRect,
+    point: (f32, f32),
+) -> (f32, f32) {
+    let origin = operation_frame.origin;
+    let local_x = point.0 - origin.x as f32;
+    let local_y = point.1 - origin.y as f32;
+    let mapped = mat3_apply(&transform.to_projective(), local_x, local_y);
+    (mapped.0 + origin.x as f32, mapped.1 + origin.y as f32)
+}
+
+/// Derive the evaluator for a target whose local `(0, 0)` is `target_origin`
+/// in plane space from one canonical operation frame.
+///
+/// Under Darkly's row-major/column-vector convention this is
+/// `T(O - o) × M × T(o - O)`. Applying the returned matrix to a target-local
+/// point is therefore equivalent to lifting it to plane space, applying the
+/// canonical operation, and lowering it back into the same target frame.
+pub fn evaluator_for_target(
+    transform: &Transform,
+    operation_frame: CanvasRect,
+    target_origin: CanvasPoint,
+) -> Mat3 {
+    let dx = (operation_frame.origin.x - target_origin.x) as f32;
+    let dy = (operation_frame.origin.y - target_origin.y) as f32;
+    let to_operation: Mat3 = [1.0, 0.0, -dx, 0.0, 1.0, -dy, 0.0, 0.0, 1.0];
+    let from_operation: Mat3 = [1.0, 0.0, dx, 0.0, 1.0, dy, 0.0, 0.0, 1.0];
+    mat3_multiply(
+        &from_operation,
+        &mat3_multiply(&transform.to_projective(), &to_operation),
+    )
+}
+
+/// Plane-space pixels touched by clearing `extraction_bounds` and writing its
+/// transformed footprint. The operation is relative to `operation_frame`;
+/// target texture origins do not affect this plane-space result.
+pub fn affected_bounds(
+    transform: &Transform,
+    operation_frame: CanvasRect,
+    extraction_bounds: CanvasRect,
+) -> CanvasRect {
+    if extraction_bounds.is_empty() || transform.is_identity() {
+        return extraction_bounds;
+    }
+
+    let corners = [
+        (extraction_bounds.x0() as f32, extraction_bounds.y0() as f32),
+        (extraction_bounds.x1() as f32, extraction_bounds.y0() as f32),
+        (extraction_bounds.x1() as f32, extraction_bounds.y1() as f32),
+        (extraction_bounds.x0() as f32, extraction_bounds.y1() as f32),
+    ];
+    let mut min = (f32::INFINITY, f32::INFINITY);
+    let mut max = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for corner in corners {
+        let mapped = map_in_operation_frame(transform, operation_frame, corner);
+        let finite_bound = |value: f32| {
+            if value.is_nan() {
+                0.0
+            } else {
+                value.clamp(-1.0e9, 1.0e9)
+            }
+        };
+        let x = finite_bound(mapped.0);
+        let y = finite_bound(mapped.1);
+        min.0 = min.0.min(x);
+        min.1 = min.1.min(y);
+        max.0 = max.0.max(x);
+        max.1 = max.1.max(y);
+    }
+    let transformed = CanvasRect::from_corners(
+        min.0.floor() as i32,
+        min.1.floor() as i32,
+        max.0.ceil() as i32,
+        max.1.ceil() as i32,
+    );
+    extraction_bounds.union(transformed)
 }
 
 /// TRS view of a [`Transform`] — see [`Transform::decompose`] (no-shear).
@@ -270,6 +368,114 @@ mod tests {
     fn default_is_identity() {
         assert_eq!(Transform::default(), Transform::Basic(IDENTITY));
         assert_eq!(Transform::identity().to_affine(), IDENTITY);
+    }
+
+    #[test]
+    fn identity_is_exact_in_both_modes() {
+        assert!(Transform::Basic(IDENTITY).is_identity());
+        assert!(Transform::Perspective(MAT3_IDENTITY).is_identity());
+
+        let mut almost_affine = IDENTITY;
+        almost_affine[2] = f32::EPSILON;
+        assert!(!Transform::Basic(almost_affine).is_identity());
+
+        let mut almost_projective = MAT3_IDENTITY;
+        almost_projective[8] += f32::EPSILON;
+        assert!(!Transform::Perspective(almost_projective).is_identity());
+    }
+
+    #[test]
+    fn target_evaluator_matches_canonical_plane_mapping() {
+        struct Case {
+            name: &'static str,
+            transform: Transform,
+            operation_frame: CanvasRect,
+            target_origin: CanvasPoint,
+            local_point: (f32, f32),
+        }
+
+        let cases = [
+            Case {
+                name: "translation differing positive origins",
+                transform: Transform::Basic(affine_translate(17.0, -9.0)),
+                operation_frame: CanvasRect::from_xywh(40, 30, 80, 60),
+                target_origin: CanvasPoint::new(7, 11),
+                local_point: (5.0, 13.0),
+            },
+            Case {
+                name: "rotation negative target origin",
+                transform: Transform::Basic(affine_rotate(0.63)),
+                operation_frame: CanvasRect::from_xywh(23, -14, 80, 60),
+                target_origin: CanvasPoint::new(-80, -35),
+                local_point: (19.0, 8.0),
+            },
+            Case {
+                name: "non-uniform scale negative operation origin",
+                transform: Transform::Basic(affine_scale(2.5, 0.4)),
+                operation_frame: CanvasRect::from_xywh(-41, -9, 80, 60),
+                target_origin: CanvasPoint::new(12, -70),
+                local_point: (31.0, 27.0),
+            },
+            Case {
+                name: "reflection across differing origins",
+                transform: Transform::Basic(affine_scale(-1.0, 1.0)),
+                operation_frame: CanvasRect::from_xywh(-3, 52, 80, 60),
+                target_origin: CanvasPoint::new(-91, 6),
+                local_point: (44.0, -2.0),
+            },
+            Case {
+                name: "perspective across negative origins",
+                transform: Transform::Perspective([
+                    1.0, 0.08, 12.0, -0.03, 0.9, -7.0, 0.001, -0.0007, 1.0,
+                ]),
+                operation_frame: CanvasRect::from_xywh(-120, 45, 80, 60),
+                target_origin: CanvasPoint::new(33, -64),
+                local_point: (28.0, 17.0),
+            },
+        ];
+
+        for case in cases {
+            let evaluator =
+                evaluator_for_target(&case.transform, case.operation_frame, case.target_origin);
+            let direct = mat3_apply(&evaluator, case.local_point.0, case.local_point.1);
+            let plane_point = (
+                case.local_point.0 + case.target_origin.x as f32,
+                case.local_point.1 + case.target_origin.y as f32,
+            );
+            let mapped_plane =
+                map_in_operation_frame(&case.transform, case.operation_frame, plane_point);
+            let expected = (
+                mapped_plane.0 - case.target_origin.x as f32,
+                mapped_plane.1 - case.target_origin.y as f32,
+            );
+            assert!(
+                (direct.0 - expected.0).abs() < 1e-3 && (direct.1 - expected.1).abs() < 1e-3,
+                "{}: expected {expected:?}, got {direct:?}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn affected_bounds_unites_source_and_canonical_footprint() {
+        let extraction = CanvasRect::from_xywh(-30, 10, 20, 10);
+        let transform = Transform::Basic(affine_scale(-2.0, 3.0));
+        assert_eq!(
+            affected_bounds(
+                &transform,
+                CanvasRect::from_xywh(-20, 15, 20, 10),
+                extraction
+            ),
+            CanvasRect::from_xywh(-40, 0, 40, 30)
+        );
+        assert_eq!(
+            affected_bounds(
+                &Transform::identity(),
+                CanvasRect::from_xywh(999, -999, 20, 10),
+                extraction
+            ),
+            extraction
+        );
     }
 
     #[test]

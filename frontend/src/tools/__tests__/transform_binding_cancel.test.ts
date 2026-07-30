@@ -12,15 +12,17 @@ const { fakeApp } = vi.hoisted(() => {
 vi.mock('../../state/app.svelte', () => ({ app: fakeApp }));
 
 import { voidTransformBinding } from '../transform_bindings';
-import { beginToolSession } from '../tool_session';
+import { SessionEngine } from '../tool_session';
 import type { Mat3 } from '../transform_projective';
 
-// Attach a real transport + typed api to the fake engine, then open a tool
-// session over it so the bindings' `toolEngine()` resolves — its api forwards to
-// the same `send`/`post` spies, so assertions still inspect them by kind.
+// Attach a real transport + typed api to the fake engine, then open a session
+// over it so the bindings' session accessor resolves — its api forwards to the
+// same `send`/`post` spies, so assertions still inspect them by kind.
 withApi(fakeApp.engine);
+let session: SessionEngine | null = null;
+const sess = () => session;
 beforeEach(() => {
-    beginToolSession(fakeApp.engine as never);
+    session = new SessionEngine(fakeApp.engine as never);
 });
 
 describe('voidTransformBinding cancel preserves the original mode', () => {
@@ -35,7 +37,7 @@ describe('voidTransformBinding cancel preserves the original mode', () => {
             matrix: [...homography],
         });
 
-        const binding = voidTransformBinding(42);
+        const binding = voidTransformBinding(sess, 42);
         await binding.read(); // captures { matrix, mode: 1 }
         binding.update([1, 0, 0, 0, 1, 0, 0, 0, 1] as Mat3, 0); // some live edit
 
@@ -61,7 +63,7 @@ describe('voidTransformBinding cancel preserves the original mode', () => {
             matrix: [2, 0, 5, 0, 2, 9],
         });
 
-        const binding = voidTransformBinding(7);
+        const binding = voidTransformBinding(sess, 7);
         await binding.read();
         fakeApp.engine.post.mockClear();
         binding.cancel();

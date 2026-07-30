@@ -1,6 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
-    import { textSession } from '../../tools/text.svelte';
+    import { focusedTextTool } from '../../tools/text.svelte';
     import LayerProperties from './LayerProperties.svelte';
     import GroupProperties from './GroupProperties.svelte';
     import TextProperties from './TextProperties.svelte';
@@ -32,19 +32,23 @@
             ? app.veilList.find((v: { index: number }) => v.index === app.activeVeilIndex) ?? null
             : null,
     );
+
+    // A pending text placement (from the text tool) owns the panel — reactive
+    // through the focused instance's text tool.
+    let textPlacement = $derived(focusedTextTool()?.placement ?? null);
 </script>
 
 <div class="panel">
     <div class="panel-body">
         {#if activeVeil}
             <VeilProperties veil={activeVeil} />
-        {:else if activeLayer || textSession.placement}
+        {:else if activeLayer || textPlacement}
             <!-- A pending placement owns the panel: it shows only the text editor
                  (the gate below stays true), so the still-active layer's own
                  controls are suppressed. Placing text is a new-object gesture,
                  and the text tool no longer deselects to express that — so we
                  hide the other panels here instead. -->
-            {#if !textSession.placement}
+            {#if !textPlacement}
                 <!-- Filter layers honor neither opacity nor blend mode yet (the
                      first slice composites at full strength), so the blend/opacity
                      controls are hidden rather than shown as inert. Re-enable when
@@ -64,7 +68,7 @@
                  position so Svelte keeps it across the pending→bound transition
                  (a fresh placement becoming a real layer). A second usage would
                  remount and drop the caret on the first keystroke. -->
-            {#if activeLayer?.type === 'vector' || textSession.placement}
+            {#if activeLayer?.type === 'vector' || textPlacement}
                 <TextProperties node={activeLayer?.type === 'vector' ? activeLayer : null} />
             {/if}
         {:else}

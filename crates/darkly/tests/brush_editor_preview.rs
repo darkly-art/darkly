@@ -32,7 +32,7 @@ fn renders_s_curve_over_black_background() {
 
     let texture = renderer
         .render_stroke(
-            &device, &queue, &pipelines, &graph, &path, fg, bg, width, height,
+            &device, &queue, &pipelines, &graph, &path, fg, bg, width, height, None,
         )
         .expect("render_stroke should return a texture for the default graph");
 
@@ -116,6 +116,7 @@ fn renderer_reuses_target_across_renders_of_same_size() {
         [0.0, 0.0, 0.0, 1.0],
         320,
         120,
+        None,
     );
     assert_eq!(renderer.current_size(), Some((320, 120)));
     let first_ptr = renderer.current_texture().map(|t| t as *const _);
@@ -130,6 +131,7 @@ fn renderer_reuses_target_across_renders_of_same_size() {
         [1.0, 1.0, 1.0, 1.0],
         320,
         120,
+        None,
     );
     let second_ptr = renderer.current_texture().map(|t| t as *const _);
 
@@ -400,7 +402,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
         .find(|p| p.port_name == "stabilize")
         .expect("Ink Pen exposes a `stabilize` port");
     engine
-        .brush_set_exposed_port(stabilize.node_id, "stabilize", 90.0)
+        .brush_set_exposed_port(&stabilize.node_id, "stabilize", 90.0)
         .expect("scrub set");
 
     assert_eq!(
@@ -414,7 +416,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
 
     // Negative control: scrubbing a port the preview *does* read must
     // still bump the version. After the compiled-WGSL migration
-    // `softness` lives on the upstream `shape` node (the
+    // `softness` lives on the upstream `circle` node (the
     // `paint` terminal has no softness port). It has no
     // `preview_irrelevant_scrub` flag, is read by the preview shader,
     // and is unwired — the perfect canary for "rule too broad". Find
@@ -426,7 +428,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
         .expect("Ink Pen exposes a `softness` port (on shape after migration)");
     let v_before_softness = engine.brush_graph_version();
     engine
-        .brush_set_exposed_port(softness.node_id, "softness", 0.5)
+        .brush_set_exposed_port(&softness.node_id, "softness", 0.5)
         .expect("scrub set");
     assert_ne!(
         engine.brush_graph_version(),
@@ -476,7 +478,7 @@ fn size_scrub_does_not_bump_editor_preview_version() {
         .find(|p| p.port_name == "size")
         .expect("Ink Pen exposes a `size` port");
     engine
-        .brush_set_exposed_port(size.node_id, "size", 90.0)
+        .brush_set_exposed_port(&size.node_id, "size", 90.0)
         .expect("scrub set");
 
     assert_eq!(
@@ -543,7 +545,7 @@ fn squash_active_brush_to_extreme_nib(engine: &mut darkly::engine::DarklyEngine)
         .expect("Calligraphy exposes an `aspect` port");
     // Percent unit: display 10 → port 0.1 (the port's minimum, ~10× stretch).
     engine
-        .brush_set_exposed_port(aspect.node_id, "aspect", 10.0)
+        .brush_set_exposed_port(&aspect.node_id, "aspect", 10.0)
         .expect("scrub aspect to 10%");
 }
 
@@ -621,6 +623,7 @@ fn empty_path_returns_none() {
         [0.0, 0.0, 0.0, 1.0],
         320,
         120,
+        None,
     );
     assert!(result.is_none());
 }

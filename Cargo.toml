@@ -18,7 +18,7 @@ darkly = { path = "crates/darkly" }
 darkly-macros = { path = "crates/darkly-macros" }
 
 # Proc-macro toolchain (the `#[handlers]` engine-bridge macro + build.rs scan)
-syn = { version = "2", features = ["full", "visit"] }
+syn = { version = "3", features = ["full", "visit"] }
 quote = "1"
 proc-macro2 = "1"
 
@@ -32,7 +32,7 @@ wgpu = { version = "29.0", features = ["webgpu"] }
 vello = "0.9"
 kurbo = { version = "0.13", features = ["serde"] }
 peniko = { version = "0.6", features = ["serde"] }
-parley = "0.7"
+parley = "0.11"
 
 # Data
 bytemuck = { version = "1.13", features = ["derive"] }
@@ -52,7 +52,7 @@ zip = { version = "8.6", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 png = "0.18"
 quick-xml = "0.41"
-base64 = "0.22"
+base64 = "0.23"
 thiserror = "2.0"
 # `serde` feature intentionally off: slotmap's derived key serde encodes the
 # generational key as a `{ idx, version }` struct, but `LayerId` crosses the

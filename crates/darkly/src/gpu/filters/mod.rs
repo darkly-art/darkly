@@ -2,10 +2,10 @@
 // To add a new module, create a .rs file in this directory
 // that exports `pub fn register() -> crate::gpu::filter::FilterPipelineRegistration`.
 
+pub mod black_and_white;
 pub mod brightness_contrast;
 pub mod chromatic_aberration;
 pub mod curves;
-pub mod desaturate;
 pub mod hsv;
 pub mod invert;
 pub mod levels;
@@ -15,10 +15,10 @@ use crate::gpu::filter::FilterPipelineRegistration;
 #[rustfmt::skip]
 pub fn registrations() -> Vec<FilterPipelineRegistration> {
     vec![
+        black_and_white::register(),
         brightness_contrast::register(),
         chromatic_aberration::register(),
         curves::register(),
-        desaturate::register(),
         hsv::register(),
         invert::register(),
         levels::register(),

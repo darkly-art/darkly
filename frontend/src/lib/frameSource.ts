@@ -90,6 +90,10 @@ export abstract class FrameSource {
     protected setStatus(status: StreamStatus): void {
         if (status === this.status) return;
         this.status = status;
+        // Each fresh connection opens a new frame-delivery epoch, so the next
+        // upload is again a "first frame" worth a timelapse capture. Covers
+        // both a brand-new source and an in-place reconnect (`setUrl`).
+        if (status === 'connected') this.firstFrameUploaded = false;
         this.onStatusChange?.(this.layerId);
     }
 
@@ -126,6 +130,12 @@ export abstract class FrameSource {
      *  can't pile up a backlog faster than the GPU drains it — the loop
      *  self-throttles to the decode rate. */
     protected decoding = false;
+
+    /** Cleared on every `connected` transition, set after the first upload of
+     *  that connection. Gates the timelapse "start" milestone: a live void's
+     *  streamed frames never bump the document revision, so its first real
+     *  frame would otherwise be absent from the recording. */
+    private firstFrameUploaded = false;
 
     /** Longest edge (px) the decoded bitmap — and the GPU upload — may reach; the
      *  source is downscaled to fit, preserving aspect. Pushed in as the
@@ -187,6 +197,13 @@ export abstract class FrameSource {
                 }
                 this.engine.uploadVoidExternalImage(this.layerId, bitmap);
                 this.afterUpload();
+                // Timelapse "start" milestone: the first frame of a connection
+                // is now in the GPU, so ask the recorder to capture it. A no-op
+                // when recording is off. Once per connection (reset on reconnect).
+                if (!this.firstFrameUploaded) {
+                    this.firstFrameUploaded = true;
+                    this.engine.api.requestRecordingCapture();
+                }
             })
             .catch(() => {
                 // Decode can fail if the frame became unavailable (track ended

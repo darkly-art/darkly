@@ -16,7 +16,7 @@ export interface MockEngine {
  *  whose `send`/`post` are test spies. `post` is optional — a mock exercising
  *  only awaited requests can omit it. Exposing `transport` lets the fake stand
  *  in for a real {@link import('../engine/protocol').Engine} wherever a
- *  `SessionEngine` is begun over it (`beginToolSession(fakeEngine)`). */
+ *  `SessionEngine` is constructed over it (`new SessionEngine(fakeEngine)`). */
 export function withApi<T extends { send: MockEngine['send']; post?: MockEngine['post'] }>(
     engine: T,
 ): T & { api: EngineApi; transport: Transport } {

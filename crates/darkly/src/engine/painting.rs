@@ -20,18 +20,26 @@ use crate::undo::GpuRegionAction;
 
 #[handlers]
 impl DarklyEngine {
-    /// Read the stabilize strength from the pen_input node's "stabilize" port
-    /// default in the active brush graph.  Returns 0.0 if not found.
-    fn pen_input_stabilize_strength(&self) -> f32 {
+    /// Read the stabilize strength from the brush_settings node's "stabilize"
+    /// port default in the active brush graph.  Returns 0.0 if not found.
+    fn active_stabilize_strength(&self) -> f32 {
         use crate::brush::state::BrushState;
         let tool = self.tool_session.read();
         let brush = tool
             .get::<BrushState>()
             .expect("BrushState registered at session init");
-        crate::brush::nodes::pen_input::read_scalar_input(&brush.graph, "stabilize").unwrap_or(0.0)
+        crate::brush::nodes::brush_settings::read_scalar_input(&brush.graph, "stabilize")
+            .unwrap_or(0.0)
     }
 
-    /// Build the `SpacingConfig` for the active brush graph. Reads pen_input
+    /// Read the global prediction horizon (ms of look-ahead) from config.
+    /// `0` = off. Prediction is a global editor preference, not per-brush —
+    /// see `config/sections/input.rs`.
+    fn prediction_horizon_ms(&self) -> f32 {
+        crate::config::get_f64("input.predictionHorizon") as f32
+    }
+
+    /// Build the `SpacingConfig` for the active brush graph. Reads brush_settings
     /// port defaults — the same source the editor preview reads — so a real
     /// stroke and its preview stamp at the same intervals.
     fn active_spacing_config(&self) -> SpacingConfig {
@@ -40,7 +48,19 @@ impl DarklyEngine {
         let brush = tool
             .get::<BrushState>()
             .expect("BrushState registered at session init");
-        crate::brush::nodes::pen_input::spacing_config(&brush.graph)
+        crate::brush::nodes::brush_settings::spacing_config(&brush.graph)
+    }
+
+    /// Read the active brush's base size from its `brush_settings.size` knob —
+    /// the same out-of-band source the editor preview uses, so a real stroke and
+    /// its preview render dabs at the same size.
+    fn active_base_size(&self) -> f32 {
+        use crate::brush::state::BrushState;
+        let tool = self.tool_session.read();
+        let brush = tool
+            .get::<BrushState>()
+            .expect("BrushState registered at session init");
+        crate::brush::nodes::brush_settings::base_size(&brush.graph)
     }
 
     /// Flush any pending diff-based undo commit. Called before overwriting the
@@ -96,10 +116,10 @@ impl DarklyEngine {
         &mut self,
         node_id: LayerId,
         rect: CanvasRect,
-        label_save: &str,
+        _label_save: &str,
         label_commit: &'static str,
         mutate: impl FnOnce(
-            &mut wgpu::CommandEncoder,
+            &mut crate::gpu::paint_target::PaintCommandEncoder<'_>,
             GpuPaintTarget<'_>,
             &PaintPipelines,
             &wgpu::Queue,
@@ -114,13 +134,19 @@ impl DarklyEngine {
 
         // Save then mutate in one command buffer — wgpu executes recorded
         // commands in order, so the snapshot captures pre-mutation pixels.
-        let snap = self.gpu.encode_ret(label_save, |encoder| {
-            let snap =
-                self.region_scratch
-                    .save_region(&self.gpu.device, encoder, &frame, format, rect);
-            mutate(encoder, target, &self.paint_pipelines, &self.gpu.queue);
-            snap
+        let mut encoder = crate::gpu::paint_target::PaintCommandEncoder::new(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &self.paint_pipelines,
+            label_commit,
+            1,
+        );
+        let snap = encoder.with_raw(|raw| {
+            self.region_scratch
+                .save_region(&self.gpu.device, raw, &frame, format, rect)
         });
+        mutate(&mut encoder, target, &self.paint_pipelines, &self.gpu.queue);
+        encoder.submit();
 
         // `frame`'s last use; after this the shared `compositor` borrow is free
         // for the `&mut` calls below (NLL).
@@ -332,7 +358,7 @@ impl DarklyEngine {
             .values()
             .find(|n| n.type_id == crate::brush::nodes::clone_source::TYPE_ID)
             .and_then(|n| n.ports.iter().find(|p| p.name == port))
-            .map(|p| p.default)
+            .map(|p| p.value.as_f32())
     }
 
     /// `true` when the active brush's `clone_source` node is in *anchored*
@@ -646,20 +672,18 @@ impl DarklyEngine {
                 self.region_scratch.grow_scratch_preserving(
                     &self.gpu.device,
                     encoder,
-                    new_extent.width,
-                    new_extent.height,
-                    dx,
-                    dy,
+                    current_extent,
+                    new_extent,
                 );
             });
-            // After grow_scratch_preserving, the new scratch holds:
-            //   - old layer contents at (dx, dy) (translated from old origin)
-            //   - zero-init in the newly-grown canvas regions
-            // Both are correct pre-stroke state — the newly-grown pixels
-            // didn't exist before the grow, so "zero / transparent" IS
-            // their pre-stroke value. Widen `saved` to cover the full
-            // new canvas extent so a diff_rect that spills into the
-            // newly-grown area is still contained at commit time.
+            // After grow_scratch_preserving, the new scratch holds valid
+            // pre-stroke state over the full new extent: the old extent's
+            // snapshot rebased to the new frame, and the format default —
+            // transparent for a raster layer, white for an R8 mask —
+            // everywhere else. The newly-grown pixels didn't exist before the
+            // grow, so that default IS their pre-stroke value. Widen `saved`
+            // to cover the full new canvas extent so a diff_rect that spills
+            // into the newly-grown area is still contained at commit time.
             snap.saved = new_extent;
         } else {
             // Lazy init will allocate the scratch at the new dimensions
@@ -888,7 +912,7 @@ impl DarklyEngine {
             let sample_merged = samples_source && self.clone_sample_merged();
 
             // Derive stabilizer from the pen_input node's "stabilize" port.
-            let strength = self.pen_input_stabilize_strength();
+            let strength = self.active_stabilize_strength();
             let stabilizer_config = if strength > 0.0 {
                 crate::brush::stabilizer::StabilizerConfig {
                     algorithm: "laplacian".into(),
@@ -897,14 +921,29 @@ impl DarklyEngine {
             } else {
                 crate::brush::stabilizer::StabilizerConfig::default()
             };
-            let stabilizer = self
+            let inner = self
                 .stabilizer_registry
                 .create_from_config(&stabilizer_config);
+
+            // Prediction is coupled to stabilization: it extrapolates from the
+            // smoothed polyline, so it only engages when a real stabilizer is
+            // active AND a look-ahead horizon is configured. Otherwise the
+            // inner stabilizer is used bare.
+            let horizon_ms = self.prediction_horizon_ms();
+            let stabilizer: Box<dyn crate::brush::stabilizer::StabilizerAlgorithm> =
+                if strength > 0.0 && horizon_ms > 0.0 {
+                    Box::new(crate::brush::stabilizer::PredictingStabilizer::new(
+                        inner, horizon_ms,
+                    ))
+                } else {
+                    inner
+                };
 
             self.brush_stroke_engine = Some(StrokeEngine::new(
                 runner,
                 color,
                 self.active_spacing_config(),
+                self.active_base_size(),
                 stabilizer,
                 clone_source_anchor,
             ));
@@ -1416,16 +1455,22 @@ impl DarklyEngine {
             None => return,
         };
 
-        self.gpu.encode("flood-fill-stamp", |encoder| {
-            target.fill_rect_with_selection(
-                encoder,
-                &self.paint_pipelines,
-                &self.gpu.queue,
-                self.doc.canvas_rect(),
-                color,
-                &mask_bind_group,
-            );
-        });
+        let mut encoder = crate::gpu::paint_target::PaintCommandEncoder::new(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &self.paint_pipelines,
+            "flood-fill-stamp",
+            1,
+        );
+        target.fill_rect_with_selection(
+            &mut encoder,
+            &self.paint_pipelines,
+            &self.gpu.queue,
+            self.doc.canvas_rect(),
+            color,
+            &mask_bind_group,
+        );
+        encoder.submit();
 
         // 4. Commit undo. The lazy save in `gpu_stroke_to` populated
         //    `scratch_snapshot` with the full layer; flood fill can change
@@ -1564,25 +1609,6 @@ impl DarklyEngine {
         self.compositor
             .node_texture(node_id)
             .map(|t| GpuPaintTarget::from_node(t, self.doc.canvas_rect()))
-    }
-
-    /// Upload a cropped region of the GPU selection as an R8 texture bind group.
-    /// Reads from the CPU cache (populated by async readback or eagerly on upload).
-    pub(crate) fn upload_cropped_selection_r8(
-        &self,
-        origin: (i32, i32),
-        width: u32,
-        height: u32,
-    ) -> Option<wgpu::BindGroup> {
-        let pixels = self.cropped_selection_pixels(origin, width, height)?;
-        Some(self.paint_pipelines.upload_r8_bind_group(
-            &self.gpu.device,
-            &self.gpu.queue,
-            width,
-            height,
-            &pixels,
-            "selection-cropped",
-        ))
     }
 
     /// Crop the live selection's CPU cache to a `width`×`height` window-local

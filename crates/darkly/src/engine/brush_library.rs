@@ -29,12 +29,26 @@ pub(crate) const BRUSH_STROKE_RENDER_SIZE: (u32, u32) = (1024, 768);
 /// border. The changed-pixel crop, not this value, decides the framed size.
 pub(crate) const BRUSH_STROKE_PATH_INSET_FRACTION: f32 = 0.4;
 
+/// Canonical brush size dab previews render at, independent of the brush's
+/// own `brush_settings.size` (and independent of whether the subgraph even has
+/// a `brush_settings` node — per-node previews don't). Chosen so the rasterized
+/// tip is large enough that the crop-and-downscale to `DAB_THUMBNAIL_OUTPUT_SIZE`
+/// preserves real detail instead of upscaling a ~50 px dab. At
+/// `radius = size * DAB_REFERENCE_SIZE * 0.5` this is ≈ 77 px, so a round dab
+/// crops to ≈ 185 px — comfortably above the output size. `BRUSH_DAB_RENDER_SIZE`
+/// is sized to keep the worst-case anisotropic nib clear of the border at this
+/// radius.
+pub(crate) const DAB_PREVIEW_BASE_SIZE: f32 = 0.3;
+
 /// Render canvas for dab previews. Square and generously oversized for the
 /// same reason as `BRUSH_STROKE_RENDER_SIZE`: the readback handler
 /// bbox-crops the rendered dab and downscales to a stable cache size, so the
-/// canvas only needs enough headroom that no neutralized-size tip (including
-/// a broad calligraphy nib or a `scatter`-displaced dab) touches the border.
-pub(crate) const BRUSH_DAB_RENDER_SIZE: (u32, u32) = (768, 768);
+/// canvas only needs enough headroom that no tip at `DAB_PREVIEW_BASE_SIZE`
+/// (including a broad calligraphy nib stretched ~10× by anisotropy, see
+/// `circle::extent`, or a `scatter`-displaced dab) touches the border: a
+/// ≈ 77 px radius × 10 = 768 px reach from the centred dab stays inside the
+/// 896 px half-canvas.
+pub(crate) const BRUSH_DAB_RENDER_SIZE: (u32, u32) = (1792, 1792);
 
 #[handlers]
 impl DarklyEngine {

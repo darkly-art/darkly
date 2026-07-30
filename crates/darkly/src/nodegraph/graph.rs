@@ -5,13 +5,39 @@ use serde::{Deserialize, Serialize};
 
 use super::registration::NodeRegistration;
 use super::WireKind;
-use crate::gpu::params::ParamValue;
+use crate::brush::input_value::InputValue;
 
 // ── Identifiers ──────────────────────────────────────────────────────
 
-/// Stable node identity inside a graph.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct NodeId(pub u64);
+/// Stable node identity inside a graph. Kind-derived: the first node of a
+/// kind gets an id equal to its `type_id` (`"noise"`), the Nth gets
+/// `"<type_id>_<N>"` (`"noise_2"`, …). See [`Graph::add_node`].
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct NodeId(pub String);
+
+impl NodeId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for NodeId {
+    fn from(s: &str) -> Self {
+        NodeId(s.to_string())
+    }
+}
+
+impl From<String> for NodeId {
+    fn from(s: String) -> Self {
+        NodeId(s)
+    }
+}
+
+impl std::fmt::Display for NodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 /// Reference to a specific port on a specific node.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -103,8 +129,38 @@ pub struct PortDef<W: WireKind> {
     pub min: f32,
     /// Slider max when the port is disconnected (UI metadata only).
     pub max: f32,
-    /// Default value when the port is disconnected.
-    pub default: f32,
+    /// The authored value used when this input port is disconnected — the
+    /// full typed value (scalar slider value, enum-dropdown index, texture
+    /// name, curve points, color). Wired inputs ignore it and take the
+    /// upstream expression. For output ports it stays the neutral scalar
+    /// default and is unused. Replaces the old scalar-only `default: f32`;
+    /// numeric inputs carry [`InputValue::Scalar`].
+    #[serde(default)]
+    pub value: InputValue,
+    /// Enum-dropdown labels, in index order — non-empty only for
+    /// [`WireKind`]-`Enum` inputs (shape's `algorithm`, noise/image `space`,
+    /// random's `mode`). Empty for every other input kind.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enum_options: Vec<String>,
+    /// Whether an upstream wire may drive this input per-dab. Computed from
+    /// `wire_type.is_wirable()` at construction and carried as data so the
+    /// frontend reads it directly rather than re-deriving the rule — the
+    /// single source of truth is [`WireKind::is_wirable`]. Every port built
+    /// from a registration (`PortDef::input`/`output`, and the clones in
+    /// `add_node` / portable import) sets it correctly; serde round-trips it.
+    #[serde(default)]
+    pub wirable: bool,
+    /// Whether a user may *expose* this input as a brush-bar control.
+    /// Computed from `wire_type.is_user_exposable()` at construction and
+    /// carried as data so the frontend gates its expose affordance directly
+    /// off one value rather than re-deriving the type rule — the single
+    /// source of truth is [`WireKind::is_user_exposable`]. Orthogonal to
+    /// `wirable`: an enum is exposable but not wirable; a wired scalar is
+    /// wirable but (while connected) not user-scrubbable. `expose_port`
+    /// enforces it, so a control the brush bar can't render can never be
+    /// surfaced. Serde round-trips it.
+    #[serde(default)]
+    pub exposable: bool,
     /// Quantization step. `0.0` (the default) means continuous; any positive
     /// value snaps the slider, scrub, and typed-value commits to multiples of
     /// `step` from `min`. Used when the wire takes a value but only certain
@@ -213,6 +269,31 @@ pub struct PortDef<W: WireKind> {
     /// thumbnail re-renders, not just the editor preview.
     #[serde(default)]
     pub persist_in_thumbnail: bool,
+    /// This output port emits a *spatial, per-fragment image* — a coverage
+    /// mask or colour field that varies across the dab — so a node carrying it
+    /// is worth a preview thumbnail (`circle.mask`, `image.color`,
+    /// `noise.color`, `stamp.dab`). Declared per port rather than inferred
+    /// from `wire_type`, because wire type can't tell a spatial field from a
+    /// per-dab constant: `random.value` and `paint_color.color` share the
+    /// `Scalar`/`Vec4` types with the real image outputs but render as flat
+    /// blobs. The node-preview builder wires the first port carrying this flag;
+    /// the brush-builder's preview gate reads it directly (like `wirable` /
+    /// `exposable`). Meaningless on inputs; only set on outputs.
+    #[serde(default)]
+    pub preview_image: bool,
+    /// This input port is *also* a wire source: its resolved value (the
+    /// wired value if driven, else the authored default) is available for
+    /// other nodes to wire *from*, exactly like an output. Only meaningful
+    /// on `dir == Input`; ignored on outputs (which are sources anyway).
+    ///
+    /// The editor shows the source handle only while the input is not
+    /// itself wire-driven — a driven port's value is the driver's, so it
+    /// should be tapped there instead. Consumers that resolve "which port a
+    /// wire leaves from" must ask [`PortDef::is_source`], never
+    /// `dir == Output`, or a settable-source is treated as a second-class
+    /// source (skipped by wire-range remap, unreachable by `find_port`).
+    #[serde(default)]
+    pub source: bool,
 }
 
 impl<W: WireKind> PortDef<W> {
@@ -223,7 +304,10 @@ impl<W: WireKind> PortDef<W> {
             wire_type,
             min: 0.0,
             max: 1.0,
-            default: 0.0,
+            value: InputValue::Scalar(0.0),
+            enum_options: Vec::new(),
+            wirable: wire_type.is_wirable(),
+            exposable: wire_type.is_user_exposable(),
             description: String::new(),
             unit_type: UnitType::default(),
             icon: String::new(),
@@ -235,6 +319,8 @@ impl<W: WireKind> PortDef<W> {
             step: 0.0,
             natural_range: None,
             persist_in_thumbnail: false,
+            preview_image: false,
+            source: false,
         }
     }
 
@@ -245,7 +331,10 @@ impl<W: WireKind> PortDef<W> {
             wire_type,
             min: 0.0,
             max: 1.0,
-            default: 0.0,
+            value: InputValue::Scalar(0.0),
+            enum_options: Vec::new(),
+            wirable: wire_type.is_wirable(),
+            exposable: wire_type.is_user_exposable(),
             description: String::new(),
             unit_type: UnitType::default(),
             icon: String::new(),
@@ -257,7 +346,16 @@ impl<W: WireKind> PortDef<W> {
             step: 0.0,
             natural_range: None,
             persist_in_thumbnail: false,
+            preview_image: false,
+            source: false,
         }
+    }
+
+    /// `true` if a wire may leave this port — every output, plus a
+    /// settable-source input (see [`PortDef::source`]). The single predicate
+    /// every wire-source resolution must use instead of `dir == Output`.
+    pub fn is_source(&self) -> bool {
+        self.dir == PortDir::Output || (self.dir == PortDir::Input && self.source)
     }
 
     /// Declare the slider/preset range and default value for this port.
@@ -280,7 +378,27 @@ impl<W: WireKind> PortDef<W> {
     pub fn with_range(mut self, min: f32, max: f32, default: f32) -> Self {
         self.min = min;
         self.max = max;
-        self.default = default;
+        self.value = InputValue::Scalar(default);
+        self
+    }
+
+    /// Set this input's authored value directly — the general form behind
+    /// [`Self::with_range`]. Use for the non-scalar input kinds: an
+    /// [`InputValue::Int`] enum index, an [`InputValue::String`] texture
+    /// name, [`InputValue::Curve`] points, an [`InputValue::Bool`] flag.
+    pub fn with_value(mut self, value: InputValue) -> Self {
+        self.value = value;
+        self
+    }
+
+    /// Declare the dropdown labels for an [`WireKind`]-`Enum` input, in
+    /// index order. The stored value is the selected index.
+    pub fn with_enum_options<I, S>(mut self, options: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.enum_options = options.into_iter().map(Into::into).collect();
         self
     }
 
@@ -331,6 +449,22 @@ impl<W: WireKind> PortDef<W> {
     /// Mark this port as exposed in the brush properties panel by default.
     pub fn exposed(mut self) -> Self {
         self.exposed = true;
+        self
+    }
+
+    /// Mark this input port as a settable-source: its resolved value is also
+    /// available as a wire source. See [`PortDef::source`] / [`PortDef::is_source`].
+    pub fn source(mut self) -> Self {
+        self.source = true;
+        self
+    }
+
+    /// Declare that this output port emits a spatial per-fragment image worth
+    /// previewing. See [`PortDef::preview_image`] for the contract. Set it on
+    /// coverage/colour-field outputs (`circle.mask`, `image.color`, …); leave
+    /// it off for per-dab constants and sensor/math outputs.
+    pub fn preview_image(mut self) -> Self {
+        self.preview_image = true;
         self
     }
 
@@ -386,10 +520,16 @@ pub struct NodeInstance<W: WireKind> {
     pub id: NodeId,
     /// References the `type_id` from the `NodeRegistration`.
     pub type_id: String,
-    /// Port definitions (copied from registration on creation).
+    /// Port definitions (copied from registration on creation). This is the
+    /// node's single, unified input/output list — the per-instance authored
+    /// value of every input lives on its [`PortDef::value`].
     pub ports: Vec<PortDef<W>>,
-    /// Per-instance parameter overrides.
-    pub params: Vec<ParamValue>,
+    /// Free-form author annotation on this node instance. Empty means none.
+    /// Inert w.r.t. compilation and render output; carried purely so a brush
+    /// author can leave explanatory notes on a node. Serializable graph state
+    /// (survives save/load through both the portable YAML and the bundle).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub comment: String,
 }
 
 // ── Errors ───────────────────────────────────────────────────────────
@@ -408,6 +548,23 @@ pub enum GraphError {
     NodeNotFound(NodeId),
     /// An input port may only have one incoming wire.
     InputAlreadyConnected {
+        node: NodeId,
+        port: String,
+    },
+    /// The destination input's wire type is not wirable (an enum, string,
+    /// or curve that resolves at compile time). Makes "unwirable" a
+    /// structural invariant the connect path enforces, so a hand-edited
+    /// graph or paste can't smuggle an illegal wire in.
+    InputNotWirable {
+        node: NodeId,
+        port: String,
+    },
+    /// The input can't be surfaced as a brush-bar control because its wire
+    /// type has no editing widget (`Curve`, `String`, …). Makes "exposable"
+    /// a structural invariant the expose path enforces, mirroring how
+    /// `InputNotWirable` guards `connect` — a control the bar can't render
+    /// can never be exposed in the first place.
+    PortNotExposable {
         node: NodeId,
         port: String,
     },
@@ -446,6 +603,12 @@ impl std::fmt::Display for GraphError {
             Self::NodeNotFound(id) => write!(f, "node {:?} not found", id),
             Self::InputAlreadyConnected { node, port } => {
                 write!(f, "input '{}' on {:?} already connected", port, node)
+            }
+            Self::InputNotWirable { node, port } => {
+                write!(f, "input '{}' on {:?} is not wirable", port, node)
+            }
+            Self::PortNotExposable { node, port } => {
+                write!(f, "input '{}' on {:?} is not user-exposable", port, node)
             }
             Self::ExposedPortNotFound { key } => {
                 write!(f, "exposed-port entry '{}' not found", key)
@@ -514,7 +677,7 @@ pub struct ExposedPortMeta {
 /// Format the canonical key for an exposed-port entry. Keys are
 /// `"<node_id>.<port_name>"` strings so the dict round-trips through
 /// JSON/YAML without needing tuple-key encoding.
-pub fn exposed_port_key(node: NodeId, port: &str) -> String {
+pub fn exposed_port_key(node: &NodeId, port: &str) -> String {
     format!("{}.{}", node.0, port)
 }
 
@@ -526,7 +689,6 @@ pub fn exposed_port_key(node: NodeId, port: &str) -> String {
 pub struct Graph<W: WireKind> {
     nodes: HashMap<NodeId, NodeInstance<W>>,
     pub connections: Vec<Connection>,
-    next_id: u64,
     /// Ordered set of exposed-port entries. Insertion order is the
     /// brush-bar display order — `IndexMap` preserves it through every
     /// mutation and JSON/YAML round-trip. Keys come from
@@ -546,7 +708,6 @@ impl<W: WireKind> Graph<W> {
         Self {
             nodes: HashMap::new(),
             connections: Vec::new(),
-            next_id: 1,
             exposed_ports: IndexMap::new(),
         }
     }
@@ -563,42 +724,63 @@ impl<W: WireKind> Graph<W> {
     /// registration `PortDef` declares `.exposed()` is auto-appended to
     /// `exposed_ports` with empty meta — preserves the "size etc. are
     /// exposed by default" affordance.
-    pub fn add_node(
-        &mut self,
-        type_id: impl Into<String>,
-        ports: Vec<PortDef<W>>,
-        params: Vec<ParamValue>,
-    ) -> NodeId {
-        let id = NodeId(self.next_id);
-        self.next_id += 1;
+    pub fn add_node(&mut self, type_id: impl Into<String>, ports: Vec<PortDef<W>>) -> NodeId {
+        let type_id = type_id.into();
+        let id = self.unique_id_for(&type_id);
         // Walk before move: every input port flagged exposed gets a
         // default brush-bar entry.
         for port in ports.iter() {
-            if port.dir == PortDir::Input && port.exposed {
-                let key = exposed_port_key(id, &port.name);
+            if port.dir == PortDir::Input && port.exposed && port.exposable {
+                let key = exposed_port_key(&id, &port.name);
                 self.exposed_ports.insert(key, ExposedPortMeta::default());
             }
         }
         self.nodes.insert(
-            id,
+            id.clone(),
             NodeInstance {
-                id,
-                type_id: type_id.into(),
+                id: id.clone(),
+                type_id,
                 ports,
-                params,
+                comment: String::new(),
             },
         );
         id
     }
 
+    /// Derive a fresh, unique id for a node of kind `type_id`. The first
+    /// node of a kind gets id == its `type_id` (`"noise"`); the Nth gets
+    /// `"<type_id>_<N>"` (`"noise_2"`, `"noise_3"`, …). Probes upward until
+    /// the candidate is free, so it stays correct after arbitrary removals
+    /// (a freed `"noise_2"` is reused before minting `"noise_3"`).
+    ///
+    /// Determinism: the node map is the source of truth for "which ids are
+    /// taken." When a file is imported, same-kind disambiguation follows the
+    /// order `add_node` is called, which is the `BTreeMap`-key order of the
+    /// source file (lexicographic) — the lexicographically-first same-kind
+    /// key normalizes to the bare `type_id`.
+    fn unique_id_for(&self, type_id: &str) -> NodeId {
+        let base = NodeId(type_id.to_string());
+        if !self.nodes.contains_key(&base) {
+            return base;
+        }
+        let mut n = 2;
+        loop {
+            let cand = NodeId(format!("{type_id}_{n}"));
+            if !self.nodes.contains_key(&cand) {
+                return cand;
+            }
+            n += 1;
+        }
+    }
+
     /// Remove a node, all its connections, and every brush-bar entry
     /// referencing one of its ports.
-    pub fn remove_node(&mut self, id: NodeId) -> Result<(), GraphError> {
-        if self.nodes.remove(&id).is_none() {
-            return Err(GraphError::NodeNotFound(id));
+    pub fn remove_node(&mut self, id: &NodeId) -> Result<(), GraphError> {
+        if self.nodes.remove(id).is_none() {
+            return Err(GraphError::NodeNotFound(id.clone()));
         }
         self.connections
-            .retain(|c| c.from.node != id && c.to.node != id);
+            .retain(|c| &c.from.node != id && &c.to.node != id);
         let prefix = format!("{}.", id.0);
         self.exposed_ports
             .retain(|key, _| !key.starts_with(&prefix));
@@ -608,16 +790,25 @@ impl<W: WireKind> Graph<W> {
     /// Add a brush-bar entry for an input port, no-op if already present.
     /// The entry starts with empty meta (registration values are used as
     /// fallback at render time).
-    pub fn expose_port(&mut self, id: NodeId, port_name: &str) -> Result<(), GraphError> {
+    pub fn expose_port(&mut self, id: &NodeId, port_name: &str) -> Result<(), GraphError> {
         // Validate that the port exists and is an input.
-        let node = self.nodes.get(&id).ok_or(GraphError::NodeNotFound(id))?;
-        if !node
+        let node = self
+            .nodes
+            .get(id)
+            .ok_or_else(|| GraphError::NodeNotFound(id.clone()))?;
+        let port = node
             .ports
             .iter()
-            .any(|p| p.name == port_name && p.dir == PortDir::Input)
-        {
-            return Err(GraphError::PortNotFound {
-                node: id,
+            .find(|p| p.name == port_name && p.dir == PortDir::Input)
+            .ok_or_else(|| GraphError::PortNotFound {
+                node: id.clone(),
+                port: port_name.to_string(),
+            })?;
+        // Only controls the brush bar can render may be exposed — enforce it
+        // here so an un-renderable entry can never reach the read builder.
+        if !port.exposable {
+            return Err(GraphError::PortNotExposable {
+                node: id.clone(),
                 port: port_name.to_string(),
             });
         }
@@ -628,13 +819,13 @@ impl<W: WireKind> Graph<W> {
 
     /// Drop a brush-bar entry by `(node, port)`. Idempotent — missing
     /// entries are not an error.
-    pub fn unexpose_port(&mut self, id: NodeId, port_name: &str) {
+    pub fn unexpose_port(&mut self, id: &NodeId, port_name: &str) {
         let key = exposed_port_key(id, port_name);
         self.exposed_ports.shift_remove(&key);
     }
 
     /// Returns true when the named input port has a live brush-bar entry.
-    pub fn is_port_exposed(&self, id: NodeId, port_name: &str) -> bool {
+    pub fn is_port_exposed(&self, id: &NodeId, port_name: &str) -> bool {
         self.exposed_ports
             .contains_key(&exposed_port_key(id, port_name))
     }
@@ -697,10 +888,20 @@ impl<W: WireKind> Graph<W> {
             });
         }
 
+        // Wirability check: a compile-time input (enum, string, curve) can
+        // never accept a per-dab wire. Type-owned — asks the wire type, not
+        // a consumer-side classifier.
+        if !to_def.is_wirable() {
+            return Err(GraphError::InputNotWirable {
+                node: to.node.clone(),
+                port: to.port.clone(),
+            });
+        }
+
         // Input-already-connected check.
         if self.connections.iter().any(|c| c.to == to) {
             return Err(GraphError::InputAlreadyConnected {
-                node: to.node,
+                node: to.node.clone(),
                 port: to.port.clone(),
             });
         }
@@ -708,9 +909,17 @@ impl<W: WireKind> Graph<W> {
         // Cycle check: would adding from→to create a cycle?
         // A cycle exists iff `from.node` is reachable from `to.node`
         // through existing connections (i.e., to is upstream of from).
-        if self.is_reachable(to.node, from.node) {
+        if self.is_reachable(&to.node, &from.node) {
             return Err(GraphError::CycleDetected);
         }
+
+        // Driving a settable-source input retires any wires that were tapping
+        // it as a source: once driven, the port's value is the driver's, and
+        // the editor hides its source handle (see `PortDef::source`), so the
+        // graph must not keep carrying the old knob value downstream. A plain
+        // input has no outgoing wires, so this is a no-op for it.
+        self.connections
+            .retain(|c| !(c.from.node == to.node && c.from.port == to.port));
 
         self.connections.push(Connection { from, to });
         Ok(())
@@ -722,17 +931,17 @@ impl<W: WireKind> Graph<W> {
     }
 
     /// All connections whose destination is a port on `node_id`.
-    pub fn inputs_for(&self, node_id: NodeId) -> impl Iterator<Item = &Connection> {
+    pub fn inputs_for<'a>(&'a self, node_id: &'a NodeId) -> impl Iterator<Item = &'a Connection> {
         self.connections
             .iter()
-            .filter(move |c| c.to.node == node_id)
+            .filter(move |c| &c.to.node == node_id)
     }
 
     /// All connections whose source is a port on `node_id`.
-    pub fn outputs_for(&self, node_id: NodeId) -> impl Iterator<Item = &Connection> {
+    pub fn outputs_for<'a>(&'a self, node_id: &'a NodeId) -> impl Iterator<Item = &'a Connection> {
         self.connections
             .iter()
-            .filter(move |c| c.from.node == node_id)
+            .filter(move |c| &c.from.node == node_id)
     }
 
     /// Neutralize ports annotated with [`PortDef::preview_value`] so
@@ -759,7 +968,7 @@ impl<W: WireKind> Graph<W> {
         for node in self.nodes.values() {
             for port in &node.ports {
                 if let Some(value) = port.preview_value {
-                    overrides.push((node.id, port.name.clone(), value));
+                    overrides.push((node.id.clone(), port.name.clone(), value));
                 }
             }
         }
@@ -770,61 +979,63 @@ impl<W: WireKind> Graph<W> {
                 .retain(|c| !(c.to.node == node_id && c.to.port == port_name));
             if let Some(node) = self.nodes.get_mut(&node_id) {
                 if let Some(port) = node.ports.iter_mut().find(|p| p.name == port_name) {
-                    port.default = value;
+                    port.value = InputValue::Scalar(value);
                 }
             }
         }
     }
 
-    /// Update a port's default value on a node instance.
-    ///
-    /// This changes the value used when the port is disconnected.
-    pub fn set_port_default(
+    /// Update an input port's authored value on a node instance — the value
+    /// used when the port is disconnected. The general form; see
+    /// [`Self::set_port_default`] for the scalar convenience wrapper the hot
+    /// slider path uses.
+    pub fn set_port_value(
         &mut self,
-        id: NodeId,
+        id: &NodeId,
         port_name: &str,
-        value: f32,
+        value: InputValue,
     ) -> Result<(), GraphError> {
         let node = self
             .nodes
-            .get_mut(&id)
-            .ok_or(GraphError::NodeNotFound(id))?;
+            .get_mut(id)
+            .ok_or_else(|| GraphError::NodeNotFound(id.clone()))?;
         let port = node
             .ports
             .iter_mut()
             .find(|p| p.name == port_name && p.dir == PortDir::Input)
             .ok_or_else(|| GraphError::PortNotFound {
-                node: id,
+                node: id.clone(),
                 port: port_name.to_string(),
             })?;
-        port.default = value;
+        port.value = value;
         Ok(())
+    }
+
+    /// Set (or clear, with an empty string) a node's author comment.
+    pub fn set_node_comment(&mut self, id: &NodeId, comment: String) -> Result<(), GraphError> {
+        let node = self
+            .nodes
+            .get_mut(id)
+            .ok_or_else(|| GraphError::NodeNotFound(id.clone()))?;
+        node.comment = comment;
+        Ok(())
+    }
+
+    /// Scalar convenience wrapper over [`Self::set_port_value`] — the hot
+    /// path for slider scrubs and numeric port defaults. Wraps the `f32` in
+    /// [`InputValue::Scalar`].
+    pub fn set_port_default(
+        &mut self,
+        id: &NodeId,
+        port_name: &str,
+        value: f32,
+    ) -> Result<(), GraphError> {
+        self.set_port_value(id, port_name, InputValue::Scalar(value))
     }
 
     // Note: brush-bar exposure / label / description / icon overrides
     // live in `Graph::exposed_ports` now. Use `expose_port`,
     // `unexpose_port`, `set_exposed_port_meta`, and `reorder_exposed_port`.
-
-    /// Update a single parameter value on a node.
-    pub fn set_param(
-        &mut self,
-        id: NodeId,
-        index: usize,
-        value: ParamValue,
-    ) -> Result<(), GraphError> {
-        let node = self
-            .nodes
-            .get_mut(&id)
-            .ok_or(GraphError::NodeNotFound(id))?;
-        if index >= node.params.len() {
-            return Err(GraphError::PortNotFound {
-                node: id,
-                port: format!("param[{}]", index),
-            });
-        }
-        node.params[index] = value;
-        Ok(())
-    }
 
     /// Find the unique node in this graph whose registration declares
     /// `is_terminal: true`. By today's invariant a brush graph contains
@@ -841,14 +1052,14 @@ impl<W: WireKind> Graph<W> {
                 registry
                     .get(&node.type_id)
                     .filter(|r| r.is_terminal)
-                    .map(|_| *id)
+                    .map(|_| id.clone())
             })
             .collect();
         match terminals.len() {
             0 => Err(FindTerminalError::NoTerminal),
             1 => Ok(terminals.remove(0)),
             _ => {
-                terminals.sort_by_key(|id| id.0);
+                terminals.sort_by(|a, b| a.0.cmp(&b.0));
                 Err(FindTerminalError::MultipleTerminals(terminals))
             }
         }
@@ -857,18 +1068,28 @@ impl<W: WireKind> Graph<W> {
     // ── helpers ──────────────────────────────────────────────────────
 
     /// Find the wire type of a port, returning an error if the node or
-    /// port doesn't exist or has the wrong direction.
+    /// port doesn't exist or can't play the requested role. `expected_dir`
+    /// names the *role* the endpoint plays on a wire: `Output` = the source
+    /// end (resolved by [`PortDef::is_source`], so settable-source inputs
+    /// qualify), `Input` = the sink end.
     fn find_port(&self, pr: &PortRef, expected_dir: PortDir) -> Result<W, GraphError> {
         let node = self
             .nodes
             .get(&pr.node)
-            .ok_or(GraphError::NodeNotFound(pr.node))?;
+            .ok_or_else(|| GraphError::NodeNotFound(pr.node.clone()))?;
+        let matches = |p: &&PortDef<W>| {
+            p.name == pr.port
+                && match expected_dir {
+                    PortDir::Output => p.is_source(),
+                    PortDir::Input => p.dir == PortDir::Input,
+                }
+        };
         let def = node
             .ports
             .iter()
-            .find(|p| p.name == pr.port && p.dir == expected_dir)
+            .find(matches)
             .ok_or_else(|| GraphError::PortNotFound {
-                node: pr.node,
+                node: pr.node.clone(),
                 port: pr.port.clone(),
             })?;
         Ok(def.wire_type)
@@ -876,19 +1097,19 @@ impl<W: WireKind> Graph<W> {
 
     /// DFS reachability: can we get from `start` to `target` following
     /// existing connection edges (from.node → to.node)?
-    fn is_reachable(&self, start: NodeId, target: NodeId) -> bool {
+    fn is_reachable(&self, start: &NodeId, target: &NodeId) -> bool {
         let mut visited = HashSet::new();
-        let mut stack = vec![start];
+        let mut stack = vec![start.clone()];
         while let Some(current) = stack.pop() {
-            if current == target {
+            if &current == target {
                 return true;
             }
-            if !visited.insert(current) {
+            if !visited.insert(current.clone()) {
                 continue;
             }
             for conn in &self.connections {
                 if conn.from.node == current {
-                    stack.push(conn.to.node);
+                    stack.push(conn.to.node.clone());
                 }
             }
         }
@@ -911,14 +1132,127 @@ mod tests {
         PortDef::output(name, TestWireKind::Color)
     }
 
+    fn scalar_source(name: &str) -> PortDef<TestWireKind> {
+        PortDef::input(name, TestWireKind::Scalar).source()
+    }
+
+    /// The first node of a kind gets an id equal to its `type_id`.
+    #[test]
+    fn add_node_first_of_kind_uses_type_id() {
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node("noise", vec![scalar_out("out")]);
+        assert_eq!(id, NodeId("noise".into()));
+    }
+
+    /// Second/third nodes of the same kind get `_2`, `_3` suffixes.
+    #[test]
+    fn add_node_second_of_kind_gets_suffix() {
+        let mut g = Graph::<TestWireKind>::new();
+        let a = g.add_node("noise", vec![scalar_out("out")]);
+        let b = g.add_node("noise", vec![scalar_out("out")]);
+        let c = g.add_node("noise", vec![scalar_out("out")]);
+        assert_eq!(a, NodeId("noise".into()));
+        assert_eq!(b, NodeId("noise_2".into()));
+        assert_eq!(c, NodeId("noise_3".into()));
+    }
+
+    /// Removing a node frees its id; the next add of that kind probes into
+    /// the gap rather than minting a fresh suffix.
+    #[test]
+    fn add_node_reuses_freed_id() {
+        let mut g = Graph::<TestWireKind>::new();
+        let _a = g.add_node("noise", vec![scalar_out("out")]);
+        let b = g.add_node("noise", vec![scalar_out("out")]);
+        assert_eq!(b, NodeId("noise_2".into()));
+        g.remove_node(&b).unwrap();
+        let c = g.add_node("noise", vec![scalar_out("out")]);
+        assert_eq!(c, NodeId("noise_2".into()));
+    }
+
+    /// A settable-source input resolves as a wire *source* (its `is_source()`
+    /// is honoured by `connect`'s from-side), while still being a settable
+    /// input on the same node — the two never interfere.
+    #[test]
+    fn settable_source_is_both_wire_source_and_settable_input() {
+        let mut g = Graph::<TestWireKind>::new();
+        let a = g.add_node("knob", vec![scalar_source("val")]);
+        let b = g.add_node("sink", vec![scalar_in("in")]);
+
+        // Wire *from* the settable-source input into another node's input.
+        g.connect(
+            PortRef {
+                node: a.clone(),
+                port: "val".into(),
+            },
+            PortRef {
+                node: b,
+                port: "in".into(),
+            },
+        )
+        .expect("settable-source resolves as a wire source");
+        assert_eq!(g.connections.len(), 1);
+
+        // Setting its default targets the input side and doesn't disturb the
+        // wire leaving it.
+        g.set_port_default(&a, "val", 0.5).unwrap();
+        assert_eq!(g.connections.len(), 1);
+    }
+
+    /// Driving a settable-source input (wiring *into* it) retires any wires
+    /// that were tapping it as a source — its value is now the driver's.
+    #[test]
+    fn driving_a_settable_source_drops_its_outgoing_wires() {
+        let mut g = Graph::<TestWireKind>::new();
+        let knob = g.add_node("knob", vec![scalar_source("val")]);
+        let sink = g.add_node("sink", vec![scalar_in("in")]);
+        let driver = g.add_node("driver", vec![scalar_out("out")]);
+
+        g.connect(
+            PortRef {
+                node: knob.clone(),
+                port: "val".into(),
+            },
+            PortRef {
+                node: sink,
+                port: "in".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(g.connections.len(), 1);
+
+        // Now drive the knob from `driver`. The knob→sink source wire must go.
+        g.connect(
+            PortRef {
+                node: driver,
+                port: "out".into(),
+            },
+            PortRef {
+                node: knob.clone(),
+                port: "val".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            g.connections.len(),
+            1,
+            "outgoing source wire should be dropped"
+        );
+        assert!(
+            g.connections
+                .iter()
+                .all(|c| c.to.node == knob && c.to.port == "val"),
+            "only the driver→knob wire should remain",
+        );
+    }
+
     #[test]
     fn add_connect_disconnect_remove() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node("source", vec![scalar_out("out")], vec![]);
-        let b = g.add_node("sink", vec![scalar_in("in")], vec![]);
+        let a = g.add_node("source", vec![scalar_out("out")]);
+        let b = g.add_node("sink", vec![scalar_in("in")]);
 
         let from = PortRef {
-            node: a,
+            node: a.clone(),
             port: "out".into(),
         };
         let to = PortRef {
@@ -932,23 +1266,23 @@ mod tests {
         g.disconnect(&from, &to);
         assert_eq!(g.connections.len(), 0);
 
-        g.remove_node(a).unwrap();
+        g.remove_node(&a).unwrap();
         assert!(!g.nodes.contains_key(&a));
     }
 
     #[test]
     fn cycle_detection() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node("a", vec![scalar_in("in"), scalar_out("out")], vec![]);
-        let b = g.add_node("b", vec![scalar_in("in"), scalar_out("out")], vec![]);
+        let a = g.add_node("a", vec![scalar_in("in"), scalar_out("out")]);
+        let b = g.add_node("b", vec![scalar_in("in"), scalar_out("out")]);
 
         g.connect(
             PortRef {
-                node: a,
+                node: a.clone(),
                 port: "out".into(),
             },
             PortRef {
-                node: b,
+                node: b.clone(),
                 port: "in".into(),
             },
         )
@@ -973,8 +1307,8 @@ mod tests {
     #[test]
     fn type_mismatch() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node("a", vec![color_out("out")], vec![]);
-        let b = g.add_node("b", vec![scalar_in("in")], vec![]);
+        let a = g.add_node("a", vec![color_out("out")]);
+        let b = g.add_node("b", vec![scalar_in("in")]);
 
         let err = g
             .connect(
@@ -993,11 +1327,35 @@ mod tests {
     }
 
     #[test]
+    fn connect_rejects_non_wirable_input() {
+        // A type-compatible wire into a non-wirable input is refused
+        // structurally, so a hand-edited graph or paste can't smuggle in a
+        // wire the model forbids.
+        let mut g = Graph::<TestWireKind>::new();
+        let a = g.add_node("a", vec![PortDef::output("out", TestWireKind::Data)]);
+        let b = g.add_node("b", vec![PortDef::input("in", TestWireKind::Data)]);
+        let err = g
+            .connect(
+                PortRef {
+                    node: a,
+                    port: "out".into(),
+                },
+                PortRef {
+                    node: b,
+                    port: "in".into(),
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(err, GraphError::InputNotWirable { .. }));
+        assert!(g.connections.is_empty());
+    }
+
+    #[test]
     fn input_already_connected() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node("a", vec![scalar_out("out")], vec![]);
-        let b = g.add_node("b", vec![scalar_out("out")], vec![]);
-        let c = g.add_node("c", vec![scalar_in("in")], vec![]);
+        let a = g.add_node("a", vec![scalar_out("out")]);
+        let b = g.add_node("b", vec![scalar_out("out")]);
+        let c = g.add_node("c", vec![scalar_in("in")]);
 
         g.connect(
             PortRef {
@@ -1005,7 +1363,7 @@ mod tests {
                 port: "out".into(),
             },
             PortRef {
-                node: c,
+                node: c.clone(),
                 port: "in".into(),
             },
         )
@@ -1030,9 +1388,9 @@ mod tests {
     #[test]
     fn remove_node_cleans_connections() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node("a", vec![scalar_out("out")], vec![]);
-        let b = g.add_node("b", vec![scalar_in("in"), scalar_out("out")], vec![]);
-        let c = g.add_node("c", vec![scalar_in("in")], vec![]);
+        let a = g.add_node("a", vec![scalar_out("out")]);
+        let b = g.add_node("b", vec![scalar_in("in"), scalar_out("out")]);
+        let c = g.add_node("c", vec![scalar_in("in")]);
 
         g.connect(
             PortRef {
@@ -1040,14 +1398,14 @@ mod tests {
                 port: "out".into(),
             },
             PortRef {
-                node: b,
+                node: b.clone(),
                 port: "in".into(),
             },
         )
         .unwrap();
         g.connect(
             PortRef {
-                node: b,
+                node: b.clone(),
                 port: "out".into(),
             },
             PortRef {
@@ -1057,15 +1415,15 @@ mod tests {
         )
         .unwrap();
 
-        g.remove_node(b).unwrap();
+        g.remove_node(&b).unwrap();
         assert!(g.connections.is_empty());
     }
 
     #[test]
     fn serde_round_trip() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node("source", vec![scalar_out("out")], vec![]);
-        let b = g.add_node("sink", vec![scalar_in("in")], vec![]);
+        let a = g.add_node("source", vec![scalar_out("out")]);
+        let b = g.add_node("sink", vec![scalar_in("in")]);
         g.connect(
             PortRef {
                 node: a,
@@ -1082,6 +1440,45 @@ mod tests {
         let g2: Graph<TestWireKind> = serde_json::from_str(&json).unwrap();
         assert_eq!(g2.nodes.len(), 2);
         assert_eq!(g2.connections.len(), 1);
+    }
+
+    #[test]
+    fn set_node_comment_sets_and_clears() {
+        let mut g = Graph::<TestWireKind>::new();
+        let a = g.add_node("source", vec![scalar_out("out")]);
+        assert_eq!(g.nodes[&a].comment, "");
+
+        g.set_node_comment(&a, "explanatory wisdom".into()).unwrap();
+        assert_eq!(g.nodes[&a].comment, "explanatory wisdom");
+
+        g.set_node_comment(&a, String::new()).unwrap();
+        assert_eq!(g.nodes[&a].comment, "");
+    }
+
+    #[test]
+    fn set_node_comment_unknown_node_errors() {
+        let mut g = Graph::<TestWireKind>::new();
+        let err = g
+            .set_node_comment(&NodeId("ghost".into()), "hi".into())
+            .unwrap_err();
+        assert_eq!(err, GraphError::NodeNotFound(NodeId("ghost".into())));
+    }
+
+    /// A comment is inert but must survive the raw-`Graph` serde that backs
+    /// the `.darkly-brush` bundle. Empty comments are elided from the JSON.
+    #[test]
+    fn comment_survives_serde_and_elides_when_empty() {
+        let mut g = Graph::<TestWireKind>::new();
+        let a = g.add_node("source", vec![scalar_out("out")]);
+        let b = g.add_node("sink", vec![scalar_in("in")]);
+        g.set_node_comment(&a, "keep me".into()).unwrap();
+
+        let json = serde_json::to_string(&g).unwrap();
+        assert_eq!(json.matches("\"comment\"").count(), 1);
+
+        let g2: Graph<TestWireKind> = serde_json::from_str(&json).unwrap();
+        assert_eq!(g2.nodes[&a].comment, "keep me");
+        assert_eq!(g2.nodes[&b].comment, "");
     }
 
     // ── UnitType tests ──────────────────────────────────────────────
@@ -1194,24 +1591,50 @@ mod tests {
     #[test]
     fn expose_then_unexpose_round_trips() {
         let mut g = Graph::<TestWireKind>::new();
-        let id = g.add_node("node", vec![scalar_in("val")], vec![]);
+        let id = g.add_node("node", vec![scalar_in("val")]);
 
-        assert!(!g.is_port_exposed(id, "val"));
-        g.expose_port(id, "val").unwrap();
-        assert!(g.is_port_exposed(id, "val"));
+        assert!(!g.is_port_exposed(&id, "val"));
+        g.expose_port(&id, "val").unwrap();
+        assert!(g.is_port_exposed(&id, "val"));
         // Idempotent — double-expose doesn't add a duplicate.
-        g.expose_port(id, "val").unwrap();
+        g.expose_port(&id, "val").unwrap();
         assert_eq!(g.exposed_ports.len(), 1);
-        g.unexpose_port(id, "val");
-        assert!(!g.is_port_exposed(id, "val"));
+        g.unexpose_port(&id, "val");
+        assert!(!g.is_port_exposed(&id, "val"));
     }
 
     #[test]
     fn expose_port_rejects_output_port() {
         let mut g = Graph::<TestWireKind>::new();
-        let id = g.add_node("node", vec![scalar_out("out")], vec![]);
-        let err = g.expose_port(id, "out").unwrap_err();
+        let id = g.add_node("node", vec![scalar_out("out")]);
+        let err = g.expose_port(&id, "out").unwrap_err();
         assert!(matches!(err, GraphError::PortNotFound { .. }));
+    }
+
+    #[test]
+    fn expose_port_rejects_non_exposable_input() {
+        // `Data` is a compile-time shape with no editing widget
+        // (`is_user_exposable() == false`). Exposing it is rejected at the
+        // model boundary, so a control the brush bar can't render can never
+        // land in `exposed_ports`.
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node("node", vec![PortDef::input("d", TestWireKind::Data)]);
+        let err = g.expose_port(&id, "d").unwrap_err();
+        assert!(matches!(err, GraphError::PortNotExposable { .. }));
+        assert!(!g.is_port_exposed(&id, "d"));
+    }
+
+    #[test]
+    fn add_node_does_not_auto_expose_non_exposable_port() {
+        // Even a registration that flags a non-exposable input `.exposed()`
+        // must not seed a brush-bar entry — the exposability invariant holds
+        // by construction, not just at the interactive expose call.
+        let mut g = Graph::<TestWireKind>::new();
+        let mut d = PortDef::input("d", TestWireKind::Data);
+        d.exposed = true;
+        let id = g.add_node("node", vec![d]);
+        assert!(!g.is_port_exposed(&id, "d"));
+        assert!(g.exposed_ports.is_empty());
     }
 
     #[test]
@@ -1224,60 +1647,56 @@ mod tests {
         let mut b = scalar_in("b");
         a.exposed = false;
         b.exposed = true;
-        let id = g.add_node("node", vec![a, b], vec![]);
-        assert!(!g.is_port_exposed(id, "a"));
-        assert!(g.is_port_exposed(id, "b"));
+        let id = g.add_node("node", vec![a, b]);
+        assert!(!g.is_port_exposed(&id, "a"));
+        assert!(g.is_port_exposed(&id, "b"));
         // Empty meta — falls back to registration at render time.
-        let key = exposed_port_key(id, "b");
+        let key = exposed_port_key(&id, "b");
         assert_eq!(g.exposed_ports[&key], ExposedPortMeta::default());
     }
 
     #[test]
     fn remove_node_drops_exposed_entries() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node("node", vec![scalar_in("x"), scalar_in("y")], vec![]);
-        let b = g.add_node("node", vec![scalar_in("x")], vec![]);
-        g.expose_port(a, "x").unwrap();
-        g.expose_port(a, "y").unwrap();
-        g.expose_port(b, "x").unwrap();
+        let a = g.add_node("node", vec![scalar_in("x"), scalar_in("y")]);
+        let b = g.add_node("node", vec![scalar_in("x")]);
+        g.expose_port(&a, "x").unwrap();
+        g.expose_port(&a, "y").unwrap();
+        g.expose_port(&b, "x").unwrap();
         assert_eq!(g.exposed_ports.len(), 3);
 
-        g.remove_node(a).unwrap();
+        g.remove_node(&a).unwrap();
         // Only b.x survives.
         assert_eq!(g.exposed_ports.len(), 1);
-        assert!(g.is_port_exposed(b, "x"));
+        assert!(g.is_port_exposed(&b, "x"));
     }
 
     #[test]
     fn reorder_moves_entry_to_target_index() {
         let mut g = Graph::<TestWireKind>::new();
-        let id = g.add_node(
-            "node",
-            vec![scalar_in("a"), scalar_in("b"), scalar_in("c")],
-            vec![],
-        );
-        g.expose_port(id, "a").unwrap();
-        g.expose_port(id, "b").unwrap();
-        g.expose_port(id, "c").unwrap();
+        let id = g.add_node("node", vec![scalar_in("a"), scalar_in("b"), scalar_in("c")]);
+        g.expose_port(&id, "a").unwrap();
+        g.expose_port(&id, "b").unwrap();
+        g.expose_port(&id, "c").unwrap();
         let keys: Vec<&str> = g.exposed_ports.keys().map(String::as_str).collect();
         assert_eq!(keys.len(), 3);
 
         // Move b to index 0.
-        let b_key = exposed_port_key(id, "b");
+        let b_key = exposed_port_key(&id, "b");
         g.reorder_exposed_port(&b_key, 0).unwrap();
 
         let order: Vec<&str> = g.exposed_ports.keys().map(String::as_str).collect();
-        let a_key = exposed_port_key(id, "a");
-        let c_key = exposed_port_key(id, "c");
+        let a_key = exposed_port_key(&id, "a");
+        let c_key = exposed_port_key(&id, "c");
         assert_eq!(order, vec![b_key.as_str(), a_key.as_str(), c_key.as_str()]);
     }
 
     #[test]
     fn set_meta_rejects_unsafe_icon() {
         let mut g = Graph::<TestWireKind>::new();
-        let id = g.add_node("node", vec![scalar_in("val")], vec![]);
-        g.expose_port(id, "val").unwrap();
-        let key = exposed_port_key(id, "val");
+        let id = g.add_node("node", vec![scalar_in("val")]);
+        g.expose_port(&id, "val").unwrap();
+        let key = exposed_port_key(&id, "val");
 
         // Safe icon class — accepted.
         g.set_exposed_port_meta(&key, "Label".into(), "Desc".into(), "fa6-solid:sun".into())
@@ -1301,14 +1720,10 @@ mod tests {
     #[test]
     fn exposed_ports_round_trip_preserves_order() {
         let mut g = Graph::<TestWireKind>::new();
-        let id = g.add_node(
-            "node",
-            vec![scalar_in("a"), scalar_in("b"), scalar_in("c")],
-            vec![],
-        );
-        g.expose_port(id, "c").unwrap();
-        g.expose_port(id, "a").unwrap();
-        g.expose_port(id, "b").unwrap();
+        let id = g.add_node("node", vec![scalar_in("a"), scalar_in("b"), scalar_in("c")]);
+        g.expose_port(&id, "c").unwrap();
+        g.expose_port(&id, "a").unwrap();
+        g.expose_port(&id, "b").unwrap();
         let before: Vec<String> = g.exposed_ports.keys().cloned().collect();
 
         let json = serde_json::to_string(&g).unwrap();

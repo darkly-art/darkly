@@ -1,20 +1,79 @@
-import type { SessionEngine } from './tool_session';
 import type { Component } from 'svelte';
+import type { DarklyInstance } from '../state/app.svelte';
+import type { SessionEngine } from './tool_session';
+import { screenToCanvas } from '../canvas/coordinates';
 
-export interface ToolContext {
-    /** The engine bound to the current tool session — not the raw `Engine`. A
-     *  request that resolves after the session dies rejects with
-     *  `ToolSessionCancelled`, so tool code never resumes into a changed world.
-     *  See `tool_session.ts`. */
-    engine: SessionEngine;
-    canvasEl: HTMLCanvasElement;
-    screenToCanvas: (screenX: number, screenY: number) => { x: number; y: number };
+/**
+ * A tool's behaviour hooks, bound to one {@link DarklyInstance}. Constructed per
+ * instance by a {@link ToolDescriptor}'s `create`, so each editor tab owns its
+ * own tool objects and their state. Hooks take no context parameter — a tool
+ * reads its own instance (the base class {@link ToolBase} exposes `engine` /
+ * `canvasEl` / `screenToCanvas`). Capture semantics are preserved by the tool
+ * session: a hook parked on an await issued through the (now dead) session
+ * rejects on resume, so the await — not a context object — is the cancellation
+ * point. See `tool_session.ts`.
+ */
+export interface Tool {
+    onActivate?(): void;
+    onDeactivate?(): void;
+    /** Optional: return true to consume this pointerdown before global
+     *  drag chords (e.g. shift+drag → brush-size scrub) are dispatched.
+     *  Tools with their own pointer-driven UI (handles, anchors, gizmos)
+     *  use this to prevent chord interception while their UI is active.
+     *
+     *  Also useful for preempting a modifier-held chord — return `true` when
+     *  the relevant modifier is held to stop a global modifier+drag binding
+     *  (e.g. `ctrl+drag` → sample color) from intercepting. `claimsPointer`
+     *  runs before `dispatchDrag` in `CanvasView.onPointerDown`. */
+    claimsPointer?(e: PointerEvent, canvasX: number, canvasY: number): boolean;
+    onPointerDown?(e: PointerEvent, canvasX: number, canvasY: number): void;
+    onPointerMove?(e: PointerEvent, canvasX: number, canvasY: number): void;
+    onPointerUp?(e: PointerEvent): void;
+    /** Pointer left the canvas. Tools with hover overlays should clear them here. */
+    onPointerLeave?(): void;
+
+    /** Re-establish hover-time visual feedback (e.g. the brush's dab
+     *  preview) at the given canvas position, without requiring a live
+     *  PointerEvent. Called by systems that briefly steal the pointer
+     *  pipeline and need to hand it back — e.g. the modifier-held color
+     *  picker releasing, where the next genuine pointermove may be far
+     *  off and the user expects the preview to be there immediately. */
+    restoreHover?(canvasX: number, canvasY: number): void;
+
+    /** Inverse of {@link restoreHover}: tear down hover-time visual feedback
+     *  and invalidate any in-flight async hover push, so a pending overlay
+     *  update can't land after the caller has taken over the pointer
+     *  pipeline (e.g. a modifier-held cursor engaging). Tools without such
+     *  feedback opt out by not implementing it — the caller falls back to a
+     *  generic overlay clear. */
+    suspendHover?(): void;
+
+    /** Handle a key event. Return true if the tool consumed it. */
+    onKeyDown?(e: KeyboardEvent): boolean;
+
+    /** Called once per frame after render, for async state synchronization.
+     *  Tools that initiate async GPU operations (readbacks, etc.) use this
+     *  to detect when results arrive. */
+    onFrame?(): void;
+
+    /** Called by the system to dismiss the tool's overlay (e.g. on any
+     *  unhandled key press). Tools that show overlays should clear their
+     *  placement state here. */
+    dismissOverlay?(): void;
 }
 
-export interface Tool {
+/**
+ * Static, instance-independent metadata for a tool, plus the factory that
+ * builds a per-instance {@link Tool}. This is what the registry holds and what
+ * the toolbar / options UI iterates — none of it depends on a live document, so
+ * a descriptor is a process-global singleton. Behaviour and per-canvas state
+ * live on the {@link Tool} that `create` returns.
+ */
+export interface ToolDescriptor {
     readonly id: string;
     /** Iconify icon name (e.g. 'fa6-solid:paintbrush', 'local:gradient').
-     *  Rendered via the shared `<Icon>` component. */
+     *  Rendered via the shared `<Icon>` component. May be a getter (the brush's
+     *  icon tracks the global erase-mode flag). */
     readonly icon?: string;
     /** Tool group for toolbar visual separation (e.g. 'paint', 'select'). */
     readonly group: string;
@@ -39,70 +98,69 @@ export interface Tool {
      *  render nothing when collapsed. */
     readonly panelComponent?: Component;
 
-    onActivate?(ctx: ToolContext): void;
-    onDeactivate?(ctx: ToolContext): void;
-    /** Optional: return true to consume this pointerdown before global
-     *  drag chords (e.g. shift+drag → brush-size scrub) are dispatched.
-     *  Tools with their own pointer-driven UI (handles, anchors, gizmos)
-     *  use this to prevent chord interception while their UI is active.
-     *
-     *  Also useful for preempting a modifier-held chord — return `true` when
-     *  the relevant modifier is held to stop a global modifier+drag binding
-     *  (e.g. `ctrl+drag` → sample color) from intercepting. `claimsPointer`
-     *  runs before `dispatchDrag` in `CanvasView.onPointerDown`. */
-    claimsPointer?(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): boolean;
-    onPointerDown(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): void;
-    onPointerMove(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): void;
-    onPointerUp(ctx: ToolContext, e: PointerEvent): void;
-    /** Pointer left the canvas. Tools with hover overlays should clear them here. */
-    onPointerLeave?(ctx: ToolContext): void;
+    /** Build the per-instance behaviour object bound to `inst`. */
+    create(inst: DarklyInstance): Tool;
+}
 
-    /** Re-establish hover-time visual feedback (e.g. the brush's dab
-     *  preview) at the given canvas position, without requiring a live
-     *  PointerEvent. Called by systems that briefly steal the pointer
-     *  pipeline and need to hand it back — e.g. the modifier-held color
-     *  picker releasing, where the next genuine pointermove may be far
-     *  off and the user expects the preview to be there immediately. */
-    restoreHover?(ctx: ToolContext, canvasX: number, canvasY: number): void;
+/**
+ * Base class for per-instance tools. Holds the owning {@link DarklyInstance} and
+ * exposes the three things tool code needs from it, all null-safe:
+ *
+ * - `engine` — the instance's live {@link SessionEngine} (`inst.session`), the
+ *   *only* engine handle tool code should reach through, so a request that
+ *   resolves after the session dies rejects with `ToolSessionCancelled`.
+ * - `canvasEl` — the instance's canvas element.
+ * - `screenToCanvas` — screen → plane conversion against that canvas.
+ *
+ * A tool reads its own instance; it never reaches for the global `app`.
+ *
+ * Not declared `implements Tool` — {@link Tool}'s members are all optional (a
+ * "weak type"), and a base with none of them would trip TS's weak-type check.
+ * Concrete subclasses supply the hooks and are structurally {@link Tool}s; each
+ * descriptor's `create` returns them typed as such.
+ */
+export abstract class ToolBase {
+    protected readonly inst: DarklyInstance;
 
-    /** Inverse of {@link restoreHover}: tear down hover-time visual feedback
-     *  and invalidate any in-flight async hover push, so a pending overlay
-     *  update can't land after the caller has taken over the pointer
-     *  pipeline (e.g. a modifier-held cursor engaging). Tools without such
-     *  feedback opt out by not implementing it — the caller falls back to a
-     *  generic overlay clear. */
-    suspendHover?(ctx: ToolContext): void;
+    constructor(inst: DarklyInstance) {
+        this.inst = inst;
+    }
 
-    /** Handle a key event. Return true if the tool consumed it. */
-    onKeyDown?(e: KeyboardEvent): boolean;
+    /** The instance's live tool session, or null when none is active. */
+    protected get engine(): SessionEngine | null {
+        return this.inst.session;
+    }
 
-    /** Called once per frame after render, for async state synchronization.
-     *  Tools that initiate async GPU operations (readbacks, etc.) use this
-     *  to detect when results arrive. */
-    onFrame?(): void;
+    /** The instance's canvas element, or null before mount. */
+    protected get canvasEl(): HTMLCanvasElement | null {
+        return this.inst.canvasEl;
+    }
 
-    /** Called by the system to dismiss the tool's overlay (e.g. on any
-     *  unhandled key press). Tools that show overlays should clear their
-     *  placement state here. */
-    dismissOverlay?(): void;
+    /** Screen (client) coords → canvas (plane) coords for this instance's
+     *  canvas. Returns `{0,0}` when the canvas isn't mounted yet. */
+    protected screenToCanvas(sx: number, sy: number): { x: number; y: number } {
+        const el = this.inst.canvasEl;
+        if (!el) return { x: 0, y: 0 };
+        return screenToCanvas(sx, sy, el);
+    }
 }
 
 class ToolRegistry {
-    private tools = new Map<string, Tool>();
+    private tools = new Map<string, ToolDescriptor>();
     private order: string[] = [];
 
-    register(tool: Tool) {
+    register(tool: ToolDescriptor) {
         if (!this.tools.has(tool.id)) {
             this.order.push(tool.id);
         }
         this.tools.set(tool.id, tool);
     }
 
-    get(id: string): Tool | undefined {
+    get(id: string): ToolDescriptor | undefined {
         return this.tools.get(id);
     }
 
-    all(): Tool[] {
+    all(): ToolDescriptor[] {
         return this.order.map(id => this.tools.get(id)!);
     }
 }

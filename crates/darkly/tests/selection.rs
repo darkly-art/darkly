@@ -10,7 +10,7 @@ use darkly::engine::types::StrokeOp;
 use darkly::engine::DarklyEngine;
 use darkly::gpu::atlas::CanvasFrame;
 use darkly::gpu::context::GpuContext;
-use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
+use darkly::gpu::paint_target::{GpuPaintTarget, PaintCommandEncoder, PaintPipelines};
 use darkly::gpu::test_utils::*;
 use darkly::layer::LayerId;
 use darkly::mask;
@@ -201,9 +201,9 @@ fn gpu_clear_selection_contents() {
     );
 
     // Erase within selection.
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.erase_with_selection(&mut enc, &pipelines, &queue, &sel_bg);
-    submit(&queue, enc);
+    enc.submit();
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
 
@@ -267,9 +267,9 @@ fn gpu_clear_selection_undo() {
         fmt,
         darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
     );
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.erase_with_selection(&mut enc, &pipelines, &queue, &sel_bg);
-    submit(&queue, enc);
+    enc.submit();
 
     let mut enc = encoder(&device);
     let (entry, _req) = store.commit_region(
@@ -347,7 +347,7 @@ fn gpu_flood_fill_respects_selection() {
         fmt,
         darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
     );
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.fill_rect_with_selection(
         &mut enc,
         &pipelines,
@@ -356,7 +356,7 @@ fn gpu_flood_fill_respects_selection() {
         [0, 0, 255, 255],
         &mask_bg,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     let result = readback_texture(&device, &queue, &tex, fmt, w, h);
 
@@ -757,6 +757,68 @@ fn clear_selection_contents() {
     assert!(
         alpha_at(&pixels, w, 72, 64) > 0,
         "right (kept) should still have paint"
+    );
+}
+
+/// REGRESSION: select-all + delete erases only alpha (straight-alpha storage
+/// keeps ghost RGB under erased pixels), and the flood fill's similarity test
+/// used to compare that invisible RGB — a fill on the emptied layer stayed
+/// bounded by the old content's edges. Fully transparent pixels must compare
+/// by alpha alone, so the fill floods the whole canvas.
+#[test]
+fn flood_fill_floods_layer_emptied_by_clear_selection_contents() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+
+    // Paint content, then Ctrl+A + Delete — the canvas is now visually empty
+    // but the texture still holds the stroke's RGB with alpha = 0.
+    paint_full_stroke(&mut engine, layer_id, w, h);
+    engine.render(0.0); // flush pending diff undo
+    engine.select_all();
+    engine.clear_selection_contents(layer_id);
+
+    let pixels = engine.test_readback_layer(layer_id);
+    assert_eq!(
+        alpha_at(&pixels, w, w / 2, h / 2),
+        0,
+        "layer must be visually empty after select-all + delete"
+    );
+
+    // Fill green from inside the former stroke.
+    engine.begin_stroke(layer_id);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: (w / 2) as f32,
+        y: (h / 2) as f32,
+        r: 0,
+        g: 255,
+        b: 0,
+        a: 255,
+        tolerance: 32,
+    });
+    engine.end_stroke();
+    // Drive the fill's async layer readback to completion.
+    for _ in 0..8 {
+        engine.test_flush_readbacks();
+        engine.render(0.0);
+    }
+
+    let pixels = engine.test_readback_layer(layer_id);
+    let at = |x: u32, y: u32| {
+        let i = ((y * w + x) * 4) as usize;
+        &pixels[i..i + 4]
+    };
+    assert_eq!(at(w / 2, h / 2), &[0, 255, 0, 255], "seed point is filled");
+    // The fill must not stop at the deleted stroke's invisible edges.
+    assert_eq!(
+        at(4, 4),
+        &[0, 255, 0, 255],
+        "fill must flood past the ghost of the deleted content"
+    );
+    assert_eq!(
+        at(w - 4, h - 4),
+        &[0, 255, 0, 255],
+        "fill must reach the far corner of the emptied layer"
     );
 }
 

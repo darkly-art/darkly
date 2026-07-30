@@ -742,6 +742,43 @@ fn filter_layer_params(e: &DarklyEngine, id: LayerId) -> Vec<ParamValue> {
     panic!("filter layer {ffi} not found in layer tree");
 }
 
+/// Pull a filter layer's `icon` (as reported to the frontend) from the
+/// layer-tree query.
+fn filter_layer_icon(e: &DarklyEngine, id: LayerId) -> String {
+    let ffi = id.to_ffi() as f64;
+    for node in e.layer_tree() {
+        if let LayerInfo::Filter { id: nid, icon, .. } = &node {
+            if *nid == ffi {
+                return icon.to_string();
+            }
+        }
+    }
+    panic!("filter layer {ffi} not found in layer tree");
+}
+
+/// Each filter pipeline reports its own icon in the layer tree — the row must
+/// reflect *which* filter it is, not a single generic filter-layer glyph. Guards
+/// the `node_to_layer_info` Filter arm against regressing to the static
+/// `kind.icon` (which would make every filter layer identical).
+#[test]
+fn filter_layer_icon_is_pipeline_specific() {
+    let mut e = test_engine(8, 8);
+    let invert = e.add_filter_layer("invert", vec![], None).unwrap();
+    let curves = e
+        .add_filter_layer("curves", filter_defaults(&e, "curves"), None)
+        .unwrap();
+
+    let invert_icon = filter_layer_icon(&e, invert);
+    let curves_icon = filter_layer_icon(&e, curves);
+
+    assert!(!invert_icon.is_empty(), "invert layer must carry an icon");
+    assert!(!curves_icon.is_empty(), "curves layer must carry an icon");
+    assert_ne!(
+        invert_icon, curves_icon,
+        "distinct filters must report distinct icons (regressed to kind.icon?)"
+    );
+}
+
 #[test]
 fn add_curves_layer_yields_eight_identity_curves() {
     let mut e = test_engine(8, 8);
@@ -906,9 +943,9 @@ fn destructive_brightness_contrast_with_selection_only_touches_selection() {
 }
 
 #[test]
-fn destructive_desaturate_with_selection_only_touches_selection() {
+fn destructive_black_and_white_with_selection_only_touches_selection() {
     // Luminosity BT.709 — visibly grays the [200,100,50] fixture.
-    assert_destructive_selection("desaturate", vec![ParamValue::Int(1)]);
+    assert_destructive_selection("black_and_white", vec![ParamValue::Int(1)]);
 }
 
 // ---- Live preview session (the non-dimming modal) --------------------------
@@ -1214,14 +1251,15 @@ fn curves_lightness_curve_darkens_neutral() {
     assert_eq!(p[3], 255, "alpha untouched by the lightness curve");
 }
 
-// ---- Desaturate GPU correctness ---------------------------------------------
+// ---- Black and White GPU correctness ----------------------------------------
 //
-// Pin the six gray mappings against Krita's desaturate adjustment
+// Pin the six fixed gray mappings against Krita's desaturate adjustment
 // (`kis_desaturate_adjustment.cpp`): each mode produces a neutral gray
 // (R == G == B) at the value its formula predicts for the [200,100,50] fixture.
+// Custom weights (mode 6) and the tint get their own pins below.
 
 #[test]
-fn desaturate_modes_produce_expected_grays() {
+fn black_and_white_modes_produce_expected_grays() {
     // (mode, expected gray) for opaque [200,100,50]: lightness (200+50)/2,
     // BT.709 dot ≈ 117.7, BT.601 dot ≈ 124.2, average 350/3, min 50, max 200.
     let expected: [(i32, u8); 6] = [(0, 125), (1, 118), (2, 124), (3, 117), (4, 50), (5, 200)];
@@ -1230,8 +1268,8 @@ fn desaturate_modes_produce_expected_grays() {
         let mut e = test_engine(w, h);
         let layer = e.paste_image(w, h, &solid_rgba(w, h, [200, 100, 50, 255]), 0, 0, None);
         assert!(
-            e.apply_filter_typed(layer, "desaturate", vec![ParamValue::Int(mode)]),
-            "desaturate mode {mode} must apply"
+            e.apply_filter_typed(layer, "black_and_white", vec![ParamValue::Int(mode)]),
+            "black_and_white mode {mode} must apply"
         );
         let p = px(&e.test_readback_layer(layer), w, 1, 1);
         assert!(
@@ -1244,6 +1282,61 @@ fn desaturate_modes_produce_expected_grays() {
         );
         assert_eq!(p[3], 255, "mode {mode}: alpha untouched");
     }
+}
+
+/// Custom Weights (mode 6) grays by the normalized weighted mix — an all-red
+/// weight isolates the R channel of the [200,100,50] fixture.
+#[test]
+fn black_and_white_custom_weights_isolate_a_channel() {
+    let (w, h) = (4u32, 4u32);
+    let mut e = test_engine(w, h);
+    let layer = e.paste_image(w, h, &solid_rgba(w, h, [200, 100, 50, 255]), 0, 0, None);
+    assert!(e.apply_filter_typed(
+        layer,
+        "black_and_white",
+        vec![
+            ParamValue::Int(6),
+            ParamValue::Float(1.0),
+            ParamValue::Float(0.0),
+            ParamValue::Float(0.0),
+        ],
+    ));
+    let p = px(&e.test_readback_layer(layer), w, 1, 1);
+    assert!(
+        p[0] == p[1] && p[1] == p[2],
+        "custom weights must still produce neutral gray, got {p:?}"
+    );
+    assert!(
+        (p[0] as i32 - 200).abs() <= 1,
+        "weights (1,0,0) must isolate the red channel (~200), got {p:?}"
+    );
+}
+
+/// Full-strength tint at hue 0° colors the gray pure red: the G/B channels
+/// drop to zero while R carries the gray value. Alpha stays untouched.
+#[test]
+fn black_and_white_tint_colors_the_gray() {
+    let (w, h) = (4u32, 4u32);
+    let mut e = test_engine(w, h);
+    let layer = e.paste_image(w, h, &solid_rgba(w, h, [200, 100, 50, 255]), 0, 0, None);
+    assert!(e.apply_filter_typed(
+        layer,
+        "black_and_white",
+        vec![
+            ParamValue::Int(2), // BT.601 → gray ~124
+            ParamValue::Float(0.299),
+            ParamValue::Float(0.587),
+            ParamValue::Float(0.114),
+            ParamValue::Float(0.0), // hue 0° → red
+            ParamValue::Float(1.0), // full tint
+        ],
+    ));
+    let p = px(&e.test_readback_layer(layer), w, 1, 1);
+    assert!(
+        (p[0] as i32 - 124).abs() <= 1 && p[1] == 0 && p[2] == 0,
+        "full red tint must yield [~124, 0, 0], got {p:?}"
+    );
+    assert_eq!(p[3], 255, "alpha untouched by the tint");
 }
 
 // ---- Brightness/Contrast GPU correctness ------------------------------------

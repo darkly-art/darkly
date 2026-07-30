@@ -1,7 +1,8 @@
 <script lang="ts">
     import { app } from '../state/app.svelte';
     import { brushGraph } from '../state/brush_graph.svelte';
-    import type { BrushInfo } from '../state/brush_graph.svelte';
+    import type { BrushInfo, ExposedPortInfo } from '../state/brush_graph.svelte';
+    import { unitFor } from '../lib/units';
     import { brushSession } from '../tools/brush.svelte';
     import BrushPicker from './brush_picker/BrushPicker.svelte';
     import LiveBrushPreviewStrip from './brush_picker/LiveBrushPreviewStrip.svelte';
@@ -32,27 +33,26 @@
         brushPickerOpen = false;
     }
 
-    function handleExposedPort(nodeId: number, portName: string, displayValue: number) {
+    function handleExposedPort(nodeId: string, portName: string, displayValue: number) {
         brushGraph.setExposedPortValueLocal(nodeId, portName, displayValue);
         brushGraph.setExposedPortValue(nodeId, portName, displayValue);
     }
 
-    /** Flip a Bool exposed port — toggles the port's f32 default between 0 and 1
-     *  via the standard scalar setter, since Bool is encoded as `default >= 0.5`. */
-    function handleExposedBool(nodeId: number, portName: string, current: boolean) {
+    /** Flip a Bool exposed port — toggles the input value between 0 and 1 via
+     *  the display-space exposed-port setter (Bool reads as `value >= 0.5`). */
+    function handleExposedBool(nodeId: string, portName: string, current: boolean) {
         const next = current ? 0 : 1;
-        brushGraph.setPortDefaultLocal(nodeId, portName, next);
+        brushGraph.setInputLocal(nodeId, portName, next);
         brushGraph.setExposedPortValue(nodeId, portName, next);
     }
 
-    /** Format an exposed scalar value based on its unit type. */
-    function formatExposedValue(unitType: string): (v: number) => string {
-        switch (unitType) {
-            case 'Percent': return (v) => `${Math.round(v)}%`;
-            case 'Degrees': return (v) => `${Math.round(v)}°`;
-            case 'Raw': return (v) => v.toFixed(2);
-            default: return (v) => v.toFixed(2); // Normalized
-        }
+    /** Select a new option for an exposed Enum port. Enum values are a plain
+     *  index, so this writes through the ordinary `set_input` path rather than
+     *  the unit-converting exposed-port setter. Mutates the entry optimistically
+     *  so the dropdown holds its selection until the graph refresh lands. */
+    function handleExposedEnum(port: ExposedPortInfo, index: number) {
+        if (port.data.kind === 'enum') port.data.value = index;
+        brushGraph.setInput(port.nodeId, port.portName, 'enum', index);
     }
 
     // A pointerdown outside the brush picker (trigger + panel, both tagged
@@ -123,7 +123,7 @@
                     min={d.min}
                     max={d.max}
                     default={d.default}
-                    formatValue={formatExposedValue(d.unitType)}
+                    formatValue={(v) => unitFor(d.unitType).format(v)}
                     onChange={(v) => handleExposedPort(port.nodeId, port.portName, v)}
                     title={port.description || undefined}
                 />
@@ -138,6 +138,22 @@
                     onToggle={() => handleExposedBool(port.nodeId, port.portName, d.value)}
                     title={port.description || undefined}
                 />
+            {:else if port.data.kind === 'enum'}
+                {@const d = port.data}
+                <div class="bar-control exposed-enum" title={port.description || undefined}>
+                    <div class="bar-control-text">
+                        <span class="bar-control-label">{port.label}</span>
+                        <select
+                            class="exposed-enum-select"
+                            value={d.value}
+                            onchange={(e) => handleExposedEnum(port, parseInt(e.currentTarget.value))}
+                        >
+                            {#each d.options as option, oi}
+                                <option value={oi}>{option}</option>
+                            {/each}
+                        </select>
+                    </div>
+                </div>
             {/if}
         {/each}
 
@@ -181,6 +197,35 @@
     .brush-picker-section {
         position: relative;
         flex-shrink: 0;
+    }
+
+    /* Exposed enum control: a native dropdown flattened to read as the
+     * chip's value line, so it sits in the scrub row like the scalar/bool
+     * controls (label caption over the current selection). */
+    .exposed-enum {
+        flex-shrink: 0;
+    }
+    .exposed-enum-select {
+        appearance: none;
+        background: transparent;
+        border: none;
+        padding: 0;
+        margin: 0;
+        font: inherit;
+        font-size: 12px;
+        line-height: 1.3;
+        color: var(--text);
+        cursor: pointer;
+    }
+    .exposed-enum-select:focus {
+        outline: none;
+        color: var(--accent);
+    }
+    /* The popup list still uses the OS surface — theme it so options stay
+     * legible on the dark bar. */
+    .exposed-enum-select option {
+        background: var(--bg-active);
+        color: var(--text);
     }
 
     /* Width-bound wrapper for the embedded preview strip — the strip

@@ -303,24 +303,11 @@ impl DarklyEngine {
         self.compositor.poll_histogram(&self.gpu.device);
         let mut any_completed = false;
 
-        // Complete pending transform if content bounds just arrived.
-        if let Some(pt) = &self.pending_transform {
-            if bounds_completed.contains(&pt.node_id) {
-                let node_id = pt.node_id;
-                self.pending_transform = None;
-
-                if self.floating.is_none() {
-                    if let Some(bounds) = self.compositor.content_bounds(node_id) {
-                        // content_bounds are layer-local; translate to canvas.
-                        let [bx, by, bw, bh] = bounds;
-                        let canvas_origin = self
-                            .compositor
-                            .node_texture(node_id)
-                            .map(|t| t.layer_to_canvas(crate::coord::LayerPoint::new(bx, by)))
-                            .unwrap_or(crate::coord::CanvasPoint::new(bx as i32, by as i32));
-                        self.setup_transform(node_id, (canvas_origin.x, canvas_origin.y), bw, bh);
-                        any_completed = true;
-                    }
+        // Any completed target bounds may make the fixed multi-target plan ready.
+        if !bounds_completed.is_empty() {
+            if let Some(pt) = self.pending_transform.take() {
+                if self.transform_session.is_none() && self.handle_transform_setup_outcome(pt) {
+                    any_completed = true;
                 }
             }
         }
@@ -408,8 +395,8 @@ impl DarklyEngine {
                 }
                 if self.selection_pixel_bounds().is_some() {
                     if let Some(pt) = self.pending_transform.take() {
-                        if self.floating.is_none() {
-                            self.begin_transform(pt.node_id);
+                        if self.transform_session.is_none() {
+                            self.handle_transform_setup_outcome(pt);
                         }
                     }
                     if let Some(pf) = self.pending_flip.take() {
@@ -533,6 +520,19 @@ impl DarklyEngine {
                 // buffer.
                 *cell.borrow_mut() = EntryPixels::Ready(pixels);
             }
+            ReadbackContext::RecordingFrame {
+                width,
+                height,
+                frame_index,
+            } => {
+                self.recorder
+                    .push_completed(super::process_recording::RecordedFrame {
+                        width,
+                        height,
+                        frame_index,
+                        rgba: pixels,
+                    });
+            }
             ReadbackContext::ActiveBrushDab { topology_version } => {
                 // Drop stale results — but key off topology, not graph
                 // version: scrub-only changes don't affect the rendered
@@ -543,6 +543,23 @@ impl DarklyEngine {
                     let png_bytes = frame_dab_thumbnail(&pixels, w, h, self.preview_theme_bg);
                     if !png_bytes.is_empty() {
                         self.active_dab_preview_cache = Some(png_bytes);
+                    }
+                }
+            }
+            ReadbackContext::NodePreview {
+                node_id,
+                topology_version,
+            } => {
+                // Drop stale results — key off topology, like ActiveBrushDab:
+                // scrub-only changes don't alter the rendered output thanks to
+                // `reset_exposed_scrubs`, so a readback queued before a scrub
+                // change is still valid.
+                if topology_version == self.brush_topology_version() {
+                    let (w, h) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
+                    let png_bytes = frame_dab_thumbnail(&pixels, w, h, self.preview_theme_bg);
+                    if !png_bytes.is_empty() {
+                        self.node_preview_cache
+                            .insert(node_id, (topology_version, png_bytes));
                     }
                 }
             }
@@ -624,6 +641,11 @@ impl DarklyEngine {
         }
         let poll_us = t_poll.elapsed().as_micros() as u64;
 
+        // Recorder tick runs after poll_pending so deferred stroke
+        // undo-commits (which bump the document revision) are visible, and
+        // before the headless early-return so tests exercise the same path.
+        self.tick_process_recording(time_secs);
+
         let t_thumb = web_time::Instant::now();
         // Auto-queue thumbnail readbacks for layers whose pixels were
         // modified since the last frame. Must run *before* the headless
@@ -651,7 +673,8 @@ impl DarklyEngine {
                 return self.readbacks.has_pending()
                     || self.compositor.has_pending_content_bounds()
                     || self.compositor.has_pending_histogram()
-                    || self.diff_rect.is_pending();
+                    || self.diff_rect.is_pending()
+                    || self.recorder.needs_frames();
             }
         };
 
@@ -667,7 +690,8 @@ impl DarklyEngine {
             };
             return self.readbacks.has_pending()
                 || self.compositor.has_pending_content_bounds()
-                || self.compositor.has_pending_histogram();
+                || self.compositor.has_pending_histogram()
+                || self.recorder.needs_frames();
         }
 
         let t_anim = web_time::Instant::now();
@@ -698,6 +722,7 @@ impl DarklyEngine {
             || self.compositor.has_pending_content_bounds()
             || self.compositor.has_pending_histogram()
             || self.diff_rect.is_pending()
+            || self.recorder.needs_frames()
     }
 
     #[handler]
@@ -868,6 +893,7 @@ impl DarklyEngine {
 
         // If this is a selection GPU action, restore the selection texture
         // and swap the active flag.
+        let restores_selection_metadata = action.restores_selection_metadata();
         if let Some(restored_active) = action.swap_selection_active(self.has_selection()) {
             self.set_selection_active(restored_active);
 
@@ -889,14 +915,20 @@ impl DarklyEngine {
                 }
             }
 
-            self.set_selection_pixel_bounds(None); // will be recomputed from readback
-            self.kick_selection_readback();
+            if !restores_selection_metadata {
+                self.set_selection_pixel_bounds(None); // recomputed from readback
+                self.kick_selection_readback();
+            }
         }
 
         match direction {
             UndoDirection::Undo => self.undo_stack.complete_undo(action),
             UndoDirection::Redo => self.undo_stack.complete_redo(action),
         }
+        // Undo/redo mutate the document without passing through the
+        // `UndoStack::push` chokepoint, so the revision counter is bumped
+        // here — the single point covering both directions.
+        self.doc.revision += 1;
         self.compositor.mark_dirty();
     }
 
@@ -1156,8 +1188,9 @@ fn generate_rgba_thumbnail_from_pixels(
 /// are tiny or off-center have enough headroom; the framer below crops
 /// to the actual content and downscales here so picker tiles always
 /// see a stably-sized PNG regardless of how the brush graph chose to
-/// place its stamp.
-const DAB_THUMBNAIL_OUTPUT_SIZE: u32 = 96;
+/// place its stamp. Sized for a crisp render on a 96 px CSS box at 2×
+/// device-pixel-ratio (the node-preview and picker displays).
+const DAB_THUMBNAIL_OUTPUT_SIZE: u32 = 192;
 
 /// Target mean luminance the cursor-preview mask gets normalized to,
 /// expressed in the 0..1 range the GPU mask uses (130/255 ≈ 0.51).

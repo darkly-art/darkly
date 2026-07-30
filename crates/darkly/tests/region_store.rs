@@ -335,6 +335,168 @@ fn region_store_save_full_commit_subrect() {
     );
 }
 
+/// Validation-scope smoke test: growing the scratch when the old capacity
+/// exceeds the grown extent must not copy past the new texture bounds. This
+/// reproduces the AAR's geometry (canvas rescaled large to 1920×1080, then the
+/// layer grows up-left by (256, 256) but only taller). With the copy now sized
+/// by the live old extent and clamped to the destination, the overflow this
+/// once guarded is no longer constructible from the API — the scope just
+/// confirms the reallocated copy stays in bounds.
+#[test]
+fn region_store_grow_offset_does_not_overflow_scratch() {
+    let (device, queue) = test_device();
+
+    // Old scratch sized to a rescaled canvas.
+    let mut store = RegionScratch::new(&device, 1920, 1080);
+
+    // Layer at canvas (0, 0) sized 1664×1024 grows up-left to a new extent at
+    // (-256, -256) — a (256, 256) rebase offset, only taller (1280), not wider.
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let mut enc = encoder(&device);
+    store.grow_scratch_preserving(
+        &device,
+        &mut enc,
+        cr(0, 0, 1664, 1024),
+        cr(-256, -256, 1920, 1280),
+    );
+    submit(&queue, enc);
+    let _ = device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: None,
+    });
+    let err = pollster::block_on(scope.pop());
+    assert!(
+        err.is_none(),
+        "grow_scratch_preserving overflowed the scratch texture: {err:?}"
+    );
+}
+
+/// Shared skeleton for the stale-tail regression: seed the scratch capacity
+/// with a sentinel (stale bytes from a prior, larger op), overwrite only a
+/// smaller layer extent with a live value, grow, then assert the grown scratch
+/// holds `live` exactly over the rebased old extent and the **format default**
+/// everywhere else in the full target texture — no surviving sentinel.
+///
+/// Run for both formats: R8's default (white) diverges from RGBA's (transparent),
+/// so it's the format the `scratch_default_clear` path can get wrong.
+fn assert_grow_clears_stale(
+    format: wgpu::TextureFormat,
+    old_extent: CanvasRect,
+    new_extent: CanvasRect,
+) {
+    let (sentinel, live, default): (&[u8], &[u8], &[u8]) = match format {
+        wgpu::TextureFormat::R8Unorm => (&[0x40], &[0xC0], &[0xFF]),
+        _ => (&[255, 0, 0, 255], &[0, 255, 0, 255], &[0, 0, 0, 0]),
+    };
+    let bpp = format.block_copy_size(None).unwrap_or(1) as usize;
+
+    let (device, queue) = test_device();
+    let (cap_w, cap_h) = (1920u32, 1080u32);
+    let mut store = RegionScratch::new(&device, cap_w, cap_h);
+
+    // Seed the full capacity with the sentinel.
+    let stale: Vec<u8> = (0..cap_w * cap_h)
+        .flat_map(|_| sentinel.iter().copied())
+        .collect();
+    let (stale_tex, _v) =
+        create_test_texture_with_format(&device, &queue, cap_w, cap_h, &stale, format);
+    let stale_frame = frame(&stale_tex, cap_w, cap_h);
+    let mut enc = encoder(&device);
+    store.save_region(
+        &device,
+        &mut enc,
+        &stale_frame,
+        format,
+        cr(0, 0, cap_w, cap_h),
+    );
+    submit(&queue, enc);
+
+    // A new stroke on a smaller layer overwrites only its live extent.
+    let (lw, lh) = (old_extent.width, old_extent.height);
+    let live_data: Vec<u8> = (0..lw * lh).flat_map(|_| live.iter().copied()).collect();
+    let (live_tex, _v) =
+        create_test_texture_with_format(&device, &queue, lw, lh, &live_data, format);
+    let live_frame = frame(&live_tex, lw, lh);
+    let mut enc = encoder(&device);
+    store.save_region(&device, &mut enc, &live_frame, format, old_extent);
+    submit(&queue, enc);
+
+    // Grow, then read back the whole scratch.
+    let mut enc = encoder(&device);
+    store.grow_scratch_preserving(&device, &mut enc, old_extent, new_extent);
+    submit(&queue, enc);
+
+    let (tw, th) = store.scratch_dimensions();
+    let scratch = store.scratch_texture(format);
+    let pixels = readback_texture(&device, &queue, scratch, format, tw, th);
+
+    // The old extent's origin rebases to (old.origin - new.origin) in the new
+    // frame; the live pixels occupy that rect and nothing else.
+    let ox = (old_extent.x0() - new_extent.x0()) as u32;
+    let oy = (old_extent.y0() - new_extent.y0()) as u32;
+
+    for y in 0..th {
+        for x in 0..tw {
+            let idx = ((y * tw + x) as usize) * bpp;
+            let px = &pixels[idx..idx + bpp];
+            let in_live = x >= ox && x < ox + lw && y >= oy && y < oy + lh;
+            let expected = if in_live { live } else { default };
+            assert_eq!(
+                px, expected,
+                "pixel ({x},{y}) format {format:?}: expected {expected:?} \
+                 (in_live={in_live}), got {px:?}"
+            );
+        }
+    }
+}
+
+/// Realloc variant: a grow that reallocates (offset ≠ 0) must not copy the full
+/// old capacity — only the live old extent — leaving stale bytes right of / below
+/// the rebased live region. Old extent `(0,0,1024,800)`, new `(-64,-64,1600,1200)`;
+/// the (64,64) offset forces a realloc, capacity stays 1920×1200 via the monotonic
+/// max. Fails against the capacity-clamped copy.
+#[test]
+fn region_store_grow_realloc_clears_stale_tail_rgba() {
+    assert_grow_clears_stale(
+        wgpu::TextureFormat::Rgba8Unorm,
+        cr(0, 0, 1024, 800),
+        cr(-64, -64, 1600, 1200),
+    );
+}
+
+#[test]
+fn region_store_grow_realloc_clears_stale_tail_r8() {
+    assert_grow_clears_stale(
+        wgpu::TextureFormat::R8Unorm,
+        cr(0, 0, 1024, 800),
+        cr(-64, -64, 1600, 1200),
+    );
+}
+
+/// In-place variant: a grow right/down *within* capacity (offset (0,0), dims ≤
+/// capacity) used to early-return with no clear, leaving the bands between old
+/// and new extent stale. Old extent `(0,0,1024,800)`, new `(0,0,1600,1000)` —
+/// bands `[1024,1600)` and `[800,1000)` keep sentinel bytes. This case forces
+/// the unified realloc path: an extent-exact copy in the realloc branch alone
+/// would not fix it.
+#[test]
+fn region_store_grow_within_capacity_clears_stale_bands_rgba() {
+    assert_grow_clears_stale(
+        wgpu::TextureFormat::Rgba8Unorm,
+        cr(0, 0, 1024, 800),
+        cr(0, 0, 1600, 1000),
+    );
+}
+
+#[test]
+fn region_store_grow_within_capacity_clears_stale_bands_r8() {
+    assert_grow_clears_stale(
+        wgpu::TextureFormat::R8Unorm,
+        cr(0, 0, 1024, 800),
+        cr(0, 0, 1600, 1000),
+    );
+}
+
 /// Lock in the new debug-mode contract: `commit_region` must reject a rect
 /// that escapes the saved snapshot. Caller bug, not RegionScratch bug — but
 /// the assert turns "silent corruption from reading uninitialised scratch"

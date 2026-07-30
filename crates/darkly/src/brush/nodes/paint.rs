@@ -14,7 +14,7 @@
 //! - **The uniform buffer carries stroke-constant values** from any
 //!   upstream nodes that declared `uniform_fields` (e.g. `paint_color`).
 //!
-//! Upstream nodes (`shape`, `stamp`, etc.) compile inline into the
+//! Upstream nodes (`circle`, `stamp`, etc.) compile inline into the
 //! fragment shader and evaluate per-fragment-per-dab — no intermediate
 //! textures.
 //!
@@ -51,11 +51,6 @@ use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 // ── Constants ───────────────────────────────────────────────────────────
-
-/// Canvas-pixel reference for `size_input * size = 1.0`. Same
-/// `DAB_REFERENCE_SIZE` used by every other brush node — see
-/// [`crate::brush::DAB_REFERENCE_SIZE`].
-const SIZE_REFERENCE_PX: f32 = crate::brush::DAB_REFERENCE_SIZE as f32;
 
 /// Maximum uniform buffer size we'll allocate per brush pipeline.
 const MAX_UNIFORM_BYTES: usize = 1024;
@@ -128,8 +123,7 @@ impl PerBrushPipeline {
         // the `clone_source` frozen snapshot, when present. `samples_source`
         // brushes carry no named textures today (the compiler rejects the
         // combination), so the source sits at slot 0.
-        let graph_tex_count =
-            compiled.graph_texture_names.len() + usize::from(compiled.samples_source);
+        let graph_tex_count = compiled.graph_sources.len() + usize::from(compiled.samples_source);
         let graph_layout = if graph_tex_count == 0 {
             None
         } else {
@@ -267,12 +261,15 @@ impl PerBrushPipeline {
         // is `None` here. Static named textures (paper grain) build once
         // and cache.
         let graph_textures_bind_group =
-            if compiled.samples_source || compiled.graph_texture_names.is_empty() {
+            if compiled.samples_source || compiled.graph_sources.is_empty() {
                 None
             } else {
-                let (_layout, bg) = ctx
-                    .texture_registry
-                    .make_bind_group(ctx.device, &compiled.graph_texture_names);
+                let (_layout, bg) = ctx.texture_registry.make_bind_group(
+                    ctx.device,
+                    ctx.queue,
+                    ctx.baked_sources,
+                    &compiled.graph_sources,
+                );
                 Some(bg)
             };
 
@@ -370,22 +367,14 @@ pub fn register() -> BrushNodeRegistration {
             ports: vec![
                 PortDef::input("position", BrushWireType::Vec2)
                     .with_description("Canvas-pixel pen tip for this dab"),
-                PortDef::input("size_input", BrushWireType::Scalar)
+                PortDef::input("size", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
                     .with_natural_range(0.0, 1.0)
-                    .with_label("Size Input")
-                    .with_unit(UnitType::Percent)
-                    .with_description(
-                        "Per-touch size multiplier (wire pressure here for pressure-sensitive size).",
-                    ),
-                PortDef::input("size", BrushWireType::Scalar)
-                    .with_range(0.0, 4.0, 0.1)
                     .with_label("Size")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa6-solid:up-right-and-down-left-from-center")
-                    .exposed()
-                    .with_preview_value(0.1)
-                    .with_description("Overall brush size"),
+                    .with_description(
+                        "Per-touch size multiplier (wire pressure here for pressure-sensitive size). Multiplies onto the brush's base size, owned by pen_input.",
+                    ),
                 PortDef::input("flow", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
                     .with_natural_range(0.0, 1.0)
@@ -414,7 +403,6 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::output("dab_size", BrushWireType::Vec2)
                     .with_description("Brush mark size in canvas pixels"),
             ],
-            params: &[],
             is_gpu: true,
             is_terminal: true,
             supports_erase: true,
@@ -427,10 +415,7 @@ pub struct PaintEvaluator;
 
 impl PaintEvaluator {
     fn effective_radius(ctx: &EvalContext) -> f32 {
-        let size_input = ctx.input_f32("size_input").max(0.0);
-        let size = ctx.input_f32("size").max(0.0);
-        let effective_size = size_input * size;
-        (effective_size * SIZE_REFERENCE_PX * 0.5).max(0.5)
+        crate::brush::read_mirror_terminal::effective_radius(ctx)
     }
 }
 
@@ -740,6 +725,7 @@ fn ensure_per_brush_pipeline(
         canvas_copy_sampler: gpu.pipelines.canvas_copy_sampler(),
         min_uniform_align: gpu.device.limits().min_uniform_buffer_offset_alignment,
         texture_registry: gpu.pipelines.texture_registry(),
+        baked_sources: gpu.pipelines.baked_sources(),
     };
     pipe.ensure_pipeline(&ctx, compiled);
 }

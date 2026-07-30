@@ -13,11 +13,15 @@ import { shell } from './shell.svelte';
 import { saveDocument } from '../storage/saveDocument';
 import { removeSnapshot } from '../storage/recovery';
 import { sessionId } from '../state/recoverySession';
+import { processRecording } from '../recording/recorder.svelte';
 
-/** Drop a tab's recovery snapshot — it's being closed deliberately, so its
- *  unsaved work is no longer something to recover from a crash. */
+/** Drop a tab's recovery snapshot and recording scratch — it's being
+ *  closed deliberately, so its unsaved work is no longer something to
+ *  recover from a crash, and its recording lives (only) in whatever file
+ *  the user last saved. */
 function clearSnapshot(recoveryId: string): void {
     void removeSnapshot(sessionId, recoveryId).catch(() => {});
+    void processRecording.clearScratchFor(recoveryId).catch(() => {});
 }
 
 class CloseGuardState {

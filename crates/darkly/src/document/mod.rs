@@ -2,11 +2,17 @@ pub mod filter;
 pub mod filters;
 pub mod layer_kind;
 pub mod layer_kinds;
+pub mod pixel_transform;
 
 pub use filter::{Filter, FilterEntityRegistration, FilterKind, FilterRegistry};
 pub use filters::mask::MaskFilter;
 pub use filters::selection::{SelectionCpuCache, SelectionFilter};
 pub use layer_kind::{LayerKindRegistration, LayerKindRegistry};
+pub use pixel_transform::{
+    PixelTransformBoundsPolicy, PixelTransformOperation, PixelTransformPlan,
+    PixelTransformSampling, PixelTransformSemantics, PixelTransformTarget, PixelValue,
+    TransformCapabilityError, TransformLinkPolicy, TransformMembershipSnapshot, TransformPlanError,
+};
 
 use std::collections::HashMap;
 
@@ -113,6 +119,16 @@ pub struct Document {
     /// flag describes editor session state, not file content.
     pub dirty: bool,
 
+    /// Monotonic mutation counter, bumped at the same chokepoints that set
+    /// [`Self::dirty`] ([`UndoStack::push`] / `coalesce_property`) plus
+    /// undo/redo application (which deliberately leave `dirty` alone).
+    /// Observers that need "did the document change since I last looked?"
+    /// (e.g. the process recorder) sample and compare it. Not serialized,
+    /// not undoable — it describes session history, not file content.
+    ///
+    /// [`UndoStack::push`]: crate::undo::UndoStack::push
+    pub revision: u64,
+
     /// Single shared slot store for every layer, group, and filter in this
     /// document. Lookups are O(1); generational keys mean stale ids return
     /// `None` instead of aliasing onto a recycled slot.
@@ -168,6 +184,7 @@ impl Document {
             height,
             canvas_origin: CanvasPoint::new(0, 0),
             dirty: false,
+            revision: 0,
             entities,
             parent: SecondaryMap::new(),
             root,

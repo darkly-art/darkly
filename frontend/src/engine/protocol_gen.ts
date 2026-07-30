@@ -110,7 +110,15 @@ unitType: UnitType, } | { "kind": "bool",
 /**
  * Current value.
  */
-value: boolean, };
+value: boolean, } | { "kind": "enum", 
+/**
+ * Current selected index into `options`.
+ */
+value: number, 
+/**
+ * Dropdown labels in index order.
+ */
+options: Array<string>, };
 
 export type UnitType = "Normalized" | "Percent" | "Degrees" | "Raw" | "Pixels";
 
@@ -121,33 +129,33 @@ export type ExposedPortInfo = {
  * `set_exposed_port_meta` / `reorder_exposed_port` without having
  * to reconstruct the format.
  */
-key: string, nodeId: number, portName: string, label: string, icon: string, description: string, nodeDisplayName: string, data: ExposedValue, };
+key: string, nodeId: string, portName: string, label: string, icon: string, description: string, nodeDisplayName: string, data: ExposedValue, };
 
 export type BrushGraphAddNodeReq = { type_id: string, };
 
-export type BrushGraphAutoLayoutReq = { sizes: { [key in number]: [number, number] }, };
+export type BrushGraphAutoLayoutReq = { sizes: { [key in string]: [number, number] }, };
 
 export type BrushGraphJsonReq = { json: string, };
 
-export type BrushGraphConnectReq = { from_node: number, from_port: string, to_node: number, to_port: string, };
+export type BrushGraphConnectReq = { from_node: string, from_port: string, to_node: string, to_port: string, };
 
-export type BrushGraphDisconnectReq = { from_node: number, from_port: string, to_node: number, to_port: string, };
+export type BrushGraphDisconnectReq = { from_node: string, from_port: string, to_node: string, to_port: string, };
 
-export type BrushGraphExposePortReq = { node_id: number, port_name: string, };
+export type BrushGraphExposePortReq = { node_id: string, port_name: string, };
 
 export type BrushGraphYamlReq = { yaml: string, };
 
-export type BrushGraphRemoveNodeReq = { node_id: number, };
+export type BrushGraphRemoveNodeReq = { node_id: string, };
 
 export type BrushGraphReorderExposedPortReq = { key: string, new_index: number, };
 
 export type BrushGraphSetExposedPortMetaReq = { key: string, label: string, description: string, icon: string, };
 
-export type BrushGraphSetParamReq = { node_id: number, param_index: number, kind: string, value: JsonValue, };
+export type BrushGraphSetInputReq = { node_id: string, input_name: string, kind: string, value: JsonValue, };
 
-export type BrushGraphSetPortDefaultReq = { node_id: number, port_name: string, value: number, };
+export type BrushGraphSetNodeCommentReq = { node_id: string, comment: string, };
 
-export type BrushGraphUnexposePortReq = { node_id: number, port_name: string, };
+export type BrushGraphUnexposePortReq = { node_id: string, port_name: string, };
 
 export type BrushInfo = { name: string, category: string, author: string, description: string, tags: Array<string>, 
 /**
@@ -160,7 +168,13 @@ icon: string | null, };
 
 export type BrushLoadReq = { name: string, };
 
-export type BrushNodePreviewReq = { node_id: number, };
+export type BrushNodePreviewReq = { node_id: string, };
+
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+
+export type PortDir = "Input" | "Output";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -172,9 +186,41 @@ min: number,
  */
 max: number, 
 /**
- * Default value when the port is disconnected.
+ * The authored value used when this input port is disconnected — the
+ * full typed value (scalar slider value, enum-dropdown index, texture
+ * name, curve points, color). Wired inputs ignore it and take the
+ * upstream expression. For output ports it stays the neutral scalar
+ * default and is unused. Replaces the old scalar-only `default: f32`;
+ * numeric inputs carry [`InputValue::Scalar`].
  */
-default: number, 
+value: InputValue, 
+/**
+ * Enum-dropdown labels, in index order — non-empty only for
+ * [`WireKind`]-`Enum` inputs (shape's `algorithm`, noise/image `space`,
+ * random's `mode`). Empty for every other input kind.
+ */
+enum_options?: Array<string>, 
+/**
+ * Whether an upstream wire may drive this input per-dab. Computed from
+ * `wire_type.is_wirable()` at construction and carried as data so the
+ * frontend reads it directly rather than re-deriving the rule — the
+ * single source of truth is [`WireKind::is_wirable`]. Every port built
+ * from a registration (`PortDef::input`/`output`, and the clones in
+ * `add_node` / portable import) sets it correctly; serde round-trips it.
+ */
+wirable: boolean, 
+/**
+ * Whether a user may *expose* this input as a brush-bar control.
+ * Computed from `wire_type.is_user_exposable()` at construction and
+ * carried as data so the frontend gates its expose affordance directly
+ * off one value rather than re-deriving the type rule — the single
+ * source of truth is [`WireKind::is_user_exposable`]. Orthogonal to
+ * `wirable`: an enum is exposable but not wirable; a wired scalar is
+ * wirable but (while connected) not user-scrubbable. `expose_port`
+ * enforces it, so a control the brush bar can't render can never be
+ * surfaced. Serde round-trips it.
+ */
+exposable: boolean, 
 /**
  * Quantization step. `0.0` (the default) means continuous; any positive
  * value snaps the slider, scrub, and typed-value commits to multiples of
@@ -293,15 +339,34 @@ natural_range: [number, number] | null,
  * scrubbing this port bumps the topology version so the dab
  * thumbnail re-renders, not just the editor preview.
  */
-persist_in_thumbnail: boolean, };
-
-export type PortDir = "Input" | "Output";
-
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4";
-
-export type ParamDef = { "kind": "float", name: string, min: number, max: number, default: number, } | { "kind": "int", name: string, min: number, max: number, default: number, } | { "kind": "bool", name: string, default: boolean, } | { "kind": "string", name: string, default: string, } | { "kind": "curve", name: string, default: Array<[number, number]>, } | { "kind": "levels", name: string, default: [number, number, number, number, number], } | { "kind": "enum", name: string, options: Array<string>, default: number, } | { "kind": "floatInput", name: string, min: number, max: number, default: number, } | { "kind": "icon", name: string, options: Array<[string, string]>, default: string, } | { "kind": "color", name: string, default: [number, number, number], } | { "kind": "vec2", name: string, max: number, default: [number, number], } | { "kind": "list", name: string, item: Array<ParamDef>, max_len: number, default: Array<Array<[string, ConstParamValue]>>, };
-
-export type ConstParamValue = boolean | number | number | string | [number, number, number] | [number, number];
+persist_in_thumbnail: boolean, 
+/**
+ * This output port emits a *spatial, per-fragment image* — a coverage
+ * mask or colour field that varies across the dab — so a node carrying it
+ * is worth a preview thumbnail (`shape.mask`, `image.color`,
+ * `noise.color`, `stamp.dab`). Declared per port rather than inferred
+ * from `wire_type`, because wire type can't tell a spatial field from a
+ * per-dab constant: `random.value` and `paint_color.color` share the
+ * `Scalar`/`Vec4` types with the real image outputs but render as flat
+ * blobs. The node-preview builder wires the first port carrying this flag;
+ * the brush-builder's preview gate reads it directly (like `wirable` /
+ * `exposable`). Meaningless on inputs; only set on outputs.
+ */
+preview_image: boolean, 
+/**
+ * This input port is *also* a wire source: its resolved value (the
+ * wired value if driven, else the authored default) is available for
+ * other nodes to wire *from*, exactly like an output. Only meaningful
+ * on `dir == Input`; ignored on outputs (which are sources anyway).
+ *
+ * The editor shows the source handle only while the input is not
+ * itself wire-driven — a driven port's value is the driver's, so it
+ * should be tapped there instead. Consumers that resolve "which port a
+ * wire leaves from" must ask [`PortDef::is_source`], never
+ * `dir == Output`, or a settable-source is treated as a second-class
+ * source (skipped by wire-range remap, unreachable by `find_port`).
+ */
+source: boolean, };
 
 export type NodeRegistration = { 
 /**
@@ -327,13 +392,12 @@ display_name: string,
  */
 description: string, 
 /**
- * Port definitions for this node type.
+ * Port definitions for this node type — the node's single, unified
+ * input/output list. Every input carries its own authored value and
+ * widget metadata on the [`PortDef`]; there is no separate parameter
+ * system.
  */
 ports: Array<PortDef>, 
-/**
- * Parameter definitions (for inline UI sliders).
- */
-params: Array<ParamDef>, 
 /**
  * Whether this node requires GPU execution.
  */
@@ -363,7 +427,7 @@ preview_fallback_icon: string | null, };
 
 export type BrushSaveReq = { name: string, category: string, };
 
-export type BrushSetExposedPortReq = { node_id: number, port_name: string, display_value: number, };
+export type BrushSetExposedPortReq = { node_id: string, port_name: string, display_value: number, };
 
 export type BrushThumbnailReq = { name: string, };
 
@@ -408,7 +472,19 @@ export type ParamInfo = { kind: string, name: string, min: number | null, max: n
  */
 options: JsonValue | null, };
 
-export type VeilTypeInfo = { type: string, displayName: string, params: Array<ParamInfo>, };
+export type VeilTypeInfo = { type: string, displayName: string, 
+/**
+ * Iconify name shown for this type. Filters carry a per-variant icon so
+ * each reads distinctly in the Colors menu and the Add Filter Layer picker;
+ * veils leave it empty (their UI renders a live preview, not an icon).
+ */
+icon: string, 
+/**
+ * One-sentence summary from the registration — picker tooltips, and (for
+ * filters) folded into the Colors-menu action description where the
+ * command palette's search indexes it.
+ */
+description: string, params: Array<ParamInfo>, };
 
 export type FlattenNodeReq = { node_id: number, };
 
@@ -437,6 +513,17 @@ export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 export type LayerKindTypeInfo = { type: string, displayName: string, };
 
 export type LayerTransformCapabilityReq = { id: number, };
+
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * Whether this modifier participates in transforms with its host.
+ */
+linkedToHost: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
 
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
@@ -489,13 +576,6 @@ pipeline: string,
  * uses.
  */
 params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
-
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
-/**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -589,6 +669,8 @@ export type SetLayerNameReq = { id: number, name: string, };
 
 export type SetLayerVisibleReq = { id: number, visible: boolean, };
 
+export type SetMaskLinkedToHostReq = { id: number, linked: boolean, };
+
 export type SetNodeLockedReq = { id: number, locked: boolean, };
 
 export type SetOpacityReq = { id: number, opacity: number, };
@@ -598,6 +680,8 @@ export type SetOverlayMaskReq = { width: number, height: number, rgba: Array<num
 export type SetPixelFilterReq = { mode: string, };
 
 export type SetPreviewThemeReq = { fg: [number, number, number, number], bg: [number, number, number, number], };
+
+export type SetRecordingParamsReq = { enabled: boolean, minIntervalSecs: number, width: number, height: number, baseWidth: number, baseHeight: number, };
 
 export type SetTextBoxReq = { id: number, object: number, 
 /**
@@ -640,6 +724,10 @@ export type StrokeOp = { "op": "flood_fill", x: number, y: number, r: number, g:
  */
 cr: number, cg: number, cb: number, ca: number, };
 
+export type PixelTransformOperation = "destructive_transform";
+
+export type TransformCapabilityError = { endpoint: number, operation: PixelTransformOperation, };
+
 export type LayerIdReq = { id: number, };
 
 export type ToolTypeInfo = { type: string, displayName: string, params: Array<ParamInfo>, };
@@ -662,7 +750,7 @@ export type VoidTransformInfoReq = { id: number, };
 
 export type VoidTransformInfoResp = { ox: number, oy: number, w: number, h: number, mode: number, matrix: Array<number>, };
 
-export type CaptureKind = "camera" | "display";
+export type CaptureKind = "camera" | "display" | "stream";
 
 export type VoidTypeInfo = { type: string, displayName: string, params: Array<ParamInfo>, icon: string, supportsPreview: boolean, 
 /**
@@ -709,8 +797,8 @@ export type RequestKind =
     | 'brush_graph_reorder_exposed_port'
     | 'brush_graph_reset'
     | 'brush_graph_set_exposed_port_meta'
-    | 'brush_graph_set_param'
-    | 'brush_graph_set_port_default'
+    | 'brush_graph_set_input'
+    | 'brush_graph_set_node_comment'
     | 'brush_graph_unexpose_port'
     | 'brush_graph_validate'
     | 'brush_import'
@@ -796,6 +884,7 @@ export type RequestKind =
     | 'poll_copy_rich_result'
     | 'poll_export_result'
     | 'poll_preview'
+    | 'poll_recording_frame'
     | 'poll_save_result'
     | 'preview_filter'
     | 'redo'
@@ -807,6 +896,7 @@ export type RequestKind =
     | 'remove_veil'
     | 'request_histogram'
     | 'request_node_histogram'
+    | 'request_recording_capture'
     | 'rescale_image'
     | 'resize'
     | 'resize_canvas_rect'
@@ -828,12 +918,14 @@ export type RequestKind =
     | 'set_isolated_node'
     | 'set_layer_name'
     | 'set_layer_visible'
+    | 'set_mask_linked_to_host'
     | 'set_node_locked'
     | 'set_opacity'
     | 'set_overlay'
     | 'set_overlay_mask'
     | 'set_pixel_filter'
     | 'set_preview_theme'
+    | 'set_recording_params'
     | 'set_text_box'
     | 'set_text_content'
     | 'set_text_style'
@@ -847,6 +939,7 @@ export type RequestKind =
     | 'start_preview'
     | 'start_save_document'
     | 'stroke_to'
+    | 'take_transform_setup_error'
     | 'text_objects'
     | 'tool_types'
     | 'undo'
@@ -897,8 +990,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'brush_graph_reorder_exposed_port',
     'brush_graph_reset',
     'brush_graph_set_exposed_port_meta',
-    'brush_graph_set_param',
-    'brush_graph_set_port_default',
+    'brush_graph_set_input',
+    'brush_graph_set_node_comment',
     'brush_graph_unexpose_port',
     'brush_graph_validate',
     'brush_import',
@@ -984,6 +1077,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'poll_copy_rich_result',
     'poll_export_result',
     'poll_preview',
+    'poll_recording_frame',
     'poll_save_result',
     'preview_filter',
     'redo',
@@ -995,6 +1089,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'remove_veil',
     'request_histogram',
     'request_node_histogram',
+    'request_recording_capture',
     'rescale_image',
     'resize',
     'resize_canvas_rect',
@@ -1016,12 +1111,14 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_isolated_node',
     'set_layer_name',
     'set_layer_visible',
+    'set_mask_linked_to_host',
     'set_node_locked',
     'set_opacity',
     'set_overlay',
     'set_overlay_mask',
     'set_pixel_filter',
     'set_preview_theme',
+    'set_recording_params',
     'set_text_box',
     'set_text_content',
     'set_text_style',
@@ -1035,6 +1132,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'start_preview',
     'start_save_document',
     'stroke_to',
+    'take_transform_setup_error',
     'text_objects',
     'tool_types',
     'undo',
@@ -1080,7 +1178,7 @@ export interface EngineApi {
     brushExport(req: BrushExportReq): Promise<{ bytes: Uint8Array }>;
     brushExposedPorts(): Promise<Array<ExposedPortInfo>>;
     brushGraphActive(): Promise<JsonValue>;
-    brushGraphAddNode(req: BrushGraphAddNodeReq): Promise<{ graph: JsonValue } | { error: string }>;
+    brushGraphAddNode(req: BrushGraphAddNodeReq): Promise<{ graph: JsonValue, added_node_id: string } | { error: string }>;
     brushGraphAutoLayout(req: BrushGraphAutoLayoutReq): Promise<Record<string, [number, number]>>;
     brushGraphCompile(req: BrushGraphJsonReq): Promise<null | { error: string }>;
     brushGraphConnect(req: BrushGraphConnectReq): Promise<{ graph: JsonValue } | { error: string }>;
@@ -1093,8 +1191,8 @@ export interface EngineApi {
     brushGraphReorderExposedPort(req: BrushGraphReorderExposedPortReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphReset(): void;
     brushGraphSetExposedPortMeta(req: BrushGraphSetExposedPortMetaReq): Promise<{ graph: JsonValue } | { error: string }>;
-    brushGraphSetParam(req: BrushGraphSetParamReq): Promise<{ graph: JsonValue } | { error: string }>;
-    brushGraphSetPortDefault(req: BrushGraphSetPortDefaultReq): Promise<{ graph: JsonValue } | { error: string }>;
+    brushGraphSetInput(req: BrushGraphSetInputReq): Promise<{ graph: JsonValue } | { error: string }>;
+    brushGraphSetNodeComment(req: BrushGraphSetNodeCommentReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphUnexposePort(req: BrushGraphUnexposePortReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphValidate(req: BrushGraphJsonReq): Promise<null | { error: string }>;
     brushImport(bytes: Uint8Array): Promise<string>;
@@ -1180,6 +1278,7 @@ export interface EngineApi {
     pollCopyRichResult(): Promise<string | null>;
     pollExportResult(): Promise<{ width: number, height: number, bytes: Uint8Array } | null>;
     pollPreview(req: PreviewReq): Promise<{ width: number, height: number, fps: number, frameCount: number, bytes: Uint8Array } | null>;
+    pollRecordingFrame(): Promise<{ canvasWidth: number, canvasHeight: number, frame: { width: number, height: number, frameIndex: number } | null, bytes?: Uint8Array }>;
     pollSaveResult(): Promise<{ manifestLen: number, compositeWidth: number, compositeHeight: number, compositeLen: number, blobs: { path: string, len: number }[], bytes: Uint8Array } | null>;
     previewFilter(req: PreviewFilterReq): Promise<boolean>;
     redo(): void;
@@ -1191,6 +1290,7 @@ export interface EngineApi {
     removeVeil(req: RemoveVeilReq): void;
     requestHistogram(req: HistogramReq): void;
     requestNodeHistogram(req: HistogramReq): void;
+    requestRecordingCapture(): void;
     rescaleImage(req: RescaleImageReq): void;
     resize(req: ResizeReq): void;
     resizeCanvasRect(req: ResizeCanvasRectReq): void;
@@ -1209,15 +1309,17 @@ export interface EngineApi {
     setFilterParams(req: SetFilterParamsReq): void;
     setGroupCollapsed(req: SetGroupCollapsedReq): void;
     setGroupPassthrough(req: SetGroupPassthroughReq): void;
-    setIsolatedNode(req: SetIsolatedNodeReq): void;
+    setIsolatedNode(req: SetIsolatedNodeReq): Promise<number | null>;
     setLayerName(req: SetLayerNameReq): void;
     setLayerVisible(req: SetLayerVisibleReq): void;
+    setMaskLinkedToHost(req: SetMaskLinkedToHostReq): void;
     setNodeLocked(req: SetNodeLockedReq): void;
     setOpacity(req: SetOpacityReq): void;
     setOverlay(req: SetOverlayReq): void;
     setOverlayMask(req: SetOverlayMaskReq): void;
     setPixelFilter(req: SetPixelFilterReq): void;
     setPreviewTheme(req: SetPreviewThemeReq): void;
+    setRecordingParams(req: SetRecordingParamsReq): void;
     setTextBox(req: SetTextBoxReq): void;
     setTextContent(req: SetTextContentReq): void;
     setTextStyle(req: SetTextStyleReq): void;
@@ -1231,6 +1333,7 @@ export interface EngineApi {
     startPreview(req: PreviewReq): void;
     startSaveDocument(req: StartSaveDocumentReq): Promise<void>;
     strokeTo(req: StrokeToReq): void;
+    takeTransformSetupError(): Promise<TransformCapabilityError | null>;
     textObjects(req: LayerIdReq): Promise<{ objects: Array<{ object: number, content: string, font_family: string, size: number, variations: Record<string, number>, features: Record<string, number>, letter_spacing: number, word_spacing: number, line_height: number, italic: boolean, align: string, color: [number, number, number, number], box: [number, number] | null }> }>;
     toolTypes(): Promise<Array<ToolTypeInfo>>;
     undo(): void;
@@ -1283,8 +1386,8 @@ export function makeApi(t: Transport): EngineApi {
         brushGraphReorderExposedPort: (req) => t.request('brush_graph_reorder_exposed_port', req),
         brushGraphReset: () => t.postFF('brush_graph_reset'),
         brushGraphSetExposedPortMeta: (req) => t.request('brush_graph_set_exposed_port_meta', req),
-        brushGraphSetParam: (req) => t.request('brush_graph_set_param', req),
-        brushGraphSetPortDefault: (req) => t.request('brush_graph_set_port_default', req),
+        brushGraphSetInput: (req) => t.request('brush_graph_set_input', req),
+        brushGraphSetNodeComment: (req) => t.request('brush_graph_set_node_comment', req),
         brushGraphUnexposePort: (req) => t.request('brush_graph_unexpose_port', req),
         brushGraphValidate: (req) => t.request('brush_graph_validate', req),
         brushImport: (bytes) => t.request('brush_import', {}, bytes),
@@ -1370,6 +1473,7 @@ export function makeApi(t: Transport): EngineApi {
         pollCopyRichResult: () => t.request('poll_copy_rich_result'),
         pollExportResult: () => t.request('poll_export_result'),
         pollPreview: (req) => t.request('poll_preview', req),
+        pollRecordingFrame: () => t.request('poll_recording_frame'),
         pollSaveResult: () => t.request('poll_save_result'),
         previewFilter: (req) => t.request('preview_filter', req),
         redo: () => t.postFF('redo'),
@@ -1381,6 +1485,7 @@ export function makeApi(t: Transport): EngineApi {
         removeVeil: (req) => t.postFF('remove_veil', req),
         requestHistogram: (req) => t.postFF('request_histogram', req),
         requestNodeHistogram: (req) => t.postFF('request_node_histogram', req),
+        requestRecordingCapture: () => t.postFF('request_recording_capture'),
         rescaleImage: (req) => t.postFF('rescale_image', req),
         resize: (req) => t.postFF('resize', req),
         resizeCanvasRect: (req) => t.postFF('resize_canvas_rect', req),
@@ -1399,15 +1504,17 @@ export function makeApi(t: Transport): EngineApi {
         setFilterParams: (req) => t.postFF('set_filter_params', req),
         setGroupCollapsed: (req) => t.postFF('set_group_collapsed', req),
         setGroupPassthrough: (req) => t.postFF('set_group_passthrough', req),
-        setIsolatedNode: (req) => t.postFF('set_isolated_node', req),
+        setIsolatedNode: (req) => t.request('set_isolated_node', req),
         setLayerName: (req) => t.postFF('set_layer_name', req),
         setLayerVisible: (req) => t.postFF('set_layer_visible', req),
+        setMaskLinkedToHost: (req) => t.postFF('set_mask_linked_to_host', req),
         setNodeLocked: (req) => t.postFF('set_node_locked', req),
         setOpacity: (req) => t.postFF('set_opacity', req),
         setOverlay: (req) => t.postFF('set_overlay', req),
         setOverlayMask: (req) => t.postFF('set_overlay_mask', req),
         setPixelFilter: (req) => t.postFF('set_pixel_filter', req),
         setPreviewTheme: (req) => t.postFF('set_preview_theme', req),
+        setRecordingParams: (req) => t.postFF('set_recording_params', req),
         setTextBox: (req) => t.postFF('set_text_box', req),
         setTextContent: (req) => t.postFF('set_text_content', req),
         setTextStyle: (req) => t.postFF('set_text_style', req),
@@ -1421,6 +1528,7 @@ export function makeApi(t: Transport): EngineApi {
         startPreview: (req) => t.postFF('start_preview', req),
         startSaveDocument: (req) => t.request('start_save_document', req),
         strokeTo: (req) => t.postFF('stroke_to', req),
+        takeTransformSetupError: () => t.request('take_transform_setup_error'),
         textObjects: (req) => t.request('text_objects', req),
         toolTypes: () => t.request('tool_types'),
         undo: () => t.postFF('undo'),

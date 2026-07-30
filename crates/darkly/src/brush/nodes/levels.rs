@@ -51,7 +51,6 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(0.0, 1.0)
                     .with_description("Clamp((input - in_low) / (in_high - in_low), 0, 1)"),
             ],
-            params: &[],
             is_gpu: false,
             is_terminal: false,
             supports_erase: true,

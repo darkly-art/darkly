@@ -1,6 +1,6 @@
 //! End-to-end tests for wire-boundary range remap (`PortDef::natural_range`).
 //!
-//! The bug that motivated this: `random.value → shape.seed` produced the
+//! The bug that motivated this: `random.value → circle.seed` produced the
 //! same seed every dab because random's output (`[-1, 1]`) collapsed to 0
 //! when seed cast it through `as u32` (range `[0, 1024]`). The fix is that
 //! when both ends of a wire declare a `natural_range`, the runner remaps
@@ -13,16 +13,11 @@
 //! registration).
 
 use darkly::brush::eval::BrushGraphRunner;
+use darkly::brush::input_value::InputValue;
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::registry;
 use darkly::brush::wire::ScalarValue;
-use darkly::gpu::params::ParamValue;
 use darkly::nodegraph::{Graph, PortDef, PortRef};
-
-/// Per-instance params for the `random` node: mode=0 (per-dab, the default).
-fn random_params() -> Vec<ParamValue> {
-    vec![ParamValue::Int(0)]
-}
 
 fn read_scalar(runner: &BrushGraphRunner, type_id: &str, port: &str) -> f32 {
     let slot = runner
@@ -49,13 +44,13 @@ fn run_one_dab(runner: &mut BrushGraphRunner, pressure: f32, dab_index: u32) {
 /// natural PRNG range), no longer the old `[-1, 1]` remap, and produces a
 /// fresh value each dab. The previous behavior — `random` outputting in
 /// `[-1, 1]` and any downstream `as u32` cast collapsing it to 0 — is what
-/// caused `random → shape.seed` to repeat.
+/// caused `random → circle.seed` to repeat.
 #[test]
 fn random_outputs_unit_range_and_varies_per_dab() {
     let registry = registry();
     let mut graph = Graph::new();
     let random_reg = registry.get("random").unwrap();
-    graph.add_node("random", random_reg.ports.clone(), random_params());
+    graph.add_node("random", random_reg.ports.clone());
 
     let mut runner =
         BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
@@ -87,7 +82,7 @@ fn random_outputs_unit_range_and_varies_per_dab() {
 /// `random → seed-style port (natural_range [0, 1024])` produces values
 /// spread across the destination range, varying per dab.
 ///
-/// We can't observe `shape.seed` directly without a GPU, but the runner's
+/// We can't observe `circle.seed` directly without a GPU, but the runner's
 /// remap step happens at `gather_inputs` — same code path for CPU and GPU
 /// nodes. So we exercise it through a CPU node (`multiply`) with a
 /// per-instance override on its `a` port: `natural_range = Some((0, 1024))`.
@@ -99,10 +94,10 @@ fn random_to_wide_range_input_remaps() {
     let mut graph = Graph::new();
 
     let random_reg = registry.get("random").unwrap();
-    let random = graph.add_node("random", random_reg.ports.clone(), random_params());
+    let random = graph.add_node("random", random_reg.ports.clone());
 
     // Clone multiply's ports, then widen the `a` input's natural_range to
-    // simulate wiring random into something like `shape.seed`.
+    // simulate wiring random into something like `circle.seed`.
     let multiply_reg = registry.get("multiply").unwrap();
     let mut multiply_ports = multiply_reg.ports.clone();
     for p in multiply_ports.iter_mut() {
@@ -111,7 +106,7 @@ fn random_to_wide_range_input_remaps() {
                 .with_natural_range(0.0, 1024.0);
         }
     }
-    let multiply = graph.add_node("multiply", multiply_ports, vec![]);
+    let multiply = graph.add_node("multiply", multiply_ports);
 
     graph
         .connect(
@@ -157,7 +152,7 @@ fn pen_pressure_to_frequency_range_remaps() {
     let mut graph = Graph::new();
 
     let pen_reg = registry.get("pen_input").unwrap();
-    let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", pen_reg.ports.clone());
 
     let multiply_reg = registry.get("multiply").unwrap();
     let mut multiply_ports = multiply_reg.ports.clone();
@@ -167,7 +162,7 @@ fn pen_pressure_to_frequency_range_remaps() {
                 .with_natural_range(1.0, 16.0);
         }
     }
-    let multiply = graph.add_node("multiply", multiply_ports, vec![]);
+    let multiply = graph.add_node("multiply", multiply_ports);
 
     graph
         .connect(
@@ -225,10 +220,10 @@ fn math_node_output_passes_through_to_ranged_input() {
     let mut multiply_src_ports = multiply_src_reg.ports.clone();
     for p in multiply_src_ports.iter_mut() {
         if p.name == "a" || p.name == "b" {
-            p.default = 0.5;
+            p.value = InputValue::Scalar(0.5);
         }
     }
-    let multiply_src = graph.add_node("multiply", multiply_src_ports, vec![]);
+    let multiply_src = graph.add_node("multiply", multiply_src_ports);
 
     // Sink multiply: `a` carries an overridden natural_range Some((0, 1024)).
     // If multiply_src were mistakenly opted in to source-side remap, we'd
@@ -242,7 +237,7 @@ fn math_node_output_passes_through_to_ranged_input() {
                 .with_natural_range(0.0, 1024.0);
         }
     }
-    let multiply_sink = graph.add_node("multiply", multiply_sink_ports, vec![]);
+    let multiply_sink = graph.add_node("multiply", multiply_sink_ports);
 
     graph
         .connect(
@@ -251,7 +246,7 @@ fn math_node_output_passes_through_to_ranged_input() {
                 port: "result".into(),
             },
             PortRef {
-                node: multiply_sink,
+                node: multiply_sink.clone(),
                 port: "a".into(),
             },
         )
@@ -265,7 +260,7 @@ fn math_node_output_passes_through_to_ranged_input() {
     // the evaluator after any wire remap). Read by node id to disambiguate
     // from the source multiply.
     let slot = runner
-        .find_node_output_slot(multiply_sink, "result")
+        .find_node_output_slot(&multiply_sink, "result")
         .expect("sink slot exists");
     let v = match runner.read_slot(slot).expect("slot has value") {
         ScalarValue::Scalar(v) => v,
@@ -285,7 +280,7 @@ fn ranged_source_to_unranged_input_passes_through() {
     let mut graph = Graph::new();
 
     let random_reg = registry.get("random").unwrap();
-    let random = graph.add_node("random", random_reg.ports.clone(), random_params());
+    let random = graph.add_node("random", random_reg.ports.clone());
 
     // multiply.a — explicitly STRIP the natural_range so this node-instance
     // behaves as if the consumer hadn't opted in.
@@ -296,7 +291,7 @@ fn ranged_source_to_unranged_input_passes_through() {
             p.natural_range = None;
         }
     }
-    let multiply = graph.add_node("multiply", multiply_ports, vec![]);
+    let multiply = graph.add_node("multiply", multiply_ports);
 
     graph
         .connect(
@@ -334,17 +329,10 @@ fn identity_range_is_a_noop() {
     let mut graph = Graph::new();
 
     let pen_reg = registry.get("pen_input").unwrap();
-    let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", pen_reg.ports.clone());
 
     let curve_reg = registry.get("curve").unwrap();
-    let curve = graph.add_node(
-        "curve",
-        curve_reg.ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Curve(vec![
-            [0.0, 0.0],
-            [1.0, 1.0],
-        ])],
-    );
+    let curve = graph.add_node("curve", curve_reg.ports.clone());
 
     graph
         .connect(
@@ -377,7 +365,7 @@ fn identity_range_is_a_noop() {
 /// Bipolar destination range: `random [0, 1] → [-100, 100]` spans both
 /// halves, verifying the affine remap handles a negative `dst_min`.
 ///
-/// Note: radian-typed ports (`shape.rotation`, `liquify.direction`, etc.)
+/// Note: radian-typed ports (`circle.rotation`, `liquify.direction`, etc.)
 /// deliberately do NOT have a `natural_range` — radians are a unit, not
 /// a normalized signal, and wires like `pen.drawing_angle → rotation`
 /// must preserve them exactly. This test uses an abstract `[-100, 100]`
@@ -389,7 +377,7 @@ fn unit_source_to_bipolar_dest_spans_full_range() {
     let mut graph = Graph::new();
 
     let random_reg = registry.get("random").unwrap();
-    let random = graph.add_node("random", random_reg.ports.clone(), random_params());
+    let random = graph.add_node("random", random_reg.ports.clone());
 
     let multiply_reg = registry.get("multiply").unwrap();
     let mut multiply_ports = multiply_reg.ports.clone();
@@ -399,7 +387,7 @@ fn unit_source_to_bipolar_dest_spans_full_range() {
                 .with_natural_range(-100.0, 100.0);
         }
     }
-    let multiply = graph.add_node("multiply", multiply_ports, vec![]);
+    let multiply = graph.add_node("multiply", multiply_ports);
 
     graph
         .connect(
@@ -456,7 +444,7 @@ fn radian_to_radian_wire_passes_through() {
     let mut graph = Graph::new();
 
     let pen_reg = registry.get("pen_input").unwrap();
-    let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
+    let pen = graph.add_node("pen_input", pen_reg.ports.clone());
 
     // multiply.a with no natural_range (radians-style dest).
     let multiply_reg = registry.get("multiply").unwrap();
@@ -466,7 +454,7 @@ fn radian_to_radian_wire_passes_through() {
             p.natural_range = None;
         }
     }
-    let multiply = graph.add_node("multiply", multiply_ports, vec![]);
+    let multiply = graph.add_node("multiply", multiply_ports);
 
     graph
         .connect(

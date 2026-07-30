@@ -9,77 +9,81 @@
  *   - Shift+Alt: intersect with selection
  * Escape clears the selection.
  */
-import type { Tool, ToolContext } from './registry';
-import { app } from '../state/app.svelte';
+import { ToolBase, type ToolDescriptor } from './registry';
+import type { DarklyInstance } from '../state/app.svelte';
 import { KIND_LINE, FLAG_CANVAS_SPACE, FLAG_INVERT_COLOR, prim, selectionMode } from './selection_helpers';
-
-let points: [number, number][] = [];
 
 /** Minimum squared distance between consecutive points to avoid redundancy. */
 const MIN_DIST_SQ = 4;
 
-function pushPreviewOverlay() {
-    if (!app.engine || points.length < 2) return;
-    const prims = [];
-    for (let i = 1; i < points.length; i++) {
-        prims.push(prim(KIND_LINE, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR, points[i - 1], points[i], { thickness: 1 }));
+class LassoSelectTool extends ToolBase {
+    private points: [number, number][] = [];
+
+    private pushPreviewOverlay(): void {
+        const engine = this.engine;
+        if (!engine || this.points.length < 2) return;
+        const prims = [];
+        for (let i = 1; i < this.points.length; i++) {
+            prims.push(prim(KIND_LINE, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR, this.points[i - 1], this.points[i], { thickness: 1 }));
+        }
+        // Closing line back to start
+        prims.push(prim(KIND_LINE, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR, this.points[this.points.length - 1], this.points[0], { dashLen: 4, thickness: 1 }));
+        engine.api.setOverlay({ primitives: prims });
     }
-    // Closing line back to start
-    prims.push(prim(KIND_LINE, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR, points[points.length - 1], points[0], { dashLen: 4, thickness: 1 }));
-    app.engine.api.setOverlay({ primitives: prims });
+
+    private clearPreviewOverlay(): void {
+        this.points = [];
+        this.engine?.api.clearOverlay();
+    }
+
+    onDeactivate(): void {
+        this.clearPreviewOverlay();
+    }
+
+    onPointerDown(_e: PointerEvent, cx: number, cy: number): void {
+        this.points = [[cx, cy]];
+        this.pushPreviewOverlay();
+    }
+
+    onPointerMove(_e: PointerEvent, cx: number, cy: number): void {
+        if (this.points.length === 0) return;
+        const last = this.points[this.points.length - 1];
+        const dx = cx - last[0];
+        const dy = cy - last[1];
+        if (dx * dx + dy * dy >= MIN_DIST_SQ) {
+            this.points.push([cx, cy]);
+            this.pushPreviewOverlay();
+        }
+    }
+
+    onPointerUp(e: PointerEvent): void {
+        if (this.points.length < 3) {
+            if (selectionMode(e) === 'replace') {
+                this.engine?.api.clearSelection();
+            }
+            this.clearPreviewOverlay();
+            return;
+        }
+
+        const mode = selectionMode(e);
+        this.engine?.api.selectLasso({ verts: this.points, mode, antialias: true, feather: 0 });
+        this.clearPreviewOverlay();
+    }
+
+    onKeyDown(e: KeyboardEvent): boolean {
+        if (e.key === 'Escape') {
+            this.engine?.api.clearSelection();
+            return true;
+        }
+        return false;
+    }
 }
 
-function clearPreviewOverlay() {
-    points = [];
-    app.engine?.api.clearOverlay();
-}
-
-export const lassoSelectTool: Tool = {
+export const lassoSelectTool: ToolDescriptor = {
     id: 'lasso_select',
     icon: 'tabler:lasso',
     group: 'select',
     cluster: 'select',
     hotkeyAction: 'lassoSelectTool',
-
-    onDeactivate() {
-        clearPreviewOverlay();
-    },
-
-    onPointerDown(_ctx, _e, cx, cy) {
-        points = [[cx, cy]];
-        pushPreviewOverlay();
-    },
-
-    onPointerMove(_ctx, _e, cx, cy) {
-        if (points.length === 0) return;
-        const last = points[points.length - 1];
-        const dx = cx - last[0];
-        const dy = cy - last[1];
-        if (dx * dx + dy * dy >= MIN_DIST_SQ) {
-            points.push([cx, cy]);
-            pushPreviewOverlay();
-        }
-    },
-
-    onPointerUp(ctx, e) {
-        if (points.length < 3) {
-            if (selectionMode(e) === 'replace') {
-                ctx.engine.api.clearSelection();
-            }
-            clearPreviewOverlay();
-            return;
-        }
-
-        const mode = selectionMode(e);
-        ctx.engine.api.selectLasso({ verts: points, mode, antialias: true, feather: 0 });
-        clearPreviewOverlay();
-    },
-
-    onKeyDown(e) {
-        if (e.key === 'Escape') {
-            app.engine?.api.clearSelection();
-            return true;
-        }
-        return false;
-    },
+    create: (inst: DarklyInstance) => new LassoSelectTool(inst),
 };

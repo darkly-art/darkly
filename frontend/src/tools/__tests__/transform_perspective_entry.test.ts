@@ -21,16 +21,18 @@ vi.mock('../../canvas/gpu_overlay', () => ({
 
 import { TransformGizmo } from '../transform_gizmo';
 import { mat3Apply, type Mat3 } from '../transform_projective';
-import { beginToolSession } from '../tool_session';
+import { SessionEngine } from '../tool_session';
 
 const IDENTITY_MAT3: Mat3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
 
-// The gizmo pushes/clears its overlay through the live tool session; establish
-// one over the fake engine so `toolEngine()` resolves and the overlay (and thus
-// the bbox that `isInside` reads) is built.
+// The gizmo pushes/clears its overlay through a live session accessor supplied
+// at construction; establish one over the fake engine so it resolves and the
+// overlay (and thus the bbox that `isInside` reads) is built.
 withApi(fakeApp.engine);
+let session: SessionEngine | null = null;
+const sess = () => session;
 beforeEach(() => {
-    beginToolSession(fakeApp.engine as never);
+    session = new SessionEngine(fakeApp.engine as never);
 });
 
 function makeBinding(live = false) {
@@ -53,7 +55,7 @@ function makeBinding(live = false) {
 
 describe('mode switching via setMode', () => {
     it('a fresh attach reports mode 0 (free transform), not perspective', async () => {
-        const gizmo = new TransformGizmo({} as never);
+        const gizmo = new TransformGizmo({} as never, sess);
         await gizmo.attach(makeBinding() as never);
         expect(gizmo.active).toBe(true);
         // The bug was right-click force-entering perspective; default must be free.
@@ -61,7 +63,7 @@ describe('mode switching via setMode', () => {
     });
 
     it('setMode(1) pushes a mode-1 homography reproducing the bbox', async () => {
-        const gizmo = new TransformGizmo({} as never);
+        const gizmo = new TransformGizmo({} as never, sess);
         const binding = makeBinding();
         await gizmo.attach(binding as never);
 
@@ -82,7 +84,7 @@ describe('mode switching via setMode', () => {
     });
 
     it('is two-way: setMode(1) then setMode(0) returns to free transform', async () => {
-        const gizmo = new TransformGizmo({} as never);
+        const gizmo = new TransformGizmo({} as never, sess);
         const binding = makeBinding();
         await gizmo.attach(binding as never);
 
@@ -103,7 +105,7 @@ describe('mode switching via setMode', () => {
     });
 
     it('setMode is a no-op when already in the target mode', async () => {
-        const gizmo = new TransformGizmo({} as never);
+        const gizmo = new TransformGizmo({} as never, sess);
         const binding = makeBinding();
         await gizmo.attach(binding as never);
         gizmo.setMode(1);
@@ -114,7 +116,7 @@ describe('mode switching via setMode', () => {
     it('availableModes respects binding.live + liveCapable', async () => {
         // Both basic and perspective are liveCapable today, so a live binding
         // offers the same set as a one-shot binding.
-        const live = new TransformGizmo({} as never);
+        const live = new TransformGizmo({} as never, sess);
         await live.attach(makeBinding(true) as never);
         expect(live.availableModes().map((m) => m.tag)).toEqual([0, 1]);
         expect(live.availableModes().map((m) => m.label)).toEqual([
@@ -122,13 +124,13 @@ describe('mode switching via setMode', () => {
             'Perspective',
         ]);
 
-        const oneShot = new TransformGizmo({} as never);
+        const oneShot = new TransformGizmo({} as never, sess);
         await oneShot.attach(makeBinding(false) as never);
         expect(oneShot.availableModes().map((m) => m.tag)).toEqual([0, 1]);
     });
 
     it('isInside reflects the current bbox', async () => {
-        const gizmo = new TransformGizmo({} as never);
+        const gizmo = new TransformGizmo({} as never, sess);
         await gizmo.attach(makeBinding() as never);
         expect(gizmo.isInside(50, 40)).toBe(true);
         expect(gizmo.isInside(1000, 1000)).toBe(false);

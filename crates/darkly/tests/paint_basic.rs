@@ -60,10 +60,14 @@ fn render_single_dab_with_pressure(
         .unwrap_or_else(|| panic!("builtin brush `{brush_name}` not registered"));
 
     let mut graph = brush.metadata.graph.clone();
-    let term_id = darkly::brush::find_terminal(&graph)
+    let _term_id = darkly::brush::find_terminal(&graph)
         .unwrap_or_else(|err| panic!("brush `{brush_name}`: {err}"));
     graph
-        .set_port_default(term_id, "size", size_override)
+        .set_port_default(
+            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
+            "size",
+            size_override,
+        )
         .unwrap();
 
     let (device, queue) = shared_device();

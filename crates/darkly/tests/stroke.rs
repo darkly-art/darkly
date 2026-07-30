@@ -7,7 +7,7 @@
 use darkly::coord::CanvasRect;
 use darkly::gpu::atlas::CanvasFrame;
 use darkly::gpu::diff_rect::DiffRectPass;
-use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
+use darkly::gpu::paint_target::{GpuPaintTarget, PaintCommandEncoder, PaintPipelines};
 use darkly::gpu::region_store::RegionScratch;
 use darkly::gpu::test_utils::*;
 
@@ -71,7 +71,7 @@ fn gpu_stroke_paint_undo_redo() {
         darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
     );
 
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.composite_circle(
         &mut enc,
         &pipelines,
@@ -82,9 +82,9 @@ fn gpu_stroke_paint_undo_redo() {
         [255, 0, 0, 255],
         1.0,
     );
-    submit(&queue, enc);
+    enc.submit();
 
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.composite_circle(
         &mut enc,
         &pipelines,
@@ -95,7 +95,7 @@ fn gpu_stroke_paint_undo_redo() {
         [255, 0, 0, 255],
         1.0,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     // --- end_stroke: commit the stroke rect ---
     // Bounding rect: x=45..65, y=45..55 (approx) — use conservative rect.
@@ -293,7 +293,7 @@ fn gpu_stroke_on_mask_undo() {
         darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
     );
 
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.composite_circle(
         &mut enc,
         &pipelines,
@@ -304,7 +304,7 @@ fn gpu_stroke_on_mask_undo() {
         [0, 0, 0, 255],
         1.0,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     // end_stroke: commit.
     let mut enc = encoder(&device);
@@ -371,7 +371,7 @@ fn gpu_two_strokes_sequential_undo() {
         fmt,
         darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
     );
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.composite_circle(
         &mut enc,
         &pipelines,
@@ -382,7 +382,7 @@ fn gpu_two_strokes_sequential_undo() {
         [255, 0, 0, 255],
         1.0,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     let mut enc = encoder(&device);
     let (entry1, _req) = store.commit_region(
@@ -408,7 +408,7 @@ fn gpu_two_strokes_sequential_undo() {
         fmt,
         darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
     );
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.composite_circle(
         &mut enc,
         &pipelines,
@@ -419,7 +419,7 @@ fn gpu_two_strokes_sequential_undo() {
         [0, 0, 255, 255],
         1.0,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     let mut enc = encoder(&device);
     let (entry2, _req) = store.commit_region(
@@ -558,7 +558,7 @@ fn gpu_region_action_undo_stack() {
         fmt,
         darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
     );
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.composite_circle(
         &mut enc,
         &pipelines,
@@ -569,7 +569,7 @@ fn gpu_region_action_undo_stack() {
         [0, 255, 0, 255],
         1.0,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     let mut enc = encoder(&device);
     let (entry, _req) = store.commit_region(
@@ -674,7 +674,7 @@ fn gpu_cpu_undo_interleaved() {
         fmt,
         darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
     );
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.composite_circle(
         &mut enc,
         &pipelines,
@@ -685,7 +685,7 @@ fn gpu_cpu_undo_interleaved() {
         [255, 0, 0, 255],
         1.0,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     let mut enc = encoder(&device);
     let (entry, _req) = store.commit_region(
@@ -807,7 +807,7 @@ fn diff_rect_finds_painted_region() {
         fmt,
         darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
     );
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.composite_circle(
         &mut enc,
         &pipelines,
@@ -818,7 +818,7 @@ fn diff_rect_finds_painted_region() {
         [255, 0, 0, 255],
         1.0,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     // Dispatch the diff.
     let mut diff = DiffRectPass::new(&device);
@@ -888,7 +888,7 @@ fn diff_rect_undo_restores_offset_paint() {
         fmt,
         darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
     );
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.composite_circle(
         &mut enc,
         &pipelines,
@@ -899,7 +899,7 @@ fn diff_rect_undo_restores_offset_paint() {
         [255, 0, 0, 255],
         1.0,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     // Verify paint landed.
     let painted = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -1158,8 +1158,14 @@ fn negative_direction_grow_crosses_zero() {
             depth_or_array_layers: 1,
         },
     );
-    // Rebase the region_store scratch alongside the layer.
-    store.grow_scratch_preserving(&device, &mut enc, new_w, new_h, 256, 256);
+    // Rebase the region_store scratch alongside the layer: old extent at
+    // canvas (0, 0), new extent at (-256, -256) — the layer grew up-left.
+    store.grow_scratch_preserving(
+        &device,
+        &mut enc,
+        cr(0, 0, init_w, init_h),
+        cr(-256, -256, new_w, new_h),
+    );
     submit(&queue, enc);
 
     // After grow the engine widens snap.saved to the new canvas extent so
@@ -1189,7 +1195,7 @@ fn negative_direction_grow_crosses_zero() {
         darkly::coord::CanvasRect::from_xywh(-256, -256, new_w, new_h),
         darkly::coord::CanvasRect::from_xywh(0, 0, new_w, new_h),
     );
-    let mut enc = encoder(&device);
+    let mut enc = PaintCommandEncoder::new(&device, &queue, &pipelines, "test", 1);
     target.composite_circle(
         &mut enc,
         &pipelines,
@@ -1200,7 +1206,7 @@ fn negative_direction_grow_crosses_zero() {
         [0, 0, 255, 255],
         1.0,
     );
-    submit(&queue, enc);
+    enc.submit();
 
     // Commit a canvas rect that spans (-100, -100) → (100, 100). This is
     // the regression: pre-fix, this rect would not be representable in the

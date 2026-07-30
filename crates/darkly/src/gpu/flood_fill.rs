@@ -142,6 +142,15 @@ fn read_rgba(pixels: &[u8], width: u32, x: i32, y: i32) -> [u8; 4] {
 
 fn matches_rgba(pixels: &[u8], width: u32, x: i32, y: i32, seed: &[u8; 4], tol: i16) -> bool {
     let px = read_rgba(pixels, width, x, y);
+    // Fully transparent pixels compare by alpha alone: straight-alpha layer
+    // storage keeps ghost RGB under erased pixels (the erase blend zeroes only
+    // alpha), and invisible color must not form fill boundaries. Same rule as
+    // Krita's `KoColorSpace::differenceA` (plugins/color/lcms2engine/
+    // LcmsColorSpace.h) and GIMP's `pixel_difference`
+    // (app/core/gimppickable-contiguous-region.cc).
+    if px[3] == 0 || seed[3] == 0 {
+        return (px[3] as i16 - seed[3] as i16).abs() <= tol;
+    }
     (px[0] as i16 - seed[0] as i16).abs() <= tol
         && (px[1] as i16 - seed[1] as i16).abs() <= tol
         && (px[2] as i16 - seed[2] as i16).abs() <= tol
@@ -468,6 +477,46 @@ mod tests {
         assert_eq!(mask[0], 0); // (0,0) — red, not matching
         assert_eq!(mask[2], 255); // (2,0) — transparent
         assert_eq!(mask[15], 255); // (3,3) — transparent
+    }
+
+    /// REGRESSION: erasing a layer zeroes only alpha (straight-alpha storage),
+    /// leaving ghost RGB behind. The fill similarity test must not let that
+    /// invisible color form fill boundaries — fully transparent pixels compare
+    /// by alpha alone.
+    #[test]
+    fn flood_fill_rgba_ignores_ghost_rgb_under_full_transparency() {
+        // 4×4 image, alpha = 0 everywhere; left half holds red residue,
+        // right half blue residue.
+        let mut pixels = vec![0u8; 4 * 4 * 4];
+        for y in 0..4 {
+            for x in 0..4 {
+                let offset = (y * 4 + x) * 4;
+                if x < 2 {
+                    pixels[offset] = 255; // R
+                } else {
+                    pixels[offset + 2] = 255; // B
+                }
+            }
+        }
+
+        // Seed in the red-residue half; the fill must flood the whole image.
+        let mask = flood_fill_rgba(&pixels, 4, 4, 0, 0, 0);
+        assert!(
+            mask.iter().all(|&m| m == 255),
+            "ghost RGB under alpha=0 must not bound the fill; mask = {mask:?}"
+        );
+    }
+
+    /// An opaque seed never selects fully transparent pixels, even when the
+    /// transparent pixel carries identical RGB residue.
+    #[test]
+    fn flood_fill_rgba_opaque_seed_does_not_select_transparent() {
+        // 2×1 image: opaque red next to a fully transparent red ghost.
+        let pixels = vec![255, 0, 0, 255, 255, 0, 0, 0];
+
+        let mask = flood_fill_rgba(&pixels, 2, 1, 0, 0, 32);
+        assert_eq!(mask[0], 255, "opaque seed pixel is filled");
+        assert_eq!(mask[1], 0, "fully transparent neighbor must not be filled");
     }
 
     #[test]

@@ -76,22 +76,14 @@ pub fn register() -> BrushNodeRegistration {
             ports: vec![
                 PortDef::input("position", BrushWireType::Vec2)
                     .with_description("Canvas-pixel pen tip for this dab"),
-                PortDef::input("size_input", BrushWireType::Scalar)
+                PortDef::input("size", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
                     .with_natural_range(0.0, 1.0)
-                    .with_label("Size Input")
-                    .with_unit(UnitType::Percent)
-                    .with_description(
-                        "Per-touch size multiplier (wire pressure here for pressure-sensitive size).",
-                    ),
-                PortDef::input("size", BrushWireType::Scalar)
-                    .with_range(0.0, 4.0, 0.2)
                     .with_label("Size")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa6-solid:up-right-and-down-left-from-center")
-                    .exposed()
-                    .with_preview_value(0.1)
-                    .with_description("Overall brush size. A bigger brush blurs over a wider neighborhood."),
+                    .with_description(
+                        "Per-touch size multiplier (wire pressure here for pressure-sensitive size). Multiplies onto the brush's base size, owned by pen_input.",
+                    ),
                 PortDef::input("strength", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 0.05)
                     .with_natural_range(0.0, 1.0)
@@ -115,12 +107,11 @@ pub fn register() -> BrushNodeRegistration {
                          over the original.",
                     ),
                 PortDef::input("mask", BrushWireType::Scalar).with_description(
-                    "Per-fragment shape mask (typically wired from shape.mask)",
+                    "Per-fragment shape mask (typically wired from circle.mask)",
                 ),
                 PortDef::output("dab_size", BrushWireType::Vec2)
                     .with_description("Brush mark size in canvas pixels"),
             ],
-            params: &[],
             is_gpu: true,
             is_terminal: true,
             supports_erase: false,
@@ -149,7 +140,7 @@ impl ReadMirrorTerminal for BlurEvaluator {
         Some([half, half])
     }
 
-    fn pack_extra(&self, ctx: &EvalContext, gpu: &mut BrushGpuContext, node_id: u32, radius: f32) {
+    fn pack_extra(&self, ctx: &EvalContext, gpu: &mut BrushGpuContext, node_id: &str, radius: f32) {
         // Per-dab kernel radius, so a pressure-wired strength rides the
         // dab record. Inserted before `queue_dab` packs the record.
         let strength = ctx.input_f32("strength").clamp(0.0, 1.0);

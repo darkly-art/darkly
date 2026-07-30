@@ -11,6 +11,7 @@ pub mod display;
 pub mod edit;
 pub mod input;
 pub mod nav;
+pub mod recording;
 pub mod rendering;
 pub mod tools;
 pub mod ui;
@@ -29,6 +30,7 @@ pub fn registrations() -> Vec<SchemaSection> {
         edit::register(),
         input::register(),
         nav::register(),
+        recording::register(),
         rendering::register(),
         tools::register(),
         ui::register(),

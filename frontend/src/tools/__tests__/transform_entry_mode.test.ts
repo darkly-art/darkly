@@ -30,6 +30,8 @@ const { fakeApp } = vi.hoisted(() => {
     return {
         fakeApp: {
             engine,
+            session: null as unknown,
+            canvasEl: {} as unknown,
             requestFrame: vi.fn(),
             toolCursor: null as string | null,
             activeLayerId: 7 as number | null,
@@ -47,30 +49,33 @@ vi.mock('../../canvas/gpu_overlay', () => ({
     }),
 }));
 
-import { transformTool, transformPerspectiveTool, transformActiveMode } from '../transform.svelte';
-import { beginToolSession } from '../tool_session';
+import { transformTool, transformPerspectiveTool } from '../transform.svelte';
+import { SessionEngine } from '../tool_session';
 
 withApi(fakeApp.engine);
 
-const ctx = { canvasEl: {} as HTMLCanvasElement } as never;
+type TransformToolLike = { onActivate?(): void; activeModeTag(): number | null };
+const freeTool = transformTool.create(fakeApp as never) as unknown as TransformToolLike;
+const perspTool = transformPerspectiveTool.create(fakeApp as never) as unknown as TransformToolLike;
 
 // onActivate fires `void activate()` (not awaited), so let its microtasks drain.
-async function activate(tool: typeof transformTool) {
-    tool.onActivate?.(ctx);
+async function activate(tool: TransformToolLike) {
+    tool.onActivate?.();
     await new Promise((r) => setTimeout(r, 0));
 }
 
 describe('transform cluster entry modes', () => {
     beforeEach(() => {
         fakeApp.engine.post.mockClear();
-        // Tool code reaches the engine through the live session (see
-        // tool_session.ts); begin one over the fake engine.
-        beginToolSession(fakeApp.engine as never);
+        // Tool code reaches the engine through the instance's live session;
+        // begin one over the fake engine.
+        (fakeApp.session as SessionEngine | null)?.kill();
+        fakeApp.session = new SessionEngine(fakeApp.engine as never);
     });
 
     it('the free transform tool engages in mode 0 (adopts the document default)', async () => {
-        await activate(transformTool);
-        expect(transformActiveMode()).toBe(0);
+        await activate(freeTool);
+        expect(freeTool.activeModeTag()).toBe(0);
         // Free entry never force-pushes a mode (no downgrade of existing state).
         const pushed = fakeApp.engine.post.mock.calls.find(
             (c) => c[0] === 'update_void_transform',
@@ -79,8 +84,8 @@ describe('transform cluster entry modes', () => {
     });
 
     it('the perspective tool engages directly in perspective (mode 1)', async () => {
-        await activate(transformPerspectiveTool);
-        expect(transformActiveMode()).toBe(1);
+        await activate(perspTool);
+        expect(perspTool.activeModeTag()).toBe(1);
         // Entering perspective seeds + pushes the 9-float homography.
         const persp = fakeApp.engine.post.mock.calls.find(
             (c) => c[0] === 'update_void_transform' && c[1]?.transform?.mode === 'Perspective',

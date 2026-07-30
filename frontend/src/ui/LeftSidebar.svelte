@@ -1,7 +1,7 @@
 <script lang="ts">
     import { untrack } from 'svelte';
     import { app } from '../state/app.svelte';
-    import { toolRegistry, toolClusterRegistry, type Tool, type ToolCluster as ToolClusterDef } from '../tools/registry';
+    import { toolRegistry, toolClusterRegistry, type ToolDescriptor, type ToolCluster as ToolClusterDef } from '../tools/registry';
     import { tooltipForAction } from '../config/store.svelte';
     import ColorPicker from './ColorPicker.svelte';
     import HamburgerMenu from './HamburgerMenu.svelte';
@@ -44,7 +44,7 @@
     // cluster takes its slot at the position of its first member in
     // registration order. Subsequent members are skipped.
     type ToolbarItem =
-        | { kind: 'tool'; tool: Tool; group: string }
+        | { kind: 'tool'; tool: ToolDescriptor; group: string }
         | { kind: 'cluster'; cluster: ToolClusterDef; group: string };
     interface ToolbarGroup { items: ToolbarItem[] }
 
