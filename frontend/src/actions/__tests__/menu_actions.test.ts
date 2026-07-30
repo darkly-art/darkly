@@ -40,10 +40,23 @@ describe('menu action registrations', () => {
     });
 
     it('puts the selection commands under Select', () => {
-        for (const id of ['selectAll', 'clearSelection', 'invertSelection', 'clearSelectionContents']) {
+        for (const id of ['selectAll', 'clearSelection', 'invertSelection', 'clearSelectionContents', 'maskToSelection']) {
             const seg = actions.get(id)?.menuPath?.[0];
             expect(parseMenuSegment(seg ?? '').title, id).toBe('Select');
         }
+    });
+
+    it('slots maskToSelection into Select right after Invert', () => {
+        expect(actions.get('maskToSelection')?.menuPath).toEqual(['Select:35']);
+        expect(actions.get('maskToSelection')?.category).toBe('selection');
+    });
+
+    it('disables maskToSelection with a reason when the active layer has no mask', () => {
+        // No layer tree / active mask in this environment → activeMaskId is null.
+        const m2s = actions.get('maskToSelection')!;
+        expect(m2s.enabled?.()).not.toBe(true);
+        expect(actionEnablement(m2s)).toMatchObject({ enabled: false });
+        expect(actionEnablement(m2s).reason).toBe('No mask on the active layer');
     });
 
     it('labels clearSelection "Deselect"', () => {

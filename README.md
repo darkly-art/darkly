@@ -14,7 +14,7 @@
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
-Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophies. Harness the **[dark arts](#dark-arts)**, and craft a masterpiece that will strike existential envy into your graphic design professor. Madness isn't a bug, it's a feature.
+Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophies. Harness the **[dark arts](#dark-arts)**, and craft a chaotic masterpiece that will make your graphic design professor roll over in his grave. Madness isn't a bug, it's a feature.
 
 ### Darkly pledges to:
 

@@ -99,6 +99,12 @@ hotkeys:
   #     for Darkly's single-layer flatten (apply-mask / flatten-group)
   #     would mislead Krita users. If someone registers `flattenImage`
   #     as an action, that's where Ctrl+Shift+E belongs.
+  #   - maskToSelection: no editor ships a keyboard key (Krita/GIMP both
+  #     use empty/NULL accelerators); the canonical gesture is Ctrl/Cmd+
+  #     click on the mask thumbnail, bound as `maskThumb:$mod+click` in the
+  #     krita/photoshop overlays (the editors disagree on the chord, so it
+  #     can't live here per rule #3). Also reachable via the mask context
+  #     menu and the command palette.
 
 settings:
   # Canvas defaults.

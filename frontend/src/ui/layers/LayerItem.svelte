@@ -168,6 +168,7 @@
     let maskMenuItems = $derived<ContextMenuItem[]>([
         { label: maskEnabled ? 'Disable mask' : 'Enable mask', onclick: toggleMaskEnabled },
         { label: isMaskIsolated ? 'Hide mask' : 'Show mask', onclick: toggleShowMask },
+        { label: 'Mask to Selection', onclick: menuMaskToSelection },
         { label: 'Apply mask', disabled: !editable, onclick: applyMask },
         { label: 'Delete mask', disabled: !editable, onclick: removeMask },
     ]);
@@ -256,6 +257,15 @@
             app.engine.api.applyMask({ id: layer.id });
             onupdate();
         }
+    }
+
+    // Routes through the action (not a direct api call like the siblings
+    // above) so the mask-menu entry and the maskThumb $mod+click gesture
+    // share one home for the op.
+    function menuMaskToSelection() {
+        if (maskModifier === null) return;
+        actions.dispatch('maskToSelection', { maskId: maskModifier.id });
+        onupdate();
     }
 
     function removeMask() {

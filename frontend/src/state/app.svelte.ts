@@ -433,6 +433,34 @@ export class DarklyInstance {
         this.activeVeilIndex = null;
     }
 
+    /** The mask modifier id relevant to the active node, or null. Resolves
+     *  both cases: the active node is a host that owns a mask, and the
+     *  active node *is* a mask modifier — clicking the mask thumbnail makes
+     *  the mask the active node, and a mask has no mask child of its own.
+     *  Drives the `maskToSelection` enabled guard. */
+    get activeMaskId(): number | null {
+        const active = this.activeLayerId;
+        if (active === null) return null;
+        let found: number | null = null;
+        const walk = (nodes: any[]): boolean => {
+            for (const n of nodes) {
+                const mask = n.modifiers?.find((m: any) => m.kind === 'mask') ?? null;
+                if (n.id === active) {
+                    found = mask ? mask.id : null;
+                    return true;
+                }
+                if (mask && mask.id === active) {
+                    found = mask.id;
+                    return true;
+                }
+                if (Array.isArray(n.children) && walk(n.children)) return true;
+            }
+            return false;
+        };
+        walk(this.layerTree);
+        return found;
+    }
+
     /** Ctrl/Cmd-click router. Adds `id` if absent, removes if present.
      *  When removing the active id, demotes `activeLayerId` to the next
      *  remaining selected id in panel order (or null when empty). */
