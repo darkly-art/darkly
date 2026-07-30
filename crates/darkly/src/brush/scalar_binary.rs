@@ -37,8 +37,7 @@ impl BrushNodeEvaluator for ScalarBinaryOp {
         }
         let a = cctx.input("a").as_f32();
         let b = cctx.input("b").as_f32();
-        wgsl.outputs
-            .insert("result".into(), (self.wgsl)(&a, &b));
+        wgsl.outputs.insert("result".into(), (self.wgsl)(&a, &b));
         Ok(wgsl)
     }
 }
