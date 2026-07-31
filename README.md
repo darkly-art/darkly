@@ -16,7 +16,9 @@
 
 Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophies. Harness the **[dark arts](#dark-arts)**, and craft a chaotic masterpiece that will make your graphic design professor roll over in his grave. Madness isn't a bug, it's a feature.
 
-Darkly is a graphical editor for digital artists and painters. It's GPU-native, written in Rust, and runs on all platforms. It has Photoshop-like features - layers, masks, and a powerful brush engine, plus some unique features like native Blender integration. 
+Darkly is an open source Photoshop alternative written in Rust. Digital painters are first-class citizens.
+
+**Try the demo [here](https://demo.darkly.art).**
 
 ### Darkly pledges to:
 
@@ -24,8 +26,6 @@ Darkly is a graphical editor for digital artists and painters. It's GPU-native, 
 - ⚛️ Run offline and without a login
 - ☯️ Never [steal or license](https://x.com/SamSantala/status/1798292952219091042) your art
 - ☮️ Stay free and open source forever
-
-**Try the demo [here](https://demo.darkly.art).**
 
 https://github.com/user-attachments/assets/1fc0632d-5846-4c64-bac8-e39b0794b8b5
 
@@ -244,7 +244,11 @@ cargo add darkly
 
 See the [crate README](crates/darkly/README.md) for a runnable example, and the [API docs](https://docs.rs/darkly) for full details.
 
-## Use of AI
+## Contribution
+
+We love hackers as much as artists. Contributions are welcome! Please see [AGENTS.md](./AGENTS.md) for details.
+
+### Use of AI
 
 It's acceptable to use AI for this codebase, but careless vibe coding is **strictly forbidden**.
 
