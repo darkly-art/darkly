@@ -2684,12 +2684,23 @@ impl Compositor {
         }
     }
 
+    /// Compile the vector renderer's pipelines now (if not already), so the first
+    /// vector layer doesn't stall on the shader-compile cost. Building it compiles
+    /// Vello's full compute-pipeline set (a >1s one-time cost). Called when the
+    /// text tool is selected — the compile then overlaps the gap before the user
+    /// commits a text box, rather than blocking the frame that would show it.
+    /// Idempotent: a no-op once the renderer exists.
+    pub fn ensure_vector_renderer(&mut self, device: &wgpu::Device) {
+        self.vector_renderer
+            .get_or_insert_with(|| crate::gpu::vector_renderer::VectorRenderer::new(device));
+    }
+
     /// Rasterize every dirty vector layer's scene into its storage texture.
     /// Runs before the composite pass (in `render_offscreen`) so the blend
     /// walk samples up-to-date pixels. Lazily constructs the shared
-    /// [`VectorRenderer`] on first use. Vello submits its own command buffer
-    /// per layer; those submits are ordered before the compositor's, so GPU
-    /// ordering is preserved.
+    /// [`VectorRenderer`] on first use (see [`Self::ensure_vector_renderer`]).
+    /// Vello submits its own command buffer per layer; those submits are ordered
+    /// before the compositor's, so GPU ordering is preserved.
     fn realize_dirty_vector_layers(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let dirty: Vec<LayerId> = self
             .vector_scenes

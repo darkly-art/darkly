@@ -16,7 +16,7 @@
 
 Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophies. Harness the **[dark arts](#dark-arts)**, and craft a chaotic masterpiece that will make your graphic design professor roll over in his grave. Madness isn't a bug, it's a feature.
 
-Darkly is a Photoshop alternative built for digital painters. Its unique features help artists commune with their imagination.
+Darkly is a Photoshop alternative for digital artists, with unique features to help you commune with your imagination.
 
 **Try the demo [here](https://demo.darkly.art).**
 

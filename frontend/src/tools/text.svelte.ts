@@ -156,6 +156,11 @@ class TextTool extends ToolBase {
         const canvasEl = this.canvasEl;
         if (!canvasEl) return;
         this.gizmo = new TextBoxGizmo(canvasEl);
+        // Compile the vector renderer's GPU pipelines now (Vello's one-time
+        // shader compile is >1s). Selecting the tool is the earliest signal text
+        // is imminent, so the compile overlaps the gap before the first click
+        // instead of stalling the frame that would show the new box.
+        this.inst.engine?.api.warmVectorRenderer();
         // Pick up the persisted default size if the user configured one.
         const cfgSize = config.get('tools.textSize');
         if (typeof cfgSize === 'number') textSession.size = cfgSize;

@@ -158,6 +158,16 @@ impl DarklyEngine {
         self.compositor.set_pixel_filter(&self.gpu.queue, mode);
     }
 
+    /// Compile the vector renderer's GPU pipelines ahead of first use, so the
+    /// first text (or path) object doesn't stall the frame that would show it on
+    /// Vello's one-time shader compile. The frontend fires this when the text
+    /// tool is selected — the compile overlaps the gap before the user commits a
+    /// box. Idempotent: a no-op once the renderer is warm.
+    #[handler]
+    pub fn warm_vector_renderer(&mut self) {
+        self.compositor.ensure_vector_renderer(&self.gpu.device);
+    }
+
     /// Start an async color pick at canvas coordinates.
     ///
     /// `source` selects which surface to sample. If a `Layer` source can't be

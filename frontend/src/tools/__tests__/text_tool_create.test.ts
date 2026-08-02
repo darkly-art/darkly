@@ -30,6 +30,7 @@ vi.mock('../../config/store.svelte', () => ({ config: { get: () => undefined } }
 import { textTool } from '../text.svelte';
 
 type TextToolLike = {
+    onActivate(): Promise<void>;
     onPointerDown(e: PointerEvent, cx: number, cy: number): Promise<void>;
     onPointerMove(e: PointerEvent, cx: number, cy: number): void;
     onPointerUp(e: PointerEvent): void | Promise<void>;
@@ -58,10 +59,22 @@ beforeEach(() => {
     fakeApp.requestFrame.mockClear();
     fakeApp.refreshLayerTree.mockClear();
     fakeApp.engine = mockEngine();
+    fakeApp.canvasEl = null;
     fakeApp.activeLayerId = null;
     fakeApp.activeNode = null;
     tool.editing = null;
     tool.focusObject = null;
+});
+
+describe('text tool warms the vector renderer on activation', () => {
+    it('activating the tool compiles the Vello pipelines ahead of first use', async () => {
+        // Selecting the text tool must warm the renderer so the first box doesn't
+        // stall on Vello's >1s one-time shader compile.
+        fakeApp.canvasEl = {};
+        await tool.onActivate();
+        const engine = fakeApp.engine as ReturnType<typeof mockEngine>;
+        expect(engine.post).toHaveBeenCalledWith('warm_vector_renderer');
+    });
 });
 
 describe('text tool creates the object itself (panel-independent)', () => {
