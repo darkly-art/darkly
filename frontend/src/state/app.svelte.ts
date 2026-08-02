@@ -433,6 +433,28 @@ export class DarklyInstance {
         this.activeVeilIndex = null;
     }
 
+    /** The layer-tree node with `id`, searched depth-first through the group
+     *  hierarchy, or null if absent. The single home for "resolve a node by id"
+     *  so consumers (tools, panels) never re-walk the tree themselves. */
+    nodeById(id: number): any | null {
+        const walk = (nodes: any[]): any | null => {
+            for (const n of nodes) {
+                if (n.id === id) return n;
+                if (Array.isArray(n.children)) {
+                    const found = walk(n.children);
+                    if (found) return found;
+                }
+            }
+            return null;
+        };
+        return walk(this.layerTree);
+    }
+
+    /** The active layer's tree node, or null when nothing is selected. */
+    get activeNode(): any | null {
+        return this.activeLayerId === null ? null : this.nodeById(this.activeLayerId);
+    }
+
     /** The mask modifier id relevant to the active node, or null. Resolves
      *  both cases: the active node is a host that owns a mask, and the
      *  active node *is* a mask modifier — clicking the mask thumbnail makes

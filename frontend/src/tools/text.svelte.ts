@@ -1,7 +1,7 @@
 import { getActiveInstance, type DarklyInstance } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
 import { OverlayBuilder } from '../canvas/gpu_overlay';
-import { flushTextContent } from './text_editor';
+import { createTextFromPending, flushTextContent, type FullStyle, type Rgba } from './text_editor';
 import { TextBoxGizmo } from './text_box_gizmo';
 import { ToolBase, type ToolDescriptor } from './registry';
 
@@ -31,15 +31,33 @@ class TextSession {
 
 export const textSession = new TextSession();
 
+/** Content a new text object is seeded with — shown selected in the editor so
+ *  the first keystroke replaces it. */
+const SEED_TEXT = 'text';
+
+/** The current creation style, baked from the app-global creation defaults. */
+function currentStyle(): FullStyle {
+    return {
+        font_family: textSession.fontFamily,
+        size: textSession.size,
+        variations: { ...textSession.variations },
+        letter_spacing: textSession.letterSpacing,
+        word_spacing: textSession.wordSpacing,
+        line_height: textSession.lineHeight,
+        italic: textSession.italic,
+        align: textSession.align,
+    };
+}
+
 /** The object whose box gizmo is shown, keyed by layer + object. */
 export interface TextEditing {
     layerId: number;
     objectId: number;
 }
 
-/** A click/drag on empty canvas handed to the panel, which creates the text
- *  object there immediately (seeded "text", selected). `box` is set when it was
- *  drag-created (area text). */
+/** A click/drag on empty canvas: the origin, the anchor layer to insert above,
+ *  and `box` (`[w, h]`) when it was drag-created (area text). Consumed
+ *  synchronously by the tool to create the text object. */
 export interface TextPlacement {
     x: number;
     y: number;
@@ -54,26 +72,28 @@ const DRAG_THRESHOLD = 4;
  * Text tool — per-instance. Chooses what the properties panel edits and drives
  * the on-canvas box; the text controls live in `TextProperties.svelte`.
  *
- * The per-document edit state lives here as reactive fields (read by the panel
- * via {@link focusedTextTool}):
+ * Creating a text object is a session→document operation, so the tool does it
+ * directly on pointer-up (via {@link createTextFromPending}) — it does not depend
+ * on any properties panel being mounted. The per-document edit state lives here
+ * as reactive fields (read by the panel via {@link focusedTextTool}):
  *   - `focusObject` asks the panel to focus a specific object's editor next
  *     render (set when a text-tool click hits an existing object, or on create).
  *   - `editing` is the object whose box gizmo is shown — the one just clicked or
  *     created. The box follows the active layer (see `onFrame`).
- *   - `placement` is a pending create the panel consumes.
  */
 class TextTool extends ToolBase {
     /** Object the panel should focus next render, or null. */
     focusObject = $state<number | null>(null);
     /** Object whose box gizmo is drawn on the canvas, or null. */
     editing = $state<TextEditing | null>(null);
-    /** Where the panel should create the next text object (consumed on create),
-     *  or null when there's no pending placement. */
-    placement = $state<TextPlacement | null>(null);
 
     /** The box gizmo for the object currently being edited, created on activate,
      *  torn down on deactivate. */
     private gizmo: TextBoxGizmo | null = null;
+
+    /** Reentrancy guard: true while an async create is in flight, so a second
+     *  pointer-up mid-await can't create a duplicate object. */
+    private busy = false;
 
     /** In-flight drag-to-create-a-box: start + current canvas position. */
     private creating:
@@ -95,6 +115,41 @@ class TextTool extends ToolBase {
     private clearCreateBand(): void {
         this.inst.engine?.api.clearOverlay();
         this.inst.requestFrame();
+    }
+
+    private foregroundTuple(): Rgba {
+        const c = this.inst.foreground;
+        return [c.r, c.g, c.b, c.a];
+    }
+
+    /** Create a text object for `placement` and select/focus it. A vector layer
+     *  active → the object is added to it (a vector layer owns many objects);
+     *  otherwise a new text layer is born. Seeded with "text" so the word appears
+     *  at once and the first keystroke replaces it. */
+    private async createText(placement: TextPlacement): Promise<void> {
+        if (this.busy || !this.inst.engine) return;
+        this.busy = true;
+        try {
+            const active = this.inst.activeNode;
+            const target = active?.type === 'vector' ? active.id : null;
+            await createTextFromPending(
+                this.inst,
+                placement,
+                SEED_TEXT,
+                currentStyle(),
+                this.foregroundTuple(),
+                () => SEED_TEXT,
+                target,
+                (layerId, objectId) => {
+                    // Show the box gizmo on the new object (drives `onFrame`) and
+                    // ask the panel — if/when mounted — to focus its editor.
+                    this.editing = { layerId, objectId };
+                    this.focusObject = objectId;
+                },
+            );
+        } finally {
+            this.busy = false;
+        }
     }
 
     async onActivate(): Promise<void> {
@@ -123,10 +178,8 @@ class TextTool extends ToolBase {
 
     onDeactivate(): void {
         // Flush any coalesced keystroke before leaving so the last character
-        // isn't dropped, then drop transient state (a never-typed placement
-        // discards nothing — no layer was created).
+        // isn't dropped, then drop transient edit/box state.
         flushTextContent();
-        this.placement = null;
         this.editing = null;
         this.creating = null;
         this.gizmo?.detach();
@@ -162,7 +215,6 @@ class TextTool extends ToolBase {
                 this.inst.selectLayer(layerId);
                 this.focusObject = hit.object;
                 this.editing = { layerId, objectId: hit.object };
-                this.placement = null;
                 await this.gizmo?.attach(layerId, hit.object);
                 return;
             }
@@ -190,7 +242,7 @@ class TextTool extends ToolBase {
         this.gizmo?.pointerMove(cx, cy);
     }
 
-    onPointerUp(): void {
+    async onPointerUp(): Promise<void> {
         if (this.gizmo?.dragging) {
             this.gizmo.pointerUp();
             return;
@@ -201,10 +253,9 @@ class TextTool extends ToolBase {
         this.clearCreateBand();
         const w = Math.abs(c.cx - c.sx);
         const h = Math.abs(c.cy - c.sy);
-        // Hand the placement to the panel, which creates the text object there.
-        // A drag past the threshold makes it an area-text box; a click makes it
-        // point text.
-        this.placement =
+        // Create the object where the gesture ended. A drag past the threshold
+        // makes it an area-text box; a click makes point text.
+        const placement: TextPlacement =
             w > DRAG_THRESHOLD && h > DRAG_THRESHOLD
                 ? {
                       x: Math.min(c.sx, c.cx),
@@ -213,6 +264,7 @@ class TextTool extends ToolBase {
                       box: [w, h],
                   }
                 : { x: c.sx, y: c.sy, anchorLayerId: c.anchorLayerId, box: null };
+        await this.createText(placement);
     }
 
     onKeyDown(e: KeyboardEvent): boolean {
@@ -220,10 +272,6 @@ class TextTool extends ToolBase {
         if (this.creating) {
             this.creating = null;
             this.clearCreateBand();
-            return true;
-        }
-        if (this.placement) {
-            this.placement = null;
             return true;
         }
         if (this.editing) {
@@ -254,12 +302,11 @@ class TextTool extends ToolBase {
     }
 
     dismissOverlay(): void {
-        // Unhandled keypress on the canvas: flush the coalesced keystroke and
-        // drop a pending placement. The box gizmo is left to `onFrame` (it
-        // detaches on a layer switch), so a freshly-created edit isn't wiped by
-        // the same-click layer change that selects its new layer.
+        // Unhandled keypress on the canvas: flush the coalesced keystroke. The
+        // box gizmo is left to `onFrame` (it detaches on a layer switch), so a
+        // freshly-created edit isn't wiped by the same-click layer change that
+        // selects its new layer.
         flushTextContent();
-        this.placement = null;
     }
 }
 
