@@ -1519,9 +1519,9 @@ fn noise_dab_space_emits_oriented_frame_and_variation() {
         "Dab basis must rotate by the rotation input"
     );
     assert!(
-        w.contains("fbm_offset2(u32(max(") && w.contains("* 4096.0), 16.000000)"),
+        w.contains("fbm_offset2(u32(max(") && w.contains("* 4096.0), 128.000000)"),
         "Dab mode must fold the per-dab variation offset via the 2D hash \
-         bounded to the noise tile period (16)"
+         bounded to the noise field period (FIELD_SPAN = 128)"
     );
     assert!(
         !w.contains("target_pos / 32.000000"),

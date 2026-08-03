@@ -189,7 +189,7 @@ impl BrushNodeEvaluator for NoiseEvaluator {
             scale_with_brush,
             &rotation,
             &variation,
-            BakeSpec::TILE_SPAN,
+            BakeSpec::FIELD_SPAN,
             &cctx.ident("noise"),
         );
         // `seed` is a compile-time integer in both paths (a wired `Int`
@@ -229,12 +229,13 @@ impl BrushNodeEvaluator for NoiseEvaluator {
             };
             let resolution = BakeSpec::resolution_for_octaves(octaves);
 
-            // The tile packs `TILE_SPAN` field units across its `[0,1)` uv, so
-            // the sample coordinate is divided by `TILE_SPAN` (and wrapped):
+            // The tile packs `FIELD_SPAN` field units across its `[0,1)` uv, so
+            // the sample coordinate is divided by `FIELD_SPAN` (and wrapped):
             // feature size then matches the live path, and the field repeats
-            // once per `TILE_SPAN` field units — the seam lever (§ plan).
+            // once per `FIELD_SPAN` field units — a period large enough that the
+            // repeat is not visible within a normal view.
             let mut body = format!("{frame_pre}    let {var}_p = {coord};\n");
-            let uv = format!("fract(({var}_p) / {:.1})", BakeSpec::TILE_SPAN);
+            let uv = format!("fract(({var}_p) / {:.1})", BakeSpec::FIELD_SPAN);
             if want_value {
                 let slot = cctx.request_source(ResolvedSource::Baked(BakeSpec {
                     kind,
@@ -276,7 +277,7 @@ impl BrushNodeEvaluator for NoiseEvaluator {
         // then let each consumed output reference `{var}_p`. The live field
         // uses the same tileable `fbm_tile` and the same period the baked path
         // does, so a wired-param brush and a static one look identical.
-        let period = BakeSpec::TILE_SPAN as i32;
+        let period = BakeSpec::FIELD_SPAN as i32;
         let mut body = format!("{frame_pre}    let {var}_p = {coord};\n");
 
         if want_value {
