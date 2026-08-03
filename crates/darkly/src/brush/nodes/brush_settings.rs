@@ -103,6 +103,7 @@ pub fn register() -> BrushNodeRegistration {
                 // it doesn't redraw the editor preview / cursor halo.
                 PortDef::input("size", BrushWireType::Scalar)
                     .with_range(0.0, 4.0, DEFAULT_BASE_SIZE)
+                    .with_natural_range(0.0, 4.0)
                     .with_unit(UnitType::Percent)
                     .with_icon("fa6-solid:up-right-and-down-left-from-center")
                     .with_label("Size")
@@ -218,6 +219,23 @@ mod tests {
         let mut graph = Graph::<BrushWireType>::new();
         graph.add_node(TYPE_ID, ports);
         graph
+    }
+
+    #[test]
+    fn size_source_declares_natural_range_for_wire_remap() {
+        // Without a `natural_range`, wiring `size` into a ranged input (e.g.
+        // `noise.scale`, natural range 1..512 px) skips the wire-boundary
+        // affine remap and dumps the raw 0..4 base size into a pixel field —
+        // a sub-pixel scale that aliases into noise. The natural range is what
+        // opts `size` into the same remap every `pen_input` source uses.
+        let reg = register();
+        let size = reg
+            .node
+            .ports
+            .iter()
+            .find(|p| p.name == "size" && p.dir == PortDir::Input)
+            .expect("size port present");
+        assert_eq!(size.natural_range, Some((0.0, 4.0)));
     }
 
     #[test]
