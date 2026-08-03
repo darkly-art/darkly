@@ -189,6 +189,7 @@ impl BrushNodeEvaluator for NoiseEvaluator {
             scale_with_brush,
             &rotation,
             &variation,
+            BakeSpec::TILE_SPAN,
             &cctx.ident("noise"),
         );
         // `seed` is a compile-time integer in both paths (a wired `Int`

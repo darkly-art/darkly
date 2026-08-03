@@ -54,12 +54,20 @@ impl SampleFrame {
 /// literal when the scale input is unwired, or an upstream WGSL expression
 /// when it's driven per-dab. It is interpolated parenthesized so a wired
 /// expression composes correctly inside the divide.
+///
+/// `period` is the repeat period of the field the caller samples, in the same
+/// units as `coord` (Dab space only). The per-dab decorrelation offset is a
+/// 2D hash of `variation` scattered over `[0, period)²`, so it lands on a fresh
+/// phase of the field per dab without resonating with its repeat. Callers pass
+/// their field's period (e.g. the baked-tile span for `noise`, `1.0` for an
+/// `fract`-wrapped texture). Ignored for Canvas.
 pub fn frame_sample_coord_expr(
     space: SampleFrame,
     scale_expr: &str,
     scale_with_brush: bool,
     rotation_expr: &str,
     variation_expr: &str,
+    period: f32,
     ident: &str,
 ) -> (String, String) {
     match space {
@@ -78,10 +86,16 @@ pub fn frame_sample_coord_expr(
                  \x20      -local_uv.x * {ident}_sa + local_uv.y * {ident}_ca,\n\
                  \x20   );\n"
             );
-            // `variation` walks overlapping dabs to disjoint regions of the
-            // continuous field; the large stride keeps adjacent values (from
-            // `random`) landing in uncorrelated regions.
-            let offset = format!("vec2<f32>(({variation_expr}) * 64.0, ({variation_expr}) * 64.0)");
+            // Per-dab 2D decorrelation: hash `variation` into two independent
+            // components (via `fbm_offset2`, from the always-prepended
+            // `fbm2d.wgsl`) so overlapping dabs sample uncorrelated regions of
+            // the periodic field, bounded to one `period` so it can't resonate
+            // with the field's repeat. `max(.., 0.0)` keeps the `u32` cast
+            // well-defined for any wired input.
+            preamble.push_str(&format!(
+                "    let {ident}_off = fbm_offset2(u32(max(({variation_expr}), 0.0) * 4096.0), {period:.6});\n"
+            ));
+            let offset = format!("{ident}_off");
             let coord = if scale_with_brush {
                 // Stamp-relative frequency: the unit-disc offset spans ~[-1,1]
                 // across the stamp at any brush size, so the same pattern maps
@@ -114,6 +128,7 @@ mod tests {
             true,
             "d.n1_rotation",
             "d.n2_variation",
+            16.0,
             "noise_3",
         );
         assert!(pre.is_empty(), "Canvas emits no preamble");
@@ -127,8 +142,15 @@ mod tests {
 
     #[test]
     fn dab_scale_with_brush_normalizes_unit_disc() {
-        let (pre, coord) =
-            frame_sample_coord_expr(SampleFrame::Dab, "8.000000", true, "1.5", "0.0", "noise_3");
+        let (pre, coord) = frame_sample_coord_expr(
+            SampleFrame::Dab,
+            "8.000000",
+            true,
+            "1.5",
+            "0.0",
+            16.0,
+            "noise_3",
+        );
         // Oriented basis rotates local_uv by the rotation expression.
         assert!(pre.contains("cos(1.5)"));
         assert!(pre.contains("sin(1.5)"));
@@ -143,24 +165,43 @@ mod tests {
 
     #[test]
     fn dab_pixel_locked_reconstructs_radius() {
-        let (pre, coord) =
-            frame_sample_coord_expr(SampleFrame::Dab, "8.000000", false, "0.0", "0.0", "img_5");
+        let (pre, coord) = frame_sample_coord_expr(
+            SampleFrame::Dab,
+            "8.000000",
+            false,
+            "0.0",
+            "0.0",
+            1.0,
+            "img_5",
+        );
         // scale_with_brush=false multiplies back to oriented dab-pixels.
         assert!(pre.contains("let img_5_radius_px = 1.0 / d.inv_radius_target_px;"));
         assert!(coord.contains("(img_5_dab_local * img_5_radius_px) / (8.000000)"));
     }
 
     #[test]
-    fn dab_folds_variation_offset() {
-        let (_pre, coord) = frame_sample_coord_expr(
+    fn dab_variation_offset_is_2d_and_period_bounded() {
+        let (pre, coord) = frame_sample_coord_expr(
             SampleFrame::Dab,
             "8.000000",
             true,
             "0.0",
             "d.n2_variation",
+            16.0,
             "noise_3",
         );
-        assert!(coord.contains("vec2<f32>((d.n2_variation) * 64.0, (d.n2_variation) * 64.0)"));
+        // Defects 1+2: the offset is a 2D hash of `variation` bounded to the
+        // caller's field period (16) — not the same scalar on both axes, and
+        // not a `* 64.0` stride that resonates with period 16. `fbm_offset2`
+        // (fbm2d.wgsl) draws x and y from two different PCG inputs by
+        // construction, so referencing it *is* the 2D guarantee.
+        assert!(pre.contains(
+            "let noise_3_off = fbm_offset2(u32(max((d.n2_variation), 0.0) * 4096.0), 16.000000)"
+        ));
+        assert!(coord.contains("+ noise_3_off"));
+        assert!(!coord.contains("* 64.0"));
+        // Old diagonal form must be gone.
+        assert!(!coord.contains("d.n2_variation) * 64.0, (d.n2_variation)"));
     }
 
     #[test]

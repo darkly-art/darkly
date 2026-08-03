@@ -133,12 +133,16 @@ impl BrushNodeEvaluator for ImageEvaluator {
         let scale_with_brush = cctx.input("scale_with_brush").boolean();
         let rotation = cctx.input("rotation").as_f32();
         let variation = cctx.input("variation").as_f32();
+        // The sampled uv is `fract`-wrapped against a repeat sampler, so the
+        // texture is effectively periodic with period 1.0 — the per-dab
+        // decorrelation offset must span exactly one period.
         let (frame_pre, coord) = frame_sample_coord_expr(
             space,
             &scale_expr,
             scale_with_brush,
             &rotation,
             &variation,
+            1.0,
             &cctx.ident("img"),
         );
 

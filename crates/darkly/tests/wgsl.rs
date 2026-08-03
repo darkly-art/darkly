@@ -1491,8 +1491,9 @@ fn noise_octaves_wired_emits_i32_clamp_and_validates() {
 #[test]
 fn noise_dab_space_emits_oriented_frame_and_variation() {
     // Dab mode must rotate the unit-disc offset by the `rotation` input and
-    // fold the `variation` offset. With both inputs unwired they fall to
-    // literal defaults (0), so the basis and offset still appear.
+    // fold the per-dab `variation` offset (a 2D hash of `variation` bounded to
+    // the field period). With both inputs unwired they fall to literal defaults
+    // (0), so the basis and offset still appear.
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
@@ -1518,8 +1519,9 @@ fn noise_dab_space_emits_oriented_frame_and_variation() {
         "Dab basis must rotate by the rotation input"
     );
     assert!(
-        w.contains("* 64.0"),
-        "Dab mode must fold the per-dab variation offset"
+        w.contains("fbm_offset2(u32(max(") && w.contains("* 4096.0), 16.000000)"),
+        "Dab mode must fold the per-dab variation offset via the 2D hash \
+         bounded to the noise tile period (16)"
     );
     assert!(
         !w.contains("target_pos / 32.000000"),
