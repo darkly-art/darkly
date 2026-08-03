@@ -1091,6 +1091,10 @@ export class DarklyInstance {
 
     private _framePending = false;
 
+    /** Handle of the rAF scheduled by {@link requestFrame}, so {@link renderNow}
+     *  can cancel a still-pending frame before rendering synchronously. */
+    private _frameHandle = 0;
+
     /**
      * Number of active UI interactions (panel drags, slider adjustments,
      * etc.) that should suppress continuous animation rendering.  While
@@ -1170,122 +1174,149 @@ export class DarklyInstance {
     requestFrame() {
         if (this._framePending) return;
         this._framePending = true;
-        requestAnimationFrame((ts) => {
+        this._frameHandle = requestAnimationFrame((ts) => {
             this._framePending = false;
-            const engine = this.engine;
-            if (!engine) return;
-            // Push the latest external frames (webcam / screenshare / Blender
-            // stream) into their void input textures BEFORE render — render
-            // reads from those textures during composite, so a later upload
-            // would lag by a frame.
-            //
-            // The frame count we pass to `tick` is the value the compositor's
-            // master counter *will* hold once render increments it (inside
-            // `update_animations`): one past the count the *previous* render
-            // returned. Anticipating the increment keeps JS-side divisor gates
-            // phase-locked with the Rust-side veil / overlay / void divisors
-            // that check the post-increment value — so a camera `divisor=N`
-            // fires on the same rAF as a veil `divisor=N`, not one off. (We
-            // can't read `frame_count` directly anymore — it would be a third
-            // competing engine borrow; render returns it on the state mirror.)
-            const nextFrameCount = (this.engineState?.frameCount ?? 0) + 1;
-            for (const src of this.streamSources.values()) {
-                src.tick(nextFrameCount);
-            }
+            this.runFrame(ts / 1000.0);
+        });
+    }
 
-            // The ONE engine borrow per frame: drains the request FIFO (which
-            // resolves any pending `send`/`post` promises) then composites. A
-            // re-entrant render reached via the event pump returns `busy` — the
-            // outer render handles everything, so we bail without rescheduling.
-            const frame = engine.render(ts / 1000.0);
-            if (frame.busy) return;
+    /** Drive one full frame synchronously in the current task — the synchronous
+     *  counterpart to {@link requestFrame}. The canvas-resize path needs this:
+     *  Firefox's zero-copy WebGPU present stalls the GPU process when a present
+     *  straddles a swapchain reconfigure, so the just-enqueued `resize`
+     *  (→ `surface.configure`) and the present must run in the same JS task as
+     *  the `canvas.width`/`canvas.height` write, with no browser turn between. */
+    renderNow(ts: number = performance.now() / 1000) {
+        // A normal rAF may already be queued; running now makes it redundant.
+        // Cancel it so we don't render twice and — critically — so `_framePending`
+        // is not left set, which would make the next `requestFrame` a silent no-op.
+        if (this._framePending) {
+            cancelAnimationFrame(this._frameHandle);
+            this._framePending = false;
+        }
+        this.runFrame(ts);
+    }
 
-            // Refresh the synchronously-readable engine-state mirror from
-            // render's returned snapshot — no per-frame query; it's a downhill
-            // projection of the borrow render already held this frame. This one
-            // assignment updates everything the UI caches: frame/thumbnail
-            // counters (thumbnail `$derived`s re-run when `thumbnailVersion`
-            // changes) and document bools.
-            if (frame.state) this.engineState = frame.state;
+    /** One frame's work: drain the request FIFO + composite (the single engine
+     *  borrow), refresh the state mirror, run per-frame tool/pointer hooks, poll
+     *  async readbacks, and self-schedule the animation loop. Shared by the
+     *  deferred ({@link requestFrame}) and synchronous ({@link renderNow}) entry
+     *  points; `ts` is in seconds. Must not touch `_framePending` — the rAF path
+     *  owns clearing it at the seam it scheduled. */
+    private runFrame(ts: number) {
+        const engine = this.engine;
+        if (!engine) return;
+        // Push the latest external frames (webcam / screenshare / Blender
+        // stream) into their void input textures BEFORE render — render
+        // reads from those textures during composite, so a later upload
+        // would lag by a frame.
+        //
+        // The frame count we pass to `tick` is the value the compositor's
+        // master counter *will* hold once render increments it (inside
+        // `update_animations`): one past the count the *previous* render
+        // returned. Anticipating the increment keeps JS-side divisor gates
+        // phase-locked with the Rust-side veil / overlay / void divisors
+        // that check the post-increment value — so a camera `divisor=N`
+        // fires on the same rAF as a veil `divisor=N`, not one off. (We
+        // can't read `frame_count` directly anymore — it would be a third
+        // competing engine borrow; render returns it on the state mirror.)
+        const nextFrameCount = (this.engineState?.frameCount ?? 0) + 1;
+        for (const src of this.streamSources.values()) {
+            src.tick(nextFrameCount);
+        }
 
-            // Per-frame tool hook — async state sync (e.g. GPU readback
-            // completion). The instance's OWN tool runs against its OWN session,
-            // so a background tab's frame drives its own tool, never the focused
-            // one. Wrapped so a hook whose engine op was cancelled by a session
-            // change mid-await settles cleanly (see tool_session.ts).
-            void runHook(this.tool(this.activeToolId)?.onFrame?.());
+        // The ONE engine borrow per frame: drains the request FIFO (which
+        // resolves any pending `send`/`post` promises) then composites. A
+        // re-entrant render reached via the event pump returns `busy` — the
+        // outer render handles everything, so we bail without rescheduling.
+        const frame = engine.render(ts);
+        if (frame.busy) return;
 
-            // Drain completed process-recording captures to the encoder
-            // worker. No-op unless this tab's recorder is live.
-            processRecording.pollFrame(this);
+        // Refresh the synchronously-readable engine-state mirror from
+        // render's returned snapshot — no per-frame query; it's a downhill
+        // projection of the borrow render already held this frame. This one
+        // assignment updates everything the UI caches: frame/thumbnail
+        // counters (thumbnail `$derived`s re-run when `thumbnailVersion`
+        // changes) and document bools.
+        if (frame.state) this.engineState = frame.state;
 
-            // Pointer singletons tick with the focused canvas's frame — there is
-            // one pointer, and these read/write the global `app` (the focused
-            // instance). A background tab's frame must not drive them.
-            if (getActiveInstance() === this) {
-                // Global color-pick poll — drives both the color-picker tool and
-                // the modifier-held `sampleColor` chord. Runs regardless of
-                // active tool so a Ctrl-drag started in (e.g.) the brush tool
-                // completes.
-                pollPick();
-                // Refresh the color-picker cursor against the latest foreground
-                // committed by `pollPick`. Cheap when nothing changed.
-                tickColorPickerCursor();
-                // Refresh the clone set-source cursor — re-queries "needs source"
-                // on brush change and shows/hides the crosshair. Cheap when
-                // nothing changed (memo guards).
-                tickCloneSourceCursor();
-            }
+        // Per-frame tool hook — async state sync (e.g. GPU readback
+        // completion). The instance's OWN tool runs against its OWN session,
+        // so a background tab's frame drives its own tool, never the focused
+        // one. Wrapped so a hook whose engine op was cancelled by a session
+        // change mid-await settles cleanly (see tool_session.ts).
+        void runHook(this.tool(this.activeToolId)?.onFrame?.());
 
-            // Check for completed async copy/cut readback.
-            if (this._copyCallback) {
-                engine.api.pollCopyResult().then((result) => {
-                    if (result && this._copyCallback) {
-                        const cb = this._copyCallback;
-                        this._copyCallback = null;
-                        cb(result);
+        // Drain completed process-recording captures to the encoder
+        // worker. No-op unless this tab's recorder is live.
+        processRecording.pollFrame(this);
+
+        // Pointer singletons tick with the focused canvas's frame — there is
+        // one pointer, and these read/write the global `app` (the focused
+        // instance). A background tab's frame must not drive them.
+        if (getActiveInstance() === this) {
+            // Global color-pick poll — drives both the color-picker tool and
+            // the modifier-held `sampleColor` chord. Runs regardless of
+            // active tool so a Ctrl-drag started in (e.g.) the brush tool
+            // completes.
+            pollPick();
+            // Refresh the color-picker cursor against the latest foreground
+            // committed by `pollPick`. Cheap when nothing changed.
+            tickColorPickerCursor();
+            // Refresh the clone set-source cursor — re-queries "needs source"
+            // on brush change and shows/hides the crosshair. Cheap when
+            // nothing changed (memo guards).
+            tickCloneSourceCursor();
+        }
+
+        // Check for completed async copy/cut readback.
+        if (this._copyCallback) {
+            engine.api.pollCopyResult().then((result) => {
+                if (result && this._copyCallback) {
+                    const cb = this._copyCallback;
+                    this._copyCallback = null;
+                    cb(result);
+                }
+            });
+        }
+
+        // Check for completed async export readback.
+        if (this._exportCallback) {
+            engine
+                .api.pollExportResult()
+                .then((result) => {
+                    if (result && this._exportCallback) {
+                        const cb = this._exportCallback;
+                        this._exportCallback = null;
+                        cb({ width: result.width, height: result.height, rgba: result.bytes });
                     }
                 });
-            }
+        }
 
-            // Check for completed async export readback.
-            if (this._exportCallback) {
-                engine
-                    .api.pollExportResult()
-                    .then((result) => {
-                        if (result && this._exportCallback) {
-                            const cb = this._exportCallback;
-                            this._exportCallback = null;
-                            cb({ width: result.width, height: result.height, rgba: result.bytes });
-                        }
-                    });
-            }
+        // Check for completed async `.darkly` save readbacks. The bundle's
+        // byte blobs arrive concatenated in `bytes`; slice them back out
+        // into the per-blob shape `saveDocument.ts` expects.
+        if (this._saveCallback) {
+            engine.api.pollSaveResult().then((packed) => {
+                if (!packed || !this._saveCallback) return;
+                const cb = this._saveCallback;
+                this._saveCallback = null;
+                cb(unpackSaveBundle(packed));
+            });
+        }
 
-            // Check for completed async `.darkly` save readbacks. The bundle's
-            // byte blobs arrive concatenated in `bytes`; slice them back out
-            // into the per-blob shape `saveDocument.ts` expects.
-            if (this._saveCallback) {
-                engine.api.pollSaveResult().then((packed) => {
-                    if (!packed || !this._saveCallback) return;
-                    const cb = this._saveCallback;
-                    this._saveCallback = null;
-                    cb(unpackSaveBundle(packed));
-                });
-            }
-
-            // Continue animation loop only when no UI interaction is
-            // monopolizing the main thread.  One-shot renders (tool
-            // actions, resize, etc.) always go through — only the
-            // self-scheduling continuous loop is suppressed.
-            const shouldContinue =
-                frame.needsMore ||
-                this._copyCallback ||
-                this._exportCallback ||
-                this._saveCallback;
-            if (shouldContinue && this._interactionCount === 0) {
-                this.requestFrame();
-            }
-        });
+        // Continue animation loop only when no UI interaction is
+        // monopolizing the main thread.  One-shot renders (tool
+        // actions, resize, etc.) always go through — only the
+        // self-scheduling continuous loop is suppressed.
+        const shouldContinue =
+            frame.needsMore ||
+            this._copyCallback ||
+            this._exportCallback ||
+            this._saveCallback;
+        if (shouldContinue && this._interactionCount === 0) {
+            this.requestFrame();
+        }
     }
 }
 

@@ -65,7 +65,14 @@
                     mirror_h: inst.mirrorH,
                     screen_w: w, screen_h: h,
                 });
-                inst.requestFrame();
+                // Drive the frame synchronously in this same task. The
+                // `canvas.width/height` write, the enqueued `resize`
+                // (→ `surface.configure`), and the present must not be split
+                // across browser turns: Firefox's zero-copy WebGPU present
+                // stalls the GPU process if a present straddles a swapchain
+                // reconfigure. `renderNow` drains the FIFO (applying the resize)
+                // and presents before yielding.
+                inst.renderNow();
             }
         });
     }

@@ -908,6 +908,27 @@ impl DarklyEngine {
         self.compositor.tool_overlay().cursor_preview_mask_size()
     }
 
+    /// Whether the frame loop would schedule another frame right now — the
+    /// `needs_more` value `render` returns to JS. Test-only.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_frame_needs_more(&self) -> bool {
+        self.frame_needs_more()
+    }
+
+    /// Mark a present as owed, mimicking the compositor's `Lost`/`Outdated`
+    /// early-return that reconfigures without presenting. Test-only.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_mark_needs_present(&mut self) {
+        self.compositor.mark_needs_present();
+    }
+
+    /// Clear the pending-present flag (no real present happens headlessly).
+    /// Test-only, for establishing a deterministic baseline.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_clear_needs_present(&mut self) {
+        self.compositor.test_clear_needs_present();
+    }
+
     /// Current cursor-preview coverage scale uniform — the multiplier the
     /// overlay shader applies to KIND_MASKED_STAMP sampled coverage.
     /// Test-only.

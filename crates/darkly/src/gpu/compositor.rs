@@ -2033,6 +2033,23 @@ impl Compositor {
         self.needs_present = true;
     }
 
+    /// Whether a present is still owed. Set by `mark_needs_present`, cleared by
+    /// `finish_present` after a frame actually reaches the surface. A dropped
+    /// acquire (`Lost`/`Outdated`) reconfigures and returns without presenting,
+    /// leaving this `true` — the frame loop must keep going so the reconfigured
+    /// surface gets a real present on the next frame.
+    pub fn needs_present(&self) -> bool {
+        self.needs_present
+    }
+
+    /// Clear the pending-present flag without a real present. Headless tests
+    /// never reach `finish_present` (no surface), so this gives them a
+    /// deterministic starting point.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_clear_needs_present(&mut self) {
+        self.needs_present = false;
+    }
+
     // --- Content Bounds (GPU compute) ---
 
     /// Return cached content bounds for a layer: `[x, y, w, h]`.

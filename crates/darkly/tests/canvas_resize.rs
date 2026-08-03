@@ -711,3 +711,37 @@ fn successive_crops_do_not_compound_squash() {
         "squash compounds across crops: uncropped {uncropped:.3}, 1 crop {one:.3}, 2 crops {two:.3}"
     );
 }
+
+/// REGRESSION: a present dropped by a `Lost`/`Outdated` surface acquire must
+/// keep the frame loop alive. On resize, the compositor's acquire can return
+/// `Outdated`; that path reconfigures the surface and returns *without*
+/// presenting, leaving `needs_present` set. If `render`'s returned `needs_more`
+/// ignores that pending present, JS never reschedules and the reconfigured
+/// surface never gets a real frame — a stale/frozen canvas. `needs_more` must
+/// therefore surface `compositor.needs_present()`.
+#[test]
+fn dropped_present_keeps_requesting_frames() {
+    let mut engine = test_engine(64, 64);
+
+    // Drain startup async work (thumbnail readbacks, etc.), then clear the
+    // pending-present flag so the baseline is genuinely quiescent — headless
+    // renders never reach `finish_present`, so `needs_present` would otherwise
+    // stay stuck set from engine setup.
+    for _ in 0..8 {
+        engine.render(0.0);
+    }
+    engine.test_clear_needs_present();
+    assert!(
+        !engine.test_frame_needs_more(),
+        "engine did not settle to quiescence; test baseline is unreliable"
+    );
+
+    // Mimic the compositor's `Lost`/`Outdated` early-return: a present is owed
+    // but was dropped without `finish_present` clearing the flag.
+    engine.test_mark_needs_present();
+
+    assert!(
+        engine.test_frame_needs_more(),
+        "a pending present must keep the frame loop alive so the dropped frame reschedules"
+    );
+}

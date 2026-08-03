@@ -727,7 +727,18 @@ impl DarklyEngine {
         };
 
         // Keep requesting frames while async operations are in flight.
+        self.frame_needs_more()
+    }
+
+    /// Whether the frame loop must schedule another frame — the value returned
+    /// to JS, which reschedules while it is `true`. Covers in-flight async work
+    /// and, critically, a present the compositor still owes: a `Lost`/`Outdated`
+    /// acquire reconfigures the surface and returns without presenting, so
+    /// `needs_present` stays set and the reconfigured surface would otherwise
+    /// never get a real frame.
+    pub(super) fn frame_needs_more(&self) -> bool {
         self.compositor.needs_animation(&self.doc)
+            || self.compositor.needs_present()
             || self.readbacks.has_pending()
             || self.compositor.has_pending_content_bounds()
             || self.compositor.has_pending_histogram()
