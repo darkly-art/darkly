@@ -168,6 +168,23 @@ export class DarklyInstance {
         this.session = null;
     }
 
+    /** Tear this instance down when its tab closes: stop its tool session and
+     *  stream sources, free the WASM handle, then drop the engine reference. The
+     *  instance owns every consumer of its handle, so it owns their teardown —
+     *  the shell just removes it from the strip. Nulling `engine` is what makes
+     *  the render loop's `if (!engine) return` guard short-circuit an
+     *  already-queued rAF; without it, that frame would call `render` on a freed
+     *  handle and throw "Attempt to use a moved value". Order matters: stop the
+     *  consumers first, then free, then null last so any synchronous `$state`
+     *  reaction observes a fully torn-down instance. Idempotent. */
+    dispose(): void {
+        this.killToolSession();
+        for (const id of [...this.streamSources.keys()]) this.stopStreamSource(id);
+        this.engine?.free();
+        this.engine = null;
+        this.engineState = null;
+    }
+
     /** Monotonic counter the `CanvasView` transition effect watches to re-run a
      *  same-tool activation (paste-into-active-transform: re-pick the floating
      *  without deactivating). Bumped by {@link requestToolReactivation}. */
