@@ -45,10 +45,11 @@ impl SampleFrame {
 /// `variation_expr` are the node's own input expressions (screen-relative
 /// radians and a per-dab decorrelation scalar respectively).
 ///
-/// `scale_with_brush` is meaningful only in [`SampleFrame::Dab`]: `true`
-/// samples the radius-normalized unit-disc frame so the pattern scales with
-/// the brush; `false` reconstructs pixel offsets so grain density stays
-/// constant in canvas pixels as the brush grows. It is ignored for Canvas.
+/// In [`SampleFrame::Dab`] the field is sampled in oriented dab-pixels, so
+/// `scale` is a canvas-pixel feature size exactly as in Canvas space, and grain
+/// density stays constant in pixels as the brush grows. To make the grain scale
+/// *with* the brush instead, drive `scale` from `brush_settings.size` (also in
+/// canvas pixels): the dab radius and the scale then grow together and cancel.
 ///
 /// `scale_expr` is the caller's `scale` **input expression** — a `{:.6}`
 /// literal when the scale input is unwired, or an upstream WGSL expression
@@ -64,7 +65,6 @@ impl SampleFrame {
 pub fn frame_sample_coord_expr(
     space: SampleFrame,
     scale_expr: &str,
-    scale_with_brush: bool,
     rotation_expr: &str,
     variation_expr: &str,
     period: f32,
@@ -96,21 +96,15 @@ pub fn frame_sample_coord_expr(
                 "    let {ident}_off = fbm_offset2(u32(max(({variation_expr}), 0.0) * 4096.0), {period:.6});\n"
             ));
             let offset = format!("{ident}_off");
-            let coord = if scale_with_brush {
-                // Stamp-relative frequency: the unit-disc offset spans ~[-1,1]
-                // across the stamp at any brush size, so the same pattern maps
-                // across the whole stamp — the grain scales with the brush.
-                format!("{ident}_dab_local / ({scale_expr}) + {offset}")
-            } else {
-                // Pixel-locked frequency: multiply the unit-disc offset back to
-                // oriented dab-pixels so grain density stays constant in canvas
-                // px as the brush grows (the stamp is a bigger window onto the
-                // same grain).
-                preamble.push_str(&format!(
-                    "    let {ident}_radius_px = 1.0 / d.inv_radius_target_px;\n"
-                ));
-                format!("({ident}_dab_local * {ident}_radius_px) / ({scale_expr}) + {offset}")
-            };
+            // Multiply the unit-disc offset back to oriented dab-pixels, so
+            // `scale` is a canvas-pixel feature size and grain density stays
+            // constant in px as the brush grows. Wiring `brush_settings.size`
+            // (also px) into `scale` makes the radius and scale cancel, so the
+            // grain scales with the brush.
+            preamble.push_str(&format!(
+                "    let {ident}_radius_px = 1.0 / d.inv_radius_target_px;\n"
+            ));
+            let coord = format!("({ident}_dab_local * {ident}_radius_px) / ({scale_expr}) + {offset}");
             (preamble, coord)
         }
     }
@@ -125,7 +119,6 @@ mod tests {
         let (pre, coord) = frame_sample_coord_expr(
             SampleFrame::Canvas,
             "32.000000",
-            true,
             "d.n1_rotation",
             "d.n2_variation",
             16.0,
@@ -141,11 +134,10 @@ mod tests {
     }
 
     #[test]
-    fn dab_scale_with_brush_normalizes_unit_disc() {
-        let (pre, coord) = frame_sample_coord_expr(
+    fn dab_rotates_local_uv_by_rotation_expr() {
+        let (pre, _coord) = frame_sample_coord_expr(
             SampleFrame::Dab,
             "8.000000",
-            true,
             "1.5",
             "0.0",
             16.0,
@@ -156,25 +148,20 @@ mod tests {
         assert!(pre.contains("sin(1.5)"));
         assert!(pre.contains("noise_3_dab_local"));
         assert!(pre.contains("local_uv.x * noise_3_ca + local_uv.y * noise_3_sa"));
-        // scale_with_brush=true divides the unit-disc offset directly and
-        // never reconstructs pixels.
-        assert!(coord.contains("noise_3_dab_local / (8.000000)"));
-        assert!(!coord.contains("inv_radius_target_px"));
-        assert!(!pre.contains("inv_radius_target_px"));
     }
 
     #[test]
-    fn dab_pixel_locked_reconstructs_radius() {
+    fn dab_reconstructs_radius_so_scale_is_canvas_pixels() {
         let (pre, coord) = frame_sample_coord_expr(
             SampleFrame::Dab,
             "8.000000",
-            false,
             "0.0",
             "0.0",
             1.0,
             "img_5",
         );
-        // scale_with_brush=false multiplies back to oriented dab-pixels.
+        // Dab space always multiplies the unit-disc offset back to oriented
+        // dab-pixels, so `scale` is a canvas-pixel feature size.
         assert!(pre.contains("let img_5_radius_px = 1.0 / d.inv_radius_target_px;"));
         assert!(coord.contains("(img_5_dab_local * img_5_radius_px) / (8.000000)"));
     }
@@ -184,7 +171,6 @@ mod tests {
         let (pre, coord) = frame_sample_coord_expr(
             SampleFrame::Dab,
             "8.000000",
-            true,
             "0.0",
             "d.n2_variation",
             16.0,

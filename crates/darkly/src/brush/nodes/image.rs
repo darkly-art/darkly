@@ -84,12 +84,6 @@ pub fn register() -> BrushNodeRegistration {
                     .with_value(InputValue::Int(1))
                     .with_label("Space")
                     .with_description("Sample in canvas space (pinned) or the dab's oriented frame."),
-                // Dab-space only: `true` scales the picture with the brush,
-                // `false` keeps its texel density constant in canvas pixels.
-                PortDef::input("scale_with_brush", BrushWireType::Bool)
-                    .with_value(InputValue::Bool(true))
-                    .with_label("Scale With Brush")
-                    .with_description("Dab space only: scale the picture with the brush size."),
                 PortDef::output("color", BrushWireType::Vec4)
                     .preview_image()
                     .with_description("RGBA value sampled from the named texture at the fragment's sample position"),
@@ -130,7 +124,6 @@ impl BrushNodeEvaluator for ImageEvaluator {
         // expression (a literal when unwired, an upstream expr when wired).
         let scale_expr = cctx.input("scale").as_f32();
         let space = SampleFrame::from_index(cctx.input("space").enum_index().max(0) as u32);
-        let scale_with_brush = cctx.input("scale_with_brush").boolean();
         let rotation = cctx.input("rotation").as_f32();
         let variation = cctx.input("variation").as_f32();
         // The sampled uv is `fract`-wrapped against a repeat sampler, so the
@@ -139,7 +132,6 @@ impl BrushNodeEvaluator for ImageEvaluator {
         let (frame_pre, coord) = frame_sample_coord_expr(
             space,
             &scale_expr,
-            scale_with_brush,
             &rotation,
             &variation,
             1.0,
@@ -168,15 +160,14 @@ mod tests {
         let reg = register();
         assert_eq!(reg.node.type_id, "image");
         assert_eq!(reg.node.category, "texture");
-        // rotation, variation, texture_name, scale, space, scale_with_brush
-        // inputs plus the color output — all unified as ports now.
-        assert_eq!(reg.node.ports.len(), 7);
+        // rotation, variation, texture_name, scale, space inputs plus the
+        // color output — all unified as ports now.
+        assert_eq!(reg.node.ports.len(), 6);
         assert!(reg.node.ports.iter().any(|p| p.name == "color"));
         assert!(reg.node.ports.iter().any(|p| p.name == "rotation"));
         assert!(reg.node.ports.iter().any(|p| p.name == "variation"));
         assert!(reg.node.ports.iter().any(|p| p.name == "texture_name"));
         assert!(reg.node.ports.iter().any(|p| p.name == "scale"));
         assert!(reg.node.ports.iter().any(|p| p.name == "space"));
-        assert!(reg.node.ports.iter().any(|p| p.name == "scale_with_brush"));
     }
 }

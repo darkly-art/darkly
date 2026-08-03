@@ -1,6 +1,6 @@
 <script lang="ts">
     import { getContext, untrack } from 'svelte';
-    import { brushGraph, WIRE_COLORS, type PortDef } from '../../state/brush_graph.svelte';
+    import { brushGraph, WIRE_COLORS, EXTENDED_RANGE_MAX, type PortDef } from '../../state/brush_graph.svelte';
     import { unitFor } from '../../lib/units';
     import { app } from '../../state/app.svelte';
     import type { NodeCanvasContext } from './NodeCanvas.svelte';
@@ -48,6 +48,30 @@
             ? port.value
             : (typeof port.value === 'boolean' ? (port.value ? 1 : 0) : 0)
     );
+
+    /** True for the scalar math nodes (add/subtract/multiply/divide), which
+     *  offer the editor's extended-range unlock. */
+    let isMathNode = $derived.by(() => {
+        const node = brushGraph.graph?.nodes[nodeId];
+        return node ? brushGraph.getNodeType(node.type_id)?.category === 'math' : false;
+    });
+
+    /** Effective slider bounds. Math-node sliders widen from the declared
+     *  `0..1` to `0..EXTENDED_RANGE_MAX` when the user has unlocked the node's
+     *  extended range — or when the current value already sits outside the base
+     *  range, so a loaded gain like `2.56` shows correctly and isn't clamped on
+     *  first touch. UI-only; the engine never enforces these bounds. */
+    let range = $derived.by(() => {
+        if (
+            isMathNode &&
+            (brushGraph.extendedRangeNodes.has(nodeId) ||
+                numValue > port.max ||
+                numValue < port.min)
+        ) {
+            return { min: port.min, max: EXTENDED_RANGE_MAX };
+        }
+        return { min: port.min, max: port.max };
+    });
 
     /** Wire-type sets driving the widget branch for disconnected inputs. */
     const SLIDER_TYPES = new Set(['Scalar', 'Int', 'Bool']);
@@ -208,12 +232,12 @@
      *  the value unchanged when `step` is zero (continuous port). */
     function snapToStep(value: number): number {
         if (!port.step || port.step <= 0) return value;
-        const stepped = Math.round((value - port.min) / port.step) * port.step + port.min;
-        return Math.max(port.min, Math.min(port.max, stepped));
+        const stepped = Math.round((value - range.min) / port.step) * port.step + range.min;
+        return Math.max(range.min, Math.min(range.max, stepped));
     }
 
     function valueFromFraction(frac: number): number {
-        const raw = port.min + frac * (port.max - port.min);
+        const raw = range.min + frac * (range.max - range.min);
         if (port.wire_type === 'Int') return Math.round(raw);
         if (port.wire_type === 'Bool') return frac >= 0.5 ? 1 : 0;
         return snapToStep(raw);
@@ -293,8 +317,8 @@
     }
 
     let sliderPercent = $derived(
-        port.max > port.min
-            ? ((numValue - port.min) / (port.max - port.min)) * 100
+        range.max > range.min
+            ? ((numValue - range.min) / (range.max - range.min)) * 100
             : 0
     );
 
@@ -332,11 +356,11 @@
         editing = false;
         const parsed = parseFloat(input.value);   // display units (degrees / percent / …)
         if (isNaN(parsed)) return;
-        // Convert display → port space *before* clamping: port.min/max/step are
-        // all port-space, so clamping a display value against them would compare
-        // e.g. degrees to radian bounds.
+        // Convert display → port space *before* clamping: the range bounds/step
+        // are all port-space, so clamping a display value against them would
+        // compare e.g. degrees to radian bounds.
         const portValue = unit.toPort(parsed);
-        const clamped = Math.max(port.min, Math.min(port.max, portValue));
+        const clamped = Math.max(range.min, Math.min(range.max, portValue));
         const value = port.wire_type === 'Int' ? Math.round(clamped) : snapToStep(clamped);
         brushGraph.setInputLocal(nodeId, port.name, value);
         commitSlider(value);

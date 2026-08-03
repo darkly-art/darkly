@@ -22,9 +22,9 @@
 //! stroke mode, preview-mask texels in preview — so the grain is pinned to
 //! the canvas. **Dab** samples the stamp's oriented unit frame (`local_uv`
 //! rotated by the `rotation` input, offset per dab by `variation`), so the
-//! grain rides the stamp instead of swimming under it. `scale_with_brush`
-//! chooses whether Dab-frame grain scales with the brush or stays
-//! pixel-locked.
+//! grain rides the stamp instead of swimming under it. In both frames `scale`
+//! is a canvas-pixel feature size; to make the grain scale with the brush,
+//! drive `scale` from `brush_settings.size` (also canvas pixels).
 //!
 //! The math (`fbm_value_noise`, `fbm_seed_xform`, `fbm_tile`, hash, fade)
 //! lives in the shared `shaders/lib/fbm2d.wgsl`, concatenated into every
@@ -123,12 +123,6 @@ pub fn register() -> BrushNodeRegistration {
                     .with_value(InputValue::Int(0))
                     .with_label("Space")
                     .with_description("Pin the grain to the canvas, or lock it to each dab."),
-                // Dab-space only: `true` scales the grain with the brush,
-                // `false` keeps grain density constant in canvas pixels.
-                PortDef::input("scale_with_brush", BrushWireType::Bool)
-                    .with_value(InputValue::Bool(true))
-                    .with_label("Scale With Brush")
-                    .with_description("Dab space only: scale the grain with the brush size."),
                 PortDef::output("color", BrushWireType::Vec4)
                     .preview_image()
                     .with_description(
@@ -174,19 +168,17 @@ impl BrushNodeEvaluator for NoiseEvaluator {
             return Ok(wgsl);
         }
         // The sampling frame is shared by the baked and the live path.
-        // `scale`/`space`/`scale_with_brush`/`rotation`/`variation` shape the
-        // sample *coordinate*, not the field content — so they are applied
-        // here at sample time and one baked tile serves Canvas and Dab, every
-        // scale and every per-dab variation.
+        // `scale`/`space`/`rotation`/`variation` shape the sample *coordinate*,
+        // not the field content — so they are applied here at sample time and
+        // one baked tile serves Canvas and Dab, every scale and every per-dab
+        // variation.
         let scale_expr = cctx.input("scale").as_f32();
         let space = SampleFrame::from_index(cctx.input("space").enum_index().max(0) as u32);
-        let scale_with_brush = cctx.input("scale_with_brush").boolean();
         let rotation = cctx.input("rotation").as_f32();
         let variation = cctx.input("variation").as_f32();
         let (frame_pre, coord) = frame_sample_coord_expr(
             space,
             &scale_expr,
-            scale_with_brush,
             &rotation,
             &variation,
             BakeSpec::FIELD_SPAN,
@@ -318,22 +310,14 @@ mod tests {
         let reg = register();
         assert_eq!(reg.node.type_id, "noise");
         assert_eq!(reg.node.category, "texture");
-        // rotation, variation, scale, seed, octaves, warp, roughness, space,
-        // scale_with_brush inputs plus the color and value outputs — all unified.
-        assert_eq!(reg.node.ports.len(), 11);
+        // rotation, variation, scale, seed, octaves, warp, roughness, space
+        // inputs plus the color and value outputs — all unified.
+        assert_eq!(reg.node.ports.len(), 10);
         assert!(reg.node.ports.iter().any(|p| p.name == "color"));
         assert!(reg.node.ports.iter().any(|p| p.name == "value"));
         assert!(reg.node.ports.iter().any(|p| p.name == "rotation"));
         assert!(reg.node.ports.iter().any(|p| p.name == "variation"));
-        for name in [
-            "scale",
-            "seed",
-            "octaves",
-            "warp",
-            "roughness",
-            "space",
-            "scale_with_brush",
-        ] {
+        for name in ["scale", "seed", "octaves", "warp", "roughness", "space"] {
             assert!(
                 reg.node.ports.iter().any(|p| p.name == name),
                 "missing {name}"

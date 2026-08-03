@@ -1284,14 +1284,9 @@ fn static_texture_brush_preview_declares_single_graph_texture() {
 // unit frame so the grain rides the rotating stamp. These tests assert the
 // emitter picks the right arm and that both shader variants stay valid.
 
-/// Apply the noise node's inputs in registration order, with
-/// `space`/`scale_with_brush`. `space`: 0 = Canvas, 1 = Dab.
-fn apply_noise_inputs(
-    graph: &mut Graph<BrushWireType>,
-    noise: &NodeId,
-    space: i32,
-    scale_with_brush: bool,
-) {
+/// Apply the noise node's inputs in registration order. `space`: 0 = Canvas,
+/// 1 = Dab.
+fn apply_noise_inputs(graph: &mut Graph<BrushWireType>, noise: &NodeId, space: i32) {
     for (name, v) in [
         ("scale", InputValue::Scalar(32.0)),
         ("seed", InputValue::Int(7)),
@@ -1299,7 +1294,6 @@ fn apply_noise_inputs(
         ("warp", InputValue::Scalar(0.6)),
         ("roughness", InputValue::Scalar(0.5)),
         ("space", InputValue::Int(space)),
-        ("scale_with_brush", InputValue::Bool(scale_with_brush)),
     ] {
         graph.set_port_value(noise, name, v).unwrap();
     }
@@ -1341,7 +1335,7 @@ fn noise_canvas_space_is_byte_identical() {
     let mut graph = Graph::<BrushWireType>::new();
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
     let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
-    apply_noise_inputs(&mut graph, &noise, 0, true);
+    apply_noise_inputs(&mut graph, &noise, 0);
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     wire(
         &mut graph,
@@ -1391,7 +1385,7 @@ fn settings_size_source_reaches_compiled_brush() {
         .set_port_default(&settings, "size", 0.25)
         .expect("brush_settings has a size input");
     let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
-    apply_noise_inputs(&mut graph, &noise, 0, true);
+    apply_noise_inputs(&mut graph, &noise, 0);
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     wire(
         &mut graph,
@@ -1432,7 +1426,7 @@ fn noise_scale_wired_emits_upstream_expr_and_validates() {
     let mut graph = Graph::<BrushWireType>::new();
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
     let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
-    apply_noise_inputs(&mut graph, &noise, 0, true);
+    apply_noise_inputs(&mut graph, &noise, 0);
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     wire(
         &mut graph,
@@ -1468,7 +1462,7 @@ fn noise_octaves_wired_emits_i32_clamp_and_validates() {
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
     let rand = graph.add_node("random", reg.get("random").unwrap().ports.clone());
     let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
-    apply_noise_inputs(&mut graph, &noise, 0, true);
+    apply_noise_inputs(&mut graph, &noise, 0);
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     wire(
         &mut graph,
@@ -1498,7 +1492,7 @@ fn noise_dab_space_emits_oriented_frame_and_variation() {
     let mut graph = Graph::<BrushWireType>::new();
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
     let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
-    apply_noise_inputs(&mut graph, &noise, 1, true);
+    apply_noise_inputs(&mut graph, &noise, 1);
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     wire(
         &mut graph,
@@ -1532,42 +1526,30 @@ fn noise_dab_space_emits_oriented_frame_and_variation() {
 }
 
 #[test]
-fn noise_scale_with_brush_picks_arm_at_compile_time() {
+fn noise_dab_reconstructs_pixels_from_radius() {
+    // Dab space always reconstructs oriented dab-pixels from the dab radius,
+    // so `scale` is a canvas-pixel feature size (uniform with Canvas space).
     let reg = registry();
-    for (swb, expect_norm) in [(true, true), (false, false)] {
-        let mut graph = Graph::<BrushWireType>::new();
-        let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
-        let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
-        apply_noise_inputs(&mut graph, &noise, 1, swb);
-        let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
-        wire(
-            &mut graph,
-            &[
-                (pen.clone(), "position", term.clone(), "position"),
-                (noise.clone(), "color", term.clone(), "rgba"),
-            ],
-        );
-        let plan = compile(&graph, reg.as_map()).unwrap();
-        let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
-        let w = &compiled.stroke_wgsl;
-        if expect_norm {
-            assert!(
-                w.contains("dab_local / (32.000000)"),
-                "scale_with_brush=true divides the unit-disc offset"
-            );
-            // The skeleton always defines `local_uv = local * d.inv_radius_target_px`,
-            // so guard against the *reconstruction* specifically, not the symbol.
-            assert!(
-                !w.contains("1.0 / d.inv_radius_target_px"),
-                "scale_with_brush=true must not reconstruct pixels"
-            );
-        } else {
-            assert!(
-                w.contains("1.0 / d.inv_radius_target_px"),
-                "scale_with_brush=false must reconstruct dab-pixels from inv_radius",
-            );
-        }
-    }
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
+    apply_noise_inputs(&mut graph, &noise, 1);
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
+    wire(
+        &mut graph,
+        &[
+            (pen.clone(), "position", term.clone(), "position"),
+            (noise.clone(), "color", term.clone(), "rgba"),
+        ],
+    );
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    assert!(
+        compiled
+            .stroke_wgsl
+            .contains("1.0 / d.inv_radius_target_px"),
+        "Dab space must reconstruct dab-pixels from inv_radius",
+    );
 }
 
 #[test]
@@ -1579,7 +1561,7 @@ fn noise_rotation_input_wires_per_dab() {
     let mut graph = Graph::<BrushWireType>::new();
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
     let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
-    apply_noise_inputs(&mut graph, &noise, 1, true);
+    apply_noise_inputs(&mut graph, &noise, 1);
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
     wire(
         &mut graph,
@@ -1617,7 +1599,6 @@ fn image_dab_tip_needs_no_shape_node() {
         ("texture_name", InputValue::String("paper".into())),
         ("scale", InputValue::Scalar(512.0)),
         ("space", InputValue::Int(1)),
-        ("scale_with_brush", InputValue::Bool(true)),
     ] {
         graph.set_port_value(&image, name, v).unwrap();
     }
