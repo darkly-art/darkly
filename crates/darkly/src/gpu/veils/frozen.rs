@@ -1,4 +1,7 @@
 use crate::gpu::effect::{EffectCache, EffectPipeline};
+use crate::gpu::params::ConstParamValue;
+use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
+use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
@@ -18,12 +21,57 @@ const PARAMS: &[ParamDef] = &[
         .with_description("Colour separation through the ice, like light through a prism."),
 ];
 
+/// The frost thickens over the image and clears again, its colour fringing
+/// intensifying alongside — the two knobs that carry the effect's character,
+/// swept concurrently across their full declared bands.
+static PREVIEW: PreviewRecipe = PreviewRecipe {
+    frames: ANIMATED_FRAMES,
+    fps: PREVIEW_FPS,
+    tracks: &[
+        Track {
+            target: TrackTarget::Param("strength"),
+            keys: &[
+                Key {
+                    t: 0.0,
+                    value: ConstParamValue::Float(0.04),
+                },
+                Key {
+                    t: 0.5,
+                    value: ConstParamValue::Float(0.2),
+                },
+                Key {
+                    t: 1.0,
+                    value: ConstParamValue::Float(0.04),
+                },
+            ],
+        },
+        Track {
+            target: TrackTarget::Param("chromatic"),
+            keys: &[
+                Key {
+                    t: 0.0,
+                    value: ConstParamValue::Float(0.1),
+                },
+                Key {
+                    t: 0.5,
+                    value: ConstParamValue::Float(1.0),
+                },
+                Key {
+                    t: 1.0,
+                    value: ConstParamValue::Float(0.1),
+                },
+            ],
+        },
+    ],
+};
+
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "frozen",
         display_name: "Frozen",
         description: "Frost the view behind a pane of refracting ice.",
         params: PARAMS,
+        preview: Some(&PREVIEW),
         create_pipeline: create_frozen_pipeline,
         from_params: |params, shared| {
             let strength = match params.first() {

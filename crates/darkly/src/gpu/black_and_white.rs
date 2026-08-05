@@ -12,7 +12,9 @@
 //! (<https://www.tannerhelland.com/3643/grayscale-image-algorithm-vb6/>).
 //! Mode 6 is a custom weighted mix, and an optional hue tint colors the gray.
 
-use crate::gpu::params::{ParamDef, ParamValue};
+use crate::gpu::params::{ConstParamValue, ParamDef, ParamValue};
+use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
+use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
 
 pub const TYPE_ID: &str = "black_and_white";
 pub const DISPLAY_NAME: &str = "Black and White";
@@ -55,6 +57,53 @@ pub static PARAMS: &[ParamDef] = &[
         .with_label("Tint Strength")
         .with_description("How strongly the tint colour shows through the grey."),
 ];
+
+/// One recipe for both surfaces, beside the schema they share. The grey is
+/// toned through the full colour wheel while the tint strengthens and fades, so
+/// a single pass shows both the desaturation and what the tint controls do to
+/// it. A `static` for the same reason `PARAMS` is one — both registrations hold
+/// the same address, which is what makes the sharing structural rather than two
+/// copies that happen to agree today.
+pub static PREVIEW: PreviewRecipe = PreviewRecipe {
+    frames: ANIMATED_FRAMES,
+    fps: PREVIEW_FPS,
+    tracks: &[
+        Track {
+            target: TrackTarget::Param("tint_strength"),
+            keys: &[
+                Key {
+                    t: 0.0,
+                    value: ConstParamValue::Float(0.0),
+                },
+                Key {
+                    t: 0.5,
+                    value: ConstParamValue::Float(1.0),
+                },
+                Key {
+                    t: 1.0,
+                    value: ConstParamValue::Float(0.0),
+                },
+            ],
+        },
+        Track {
+            target: TrackTarget::Param("tint_hue"),
+            keys: &[
+                Key {
+                    t: 0.0,
+                    value: ConstParamValue::Float(0.0),
+                },
+                Key {
+                    t: 0.5,
+                    value: ConstParamValue::Float(360.0),
+                },
+                Key {
+                    t: 1.0,
+                    value: ConstParamValue::Float(0.0),
+                },
+            ],
+        },
+    ],
+};
 
 /// The shared WGSL transform (`BwParams` / `bw_gray` / `bw_transform`),
 /// prepended to each surface's wrapper shader at pipeline build time.

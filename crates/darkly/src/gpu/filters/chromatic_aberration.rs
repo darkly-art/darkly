@@ -29,6 +29,8 @@ use crate::gpu::effect::EffectCache;
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
 use crate::gpu::param_filter::{ParamFilter, SrcSampling};
 use crate::gpu::params::{ConstParamValue, ParamDef, ParamValue};
+use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
+use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
 
 /// Uniform-array size (and the schema's entry cap). The UI disables "Add" at the
 /// limit; [`pack_uniform`] still clamps defensively.
@@ -83,6 +85,76 @@ pub const PARAMS: &[ParamDef] = &[ParamDef::list(
 )
 .with_label("Fringes")
 .with_description("The coloured copies the lens splits the image into.")];
+
+/// One recipe for both surfaces, beside the schema they share. The three fringes
+/// spread outward from their photographic resting positions and close again,
+/// softening as they go — so the preview shows the fringe *forming* rather than a
+/// still that could be mistaken for a blurry image. Every keyframe carries the
+/// same three entries, so the list blends per entry through the item schema.
+///
+/// A `static` so both registrations hold the same address, which is what makes
+/// the sharing structural rather than two copies that happen to agree today.
+pub static PREVIEW: PreviewRecipe = PreviewRecipe {
+    frames: ANIMATED_FRAMES,
+    fps: PREVIEW_FPS,
+    tracks: &[Track {
+        target: TrackTarget::Param("aberrations"),
+        keys: &[
+            Key {
+                t: 0.0,
+                value: ConstParamValue::List(DEFAULT_FRINGES),
+            },
+            Key {
+                t: 0.5,
+                value: ConstParamValue::List(SPREAD_FRINGES),
+            },
+            Key {
+                t: 1.0,
+                value: ConstParamValue::List(DEFAULT_FRINGES),
+            },
+        ],
+    }],
+};
+
+/// The resting three-entry fringe: red at unit magnification, green and blue
+/// stepped 1% inward each, every one softened a touch.
+const DEFAULT_FRINGES: &[&[(&str, ConstParamValue)]] = &[
+    &[
+        ("scale", ConstParamValue::Float(1.0)),
+        ("color", ConstParamValue::Color([1.0, 0.0, 0.0])),
+        ("blur", ConstParamValue::Float(0.6)),
+    ],
+    &[
+        ("scale", ConstParamValue::Float(0.99)),
+        ("color", ConstParamValue::Color([0.0, 1.0, 0.0])),
+        ("blur", ConstParamValue::Float(0.6)),
+    ],
+    &[
+        ("scale", ConstParamValue::Float(0.98)),
+        ("color", ConstParamValue::Color([0.0, 0.0, 1.0])),
+        ("blur", ConstParamValue::Float(0.6)),
+    ],
+];
+
+/// The same three fringes pulled three times as far apart and three times as
+/// soft — the far end of the preview's swing.
+const SPREAD_FRINGES: &[&[(&str, ConstParamValue)]] = &[
+    &[
+        ("scale", ConstParamValue::Float(1.0)),
+        ("color", ConstParamValue::Color([1.0, 0.0, 0.0])),
+        ("blur", ConstParamValue::Float(1.8)),
+    ],
+    &[
+        ("scale", ConstParamValue::Float(0.97)),
+        ("color", ConstParamValue::Color([0.0, 1.0, 0.0])),
+        ("blur", ConstParamValue::Float(1.8)),
+    ],
+    &[
+        ("scale", ConstParamValue::Float(0.94)),
+        ("color", ConstParamValue::Color([0.0, 0.0, 1.0])),
+        ("blur", ConstParamValue::Float(1.8)),
+    ],
+];
 
 /// One aberration in the shader's uniform (48 B). Field offsets match
 /// `struct Aberration` in `lib/aberration.wgsl` (vec3 `axis` at offset 16). The
@@ -266,6 +338,7 @@ pub fn register() -> FilterPipelineRegistration {
         icon: "lucide-lab:venn",
         description: DESCRIPTION,
         params: PARAMS,
+        preview: Some(&PREVIEW),
         create_pipeline,
     }
 }

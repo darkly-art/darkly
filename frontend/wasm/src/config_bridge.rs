@@ -94,7 +94,11 @@ pub fn config_schema() -> String {
 pub fn format_chord(binding: &str, is_mac: bool) -> String {
     use darkly::config::chord::{format_chord, parse_binding, Platform};
     let parsed = parse_binding(binding);
-    let platform = if is_mac { Platform::Mac } else { Platform::Other };
+    let platform = if is_mac {
+        Platform::Mac
+    } else {
+        Platform::Other
+    };
     format_chord(&parsed.chord, platform)
 }
 

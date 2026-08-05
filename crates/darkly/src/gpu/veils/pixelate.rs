@@ -1,4 +1,7 @@
 use crate::gpu::effect::{create_blit_pipeline, EffectCache, EffectPipeline};
+use crate::gpu::params::ConstParamValue;
+use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
+use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use crate::units::UnitType;
 use std::sync::Arc;
@@ -13,12 +16,38 @@ const PARAMS: &[ParamDef] = &[
         .with_description("Blends between blocks instead of leaving hard square edges."),
 ];
 
+/// Blocks grow from a single pixel to the coarsest the control allows and back,
+/// one visible quantised step at a time — which is what shows what the control
+/// does in a way no single block size can.
+static PREVIEW: PreviewRecipe = PreviewRecipe {
+    frames: ANIMATED_FRAMES,
+    fps: PREVIEW_FPS,
+    tracks: &[Track {
+        target: TrackTarget::Param("scale"),
+        keys: &[
+            Key {
+                t: 0.0,
+                value: ConstParamValue::Int(1),
+            },
+            Key {
+                t: 0.5,
+                value: ConstParamValue::Int(6),
+            },
+            Key {
+                t: 1.0,
+                value: ConstParamValue::Int(1),
+            },
+        ],
+    }],
+};
+
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "pixelate",
         display_name: "Pixelate",
         description: "Downsample the view into a blocky pixel mosaic.",
         params: PARAMS,
+        preview: Some(&PREVIEW),
         create_pipeline: create_pixelate_pipeline,
         from_params: |params, shared| {
             let scale = match params.first() {

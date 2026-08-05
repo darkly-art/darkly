@@ -265,8 +265,8 @@ fn export_is_a_faithful_projection() {
             .collect(),
     );
 
-    // Voids alone answer "is there a thumbnail worth rendering?", and the
-    // capture kind rides with it.
+    // The capture kind is voids' alone, and it rides beside the previewability
+    // every catalog now answers.
     for r in darkly::gpu::void::VoidRegistry::new().types() {
         let e = catalog(&json, "voids")["entries"]
             .as_array()
@@ -274,17 +274,33 @@ fn export_is_a_faithful_projection() {
             .iter()
             .find(|e| e["type"] == r.type_id)
             .unwrap();
-        assert_eq!(
-            e["supportsPreview"].as_bool(),
-            Some(r.supports_preview),
-            "`voids/{}` supportsPreview",
-            r.type_id
-        );
         let want_capture = r.capture_kind.map(|k| serde_json::to_value(k).unwrap());
         let got = e["captureKind"].clone();
         let got = (!got.is_null()).then_some(got);
         assert_eq!(got, want_capture, "`voids/{}` captureKind", r.type_id);
     }
+
+    // Previewability is one question every catalog answers, and the artifact
+    // must carry the same answer the registry gives. A consumer pairing this
+    // JSON with a directory of rendered assets reads exactly this flag to know
+    // which entries it should find one for.
+    let mut previewable = 0usize;
+    for cat in catalogs_of(&json) {
+        for e in cat["entries"].as_array().unwrap() {
+            let got = e["supportsPreview"].as_bool();
+            assert!(
+                got.is_some(),
+                "`{}/{}` has no supportsPreview",
+                cat["id"],
+                e["type"]
+            );
+            previewable += usize::from(got == Some(true));
+        }
+    }
+    assert_eq!(
+        previewable, 34,
+        "7 filters + 10 veils + 1 void + 16 blend modes declare a preview recipe"
+    );
 
     // Settings ride on the same footing, against the section schema minus the
     // prefs the UI does not treat as settings.

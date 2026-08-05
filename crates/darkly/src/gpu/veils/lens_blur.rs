@@ -1,4 +1,7 @@
 use crate::gpu::effect::{EffectCache, EffectPipeline};
+use crate::gpu::params::ConstParamValue;
+use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
+use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
@@ -15,12 +18,38 @@ const PARAMS: &[ParamDef] = &[
         .with_description("How bright a pixel must be before it blooms into a bokeh highlight."),
 ];
 
+/// Focus pulls all the way out and back in. `radius` is a sample-footprint
+/// parameter within a single pass rather than a pass count, so sweeping its full
+/// band averages *below* the shipped default in cost.
+static PREVIEW: PreviewRecipe = PreviewRecipe {
+    frames: ANIMATED_FRAMES,
+    fps: PREVIEW_FPS,
+    tracks: &[Track {
+        target: TrackTarget::Param("radius"),
+        keys: &[
+            Key {
+                t: 0.0,
+                value: ConstParamValue::Float(0.0),
+            },
+            Key {
+                t: 0.5,
+                value: ConstParamValue::Float(1.0),
+            },
+            Key {
+                t: 1.0,
+                value: ConstParamValue::Float(0.0),
+            },
+        ],
+    }],
+};
+
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "lens_blur",
         display_name: "Lens Blur",
         description: "Defocus the view with a soft camera-lens blur.",
         params: PARAMS,
+        preview: Some(&PREVIEW),
         create_pipeline: create_lens_blur_pipeline,
         from_params: |params, shared| {
             let radius = match params.first() {

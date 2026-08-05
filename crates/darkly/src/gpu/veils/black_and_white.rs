@@ -15,6 +15,7 @@ pub fn register() -> VeilRegistration {
         display_name: bw::DISPLAY_NAME,
         description: bw::DESCRIPTION,
         params: bw::PARAMS,
+        preview: Some(&bw::PREVIEW),
         create_pipeline,
         from_params: |params, shared| Box::new(BlackAndWhite::new(params, shared)),
     }

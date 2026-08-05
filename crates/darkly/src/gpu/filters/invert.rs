@@ -10,6 +10,9 @@ use std::sync::Arc;
 
 use crate::gpu::effect::MaskedFilterPipeline;
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
+use crate::gpu::params::ConstParamValue;
+use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
+use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
 
 /// Prepend the shared color atom to the invert shader so `fs_invert` /
 /// `fs_invert_masked` can call `invert_color` — the same `include_str!`
@@ -30,6 +33,32 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
     ))
 }
 
+/// The inversion fades in over the untouched image and back out. Invert takes
+/// no parameters of its own, so the host layer's opacity is the whole of the
+/// motion — and a crossfade between the original and its negative shows what the
+/// filter does better than either end alone.
+static PREVIEW: PreviewRecipe = PreviewRecipe {
+    frames: ANIMATED_FRAMES,
+    fps: PREVIEW_FPS,
+    tracks: &[Track {
+        target: TrackTarget::Layer("opacity"),
+        keys: &[
+            Key {
+                t: 0.0,
+                value: ConstParamValue::Float(0.0),
+            },
+            Key {
+                t: 0.5,
+                value: ConstParamValue::Float(1.0),
+            },
+            Key {
+                t: 1.0,
+                value: ConstParamValue::Float(0.0),
+            },
+        ],
+    }],
+};
+
 pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "invert",
@@ -37,6 +66,7 @@ pub fn register() -> FilterPipelineRegistration {
         icon: "fa6-solid:circle-half-stroke",
         description: "Invert every color channel for a photo-negative.",
         params: &[],
+        preview: Some(&PREVIEW),
         create_pipeline,
     }
 }

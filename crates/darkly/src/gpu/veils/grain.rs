@@ -1,4 +1,7 @@
 use crate::gpu::effect::{EffectCache, EffectPipeline};
+use crate::gpu::params::ConstParamValue;
+use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
+use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
@@ -14,12 +17,34 @@ const PARAMS: &[ParamDef] = &[
         .with_description("How strongly the grain shows over the image."),
 ];
 
+/// Two seconds of grain reshuffling. The veil advances one noise index per
+/// call, so the preview drives its clock rather than a parameter — and because
+/// that index only marches forward, the sequence does not loop.
+static PREVIEW: PreviewRecipe = PreviewRecipe {
+    frames: ANIMATED_FRAMES,
+    fps: PREVIEW_FPS,
+    tracks: &[Track {
+        target: TrackTarget::Time,
+        keys: &[
+            Key {
+                t: 0.0,
+                value: ConstParamValue::Float(0.0),
+            },
+            Key {
+                t: 1.0,
+                value: ConstParamValue::Float(2.0),
+            },
+        ],
+    }],
+};
+
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "grain",
         display_name: "Grain",
         description: "Film grain noise over the view, optionally animated.",
         params: PARAMS,
+        preview: Some(&PREVIEW),
         create_pipeline: create_evolve_pipeline,
         from_params: |params, shared| {
             let speed = match params.first() {

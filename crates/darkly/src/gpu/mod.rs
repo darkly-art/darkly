@@ -118,6 +118,7 @@ pub mod paint_target;
 pub mod param_filter;
 pub mod params;
 pub mod preview;
+pub mod preview_recipe;
 pub mod readback;
 pub mod region_store;
 pub mod rescale;

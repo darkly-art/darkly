@@ -17,7 +17,9 @@ use std::sync::Arc;
 use crate::gpu::effect::EffectCache;
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
 use crate::gpu::param_filter::{ParamFilter, SrcSampling};
-use crate::gpu::params::{ParamDef, ParamValue};
+use crate::gpu::params::{ConstParamValue, ParamDef, ParamValue};
+use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
+use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
 
 pub const PARAMS: &[ParamDef] = &[
     ParamDef::float("brightness", -100.0, 100.0, 0.0)
@@ -93,6 +95,59 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
     ))
 }
 
+/// Both sliders swing up, down and back, concurrently — so the preview shows
+/// the two controls interacting rather than one at a time. Contrast leads with a
+/// wider swing because it reads more slowly than brightness at the same
+/// magnitude.
+static PREVIEW: PreviewRecipe = PreviewRecipe {
+    frames: ANIMATED_FRAMES,
+    fps: PREVIEW_FPS,
+    tracks: &[
+        Track {
+            target: TrackTarget::Param("brightness"),
+            keys: &[
+                Key {
+                    t: 0.00,
+                    value: ConstParamValue::Float(0.0),
+                },
+                Key {
+                    t: 0.25,
+                    value: ConstParamValue::Float(40.0),
+                },
+                Key {
+                    t: 0.75,
+                    value: ConstParamValue::Float(-40.0),
+                },
+                Key {
+                    t: 1.00,
+                    value: ConstParamValue::Float(0.0),
+                },
+            ],
+        },
+        Track {
+            target: TrackTarget::Param("contrast"),
+            keys: &[
+                Key {
+                    t: 0.00,
+                    value: ConstParamValue::Float(0.0),
+                },
+                Key {
+                    t: 0.25,
+                    value: ConstParamValue::Float(60.0),
+                },
+                Key {
+                    t: 0.75,
+                    value: ConstParamValue::Float(-40.0),
+                },
+                Key {
+                    t: 1.00,
+                    value: ConstParamValue::Float(0.0),
+                },
+            ],
+        },
+    ],
+};
+
 pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "brightness_contrast",
@@ -100,6 +155,7 @@ pub fn register() -> FilterPipelineRegistration {
         icon: "fa6-solid:sun",
         description: "The classic two-slider brightness and contrast adjustment.",
         params: PARAMS,
+        preview: Some(&PREVIEW),
         create_pipeline,
     }
 }

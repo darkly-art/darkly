@@ -68,6 +68,10 @@ name = "export-docs"
 path = "src/bin/export_docs.rs"
 
 [[bin]]
+name = "render_docs"
+required-features = ["testing"]
+
+[[bin]]
 name = "stroke_replay_bench"
 required-features = ["testing"]
 

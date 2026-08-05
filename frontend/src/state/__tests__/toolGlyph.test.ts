@@ -26,7 +26,7 @@ function withToolsCatalog(inst: DarklyInstance, entries: Array<[string, string |
                 category: null,
                 hotkeyAction: null,
                 params: [],
-                supportsPreview: null,
+                supportsPreview: false,
                 captureKind: null,
             })),
         },

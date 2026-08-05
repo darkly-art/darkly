@@ -82,8 +82,8 @@ pub fn registration(
         params: config.params,
         icon: config.icon,
         // The aux texture is a 1×1 placeholder until a frame arrives, so
-        // there's nothing meaningful to render at picker-preview time.
-        supports_preview: false,
+        // there is nothing meaningful to render, and nothing to animate.
+        preview: None,
         supports_live_transform: true,
         capture_kind: Some(config.capture_kind),
         default_transform: config.default_transform,

@@ -20,7 +20,9 @@ use std::sync::Arc;
 use crate::gpu::effect::EffectCache;
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
 use crate::gpu::param_filter::{ParamFilter, SrcSampling};
-use crate::gpu::params::{ParamDef, ParamValue};
+use crate::gpu::params::{ConstParamValue, ParamDef, ParamValue};
+use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
+use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
 
 /// Parameter schema. `model` is an enum dropdown; the three scalars are plain
 /// rows; `colorize` is a checkbox that (in the shader) overrides the model.
@@ -123,6 +125,57 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
     ))
 }
 
+/// The image lightens, darkens and returns while the hue rotates out and back,
+/// the two tracks running concurrently. `model` and `colorize` stay at their
+/// defaults, so what moves is exactly the pair of knobs the filter is named for.
+/// A full 360° spin is expressible as `hue: -180 → 180` — the parameter's own
+/// endpoints are the same colour — but its last keyframe is not numerically its
+/// first, so it would report no loop; the ping-pong closes instead.
+static PREVIEW: PreviewRecipe = PreviewRecipe {
+    frames: ANIMATED_FRAMES,
+    fps: PREVIEW_FPS,
+    tracks: &[
+        Track {
+            target: TrackTarget::Param("value"),
+            keys: &[
+                Key {
+                    t: 0.00,
+                    value: ConstParamValue::Float(0.0),
+                },
+                Key {
+                    t: 0.25,
+                    value: ConstParamValue::Float(60.0),
+                },
+                Key {
+                    t: 0.75,
+                    value: ConstParamValue::Float(-60.0),
+                },
+                Key {
+                    t: 1.00,
+                    value: ConstParamValue::Float(0.0),
+                },
+            ],
+        },
+        Track {
+            target: TrackTarget::Param("hue"),
+            keys: &[
+                Key {
+                    t: 0.0,
+                    value: ConstParamValue::Float(0.0),
+                },
+                Key {
+                    t: 0.5,
+                    value: ConstParamValue::Float(180.0),
+                },
+                Key {
+                    t: 1.0,
+                    value: ConstParamValue::Float(0.0),
+                },
+            ],
+        },
+    ],
+};
+
 pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "hsv",
@@ -130,6 +183,7 @@ pub fn register() -> FilterPipelineRegistration {
         icon: "fa6-solid:palette",
         description: "Rotate hue and scale saturation and value, with optional colorize.",
         params: PARAMS,
+        preview: Some(&PREVIEW),
         create_pipeline,
     }
 }

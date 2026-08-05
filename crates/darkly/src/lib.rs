@@ -3,6 +3,11 @@ pub mod catalog;
 pub mod clipboard;
 pub mod config;
 pub mod coord;
+/// Renders the documentation preview assets. Performs blocking GPU readbacks,
+/// so it lives behind the same gate as `gpu::test_utils` — engine, compositor
+/// and WASM-bridge code cannot name it in a production build.
+#[cfg(any(test, feature = "testing"))]
+pub mod docs_render;
 pub mod document;
 pub mod engine;
 pub mod format;

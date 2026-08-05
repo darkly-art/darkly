@@ -1,4 +1,7 @@
 use crate::gpu::effect::{EffectCache, EffectPipeline};
+use crate::gpu::params::ConstParamValue;
+use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
+use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
@@ -20,12 +23,35 @@ const PARAMS: &[ParamDef] = &[
         .with_description("Size of the droplets."),
 ];
 
+/// Two seconds of droplets running down the glass. The motion *is* the effect,
+/// so the preview runs the veil's own clock rather than a parameter. It is
+/// integrated forward and does not return to its start, so the sequence does not
+/// loop.
+static PREVIEW: PreviewRecipe = PreviewRecipe {
+    frames: ANIMATED_FRAMES,
+    fps: PREVIEW_FPS,
+    tracks: &[Track {
+        target: TrackTarget::Time,
+        keys: &[
+            Key {
+                t: 0.0,
+                value: ConstParamValue::Float(0.0),
+            },
+            Key {
+                t: 1.0,
+                value: ConstParamValue::Float(2.0),
+            },
+        ],
+    }],
+};
+
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "rainy_glass",
         display_name: "Rainy Glass",
         description: "Raindrops run down a pane of glass over the view.",
         params: PARAMS,
+        preview: Some(&PREVIEW),
         create_pipeline: create_rainy_glass_pipeline,
         from_params: |params, shared| {
             let speed = match params.first() {

@@ -34,9 +34,11 @@ pub struct CatalogEntry {
     /// Action id this variant is bound to, for variants a hotkey can select.
     pub hotkey_action: Option<&'static str>,
     pub params: Vec<ParamInfo>,
-    /// Whether the browser can render a live thumbnail of this variant; voids
-    /// only, `None` for registries where the question does not arise.
-    pub supports_preview: Option<bool>,
+    /// Whether this variant declares a preview recipe — the one fact behind
+    /// both "the picker can render a live thumbnail of it" and "a rendered
+    /// documentation asset exists for it". False for the registries whose
+    /// entries are affordances rather than images.
+    pub supports_preview: bool,
     /// How the browser captures this variant's external frames; voids only.
     pub capture_kind: Option<CaptureKind>,
 }
@@ -55,7 +57,7 @@ impl CatalogEntry {
             category: None,
             hotkey_action: None,
             params: Vec::new(),
-            supports_preview: None,
+            supports_preview: false,
             capture_kind: None,
         }
     }
@@ -92,7 +94,7 @@ impl CatalogEntry {
     }
 
     pub fn with_supports_preview(mut self, supports_preview: bool) -> Self {
-        self.supports_preview = Some(supports_preview);
+        self.supports_preview = supports_preview;
         self
     }
 
@@ -176,7 +178,7 @@ pub fn settings_catalogs() -> Vec<Catalog> {
                 category: None,
                 hotkey_action: None,
                 params,
-                supports_preview: None,
+                supports_preview: false,
                 capture_kind: None,
             };
             let mut catalog = Catalog::new(

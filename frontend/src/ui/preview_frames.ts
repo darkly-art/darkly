@@ -44,9 +44,9 @@ export function toPreviewData(raw: RawPreview): PreviewData {
 
 /** Whether the "Add Void" picker should render a live thumbnail for this void
  *  type, versus falling back to its iconify icon. Type-owned: the void declares
- *  `supportsPreview` on its registration, and the picker asks here rather than
- *  branching on the void kind. */
-export function voidShowsPreview(vt: { supportsPreview?: boolean | null }): boolean {
+ *  a preview recipe on its registration and `supportsPreview` reports whether it
+ *  did, so the picker asks here rather than branching on the void kind. */
+export function voidShowsPreview(vt: { supportsPreview?: boolean }): boolean {
     return vt.supportsPreview === true;
 }
 

@@ -12,6 +12,9 @@
 use crate::gpu::effect::{
     create_blit_bind_group, create_blit_pipeline, EffectCache, EffectPipeline,
 };
+use crate::gpu::params::ConstParamValue;
+use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
+use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
 use crate::gpu::void::{DirtyFlag, ParamDef, ParamValue, Void, VoidRegistration};
 use crate::units::UnitType;
 use std::cell::Cell;
@@ -83,6 +86,32 @@ const PARAMS: &[ParamDef] = &[
         ),
 ];
 
+/// The field drifts forward through the noise volume and rewinds. `time` is an
+/// ordinary parameter rather than the animation trait's clock, so the whole
+/// sweep is a value that can be written and re-written — which is what lets it
+/// return to where it started and close the loop.
+static PREVIEW: PreviewRecipe = PreviewRecipe {
+    frames: ANIMATED_FRAMES,
+    fps: PREVIEW_FPS,
+    tracks: &[Track {
+        target: TrackTarget::Param("time"),
+        keys: &[
+            Key {
+                t: 0.0,
+                value: ConstParamValue::Float(0.0),
+            },
+            Key {
+                t: 0.5,
+                value: ConstParamValue::Float(6.0),
+            },
+            Key {
+                t: 1.0,
+                value: ConstParamValue::Float(0.0),
+            },
+        ],
+    }],
+};
+
 pub fn register() -> VoidRegistration {
     VoidRegistration {
         type_id: TYPE_ID,
@@ -90,7 +119,7 @@ pub fn register() -> VoidRegistration {
         description: "Procedural fractal noise — clouds, grain and organic texture from a seed.",
         params: PARAMS,
         icon: "tabler:galaxy",
-        supports_preview: true,
+        preview: Some(&PREVIEW),
         supports_live_transform: true,
         // Purely procedural — no external capture, identity seed transform.
         capture_kind: None,

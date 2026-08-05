@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::gpu::effect::{EffectCache, EffectPipeline};
 use crate::gpu::filters::chromatic_aberration::{
-    pack_uniform, GpuAberrationParams, DESCRIPTION, PARAMS,
+    pack_uniform, GpuAberrationParams, DESCRIPTION, PARAMS, PREVIEW,
 };
 use crate::gpu::veil::{ParamValue, Veil, VeilRegistration};
 
@@ -19,6 +19,7 @@ pub fn register() -> VeilRegistration {
         display_name: "Chromatic Aberration",
         description: DESCRIPTION,
         params: PARAMS,
+        preview: Some(&PREVIEW),
         create_pipeline,
         from_params: |params, shared| Box::new(ChromaticAberration::new(params.to_vec(), shared)),
     }

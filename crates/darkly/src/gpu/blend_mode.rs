@@ -16,6 +16,10 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use super::params::{ConstParamValue, ParamDef};
+use super::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
+use super::preview_recipe::{Key, PreviewRecipe, PreviewSpec, Track, TrackTarget};
+
 /// Static metadata for one blend mode. Every layer/group holds a
 /// `&'static BlendModeRegistration` directly; the GPU value is read straight
 /// from `gpu_value`, no enum cast, no extra lookup.
@@ -46,6 +50,43 @@ pub struct BlendModeRegistration {
 /// Id of the catalog this registry projects into.
 pub const CATALOG_ID: &str = "blendModes";
 
+/// Document properties a blend mode's preview may drive. A mode is previewed
+/// through a real layer tree, so the blended layer's opacity is available to a
+/// [`TrackTarget::Layer`] track.
+pub const LAYER_KNOBS: &[ParamDef] = &[super::preview_recipe::OPACITY];
+
+/// How a blend mode's preview moves: the blended layer rising over an unchanged
+/// backdrop and receding. Modes take no parameters and the motion is the same
+/// for every one of them, so it belongs to the catalog rather than to any single
+/// registration — a seventeenth mode is still one file of five fields and
+/// inherits this for free. It returns to zero, so the loop closes.
+///
+/// A mode that ever wants different motion is a `preview` field on
+/// [`BlendModeRegistration`] and a fallback to this in
+/// [`BlendModeRegistry::preview`] — a change local to this file and the one
+/// mode that wants the override.
+pub static PREVIEW: PreviewRecipe = PreviewRecipe {
+    frames: ANIMATED_FRAMES,
+    fps: PREVIEW_FPS,
+    tracks: &[Track {
+        target: TrackTarget::Layer("opacity"),
+        keys: &[
+            Key {
+                t: 0.0,
+                value: ConstParamValue::Float(0.0),
+            },
+            Key {
+                t: 0.5,
+                value: ConstParamValue::Float(1.0),
+            },
+            Key {
+                t: 1.0,
+                value: ConstParamValue::Float(0.0),
+            },
+        ],
+    }],
+};
+
 impl BlendModeRegistration {
     pub fn catalog_entry(&self) -> crate::catalog::CatalogEntry {
         // Blend modes have no icons anywhere — the dropdown is text, grouped by
@@ -53,6 +94,10 @@ impl BlendModeRegistration {
         crate::catalog::CatalogEntry::new(self.type_id, self.display_name)
             .with_description(self.description)
             .with_category(self.category)
+            // Modes carry no `preview` field of their own — the recipe lives on
+            // the catalog — so previewability is the same question put to the
+            // same authority, resolved through the registry rather than a field.
+            .with_supports_preview(registry().preview(self.type_id).is_some())
     }
 }
 
@@ -125,6 +170,16 @@ impl BlendModeRegistry {
     /// `blend_mode_types()` query to populate the UI dropdown.
     pub fn all(&'static self) -> Vec<&'static BlendModeRegistration> {
         self.ordered.iter().map(|&i| &self.entries[i]).collect()
+    }
+
+    /// How a mode's preview moves, paired with the knob namespace this catalog
+    /// exposes to it. Every registered mode inherits [`PREVIEW`]; an unknown
+    /// `type_id` gets `None`.
+    pub fn preview(&'static self, type_id: &str) -> Option<PreviewSpec> {
+        self.get(type_id).map(|_| PreviewSpec {
+            recipe: &PREVIEW,
+            layer_knobs: LAYER_KNOBS,
+        })
     }
 }
 

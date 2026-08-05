@@ -1,4 +1,7 @@
 use crate::gpu::effect::{EffectCache, EffectPipeline};
+use crate::gpu::params::ConstParamValue;
+use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
+use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
@@ -22,12 +25,37 @@ const PARAMS: &[ParamDef] = &[
         .with_description("Slow bright bar rolling up the frame from mains interference."),
 ];
 
+/// Two seconds of the veil's own tape clock. The artefacts this veil is made of
+/// are temporal — the wobble, the switching noise, the AC beat — so its preview
+/// runs time rather than any parameter. The clock is integrated forward and does
+/// not return to where it started, so the sequence does not loop; making it do so
+/// would mean a periodic time basis in the shader, which is a change to the
+/// effect rather than to its preview.
+static PREVIEW: PreviewRecipe = PreviewRecipe {
+    frames: ANIMATED_FRAMES,
+    fps: PREVIEW_FPS,
+    tracks: &[Track {
+        target: TrackTarget::Time,
+        keys: &[
+            Key {
+                t: 0.0,
+                value: ConstParamValue::Float(0.0),
+            },
+            Key {
+                t: 1.0,
+                value: ConstParamValue::Float(2.0),
+            },
+        ],
+    }],
+};
+
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "vhs",
         display_name: "VHS",
         description: "Analog VHS tape artifacts — scanlines, noise, and color bleed.",
         params: PARAMS,
+        preview: Some(&PREVIEW),
         create_pipeline: create_vhs_pipeline,
         from_params: |params, shared| {
             let speed = match params.first() {

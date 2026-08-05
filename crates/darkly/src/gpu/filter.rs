@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use super::effect::EffectCache;
 use super::params::{ParamDef, ParamValue};
+use super::preview_recipe::{PreviewRecipe, PreviewSpec};
 use crate::catalog::{Catalog, CatalogEntry};
 
 /// A filter's GPU realization: a render pipeline plus optional param-derived
@@ -77,6 +78,10 @@ pub struct FilterPipelineRegistration {
     /// search indexes it — include the terms users would search for.
     pub description: &'static str,
     pub params: &'static [ParamDef],
+    /// How this filter's documentation preview moves, or `None` for a filter
+    /// with nothing worth showing. Declaring a recipe is what makes a filter
+    /// previewable — the two facts are one.
+    pub preview: Option<&'static PreviewRecipe>,
     pub create_pipeline: fn(&wgpu::Device) -> Arc<dyn FilterEffect>,
 }
 
@@ -85,12 +90,18 @@ pub struct FilterPipelineRegistration {
 /// and selection modifiers rather than colour adjustments.
 pub const CATALOG_ID: &str = "filters";
 
+/// Document properties a filter's preview may drive. A filter is previewed
+/// through a real layer tree, so the host layer's opacity is available to a
+/// [`TrackTarget::Layer`](super::preview_recipe::TrackTarget::Layer) track.
+pub const LAYER_KNOBS: &[ParamDef] = &[super::preview_recipe::OPACITY];
+
 impl FilterPipelineRegistration {
     pub fn catalog_entry(&self) -> CatalogEntry {
         CatalogEntry::new(self.type_id, self.display_name)
             .with_icon(self.icon)
             .with_description(self.description)
             .with_params(self.params)
+            .with_supports_preview(self.preview.is_some())
     }
 }
 
@@ -165,6 +176,16 @@ impl FilterPipelineRegistry {
     /// True when this registry knows the given `type_id`.
     pub fn has(&self, type_id: &str) -> bool {
         self.entries.contains_key(type_id)
+    }
+
+    /// How a filter type's preview moves, paired with the knob namespace this
+    /// catalog exposes to it. `None` for an unknown type or one that declares
+    /// no recipe.
+    pub fn preview(&self, type_id: &str) -> Option<PreviewSpec> {
+        Some(PreviewSpec {
+            recipe: self.entries.get(type_id)?.reg.preview?,
+            layer_knobs: LAYER_KNOBS,
+        })
     }
 
     /// Human-friendly display name for a filter type, falling back to the

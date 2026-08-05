@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 pub use super::effect::{EffectCache, EffectPipeline};
 pub use super::params::{ParamDef, ParamValue};
+use super::preview_recipe::{PreviewRecipe, PreviewSpec};
 
 /// External image source for [`Void::upload_external_image`]. Today the only
 /// populated variant is `Web`, which wraps wgpu's WebGPU-only external-image
@@ -270,12 +271,13 @@ pub struct VoidRegistration {
     /// panel renders it for void layers of this kind, and the picker falls back
     /// to it when the void declares no rendered preview.
     pub icon: &'static str,
-    /// Whether this void can render a meaningful picker thumbnail. When true the
-    /// "Add Void" picker shows a live rendered preview; when false it shows
-    /// [`icon`](Self::icon) instead. (The camera void opts out — its aux texture
-    /// is a 1×1 placeholder until a webcam frame arrives, so there's nothing to
-    /// render at preview time.)
-    pub supports_preview: bool,
+    /// How this void's preview moves, or `None` for a void with nothing to
+    /// show. Declaring a recipe is what makes a void previewable — the "Add
+    /// Void" picker renders a live thumbnail for the ones that do and falls
+    /// back to [`icon`](Self::icon) for the ones that don't. (The stream voids
+    /// opt out: their aux texture is a 1×1 placeholder until a browser frame
+    /// arrives, so there is nothing to render and nothing to animate.)
+    pub preview: Option<&'static PreviewRecipe>,
     /// Whether this void exposes a live, user-editable transform (driven by the
     /// generic gizmo, stored on [`crate::layer::VoidLayer::transform`]). Voids
     /// that opt in implement [`Void::set_transform`]; the rest leave it false
@@ -298,13 +300,19 @@ pub struct VoidRegistration {
 /// Id of the catalog this registry projects into.
 pub const CATALOG_ID: &str = "voids";
 
+/// Document properties a void's preview may drive — none. Voids are previewed
+/// offscreen, generating straight into a destination texture rather than
+/// through a layer tree, so there is no compositing layer whose properties a
+/// track could name.
+pub const LAYER_KNOBS: &[ParamDef] = &[];
+
 impl VoidRegistration {
     pub fn catalog_entry(&self) -> crate::catalog::CatalogEntry {
         crate::catalog::CatalogEntry::new(self.type_id, self.display_name)
             .with_icon(self.icon)
             .with_description(self.description)
             .with_params(self.params)
-            .with_supports_preview(self.supports_preview)
+            .with_supports_preview(self.preview.is_some())
             .with_capture_kind(self.capture_kind)
     }
 }
@@ -375,6 +383,16 @@ impl VoidRegistry {
             .get(type_id)
             .map(|e| e.reg.params)
             .unwrap_or(&[])
+    }
+
+    /// How a void type's preview moves, paired with the knob namespace this
+    /// catalog exposes to it. `None` for an unknown type or one that declares
+    /// no recipe.
+    pub fn preview(&self, type_id: &str) -> Option<PreviewSpec> {
+        Some(PreviewSpec {
+            recipe: self.entries.get(type_id)?.reg.preview?,
+            layer_knobs: LAYER_KNOBS,
+        })
     }
 
     /// The iconify icon name for a void kind (layer-panel icon + picker

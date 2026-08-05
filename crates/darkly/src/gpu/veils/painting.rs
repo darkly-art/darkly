@@ -2,6 +2,9 @@
 // generalized Kuwahara filter — see shader header for prior-art credit.
 
 use crate::gpu::effect::{EffectCache, EffectPipeline};
+use crate::gpu::params::ConstParamValue;
+use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
+use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use crate::units::UnitType;
 use std::sync::Arc;
@@ -19,12 +22,40 @@ const PARAMS: &[ParamDef] = &[
         .with_description("How strongly the strongest-oriented region wins, flattening detail into flat patches."),
 ];
 
+/// The brush widens from a single texel to the full Kuwahara window and back,
+/// so each quantised step of the control is plainly visible. `kernel_size` sets
+/// the sampling radius inside one pass — `O(kernel²)` samples — so the ramp
+/// averages a radius of 4 against the shipped default of 6 and is *cheaper* per
+/// frame than a default-parameter render.
+static PREVIEW: PreviewRecipe = PreviewRecipe {
+    frames: ANIMATED_FRAMES,
+    fps: PREVIEW_FPS,
+    tracks: &[Track {
+        target: TrackTarget::Param("kernel_size"),
+        keys: &[
+            Key {
+                t: 0.0,
+                value: ConstParamValue::Int(1),
+            },
+            Key {
+                t: 0.5,
+                value: ConstParamValue::Int(7),
+            },
+            Key {
+                t: 1.0,
+                value: ConstParamValue::Int(1),
+            },
+        ],
+    }],
+};
+
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "painting",
         display_name: "Painting",
         description: "Smooth the view into painterly, brush-like daubs.",
         params: PARAMS,
+        preview: Some(&PREVIEW),
         create_pipeline: create_painting_pipeline,
         from_params: |params, shared| {
             let kernel_size = match params.first() {

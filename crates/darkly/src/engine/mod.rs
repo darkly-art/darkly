@@ -1345,6 +1345,12 @@ impl DarklyEngine {
     /// Uses `device.poll(Wait)` to ensure mapping callbacks fire, then
     /// dispatches every completed readback through the shared handler —
     /// same semantics as a real frame's `poll_pending`.
+    ///
+    /// Gated with the rest of the blocking-readback surface: `device.poll(Wait)`
+    /// deadlocks on WebGPU, where the browser event loop is the only thing that
+    /// resolves buffer mappings, so production and WASM builds must not be able
+    /// to name this at all.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_flush_readbacks(&mut self) {
         let _ = self.gpu.device.poll(wgpu::PollType::Wait {
             submission_index: None,

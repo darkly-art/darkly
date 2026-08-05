@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 pub use super::effect::{EffectCache, EffectPipeline};
 pub use super::params::{ParamDef, ParamValue};
+use super::preview_recipe::{PreviewRecipe, PreviewSpec};
 use crate::catalog::{Catalog, CatalogEntry};
 
 /// Viewport-level post-processing effect ("veil").
@@ -80,6 +81,10 @@ pub struct VeilRegistration {
     /// include the terms users would search for.
     pub description: &'static str,
     pub params: &'static [ParamDef],
+    /// How this veil's documentation preview moves, or `None` for a veil with
+    /// nothing worth showing. Declaring a recipe is what makes a veil
+    /// previewable — the two facts are one.
+    pub preview: Option<&'static PreviewRecipe>,
     pub create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
     pub from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Veil>,
 }
@@ -87,12 +92,18 @@ pub struct VeilRegistration {
 /// Id of the catalog this registry projects into.
 pub const CATALOG_ID: &str = "veils";
 
+/// Document properties a veil's preview may drive — none. Veils are previewed
+/// offscreen, over a source texture rather than through a layer tree, so there
+/// is no compositing layer whose properties a track could name.
+pub const LAYER_KNOBS: &[ParamDef] = &[];
+
 impl VeilRegistration {
     pub fn catalog_entry(&self) -> CatalogEntry {
         // Veils render a live preview in their picker, so no icon.
         CatalogEntry::new(self.type_id, self.display_name)
             .with_description(self.description)
             .with_params(self.params)
+            .with_supports_preview(self.preview.is_some())
     }
 }
 
@@ -174,6 +185,16 @@ impl VeilRegistry {
     /// binary doesn't ship — see [`crate::format::error::LoadError`].
     pub fn has(&self, type_id: &str) -> bool {
         self.entries.contains_key(type_id)
+    }
+
+    /// How a veil type's preview moves, paired with the knob namespace this
+    /// catalog exposes to it. `None` for an unknown type or one that declares
+    /// no recipe.
+    pub fn preview(&self, type_id: &str) -> Option<PreviewSpec> {
+        Some(PreviewSpec {
+            recipe: self.entries.get(type_id)?.reg.preview?,
+            layer_knobs: LAYER_KNOBS,
+        })
     }
 
     /// Get the human-friendly display name for a veil type, falling back to

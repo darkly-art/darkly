@@ -1,4 +1,7 @@
 use crate::gpu::effect::{EffectCache, EffectPipeline};
+use crate::gpu::params::ConstParamValue;
+use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
+use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
@@ -14,12 +17,60 @@ const PARAMS: &[ParamDef] = &[
 /// Size of the generated RGBA noise texture used as a flow map.
 const NOISE_SIZE: u32 = 256;
 
+/// The wash bleeds outward and dries back. `iterations` is a *pass count* —
+/// each one is a fullscreen blur — so its sweep is bounded well below the
+/// slider's maximum: `1 → 10 → 1` averages 5.5 passes per frame, comparable to
+/// the shipped default of 5, where the full `1 → 50` band would average 25. The
+/// visible bleed still ramps from barely-there to twice the default, and
+/// `wetness` costs nothing and carries the rest of the motion.
+static PREVIEW: PreviewRecipe = PreviewRecipe {
+    frames: ANIMATED_FRAMES,
+    fps: PREVIEW_FPS,
+    tracks: &[
+        Track {
+            target: TrackTarget::Param("iterations"),
+            keys: &[
+                Key {
+                    t: 0.0,
+                    value: ConstParamValue::Int(1),
+                },
+                Key {
+                    t: 0.5,
+                    value: ConstParamValue::Int(10),
+                },
+                Key {
+                    t: 1.0,
+                    value: ConstParamValue::Int(1),
+                },
+            ],
+        },
+        Track {
+            target: TrackTarget::Param("wetness"),
+            keys: &[
+                Key {
+                    t: 0.0,
+                    value: ConstParamValue::Float(0.1),
+                },
+                Key {
+                    t: 0.5,
+                    value: ConstParamValue::Float(2.0),
+                },
+                Key {
+                    t: 1.0,
+                    value: ConstParamValue::Float(0.1),
+                },
+            ],
+        },
+    ],
+};
+
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "watercolor",
         display_name: "Watercolor",
         description: "Bleed the view outward into soft watercolor washes.",
         params: PARAMS,
+        preview: Some(&PREVIEW),
         create_pipeline: create_watercolor_pipeline,
         from_params: |params, shared| {
             let iterations = match params.first() {
