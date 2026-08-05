@@ -12,9 +12,6 @@ hotkeys:
   pasteInPlace: $mod+Shift+KeyV
   # Photoshop binds Edit > Preferences to Ctrl+K (Cmd+K on macOS).
   openSettings: $mod+KeyK
-  # Photoshop's File > Export > Export As… is Alt+Shift+Ctrl+W; Darkly
-  # uses the closer Alt+Ctrl+W variant.
-  exportImage: $mod+Alt+KeyW
   # mirrorViewH: intentionally unbound. Photoshop has no native mirror-
   # view action, and M is already taken by rectSelectTool here. Users
   # who want a mirror-view hotkey under the PS preset can set one via

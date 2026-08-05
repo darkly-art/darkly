@@ -8,7 +8,6 @@ import { imageRescale } from '../state/imageRescale.svelte';
 import { selectionModify } from '../state/selectionModify.svelte';
 import { filterModal } from '../state/filterModal.svelte';
 import type { FilterParam } from '../ui/filters/filterParams';
-import { exportImage } from '../state/exportImage.svelte';
 import { exportTimelapse } from '../state/exportTimelapse.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
 import { toast } from '../state/toast.svelte';
@@ -24,18 +23,11 @@ import { detectKind, isImageKind, type FileKind } from '../storage/detectKind';
 import { saveDocument } from '../storage/saveDocument';
 import { fontLibrary } from '../state/font_library.svelte';
 import { processRecording } from '../recording/recorder.svelte';
-import { canSave } from '../storage/fileHandle';
 import { shell } from '../multi_tab/shell.svelte';
 import { about } from '../state/about.svelte';
 import { commandPalette } from '../state/commandPalette.svelte';
 import { openCheatsheet } from '../ui/cheatsheet';
 import { links, openExternal } from '../links';
-
-// Tooltip explaining why Save / Save As are disabled when the browser lacks
-// the File System Access API (Firefox). Returned from each save action's
-// `enabled()` as the disabled-reason string, surfaced as the menu row's `title`.
-const NO_SAVE_TOOLTIP =
-    "Filesystem save isn't supported in this browser — try Chrome, Edge, or Safari.";
 
 /** Walk the layer tree to find a node by id. The layer tree is the
  *  JSON shape produced by `app.refreshLayerTree`, with `children` on
@@ -535,11 +527,11 @@ export function registerActions() {
         displayName: 'Save',
         category: 'file',
         description:
-            'Save the current document as a `.darkly` file. ' +
-            'Re-saves to the same file after the first Save As; otherwise prompts.',
+            'Save the current document. Re-saves to the same `.darkly` file after ' +
+            'the first Save As; otherwise opens the Save picker (`.darkly`, or ' +
+            'PNG / JPEG / WebP to export the canvas).',
         icon: 'fa6-solid:floppy-disk',
         menuPath: ['File:30'],
-        enabled: () => canSave || NO_SAVE_TOOLTIP,
         handler: () => {
             if (!app.engine) return;
             void saveDocument({ forceAs: false });
@@ -549,10 +541,11 @@ export function registerActions() {
         id: 'saveDocumentAs',
         displayName: 'Save As',
         category: 'file',
-        description: 'Save the current document to a new `.darkly` file.',
+        description:
+            'Save the current document to a new file — `.darkly`, or PNG / JPEG / ' +
+            'WebP to export the canvas.',
         icon: 'fa6-solid:file-export',
         menuPath: ['File:40'],
-        enabled: () => canSave || NO_SAVE_TOOLTIP,
         handler: () => {
             if (!app.engine) return;
             void saveDocument({ forceAs: true });
@@ -583,18 +576,6 @@ export function registerActions() {
         menuPath: ['File:20'],
         handler: () => {
             void openFlow();
-        },
-    });
-    actions.register({
-        id: 'exportImage',
-        displayName: 'Export Image…',
-        category: 'file',
-        description: 'Export the canvas composite as PNG, JPEG, or WebP.',
-        icon: 'fa6-solid:image',
-        menuPath: ['File:50'],
-        handler: () => {
-            if (!app.engine) return;
-            exportImage.open = true;
         },
     });
     actions.register({

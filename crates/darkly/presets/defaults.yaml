@@ -50,10 +50,9 @@ hotkeys:
   # Photoshop binds Edit > Preferences to $mod+K; Krita/GIMP have no
   # default. Darkly picks the macOS preferences convention.
   openSettings: $mod+Comma
-  # Photoshop & GIMP both have export (Photoshop: $mod+Alt+W for "Export
-  # As"; GIMP: $mod+Shift+E for "Export As…"). Krita's `file_export_file`
-  # is explicitly `none`. Darkly picks GIMP's binding.
-  exportImage: $mod+Shift+KeyE
+  # Image export is folded into Save As (the save picker's type dropdown
+  # offers PNG/JPEG/WebP alongside `.darkly`), so there's no separate
+  # export-image hotkey — Save As ($mod+Shift+KeyS) covers it.
   # Photoshop binds Lasso to L and Polygonal Lasso to Shift+L; Krita's
   # selection-tool .action files have empty <shortcut>; GIMP's analog is
   # "Free Select" (KeyF) with no polygonal counterpart. Darkly inherits
