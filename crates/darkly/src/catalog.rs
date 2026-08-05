@@ -34,10 +34,18 @@ pub struct CatalogEntry {
     /// Action id this variant is bound to, for variants a hotkey can select.
     pub hotkey_action: Option<&'static str>,
     pub params: Vec<ParamInfo>,
-    /// Whether this variant declares a preview recipe — the one fact behind
-    /// both "the picker can render a live thumbnail of it" and "a rendered
-    /// documentation asset exists for it". False for the registries whose
-    /// entries are affordances rather than images.
+    /// Whether this variant declares a
+    /// [`PreviewAnim`](crate::gpu::preview::PreviewAnim) — the one fact behind
+    /// "a rendered preview of it exists". False for the registries whose entries
+    /// are affordances rather than images.
+    ///
+    /// It does **not** promise a *picker* preview. A blend mode declares one and
+    /// has a documentation asset, but is a relation between two images rather
+    /// than an effect over one, so its catalog exports no preview mechanism and
+    /// `start_preview` no-ops for it exactly as it does for an unknown type.
+    /// Whether a catalog can be driven live is
+    /// [`preview_mechanisms`](crate::catalog::preview_mechanisms)' answer, not
+    /// this field's.
     pub supports_preview: bool,
     /// How the browser captures this variant's external frames; voids only.
     pub capture_kind: Option<CaptureKind>,

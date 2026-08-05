@@ -41,7 +41,6 @@ use crate::gpu::effect::{EffectCache, EffectPipeline};
 use crate::gpu::void::{
     CaptureKind, DirtyFlag, ExternalImageSource, ParamDef, ParamValue, Void, VoidRegistration,
 };
-use std::cell::Cell;
 use std::sync::Arc;
 
 /// Static per-variant description of a video-stream void. One of these is
@@ -199,11 +198,10 @@ pub struct VideoStreamVoid {
     /// the first frame arrives — matching the placeholder aux texture.
     src_w: u32,
     src_h: u32,
-    /// Canvas dimensions cached from `create_cache`. `Cell` because the trait
-    /// gives us `&self` there; `upload_external_image` reads these to rewrite
-    /// the uniforms when the source resolution changes.
-    canvas_w: Cell<u32>,
-    canvas_h: Cell<u32>,
+    /// Canvas dimensions kept from `create_cache`. `upload_external_image`
+    /// reads these to rewrite the uniforms when the source resolution changes.
+    canvas_w: u32,
+    canvas_h: u32,
     shared: Arc<EffectPipeline>,
     dirty: DirtyFlag,
 }
@@ -221,8 +219,8 @@ impl Clone for VideoStreamVoid {
             param_snapshot: self.param_snapshot.clone(),
             src_w: self.src_w,
             src_h: self.src_h,
-            canvas_w: Cell::new(self.canvas_w.get()),
-            canvas_h: Cell::new(self.canvas_h.get()),
+            canvas_w: self.canvas_w,
+            canvas_h: self.canvas_h,
             shared: self.shared.clone(),
             dirty: DirtyFlag::new_dirty(),
         }
@@ -247,8 +245,8 @@ impl VideoStreamVoid {
             param_snapshot: normalize_params(config, params),
             src_w: 1,
             src_h: 1,
-            canvas_w: Cell::new(1),
-            canvas_h: Cell::new(1),
+            canvas_w: 1,
+            canvas_h: 1,
             shared,
             dirty: DirtyFlag::new_dirty(),
         }
@@ -261,7 +259,7 @@ impl VideoStreamVoid {
         // shader's perspective divide is a no-op for them.
         let [inv_row0, inv_row1, inv_row2] =
             crate::gpu::transform::pack_inv_rows(&self.transform.to_projective());
-        let (ox, oy, cw, ch) = self.content_rect(self.canvas_w.get(), self.canvas_h.get());
+        let (ox, oy, cw, ch) = self.content_rect(self.canvas_w, self.canvas_h);
         VideoStreamUniforms {
             inv_row0,
             inv_row1,
@@ -476,9 +474,7 @@ impl Void for VideoStreamVoid {
         self.freeze = read_freeze(self.config, params);
         self.frame_divisor = read_frame_divisor(self.config, params);
         self.param_snapshot = normalize_params(self.config, params);
-        if let Some(buf) = cache.uniform_bufs.first() {
-            queue.write_buffer(buf, 0, bytemuck::bytes_of(&self.uniforms()));
-        }
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
         self.dirty.mark();
     }
 
@@ -492,15 +488,13 @@ impl Void for VideoStreamVoid {
         // rewrite the uniform. Never rebuild — that would drop the aux frame
         // texture (the `from_params` rebuild bug documented on `update_params`).
         self.transform = *transform;
-        if let Some(buf) = cache.uniform_bufs.first() {
-            queue.write_buffer(buf, 0, bytemuck::bytes_of(&self.uniforms()));
-        }
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
         self.dirty.mark();
     }
 
     fn content_extent(&self, canvas_w: u32, canvas_h: u32) -> (f32, f32, f32, f32) {
         // Use the compositor's LIVE canvas dims (passed in) rather than the
-        // cached Cell, so the gizmo bbox is correct immediately after a crop —
+        // cached copy, so the gizmo bbox is correct immediately after a crop —
         // `set_canvas_rect` updates the compositor's dims but not the void's
         // cached copy.
         self.content_rect(canvas_w, canvas_h)
@@ -638,7 +632,7 @@ impl Void for VideoStreamVoid {
     }
 
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         _dst_view: &wgpu::TextureView,
@@ -648,8 +642,8 @@ impl Void for VideoStreamVoid {
     ) -> EffectCache {
         // Cache the canvas dims; `upload_external_image` needs them to
         // rewrite uniforms when the source resolution changes.
-        self.canvas_w.set(render_width.max(1));
-        self.canvas_h.set(render_height.max(1));
+        self.canvas_w = render_width.max(1);
+        self.canvas_h = render_height.max(1);
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("void-video-stream-uniforms"),
@@ -1060,8 +1054,8 @@ mod tests {
             let mut x = make_void();
             x.src_w = 100;
             x.src_h = 100;
-            x.canvas_w.set(100);
-            x.canvas_h.set(100);
+            x.canvas_w = 100;
+            x.canvas_h = 100;
             x
         };
 
@@ -1093,8 +1087,8 @@ mod tests {
     #[test]
     fn content_extent_overhangs_canvas() {
         let mut v = make_void();
-        v.canvas_w.set(100);
-        v.canvas_h.set(100);
+        v.canvas_w = 100;
+        v.canvas_h = 100;
         v.src_w = 200;
         v.src_h = 100;
         let (ox, oy, w, h) = v.content_extent(100, 100);
@@ -1108,9 +1102,9 @@ mod tests {
     /// cover-fit, so the content rect falls back to canvas-fill.
     #[test]
     fn content_extent_falls_back_to_canvas_without_frame() {
-        let v = make_void();
-        v.canvas_w.set(80);
-        v.canvas_h.set(60);
+        let mut v = make_void();
+        v.canvas_w = 80;
+        v.canvas_h = 60;
         let (ox, oy, w, h) = v.content_extent(80, 60);
         assert_eq!((ox, oy, w, h), (0.0, 0.0, 80.0, 60.0));
     }

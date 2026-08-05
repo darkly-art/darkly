@@ -3,7 +3,10 @@ use std::sync::Arc;
 
 pub use super::effect::{EffectCache, EffectPipeline};
 pub use super::params::{ParamDef, ParamValue};
-use super::preview_recipe::{PreviewRecipe, PreviewSpec};
+use super::preview::{
+    PreviewAnim, PreviewEntry, PreviewMechanism, PreviewRegistries, PreviewSession, PreviewTarget,
+    PREVIEW_FORMAT,
+};
 use crate::catalog::{Catalog, CatalogEntry};
 
 /// Viewport-level post-processing effect ("veil").
@@ -27,8 +30,12 @@ pub trait Veil: std::fmt::Debug {
     /// from and write to these at whatever resolution the chain provides.
     /// When `rendering.veil_scale` is below 1.0 the chain passes smaller
     /// textures automatically; veils never need to know about the distinction.
+    ///
+    /// Takes `&mut self` so a veil whose uniform struct folds in something it
+    /// is only handed here — the render resolution, a decoded texture's aspect
+    /// — can keep it, and rewrite that struct later from state alone.
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ping_pong_views: &[wgpu::TextureView; 2],
@@ -60,6 +67,25 @@ pub trait Veil: std::fmt::Debug {
     /// Default is a no-op for non-animated veils.
     fn update_time(&mut self, _queue: &wgpu::Queue, _cache: &EffectCache, _dt: f32) {}
 
+    /// Put this instance into the state its preview shows at normalized time
+    /// `t ∈ [0, 1]`, and sync whatever GPU resources that state feeds.
+    ///
+    /// Absolute, not incremental: `preview_at(0.5)` produces the same state
+    /// whether it follows `preview_at(0.4)` or nothing at all.
+    ///
+    /// Answers whether `cache` still describes this instance. A veil whose
+    /// cache *shape* is a function of its parameters — pixelate's aux chain is
+    /// the one in the tree — sets its fields and answers `false`, and the
+    /// caller rebuilds through [`create_cache`](Self::create_cache) before
+    /// encoding. The default is a no-op answering `true`, which renders a still
+    /// at the instance's own parameters.
+    ///
+    /// See [`super::preview`] for the shape every body follows and the sweeps
+    /// they share.
+    fn preview_at(&mut self, _queue: &wgpu::Queue, _cache: &EffectCache, _t: f32) -> bool {
+        true
+    }
+
     /// Encode all render passes into the command encoder.
     /// The veil reads from `ping_pong[src_idx]` (via pre-built bind groups)
     /// and must write its final output to `dst_view`.
@@ -81,21 +107,17 @@ pub struct VeilRegistration {
     /// include the terms users would search for.
     pub description: &'static str,
     pub params: &'static [ParamDef],
-    /// How this veil's documentation preview moves, or `None` for a veil with
-    /// nothing worth showing. Declaring a recipe is what makes a veil
-    /// previewable — the two facts are one.
-    pub preview: Option<&'static PreviewRecipe>,
+    /// How long this veil's preview runs, or `None` for a veil with nothing
+    /// worth showing. Declaring an animation is what makes a veil previewable —
+    /// the two facts are one. What the preview *does* over that span is
+    /// [`Veil::preview_at`].
+    pub preview: Option<PreviewAnim>,
     pub create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
     pub from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Veil>,
 }
 
 /// Id of the catalog this registry projects into.
 pub const CATALOG_ID: &str = "veils";
-
-/// Document properties a veil's preview may drive — none. Veils are previewed
-/// offscreen, over a source texture rather than through a layer tree, so there
-/// is no compositing layer whose properties a track could name.
-pub const LAYER_KNOBS: &[ParamDef] = &[];
 
 impl VeilRegistration {
     pub fn catalog_entry(&self) -> CatalogEntry {
@@ -187,14 +209,10 @@ impl VeilRegistry {
         self.entries.contains_key(type_id)
     }
 
-    /// How a veil type's preview moves, paired with the knob namespace this
-    /// catalog exposes to it. `None` for an unknown type or one that declares
-    /// no recipe.
-    pub fn preview(&self, type_id: &str) -> Option<PreviewSpec> {
-        Some(PreviewSpec {
-            recipe: self.entries.get(type_id)?.reg.preview?,
-            layer_knobs: LAYER_KNOBS,
-        })
+    /// How long a veil type's preview runs. `None` for an unknown type or one
+    /// that declares no preview.
+    pub fn preview(&self, type_id: &str) -> Option<PreviewAnim> {
+        self.entries.get(type_id)?.reg.preview
     }
 
     /// Get the human-friendly display name for a veil type, falling back to
@@ -240,5 +258,116 @@ impl VeilRegistry {
             .get_or_insert_with(|| Arc::new((entry.reg.create_pipeline)(device, format)))
             .clone();
         (entry.reg.from_params)(params, pipeline)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Preview mechanism
+// ---------------------------------------------------------------------------
+
+/// This catalog's answer to [`PreviewMechanism`]. Exported by name so
+/// `build.rs` finds it while scanning this module's source and emits a
+/// `preview_mechanisms()` row for `veils`; a catalog with nothing to export is
+/// simply silent.
+pub fn preview_mechanism() -> &'static dyn PreviewMechanism {
+    &VeilMechanism
+}
+
+struct VeilMechanism;
+
+impl PreviewMechanism for VeilMechanism {
+    fn resolve(&self, type_id: &str) -> Option<PreviewEntry> {
+        let registry = VeilRegistry::new();
+        Some(PreviewEntry {
+            type_id: registry.static_type_id(type_id)?,
+            anim: registry.preview(type_id)?,
+        })
+    }
+
+    fn reads_source(&self) -> bool {
+        true
+    }
+
+    fn open<'a>(
+        &self,
+        regs: PreviewRegistries<'a>,
+        type_id: &str,
+    ) -> Option<Box<dyn PreviewSession + 'a>> {
+        let type_id = regs.veils.static_type_id(type_id)?;
+        Some(Box::new(VeilSession {
+            registry: regs.veils,
+            type_id,
+            instance: None,
+        }))
+    }
+}
+
+/// One open veil preview: the instance and the cache it was built against.
+///
+/// Rebuilding is a normal outcome rather than a failure mode — [`Veil::preview_at`]
+/// answers `false` when the state it just entered no longer fits the cache, and
+/// a rebuilt instance at `t` is fully described by `t`.
+struct VeilSession<'a> {
+    registry: &'a mut VeilRegistry,
+    type_id: &'static str,
+    instance: Option<(Box<dyn Veil>, EffectCache)>,
+}
+
+impl<'a> VeilSession<'a> {
+    fn build(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, target: &PreviewTarget) {
+        let defaults: Vec<ParamValue> = self
+            .registry
+            .param_defs(self.type_id)
+            .iter()
+            .map(ParamDef::default_value)
+            .collect();
+        let mut veil = self
+            .registry
+            .create_veil(self.type_id, &defaults, device, PREVIEW_FORMAT);
+        let cache = build_cache(&mut *veil, device, queue, target);
+        self.instance = Some((veil, cache));
+    }
+}
+
+/// The one place a veil's cache is built against a preview target, so the two
+/// callers — the first build and a `preview_at` that invalidated its cache —
+/// cannot disagree about what it is built from.
+fn build_cache(
+    veil: &mut dyn Veil,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    target: &PreviewTarget,
+) -> EffectCache {
+    let (w, h) = target.size();
+    veil.create_cache(device, queue, target.views(), target.sampler(), w, h)
+}
+
+impl<'a> PreviewSession for VeilSession<'a> {
+    fn set_t(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &PreviewTarget,
+        t: f32,
+    ) {
+        if self.instance.is_none() {
+            self.build(device, queue, target);
+        }
+        let (veil, cache) = self.instance.as_mut().expect("built above");
+        if !veil.preview_at(queue, cache, t) {
+            *cache = build_cache(&mut **veil, device, queue, target);
+        }
+    }
+
+    fn encode(
+        &mut self,
+        _device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &PreviewTarget,
+    ) {
+        let Some((veil, cache)) = self.instance.as_ref() else {
+            return;
+        };
+        veil.encode(encoder, cache, 0, target.output_view());
     }
 }

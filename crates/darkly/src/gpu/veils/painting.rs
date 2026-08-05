@@ -2,9 +2,7 @@
 // generalized Kuwahara filter — see shader header for prior-art credit.
 
 use crate::gpu::effect::{EffectCache, EffectPipeline};
-use crate::gpu::params::ConstParamValue;
-use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
-use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
+use crate::gpu::preview::{swing, PreviewAnim};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use crate::units::UnitType;
 use std::sync::Arc;
@@ -22,40 +20,13 @@ const PARAMS: &[ParamDef] = &[
         .with_description("How strongly the strongest-oriented region wins, flattening detail into flat patches."),
 ];
 
-/// The brush widens from a single texel to the full Kuwahara window and back,
-/// so each quantised step of the control is plainly visible. `kernel_size` sets
-/// the sampling radius inside one pass — `O(kernel²)` samples — so the ramp
-/// averages a radius of 4 against the shipped default of 6 and is *cheaper* per
-/// frame than a default-parameter render.
-static PREVIEW: PreviewRecipe = PreviewRecipe {
-    frames: ANIMATED_FRAMES,
-    fps: PREVIEW_FPS,
-    tracks: &[Track {
-        target: TrackTarget::Param("kernel_size"),
-        keys: &[
-            Key {
-                t: 0.0,
-                value: ConstParamValue::Int(1),
-            },
-            Key {
-                t: 0.5,
-                value: ConstParamValue::Int(7),
-            },
-            Key {
-                t: 1.0,
-                value: ConstParamValue::Int(1),
-            },
-        ],
-    }],
-};
-
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "painting",
         display_name: "Painting",
         description: "Smooth the view into painterly, brush-like daubs.",
         params: PARAMS,
-        preview: Some(&PREVIEW),
+        preview: Some(PreviewAnim::LOOPING),
         create_pipeline: create_painting_pipeline,
         from_params: |params, shared| {
             let kernel_size = match params.first() {
@@ -93,6 +64,9 @@ pub struct Painting {
     pub kernel_size: i32,
     pub sharpness: f32,
     pub hardness: f32,
+    /// Render resolution, kept from `create_cache` so
+    /// [`uniforms`](Self::uniforms) rebuilds the whole struct from state.
+    resolution: (f32, f32),
     shared: Arc<EffectPipeline>,
 }
 
@@ -107,7 +81,19 @@ impl Painting {
             kernel_size: kernel_size.max(1),
             sharpness,
             hardness,
+            resolution: (0.0, 0.0),
             shared,
+        }
+    }
+
+    fn uniforms(&self) -> PaintingUniforms {
+        PaintingUniforms {
+            kernel_size: self.kernel_size,
+            sharpness: self.sharpness,
+            hardness: self.hardness,
+            _pad: 0.0,
+            resolution_x: self.resolution.0,
+            resolution_y: self.resolution.1,
         }
     }
 }
@@ -136,8 +122,19 @@ impl Veil for Painting {
         ]
     }
 
+    /// The brush widens from a single texel to the full Kuwahara window and
+    /// back, so each quantised step of the control is plainly visible.
+    /// `kernel_size` sets the sampling radius inside one pass — `O(kernel²)`
+    /// samples — so the ramp averages a radius of 4 against the shipped default
+    /// of 6 and is *cheaper* per frame than a default-parameter render.
+    fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
+        self.kernel_size = (1.0 + 6.0 * swing(t)).round() as i32;
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
+        true
+    }
+
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ping_pong_views: &[wgpu::TextureView; 2],
@@ -145,21 +142,14 @@ impl Veil for Painting {
         render_width: u32,
         render_height: u32,
     ) -> EffectCache {
-        let uniforms = PaintingUniforms {
-            kernel_size: self.kernel_size,
-            sharpness: self.sharpness,
-            hardness: self.hardness,
-            _pad: 0.0,
-            resolution_x: render_width as f32,
-            resolution_y: render_height as f32,
-        };
+        self.resolution = (render_width as f32, render_height as f32);
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("painting-uniforms"),
             size: std::mem::size_of::<PaintingUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&self.uniforms()));
 
         let layout = &self.shared.bind_group_layout;
         let bind_groups: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {

@@ -31,7 +31,7 @@
     <div class="grid">
         {#each veilTypes as vt (vt.type)}
             <button class="card" title={vt.description ?? undefined} onclick={() => pick(vt)}>
-                <EffectPreview kind="veil" type={vt.type} />
+                <EffectPreview catalog="veils" entry={vt} />
                 <span class="card-name">{vt.displayName}</span>
             </button>
         {/each}

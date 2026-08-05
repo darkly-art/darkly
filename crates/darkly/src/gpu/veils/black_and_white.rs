@@ -15,7 +15,7 @@ pub fn register() -> VeilRegistration {
         display_name: bw::DISPLAY_NAME,
         description: bw::DESCRIPTION,
         params: bw::PARAMS,
-        preview: Some(&bw::PREVIEW),
+        preview: Some(bw::PREVIEW),
         create_pipeline,
         from_params: |params, shared| Box::new(BlackAndWhite::new(params, shared)),
     }
@@ -58,8 +58,18 @@ impl Veil for BlackAndWhite {
         self.params.clone()
     }
 
+    fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
+        self.params = bw::preview_params(t);
+        cache.write_uniform(
+            queue,
+            0,
+            bytemuck::cast_slice(&bw::pack_uniform(&self.params)),
+        );
+        true
+    }
+
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ping_pong_views: &[wgpu::TextureView; 2],

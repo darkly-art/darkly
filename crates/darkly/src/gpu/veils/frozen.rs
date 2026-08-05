@@ -1,7 +1,5 @@
 use crate::gpu::effect::{EffectCache, EffectPipeline};
-use crate::gpu::params::ConstParamValue;
-use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
-use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
+use crate::gpu::preview::{swing, PreviewAnim};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
@@ -21,57 +19,13 @@ const PARAMS: &[ParamDef] = &[
         .with_description("Colour separation through the ice, like light through a prism."),
 ];
 
-/// The frost thickens over the image and clears again, its colour fringing
-/// intensifying alongside — the two knobs that carry the effect's character,
-/// swept concurrently across their full declared bands.
-static PREVIEW: PreviewRecipe = PreviewRecipe {
-    frames: ANIMATED_FRAMES,
-    fps: PREVIEW_FPS,
-    tracks: &[
-        Track {
-            target: TrackTarget::Param("strength"),
-            keys: &[
-                Key {
-                    t: 0.0,
-                    value: ConstParamValue::Float(0.04),
-                },
-                Key {
-                    t: 0.5,
-                    value: ConstParamValue::Float(0.2),
-                },
-                Key {
-                    t: 1.0,
-                    value: ConstParamValue::Float(0.04),
-                },
-            ],
-        },
-        Track {
-            target: TrackTarget::Param("chromatic"),
-            keys: &[
-                Key {
-                    t: 0.0,
-                    value: ConstParamValue::Float(0.1),
-                },
-                Key {
-                    t: 0.5,
-                    value: ConstParamValue::Float(1.0),
-                },
-                Key {
-                    t: 1.0,
-                    value: ConstParamValue::Float(0.1),
-                },
-            ],
-        },
-    ],
-};
-
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "frozen",
         display_name: "Frozen",
         description: "Frost the view behind a pane of refracting ice.",
         params: PARAMS,
-        preview: Some(&PREVIEW),
+        preview: Some(PreviewAnim::LOOPING),
         create_pipeline: create_frozen_pipeline,
         from_params: |params, shared| {
             let strength = match params.first() {
@@ -114,6 +68,11 @@ pub struct Frozen {
     pub scale: f32,
     /// Chromatic aberration: 0 = clean refraction, 1 = pronounced prism edge.
     pub chromatic: f32,
+    /// Render resolution and the decoded normal map's aspect, kept from
+    /// `create_cache` so [`uniforms`](Self::uniforms) rebuilds the whole struct
+    /// from state.
+    resolution: (f32, f32),
+    normal_aspect: f32,
     shared: Arc<EffectPipeline>,
 }
 
@@ -123,7 +82,22 @@ impl Frozen {
             strength,
             scale,
             chromatic,
+            resolution: (0.0, 0.0),
+            normal_aspect: 1.0,
             shared,
+        }
+    }
+
+    fn uniforms(&self) -> FrozenUniforms {
+        FrozenUniforms {
+            resolution_x: self.resolution.0,
+            resolution_y: self.resolution.1,
+            normal_aspect: self.normal_aspect,
+            strength: self.strength,
+            scale: self.scale,
+            chromatic: self.chromatic,
+            _pad0: 0.0,
+            _pad1: 0.0,
         }
     }
 }
@@ -145,8 +119,19 @@ impl Veil for Frozen {
         ]
     }
 
+    /// The frost thickens over the image and clears again, its colour fringing
+    /// intensifying alongside — the two knobs that carry the effect's
+    /// character, swept concurrently across their full declared bands.
+    fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
+        let swing = swing(t);
+        self.strength = 0.04 + 0.16 * swing;
+        self.chromatic = 0.1 + 0.9 * swing;
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
+        true
+    }
+
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ping_pong_views: &[wgpu::TextureView; 2],
@@ -159,7 +144,8 @@ impl Veil for Frozen {
             .expect("failed to decode frozen normal map")
             .to_rgba8();
         let (nw, nh) = decoded.dimensions();
-        let normal_aspect = nw as f32 / nh as f32;
+        self.normal_aspect = nw as f32 / nh as f32;
+        self.resolution = (render_width as f32, render_height as f32);
 
         let normal_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("frozen-normal"),
@@ -209,23 +195,13 @@ impl Veil for Frozen {
             ..Default::default()
         });
 
-        let uniforms = FrozenUniforms {
-            resolution_x: render_width as f32,
-            resolution_y: render_height as f32,
-            normal_aspect,
-            strength: self.strength,
-            scale: self.scale,
-            chromatic: self.chromatic,
-            _pad0: 0.0,
-            _pad1: 0.0,
-        };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frozen-uniforms"),
             size: std::mem::size_of::<FrozenUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&self.uniforms()));
 
         let layout = &self.shared.bind_group_layout;
         let bind_groups: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {

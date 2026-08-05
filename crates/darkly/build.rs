@@ -136,7 +136,7 @@ fn main() {
         &mut catalog_sources,
     );
 
-    generate_catalog_sources(catalog_sources);
+    generate_catalog_sources(catalog_sources, &src);
 
     generate_yaml_presets(&PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("presets"));
 
@@ -160,7 +160,7 @@ fn main() {
 /// handler groups) contributes to neither.
 ///
 /// The registry module — the parent module of the registration type — must
-/// export `CATALOG_ID` and `catalog()`.
+/// export `CATALOG_ID` and `catalog()`, and may export `preview_mechanism()`.
 fn generate_catalog_registry(
     dir: &Path,
     registration_type: &str,
@@ -180,11 +180,24 @@ fn generate_catalog_registry(
     ));
 }
 
+/// Resolve a module path (`crate::a::b`) to the file that holds it, trying
+/// `src/a/b.rs` then `src/a/b/mod.rs`. `None` when neither exists.
+fn module_source(module: &str, src: &Path) -> Option<PathBuf> {
+    let rel = module.trim_start_matches("crate::").replace("::", "/");
+    let flat = src.join(format!("{rel}.rs"));
+    if flat.exists() {
+        return Some(flat);
+    }
+    let dir = src.join(&rel).join("mod.rs");
+    dir.exists().then_some(dir)
+}
+
 /// Emit `OUT_DIR/catalog_sources_gen.rs`: the list of scanned catalog-producing
-/// registry directories, and the `catalogs()` projection over them. Generated
+/// registry directories, the `catalogs()` projection over them, and the
+/// `preview_mechanisms()` projection over the subset that has one. Generated
 /// rather than hand-written so the export and the test that checks the export
 /// is complete both read from what the build actually found on disk.
-fn generate_catalog_sources(mut sources: Vec<(String, String)>) {
+fn generate_catalog_sources(mut sources: Vec<(String, String)>, src: &Path) {
     sources.sort();
 
     let mut code = String::new();
@@ -219,6 +232,37 @@ fn generate_catalog_sources(mut sources: Vec<(String, String)>) {
     code.push_str("    vec![\n");
     for (_, module) in &sources {
         code.push_str(&format!("        {module}::catalog(),\n"));
+    }
+    code.push_str("    ]\n");
+    code.push_str("}\n\n");
+
+    // One row per catalog whose registry module exports a preview mechanism.
+    // A catalog that has none writes nothing — which is what keeps the
+    // document-layer registries free of a `wgpu`-taking trait rather than
+    // making each of them hand-write a negative.
+    code.push_str(
+        "/// Every catalog that can render a preview, keyed by catalog id. A catalog\n\
+         /// whose registry module exports no `preview_mechanism` is absent, which is\n\
+         /// how a non-previewable catalog answers without writing anything.\n",
+    );
+    code.push_str("#[rustfmt::skip]\n");
+    code.push_str(
+        "pub fn preview_mechanisms() -> Vec<(&'static str, &'static dyn crate::gpu::preview::PreviewMechanism)> {\n",
+    );
+    code.push_str("    vec![\n");
+    for (_, module) in &sources {
+        let Some(path) = module_source(module, src) else {
+            continue;
+        };
+        println!("cargo:rerun-if-changed={}", path.display());
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        if text.contains("pub fn preview_mechanism") {
+            code.push_str(&format!(
+                "        ({module}::CATALOG_ID, {module}::preview_mechanism()),\n"
+            ));
+        }
     }
     code.push_str("    ]\n");
     code.push_str("}\n");

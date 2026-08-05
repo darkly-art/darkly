@@ -1,7 +1,5 @@
 use crate::gpu::effect::{EffectCache, EffectPipeline};
-use crate::gpu::params::ConstParamValue;
-use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
-use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
+use crate::gpu::preview::{PreviewAnim, ANIMATED_FRAMES};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
@@ -17,34 +15,13 @@ const PARAMS: &[ParamDef] = &[
         .with_description("How strongly the grain shows over the image."),
 ];
 
-/// Two seconds of grain reshuffling. The veil advances one noise index per
-/// call, so the preview drives its clock rather than a parameter — and because
-/// that index only marches forward, the sequence does not loop.
-static PREVIEW: PreviewRecipe = PreviewRecipe {
-    frames: ANIMATED_FRAMES,
-    fps: PREVIEW_FPS,
-    tracks: &[Track {
-        target: TrackTarget::Time,
-        keys: &[
-            Key {
-                t: 0.0,
-                value: ConstParamValue::Float(0.0),
-            },
-            Key {
-                t: 1.0,
-                value: ConstParamValue::Float(2.0),
-            },
-        ],
-    }],
-};
-
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "grain",
         display_name: "Grain",
         description: "Film grain noise over the view, optionally animated.",
         params: PARAMS,
-        preview: Some(&PREVIEW),
+        preview: Some(PreviewAnim::ONE_WAY),
         create_pipeline: create_evolve_pipeline,
         from_params: |params, shared| {
             let speed = match params.first() {
@@ -100,6 +77,15 @@ impl Grain {
             shared,
         }
     }
+
+    fn uniforms(&self) -> GrainUniforms {
+        GrainUniforms {
+            seed: self.frame_count,
+            color: self.color,
+            rate: self.speed,
+            opacity: self.opacity,
+        }
+    }
 }
 
 impl Veil for Grain {
@@ -123,22 +109,31 @@ impl Veil for Grain {
         self.speed > 0.0
     }
 
+    /// Two seconds of grain reshuffling, one fresh pattern per frame.
+    ///
+    /// The evolve pass replaces a `speed` fraction of pixels and keeps the
+    /// rest, so at any lower rate what a frame shows depends on the frames
+    /// before it. Pinning the rate to its maximum makes every pixel fresh, so
+    /// the pattern is a function of `seed` alone — which is both what makes
+    /// this absolute and the most legible thing a grain preview can show.
+    fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
+        self.speed = 1.0;
+        self.frame_count = (t * ANIMATED_FRAMES as f32).round();
+        // A full reshuffle leaves nothing of the previous state to preserve, so
+        // the ping-pong has nothing to alternate for and the slot is fixed.
+        self.noise_idx = 0;
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
+        true
+    }
+
     fn update_time(&mut self, queue: &wgpu::Queue, cache: &EffectCache, _dt: f32) {
         self.frame_count += 1.0;
         self.noise_idx = 1 - self.noise_idx;
-        let uniforms = GrainUniforms {
-            seed: self.frame_count,
-            color: self.color,
-            rate: self.speed,
-            opacity: self.opacity,
-        };
-        if let Some(buf) = cache.uniform_bufs.first() {
-            queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));
-        }
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
     }
 
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ping_pong_views: &[wgpu::TextureView; 2],
@@ -146,19 +141,13 @@ impl Veil for Grain {
         render_width: u32,
         render_height: u32,
     ) -> EffectCache {
-        let uniforms = GrainUniforms {
-            seed: 0.0,
-            color: self.color,
-            rate: self.speed,
-            opacity: self.opacity,
-        };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grain-uniforms"),
             size: std::mem::size_of::<GrainUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&self.uniforms()));
 
         // Two noise state textures for ping-pong evolution.
         let noise_textures: Vec<wgpu::Texture> = (0..2)

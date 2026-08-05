@@ -17,9 +17,8 @@ use std::sync::Arc;
 use crate::gpu::effect::EffectCache;
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
 use crate::gpu::param_filter::{ParamFilter, SrcSampling};
-use crate::gpu::params::{ConstParamValue, ParamDef, ParamValue};
-use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
-use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
+use crate::gpu::params::{ParamDef, ParamValue};
+use crate::gpu::preview::{swing_signed, PreviewAnim};
 
 pub const PARAMS: &[ParamDef] = &[
     ParamDef::float("brightness", -100.0, 100.0, 0.0)
@@ -96,57 +95,17 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
 }
 
 /// Both sliders swing up, down and back, concurrently — so the preview shows
-/// the two controls interacting rather than one at a time. Contrast leads with a
-/// wider swing because it reads more slowly than brightness at the same
-/// magnitude.
-static PREVIEW: PreviewRecipe = PreviewRecipe {
-    frames: ANIMATED_FRAMES,
-    fps: PREVIEW_FPS,
-    tracks: &[
-        Track {
-            target: TrackTarget::Param("brightness"),
-            keys: &[
-                Key {
-                    t: 0.00,
-                    value: ConstParamValue::Float(0.0),
-                },
-                Key {
-                    t: 0.25,
-                    value: ConstParamValue::Float(40.0),
-                },
-                Key {
-                    t: 0.75,
-                    value: ConstParamValue::Float(-40.0),
-                },
-                Key {
-                    t: 1.00,
-                    value: ConstParamValue::Float(0.0),
-                },
-            ],
-        },
-        Track {
-            target: TrackTarget::Param("contrast"),
-            keys: &[
-                Key {
-                    t: 0.00,
-                    value: ConstParamValue::Float(0.0),
-                },
-                Key {
-                    t: 0.25,
-                    value: ConstParamValue::Float(60.0),
-                },
-                Key {
-                    t: 0.75,
-                    value: ConstParamValue::Float(-40.0),
-                },
-                Key {
-                    t: 1.00,
-                    value: ConstParamValue::Float(0.0),
-                },
-            ],
-        },
-    ],
-};
+/// the two controls interacting rather than one at a time. Contrast leads with
+/// a wider positive swing because it reads more slowly than brightness at the
+/// same magnitude, and a narrower negative one because flattening reads faster
+/// than steepening.
+fn preview_params(t: f32) -> Vec<ParamValue> {
+    let s = swing_signed(t);
+    let mut params: Vec<ParamValue> = PARAMS.iter().map(ParamDef::default_value).collect();
+    params[0] = ParamValue::Float(40.0 * s); // brightness
+    params[1] = ParamValue::Float(60.0 * s.max(0.0) + 40.0 * s.min(0.0)); // contrast
+    params
+}
 
 pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
@@ -155,7 +114,8 @@ pub fn register() -> FilterPipelineRegistration {
         icon: "fa6-solid:sun",
         description: "The classic two-slider brightness and contrast adjustment.",
         params: PARAMS,
-        preview: Some(&PREVIEW),
+        preview: Some(PreviewAnim::LOOPING),
+        preview_at: Some(preview_params),
         create_pipeline,
     }
 }

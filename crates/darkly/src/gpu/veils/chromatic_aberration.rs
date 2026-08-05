@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::gpu::effect::{EffectCache, EffectPipeline};
 use crate::gpu::filters::chromatic_aberration::{
-    pack_uniform, GpuAberrationParams, DESCRIPTION, PARAMS, PREVIEW,
+    pack_uniform, preview_params, GpuAberrationParams, DESCRIPTION, PARAMS, PREVIEW,
 };
 use crate::gpu::veil::{ParamValue, Veil, VeilRegistration};
 
@@ -19,7 +19,7 @@ pub fn register() -> VeilRegistration {
         display_name: "Chromatic Aberration",
         description: DESCRIPTION,
         params: PARAMS,
-        preview: Some(&PREVIEW),
+        preview: Some(PREVIEW),
         create_pipeline,
         from_params: |params, shared| Box::new(ChromaticAberration::new(params.to_vec(), shared)),
     }
@@ -50,8 +50,14 @@ impl Veil for ChromaticAberration {
         self.params.clone()
     }
 
+    fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
+        self.params = preview_params(t);
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&pack_uniform(&self.params)));
+        true
+    }
+
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ping_pong_views: &[wgpu::TextureView; 2],

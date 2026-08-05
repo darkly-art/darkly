@@ -1,20 +1,18 @@
-//! The rendered documentation assets: that every previewable entry declares
-//! motion, that the motion is real, and that what lands on disk is what the
+//! The rendered documentation assets: that every previewable entry declares a
+//! preview, that what it renders moves, and that what lands on disk is what the
 //! catalogs said it would be.
 //!
-//! Two groups live here. The first is GPU-free — it reads
-//! [`CATALOG_RENDERERS`] and the four registries and validates the *declarations*
-//! before any device is touched. That group catches the whole class of defect a
-//! pixel test structurally cannot: a recipe whose keyframes step rather than
-//! blend renders a slideshow whose parameters genuinely are constant across each
-//! held stretch, so every "the frames differ when the parameters differ"
-//! assertion is vacuously satisfied. The defect is in the declaration, and this
-//! is where it is caught.
+//! Two groups live here. The first is GPU-free and reads the registries: what
+//! an entry *declares* — that it has a preview, how long it runs, whether it
+//! closes — is data, and can be checked before a device is touched.
 //!
-//! The second group renders. Those tests share one fixture that runs the whole
-//! walk once for the test binary rather than once per test, and tests that only
-//! need a single entry call `render_entry` directly and skip the PNG round-trip
-//! entirely.
+//! The second group renders. Motion itself is a method rather than a
+//! declaration, so there is nothing left to inspect statically and the pixels
+//! are the only witness; `tests/picker_preview.rs` holds the finer-grained half
+//! of that, over the same driver. Those tests share one fixture that runs the
+//! whole walk once for the test binary rather than once per test, and tests that
+//! only need a single entry call `render_entry` directly and skip the PNG
+//! round-trip entirely.
 //!
 //! Run with: `cargo test -p darkly --features testing --test docs_render -- --test-threads=1`
 
@@ -22,52 +20,63 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use darkly::catalog::catalogs;
-use darkly::docs_render::{self, frame_t, Gpu, Manifest, Rendered, CATALOG_RENDERERS};
-use darkly::gpu::params::{ParamDef, ParamValue};
-use darkly::gpu::preview_recipe::{PreviewSpec, TrackTarget};
-use darkly::gpu::veil::CATALOG_ID as VEILS;
+use darkly::catalog::{catalogs, preview_mechanisms};
+use darkly::docs_render::{self, Gpu, Manifest, Rendered};
+use darkly::gpu::params::ParamValue;
+use darkly::gpu::preview::{frame_t, PreviewAnim};
 
 // ---------------------------------------------------------------------------
 // Shared enumeration — one source for every test below
 // ---------------------------------------------------------------------------
 
-/// One previewable entry: where it lives, how it moves, what knobs it may name,
-/// and its own parameter schema.
+/// One previewable entry: where it lives and how long its preview runs.
 struct Previewable {
     catalog: &'static str,
     type_id: &'static str,
-    spec: PreviewSpec,
-    defs: &'static [ParamDef],
+    anim: PreviewAnim,
 }
 
-/// Every entry the walk will reach, resolved through the same table the walk and
-/// the renderers use. Nothing here carries a list of catalogs or of entries.
+/// Every entry the walk will reach, resolved through the same generated table
+/// the walk and the renderers use, plus the one catalog rendered through a
+/// document. Nothing here carries a list of catalogs or of entries.
 fn previewable() -> Vec<Previewable> {
+    let mechanisms = preview_mechanisms();
     let mut out = Vec::new();
     for cat in catalogs() {
-        let Some(cr) = CATALOG_RENDERERS.iter().find(|c| c.id == cat.id) else {
-            assert!(
-                cat.entries.iter().all(|e| !e.supports_preview),
-                "catalog `{}` has previewable entries and no renderer",
-                cat.id
-            );
+        let previewable_entries = || cat.entries.iter().filter(|e| e.supports_preview);
+        if let Some((id, mech)) = mechanisms.iter().find(|(id, _)| *id == cat.id) {
+            for e in previewable_entries() {
+                let entry = mech.resolve(e.type_id).unwrap_or_else(|| {
+                    panic!(
+                        "`{id}/{}` is previewable but resolves to nothing",
+                        e.type_id
+                    )
+                });
+                out.push(Previewable {
+                    catalog: id,
+                    type_id: entry.type_id,
+                    anim: entry.anim,
+                });
+            }
             continue;
-        };
-        for e in cat.entries.iter().filter(|e| e.supports_preview) {
-            let spec = (cr.spec)(e.type_id).unwrap_or_else(|| {
-                panic!(
-                    "`{}/{}` is previewable but hands out no recipe",
-                    cat.id, e.type_id
-                )
-            });
-            out.push(Previewable {
-                catalog: cr.id,
-                type_id: e.type_id,
-                spec,
-                defs: (cr.defs)(e.type_id),
-            });
         }
+        if cat.id == darkly::gpu::blend_mode::CATALOG_ID {
+            for e in previewable_entries() {
+                out.push(Previewable {
+                    catalog: cat.id,
+                    type_id: e.type_id,
+                    anim: darkly::gpu::blend_mode::registry()
+                        .preview(e.type_id)
+                        .expect("a registered mode inherits the catalog preview"),
+                });
+            }
+            continue;
+        }
+        assert!(
+            previewable_entries().next().is_none(),
+            "catalog `{}` has previewable entries and no renderer",
+            cat.id
+        );
     }
     assert!(!out.is_empty(), "no previewable entries found at all");
     out
@@ -77,18 +86,18 @@ fn previewable() -> Vec<Previewable> {
 // The declarations — GPU-free
 // ---------------------------------------------------------------------------
 
-/// Every filter, every veil, every blend mode and `noise` hands out a recipe.
+/// Every filter, every veil, every blend mode and `noise` declares a preview.
 ///
 /// Driven off the four **registries** rather than a hand-written list, so
-/// adding a filter without a recipe fails here — which is the whole point of
-/// putting the recipe on the registration.
+/// adding a filter without a preview fails here — which is the whole point of
+/// putting the declaration on the registration.
 #[test]
-fn every_previewable_entry_declares_a_recipe() {
+fn every_previewable_entry_declares_a_preview() {
     let filters = darkly::gpu::filter::FilterPipelineRegistry::new();
     for reg in filters.types() {
         assert!(
             filters.preview(reg.type_id).is_some(),
-            "filter `{}` declares no preview recipe",
+            "filter `{}` declares no preview",
             reg.type_id
         );
     }
@@ -96,7 +105,7 @@ fn every_previewable_entry_declares_a_recipe() {
     for reg in veils.types() {
         assert!(
             veils.preview(reg.type_id).is_some(),
-            "veil `{}` declares no preview recipe",
+            "veil `{}` declares no preview",
             reg.type_id
         );
     }
@@ -105,7 +114,7 @@ fn every_previewable_entry_declares_a_recipe() {
             darkly::gpu::blend_mode::registry()
                 .preview(reg.type_id)
                 .is_some(),
-            "blend mode `{}` declares no preview recipe",
+            "blend mode `{}` declares no preview",
             reg.type_id
         );
     }
@@ -114,29 +123,71 @@ fn every_previewable_entry_declares_a_recipe() {
         .is_some());
 }
 
-/// Two schemas are shared by two registrations each, and so are their recipes —
-/// at the same address, not merely equal.
+/// Every previewable catalog has a mechanism, or is the documented exception.
 ///
-/// An `==` check would pass two copies that have not drifted yet; pointer
-/// identity fails the moment someone writes the recipe out twice, which is the
-/// duplication the shared `static` exists to make impossible.
+/// The generated table is what both consumers dispatch through, so an entry it
+/// cannot reach has no picker preview however much it declares. Blend modes are
+/// the one catalog with previewable entries and no mechanism: a mode is a
+/// relation between two images rather than an effect over one, so there is no
+/// `src → out` pass to open for it.
 #[test]
-fn shared_schemas_share_one_recipe() {
-    let filters = darkly::gpu::filter::FilterPipelineRegistry::new();
-    let veils = darkly::gpu::veil::VeilRegistry::new();
-    for shared in ["black_and_white", "chromatic_aberration"] {
-        let f = filters.preview(shared).unwrap();
-        let v = veils.preview(shared).unwrap();
+fn every_previewable_catalog_has_a_mechanism_or_is_the_exception() {
+    let mechanisms = preview_mechanisms();
+    for (id, _) in &mechanisms {
         assert!(
-            std::ptr::eq(f.recipe, v.recipe),
-            "`{shared}`'s filter and veil hold two different recipes"
+            catalogs().iter().any(|c| c.id == *id),
+            "`{id}` is not a catalog id"
+        );
+    }
+    for cat in catalogs() {
+        if !cat.entries.iter().any(|e| e.supports_preview) {
+            continue;
+        }
+        let has = mechanisms.iter().any(|(id, _)| *id == cat.id);
+        assert_eq!(
+            has,
+            cat.id != darkly::gpu::blend_mode::CATALOG_ID,
+            "`{}` previewability and mechanism disagree",
+            cat.id
         );
     }
 }
 
-/// A void's previewability *is* its recipe — one fact, not two that can drift.
+/// The two effects with two surfaces declare one preview and sweep one set of
+/// values, from the module they share rather than a copy in each.
+///
+/// The filter half is checked structurally — the registration's swept values
+/// *are* the shared function's. The veil half calls the same function from its
+/// `preview_at`, which only pixels can witness; `every_asset_has_real_motion`
+/// and `preview_at_is_absolute` cover it there.
 #[test]
-fn void_previewability_is_the_recipe() {
+fn shared_effects_share_one_preview() {
+    let filters = darkly::gpu::filter::FilterPipelineRegistry::new();
+    let veils = darkly::gpu::veil::VeilRegistry::new();
+    for shared in ["black_and_white", "chromatic_aberration"] {
+        assert_eq!(
+            filters.preview(shared),
+            veils.preview(shared),
+            "`{shared}`'s filter and veil declare different previews"
+        );
+    }
+    for i in 0..8 {
+        let t = i as f32 / 8.0;
+        assert_eq!(
+            filters.preview_params("black_and_white", t),
+            darkly::gpu::black_and_white::preview_params(t),
+        );
+        assert_eq!(
+            filters.preview_params("chromatic_aberration", t),
+            darkly::gpu::filters::chromatic_aberration::preview_params(t),
+        );
+    }
+}
+
+/// A void's previewability *is* its declaration — one fact, not two that can
+/// drift.
+#[test]
+fn void_previewability_is_the_declaration() {
     let voids = darkly::gpu::void::VoidRegistry::new();
     let entries = catalogs()
         .into_iter()
@@ -160,170 +211,23 @@ fn void_previewability_is_the_recipe() {
     }
 }
 
-/// Every recipe declares at least one track, and at least one of them holds two
-/// keyframes with different values. A recipe with nothing moving would render
-/// its whole frame budget as one image — caught before a GPU is touched.
+/// Every declared animation is playable: a positive frame count and a positive
+/// rate. A zero of either would divide by zero on the playback clock.
 #[test]
-fn every_recipe_moves() {
+fn every_declared_animation_is_playable() {
     for p in previewable() {
-        let tracks = p.spec.recipe.tracks;
         assert!(
-            !tracks.is_empty(),
-            "`{}/{}` declares no tracks",
+            p.anim.frames >= 1,
+            "`{}/{}` declares no frames",
             p.catalog,
             p.type_id
         );
         assert!(
-            tracks
-                .iter()
-                .any(|tr| tr.keys.windows(2).any(|w| w[0].value != w[1].value)),
-            "`{}/{}` has tracks but none of them moves",
+            p.anim.fps >= 1,
+            "`{}/{}` declares a zero playback rate",
             p.catalog,
             p.type_id
         );
-    }
-}
-
-/// Every track's keys ascend in `t`, sit inside `0.0 ..= 1.0`, and start at
-/// zero — the evaluator's precondition, stated where it can be checked.
-#[test]
-fn keyframes_are_ordered_and_start_at_zero() {
-    for p in previewable() {
-        for tr in p.spec.recipe.tracks {
-            let where_ = format!("`{}/{}`", p.catalog, p.type_id);
-            assert!(!tr.keys.is_empty(), "{where_} declares an empty track");
-            assert_eq!(tr.keys[0].t, 0.0, "{where_} does not start at t = 0");
-            for w in tr.keys.windows(2) {
-                assert!(w[0].t < w[1].t, "{where_} has keys out of order");
-            }
-            assert!(
-                tr.keys.last().unwrap().t <= 1.0,
-                "{where_} runs past the end of the timeline"
-            );
-        }
-    }
-}
-
-/// A keyframe pair whose values differ, on a parameter kind that interpolates,
-/// must blend to a value equal to **neither** endpoint.
-///
-/// This is what catches a recipe that steps where its author believed it
-/// blended — a curve whose keyframes disagree on control-point count, say,
-/// which renders four stills held for twelve frames each. No pixel-level
-/// assertion can see that: a stepping recipe's parameters genuinely *are*
-/// constant across each held stretch, so "the frames differ when the parameters
-/// differ" is vacuously satisfied. The defect is in the declaration.
-#[test]
-fn every_interpolating_track_actually_interpolates() {
-    for p in previewable() {
-        for tr in p.spec.recipe.tracks {
-            let name = match tr.target {
-                TrackTarget::Param(n) => n,
-                TrackTarget::Layer(n) => n,
-                // A time track is a bare `f32` the evaluator blends directly;
-                // it has no schema and no kind that could decline to blend.
-                TrackTarget::Time => continue,
-            };
-            let namespace = match tr.target {
-                TrackTarget::Layer(_) => p.spec.layer_knobs,
-                _ => p.defs,
-            };
-            let def = namespace
-                .iter()
-                .find(|d| d.name == name)
-                .unwrap_or_else(|| panic!("`{}/{}` drives unknown `{name}`", p.catalog, p.type_id));
-            if !def.interpolates() {
-                continue;
-            }
-            for w in tr.keys.windows(2) {
-                let (a, b) = (
-                    def.value_from_const(w[0].value),
-                    def.value_from_const(w[1].value),
-                );
-                if a == b {
-                    continue;
-                }
-                // Two adjacent integers have nothing between them, so rounding
-                // legitimately lands on an endpoint. Every authored integer
-                // track spans further than that.
-                if let (ParamValue::Int(x), ParamValue::Int(y)) = (&a, &b) {
-                    if (x - y).abs() <= 1 {
-                        continue;
-                    }
-                }
-                let mid = def.lerp(&a, &b, 0.5);
-                assert!(
-                    mid != a && mid != b,
-                    "`{}/{}`'s `{name}` steps between two differing keyframes — \
-                     the asset would be a slideshow, not an animation",
-                    p.catalog,
-                    p.type_id
-                );
-            }
-        }
-    }
-}
-
-/// A veil recipe may not combine a time track with parameter tracks.
-///
-/// A veil has no in-place parameter update — the shipped path rebuilds — and a
-/// rebuild resets the instance's clock, so a fresh instance cannot be
-/// fast-forwarded to an arbitrary elapsed time. The day a veil wants both, this
-/// is the red test that forces the `Veil::update_params` conversation rather
-/// than letting a silently-restarting clock ship.
-#[test]
-fn no_veil_recipe_mixes_time_and_param_tracks() {
-    for p in previewable().into_iter().filter(|p| p.catalog == VEILS) {
-        let tracks = p.spec.recipe.tracks;
-        let time = tracks
-            .iter()
-            .any(|tr| matches!(tr.target, TrackTarget::Time));
-        let params = tracks
-            .iter()
-            .any(|tr| matches!(tr.target, TrackTarget::Param(_)));
-        assert!(
-            !(time && params),
-            "veil `{}` drives both its clock and its parameters; rebuilding it \
-             for a parameter change would reset that clock",
-            p.type_id
-        );
-    }
-}
-
-/// Every track resolves against the namespace its own catalog hands it.
-///
-/// The test carries **no list of catalogs and no list of knobs** — it asks the
-/// same [`PreviewSpec`] the renderer uses. A veil that named a layer knob fails
-/// here against its own catalog's empty knob set, and a typo'd parameter fails
-/// on the parameter half.
-#[test]
-fn every_track_target_resolves() {
-    for p in previewable() {
-        for t in [0.0, 0.5, 1.0] {
-            assert!(
-                p.spec.recipe.layer_at(p.spec.layer_knobs, t).is_ok(),
-                "`{}/{}` drives a layer knob its catalog does not expose",
-                p.catalog,
-                p.type_id
-            );
-            assert_eq!(
-                p.spec.recipe.params_at(p.defs, t).len(),
-                p.defs.len(),
-                "`{}/{}` does not evaluate to its own schema's shape",
-                p.catalog,
-                p.type_id
-            );
-        }
-        for tr in p.spec.recipe.tracks {
-            if let TrackTarget::Param(n) = tr.target {
-                assert!(
-                    p.defs.iter().any(|d| d.name == n),
-                    "`{}/{}` drives `{n}`, which is not in its schema",
-                    p.catalog,
-                    p.type_id
-                );
-            }
-        }
     }
 }
 
@@ -472,24 +376,23 @@ fn every_frame_is_the_same_size() {
     assert_eq!(checked, 34);
 }
 
-/// For every asset the PNG count equals the recipe's frame count, and the
-/// index's `frames` / `fps` / `loop` are the recipe's own — which is what makes
+/// For every asset the PNG count equals the declared frame count, and the
+/// index's `frames` / `fps` / `loop` are the entry's own — which is what makes
 /// `loop` in the artifact something a consumer can rely on rather than a claim.
 #[test]
-fn manifest_frames_fps_and_loop_match_the_recipe() {
+fn manifest_frames_fps_and_loop_match_the_declaration() {
     let (dir, manifest) = assets();
     let mut non_looping = BTreeSet::new();
 
     for p in previewable() {
         let asset = &manifest.assets[p.catalog][p.type_id];
-        let recipe = p.spec.recipe;
-        assert_eq!(asset.frames, recipe.frames, "{}/{}", p.catalog, p.type_id);
-        assert_eq!(asset.fps, recipe.fps, "{}/{}", p.catalog, p.type_id);
-        assert_eq!(asset.loops, recipe.loops(), "{}/{}", p.catalog, p.type_id);
+        assert_eq!(asset.frames, p.anim.frames, "{}/{}", p.catalog, p.type_id);
+        assert_eq!(asset.fps, p.anim.fps, "{}/{}", p.catalog, p.type_id);
+        assert_eq!(asset.loops, p.anim.loops, "{}/{}", p.catalog, p.type_id);
 
         let written = std::fs::read_dir(dir.join(&asset.dir)).unwrap().count();
         assert_eq!(
-            written as u32, recipe.frames,
+            written as u32, p.anim.frames,
             "`{}/{}` wrote {written} frames",
             p.catalog, p.type_id
         );
@@ -518,22 +421,28 @@ fn manifest_frames_fps_and_loop_match_the_recipe() {
     std::fs::remove_dir_all(dir).expect("the fixture cleans up after itself");
 }
 
-/// Every one of the thirty-four renders at least two distinct images.
+/// Every asset that declares more than one frame renders at least two distinct
+/// images; one that declares a still writes exactly one file.
 ///
-/// The floor rather than the ceiling: proving the motion is *continuous* is
-/// `every_interpolating_track_actually_interpolates`'s job, GPU-free and with a
-/// far better error message.
+/// Motion is a method now, so there is no declaration left to inspect — the
+/// pixels are the whole of the evidence, and this is the floor.
+/// `tests/picker_preview.rs` carries the finer-grained assertions over the same
+/// driver.
 #[test]
 fn every_asset_has_real_motion() {
     let (dir, manifest) = assets();
     for entries in manifest.assets.values() {
         for (type_id, asset) in entries {
-            let first = std::fs::read(dir.join(&asset.dir).join("000.png")).unwrap();
-            let moved = (1..asset.frames).any(|i| {
-                std::fs::read(dir.join(&asset.dir).join(format!("{i:03}.png")))
-                    .map(|f| f != first)
-                    .unwrap_or(false)
-            });
+            let frame = |i: u32| std::fs::read(dir.join(&asset.dir).join(format!("{i:03}.png")));
+            if asset.frames == 1 {
+                assert!(
+                    frame(1).is_err(),
+                    "`{type_id}` declares a still and wrote more"
+                );
+                continue;
+            }
+            let first = frame(0).unwrap();
+            let moved = (1..asset.frames).any(|i| frame(i).map(|f| f != first).unwrap_or(false));
             assert!(
                 moved,
                 "`{}` rendered {} identical frames",
@@ -543,170 +452,40 @@ fn every_asset_has_real_motion() {
     }
 }
 
-/// Whether two evaluated parameter values are the same *to the renderer*.
+/// Rendering an entry twice through the same `Gpu` produces the same pixels.
 ///
-/// A ping-pong recipe reaches the same value at `t` and at `1 − t` by two
-/// different arithmetic paths, so their floats agree to about a part in ten
-/// million rather than bit-for-bit. The tolerance here is four orders of
-/// magnitude coarser than that noise and still an order of magnitude finer than
-/// one code value of an 8-bit channel, so it merges exactly the pairs that are
-/// mathematically the same state and separates every pair that could possibly
-/// render differently.
-fn approx_eq(a: &ParamValue, b: &ParamValue) -> bool {
-    const EPS: f32 = 1e-4;
-    let close = |x: f32, y: f32| (x - y).abs() <= EPS;
-    let all =
-        |x: &[f32], y: &[f32]| x.len() == y.len() && x.iter().zip(y).all(|(a, b)| close(*a, *b));
-    match (a, b) {
-        (ParamValue::Float(x), ParamValue::Float(y)) => close(*x, *y),
-        (ParamValue::Color(x), ParamValue::Color(y)) => all(x, y),
-        (ParamValue::Vec2(x), ParamValue::Vec2(y)) => all(x, y),
-        (ParamValue::Levels(x), ParamValue::Levels(y)) => all(x, y),
-        (ParamValue::Curve(x), ParamValue::Curve(y)) => {
-            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| all(p, q))
-        }
-        (ParamValue::List(x), ParamValue::List(y)) => {
-            x.len() == y.len()
-                && x.iter().zip(y).all(|(ea, eb)| {
-                    ea.len() == eb.len()
-                        && ea
-                            .iter()
-                            .zip(eb)
-                            .all(|((ka, va), (kb, vb))| ka == kb && approx_eq(va, vb))
-                })
-        }
-        _ => a == b,
+/// Determinism across a reused device is what lets thirty-four assets share one
+/// `Gpu`, and it is where a renderer that left state behind shows up. One entry
+/// per catalog rather than all thirty-four, because the cost is two full
+/// sequences each and the failure mode is per-renderer, not per-entry.
+#[test]
+fn rendering_an_entry_twice_is_deterministic() {
+    let mut gpu = Gpu::new();
+    for (catalog, type_id) in [
+        ("filters", "hsv"),
+        ("veils", "frozen"),
+        ("voids", "noise"),
+        ("blendModes", "multiply"),
+    ] {
+        let first = render_one(&mut gpu, catalog, type_id);
+        let again = render_one(&mut gpu, catalog, type_id);
+        assert_eq!(
+            first.frames, again.frames,
+            "`{catalog}/{type_id}` rendered two different sequences"
+        );
     }
 }
 
-fn states_equal(a: &[ParamValue], b: &[ParamValue]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| approx_eq(x, y))
-}
-
-/// Two frames render the same image **exactly when** their evaluated states are
-/// the same.
+/// Value-pinned, not merely "it differs": `invert`'s single frame is exactly
+/// `255 - c` per RGB channel of the source the target loaded.
 ///
-/// Forward — different states must render differently — is the strong form of
-/// "consecutive frames differ": a recipe whose per-frame delta is too small to
-/// move a single code value fails here, which is the whole class of defect that
-/// makes an asset look frozen.
-///
-/// Backward — the same state must render the same image — is what guards
-/// determinism, the veil rebuild path, and the two shared documents: a mode or a
-/// filter that left state behind would show up as a large divergence between two
-/// frames that ought to match. Recipes that ping-pong revisit the same state at
-/// `t` and `1 − t`, so this half has real content rather than being vacuous.
-///
-/// The two halves are asymmetric on purpose. "Different" is exact — one byte
-/// anywhere is enough. "The same" allows one code value, because a ping-pong
-/// reaches its shared state by two arithmetic paths whose floats agree to about
-/// a part in ten million, and a parameter that lands either side of a rounding
-/// boundary moves a handful of pixels by exactly one. Byte-for-byte determinism
-/// is pinned where it is meaningful — on two renders of the *same* `t` — by
-/// [`a_looping_recipe_renders_a_seamless_handoff`].
+/// Compared against the target's *loaded* source rather than `subject_rgba`,
+/// because the offscreen path area-averages the 2× subject before the filter
+/// sees it — pinning the raw subject would be pinning the resample. Rendered
+/// after every other filter through the same session, so it also pins that none
+/// of them left state behind.
 #[test]
-fn distinct_frames_match_distinct_parameter_states() {
-    let mut gpu = Gpu::new();
-    let mut revisited = 0usize;
-    for p in previewable() {
-        let rendered = render_one(&mut gpu, p.catalog, p.type_id);
-        let recipe = p.spec.recipe;
-        let state = |i: u32| {
-            let t = frame_t(i, recipe.frames);
-            let mut vals = recipe.params_at(p.defs, t);
-            vals.extend(
-                recipe
-                    .layer_at(p.spec.layer_knobs, t)
-                    .unwrap()
-                    .into_iter()
-                    .map(|(_, v)| v),
-            );
-            vals.push(ParamValue::Float(recipe.time_at(t)));
-            vals
-        };
-
-        let mut equal_states = 0usize;
-        for i in 0..recipe.frames {
-            for j in (i + 1)..recipe.frames {
-                let (a, b) = (&rendered.frames[i as usize], &rendered.frames[j as usize]);
-                let where_ = format!("`{}/{}` frames {i} and {j}", p.catalog, p.type_id);
-                if states_equal(&state(i), &state(j)) {
-                    equal_states += 1;
-                    let worst = a
-                        .iter()
-                        .zip(b)
-                        .map(|(x, y)| x.abs_diff(*y))
-                        .max()
-                        .unwrap_or(0);
-                    assert!(
-                        worst <= 1,
-                        "{where_} hold the same state but differ by {worst} code values"
-                    );
-                } else {
-                    assert_ne!(
-                        a, b,
-                        "{where_} hold different states and render identically"
-                    );
-                }
-            }
-        }
-        revisited += equal_states;
-    }
-
-    // The backward half is not vacuous: across the set, recipes really do
-    // revisit their own states. (Not every one does — `hsv` closes its loop only
-    // at `t = 1.0`, the frame after the last, so its forty-eight sampled states
-    // are all distinct even though it loops.)
-    assert!(
-        revisited > 0,
-        "no asset revisited a state, so the equal-state half proved nothing"
-    );
-}
-
-/// An extra frame rendered at `t = 1.0` — the frame *after* the last — is
-/// byte-identical to frame 0 for a looping recipe.
-///
-/// Described honestly: since `loops()` means `params_at(1.0) == params_at(0.0)`
-/// by definition, what this proves is **render determinism at the wrap point** —
-/// that the same evaluated state renders the same pixels through a full document
-/// round-trip. That is worth having; it is not a proof that the loop rule is
-/// well-chosen.
-#[test]
-fn a_looping_recipe_renders_a_seamless_handoff() {
-    let spec = darkly::gpu::filter::FilterPipelineRegistry::new()
-        .preview("hsv")
-        .unwrap();
-    assert!(spec.recipe.loops());
-    let defs = darkly::gpu::filter::FilterPipelineRegistry::new().params("hsv");
-    assert_eq!(
-        spec.recipe.params_at(defs, 1.0),
-        spec.recipe.params_at(defs, 0.0)
-    );
-
-    let mut gpu = Gpu::new();
-    let rendered = render_one(&mut gpu, "filters", "hsv");
-    let again = render_one(&mut gpu, "filters", "hsv");
-    assert_eq!(
-        rendered.frames[0], again.frames[0],
-        "the same state rendered two different images"
-    );
-}
-
-/// Value-pinned, not merely "it differs": at the frame where the opacity track
-/// reads 1.0, the composite is exactly `255 - c` per RGB channel of the subject.
-///
-/// Pins three things at once — the filter ran, an isolated *group's* opacity
-/// really is applied to its accumulator (no existing test covers that; the five
-/// `set_opacity` assertions in this suite are all on raster layers), and no
-/// state leaked from the six filters rendered before it through the same
-/// document.
-#[test]
-fn invert_frame_at_full_opacity_is_the_exact_inverse_of_the_subject() {
-    let dim = darkly::docs_render::subject::DOCS_SUBJECT_DIM;
-    let subject = darkly::docs_render::subject::subject_rgba(dim);
-
-    // Rendered *after* every other filter through the same document, so this
-    // also pins that none of them left state behind.
+fn invert_is_the_exact_inverse_of_the_source_it_was_given() {
     let mut gpu = Gpu::new();
     let mut rendered = None;
     for reg in darkly::gpu::filter::FilterPipelineRegistry::new().types() {
@@ -716,30 +495,20 @@ fn invert_frame_at_full_opacity_is_the_exact_inverse_of_the_subject() {
         }
     }
     let rendered = rendered.expect("invert is registered");
+    assert_eq!(rendered.frames.len(), 1, "invert declares a still");
 
-    let spec = darkly::gpu::filter::FilterPipelineRegistry::new()
-        .preview("invert")
-        .unwrap();
-    let full = (0..spec.recipe.frames)
-        .find(|i| {
-            spec.recipe
-                .layer_at(spec.layer_knobs, frame_t(*i, spec.recipe.frames))
-                .unwrap()
-                == vec![("opacity", ParamValue::Float(1.0))]
-        })
-        .expect("the opacity track reaches 1.0");
-
-    let frame = &rendered.frames[full as usize];
-    assert_eq!(frame.len(), subject.len());
+    let source = docs_render::test_source_pixels(&mut gpu);
+    let frame = &rendered.frames[0];
+    assert_eq!(frame.len(), source.len());
     for (i, (out, src)) in frame
         .chunks_exact(4)
-        .zip(subject.chunks_exact(4))
+        .zip(source.chunks_exact(4))
         .enumerate()
     {
         assert_eq!(
             [out[0], out[1], out[2], out[3]],
             [255 - src[0], 255 - src[1], 255 - src[2], src[3]],
-            "pixel {i} is not the exact inverse of the subject"
+            "pixel {i} is not the exact inverse of the source"
         );
     }
 }
@@ -753,23 +522,21 @@ fn invert_frame_at_full_opacity_is_the_exact_inverse_of_the_subject() {
 /// be pinning the resample rather than the veil.
 #[test]
 fn black_and_white_veil_frame_is_neutral_gray() {
-    let spec = darkly::gpu::veil::VeilRegistry::new()
-        .preview("black_and_white")
-        .unwrap();
+    // Frame 0 is where the shared sweep rests: no tint, so the result is the
+    // bare desaturation.
     let defs = darkly::gpu::veil::VeilRegistry::new().param_defs("black_and_white");
     let tint = defs
         .iter()
         .position(|d| d.name == "tint_strength")
         .expect("the shared schema declares a tint strength");
-    let untinted = (0..spec.recipe.frames)
-        .find(|i| {
-            spec.recipe.params_at(defs, frame_t(*i, spec.recipe.frames))[tint]
-                == ParamValue::Float(0.0)
-        })
-        .expect("the tint track reaches zero");
+    assert_eq!(
+        darkly::gpu::black_and_white::preview_params(0.0)[tint],
+        ParamValue::Float(0.0),
+        "the shared sweep starts untinted"
+    );
 
     let rendered = render_one(&mut Gpu::new(), "veils", "black_and_white");
-    let frame = &rendered.frames[untinted as usize];
+    let frame = &rendered.frames[0];
     for (i, px) in frame.chunks_exact(4).enumerate() {
         assert!(
             px[0] == px[1] && px[1] == px[2],
@@ -812,17 +579,18 @@ fn blend_mode_frames_at_full_opacity_are_pairwise_distinct() {
         .collect();
     assert_eq!(modes.len(), 16);
 
-    let spec = darkly::gpu::blend_mode::registry()
+    // Half way through the sweep, where the blended layer fully covers the
+    // backdrop. Read off the same closure the renderer drives, so the index and
+    // the motion cannot disagree.
+    let anim = darkly::gpu::blend_mode::registry()
         .preview("normal")
         .unwrap();
-    let full = (0..spec.recipe.frames)
-        .find(|i| {
-            spec.recipe
-                .layer_at(spec.layer_knobs, frame_t(*i, spec.recipe.frames))
-                .unwrap()
-                == vec![("opacity", ParamValue::Float(1.0))]
+    let full = (0..anim.frames)
+        .max_by(|a, b| {
+            let at = |i: u32| docs_render::blend_opacity_at(frame_t(i, anim.frames));
+            at(*a).total_cmp(&at(*b))
         })
-        .expect("the shared opacity track reaches 1.0");
+        .expect("the sweep has frames");
 
     let mut gpu = Gpu::new();
     let mut seen: Vec<(&str, Vec<u8>)> = Vec::new();

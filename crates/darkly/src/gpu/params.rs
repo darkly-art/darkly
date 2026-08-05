@@ -1,15 +1,11 @@
 use crate::units::UnitType;
 use std::collections::BTreeMap;
 
-/// A `const`-constructible parameter value, used for schema-level defaults (a
-/// [`ParamKind::List`]'s per-entry overrides) and for the keyframe values of a
-/// [`PreviewRecipe`](super::preview_recipe::PreviewRecipe). [`ParamValue`] owns
+/// A `const`-constructible parameter value, used for schema-level defaults —
+/// today, a [`ParamKind::List`]'s per-entry overrides. [`ParamValue`] owns
 /// `String`s and `Vec`s that can't be built in a `const`, so the schema carries
-/// this `'static`-friendly mirror and lifts it to a `ParamValue` through
-/// [`ParamDef::value_from_const`].
-///
-/// Every [`ParamValue`] shape has a mirror here, so any parameter is
-/// expressible as a keyframe.
+/// this `'static`-friendly mirror and lifts it through
+/// [`to_value`](ConstParamValue::to_value).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ConstParamValue {
     Bool(bool),
@@ -28,10 +24,10 @@ pub enum ConstParamValue {
 }
 
 impl ConstParamValue {
-    /// Lift to a [`ParamValue`] without a schema. Every scalar shape mirrors
-    /// directly; a [`List`](ConstParamValue::List) cannot, because expanding
-    /// its entries needs the `item` defs it overlays — that lift lives on
-    /// [`ParamDef::value_from_const`], which has them.
+    /// Lift to a [`ParamValue`]. Every scalar shape mirrors directly; a nested
+    /// [`List`](ConstParamValue::List) lifts to an empty list, because
+    /// expanding its entries would need the `item` defs it overlays and a
+    /// schema declares no list of lists.
     fn to_value(self) -> ParamValue {
         match self {
             ConstParamValue::Bool(b) => ParamValue::Bool(b),
@@ -322,13 +318,6 @@ fn clamp_magnitude(v: [f32; 2], max: f32) -> [f32; 2] {
     }
 }
 
-/// Linear blend between two scalars. Written so `u == 0` and `u == 1` return
-/// `a` and `b` exactly, which is what makes a keyframe's own value survive
-/// evaluation at its own `t`.
-fn lerp_f32(a: f32, b: f32, u: f32) -> f32 {
-    a + (b - a) * u
-}
-
 /// Expand a [`ParamKind::List`]'s schema defaults into concrete entries: each
 /// default entry starts from the `item` schema's own per-field defaults, then
 /// applies that entry's named overrides on top.
@@ -369,109 +358,6 @@ impl ParamDef {
             ParamKind::Color { default, .. } => ParamValue::Color(*default),
             ParamKind::Vec2 { default, .. } => ParamValue::Vec2(*default),
             ParamKind::List { item, default, .. } => ParamValue::List(list_default(item, default)),
-        }
-    }
-
-    /// Lift a `'static` value against this def's schema. The `List` arm expands
-    /// per-entry overrides over `item`'s own defaults exactly as
-    /// [`default_value`](Self::default_value) does; every other arm is a direct
-    /// mirror. A value whose shape does not match this def's kind lifts to its
-    /// own variant, which [`lerp`](Self::lerp) then treats as a mismatch and
-    /// steps.
-    pub fn value_from_const(&self, v: ConstParamValue) -> ParamValue {
-        match (&self.kind, v) {
-            (ParamKind::List { item, .. }, ConstParamValue::List(entries)) => {
-                ParamValue::List(list_default(item, entries))
-            }
-            _ => v.to_value(),
-        }
-    }
-
-    /// Whether [`lerp`](Self::lerp) produces genuinely intermediate values for
-    /// this kind, or only ever returns one of its endpoints. There is no value
-    /// between two dropdown options or two icon names, so those kinds step —
-    /// and saying so lets a caller check that a keyframe pair it believes is
-    /// animating actually animates.
-    pub fn interpolates(&self) -> bool {
-        !matches!(
-            self.kind,
-            ParamKind::Enum { .. }
-                | ParamKind::Bool { .. }
-                | ParamKind::String { .. }
-                | ParamKind::Icon { .. }
-        )
-    }
-
-    /// Blend two values of this parameter at `u ∈ [0,1]`. `a` and `b` are
-    /// expected to be this def's own variant; any other pairing steps.
-    ///
-    /// Interpolating kinds blend component-wise and clamp to the def's own
-    /// range; the rest step at the midpoint. The distinction lives here rather
-    /// than on [`ParamValue`] because a value has already lost it — `Enum` and
-    /// `Int` are both `ParamValue::Int`, `FloatInput` and `Float` are both
-    /// `ParamValue::Float` — and only the schema still knows which is which.
-    pub fn lerp(&self, a: &ParamValue, b: &ParamValue, u: f32) -> ParamValue {
-        let step = || if u < 0.5 { a.clone() } else { b.clone() };
-        match (&self.kind, a, b) {
-            (
-                ParamKind::Float { min, max, .. } | ParamKind::FloatInput { min, max, .. },
-                ParamValue::Float(x),
-                ParamValue::Float(y),
-            ) => ParamValue::Float(lerp_f32(*x, *y, u).clamp(*min, *max)),
-            // Rounded rather than truncated: truncation biases every ramp
-            // downward and makes a `1 → 7` sweep spend twice as long at `1`.
-            (ParamKind::Int { min, max, .. }, ParamValue::Int(x), ParamValue::Int(y)) => {
-                ParamValue::Int(
-                    (lerp_f32(*x as f32, *y as f32, u).round() as i32).clamp(*min, *max),
-                )
-            }
-            (ParamKind::Color { .. }, ParamValue::Color(x), ParamValue::Color(y)) => {
-                ParamValue::Color(std::array::from_fn(|i| lerp_f32(x[i], y[i], u)))
-            }
-            (ParamKind::Vec2 { max, .. }, ParamValue::Vec2(x), ParamValue::Vec2(y)) => {
-                ParamValue::Vec2(clamp_magnitude(
-                    std::array::from_fn(|i| lerp_f32(x[i], y[i], u)),
-                    *max,
-                ))
-            }
-            (ParamKind::Levels { .. }, ParamValue::Levels(x), ParamValue::Levels(y)) => {
-                ParamValue::Levels(std::array::from_fn(|i| lerp_f32(x[i], y[i], u)))
-            }
-            // Both coordinates of every control point move together. Blending
-            // two ascending `x` sequences stays ascending, so `CurveLut`'s
-            // sorted-input precondition survives. Differing point counts have
-            // no correspondence to blend, so they step.
-            (ParamKind::Curve { .. }, ParamValue::Curve(x), ParamValue::Curve(y))
-                if x.len() == y.len() =>
-            {
-                ParamValue::Curve(
-                    x.iter()
-                        .zip(y)
-                        .map(|(p, q)| std::array::from_fn(|i| lerp_f32(p[i], q[i], u)))
-                        .collect(),
-                )
-            }
-            // Each entry's fields blend through the item schema that owns them,
-            // so a list of vectors and colours interpolates the same way a bare
-            // vector or colour would. Differing entry counts step.
-            (ParamKind::List { item, .. }, ParamValue::List(x), ParamValue::List(y))
-                if x.len() == y.len() =>
-            {
-                ParamValue::List(
-                    x.iter()
-                        .zip(y)
-                        .map(|(ea, eb)| {
-                            item.iter()
-                                .filter_map(|d| {
-                                    let (va, vb) = (ea.get(d.name)?, eb.get(d.name)?);
-                                    Some((d.name.to_string(), d.lerp(va, vb, u)))
-                                })
-                                .collect()
-                        })
-                        .collect(),
-                )
-            }
-            _ => step(),
         }
     }
 
@@ -879,150 +765,6 @@ mod tests {
         assert_eq!(entries[0]["color"], ParamValue::Color([1.0, 1.0, 1.0]));
         assert_eq!(entries[1]["scale"], ParamValue::Float(0.95));
         assert_eq!(entries[1]["offset"], ParamValue::Vec2([0.0, 0.0]));
-    }
-
-    /// Every kind either blends to a genuinely intermediate value or steps to
-    /// one of its endpoints, and `interpolates()` says which. Driven off
-    /// `interpolates()` itself so the expectation and the implementation cannot
-    /// disagree about a kind: the test asserts the *relationship*, not a
-    /// hand-copied list. The `Enum`-vs-`Int` and `Float`-vs-`FloatInput`
-    /// distinctions are only expressible on `ParamDef` — both pairs collapse to
-    /// the same `ParamValue`.
-    #[test]
-    fn lerp_blends_interpolating_kinds_and_steps_the_rest() {
-        let curve_a = ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]]);
-        let curve_b = ParamValue::Curve(vec![[0.0, 0.5], [1.0, 0.5]]);
-        let list_a = LIST.default_value();
-        let ParamValue::List(entries) = &list_a else {
-            panic!("expected a List value");
-        };
-        let mut shifted = entries.clone();
-        shifted[0].insert("scale".to_string(), ParamValue::Float(1.1));
-        let list_b = ParamValue::List(shifted);
-
-        let cases: &[(ParamDef, ParamValue, ParamValue)] = &[
-            (
-                ParamDef::float("f", 0.0, 10.0, 0.0),
-                ParamValue::Float(0.0),
-                ParamValue::Float(10.0),
-            ),
-            (
-                ParamDef::float_input("fi", 0.0, 10.0, 0.0),
-                ParamValue::Float(0.0),
-                ParamValue::Float(10.0),
-            ),
-            (
-                ParamDef::int("i", 0, 10, 0),
-                ParamValue::Int(0),
-                ParamValue::Int(10),
-            ),
-            (
-                ParamDef::color("c", [0.0; 3]),
-                ParamValue::Color([0.0, 0.0, 0.0]),
-                ParamValue::Color([1.0, 1.0, 1.0]),
-            ),
-            (
-                ParamDef::vec2("v", 64.0, [0.0; 2]),
-                ParamValue::Vec2([0.0, 0.0]),
-                ParamValue::Vec2([8.0, 4.0]),
-            ),
-            (
-                ParamDef::levels("l", [0.0, 1.0, 1.0, 0.0, 1.0]),
-                ParamValue::Levels([0.0, 1.0, 1.0, 0.0, 1.0]),
-                ParamValue::Levels([0.2, 0.8, 2.0, 0.1, 0.9]),
-            ),
-            (
-                ParamDef::curve("cu", &[[0.0, 0.0], [1.0, 1.0]]),
-                curve_a.clone(),
-                curve_b,
-            ),
-            (ParamDef::list("li", ITEM, 4, &[]), list_a, list_b),
-            (
-                ParamDef::enumeration("e", &["a", "b", "c"], 0),
-                ParamValue::Int(0),
-                ParamValue::Int(2),
-            ),
-            (
-                ParamDef::boolean("b", false),
-                ParamValue::Bool(false),
-                ParamValue::Bool(true),
-            ),
-            (
-                ParamDef::string("s", "a"),
-                ParamValue::String("a".into()),
-                ParamValue::String("b".into()),
-            ),
-            (
-                ParamDef::icon("ic", &[("a", "a"), ("b", "b")], "a"),
-                ParamValue::String("a".into()),
-                ParamValue::String("b".into()),
-            ),
-        ];
-
-        let mut blended = 0usize;
-        let mut stepped = 0usize;
-        for (def, a, b) in cases {
-            let mid = def.lerp(a, b, 0.5);
-            assert_eq!(def.lerp(a, b, 0.0), *a, "`{}` moved at u = 0", def.name);
-            assert_eq!(def.lerp(a, b, 1.0), *b, "`{}` moved at u = 1", def.name);
-            if def.interpolates() {
-                assert!(
-                    mid != *a && mid != *b,
-                    "`{}` interpolates but landed on an endpoint: {mid:?}",
-                    def.name
-                );
-                blended += 1;
-            } else {
-                assert!(
-                    mid == *a || mid == *b,
-                    "`{}` does not interpolate but produced {mid:?}",
-                    def.name
-                );
-                stepped += 1;
-            }
-        }
-        assert_eq!((blended, stepped), (8, 4));
-
-        // A curve whose keyframes disagree on point count has no per-point
-        // correspondence to blend, so it steps despite the kind interpolating.
-        let curve = ParamDef::curve("cu", &[[0.0, 0.0], [1.0, 1.0]]);
-        let four = ParamValue::Curve(vec![[0.0, 0.0], [0.25, 0.4], [0.75, 0.6], [1.0, 1.0]]);
-        let mid = curve.lerp(&curve_a, &four, 0.5);
-        assert!(mid == curve_a || mid == four, "a mismatched curve blended");
-
-        // So does a pairing of two different `ParamValue` variants — and a
-        // step swaps at the midpoint, so each endpoint holds half the span.
-        let f = ParamDef::float("f", 0.0, 1.0, 0.0);
-        let (lo, hi) = (ParamValue::Float(0.0), ParamValue::Bool(true));
-        assert_eq!(f.lerp(&lo, &hi, 0.4), lo);
-        assert_eq!(f.lerp(&lo, &hi, 0.6), hi);
-    }
-
-    /// An `Int` ramp rounds to nearest rather than truncating, so `1 → 7` is
-    /// `4` at the midpoint and spends the same span at each end. Truncation
-    /// would bias every integer sweep downward and hold the low value twice as
-    /// long as the high one.
-    #[test]
-    fn int_tracks_round_rather_than_truncate() {
-        let def = ParamDef::int("kernel_size", 1, 7, 1);
-        let (a, b) = (ParamValue::Int(1), ParamValue::Int(7));
-        assert_eq!(def.lerp(&a, &b, 0.5), ParamValue::Int(4));
-        // Truncation would answer 1 here and 4 at 0.5 — both flattened toward a.
-        assert_eq!(def.lerp(&a, &b, 0.1), ParamValue::Int(2));
-        assert_eq!(def.lerp(&a, &b, 0.9), ParamValue::Int(6));
-
-        // Equal spans: across a frame budget, as many samples land on the low
-        // end as on the high one. Truncation would hold `1` for twice as long.
-        let hits = |target: i32| {
-            (0..48)
-                .filter(|i| def.lerp(&a, &b, *i as f32 / 48.0) == ParamValue::Int(target))
-                .count()
-        };
-        assert_eq!(hits(1), hits(7));
-        assert!(hits(1) > 0);
-
-        // The def's own range still wins over an out-of-range keyframe.
-        assert_eq!(def.lerp(&a, &ParamValue::Int(40), 1.0), ParamValue::Int(7));
     }
 
     /// Portable coercion (the YAML/def-driven path) round-trips the new kinds,

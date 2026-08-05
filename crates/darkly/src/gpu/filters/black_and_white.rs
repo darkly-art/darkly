@@ -66,7 +66,8 @@ pub fn register() -> FilterPipelineRegistration {
         description: bw::DESCRIPTION,
         icon: "fa6-solid:droplet-slash",
         params: bw::PARAMS,
-        preview: Some(&bw::PREVIEW),
+        preview: Some(bw::PREVIEW),
+        preview_at: Some(bw::preview_params),
         create_pipeline,
     }
 }

@@ -140,7 +140,12 @@ impl VeilChain {
     // --- Veil management ---
 
     /// Add a veil to the chain. Creates GPU resources immediately.
-    pub fn add_veil(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, veil: Box<dyn Veil>) {
+    pub fn add_veil(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mut veil: Box<dyn Veil>,
+    ) {
         self.ensure_textures(device);
         self.ensure_scaling_pipelines(device);
         let native_views = self.views.as_ref().unwrap();
@@ -148,7 +153,7 @@ impl VeilChain {
         let (scaling, cache) = create_veil_resources(
             device,
             queue,
-            &*veil,
+            &mut *veil,
             native_views,
             &self.sampler,
             self.downscale_pipeline.as_ref(),
@@ -210,7 +215,7 @@ impl VeilChain {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         index: usize,
-        new_veil: Box<dyn Veil>,
+        mut new_veil: Box<dyn Veil>,
     ) {
         if index >= self.entries.len() {
             return;
@@ -222,7 +227,7 @@ impl VeilChain {
         let (scaling, cache) = create_veil_resources(
             device,
             queue,
-            &*new_veil,
+            &mut *new_veil,
             native_views,
             &self.sampler,
             self.downscale_pipeline.as_ref(),
@@ -511,7 +516,7 @@ impl VeilChain {
             let (scaling, cache) = create_veil_resources(
                 device,
                 queue,
-                &*entry.veil,
+                &mut *entry.veil,
                 native_views,
                 &self.sampler,
                 self.downscale_pipeline.as_ref(),
@@ -537,7 +542,7 @@ impl VeilChain {
 fn create_veil_resources(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    veil: &dyn Veil,
+    veil: &mut dyn Veil,
     native_views: &[wgpu::TextureView; 2],
     sampler: &wgpu::Sampler,
     scaling_layout: Option<&EffectPipeline>,

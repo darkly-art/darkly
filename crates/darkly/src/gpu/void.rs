@@ -21,7 +21,10 @@ use std::sync::Arc;
 
 pub use super::effect::{EffectCache, EffectPipeline};
 pub use super::params::{ParamDef, ParamValue};
-use super::preview_recipe::{PreviewRecipe, PreviewSpec};
+use super::preview::{
+    PreviewAnim, PreviewEntry, PreviewMechanism, PreviewRegistries, PreviewSession, PreviewTarget,
+    PREVIEW_FORMAT,
+};
 
 /// External image source for [`Void::upload_external_image`]. Today the only
 /// populated variant is `Web`, which wraps wgpu's WebGPU-only external-image
@@ -117,8 +120,12 @@ pub trait Void: std::fmt::Debug {
     /// destination view (the void's own texture) so the void can build
     /// bind groups that target it directly — voids never sample from a
     /// ping-pong pair the way veils do.
+    ///
+    /// Takes `&mut self` so a void whose uniform struct folds in something it
+    /// is only handed here — the render resolution, the render-target→canvas
+    /// scale — can keep it, and rewrite that struct later from state alone.
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         dst_view: &wgpu::TextureView,
@@ -139,6 +146,24 @@ pub trait Void: std::fmt::Debug {
 
     /// Per-frame uniform update for animated voids. Default is a no-op.
     fn update_time(&mut self, _queue: &wgpu::Queue, _cache: &EffectCache, _dt: f32) {}
+
+    /// Put this instance into the state its preview shows at normalized time
+    /// `t ∈ [0, 1]`, and sync whatever GPU resources that state feeds.
+    ///
+    /// Absolute, not incremental: `preview_at(0.5)` produces the same state
+    /// whether it follows `preview_at(0.4)` or nothing at all.
+    ///
+    /// Answers whether `cache` still describes this instance; a void whose
+    /// cache shape is a function of its parameters would answer `false` and be
+    /// rebuilt through [`create_cache`](Self::create_cache). The default is a
+    /// no-op answering `true`, which renders a still at the instance's own
+    /// parameters.
+    ///
+    /// See [`super::preview`] for the shape every body follows and the sweeps
+    /// they share.
+    fn preview_at(&mut self, _queue: &wgpu::Queue, _cache: &EffectCache, _t: f32) -> bool {
+        true
+    }
 
     /// Replace this void's parameter values in place — update internal
     /// fields, rewrite the uniform buffer, but leave any stateful GPU
@@ -271,13 +296,14 @@ pub struct VoidRegistration {
     /// panel renders it for void layers of this kind, and the picker falls back
     /// to it when the void declares no rendered preview.
     pub icon: &'static str,
-    /// How this void's preview moves, or `None` for a void with nothing to
-    /// show. Declaring a recipe is what makes a void previewable — the "Add
+    /// How long this void's preview runs, or `None` for a void with nothing to
+    /// show. Declaring an animation is what makes a void previewable — the "Add
     /// Void" picker renders a live thumbnail for the ones that do and falls
     /// back to [`icon`](Self::icon) for the ones that don't. (The stream voids
     /// opt out: their aux texture is a 1×1 placeholder until a browser frame
-    /// arrives, so there is nothing to render and nothing to animate.)
-    pub preview: Option<&'static PreviewRecipe>,
+    /// arrives, so there is nothing to render and nothing to animate.) What the
+    /// preview *does* over that span is [`Void::preview_at`].
+    pub preview: Option<PreviewAnim>,
     /// Whether this void exposes a live, user-editable transform (driven by the
     /// generic gizmo, stored on [`crate::layer::VoidLayer::transform`]). Voids
     /// that opt in implement [`Void::set_transform`]; the rest leave it false
@@ -299,12 +325,6 @@ pub struct VoidRegistration {
 
 /// Id of the catalog this registry projects into.
 pub const CATALOG_ID: &str = "voids";
-
-/// Document properties a void's preview may drive — none. Voids are previewed
-/// offscreen, generating straight into a destination texture rather than
-/// through a layer tree, so there is no compositing layer whose properties a
-/// track could name.
-pub const LAYER_KNOBS: &[ParamDef] = &[];
 
 impl VoidRegistration {
     pub fn catalog_entry(&self) -> crate::catalog::CatalogEntry {
@@ -385,14 +405,10 @@ impl VoidRegistry {
             .unwrap_or(&[])
     }
 
-    /// How a void type's preview moves, paired with the knob namespace this
-    /// catalog exposes to it. `None` for an unknown type or one that declares
-    /// no recipe.
-    pub fn preview(&self, type_id: &str) -> Option<PreviewSpec> {
-        Some(PreviewSpec {
-            recipe: self.entries.get(type_id)?.reg.preview?,
-            layer_knobs: LAYER_KNOBS,
-        })
+    /// How long a void type's preview runs. `None` for an unknown type or one
+    /// that declares no preview.
+    pub fn preview(&self, type_id: &str) -> Option<PreviewAnim> {
+        self.entries.get(type_id)?.reg.preview
     }
 
     /// The iconify icon name for a void kind (layer-panel icon + picker
@@ -482,6 +498,109 @@ impl VoidRegistry {
             .clone();
         (entry.reg.from_params)(params, pipeline)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Preview mechanism
+// ---------------------------------------------------------------------------
+
+/// This catalog's answer to [`PreviewMechanism`]. Exported by name so
+/// `build.rs` finds it while scanning this module's source and emits a
+/// `preview_mechanisms()` row for `voids`.
+pub fn preview_mechanism() -> &'static dyn PreviewMechanism {
+    &VoidMechanism
+}
+
+struct VoidMechanism;
+
+impl PreviewMechanism for VoidMechanism {
+    fn resolve(&self, type_id: &str) -> Option<PreviewEntry> {
+        let registry = VoidRegistry::new();
+        Some(PreviewEntry {
+            type_id: registry.static_type_id(type_id)?,
+            anim: registry.preview(type_id)?,
+        })
+    }
+
+    /// A void generates its content from a shader with no input, so the
+    /// target's source texture is cleared rather than loaded.
+    fn reads_source(&self) -> bool {
+        false
+    }
+
+    fn open<'a>(
+        &self,
+        regs: PreviewRegistries<'a>,
+        type_id: &str,
+    ) -> Option<Box<dyn PreviewSession + 'a>> {
+        let type_id = regs.voids.static_type_id(type_id)?;
+        Some(Box::new(VoidSession {
+            registry: regs.voids,
+            type_id,
+            instance: None,
+        }))
+    }
+}
+
+/// One open void preview: the instance and the cache it renders through.
+struct VoidSession<'a> {
+    registry: &'a mut VoidRegistry,
+    type_id: &'static str,
+    instance: Option<(Box<dyn Void>, EffectCache)>,
+}
+
+impl<'a> PreviewSession for VoidSession<'a> {
+    fn set_t(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &PreviewTarget,
+        t: f32,
+    ) {
+        if self.instance.is_none() {
+            let defaults: Vec<ParamValue> = self
+                .registry
+                .param_defs(self.type_id)
+                .iter()
+                .map(ParamDef::default_value)
+                .collect();
+            let mut void =
+                self.registry
+                    .create_void(self.type_id, &defaults, device, PREVIEW_FORMAT);
+            let cache = build_cache(&mut *void, device, queue, target);
+            self.instance = Some((void, cache));
+        }
+        let (void, cache) = self.instance.as_mut().expect("built above");
+        if !void.preview_at(queue, cache, t) {
+            *cache = build_cache(&mut **void, device, queue, target);
+        }
+    }
+
+    fn encode(
+        &mut self,
+        _device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &PreviewTarget,
+    ) {
+        let Some((void, cache)) = self.instance.as_ref() else {
+            return;
+        };
+        void.encode(encoder, cache, target.output_view());
+    }
+}
+
+/// The one place a void's cache is built against a preview target, so the two
+/// callers — the first build and a `preview_at` that invalidated its cache —
+/// cannot disagree about what it is built from. A void writes straight into the
+/// output view, so that is what its bind groups target.
+fn build_cache(
+    void: &mut dyn Void,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    target: &PreviewTarget,
+) -> EffectCache {
+    let (w, h) = target.size();
+    void.create_cache(device, queue, target.output_view(), target.sampler(), w, h)
 }
 
 #[cfg(test)]

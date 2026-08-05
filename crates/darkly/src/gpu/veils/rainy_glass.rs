@@ -1,7 +1,5 @@
 use crate::gpu::effect::{EffectCache, EffectPipeline};
-use crate::gpu::params::ConstParamValue;
-use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
-use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
+use crate::gpu::preview::{PreviewAnim, PREVIEW_SECONDS};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
@@ -23,35 +21,13 @@ const PARAMS: &[ParamDef] = &[
         .with_description("Size of the droplets."),
 ];
 
-/// Two seconds of droplets running down the glass. The motion *is* the effect,
-/// so the preview runs the veil's own clock rather than a parameter. It is
-/// integrated forward and does not return to its start, so the sequence does not
-/// loop.
-static PREVIEW: PreviewRecipe = PreviewRecipe {
-    frames: ANIMATED_FRAMES,
-    fps: PREVIEW_FPS,
-    tracks: &[Track {
-        target: TrackTarget::Time,
-        keys: &[
-            Key {
-                t: 0.0,
-                value: ConstParamValue::Float(0.0),
-            },
-            Key {
-                t: 1.0,
-                value: ConstParamValue::Float(2.0),
-            },
-        ],
-    }],
-};
-
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "rainy_glass",
         display_name: "Rainy Glass",
         description: "Raindrops run down a pane of glass over the view.",
         params: PARAMS,
-        preview: Some(&PREVIEW),
+        preview: Some(PreviewAnim::ONE_WAY),
         create_pipeline: create_rainy_glass_pipeline,
         from_params: |params, shared| {
             let speed = match params.first() {
@@ -117,6 +93,9 @@ pub struct RainyGlass {
     pub scale: f32,
     /// Accumulated effective time (speed-scaled).
     time: f32,
+    /// Render resolution, kept from `create_cache` so
+    /// [`uniforms`](Self::uniforms) rebuilds the whole struct from state.
+    resolution: (f32, f32),
     shared: Arc<EffectPipeline>,
 }
 
@@ -136,7 +115,23 @@ impl RainyGlass {
             fog_amount,
             scale,
             time: 0.0,
+            resolution: (0.0, 0.0),
             shared,
+        }
+    }
+
+    fn uniforms(&self) -> RainyGlassUniforms {
+        RainyGlassUniforms {
+            time: self.time,
+            rain_amount: self.rain_amount,
+            resolution_x: self.resolution.0,
+            resolution_y: self.resolution.1,
+            // Add π to compensate for our Y-flip (the vertex shader does
+            // `1 - uv.y`) against Shadertoy's Y-up convention.
+            direction: self.direction.to_radians() + std::f32::consts::PI,
+            fog_amount: self.fog_amount,
+            scale: self.scale,
+            _pad: 0.0,
         }
     }
 }
@@ -164,15 +159,23 @@ impl Veil for RainyGlass {
         self.speed > 0.0
     }
 
+    /// Two seconds of droplets running down the glass. The motion *is* the
+    /// effect, so the preview runs the veil's own clock rather than a
+    /// parameter. It runs forward and does not return to its start, so the
+    /// sequence does not loop.
+    fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
+        self.time = PREVIEW_SECONDS * t * self.speed;
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
+        true
+    }
+
     fn update_time(&mut self, queue: &wgpu::Queue, cache: &EffectCache, dt: f32) {
         self.time += dt * self.speed;
-        if let Some(buf) = cache.uniform_bufs.first() {
-            queue.write_buffer(buf, 0, bytemuck::bytes_of(&self.time));
-        }
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
     }
 
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ping_pong_views: &[wgpu::TextureView; 2],
@@ -180,26 +183,14 @@ impl Veil for RainyGlass {
         render_width: u32,
         render_height: u32,
     ) -> EffectCache {
-        // Convert direction to radians and add π to compensate for our
-        // Y-flip (vertex shader does 1-uv.y) vs Shadertoy's Y-up convention.
-        let dir_rad = self.direction.to_radians() + std::f32::consts::PI;
-        let uniforms = RainyGlassUniforms {
-            time: self.time,
-            rain_amount: self.rain_amount,
-            resolution_x: render_width as f32,
-            resolution_y: render_height as f32,
-            direction: dir_rad,
-            fog_amount: self.fog_amount,
-            scale: self.scale,
-            _pad: 0.0,
-        };
+        self.resolution = (render_width as f32, render_height as f32);
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("rainy-glass-uniforms"),
             size: std::mem::size_of::<RainyGlassUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&self.uniforms()));
 
         let layout = &self.shared.bind_group_layout;
         let bind_groups: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {

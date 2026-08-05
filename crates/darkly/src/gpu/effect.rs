@@ -44,6 +44,19 @@ impl EffectCache {
             aux_pipelines: Vec::new(),
         }
     }
+
+    /// Rewrite the uniform buffer at `index` from freshly-packed bytes, or do
+    /// nothing when this cache holds no such buffer.
+    ///
+    /// An effect's parameter state reaches the GPU through exactly two callers
+    /// — the effect's own `create_cache` and whatever rewrites it afterwards —
+    /// and the two must agree on a layout `bytemuck` will not check for them.
+    /// Routing both through one method is what keeps the packing in one place.
+    pub fn write_uniform(&self, queue: &wgpu::Queue, index: usize, bytes: &[u8]) {
+        if let Some(buf) = self.uniform_bufs.get(index) {
+            queue.write_buffer(buf, 0, bytes);
+        }
+    }
 }
 
 /// Build a render pipeline from a passthrough blit shader.

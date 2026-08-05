@@ -12,12 +12,9 @@
 use crate::gpu::effect::{
     create_blit_bind_group, create_blit_pipeline, EffectCache, EffectPipeline,
 };
-use crate::gpu::params::ConstParamValue;
-use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
-use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
+use crate::gpu::preview::{swing, PreviewAnim};
 use crate::gpu::void::{DirtyFlag, ParamDef, ParamValue, Void, VoidRegistration};
 use crate::units::UnitType;
-use std::cell::Cell;
 use std::sync::Arc;
 
 /// Procedural-render downscale factor. The FBM shader runs into an aux
@@ -86,32 +83,6 @@ const PARAMS: &[ParamDef] = &[
         ),
 ];
 
-/// The field drifts forward through the noise volume and rewinds. `time` is an
-/// ordinary parameter rather than the animation trait's clock, so the whole
-/// sweep is a value that can be written and re-written — which is what lets it
-/// return to where it started and close the loop.
-static PREVIEW: PreviewRecipe = PreviewRecipe {
-    frames: ANIMATED_FRAMES,
-    fps: PREVIEW_FPS,
-    tracks: &[Track {
-        target: TrackTarget::Param("time"),
-        keys: &[
-            Key {
-                t: 0.0,
-                value: ConstParamValue::Float(0.0),
-            },
-            Key {
-                t: 0.5,
-                value: ConstParamValue::Float(6.0),
-            },
-            Key {
-                t: 1.0,
-                value: ConstParamValue::Float(0.0),
-            },
-        ],
-    }],
-};
-
 pub fn register() -> VoidRegistration {
     VoidRegistration {
         type_id: TYPE_ID,
@@ -119,7 +90,7 @@ pub fn register() -> VoidRegistration {
         description: "Procedural fractal noise — clouds, grain and organic texture from a seed.",
         params: PARAMS,
         icon: "tabler:galaxy",
-        preview: Some(&PREVIEW),
+        preview: Some(PreviewAnim::LOOPING),
         supports_live_transform: true,
         // Purely procedural — no external capture, identity seed transform.
         capture_kind: None,
@@ -168,10 +139,9 @@ pub struct Noise {
     /// User transform (gizmo affine). The shader samples the field through its
     /// inverse, so the noise pattern pans / scales / rotates under the gizmo.
     transform: crate::transform::Transform,
-    /// Render-target→canvas px scale, baked at `create_cache`. `Cell` because
-    /// the trait hands `&self` there; cached so uniform writes need no extra
-    /// argument and never clobber it.
-    canvas_scale: Cell<f32>,
+    /// Render-target→canvas px scale, kept from `create_cache` so every
+    /// uniform write rebuilds the whole struct from state and never clobbers it.
+    canvas_scale: f32,
     shared: Arc<EffectPipeline>,
     dirty: DirtyFlag,
 }
@@ -189,7 +159,7 @@ impl Clone for Noise {
             darkness: self.darkness,
             time: self.time,
             transform: self.transform,
-            canvas_scale: Cell::new(self.canvas_scale.get()),
+            canvas_scale: self.canvas_scale,
             shared: self.shared.clone(),
             dirty: DirtyFlag::new_dirty(),
         }
@@ -230,7 +200,7 @@ impl Noise {
             darkness,
             time,
             transform: crate::transform::Transform::identity(),
-            canvas_scale: Cell::new(1.0),
+            canvas_scale: 1.0,
             shared,
             dirty: DirtyFlag::new_dirty(),
         }
@@ -246,7 +216,7 @@ impl Noise {
             warp: self.warp,
             darkness: self.darkness,
             time: self.time,
-            canvas_scale: self.canvas_scale.get(),
+            canvas_scale: self.canvas_scale,
             _pad0: 0.0,
             inv_row0,
             inv_row1,
@@ -283,6 +253,17 @@ impl Void for Noise {
         self.dirty.mark();
     }
 
+    /// The field drifts forward through the noise volume and rewinds. `time` is
+    /// an ordinary parameter rather than the animation trait's clock, so the
+    /// whole sweep is a value that can be written and re-written — which is what
+    /// lets it return to where it started and close the loop.
+    fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
+        self.time = 6.0 * swing(t);
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
+        self.dirty.mark();
+        true
+    }
+
     fn update_params(&mut self, queue: &wgpu::Queue, cache: &EffectCache, params: &[ParamValue]) {
         self.seed = match params.first() {
             Some(ParamValue::Int(v)) => *v,
@@ -310,9 +291,7 @@ impl Void for Noise {
         };
         // Full write — `canvas_scale` is cached on the struct, so rebuilding
         // the whole uniform can't clobber it.
-        if let Some(buf) = cache.uniform_bufs.first() {
-            queue.write_buffer(buf, 0, bytemuck::bytes_of(&self.uniforms()));
-        }
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
         self.dirty.mark();
     }
 
@@ -323,14 +302,12 @@ impl Void for Noise {
         transform: &crate::transform::Transform,
     ) {
         self.transform = *transform;
-        if let Some(buf) = cache.uniform_bufs.first() {
-            queue.write_buffer(buf, 0, bytemuck::bytes_of(&self.uniforms()));
-        }
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
         self.dirty.mark();
     }
 
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         _dst_view: &wgpu::TextureView,
@@ -340,7 +317,7 @@ impl Void for Noise {
     ) -> EffectCache {
         let aux_w = (render_width / AUX_DOWNSCALE).max(AUX_MIN_DIM);
         let aux_h = (render_height / AUX_DOWNSCALE).max(AUX_MIN_DIM);
-        self.canvas_scale.set(render_width as f32 / aux_w as f32);
+        self.canvas_scale = render_width as f32 / aux_w as f32;
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("void-noise-uniforms"),

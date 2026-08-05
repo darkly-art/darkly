@@ -16,9 +16,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use super::params::{ConstParamValue, ParamDef};
-use super::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
-use super::preview_recipe::{Key, PreviewRecipe, PreviewSpec, Track, TrackTarget};
+use super::preview::PreviewAnim;
 
 /// Static metadata for one blend mode. Every layer/group holds a
 /// `&'static BlendModeRegistration` directly; the GPU value is read straight
@@ -50,42 +48,20 @@ pub struct BlendModeRegistration {
 /// Id of the catalog this registry projects into.
 pub const CATALOG_ID: &str = "blendModes";
 
-/// Document properties a blend mode's preview may drive. A mode is previewed
-/// through a real layer tree, so the blended layer's opacity is available to a
-/// [`TrackTarget::Layer`] track.
-pub const LAYER_KNOBS: &[ParamDef] = &[super::preview_recipe::OPACITY];
-
-/// How a blend mode's preview moves: the blended layer rising over an unchanged
-/// backdrop and receding. Modes take no parameters and the motion is the same
-/// for every one of them, so it belongs to the catalog rather than to any single
-/// registration — a seventeenth mode is still one file of five fields and
-/// inherits this for free. It returns to zero, so the loop closes.
+/// How a blend mode's preview plays back: the blended layer rising over an
+/// unchanged backdrop and receding. Modes take no parameters and the motion is
+/// the same for every one of them, so it belongs to the catalog rather than to
+/// any single registration — a seventeenth mode is still one file of five
+/// fields and inherits this for free. It returns to zero, so the loop closes.
 ///
-/// A mode that ever wants different motion is a `preview` field on
-/// [`BlendModeRegistration`] and a fallback to this in
-/// [`BlendModeRegistry::preview`] — a change local to this file and the one
-/// mode that wants the override.
-pub static PREVIEW: PreviewRecipe = PreviewRecipe {
-    frames: ANIMATED_FRAMES,
-    fps: PREVIEW_FPS,
-    tracks: &[Track {
-        target: TrackTarget::Layer("opacity"),
-        keys: &[
-            Key {
-                t: 0.0,
-                value: ConstParamValue::Float(0.0),
-            },
-            Key {
-                t: 0.5,
-                value: ConstParamValue::Float(1.0),
-            },
-            Key {
-                t: 1.0,
-                value: ConstParamValue::Float(0.0),
-            },
-        ],
-    }],
-};
+/// A mode is not an effect over an image but a relation between two, so there
+/// is no `src → out` mechanism to write and no `preview_at` to override: the
+/// documentation renderer drives the *host layer's* opacity, which is the one
+/// thing only a consumer holding a document can do. A mode that ever wants
+/// different motion is a `preview` field on [`BlendModeRegistration`] and a
+/// fallback to this in [`BlendModeRegistry::preview`] — a change local to this
+/// file and the one mode that wants the override.
+pub static PREVIEW: PreviewAnim = PreviewAnim::LOOPING;
 
 impl BlendModeRegistration {
     pub fn catalog_entry(&self) -> crate::catalog::CatalogEntry {
@@ -172,14 +148,10 @@ impl BlendModeRegistry {
         self.ordered.iter().map(|&i| &self.entries[i]).collect()
     }
 
-    /// How a mode's preview moves, paired with the knob namespace this catalog
-    /// exposes to it. Every registered mode inherits [`PREVIEW`]; an unknown
-    /// `type_id` gets `None`.
-    pub fn preview(&'static self, type_id: &str) -> Option<PreviewSpec> {
-        self.get(type_id).map(|_| PreviewSpec {
-            recipe: &PREVIEW,
-            layer_knobs: LAYER_KNOBS,
-        })
+    /// How long a mode's preview runs. Every registered mode inherits
+    /// [`PREVIEW`]; an unknown `type_id` gets `None`.
+    pub fn preview(&'static self, type_id: &str) -> Option<PreviewAnim> {
+        self.get(type_id).map(|_| PREVIEW)
     }
 }
 

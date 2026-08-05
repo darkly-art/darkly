@@ -23,9 +23,8 @@ use std::sync::Arc;
 use crate::brush::curve_math::CurveLut;
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
 use crate::gpu::lut_filter::{bake_lut, lut_param_filter, lut_shader_source, Baked};
-use crate::gpu::params::{ConstParamValue, ParamDef, ParamValue};
-use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
-use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
+use crate::gpu::params::{ParamDef, ParamValue};
+use crate::gpu::preview::{swing_signed, PreviewAnim};
 
 /// Identity curve — a straight line through the two endpoints.
 const IDENTITY: &[[f32; 2]] = &[[0.0, 0.0], [1.0, 1.0]];
@@ -85,66 +84,29 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
 
 /// Contrast rises above the identity transfer, falls below it, and returns.
 ///
-/// Every keyframe carries four control points at identical `x` coordinates, so
-/// only `y` moves and the blended points stay ascending for
-/// [`CurveLut::from_points`]' sorted-input precondition. `IDENTITY` is
-/// deliberately *not* used as the resting keyframe: it holds two points, an
-/// S-curve needs four, and keyframes whose point counts disagree have no
-/// correspondence to blend — they would step, rendering four stills rather than
-/// an animation. The four-point resting curve is collinear, so the
-/// natural-cubic spline reproduces the straight line exactly and the resting
-/// frames match a default-parameter render.
+/// The swept curve carries four control points at fixed `x` coordinates, so
+/// only `y` moves and the points stay ascending for [`CurveLut::from_points`]'
+/// sorted-input precondition. `IDENTITY` is deliberately not the resting curve:
+/// it holds two points, an S-curve needs four, and a preview that changed point
+/// count mid-sweep would step rather than move. The four-point resting curve is
+/// collinear, so the natural-cubic spline reproduces the straight line exactly
+/// and the resting frames match a default-parameter render.
 ///
 /// Only the composite `rgb` channel moves; the other seven stay at their
 /// two-point defaults, which keeps the per-channel and HSL rows of the baked LUT
 /// inactive and the result reading as a tone swing rather than a hue mess.
-static PREVIEW: PreviewRecipe = PreviewRecipe {
-    frames: ANIMATED_FRAMES,
-    fps: PREVIEW_FPS,
-    tracks: &[Track {
-        target: TrackTarget::Param("rgb"),
-        keys: &[
-            Key {
-                t: 0.00,
-                value: ConstParamValue::Curve(&[
-                    [0.0, 0.0],
-                    [0.25, 0.25],
-                    [0.75, 0.75],
-                    [1.0, 1.0],
-                ]),
-            },
-            // Shadows down, highlights up.
-            Key {
-                t: 0.25,
-                value: ConstParamValue::Curve(&[
-                    [0.0, 0.0],
-                    [0.25, 0.07],
-                    [0.75, 0.93],
-                    [1.0, 1.0],
-                ]),
-            },
-            // And the inverse — contrast below the identity.
-            Key {
-                t: 0.75,
-                value: ConstParamValue::Curve(&[
-                    [0.0, 0.0],
-                    [0.25, 0.43],
-                    [0.75, 0.57],
-                    [1.0, 1.0],
-                ]),
-            },
-            Key {
-                t: 1.00,
-                value: ConstParamValue::Curve(&[
-                    [0.0, 0.0],
-                    [0.25, 0.25],
-                    [0.75, 0.75],
-                    [1.0, 1.0],
-                ]),
-            },
-        ],
-    }],
-};
+fn preview_params(t: f32) -> Vec<ParamValue> {
+    let bend = 0.18 * swing_signed(t);
+    let mut params: Vec<ParamValue> = PARAMS.iter().map(ParamDef::default_value).collect();
+    params[0] = ParamValue::Curve(vec![
+        // rgb
+        [0.0, 0.0],
+        [0.25, 0.25 - bend],
+        [0.75, 0.75 + bend],
+        [1.0, 1.0],
+    ]);
+    params
+}
 
 pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
@@ -153,7 +115,8 @@ pub fn register() -> FilterPipelineRegistration {
         icon: "fa6-solid:chart-line",
         description: "Remap tones and colors with editable per-channel curves.",
         params: PARAMS,
-        preview: Some(&PREVIEW),
+        preview: Some(PreviewAnim::LOOPING),
+        preview_at: Some(preview_params),
         create_pipeline,
     }
 }

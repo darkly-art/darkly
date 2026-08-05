@@ -1,7 +1,5 @@
 use crate::gpu::effect::{create_blit_pipeline, EffectCache, EffectPipeline};
-use crate::gpu::params::ConstParamValue;
-use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
-use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
+use crate::gpu::preview::{swing, PreviewAnim};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use crate::units::UnitType;
 use std::sync::Arc;
@@ -16,38 +14,13 @@ const PARAMS: &[ParamDef] = &[
         .with_description("Blends between blocks instead of leaving hard square edges."),
 ];
 
-/// Blocks grow from a single pixel to the coarsest the control allows and back,
-/// one visible quantised step at a time — which is what shows what the control
-/// does in a way no single block size can.
-static PREVIEW: PreviewRecipe = PreviewRecipe {
-    frames: ANIMATED_FRAMES,
-    fps: PREVIEW_FPS,
-    tracks: &[Track {
-        target: TrackTarget::Param("scale"),
-        keys: &[
-            Key {
-                t: 0.0,
-                value: ConstParamValue::Int(1),
-            },
-            Key {
-                t: 0.5,
-                value: ConstParamValue::Int(6),
-            },
-            Key {
-                t: 1.0,
-                value: ConstParamValue::Int(1),
-            },
-        ],
-    }],
-};
-
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "pixelate",
         display_name: "Pixelate",
         description: "Downsample the view into a blocky pixel mosaic.",
         params: PARAMS,
-        preview: Some(&PREVIEW),
+        preview: Some(PreviewAnim::LOOPING),
         create_pipeline: create_pixelate_pipeline,
         from_params: |params, shared| {
             let scale = match params.first() {
@@ -70,6 +43,11 @@ pub struct Pixelate {
     /// When true, upscale uses linear filtering (soft/blurry).
     /// When false, uses nearest-neighbor (hard pixel edges).
     pub soft: bool,
+    /// The `scale` the current [`EffectCache`] was built for. Pixelate's cache
+    /// *is* its parameters — one aux texture and bind group per halving — so
+    /// this is what lets [`preview_at`](Veil::preview_at) say when the cache it
+    /// was handed no longer describes the instance.
+    built_scale: Option<u32>,
     shared: Arc<EffectPipeline>,
 }
 
@@ -78,6 +56,7 @@ impl Pixelate {
         Pixelate {
             scale: scale.max(1),
             soft,
+            built_scale: None,
             shared,
         }
     }
@@ -109,8 +88,20 @@ impl Veil for Pixelate {
         ]
     }
 
+    /// Blocks grow from a single pixel to the coarsest the control allows and
+    /// back, one visible quantised step at a time — which is what shows what
+    /// the control does in a way no single block size can.
+    ///
+    /// Every step changes the cache's *shape*, so this answers `false` whenever
+    /// the block size moved and the caller rebuilds. That is honest rather than
+    /// expensive: a rebuilt pixelate at `t` is fully described by `t`.
+    fn preview_at(&mut self, _queue: &wgpu::Queue, _cache: &EffectCache, t: f32) -> bool {
+        self.scale = (1.0 + 5.0 * swing(t)).round() as u32;
+        self.built_scale == Some(self.scale)
+    }
+
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         _queue: &wgpu::Queue,
         ping_pong_views: &[wgpu::TextureView; 2],
@@ -118,6 +109,7 @@ impl Veil for Pixelate {
         viewport_width: u32,
         viewport_height: u32,
     ) -> EffectCache {
+        self.built_scale = Some(self.scale);
         let n = self.num_halvings();
         let layout = self.bind_group_layout();
         let tex_usage =

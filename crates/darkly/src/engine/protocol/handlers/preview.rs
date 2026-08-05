@@ -1,59 +1,45 @@
-//! Picker previews (veil + void): one generic start/poll request pair.
+//! Picker previews: one generic start/poll request pair over every previewable
+//! catalog.
 //!
-//! Both effect kinds render small looping thumbnails read back asynchronously;
-//! once [`PreviewKind`] exists the start/poll handlers are identical except for
-//! which engine entry point `start` dispatches to, so a single pair (keyed on a
-//! `kind` field) serves both pickers rather than two byte-identical copies.
+//! The `catalog` field carries a catalog id — the same `"veils"` / `"voids"` /
+//! `"filters"` vocabulary `catalogs()` publishes and the frontend's pickers
+//! already hold. There is no translation table here and nothing to add when a
+//! catalog becomes previewable: the engine looks the id up in the generated
+//! mechanism table, and an id it does not find is a no-op.
 
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::engine::protocol::{decode, RequestRegistration, Response};
-use crate::engine::PreviewKind;
 
-/// `{ kind, type }` — which picker (`veil`/`void`) and which effect type id.
+/// `{ catalog, type }` — which catalog and which entry's type id.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct PreviewReq {
-    pub kind: String,
+    pub catalog: String,
     #[serde(rename = "type")]
     pub type_id: String,
-}
-
-/// Resolve the wire `kind` string to a [`PreviewKind`]. Unknown kinds return
-/// `None` so the handler can no-op rather than panic on malformed input.
-fn parse_kind(kind: &str) -> Option<PreviewKind> {
-    match kind {
-        "veil" => Some(PreviewKind::Veil),
-        "void" => Some(PreviewKind::Void),
-        _ => None,
-    }
 }
 
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
         RequestRegistration::new("start_preview", |engine, payload, _b| {
             let r: PreviewReq = decode(payload)?;
-            match parse_kind(&r.kind) {
-                Some(PreviewKind::Veil) => engine.start_veil_preview(&r.type_id),
-                Some(PreviewKind::Void) => engine.start_void_preview(&r.type_id),
-                None => {}
-            }
+            engine.start_preview(&r.catalog, &r.type_id);
             Ok(Response::empty())
         })
         .post()
         .req::<PreviewReq>(),
         RequestRegistration::new("poll_preview", |engine, payload, _b| {
             let r: PreviewReq = decode(payload)?;
-            let Some(kind) = parse_kind(&r.kind) else {
-                return Ok(Response::json(serde_json::Value::Null));
-            };
-            let Some((width, height, frames)) = engine.poll_preview(kind, &r.type_id) else {
+            let Some((width, height, fps, frames)) = engine.poll_preview(&r.catalog, &r.type_id)
+            else {
                 return Ok(Response::json(serde_json::Value::Null));
             };
             // Frames are concatenated into the single bytes side-channel;
             // the JS edge slices them back out using width*height*4 stride.
-            let fps = crate::gpu::preview::PREVIEW_FPS;
+            // `fps` comes from the entry's own `PreviewAnim` — the one
+            // authority on how fast its preview plays.
             let frame_count = frames.len();
             let mut bytes = Vec::new();
             for f in &frames {

@@ -1,7 +1,7 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
     import Modal from '../Modal.svelte';
-    import Icon from '../../icons/Icon.svelte';
+    import EffectPreview from '../EffectPreview.svelte';
 
     let { onclose }: { onclose: () => void } = $props();
 
@@ -33,9 +33,7 @@
     <div class="grid">
         {#each filterTypes as ft (ft.type)}
             <button class="card" title={ft.description ?? undefined} onclick={() => pick(ft)}>
-                <div class="preview preview-icon">
-                    <Icon name={ft.icon ?? ''} />
-                </div>
+                <EffectPreview catalog="filters" entry={ft} />
                 <span class="card-name">{ft.displayName}</span>
             </button>
         {/each}
@@ -68,17 +66,6 @@
     .card:hover {
         background: var(--bg-active);
         border-color: var(--accent);
-    }
-
-    .preview-icon {
-        aspect-ratio: 16 / 9;
-        background: var(--bg);
-        border-radius: var(--radius-sm);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 32px;
-        color: var(--text-dim);
     }
 
     .card-name {

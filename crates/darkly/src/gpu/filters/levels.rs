@@ -19,9 +19,8 @@ use std::sync::Arc;
 
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
 use crate::gpu::lut_filter::{bake_lut, lut_param_filter, lut_shader_source, Baked};
-use crate::gpu::params::{ConstParamValue, ParamDef, ParamValue};
-use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
-use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
+use crate::gpu::params::{ParamDef, ParamValue};
+use crate::gpu::preview::{swing_signed, PreviewAnim};
 
 /// Identity levels — `[inBlack, inWhite, gamma, outBlack, outWhite]`. Maps the
 /// full `[0,1]` input range linearly onto `[0,1]` output: a no-op transfer.
@@ -105,40 +104,27 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
 }
 
 /// The input range pinches inward against a brightening gamma, then opens back
-/// out against a darkening one, and returns — the two halves of what the control
-/// does, in one pass.
+/// out against a darkening one, and returns — the two halves of what the
+/// control does, in one pass.
 ///
-/// A [`ParamKind::Levels`](crate::gpu::params::ParamKind::Levels) is a fixed
-/// five-vector, so every keyframe has the same shape by construction and the
-/// blend is component-wise throughout. `gamma` is a raw exponent rather than a
-/// perceptual scale, so its keyframes are chosen as a ratio around 1.0 (0.45 and
-/// 2.2) rather than as an even numeric spread. Only the composite `rgb` channel
+/// `gamma` is a raw exponent rather than a perceptual scale, so it sweeps as a
+/// ratio around 1.0 rather than an even numeric spread: the two extremes are
+/// reciprocals and read as equal and opposite. Only the composite `rgb` channel
 /// moves; the other seven stay at their identity defaults.
-static PREVIEW: PreviewRecipe = PreviewRecipe {
-    frames: ANIMATED_FRAMES,
-    fps: PREVIEW_FPS,
-    tracks: &[Track {
-        target: TrackTarget::Param("rgb"),
-        keys: &[
-            Key {
-                t: 0.00,
-                value: ConstParamValue::Levels([0.0, 1.0, 1.0, 0.0, 1.0]),
-            },
-            Key {
-                t: 0.25,
-                value: ConstParamValue::Levels([0.15, 0.85, 0.45, 0.0, 1.0]),
-            },
-            Key {
-                t: 0.75,
-                value: ConstParamValue::Levels([0.0, 1.0, 2.2, 0.0, 1.0]),
-            },
-            Key {
-                t: 1.00,
-                value: ConstParamValue::Levels([0.0, 1.0, 1.0, 0.0, 1.0]),
-            },
-        ],
-    }],
-};
+fn preview_params(t: f32) -> Vec<ParamValue> {
+    let s = swing_signed(t);
+    let pinch = 0.15 * s.max(0.0);
+    let mut params: Vec<ParamValue> = PARAMS.iter().map(ParamDef::default_value).collect();
+    params[0] = ParamValue::Levels([
+        // rgb
+        pinch,
+        1.0 - pinch,
+        2.2f32.powf(-s),
+        0.0,
+        1.0,
+    ]);
+    params
+}
 
 pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
@@ -147,7 +133,8 @@ pub fn register() -> FilterPipelineRegistration {
         icon: "fa6-solid:sliders",
         description: "Tone mapping with black point, white point, gamma, and output range.",
         params: PARAMS,
-        preview: Some(&PREVIEW),
+        preview: Some(PreviewAnim::LOOPING),
+        preview_at: Some(preview_params),
         create_pipeline,
     }
 }

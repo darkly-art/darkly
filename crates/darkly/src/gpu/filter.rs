@@ -24,7 +24,10 @@ use std::sync::Arc;
 
 use super::effect::EffectCache;
 use super::params::{ParamDef, ParamValue};
-use super::preview_recipe::{PreviewRecipe, PreviewSpec};
+use super::preview::{
+    PreviewAnim, PreviewEntry, PreviewMechanism, PreviewRegistries, PreviewSession, PreviewTarget,
+    PREVIEW_FORMAT,
+};
 use crate::catalog::{Catalog, CatalogEntry};
 
 /// A filter's GPU realization: a render pipeline plus optional param-derived
@@ -78,10 +81,20 @@ pub struct FilterPipelineRegistration {
     /// search indexes it — include the terms users would search for.
     pub description: &'static str,
     pub params: &'static [ParamDef],
-    /// How this filter's documentation preview moves, or `None` for a filter
-    /// with nothing worth showing. Declaring a recipe is what makes a filter
-    /// previewable — the two facts are one.
-    pub preview: Option<&'static PreviewRecipe>,
+    /// How long this filter's preview runs, or `None` for a filter with nothing
+    /// worth showing. Declaring an animation is what makes a filter previewable
+    /// — the two facts are one.
+    pub preview: Option<PreviewAnim>,
+    /// The parameter values this filter's preview shows at `t ∈ [0, 1]`, in
+    /// `params` order.
+    ///
+    /// A function on the registration rather than a method on the effect,
+    /// because a [`FilterEffect`] is shared across every filter layer of its
+    /// type and holds no parameters of its own — they reach it through
+    /// [`ensure`](FilterEffect::ensure), which is what this feeds. `None` — the
+    /// default — is a still at the schema defaults, which is the honest answer
+    /// for a filter with no parameters to sweep.
+    pub preview_at: Option<fn(f32) -> Vec<ParamValue>>,
     pub create_pipeline: fn(&wgpu::Device) -> Arc<dyn FilterEffect>,
 }
 
@@ -89,11 +102,6 @@ pub struct FilterPipelineRegistration {
 /// `layerFilters` catalog of `crate::document::filter`, which registers mask
 /// and selection modifiers rather than colour adjustments.
 pub const CATALOG_ID: &str = "filters";
-
-/// Document properties a filter's preview may drive. A filter is previewed
-/// through a real layer tree, so the host layer's opacity is available to a
-/// [`TrackTarget::Layer`](super::preview_recipe::TrackTarget::Layer) track.
-pub const LAYER_KNOBS: &[ParamDef] = &[super::preview_recipe::OPACITY];
 
 impl FilterPipelineRegistration {
     pub fn catalog_entry(&self) -> CatalogEntry {
@@ -178,14 +186,36 @@ impl FilterPipelineRegistry {
         self.entries.contains_key(type_id)
     }
 
-    /// How a filter type's preview moves, paired with the knob namespace this
-    /// catalog exposes to it. `None` for an unknown type or one that declares
-    /// no recipe.
-    pub fn preview(&self, type_id: &str) -> Option<PreviewSpec> {
-        Some(PreviewSpec {
-            recipe: self.entries.get(type_id)?.reg.preview?,
-            layer_knobs: LAYER_KNOBS,
-        })
+    /// How long a filter type's preview runs. `None` for an unknown type or
+    /// one that declares no preview.
+    pub fn preview(&self, type_id: &str) -> Option<PreviewAnim> {
+        self.entries.get(type_id)?.reg.preview
+    }
+
+    /// The parameter values a filter type's preview shows at `t`, in schema
+    /// order. Falls back to the schema defaults for a filter that declares no
+    /// sweep, so a caller never has to ask whether one exists.
+    pub fn preview_params(&self, type_id: &str, t: f32) -> Vec<ParamValue> {
+        let Some(entry) = self.entries.get(type_id) else {
+            return Vec::new();
+        };
+        match entry.reg.preview_at {
+            Some(at) => at(t),
+            None => entry
+                .reg
+                .params
+                .iter()
+                .map(ParamDef::default_value)
+                .collect(),
+        }
+    }
+
+    /// Resolve a runtime `&str` type id to the registry's `&'static str` key,
+    /// or `None` if the type is unknown. Callers keying long-lived state by
+    /// type id (the preview cache + its readback context) use this to obtain a
+    /// `'static` id without leaking. Mirrors `VeilRegistry::static_type_id`.
+    pub fn static_type_id(&self, type_id: &str) -> Option<&'static str> {
+        self.entries.get_key_value(type_id).map(|(k, _)| *k)
     }
 
     /// Human-friendly display name for a filter type, falling back to the
@@ -218,6 +248,100 @@ impl FilterPipelineRegistry {
                 .get_or_insert_with(|| (entry.reg.create_pipeline)(device))
                 .clone(),
         )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Preview mechanism
+// ---------------------------------------------------------------------------
+
+/// This catalog's answer to [`PreviewMechanism`]. Exported by name so
+/// `build.rs` finds it while scanning this module's source and emits a
+/// `preview_mechanisms()` row for `filters`.
+pub fn preview_mechanism() -> &'static dyn PreviewMechanism {
+    &FilterMechanism
+}
+
+struct FilterMechanism;
+
+impl PreviewMechanism for FilterMechanism {
+    fn resolve(&self, type_id: &str) -> Option<PreviewEntry> {
+        let registry = FilterPipelineRegistry::new();
+        Some(PreviewEntry {
+            type_id: registry.static_type_id(type_id)?,
+            anim: registry.preview(type_id)?,
+        })
+    }
+
+    fn reads_source(&self) -> bool {
+        true
+    }
+
+    fn open<'a>(
+        &self,
+        regs: PreviewRegistries<'a>,
+        type_id: &str,
+    ) -> Option<Box<dyn PreviewSession + 'a>> {
+        let type_id = regs.filters.static_type_id(type_id)?;
+        Some(Box::new(FilterSession {
+            registry: regs.filters,
+            type_id,
+            effect: None,
+            cache: EffectCache::empty(),
+        }))
+    }
+}
+
+/// One open filter preview.
+///
+/// Unlike a veil or a void there is no per-instance object to drive: a
+/// [`FilterEffect`] is shared across every filter layer of its type and holds
+/// no parameters, so each frame's values are computed on the registration and
+/// pushed through [`ensure`](FilterEffect::ensure) into this session's own
+/// cache. That is the same contract the compositor uses per layer.
+struct FilterSession<'a> {
+    registry: &'a mut FilterPipelineRegistry,
+    type_id: &'static str,
+    effect: Option<Arc<dyn FilterEffect>>,
+    cache: EffectCache,
+}
+
+impl<'a> PreviewSession for FilterSession<'a> {
+    fn set_t(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        _target: &PreviewTarget,
+        t: f32,
+    ) {
+        if self.effect.is_none() {
+            self.effect = self.registry.pipeline(self.type_id, device);
+        }
+        let Some(effect) = self.effect.as_ref() else {
+            return;
+        };
+        let params = self.registry.preview_params(self.type_id, t);
+        effect.ensure(device, queue, &params, &mut self.cache);
+    }
+
+    fn encode(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &PreviewTarget,
+    ) {
+        let Some(effect) = self.effect.as_ref() else {
+            return;
+        };
+        effect.render(
+            device,
+            encoder,
+            target.source_view(),
+            None,
+            target.output_view(),
+            PREVIEW_FORMAT,
+            &self.cache,
+        );
     }
 }
 

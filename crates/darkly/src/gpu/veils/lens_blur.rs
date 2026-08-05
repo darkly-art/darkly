@@ -1,7 +1,5 @@
 use crate::gpu::effect::{EffectCache, EffectPipeline};
-use crate::gpu::params::ConstParamValue;
-use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
-use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
+use crate::gpu::preview::{swing, PreviewAnim};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
@@ -18,38 +16,13 @@ const PARAMS: &[ParamDef] = &[
         .with_description("How bright a pixel must be before it blooms into a bokeh highlight."),
 ];
 
-/// Focus pulls all the way out and back in. `radius` is a sample-footprint
-/// parameter within a single pass rather than a pass count, so sweeping its full
-/// band averages *below* the shipped default in cost.
-static PREVIEW: PreviewRecipe = PreviewRecipe {
-    frames: ANIMATED_FRAMES,
-    fps: PREVIEW_FPS,
-    tracks: &[Track {
-        target: TrackTarget::Param("radius"),
-        keys: &[
-            Key {
-                t: 0.0,
-                value: ConstParamValue::Float(0.0),
-            },
-            Key {
-                t: 0.5,
-                value: ConstParamValue::Float(1.0),
-            },
-            Key {
-                t: 1.0,
-                value: ConstParamValue::Float(0.0),
-            },
-        ],
-    }],
-};
-
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "lens_blur",
         display_name: "Lens Blur",
         description: "Defocus the view with a soft camera-lens blur.",
         params: PARAMS,
-        preview: Some(&PREVIEW),
+        preview: Some(PreviewAnim::LOOPING),
         create_pipeline: create_lens_blur_pipeline,
         from_params: |params, shared| {
             let radius = match params.first() {
@@ -78,6 +51,9 @@ struct LensBlurUniforms {
 pub struct LensBlur {
     pub radius: f32,
     pub threshold: f32,
+    /// Render resolution, kept from `create_cache` so
+    /// [`uniforms`](Self::uniforms) rebuilds the whole struct from state.
+    resolution: (f32, f32),
     shared: Arc<EffectPipeline>,
 }
 
@@ -86,7 +62,17 @@ impl LensBlur {
         LensBlur {
             radius: radius.max(0.0),
             threshold: threshold.max(0.01),
+            resolution: (0.0, 0.0),
             shared,
+        }
+    }
+
+    fn uniforms(&self) -> LensBlurUniforms {
+        LensBlurUniforms {
+            radius: self.radius,
+            threshold: self.threshold,
+            resolution_x: self.resolution.0,
+            resolution_y: self.resolution.1,
         }
     }
 }
@@ -107,8 +93,17 @@ impl Veil for LensBlur {
         ]
     }
 
+    /// Focus pulls all the way out and back in. `radius` is a sample-footprint
+    /// parameter within a single pass rather than a pass count, so sweeping its
+    /// full band averages *below* the shipped default in cost.
+    fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
+        self.radius = swing(t);
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
+        true
+    }
+
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ping_pong_views: &[wgpu::TextureView; 2],
@@ -116,19 +111,14 @@ impl Veil for LensBlur {
         render_width: u32,
         render_height: u32,
     ) -> EffectCache {
-        let uniforms = LensBlurUniforms {
-            radius: self.radius,
-            threshold: self.threshold,
-            resolution_x: render_width as f32,
-            resolution_y: render_height as f32,
-        };
+        self.resolution = (render_width as f32, render_height as f32);
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("lens-blur-uniforms"),
             size: std::mem::size_of::<LensBlurUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&self.uniforms()));
 
         let layout = &self.shared.bind_group_layout;
         let bind_groups: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {

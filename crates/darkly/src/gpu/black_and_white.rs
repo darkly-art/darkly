@@ -12,9 +12,8 @@
 //! (<https://www.tannerhelland.com/3643/grayscale-image-algorithm-vb6/>).
 //! Mode 6 is a custom weighted mix, and an optional hue tint colors the gray.
 
-use crate::gpu::params::{ConstParamValue, ParamDef, ParamValue};
-use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
-use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
+use crate::gpu::params::{ParamDef, ParamValue};
+use crate::gpu::preview::{swing, PreviewAnim};
 
 pub const TYPE_ID: &str = "black_and_white";
 pub const DISPLAY_NAME: &str = "Black and White";
@@ -58,52 +57,26 @@ pub static PARAMS: &[ParamDef] = &[
         .with_description("How strongly the tint colour shows through the grey."),
 ];
 
-/// One recipe for both surfaces, beside the schema they share. The grey is
-/// toned through the full colour wheel while the tint strengthens and fades, so
-/// a single pass shows both the desaturation and what the tint controls do to
-/// it. A `static` for the same reason `PARAMS` is one — both registrations hold
-/// the same address, which is what makes the sharing structural rather than two
-/// copies that happen to agree today.
-pub static PREVIEW: PreviewRecipe = PreviewRecipe {
-    frames: ANIMATED_FRAMES,
-    fps: PREVIEW_FPS,
-    tracks: &[
-        Track {
-            target: TrackTarget::Param("tint_strength"),
-            keys: &[
-                Key {
-                    t: 0.0,
-                    value: ConstParamValue::Float(0.0),
-                },
-                Key {
-                    t: 0.5,
-                    value: ConstParamValue::Float(1.0),
-                },
-                Key {
-                    t: 1.0,
-                    value: ConstParamValue::Float(0.0),
-                },
-            ],
-        },
-        Track {
-            target: TrackTarget::Param("tint_hue"),
-            keys: &[
-                Key {
-                    t: 0.0,
-                    value: ConstParamValue::Float(0.0),
-                },
-                Key {
-                    t: 0.5,
-                    value: ConstParamValue::Float(360.0),
-                },
-                Key {
-                    t: 1.0,
-                    value: ConstParamValue::Float(0.0),
-                },
-            ],
-        },
-    ],
-};
+/// One preview for both surfaces, beside the schema they share. A `static` for
+/// the same reason `PARAMS` is one — both registrations hold the same address,
+/// which is what makes the sharing structural rather than two copies that
+/// happen to agree today.
+pub static PREVIEW: PreviewAnim = PreviewAnim::LOOPING;
+
+/// What that preview shows at `t`: the grey toned through the full colour wheel
+/// while the tint strengthens and fades, so a single pass shows both the
+/// desaturation and what the tint controls do to it.
+///
+/// The filter reads this off its registration and the veil calls it from
+/// [`Veil::preview_at`](crate::gpu::veil::Veil::preview_at) — the two surfaces
+/// share the motion the same way they share the schema.
+pub fn preview_params(t: f32) -> Vec<ParamValue> {
+    let swing = swing(t);
+    let mut params: Vec<ParamValue> = PARAMS.iter().map(ParamDef::default_value).collect();
+    params[4] = ParamValue::Float(360.0 * swing);
+    params[5] = ParamValue::Float(swing);
+    params
+}
 
 /// The shared WGSL transform (`BwParams` / `bw_gray` / `bw_transform`),
 /// prepended to each surface's wrapper shader at pipeline build time.

@@ -2,8 +2,6 @@
     import { app } from '../../state/app.svelte';
     import Modal from '../Modal.svelte';
     import EffectPreview from '../EffectPreview.svelte';
-    import Icon from '../../icons/Icon.svelte';
-    import { voidShowsPreview } from '../preview_frames';
     import type { CaptureKind } from '../../lib/frameSource';
 
     let { onclose }: { onclose: () => void } = $props();
@@ -72,13 +70,7 @@
     <div class="grid">
         {#each voidTypes as vt (vt.type)}
             <button class="card" onclick={() => pick(vt)}>
-                {#if voidShowsPreview(vt)}
-                    <EffectPreview kind="void" type={vt.type} />
-                {:else}
-                    <div class="preview preview-icon">
-                        <Icon name={vt.icon ?? ''} />
-                    </div>
-                {/if}
+                <EffectPreview catalog="voids" entry={vt} />
                 <span class="card-name">{vt.displayName}</span>
             </button>
         {/each}
@@ -111,19 +103,6 @@
     .card:hover {
         background: var(--bg-active);
         border-color: var(--accent);
-    }
-
-    /* Fallback box shown for voids without a rendered preview — a centered
-       iconify glyph declared by the void's registration. */
-    .preview-icon {
-        aspect-ratio: 16 / 9;
-        background: var(--bg);
-        border-radius: var(--radius-sm);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 32px;
-        color: var(--text-dim);
     }
 
     .card-name {

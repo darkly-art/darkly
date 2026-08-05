@@ -1,7 +1,5 @@
 use crate::gpu::effect::{EffectCache, EffectPipeline};
-use crate::gpu::params::ConstParamValue;
-use crate::gpu::preview::{ANIMATED_FRAMES, PREVIEW_FPS};
-use crate::gpu::preview_recipe::{Key, PreviewRecipe, Track, TrackTarget};
+use crate::gpu::preview::{swing, PreviewAnim};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
@@ -17,60 +15,13 @@ const PARAMS: &[ParamDef] = &[
 /// Size of the generated RGBA noise texture used as a flow map.
 const NOISE_SIZE: u32 = 256;
 
-/// The wash bleeds outward and dries back. `iterations` is a *pass count* —
-/// each one is a fullscreen blur — so its sweep is bounded well below the
-/// slider's maximum: `1 → 10 → 1` averages 5.5 passes per frame, comparable to
-/// the shipped default of 5, where the full `1 → 50` band would average 25. The
-/// visible bleed still ramps from barely-there to twice the default, and
-/// `wetness` costs nothing and carries the rest of the motion.
-static PREVIEW: PreviewRecipe = PreviewRecipe {
-    frames: ANIMATED_FRAMES,
-    fps: PREVIEW_FPS,
-    tracks: &[
-        Track {
-            target: TrackTarget::Param("iterations"),
-            keys: &[
-                Key {
-                    t: 0.0,
-                    value: ConstParamValue::Int(1),
-                },
-                Key {
-                    t: 0.5,
-                    value: ConstParamValue::Int(10),
-                },
-                Key {
-                    t: 1.0,
-                    value: ConstParamValue::Int(1),
-                },
-            ],
-        },
-        Track {
-            target: TrackTarget::Param("wetness"),
-            keys: &[
-                Key {
-                    t: 0.0,
-                    value: ConstParamValue::Float(0.1),
-                },
-                Key {
-                    t: 0.5,
-                    value: ConstParamValue::Float(2.0),
-                },
-                Key {
-                    t: 1.0,
-                    value: ConstParamValue::Float(0.1),
-                },
-            ],
-        },
-    ],
-};
-
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "watercolor",
         display_name: "Watercolor",
         description: "Bleed the view outward into soft watercolor washes.",
         params: PARAMS,
-        preview: Some(&PREVIEW),
+        preview: Some(PreviewAnim::LOOPING),
         create_pipeline: create_watercolor_pipeline,
         from_params: |params, shared| {
             let iterations = match params.first() {
@@ -101,6 +52,9 @@ struct WatercolorUniforms {
 pub struct Watercolor {
     pub iterations: i32,
     pub wetness: f32,
+    /// Render resolution, kept from `create_cache` so
+    /// [`uniforms`](Self::uniforms) rebuilds the whole struct from state.
+    resolution: (f32, f32),
     shared: Arc<EffectPipeline>,
 }
 
@@ -109,7 +63,19 @@ impl Watercolor {
         Watercolor {
             iterations: iterations.max(1),
             wetness,
+            resolution: (0.0, 0.0),
             shared,
+        }
+    }
+
+    /// The three passes share a layout and differ only in `pass_type`, so one
+    /// packing serves all three buffers.
+    fn uniforms(&self, pass_type: i32) -> WatercolorUniforms {
+        WatercolorUniforms {
+            pass_type,
+            wetness: self.wetness,
+            resolution_x: self.resolution.0,
+            resolution_y: self.resolution.1,
         }
     }
 
@@ -118,23 +84,15 @@ impl Watercolor {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         pass_type: i32,
-        width: u32,
-        height: u32,
         label: &str,
     ) -> wgpu::Buffer {
-        let uniforms = WatercolorUniforms {
-            pass_type,
-            wetness: self.wetness,
-            resolution_x: width as f32,
-            resolution_y: height as f32,
-        };
         let buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size: std::mem::size_of::<WatercolorUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&buf, 0, bytemuck::bytes_of(&self.uniforms(pass_type)));
         buf
     }
 }
@@ -213,8 +171,32 @@ impl Veil for Watercolor {
         ]
     }
 
+    /// The wash bleeds outward and dries back. `iterations` is a *pass count* —
+    /// each one is a fullscreen blur — so its sweep is bounded well below the
+    /// slider's maximum: `1 → 10 → 1` averages 5.5 passes per frame, comparable
+    /// to the shipped default of 5, where the full `1 → 50` band would average
+    /// 25. The visible bleed still ramps from barely-there to twice the
+    /// default, and `wetness` costs nothing and carries the rest of the motion.
+    ///
+    /// The pass count lives in `encode`'s loop rather than in the cache's
+    /// shape, so nothing here needs rebuilding; only `wetness` reaches the
+    /// shader, through all three passes' uniforms.
+    fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
+        let swing = swing(t);
+        self.iterations = (1.0 + 9.0 * swing).round() as i32;
+        self.wetness = 0.1 + 1.9 * swing;
+        for pass_type in 0..3 {
+            cache.write_uniform(
+                queue,
+                pass_type as usize,
+                bytemuck::bytes_of(&self.uniforms(pass_type)),
+            );
+        }
+        true
+    }
+
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ping_pong_views: &[wgpu::TextureView; 2],
@@ -222,33 +204,13 @@ impl Veil for Watercolor {
         render_width: u32,
         render_height: u32,
     ) -> EffectCache {
+        self.resolution = (render_width as f32, render_height as f32);
         let layout = &self.shared.bind_group_layout;
 
         // --- Uniform buffers for each pass type ---
-        let init_ub = self.make_uniform_buf(
-            device,
-            queue,
-            0,
-            render_width,
-            render_height,
-            "watercolor-ub-init",
-        );
-        let blur_ub = self.make_uniform_buf(
-            device,
-            queue,
-            1,
-            render_width,
-            render_height,
-            "watercolor-ub-blur",
-        );
-        let final_ub = self.make_uniform_buf(
-            device,
-            queue,
-            2,
-            render_width,
-            render_height,
-            "watercolor-ub-final",
-        );
+        let init_ub = self.make_uniform_buf(device, queue, 0, "watercolor-ub-init");
+        let blur_ub = self.make_uniform_buf(device, queue, 1, "watercolor-ub-blur");
+        let final_ub = self.make_uniform_buf(device, queue, 2, "watercolor-ub-final");
 
         // --- Noise texture + repeat sampler for flow-map bias ---
         let (noise_tex, noise_view) = create_noise_texture(device, queue);

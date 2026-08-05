@@ -1,12 +1,23 @@
 <script lang="ts">
     import { onDestroy } from 'svelte';
     import { app } from '../state/app.svelte';
-    import { pollPreview, type PreviewData, type PreviewKind } from './preview_frames';
+    import Icon from '../icons/Icon.svelte';
+    import { pollPreview, showsPreview, type PreviewData } from './preview_frames';
 
-    let { kind, type }: { kind: PreviewKind; type: string } = $props();
+    /** What a picker card knows about its entry — the subset of a catalog entry
+     *  this component needs to decide what to show. */
+    export interface PreviewEntry {
+        type: string;
+        displayName?: string;
+        icon?: string | null;
+        supportsPreview?: boolean;
+    }
+
+    let { catalog, entry }: { catalog: string; entry: PreviewEntry } = $props();
 
     /** Frames during which we actively poll WASM for the async readbacks to
-     *  land. Generation is a handful of frames; this is a generous ceiling. */
+     *  land. Generation is paced across engine ticks; this is a generous
+     *  ceiling. */
     const POLL_FRAMES = 180;
 
     let canvasEl = $state<HTMLCanvasElement | null>(null);
@@ -31,12 +42,12 @@
     async function tick(now: number) {
         rafHandle = 0;
         if (!data) {
-            // Still generating — kick the engine's render loop so its
-            // `poll_pending` drains the in-flight readbacks, then check.
+            // Still generating — kick the engine's render loop so it pumps the
+            // next slice of frames and drains the landed readbacks, then check.
             if (framesRemaining <= 0 || !app.engine) return;
             framesRemaining--;
             app.requestFrame();
-            const pd = await pollPreview(app.engine, kind, type);
+            const pd = await pollPreview(app.engine, catalog, entry.type);
             if (pd) {
                 data = pd;
                 prevTime = now;
@@ -66,18 +77,19 @@
         rafHandle = requestAnimationFrame(tick);
     }
 
-    // Kick off a fresh render whenever the kind/type changes. No caching — the
+    // Kick off a fresh render whenever the entry changes. No caching — the
     // engine re-renders against the current document each time the picker opens.
     $effect(() => {
-        void kind;
-        void type;
+        void catalog;
+        void entry.type;
+        if (!showsPreview(entry)) return;
         frameIdx = 0;
         lastDrawn = -1;
         accum = 0;
         prevTime = 0;
         data = null;
         framesRemaining = POLL_FRAMES;
-        app.engine?.api.startPreview({ kind, type });
+        app.engine?.api.startPreview({ catalog, type: entry.type });
         schedule();
     });
 
@@ -86,16 +98,30 @@
     });
 </script>
 
-<!-- Intrinsic size follows the document so the card holds the canvas aspect
-     ratio from the start (placeholder uses doc dims, real frames match). The
-     element scales to the card width; height follows proportionally. -->
-<canvas
-    class="effect-preview"
-    bind:this={canvasEl}
-    width={data?.width ?? app.docW}
-    height={data?.height ?? app.docH}
-    class:loading={!data}
-></canvas>
+<!-- Preview, then icon, then a named placeholder. The chain has to be total:
+     veils deliberately carry no icon (their picker renders a live thumbnail),
+     so a future veil that declared no preview would otherwise render an empty
+     card with nothing to say why. -->
+{#if showsPreview(entry)}
+    <!-- Intrinsic size follows the document so the card holds the canvas aspect
+         ratio from the start (placeholder uses doc dims, real frames match). The
+         element scales to the card width; height follows proportionally. -->
+    <canvas
+        class="effect-preview"
+        bind:this={canvasEl}
+        width={data?.width ?? app.docW}
+        height={data?.height ?? app.docH}
+        class:loading={!data}
+    ></canvas>
+{:else if entry.icon}
+    <div class="effect-preview placeholder">
+        <Icon name={entry.icon} />
+    </div>
+{:else}
+    <div class="effect-preview placeholder">
+        <span class="placeholder-name">{entry.displayName ?? entry.type}</span>
+    </div>
+{/if}
 
 <style>
     .effect-preview {
@@ -113,5 +139,20 @@
             color-mix(in srgb, var(--accent) 20%, transparent) 0%,
             transparent 70%
         );
+    }
+    /* Fallback box: a centered iconify glyph, or the entry's name when it
+       declares neither a preview nor an icon. */
+    .placeholder {
+        aspect-ratio: 16 / 9;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 32px;
+        color: var(--text-dim);
+    }
+    .placeholder-name {
+        font-size: 12px;
+        text-align: center;
+        padding: 0 4px;
     }
 </style>

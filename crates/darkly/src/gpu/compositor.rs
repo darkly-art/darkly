@@ -2558,7 +2558,7 @@ impl Compositor {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         layer_id: LayerId,
-        void: Box<dyn Void>,
+        mut void: Box<dyn Void>,
     ) {
         if self.layer_cache.contains_key(&layer_id) {
             return;
@@ -3114,6 +3114,21 @@ impl Compositor {
 
     pub fn veil_chain_mut(&mut self) -> &mut VeilChain {
         &mut self.veil_chain
+    }
+
+    /// The registries a preview mechanism may need, borrow-split in one place
+    /// so a caller does not have to reach for three `&mut self` accessors that
+    /// cannot coexist.
+    ///
+    /// The compositor's own registries rather than a second set owned by the
+    /// preview subsystem: a preview then shares the live pipeline cache and
+    /// compiles no shader twice.
+    pub fn preview_registries(&mut self) -> crate::gpu::preview::PreviewRegistries<'_> {
+        crate::gpu::preview::PreviewRegistries {
+            veils: self.veil_chain.registry_mut(),
+            voids: &mut self.void_registry,
+            filters: &mut self.filter_pipeline_registry,
+        }
     }
 
     /// Read-only access to the tool overlay. Callers do their own dispatch;
