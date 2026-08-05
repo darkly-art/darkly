@@ -1,5 +1,5 @@
 //! Picker previews: one generic start/poll request pair over every previewable
-//! catalog.
+//! catalog and both preview variants.
 //!
 //! The `catalog` field carries a catalog id — the same `"veils"` / `"voids"` /
 //! `"filters"` vocabulary `catalogs()` publishes and the frontend's pickers
@@ -11,28 +11,31 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::engine::protocol::{decode, RequestRegistration, Response};
+use crate::gpu::preview::PreviewVariant;
 
-/// `{ catalog, type }` — which catalog and which entry's type id.
+/// `{ catalog, type, variant }` — which catalog, which entry's type id, and
+/// which of its two previews.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct PreviewReq {
     pub catalog: String,
     #[serde(rename = "type")]
     pub type_id: String,
+    pub variant: PreviewVariant,
 }
 
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
         RequestRegistration::new("start_preview", |engine, payload, _b| {
             let r: PreviewReq = decode(payload)?;
-            engine.start_preview(&r.catalog, &r.type_id);
+            engine.start_preview(&r.catalog, &r.type_id, r.variant);
             Ok(Response::empty())
         })
         .post()
         .req::<PreviewReq>(),
         RequestRegistration::new("poll_preview", |engine, payload, _b| {
             let r: PreviewReq = decode(payload)?;
-            let Some((width, height, fps, frames)) = engine.poll_preview(&r.catalog, &r.type_id)
+            let Some((width, height, fps, frames)) = engine.poll_preview(&r.catalog, &r.type_id, r.variant)
             else {
                 return Ok(Response::json(serde_json::Value::Null));
             };

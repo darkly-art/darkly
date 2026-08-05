@@ -37,13 +37,36 @@ pub const PREVIEW_SECONDS: f32 = 2.0;
 /// carries the same kind of pixels the canvas does.
 pub const PREVIEW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-/// That an entry has a preview, and how it plays back.
+/// Which of an entry's two previews is wanted.
 ///
-/// The motion itself is a method, not data — this says only how long it runs
-/// and how it ends. `loops` is declared rather than derived for exactly that
-/// reason: the only thing that knows whether the last frame hands back to the
-/// first is the body that wrote the motion.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A picker shows every card at once, so it asks for [`Still`](Self::Still)
+/// — seventeen cards moving at once is noise, and seventeen sequences is
+/// forty-eight times the work. [`Animated`](Self::Animated) is what a card asks
+/// for when the pointer is over it, and it is the only thing that ever costs a
+/// full sequence.
+///
+/// Both are the same motion sampled differently, which is what keeps the
+/// hand-off invisible: `preview_at` is absolute, so a still is literally the
+/// animation's frame at [`PreviewAnim::still_at`], rendered without rendering
+/// the rest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub enum PreviewVariant {
+    /// One frame — the moment of the motion that stands for it.
+    Still,
+    /// The whole sequence.
+    Animated,
+}
+
+/// That an entry has a preview, how it plays back, and which moment of it
+/// stands for the whole.
+///
+/// The motion itself is a method, not data — this says only how long it runs,
+/// how it ends, and where to freeze it. `loops` is declared rather than derived
+/// for exactly that reason: the only thing that knows whether the last frame
+/// hands back to the first is the body that wrote the motion.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PreviewAnim {
     /// Images in the sequence. `1` is a still at the entry's own parameters.
     pub frames: u32,
@@ -51,6 +74,16 @@ pub struct PreviewAnim {
     pub fps: u32,
     /// Whether the last frame hands back to the first without a visible jump.
     pub loops: bool,
+    /// Where on the timeline the [`PreviewVariant::Still`] is taken — the one
+    /// frame a picker card shows before anyone hovers it, and the poster frame
+    /// of the documentation asset.
+    ///
+    /// The default `0.5` is the peak of [`swing`], which is where a sweep is
+    /// furthest from its resting value and so most legible as a single image.
+    /// An entry whose motion peaks elsewhere overrides it with
+    /// [`with_still_at`](Self::with_still_at) — a sweep resting at `t = 0` would
+    /// otherwise pick the frame that looks like no effect at all.
+    pub still_at: f32,
 }
 
 impl PreviewAnim {
@@ -61,6 +94,7 @@ impl PreviewAnim {
         frames: ANIMATED_FRAMES,
         fps: PREVIEW_FPS,
         loops: true,
+        still_at: 0.5,
     };
 
     /// The same length, for motion that runs one way and does not return — a
@@ -69,15 +103,32 @@ impl PreviewAnim {
         frames: ANIMATED_FRAMES,
         fps: PREVIEW_FPS,
         loops: false,
+        still_at: 0.5,
     };
 
     /// A single frame at the entry's own parameters, for an entry with nothing
-    /// to sweep.
+    /// to sweep. Both variants render the same image, so hovering such a card
+    /// changes nothing — which is the honest thing for an effect that has one
+    /// state.
     pub const STILL: Self = Self {
         frames: 1,
         fps: PREVIEW_FPS,
         loops: true,
+        still_at: 0.0,
     };
+
+    /// Take the still somewhere other than the middle. For a sweep that runs
+    /// signed — out one way, back, out the other — where the middle is the
+    /// resting value and the quarter point is the extreme.
+    pub const fn with_still_at(self, still_at: f32) -> Self {
+        Self { still_at, ..self }
+    }
+
+    /// The frame index the still is taken at, clamped into the sequence.
+    pub fn still_frame(&self) -> u32 {
+        let frames = self.frames.max(1);
+        ((self.still_at * frames as f32) as u32).min(frames - 1)
+    }
 }
 
 /// Normalized timeline position of frame `i` of `frames`. Frame `frames` itself
@@ -421,6 +472,7 @@ pub trait PreviewSession {
 pub struct PreviewSequence<'a> {
     session: Box<dyn PreviewSession + 'a>,
     anim: PreviewAnim,
+    variant: PreviewVariant,
     cursor: u32,
 }
 
@@ -433,11 +485,13 @@ impl<'a> PreviewSequence<'a> {
         mech: &dyn PreviewMechanism,
         regs: PreviewRegistries<'a>,
         type_id: &str,
+        variant: PreviewVariant,
     ) -> Option<Self> {
         let entry = mech.resolve(type_id)?;
         Some(PreviewSequence {
             session: mech.open(regs, type_id)?,
             anim: entry.anim,
+            variant,
             cursor: 0,
         })
     }
@@ -446,8 +500,23 @@ impl<'a> PreviewSequence<'a> {
         self.anim
     }
 
+    /// Frames this sequence will produce: the whole animation, or the one frame
+    /// that stands for it.
     pub fn total(&self) -> u32 {
-        self.anim.frames.max(1)
+        match self.variant {
+            PreviewVariant::Still => 1,
+            PreviewVariant::Animated => self.anim.frames.max(1),
+        }
+    }
+
+    /// Where on the timeline frame `i` of this sequence sits. The only place the
+    /// two variants differ, and the reason they cannot drift apart: a still is
+    /// the animation sampled at one point, not a separate rendering of it.
+    fn t_at(&self, i: u32) -> f32 {
+        match self.variant {
+            PreviewVariant::Still => self.anim.still_at,
+            PreviewVariant::Animated => frame_t(i, self.total()),
+        }
     }
 
     pub fn is_done(&self) -> bool {
@@ -477,7 +546,7 @@ impl<'a> PreviewSequence<'a> {
         if i >= total {
             return false;
         }
-        self.session.set_t(device, queue, target, frame_t(i, total));
+        self.session.set_t(device, queue, target, self.t_at(i));
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("preview-frame"),
         });

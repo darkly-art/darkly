@@ -37,7 +37,7 @@ use crate::gpu::context::{GpuContext, GpuDevice};
 use crate::gpu::filter::FilterPipelineRegistry;
 use crate::gpu::preview::{
     drive, frame_t, swing, PreviewAnim, PreviewMechanism, PreviewRegistries, PreviewSequence,
-    PreviewTarget, PREVIEW_FORMAT,
+    PreviewTarget, PreviewVariant, PREVIEW_FORMAT,
 };
 use crate::gpu::test_utils::{readback_texture, test_device};
 use crate::gpu::veil::VeilRegistry;
@@ -120,18 +120,20 @@ impl From<image::ImageError> for DocsRenderError {
 // The index written beside the frames
 // ---------------------------------------------------------------------------
 
-/// The three things a consumer cannot derive from a directory listing: how many
-/// files, how fast to play them, and whether the last frame hands back to the
-/// first without a visible jump.
+/// The four things a consumer cannot derive from a directory listing: how many
+/// files, how fast to play them, whether the last frame hands back to the first
+/// without a visible jump, and which frame stands for the whole.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Asset {
     pub dir: String,
     pub frames: u32,
     pub fps: u32,
-    /// Computed from the recipe, never authored: true exactly when every track
-    /// ends where it began.
     #[serde(rename = "loop")]
     pub loops: bool,
+    /// Index of the poster frame — the one a consumer shows when it is not
+    /// playing the sequence, and the same frame the editor's picker renders for
+    /// [`PreviewVariant::Still`]. `{still:03}.png` in `dir`.
+    pub still: u32,
 }
 
 /// A thin index of what was written — not a second copy of the metadata export.
@@ -150,11 +152,13 @@ pub struct Manifest {
 /// One RGBA8 buffer per frame, in playback order.
 pub type Frames = Vec<Vec<u8>>;
 
-/// One entry's rendered frames, with the playback facts the recipe determines.
+/// One entry's rendered frames, with the playback facts its declaration
+/// determines.
 pub struct Rendered {
     pub frames: Frames,
     pub fps: u32,
     pub loops: bool,
+    pub still: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -318,7 +322,10 @@ impl Gpu {
                 voids,
                 filters,
             };
-            let mut seq = PreviewSequence::open(mech, regs, type_id).ok_or_else(no_recipe)?;
+            // The whole sequence: a documentation asset is every frame, and the
+            // poster is recorded as an index into it rather than written twice.
+            let mut seq = PreviewSequence::open(mech, regs, type_id, PreviewVariant::Animated)
+                .ok_or_else(no_recipe)?;
             drive(
                 &mut seq,
                 &device.device,
@@ -341,6 +348,7 @@ impl Gpu {
             frames,
             fps: anim.fps,
             loops: anim.loops,
+            still: anim.still_frame(),
         })
     }
 
@@ -371,6 +379,7 @@ impl Gpu {
             frames,
             fps: anim.fps,
             loops: anim.loops,
+            still: anim.still_frame(),
         })
     }
 }
@@ -464,6 +473,7 @@ pub fn render_all(out: &Path) -> Result<Manifest, DocsRenderError> {
                     frames: rendered.frames.len() as u32,
                     fps: rendered.fps,
                     loops: rendered.loops,
+                    still: rendered.still,
                 },
             );
         }

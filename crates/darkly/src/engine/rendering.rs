@@ -498,6 +498,7 @@ impl DarklyEngine {
             ReadbackContext::PreviewFrame {
                 catalog,
                 type_id,
+                variant,
                 frame_idx,
                 total,
             } => {
@@ -505,7 +506,7 @@ impl DarklyEngine {
                 // putImageData. Guard against a stale generation (frame count
                 // mismatch) so a superseded request can't write into a freshly
                 // sized buffer.
-                if let Some(job) = self.previews.get_mut(&(catalog, type_id)) {
+                if let Some(job) = self.previews.get_mut(&(catalog, type_id, variant)) {
                     if job.frames.len() == total as usize {
                         if let Some(slot) = job.frames.get_mut(frame_idx as usize) {
                             *slot = Some(pixels);

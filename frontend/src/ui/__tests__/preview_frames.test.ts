@@ -59,7 +59,7 @@ describe('toPreviewData', () => {
 describe('pollPreview', () => {
     it('returns null while the engine is still generating', async () => {
         const { engine } = fakeEngine(null);
-        expect(await pollPreview(engine, 'veils', 'grain')).toBeNull();
+        expect(await pollPreview(engine, 'veils', 'grain', 'still')).toBeNull();
     });
 
     it('returns null for an empty frame set', async () => {
@@ -70,36 +70,55 @@ describe('pollPreview', () => {
             frameCount: 0,
             bytes: new Uint8Array(0),
         });
-        expect(await pollPreview(engine, 'veils', 'grain')).toBeNull();
+        expect(await pollPreview(engine, 'veils', 'grain', 'still')).toBeNull();
     });
 
     it('converts the frames once the generation completes', async () => {
         const { engine } = fakeEngine(rawPreview(4, 8, 4));
-        const data = await pollPreview(engine, 'veils', 'vhs');
+        const data = await pollPreview(engine, 'veils', 'vhs', 'animated');
         expect(data?.frames).toHaveLength(4);
         expect(data?.width).toBe(8);
         expect(data?.height).toBe(4);
     });
 
-    it('sends the generic poll_preview with { catalog, type } for every catalog', async () => {
+    it('sends { catalog, type, variant } for every catalog', async () => {
         const { engine, send } = fakeEngine(rawPreview(1));
         // Catalog ids, not a second vocabulary — the same strings the pickers
         // already hold and `catalogs()` publishes.
         for (const catalog of ['veils', 'voids', 'filters']) {
-            await pollPreview(engine, catalog, 'noise');
+            await pollPreview(engine, catalog, 'noise', 'still');
         }
-        expect(send).toHaveBeenNthCalledWith(1, 'poll_preview', { catalog: 'veils', type: 'noise' });
-        expect(send).toHaveBeenNthCalledWith(2, 'poll_preview', { catalog: 'voids', type: 'noise' });
-        expect(send).toHaveBeenNthCalledWith(3, 'poll_preview', {
-            catalog: 'filters',
-            type: 'noise',
+        for (const [i, catalog] of ['veils', 'voids', 'filters'].entries()) {
+            expect(send).toHaveBeenNthCalledWith(i + 1, 'poll_preview', {
+                catalog,
+                type: 'noise',
+                variant: 'still',
+            });
+        }
+    });
+
+    it('polls the two variants independently', async () => {
+        const { engine, send } = fakeEngine(rawPreview(1));
+        // A card polls for its still and, once hovered, for its animation. They
+        // are separate generations engine-side, so they are separate requests.
+        await pollPreview(engine, 'veils', 'frozen', 'still');
+        await pollPreview(engine, 'veils', 'frozen', 'animated');
+        expect(send).toHaveBeenNthCalledWith(1, 'poll_preview', {
+            catalog: 'veils',
+            type: 'frozen',
+            variant: 'still',
+        });
+        expect(send).toHaveBeenNthCalledWith(2, 'poll_preview', {
+            catalog: 'veils',
+            type: 'frozen',
+            variant: 'animated',
         });
     });
 
     it('re-polls the engine each call (no caching)', async () => {
         const { engine, send } = fakeEngine(rawPreview(2));
-        await pollPreview(engine, 'voids', 'noise');
-        await pollPreview(engine, 'voids', 'noise');
+        await pollPreview(engine, 'voids', 'noise', 'animated');
+        await pollPreview(engine, 'voids', 'noise', 'animated');
         // Unlike a cached path, every call hits the engine — the preview tracks
         // the live document, so results are never memoised.
         expect(send).toHaveBeenCalledTimes(2);

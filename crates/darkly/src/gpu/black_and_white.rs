@@ -61,20 +61,35 @@ pub static PARAMS: &[ParamDef] = &[
 /// the same reason `PARAMS` is one — both registrations hold the same address,
 /// which is what makes the sharing structural rather than two copies that
 /// happen to agree today.
-pub static PREVIEW: PreviewAnim = PreviewAnim::LOOPING;
+///
+/// The still is taken at rest rather than at the sweep's peak, which is the
+/// opposite of what most entries want and is the whole reason `still_at` is
+/// per-entry. Everywhere else the sweep animates *the* control the effect is
+/// named for, so the peak is the effect at its most legible. Here the effect is
+/// already fully applied at rest — the grey is the point — and the sweep
+/// animates the *tint*, a secondary control. A still taken at the peak would
+/// show a saturated colour wash, which is the one thing a black-and-white
+/// preview must not look like.
+pub static PREVIEW: PreviewAnim = PreviewAnim::LOOPING.with_still_at(0.0);
 
 /// What that preview shows at `t`: the grey toned through the full colour wheel
 /// while the tint strengthens and fades, so a single pass shows both the
 /// desaturation and what the tint controls do to it.
 ///
+/// The hue runs *monotonically* through the wheel rather than swinging out and
+/// back, because the wheel is circular: a swinging hue would spend its peak
+/// strength at 360°, which is 0°, which is red — so the one frame that stands
+/// for the whole effect would be a full-strength red wash. Running the hue
+/// forward puts the peak at 180° instead, and 360° ≡ 0° means the sequence still
+/// closes on the colour it opened with.
+///
 /// The filter reads this off its registration and the veil calls it from
 /// [`Veil::preview_at`](crate::gpu::veil::Veil::preview_at) — the two surfaces
 /// share the motion the same way they share the schema.
 pub fn preview_params(t: f32) -> Vec<ParamValue> {
-    let swing = swing(t);
     let mut params: Vec<ParamValue> = PARAMS.iter().map(ParamDef::default_value).collect();
-    params[4] = ParamValue::Float(360.0 * swing);
-    params[5] = ParamValue::Float(swing);
+    params[4] = ParamValue::Float(360.0 * t);
+    params[5] = ParamValue::Float(swing(t));
     params
 }
 

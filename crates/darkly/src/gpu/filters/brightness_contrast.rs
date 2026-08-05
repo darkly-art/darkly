@@ -114,7 +114,10 @@ pub fn register() -> FilterPipelineRegistration {
         icon: "fa6-solid:sun",
         description: "The classic two-slider brightness and contrast adjustment.",
         params: PARAMS,
-        preview: Some(PreviewAnim::LOOPING),
+        // A signed sweep rests in the middle, so the default still would be the
+        // frame that looks like no effect at all. The quarter point is its
+        // positive extreme.
+        preview: Some(PreviewAnim::LOOPING.with_still_at(0.25)),
         preview_at: Some(preview_params),
         create_pipeline,
     }

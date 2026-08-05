@@ -302,6 +302,7 @@ pub(crate) enum ReadbackContext {
     PreviewFrame {
         catalog: &'static str,
         type_id: &'static str,
+        variant: crate::gpu::preview::PreviewVariant,
         frame_idx: u32,
         total: u32,
     },
@@ -524,7 +525,14 @@ pub struct DarklyEngine {
     /// chain, layer stack and document.
     pub(crate) preview_target: PreviewTarget,
     /// Previews requested but not yet started, in arrival order.
-    pub(crate) preview_queue: std::collections::VecDeque<(&'static str, &'static str)>,
+    pub(crate) preview_queue: std::collections::VecDeque<preview::PreviewKey>,
+    /// Whether the target's loaded subject predates the current burst of
+    /// requests. Set when a request arrives with nothing in flight, so one
+    /// `render_offscreen` serves a whole picker's worth of cards.
+    pub(crate) preview_source_dirty: bool,
+    /// Whether that subject is the live composite rather than a cleared texture
+    /// — what the last mechanism to open asked for.
+    pub(crate) preview_source_is_composite: bool,
     /// The one preview being generated right now — see
     /// [`preview::PREVIEW_FRAMES_PER_TICK`] for why generation is serialized.
     pub(crate) preview_active: Option<preview::ActivePreview>,
@@ -533,7 +541,7 @@ pub struct DarklyEngine {
     /// readbacks land; `poll_preview` hands back the frames once every slot is
     /// `Some` and removes the job, so the next open regenerates against the
     /// canvas as it then stands.
-    pub(crate) previews: HashMap<(&'static str, &'static str), PreviewJob>,
+    pub(crate) previews: HashMap<preview::PreviewKey, PreviewJob>,
 
     // --- Brush Library ---
     pub(crate) brush_library: BrushLibrary,
@@ -737,6 +745,8 @@ impl DarklyEngine {
             preview_theme_bg: [0.0, 0.0, 0.0, 1.0],
             preview_target: PreviewTarget::new(),
             preview_queue: std::collections::VecDeque::new(),
+            preview_source_dirty: true,
+            preview_source_is_composite: false,
             preview_active: None,
             previews: HashMap::new(),
             brush_library: {

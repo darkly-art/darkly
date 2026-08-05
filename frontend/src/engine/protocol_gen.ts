@@ -454,10 +454,18 @@ category: string | null,
  */
 hotkeyAction: string | null, params: Array<ParamInfo>, 
 /**
- * Whether this variant declares a preview recipe — the one fact behind
- * both "the picker can render a live thumbnail of it" and "a rendered
- * documentation asset exists for it". False for the registries whose
- * entries are affordances rather than images.
+ * Whether this variant declares a
+ * [`PreviewAnim`](crate::gpu::preview::PreviewAnim) — the one fact behind
+ * "a rendered preview of it exists". False for the registries whose entries
+ * are affordances rather than images.
+ *
+ * It does **not** promise a *picker* preview. A blend mode declares one and
+ * has a documentation asset, but is a relation between two images rather
+ * than an effect over one, so its catalog exports no preview mechanism and
+ * `start_preview` no-ops for it exactly as it does for an unknown type.
+ * Whether a catalog can be driven live is
+ * [`preview_mechanisms`](crate::catalog::preview_mechanisms)' answer, not
+ * this field's.
  */
 supportsPreview: boolean, 
 /**
@@ -466,6 +474,14 @@ supportsPreview: boolean,
 captureKind: CaptureKind | null, };
 
 export type CaptureKind = "camera" | "display" | "stream";
+
+export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
+/**
+ * The unit suffix alone, for a column header. Empty for unitless values.
+ */
+unit: string, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
 export type ParamInfo = { kind: string, name: string, 
 /**
@@ -483,14 +499,6 @@ widget: string, unit: UnitType, min: number | null, max: number | null, default:
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
 options: JsonValue | null, display: ParamDisplay, };
-
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
-export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
-/**
- * The unit suffix alone, for a column header. Empty for unitless values.
- */
-unit: string, };
 
 export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
 /**
@@ -640,7 +648,9 @@ export type PasteLayerRichReq = { json: string, active_layer_id: number, };
 
 export type PickColorReq = { x: number, y: number, id: number, };
 
-export type PreviewReq = { catalog: string, type: string, };
+export type PreviewReq = { catalog: string, type: string, variant: PreviewVariant, };
+
+export type PreviewVariant = "still" | "animated";
 
 export type PreviewFilterReq = { node_id: number, filter_type: string, params: JsonValue, };
 

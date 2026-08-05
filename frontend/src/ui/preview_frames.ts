@@ -6,8 +6,16 @@
 //! *current canvas*, the rest from scratch — and are **not** cached: each time
 //! the picker opens, frames are regenerated, so the preview always reflects the
 //! live document.
+//!
+//! Every entry has two: a `still` the card shows at rest, and an `animated`
+//! sequence it asks for when the pointer arrives. They are separate generations
+//! and are polled separately, so a card never waits on a sequence to show
+//! something.
 
 import type { Engine } from '../engine/protocol';
+import type { PreviewVariant } from '../engine/protocol_gen';
+
+export type { PreviewVariant };
 
 /** Engine `poll_preview` response: all frames concatenated into a single
  *  `bytes` buffer (stride = width*height*4), sliced into `frameCount` frames. */
@@ -48,15 +56,17 @@ export function showsPreview(entry: { supportsPreview?: boolean }): boolean {
     return entry.supportsPreview === true;
 }
 
-/** Poll the engine for a preview of `catalog`/`type`. Returns converted frames
- *  once the generation completes, or `null` while it's still rendering. No
- *  caching — the caller polls until frames arrive, then stops on its own. */
+/** Poll the engine for one variant of `catalog`/`type`'s preview. Returns
+ *  converted frames once that generation completes, or `null` while it's still
+ *  rendering. No caching — the caller polls until frames arrive, then stops on
+ *  its own. */
 export async function pollPreview(
     engine: Engine,
     catalog: string,
     type: string,
+    variant: PreviewVariant,
 ): Promise<PreviewData | null> {
-    const raw = (await engine.api.pollPreview({ catalog, type })) as
+    const raw = (await engine.api.pollPreview({ catalog, type, variant })) as
         | RawPreview
         | null
         | undefined;

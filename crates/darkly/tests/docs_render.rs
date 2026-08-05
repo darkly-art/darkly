@@ -389,6 +389,27 @@ fn manifest_frames_fps_and_loop_match_the_declaration() {
         assert_eq!(asset.frames, p.anim.frames, "{}/{}", p.catalog, p.type_id);
         assert_eq!(asset.fps, p.anim.fps, "{}/{}", p.catalog, p.type_id);
         assert_eq!(asset.loops, p.anim.loops, "{}/{}", p.catalog, p.type_id);
+        assert_eq!(
+            asset.still,
+            p.anim.still_frame(),
+            "{}/{}",
+            p.catalog,
+            p.type_id
+        );
+        assert!(
+            asset.still < asset.frames,
+            "`{}/{}`'s poster frame falls outside its own sequence",
+            p.catalog,
+            p.type_id
+        );
+        assert!(
+            dir.join(&asset.dir)
+                .join(format!("{:03}.png", asset.still))
+                .exists(),
+            "`{}/{}`'s poster frame names no file",
+            p.catalog,
+            p.type_id
+        );
 
         let written = std::fs::read_dir(dir.join(&asset.dir)).unwrap().count();
         assert_eq!(

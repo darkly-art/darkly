@@ -21,7 +21,13 @@ use super::PreviewJob;
 use super::ReadbackContext;
 use crate::catalog::preview_mechanisms;
 use crate::coord::LayerRect;
-use crate::gpu::preview::{PreviewMechanism, PreviewSequence, PREVIEW_FORMAT};
+use crate::gpu::preview::{PreviewMechanism, PreviewSequence, PreviewVariant, PREVIEW_FORMAT};
+
+/// What keys a preview job: which catalog, which entry, and which of the entry's
+/// two previews. A card's still and its animation are separate generations of
+/// the same entry and coexist, so hovering never discards the frame already on
+/// screen.
+pub(crate) type PreviewKey = (&'static str, &'static str, PreviewVariant);
 
 /// Frames encoded per engine tick, across all pending previews. Bounds both
 /// in-flight readback memory (this many `MAP_READ` staging buffers) and the GPU
@@ -35,8 +41,7 @@ pub const PREVIEW_FRAMES_PER_TICK: u32 = 8;
 /// seeked to `cursor` — free, because `preview_at` is absolute and a resumed
 /// sequence reaches the state an uninterrupted one would have.
 pub(crate) struct ActivePreview {
-    pub catalog: &'static str,
-    pub type_id: &'static str,
+    pub key: PreviewKey,
     pub cursor: u32,
 }
 
@@ -48,9 +53,13 @@ fn mechanism(catalog: &str) -> Option<(&'static str, &'static dyn PreviewMechani
 }
 
 impl DarklyEngine {
-    /// Queue the looping thumbnail preview for `catalog`/`type_id` — the effect
-    /// applied to the **current canvas** for the kinds that read one, generated
-    /// from scratch for the kinds that don't.
+    /// Queue one of the two previews of `catalog`/`type_id` — the effect applied
+    /// to the **current canvas** for the kinds that read one, generated from
+    /// scratch for the kinds that don't.
+    ///
+    /// A picker asks for [`PreviewVariant::Still`] per card and for
+    /// [`PreviewVariant::Animated`] only when the pointer arrives, so opening a
+    /// picker costs one frame per card rather than a full sequence each.
     ///
     /// Enqueues only; frames are produced by [`Self::pump_previews`] and
     /// retrieved with [`Self::poll_preview`]. An unknown catalog or type, or one
@@ -60,26 +69,29 @@ impl DarklyEngine {
     /// Fully isolated from the live document: the effect instance is built fresh
     /// against the preview target's own textures, so the user's veil chain,
     /// layer stack and compositor surface are never touched.
-    pub fn start_preview(&mut self, catalog: &str, type_id: &str) {
+    pub fn start_preview(&mut self, catalog: &str, type_id: &str, variant: PreviewVariant) {
         let Some((catalog, mech)) = mechanism(catalog) else {
             return;
         };
         let Some(entry) = mech.resolve(type_id) else {
             return;
         };
-        let key = (catalog, entry.type_id);
+        let key = (catalog, entry.type_id, variant);
 
         // Already done, already running, or already queued. Re-opening the
         // picker after a poll *does* regenerate: the completed job is taken
         // rather than cloned, so the canvas it reflects is always the current
         // one.
         let queued = self.preview_queue.iter().any(|k| *k == key);
-        let active = self
-            .preview_active
-            .as_ref()
-            .is_some_and(|a| (a.catalog, a.type_id) == key);
+        let active = self.preview_active.as_ref().is_some_and(|a| a.key == key);
         if self.previews.contains_key(&key) || queued || active {
             return;
+        }
+        // A burst of requests — a picker opening — shares one composite. The
+        // flag is what makes `render_offscreen` cost once per burst rather than
+        // once per card.
+        if self.preview_queue.is_empty() && self.preview_active.is_none() {
+            self.preview_source_dirty = true;
         }
         self.preview_queue.push_back(key);
     }
@@ -95,19 +107,19 @@ impl DarklyEngine {
             let Some(active) = self.preview_active.as_ref() else {
                 return;
             };
-            let (catalog, type_id, cursor) = (active.catalog, active.type_id, active.cursor);
-            let Some((_, mech)) = mechanism(catalog) else {
+            let (key, cursor) = (active.key, active.cursor);
+            let Some((_, mech)) = mechanism(key.0) else {
                 self.preview_active = None;
                 return;
             };
 
-            match self.encode_frames(mech, catalog, type_id, cursor, budget) {
+            match self.encode_frames(mech, key, cursor, budget) {
                 // The entry resolved but its mechanism could not open it. Drop
                 // the job rather than leave one nothing can ever complete: the
                 // frontend polls for 180 frames before giving up, so a job that
                 // can never fill is a silent hang.
                 None => {
-                    self.previews.remove(&(catalog, type_id));
+                    self.previews.remove(&key);
                     self.preview_active = None;
                     return;
                 }
@@ -134,11 +146,11 @@ impl DarklyEngine {
     fn encode_frames(
         &mut self,
         mech: &'static dyn PreviewMechanism,
-        catalog: &'static str,
-        type_id: &'static str,
+        key: PreviewKey,
         cursor: u32,
         budget: u32,
     ) -> Option<(u32, bool)> {
+        let (catalog, type_id, variant) = key;
         // Disjoint fields: the sequence borrows the compositor's registries
         // while the capture closure borrows the GPU context and the readback
         // scheduler.
@@ -149,7 +161,8 @@ impl DarklyEngine {
             preview_target,
             ..
         } = self;
-        let mut seq = PreviewSequence::open(mech, compositor.preview_registries(), type_id)?;
+        let mut seq =
+            PreviewSequence::open(mech, compositor.preview_registries(), type_id, variant)?;
         seq.seek(cursor);
 
         let mut encoded = 0;
@@ -173,6 +186,7 @@ impl DarklyEngine {
                         ReadbackContext::PreviewFrame {
                             catalog,
                             type_id,
+                            variant,
                             frame_idx,
                             total,
                         },
@@ -187,16 +201,18 @@ impl DarklyEngine {
         Some((encoded, seq.is_done()))
     }
 
-    /// Open the next queued preview, refreshing the target's subject for the
-    /// batch as we go. `false` when the queue is empty or the entry evaporated.
+    /// Open the next queued preview, refreshing the target's subject if this is
+    /// the first of a burst. `false` when the queue is empty or the entry
+    /// evaporated.
     ///
-    /// The subject is loaded here rather than per card: the composite does not
-    /// change between the cards of one picker batch, so one full-canvas
-    /// `render_offscreen` serves all of them.
+    /// The composite does not change between the cards of one picker batch, so
+    /// one full-canvas `render_offscreen` serves all of them — which matters
+    /// most for the stills, where the batch is every card at once.
     fn open_next(&mut self) -> bool {
-        let Some((catalog, type_id)) = self.preview_queue.pop_front() else {
+        let Some(key) = self.preview_queue.pop_front() else {
             return false;
         };
+        let (catalog, type_id, variant) = key;
         let Some((_, mech)) = mechanism(catalog) else {
             return false;
         };
@@ -204,7 +220,38 @@ impl DarklyEngine {
             return false;
         };
 
-        if mech.reads_source() {
+        self.load_subject(mech.reads_source());
+
+        let (pw, ph) = self.preview_target.size();
+        let frames = match variant {
+            PreviewVariant::Still => 1,
+            PreviewVariant::Animated => entry.anim.frames.max(1),
+        };
+        self.previews.insert(
+            key,
+            PreviewJob {
+                width: pw,
+                height: ph,
+                fps: entry.anim.fps,
+                frames: vec![None; frames as usize],
+            },
+        );
+        self.preview_active = Some(ActivePreview { key, cursor: 0 });
+        true
+    }
+
+    /// Put the subject the next entry needs into the target: the live composite
+    /// for a mechanism that reads one, a cleared texture for one that generates
+    /// its own content.
+    ///
+    /// Reloads only when the target does not already hold what is wanted —
+    /// which for a burst of same-kind requests is once, and for a burst that
+    /// mixes kinds is once per switch.
+    fn load_subject(&mut self, reads_source: bool) {
+        if !self.preview_source_dirty && self.preview_source_is_composite == reads_source {
+            return;
+        }
+        if reads_source {
             // Refresh the composite so the preview reflects the current
             // document, even with no surface present yet (mirrors
             // `start_export`).
@@ -221,33 +268,18 @@ impl DarklyEngine {
             preview_target,
             ..
         } = self;
-        if mech.reads_source() {
+        if reads_source {
             let source = compositor.composited_texture();
             let view = source.create_view(&wgpu::TextureViewDescriptor::default());
             preview_target.load_source(&gpu.device, &gpu.queue, &view, w, h);
         } else {
             preview_target.clear_source(&gpu.device, &gpu.queue, w, h);
         }
-
-        let (pw, ph) = self.preview_target.size();
-        self.previews.insert(
-            (catalog, type_id),
-            PreviewJob {
-                width: pw,
-                height: ph,
-                fps: entry.anim.fps,
-                frames: vec![None; entry.anim.frames.max(1) as usize],
-            },
-        );
-        self.preview_active = Some(ActivePreview {
-            catalog,
-            type_id,
-            cursor: 0,
-        });
-        true
+        self.preview_source_is_composite = reads_source;
+        self.preview_source_dirty = false;
     }
 
-    /// Take the completed preview for `catalog`/`type_id` as
+    /// Take the completed preview for `catalog`/`type_id`/`variant` as
     /// `(width, height, fps, frames)` once every frame has landed, else `None`.
     /// Each frame is `width × height` tightly-packed RGBA8.
     ///
@@ -259,11 +291,12 @@ impl DarklyEngine {
         &mut self,
         catalog: &str,
         type_id: &str,
+        variant: PreviewVariant,
     ) -> Option<(u32, u32, u32, Vec<Vec<u8>>)> {
         let key = *self
             .previews
             .keys()
-            .find(|(c, t)| *c == catalog && *t == type_id)?;
+            .find(|(c, t, v)| *c == catalog && *t == type_id && *v == variant)?;
         if self.previews[&key].frames.iter().any(Option::is_none) {
             return None;
         }
