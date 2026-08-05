@@ -75,13 +75,27 @@ pub fn config_kind_is_int(key: &str) -> bool {
     config::kind_is_int(key)
 }
 
-/// Get the full preferences schema as JSON: an array of section objects,
-/// each containing the section's metadata and the flat list of prefs with
-/// their display label, kind, and widget hint. Sorted by section order.
-/// (No `default` field — defaults live in the YAML layers.)
+/// Get the full preferences schema as JSON: one `Catalog` per settings
+/// section, each holding a single entry whose `params` are that section's
+/// prefs as `ParamInfo` — the same shape the effect panels consume. Sorted by
+/// section order. Prefs marked `Hidden` are not settings and are omitted.
 #[wasm_bindgen]
 pub fn config_schema() -> String {
-    serde_json::to_string(&config::schema_info()).unwrap_or_else(|_| "[]".into())
+    serde_json::to_string(&darkly::catalog::settings_catalogs()).unwrap_or_else(|_| "[]".into())
+}
+
+/// Render a binding's chord for one platform's modifier vocabulary.
+///
+/// Takes the binding as written in the presets — the optional
+/// `site@scope@brush:` prefix is stripped here, since only the chord is
+/// user-facing. `is_mac` selects the Apple glyphs (`⌘⇧⌥⌃`) over the
+/// Windows/Linux names; only the browser knows which to use.
+#[wasm_bindgen]
+pub fn format_chord(binding: &str, is_mac: bool) -> String {
+    use darkly::config::chord::{format_chord, parse_binding, Platform};
+    let parsed = parse_binding(binding);
+    let platform = if is_mac { Platform::Mac } else { Platform::Other };
+    format_chord(&parsed.chord, platform)
 }
 
 fn config_value_to_js(value: Option<&ConfigValue>) -> JsValue {

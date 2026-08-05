@@ -12,28 +12,19 @@
     let editable = $derived(node.editable !== false);
 
     // Blend modes come from the Rust BlendModeRegistry — the dropdown
-    // (and its category-based <optgroup>s) is built entirely from that table.
-    interface BlendModeType { type: string; displayName: string; category: string; }
-    let blendModeTypes = $state<BlendModeType[]>([]);
-    $effect(() => {
-        const engine = app.engine;
-        if (!engine) return;
-        (async () => {
-            try {
-                blendModeTypes = (await engine.api.blendModeTypes()) as BlendModeType[];
-            } catch {
-                blendModeTypes = [];
-            }
-        })();
-    });
+    // (and its category-based <optgroup>s) is built entirely from that table,
+    // which arrives in registry order (GPU value, i.e. the conventional
+    // Photoshop / Krita ordering) as the `blendModes` catalog.
+    let blendModeTypes = $derived(app.entries?.('blendModes') ?? []);
 
-    interface BlendModeGroup { label: string; modes: BlendModeType[]; }
+    interface BlendModeGroup { label: string; modes: typeof blendModeTypes; }
     let blendModeGroups = $derived((() => {
         const groups: BlendModeGroup[] = [];
         let current: BlendModeGroup | null = null;
         for (const bm of blendModeTypes) {
-            if (!current || current.label !== bm.category) {
-                current = { label: bm.category, modes: [] };
+            const label = bm.category ?? '';
+            if (!current || current.label !== label) {
+                current = { label, modes: [] };
                 groups.push(current);
             }
             current.modes.push(bm);

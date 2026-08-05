@@ -3,36 +3,23 @@ use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Float {
-        name: "speed",
-        min: 0.0,
-        max: 3.0,
-        default: 0.5,
-    },
-    ParamDef::Float {
-        name: "wobble",
-        min: 0.0,
-        max: 2.0,
-        default: 1.0,
-    },
-    ParamDef::Float {
-        name: "switching",
-        min: 0.0,
-        max: 2.0,
-        default: 1.0,
-    },
-    ParamDef::Float {
-        name: "bloom",
-        min: 0.0,
-        max: 2.0,
-        default: 1.0,
-    },
-    ParamDef::Float {
-        name: "ac_beat",
-        min: 0.0,
-        max: 2.0,
-        default: 1.0,
-    },
+    ParamDef::float("speed", 0.0, 3.0, 0.5)
+        .with_label("Speed")
+        .with_description("How fast the tape artefacts drift and flicker."),
+    ParamDef::float("wobble", 0.0, 2.0, 1.0)
+        .with_label("Wobble")
+        .with_description("Horizontal waver of each scanline, as if the tape were stretched."),
+    ParamDef::float("switching", 0.0, 2.0, 1.0)
+        .with_label("Switching Noise")
+        .with_description(
+            "Torn band of static at the bottom of the frame where the head switches.",
+        ),
+    ParamDef::float("bloom", 0.0, 2.0, 1.0)
+        .with_label("Bloom")
+        .with_description("How far bright areas smear and glow into their surroundings."),
+    ParamDef::float("ac_beat", 0.0, 2.0, 1.0)
+        .with_label("Hum Bar")
+        .with_description("Slow bright bar rolling up the frame from mains interference."),
 ];
 
 pub fn register() -> VeilRegistration {

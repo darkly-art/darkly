@@ -3,36 +3,21 @@ use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Float {
-        name: "speed",
-        min: 0.0,
-        max: 3.0,
-        default: 0.5,
-    },
-    ParamDef::Float {
-        name: "rain_amount",
-        min: 0.0,
-        max: 1.0,
-        default: 0.5,
-    },
-    ParamDef::Float {
-        name: "direction",
-        min: 0.0,
-        max: 360.0,
-        default: 0.0,
-    },
-    ParamDef::Float {
-        name: "fog_amount",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-    },
-    ParamDef::Float {
-        name: "scale",
-        min: 0.1,
-        max: 5.0,
-        default: 1.4,
-    },
+    ParamDef::float("speed", 0.0, 3.0, 0.5)
+        .with_label("Speed")
+        .with_description("How fast the droplets run down the glass."),
+    ParamDef::float("rain_amount", 0.0, 1.0, 0.5)
+        .with_label("Rain")
+        .with_description("How many droplets cover the glass."),
+    ParamDef::float("direction", 0.0, 360.0, 0.0)
+        .with_label("Direction")
+        .with_description("Which way the rain is driven."),
+    ParamDef::float("fog_amount", 0.0, 1.0, 0.0)
+        .with_label("Fog")
+        .with_description("How much condensation clouds the glass between droplets."),
+    ParamDef::float("scale", 0.1, 5.0, 1.4)
+        .with_label("Scale")
+        .with_description("Size of the droplets."),
 ];
 
 pub fn register() -> VeilRegistration {

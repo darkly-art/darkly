@@ -186,7 +186,6 @@ class PolygonSelectTool extends ToolBase {
 
 export const polygonSelectTool: ToolDescriptor = {
     id: 'polygon_select',
-    icon: 'lucide:triangle-dashed',
     group: 'select',
     cluster: 'select',
     hotkeyAction: 'polygonSelectTool',

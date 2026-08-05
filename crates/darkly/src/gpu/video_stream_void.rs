@@ -51,6 +51,9 @@ use std::sync::Arc;
 pub struct VideoStreamConfig {
     pub type_id: &'static str,
     pub display_name: &'static str,
+    /// One-sentence summary shown as a tooltip in the Add Void picker —
+    /// include the terms users would search for.
+    pub description: &'static str,
     pub icon: &'static str,
     /// Param schema — looked up by *name* (`"freeze"`, `"frame_divisor"`) by the
     /// shared code, so variants are decoupled from each other's param ordering.
@@ -75,6 +78,7 @@ pub fn registration(
     VoidRegistration {
         type_id: config.type_id,
         display_name: config.display_name,
+        description: config.description,
         params: config.params,
         icon: config.icon,
         // The aux texture is a 1×1 placeholder until a frame arrives, so
@@ -100,7 +104,7 @@ pub fn build_void(
 
 /// Index of the named param within a config's schema, or `None` if absent.
 fn param_index(config: &VideoStreamConfig, name: &str) -> Option<usize> {
-    config.params.iter().position(|p| p.name() == name)
+    config.params.iter().position(|p| p.name == name)
 }
 
 /// Read the `"freeze"` toggle out of a positional param slice by resolving its
@@ -427,7 +431,7 @@ impl Void for VideoStreamVoid {
             .params
             .iter()
             .enumerate()
-            .map(|(i, def)| match def.name() {
+            .map(|(i, def)| match def.name {
                 "freeze" => ParamValue::Bool(self.freeze),
                 "frame_divisor" => ParamValue::Int(self.frame_divisor as i32),
                 // Passthrough param (e.g. `url`): echo the stored value so the
@@ -801,21 +805,14 @@ mod tests {
     // to camera / screenshare; identity seed transform keeps the affine math
     // easy to reason about.
     const TEST_PARAMS: &[ParamDef] = &[
-        ParamDef::Bool {
-            name: "freeze",
-            default: false,
-        },
-        ParamDef::Int {
-            name: "frame_divisor",
-            min: 1,
-            max: 60,
-            default: 4,
-        },
+        ParamDef::boolean("freeze", false),
+        ParamDef::int("frame_divisor", 1, 60, 4),
     ];
 
     static TEST_CONFIG: VideoStreamConfig = VideoStreamConfig {
         type_id: "test_video_stream",
         display_name: "Test",
+        description: "Test fixture.",
         icon: "tabler:test",
         params: TEST_PARAMS,
         capture_kind: CaptureKind::Camera,
@@ -851,25 +848,15 @@ mod tests {
     // in for the Blender void — exercises that params the machinery doesn't model
     // still round-trip.
     const URL_PARAMS: &[ParamDef] = &[
-        ParamDef::Bool {
-            name: "freeze",
-            default: false,
-        },
-        ParamDef::Int {
-            name: "frame_divisor",
-            min: 1,
-            max: 60,
-            default: 4,
-        },
-        ParamDef::String {
-            name: "url",
-            default: "http://localhost:8765/stream",
-        },
+        ParamDef::boolean("freeze", false),
+        ParamDef::int("frame_divisor", 1, 60, 4),
+        ParamDef::string("url", "http://localhost:8765/stream"),
     ];
 
     static URL_CONFIG: VideoStreamConfig = VideoStreamConfig {
         type_id: "test_url_stream",
         display_name: "Test URL",
+        description: "Test fixture.",
         icon: "tabler:test",
         params: URL_PARAMS,
         capture_kind: CaptureKind::Stream,

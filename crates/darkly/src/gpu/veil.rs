@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 pub use super::effect::{EffectCache, EffectPipeline};
 pub use super::params::{ParamDef, ParamValue};
+use crate::catalog::{Catalog, CatalogEntry};
 
 /// Viewport-level post-processing effect ("veil").
 /// Veils run on the fully-presented image at screen resolution,
@@ -83,17 +84,42 @@ pub struct VeilRegistration {
     pub from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Veil>,
 }
 
+/// Id of the catalog this registry projects into.
+pub const CATALOG_ID: &str = "veils";
+
+impl VeilRegistration {
+    pub fn catalog_entry(&self) -> CatalogEntry {
+        // Veils render a live preview in their picker, so no icon.
+        CatalogEntry::new(self.type_id, self.display_name)
+            .with_description(self.description)
+            .with_params(self.params)
+    }
+}
+
+/// The veil catalog — every registered veil, sorted by `type_id`.
+pub fn catalog() -> Catalog {
+    Catalog::new(
+        CATALOG_ID,
+        "Veils",
+        VeilRegistry::new()
+            .types()
+            .into_iter()
+            .map(VeilRegistration::catalog_entry)
+            .collect(),
+    )
+    .with_description("Non-destructive effects stacked above a layer's pixels.")
+}
+
 /// Auto-discovered veil registry with lazy pipeline caching.
 pub struct VeilRegistry {
     entries: HashMap<&'static str, RegistryEntry>,
 }
 
 struct RegistryEntry {
-    display_name: &'static str,
-    description: &'static str,
-    create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
-    params: &'static [ParamDef],
-    from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Veil>,
+    /// The full registration this entry was built from. All metadata accessors
+    /// read straight off this, so a new `VeilRegistration` field is exposed
+    /// without widening any tuple or touching the registry.
+    reg: VeilRegistration,
     cached_pipeline: Option<Arc<EffectPipeline>>,
 }
 
@@ -110,11 +136,7 @@ impl VeilRegistry {
             entries.insert(
                 reg.type_id,
                 RegistryEntry {
-                    display_name: reg.display_name,
-                    description: reg.description,
-                    create_pipeline: reg.create_pipeline,
-                    params: reg.params,
-                    from_params: reg.from_params,
+                    reg,
                     cached_pipeline: None,
                 },
             );
@@ -122,29 +144,21 @@ impl VeilRegistry {
         VeilRegistry { entries }
     }
 
-    /// Return all registered veil type IDs with display name, description,
-    /// and parameter definitions.
-    #[allow(clippy::type_complexity)]
-    pub fn types(
-        &self,
-    ) -> Vec<(
-        &'static str,
-        &'static str,
-        &'static str,
-        &'static [ParamDef],
-    )> {
-        let mut types: Vec<_> = self
-            .entries
-            .iter()
-            .map(|(&id, e)| (id, e.display_name, e.description, e.params))
-            .collect();
-        types.sort_by_key(|(id, _, _, _)| *id);
+    /// Return every registered veil's full [`VeilRegistration`], sorted by
+    /// `type_id` for deterministic UI ordering. Callers read whatever fields
+    /// they need off the registration — a new field is free here.
+    pub fn types(&self) -> Vec<&VeilRegistration> {
+        let mut types: Vec<&VeilRegistration> = self.entries.values().map(|e| &e.reg).collect();
+        types.sort_by_key(|reg| reg.type_id);
         types
     }
 
     /// Get the static parameter definitions for a veil type.
     pub fn param_defs(&self, type_id: &str) -> &'static [ParamDef] {
-        self.entries.get(type_id).map(|e| e.params).unwrap_or(&[])
+        self.entries
+            .get(type_id)
+            .map(|e| e.reg.params)
+            .unwrap_or(&[])
     }
 
     /// Resolve a runtime `&str` type id to the registry's `&'static str` key,
@@ -167,7 +181,7 @@ impl VeilRegistry {
     pub fn display_name(&self, type_id: &str) -> &'static str {
         self.entries
             .get(type_id)
-            .map(|e| e.display_name)
+            .map(|e| e.reg.display_name)
             .unwrap_or("")
     }
 
@@ -184,7 +198,7 @@ impl VeilRegistry {
             .unwrap_or_else(|| panic!("Unknown veil type: {type_id}"));
         entry
             .cached_pipeline
-            .get_or_insert_with(|| Arc::new((entry.create_pipeline)(device, format)))
+            .get_or_insert_with(|| Arc::new((entry.reg.create_pipeline)(device, format)))
             .clone()
     }
 
@@ -202,8 +216,8 @@ impl VeilRegistry {
             .unwrap_or_else(|| panic!("Unknown veil type: {type_id}"));
         let pipeline = entry
             .cached_pipeline
-            .get_or_insert_with(|| Arc::new((entry.create_pipeline)(device, format)))
+            .get_or_insert_with(|| Arc::new((entry.reg.create_pipeline)(device, format)))
             .clone();
-        (entry.from_params)(params, pipeline)
+        (entry.reg.from_params)(params, pipeline)
     }
 }

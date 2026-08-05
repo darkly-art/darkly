@@ -25,33 +25,23 @@ use crate::gpu::params::{ParamDef, ParamValue};
 /// Parameter schema. `model` is an enum dropdown; the three scalars are plain
 /// rows; `colorize` is a checkbox that (in the shader) overrides the model.
 pub const PARAMS: &[ParamDef] = &[
-    ParamDef::Enum {
-        name: "model",
-        options: &["HSV", "HSL", "HSY"],
-        default: 0,
-    },
-    ParamDef::Float {
-        name: "hue",
-        min: -180.0,
-        max: 180.0,
-        default: 0.0,
-    },
-    ParamDef::Float {
-        name: "saturation",
-        min: -100.0,
-        max: 100.0,
-        default: 0.0,
-    },
-    ParamDef::Float {
-        name: "value",
-        min: -100.0,
-        max: 100.0,
-        default: 0.0,
-    },
-    ParamDef::Bool {
-        name: "colorize",
-        default: false,
-    },
+    ParamDef::enumeration("model", &["HSV", "HSL", "HSY"], 0)
+        .with_label("Colour Model")
+        .with_description("Which cylindrical model the adjustment works in."),
+    ParamDef::float("hue", -180.0, 180.0, 0.0)
+        .with_label("Hue")
+        .with_description("Rotation applied to every pixel's hue."),
+    ParamDef::float("saturation", -100.0, 100.0, 0.0)
+        .with_label("Saturation")
+        .with_description("Pushes colours toward grey or toward full intensity."),
+    ParamDef::float("value", -100.0, 100.0, 0.0)
+        .with_label("Value")
+        .with_description("Lightens or darkens without changing hue."),
+    ParamDef::boolean("colorize", false)
+        .with_label("Colorize")
+        .with_description(
+            "Replaces every hue with the chosen one, tinting the layer a single colour.",
+        ),
 ];
 
 /// The HSV fragment shader: the shared colour-space lib prepended to `hsv.wgsl`

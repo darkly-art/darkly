@@ -7,7 +7,7 @@
  * bakes them into the node via `applyFilter`. Param-free filters (invert) skip
  * this and apply immediately.
  */
-import type { FilterParam } from '../ui/filters/filterParams';
+import type { ParamInfo } from '../ui/filters/filterParams';
 
 class FilterModalState {
     open = $state(false);
@@ -15,9 +15,9 @@ class FilterModalState {
     filterType = $state('');
     displayName = $state('');
     /** The filter type's schema (params carry their defaults). */
-    schema = $state<FilterParam[]>([]);
+    schema = $state<ParamInfo[]>([]);
 
-    show(nodeId: number, filterType: string, displayName: string, schema: FilterParam[]) {
+    show(nodeId: number, filterType: string, displayName: string, schema: ParamInfo[]) {
         this.nodeId = nodeId;
         this.filterType = filterType;
         this.displayName = displayName;

@@ -7,24 +7,15 @@ use std::sync::Arc;
 const FROZEN_NORMAL_BYTES: &[u8] = include_bytes!("../../../resources/veils/frozen.jpg");
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Float {
-        name: "strength",
-        min: 0.0,
-        max: 0.2,
-        default: 0.04,
-    },
-    ParamDef::Float {
-        name: "scale",
-        min: 0.1,
-        max: 5.0,
-        default: 1.0,
-    },
-    ParamDef::Float {
-        name: "chromatic",
-        min: 0.0,
-        max: 1.0,
-        default: 0.1,
-    },
+    ParamDef::float("strength", 0.0, 0.2, 0.04)
+        .with_label("Strength")
+        .with_description("How far the frosted surface displaces what is behind it."),
+    ParamDef::float("scale", 0.1, 5.0, 1.0)
+        .with_label("Scale")
+        .with_description("Size of the ice crystals."),
+    ParamDef::float("chromatic", 0.0, 1.0, 0.1)
+        .with_label("Chromatic")
+        .with_description("Colour separation through the ice, like light through a prism."),
 ];
 
 pub fn register() -> VeilRegistration {

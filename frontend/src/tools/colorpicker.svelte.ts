@@ -50,7 +50,6 @@ class ColorPickerTool extends ToolBase {
 
 export const colorPickerTool: ToolDescriptor = {
     id: 'colorpicker',
-    icon: 'fa6-solid:eye-dropper',
     group: 'paint',
     hotkeyAction: 'colorPickerTool',
     optionsComponent: ColorPickerOptions,

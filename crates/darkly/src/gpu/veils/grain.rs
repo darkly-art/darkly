@@ -3,24 +3,15 @@ use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Float {
-        name: "speed",
-        min: 0.0,
-        max: 1.0,
-        default: 0.05,
-    },
-    ParamDef::Float {
-        name: "color",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-    },
-    ParamDef::Float {
-        name: "opacity",
-        min: 0.0,
-        max: 1.0,
-        default: 1.0,
-    },
+    ParamDef::float("speed", 0.0, 1.0, 0.05)
+        .with_label("Speed")
+        .with_description("How fast the grain reshuffles; zero holds a single still pattern."),
+    ParamDef::float("color", 0.0, 1.0, 0.0)
+        .with_label("Colour")
+        .with_description("Blends the grain from monochrome speckle toward coloured noise."),
+    ParamDef::float("opacity", 0.0, 1.0, 1.0)
+        .with_label("Opacity")
+        .with_description("How strongly the grain shows over the image."),
 ];
 
 pub fn register() -> VeilRegistration {

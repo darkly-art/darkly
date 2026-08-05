@@ -262,6 +262,9 @@ pub enum CaptureKind {
 pub struct VoidRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
+    /// One-sentence summary shown as a tooltip in the Add Void picker —
+    /// include the terms users would search for.
+    pub description: &'static str,
     pub params: &'static [ParamDef],
     /// Iconify icon name (e.g. `"tabler:galaxy"`). Always present — the layer
     /// panel renders it for void layers of this kind, and the picker falls back
@@ -290,6 +293,34 @@ pub struct VoidRegistration {
     pub default_transform: fn(u32, u32) -> crate::transform::Transform,
     pub create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
     pub from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Void>,
+}
+
+/// Id of the catalog this registry projects into.
+pub const CATALOG_ID: &str = "voids";
+
+impl VoidRegistration {
+    pub fn catalog_entry(&self) -> crate::catalog::CatalogEntry {
+        crate::catalog::CatalogEntry::new(self.type_id, self.display_name)
+            .with_icon(self.icon)
+            .with_description(self.description)
+            .with_params(self.params)
+            .with_supports_preview(self.supports_preview)
+            .with_capture_kind(self.capture_kind)
+    }
+}
+
+/// The void catalog — every registered void, sorted by `type_id`.
+pub fn catalog() -> crate::catalog::Catalog {
+    crate::catalog::Catalog::new(
+        CATALOG_ID,
+        "Voids",
+        VoidRegistry::new()
+            .types()
+            .into_iter()
+            .map(VoidRegistration::catalog_entry)
+            .collect(),
+    )
+    .with_description("Sources that generate a layer's pixels instead of storing them.")
 }
 
 /// Auto-discovered void registry with lazy pipeline caching. Each void

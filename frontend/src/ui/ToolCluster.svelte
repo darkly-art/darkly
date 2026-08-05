@@ -66,7 +66,7 @@
     });
 
     function toolTitle(t: ToolDescriptor): string {
-        return tooltipForAction(app.toolDisplayName(t.id), t.hotkeyAction);
+        return tooltipForAction(app.displayName('tools', t.id), t.hotkeyAction);
     }
 
     const clusterTitle = $derived(
@@ -87,8 +87,8 @@
         onmouseenter={onClusterEnter}
         title={clusterTitle}
     >
-        {#if iconSource?.icon}
-            <Icon name={iconSource.icon} />
+        {#if iconSource}
+            <Icon name={app.toolGlyph(iconSource.id)} />
         {/if}
     </button>
 
@@ -103,9 +103,7 @@
                 onclick={() => pickTool(tool.id)}
                 title={toolTitle(tool)}
             >
-                {#if tool.icon}
-                    <Icon name={tool.icon} />
-                {/if}
+                <Icon name={app.toolGlyph(tool.id)} />
             </button>
         {/each}
     </div>

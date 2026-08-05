@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use super::effect::EffectCache;
 use super::params::{ParamDef, ParamValue};
+use crate::catalog::{Catalog, CatalogEntry};
 
 /// A filter's GPU realization: a render pipeline plus optional param-derived
 /// resources built into an [`EffectCache`]. One instance is shared (Arc'd)
@@ -79,17 +80,44 @@ pub struct FilterPipelineRegistration {
     pub create_pipeline: fn(&wgpu::Device) -> Arc<dyn FilterEffect>,
 }
 
+/// Id of the catalog this registry projects into. Distinct from the
+/// `layerFilters` catalog of `crate::document::filter`, which registers mask
+/// and selection modifiers rather than colour adjustments.
+pub const CATALOG_ID: &str = "filters";
+
+impl FilterPipelineRegistration {
+    pub fn catalog_entry(&self) -> CatalogEntry {
+        CatalogEntry::new(self.type_id, self.display_name)
+            .with_icon(self.icon)
+            .with_description(self.description)
+            .with_params(self.params)
+    }
+}
+
+/// The filter catalog — every registered filter, sorted by `type_id`.
+pub fn catalog() -> Catalog {
+    Catalog::new(
+        CATALOG_ID,
+        "Filters",
+        FilterPipelineRegistry::new()
+            .types()
+            .into_iter()
+            .map(FilterPipelineRegistration::catalog_entry)
+            .collect(),
+    )
+    .with_description("Colour adjustments applied to everything beneath them in the layer tree.")
+}
+
 /// Auto-discovered filter registry with lazy effect caching.
 pub struct FilterPipelineRegistry {
     entries: HashMap<&'static str, RegistryEntry>,
 }
 
 struct RegistryEntry {
-    display_name: &'static str,
-    icon: &'static str,
-    description: &'static str,
-    params: &'static [ParamDef],
-    create_pipeline: fn(&wgpu::Device) -> Arc<dyn FilterEffect>,
+    /// The full registration this entry was built from. All metadata accessors
+    /// read straight off this, so a new `FilterPipelineRegistration` field is
+    /// exposed without widening any tuple or touching the registry.
+    reg: FilterPipelineRegistration,
     cached_pipeline: Option<Arc<dyn FilterEffect>>,
 }
 
@@ -106,11 +134,7 @@ impl FilterPipelineRegistry {
             entries.insert(
                 reg.type_id,
                 RegistryEntry {
-                    display_name: reg.display_name,
-                    icon: reg.icon,
-                    description: reg.description,
-                    params: reg.params,
-                    create_pipeline: reg.create_pipeline,
+                    reg,
                     cached_pipeline: None,
                 },
             );
@@ -118,15 +142,13 @@ impl FilterPipelineRegistry {
         FilterPipelineRegistry { entries }
     }
 
-    /// All registered filter type IDs with their display names, icons, and
-    /// descriptions, sorted by id for a stable menu order.
-    pub fn types(&self) -> Vec<(&'static str, &'static str, &'static str, &'static str)> {
-        let mut types: Vec<_> = self
-            .entries
-            .iter()
-            .map(|(&id, e)| (id, e.display_name, e.icon, e.description))
-            .collect();
-        types.sort_by_key(|(id, _, _, _)| *id);
+    /// Return every registered filter's full [`FilterPipelineRegistration`],
+    /// sorted by `type_id` for a stable menu order. Callers read whatever
+    /// fields they need off the registration — a new field is free here.
+    pub fn types(&self) -> Vec<&FilterPipelineRegistration> {
+        let mut types: Vec<&FilterPipelineRegistration> =
+            self.entries.values().map(|e| &e.reg).collect();
+        types.sort_by_key(|reg| reg.type_id);
         types
     }
 
@@ -134,7 +156,10 @@ impl FilterPipelineRegistry {
     /// type (or a parameter-free filter). Drives both the `filter_types()`
     /// protocol emission and JSON→`ParamValue` conversion when a layer is added.
     pub fn params(&self, type_id: &str) -> &'static [ParamDef] {
-        self.entries.get(type_id).map(|e| e.params).unwrap_or(&[])
+        self.entries
+            .get(type_id)
+            .map(|e| e.reg.params)
+            .unwrap_or(&[])
     }
 
     /// True when this registry knows the given `type_id`.
@@ -147,14 +172,14 @@ impl FilterPipelineRegistry {
     pub fn display_name(&self, type_id: &str) -> &'static str {
         self.entries
             .get(type_id)
-            .map(|e| e.display_name)
+            .map(|e| e.reg.display_name)
             .unwrap_or("")
     }
 
     /// Iconify name for a filter type, falling back to the empty string when
     /// the type is unknown (callers substitute the generic layer-kind icon).
     pub fn icon(&self, type_id: &str) -> &'static str {
-        self.entries.get(type_id).map(|e| e.icon).unwrap_or("")
+        self.entries.get(type_id).map(|e| e.reg.icon).unwrap_or("")
     }
 
     /// Get or create the shared effect for a filter type. Returns `None`
@@ -169,36 +194,12 @@ impl FilterPipelineRegistry {
         Some(
             entry
                 .cached_pipeline
-                .get_or_insert_with(|| (entry.create_pipeline)(device))
+                .get_or_insert_with(|| (entry.reg.create_pipeline)(device))
                 .clone(),
         )
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashSet;
-
-    /// Every filter declares a well-formed, non-empty Iconify name, and no two
-    /// filters share one — so each reads distinctly in the Colors menu and the
-    /// Add Filter Layer picker. Guards against copy-pasting a `register()` and
-    /// forgetting to change the icon.
-    #[test]
-    fn every_filter_has_a_unique_icon() {
-        let registry = FilterPipelineRegistry::new();
-        let mut seen = HashSet::new();
-        for (type_id, _display, icon, _description) in registry.types() {
-            assert!(!icon.is_empty(), "filter '{type_id}' has no icon");
-            assert!(
-                icon.contains(':'),
-                "filter '{type_id}' icon '{icon}' is not a `prefix:name` Iconify id"
-            );
-            assert!(
-                seen.insert(icon),
-                "filter '{type_id}' reuses icon '{icon}' — icons must be unique per filter"
-            );
-        }
-        assert!(!seen.is_empty(), "no filters registered");
-    }
-}
+// Icon well-formedness and per-catalog uniqueness are asserted generically for
+// every registry by `icons_are_wellformed_and_unique_within_a_catalog` in
+// `crate::catalog`.

@@ -65,6 +65,7 @@ pub fn register() -> LayerKindRegistration {
     LayerKindRegistration {
         type_id: TYPE_ID,
         display_name: "Void Layer",
+        description: "Pixels generated on demand by a source rather than stored.",
         can_have_mask: true,
         can_rename: true,
         has_thumbnail: false,

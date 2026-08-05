@@ -4,6 +4,7 @@ pub fn register() -> BlendModeRegistration {
     BlendModeRegistration {
         type_id: "color_dodge",
         display_name: "Color Dodge",
+        description: "Lightens the base by decreasing its contrast toward the blend colour.",
         category: "Lighten",
         gpu_value: 6,
         // pd_color_dodge: Krita KoCompositeOpFunctions.h:376–403.

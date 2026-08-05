@@ -27,9 +27,8 @@ let cleanup: (() => void) | null = null;
  * `layerThumb:alt+click` + `maskThumb:alt+click`) are joined with `|` in
  * the YAML parser; we split them back into a list here.
  *
- * Empty string means "no keyboard trigger" — used by overlays that
- * explicitly want to disable a binding the previous layer set
- * (e.g. Photoshop sets `hotkeys.isolateLayer = ""`).
+ * An action a preset does not bind is simply absent from that preset's
+ * layers; there is no unbind directive, and no preset file carries one.
  */
 export function effectiveHotkeys(actionId: string): string[] {
     const v = config.get(`hotkeys.${actionId}`);

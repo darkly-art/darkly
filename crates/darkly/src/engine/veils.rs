@@ -2,14 +2,12 @@
 
 use darkly_macros::handlers;
 
-use super::types::{
-    node_to_layer_info, BlendModeTypeInfo, LayerInfo, LayerKindTypeInfo, ModifierTypeInfo,
-    ParamInfo, ToolTypeInfo, VeilInfo, VeilTypeInfo,
-};
+use super::types::{node_to_layer_info, LayerInfo, ParamInfo, VeilInfo};
 use super::DarklyEngine;
 use super::PreviewJob;
 use super::PreviewKind;
 use super::ReadbackContext;
+use crate::catalog::Catalog;
 use crate::coord::LayerRect;
 use crate::engine::protocol::{params_from_json, RawParams};
 use crate::gpu::params::{ParamDef, ParamValue};
@@ -269,87 +267,18 @@ impl DarklyEngine {
         list
     }
 
-    /// Return all registered veil types with their parameter definitions.
+    /// Every registry, projected into the one browsable shape the UI pickers,
+    /// the settings surface and the metadata export all consume. Delegates to
+    /// the GPU-free free function so an exporter can build the same data
+    /// without an engine; the handler exists so `ts_rs` emits `Catalog` into
+    /// the frontend's typed client.
     #[handler]
-    pub fn veil_types(&self) -> Vec<VeilTypeInfo> {
-        self.compositor
-            .veil_chain()
-            .registry()
-            .types()
-            .into_iter()
-            .map(|(type_id, display_name, description, defs)| VeilTypeInfo {
-                type_id,
-                display_name,
-                // Veils render a live preview in their picker, so no icon.
-                icon: "",
-                description,
-                params: defs.iter().map(|d| ParamInfo::from_def(d, None)).collect(),
-            })
-            .collect()
+    pub fn catalogs(&self) -> Vec<Catalog> {
+        crate::catalog::catalogs()
     }
 
     /// Get the parameter definitions for a veil type.
     pub fn veil_param_defs(&self, type_id: &str) -> &'static [ParamDef] {
         self.compositor.veil_chain().registry().param_defs(type_id)
-    }
-
-    /// Return all registered tool types with display name and parameter definitions.
-    /// Backs the WASM bridge so the UI can render tool names without hardcoding them.
-    #[handler]
-    pub fn tool_types(&self) -> Vec<ToolTypeInfo> {
-        crate::tool::registry()
-            .types()
-            .into_iter()
-            .map(|(type_id, display_name, defs)| ToolTypeInfo {
-                type_id,
-                display_name,
-                params: defs.iter().map(|d| ParamInfo::from_def(d, None)).collect(),
-            })
-            .collect()
-    }
-
-    /// Return all registered blend modes in GPU-value order, with display name
-    /// and category. Backs the WASM bridge so the UI populates the blend-mode
-    /// dropdown from the registry instead of a hardcoded table.
-    #[handler]
-    pub fn blend_mode_types(&self) -> Vec<BlendModeTypeInfo> {
-        crate::gpu::blend_mode::registry()
-            .all()
-            .into_iter()
-            .map(|reg| BlendModeTypeInfo {
-                type_id: reg.type_id,
-                display_name: reg.display_name,
-                category: reg.category,
-            })
-            .collect()
-    }
-
-    /// Return all registered filter kinds. UI uses this to resolve
-    /// `ModifierInfo.kind` to a display label and to populate the
-    /// "Add filter" menu.
-    #[handler]
-    pub fn modifier_types(&self) -> Vec<ModifierTypeInfo> {
-        crate::document::filter::registry()
-            .all()
-            .into_iter()
-            .map(|reg| ModifierTypeInfo {
-                type_id: reg.type_id,
-                display_name: reg.display_name,
-            })
-            .collect()
-    }
-
-    /// Return all registered layer kinds. UI uses this to resolve a layer's
-    /// `type` discriminator to a display label (e.g. "Raster Layer", "Group").
-    #[handler]
-    pub fn layer_kind_types(&self) -> Vec<LayerKindTypeInfo> {
-        crate::document::layer_kind::registry()
-            .all()
-            .into_iter()
-            .map(|reg| LayerKindTypeInfo {
-                type_id: reg.type_id,
-                display_name: reg.display_name,
-            })
-            .collect()
     }
 }

@@ -46,7 +46,7 @@ export function toPreviewData(raw: RawPreview): PreviewData {
  *  type, versus falling back to its iconify icon. Type-owned: the void declares
  *  `supportsPreview` on its registration, and the picker asks here rather than
  *  branching on the void kind. */
-export function voidShowsPreview(vt: { supportsPreview?: boolean }): boolean {
+export function voidShowsPreview(vt: { supportsPreview?: boolean | null }): boolean {
     return vt.supportsPreview === true;
 }
 

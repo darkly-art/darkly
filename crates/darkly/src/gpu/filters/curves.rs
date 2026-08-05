@@ -32,38 +32,30 @@ const IDENTITY: &[[f32; 2]] = &[[0.0, 0.0], [1.0, 1.0]];
 /// [`build_lut`] indexes these positionally (matching [`Channel`]) and the
 /// shader reads baked components in the same order.
 pub const PARAMS: &[ParamDef] = &[
-    ParamDef::Curve {
-        name: "rgb",
-        default: IDENTITY,
-    },
-    ParamDef::Curve {
-        name: "red",
-        default: IDENTITY,
-    },
-    ParamDef::Curve {
-        name: "green",
-        default: IDENTITY,
-    },
-    ParamDef::Curve {
-        name: "blue",
-        default: IDENTITY,
-    },
-    ParamDef::Curve {
-        name: "alpha",
-        default: IDENTITY,
-    },
-    ParamDef::Curve {
-        name: "hue",
-        default: IDENTITY,
-    },
-    ParamDef::Curve {
-        name: "saturation",
-        default: IDENTITY,
-    },
-    ParamDef::Curve {
-        name: "lightness",
-        default: IDENTITY,
-    },
+    ParamDef::curve("rgb", IDENTITY)
+        .with_label("RGB")
+        .with_description("Tone curve applied to all three colour channels together."),
+    ParamDef::curve("red", IDENTITY)
+        .with_label("Red")
+        .with_description("Tone curve applied to the red channel alone."),
+    ParamDef::curve("green", IDENTITY)
+        .with_label("Green")
+        .with_description("Tone curve applied to the green channel alone."),
+    ParamDef::curve("blue", IDENTITY)
+        .with_label("Blue")
+        .with_description("Tone curve applied to the blue channel alone."),
+    ParamDef::curve("alpha", IDENTITY)
+        .with_label("Alpha")
+        .with_description("Tone curve applied to opacity."),
+    ParamDef::curve("hue", IDENTITY)
+        .with_label("Hue")
+        .with_description("Remaps hue against itself, shifting colours around the wheel."),
+    ParamDef::curve("saturation", IDENTITY)
+        .with_label("Saturation")
+        .with_description("Remaps saturation, letting muted and vivid areas move apart."),
+    ParamDef::curve("lightness", IDENTITY)
+        .with_label("Lightness")
+        .with_description("Remaps lightness independently of hue and saturation."),
 ];
 
 /// Read a curve param's control points by index, falling back to identity when

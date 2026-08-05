@@ -44,6 +44,7 @@ pub fn register() -> LayerKindRegistration {
     LayerKindRegistration {
         type_id: TYPE_ID,
         display_name: "Vector Layer",
+        description: "Resolution-independent shapes and text, rasterized at draw time.",
         can_have_mask: true,
         can_rename: true,
         has_thumbnail: false,

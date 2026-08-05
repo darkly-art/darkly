@@ -19,6 +19,7 @@
 //! Unlike the other parametric filters this one reads its source with
 //! [`SrcSampling::Bilinear`] — the ghost/blur taps land on fractional offsets.
 
+use crate::units::UnitType;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -35,28 +36,22 @@ pub const MAX_ABERRATIONS: usize = 16;
 
 /// Schema for a single aberration entry.
 const ABERRATION_ITEM: &[ParamDef] = &[
-    ParamDef::Vec2 {
-        name: "offset",
-        max: 64.0,
-        default: [0.0, 0.0],
-    },
-    ParamDef::Float {
-        name: "scale",
-        min: 0.9,
-        max: 1.1,
-        default: 1.0,
-    },
-    ParamDef::Color {
-        name: "color",
-        default: [1.0, 1.0, 1.0],
-    },
-    ParamDef::Float {
-        name: "blur",
-        min: 0.0,
-        // Max blur kept modest so a bounded tap count can't band.
-        max: 6.0,
-        default: 0.0,
-    },
+    ParamDef::vec2("offset", 64.0, [0.0, 0.0])
+        .with_label("Offset")
+        .with_description(
+            "How far this fringe is displaced from the original, and in which direction.",
+        )
+        .with_unit(UnitType::Pixels),
+    ParamDef::float("scale", 0.9, 1.1, 1.0)
+        .with_label("Scale")
+        .with_description("Magnification of this fringe — values below 1 pull it inward."),
+    ParamDef::color("color", [1.0, 1.0, 1.0])
+        .with_label("Colour")
+        .with_description("Which colour this fringe contributes."),
+    ParamDef::float("blur", 0.0, 6.0, 0.0)
+        .with_label("Blur")
+        .with_description("Softens this fringe so it reads as defocus rather than a hard copy.")
+        .with_unit(UnitType::Pixels),
 ];
 
 /// One `aberrations` list param with the photographic 3-entry default: red
@@ -64,11 +59,11 @@ const ABERRATION_ITEM: &[ParamDef] = &[
 /// (1.00 / 0.99 / 0.98), a 1% step per channel — the wavelength-dependent focus
 /// of a real lens fringing the shorter wavelengths inward. Each is softened a
 /// touch.
-pub const PARAMS: &[ParamDef] = &[ParamDef::List {
-    name: "aberrations",
-    item: ABERRATION_ITEM,
-    max_len: MAX_ABERRATIONS,
-    default: &[
+pub const PARAMS: &[ParamDef] = &[ParamDef::list(
+    "aberrations",
+    ABERRATION_ITEM,
+    MAX_ABERRATIONS,
+    &[
         &[
             ("scale", ConstParamValue::Float(1.0)),
             ("color", ConstParamValue::Color([1.0, 0.0, 0.0])),
@@ -85,7 +80,9 @@ pub const PARAMS: &[ParamDef] = &[ParamDef::List {
             ("blur", ConstParamValue::Float(0.6)),
         ],
     ],
-}];
+)
+.with_label("Fringes")
+.with_description("The coloured copies the lens splits the image into.")];
 
 /// One aberration in the shader's uniform (48 B). Field offsets match
 /// `struct Aberration` in `lib/aberration.wgsl` (vec3 `axis` at offset 16). The

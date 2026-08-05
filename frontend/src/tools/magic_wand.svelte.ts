@@ -46,7 +46,6 @@ class MagicWandTool extends ToolBase {
 
 export const magicWandTool: ToolDescriptor = {
     id: 'magic_wand',
-    icon: 'fa6-solid:wand-magic-sparkles',
     group: 'select',
     cluster: 'select',
     hotkeyAction: 'magicWandTool',

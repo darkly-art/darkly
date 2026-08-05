@@ -23,7 +23,7 @@ import { actions } from '../registry';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const PRESETS_DIR = resolve(REPO_ROOT, 'crates/darkly/presets');
 const FILTERS_DIR = resolve(REPO_ROOT, 'crates/darkly/src/gpu/filters');
-const TOOLS_DIR = resolve(REPO_ROOT, 'frontend/src/tools');
+const TOOLS_DIR = resolve(REPO_ROOT, 'crates/darkly/src/tools');
 const PRESETS = ['defaults', 'krita', 'photoshop', 'gimp'];
 
 /** Collect the action ids referenced by a preset's `hotkeys:` and
@@ -63,16 +63,18 @@ function dynamicFilterActionIds(): string[] {
     return ids;
 }
 
-/** Tool-switch action ids, sourced from each tool's `hotkeyAction` literal.
- *  The per-tool loop in actions/index.ts registers exactly these ids, but the
- *  registration touches `app` methods that aren't wired up in a headless test,
- *  so we read the ids from the tool definitions instead. */
+/** Tool-switch action ids, sourced from each tool's `hotkey_action` literal in
+ *  the Rust registry — the same source of truth the presets live beside, and
+ *  the same shape `dynamicFilterActionIds` reads for filters. The per-tool loop
+ *  in actions/index.ts registers exactly these ids, but the registration
+ *  touches `app` methods that aren't wired up in a headless test, so we read
+ *  the ids from the registrations instead. */
 function toolActionIds(): string[] {
     const ids: string[] = [];
     for (const file of readdirSync(TOOLS_DIR)) {
-        if (!file.endsWith('.ts')) continue;
+        if (!file.endsWith('.rs') || file === 'mod.rs') continue;
         const src = readFileSync(resolve(TOOLS_DIR, file), 'utf8');
-        for (const m of src.matchAll(/hotkeyAction:\s*'([A-Za-z0-9_]+)'/g)) {
+        for (const m of src.matchAll(/hotkey_action:\s*"([A-Za-z0-9_]+)"/g)) {
             ids.push(m[1]);
         }
     }

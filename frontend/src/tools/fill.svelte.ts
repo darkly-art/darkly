@@ -32,7 +32,6 @@ class FillTool extends ToolBase {
 
 export const fillTool: ToolDescriptor = {
     id: 'fill',
-    icon: 'fa6-solid:fill-drip',
     group: 'paint',
     cluster: 'fill',
     hotkeyAction: 'fillTool',

@@ -44,6 +44,7 @@ pub fn register() -> LayerKindRegistration {
     LayerKindRegistration {
         type_id: TYPE_ID,
         display_name: "Filter Layer",
+        description: "A colour adjustment applied to everything composited beneath it.",
         can_have_mask: true,
         can_rename: true,
         has_thumbnail: false,

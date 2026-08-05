@@ -2,7 +2,6 @@
 
 use darkly_macros::handlers;
 
-use super::types::{ParamInfo, VoidTypeInfo};
 use super::DarklyEngine;
 use super::PreviewJob;
 use super::PreviewKind;
@@ -19,29 +18,6 @@ const VOID_PREVIEW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm
 #[handlers]
 impl DarklyEngine {
     // --- Queries ---
-
-    /// Return all registered void types with their parameter definitions, icon,
-    /// and whether each supports a rendered picker preview.
-    #[handler]
-    pub fn void_types(&self) -> Vec<VoidTypeInfo> {
-        self.compositor
-            .void_registry()
-            .types()
-            .into_iter()
-            .map(|reg| VoidTypeInfo {
-                type_id: reg.type_id,
-                display_name: reg.display_name,
-                params: reg
-                    .params
-                    .iter()
-                    .map(|d| ParamInfo::from_def(d, None))
-                    .collect(),
-                icon: reg.icon,
-                supports_preview: reg.supports_preview,
-                capture_kind: reg.capture_kind,
-            })
-            .collect()
-    }
 
     /// Get the parameter definitions for a void type.
     pub fn void_param_defs(&self, type_id: &str) -> &'static [ParamDef] {

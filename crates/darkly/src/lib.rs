@@ -1,4 +1,5 @@
 pub mod brush;
+pub mod catalog;
 pub mod clipboard;
 pub mod config;
 pub mod coord;
@@ -16,6 +17,7 @@ pub mod tool;
 pub mod tools;
 pub mod transform;
 pub mod undo;
+pub mod units;
 
 /// Darkly's version — the latest git tag plus the commit height since it
 /// (`git describe --tags --long`, e.g. `v0.3.0-1-gf0c3ea9`), baked in by

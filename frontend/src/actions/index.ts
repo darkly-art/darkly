@@ -7,7 +7,7 @@ import { resizeCanvas } from '../state/resizeCanvas.svelte';
 import { imageRescale } from '../state/imageRescale.svelte';
 import { selectionModify } from '../state/selectionModify.svelte';
 import { filterModal } from '../state/filterModal.svelte';
-import type { FilterParam } from '../ui/filters/filterParams';
+import type { ParamInfo } from '../ui/filters/filterParams';
 import { exportImage } from '../state/exportImage.svelte';
 import { exportTimelapse } from '../state/exportTimelapse.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
@@ -58,13 +58,6 @@ function findNodeInTree(nodes: any[], id: number): any | null {
 function tabNameFromFile(fileName: string): string {
     const stripped = fileName.replace(/\.[^./]+$/, '');
     return stripped || 'Untitled';
-}
-
-/** The Iconify icon name for a tool-switch action — the tool's own `icon`,
- *  falling back to a generic glyph for the (now hypothetical) tool that ships
- *  none. Every tool currently declares one. */
-function glyphFromTool(tool: ToolDescriptor): string {
-    return tool.icon ?? 'fa6-solid:wrench';
 }
 
 /** Unified Open. Pick any supported file, sniff its kind, and route to
@@ -642,13 +635,13 @@ export function registerActions() {
     // `app.loadRegistries(handle)` during editor init — the frontend never
     // hardcodes a label.
     for (const tool of toolRegistry.all()) {
-        const name = app.toolDisplayName(tool.id);
+        const name = app.displayName('tools', tool.id);
         actions.register({
             id: tool.hotkeyAction,
             displayName: name,
             category: 'tools',
             description: `Switch to ${name} tool`,
-            icon: glyphFromTool(tool),
+            icon: app.toolGlyph(tool.id),
             handler: () => { app.activeToolId = tool.id; },
         });
     }
@@ -881,12 +874,12 @@ export function registerActions() {
         },
     });
     // Destructive color filters (invert, …) are registered dynamically
-    // from the Rust filter-pipeline registry (fetched into `app.filterTypes`
+    // from the Rust filter-pipeline registry (the `filters` catalog fetched
     // during `loadRegistries`), so a new filter in the core surfaces a
     // Colors-menu entry with no frontend edit. The target is the active *node*
     // (`activeLayerId` is the mask filter id when a mask is selected), which
     // is what makes "invert the mask" reachable from the same entry.
-    for (const flt of app.filterTypes ?? []) {
+    for (const flt of app.entries?.('filters') ?? []) {
         const filterType = flt.type;
         // A parametric filter (curves/levels/hsv) can't apply in one click — its
         // params must be authored first, so it opens the modal (the same
@@ -900,8 +893,8 @@ export function registerActions() {
             // Lead with the registry's own summary — the command palette's
             // substring search indexes descriptions, so its keywords (e.g.
             // "desaturate" for Black and White) keep the filter findable.
-            description: `${flt.description} Applies to the active layer or mask (respecting any selection).`,
-            icon: flt.icon,
+            description: `${flt.description ?? ''} Applies to the active layer or mask (respecting any selection).`.trim(),
+            icon: flt.icon ?? '',
             menuPath: ['Colors:10'],
             enabled: () => app.activeLayerId !== null || 'No active layer',
             handler: async () => {
@@ -912,7 +905,7 @@ export function registerActions() {
                         app.activeLayerId,
                         filterType,
                         flt.displayName,
-                        (flt.params ?? []) as unknown as FilterParam[]
+                        (flt.params ?? []) as unknown as ParamInfo[]
                     );
                     return;
                 }

@@ -170,7 +170,6 @@ class GradientTool extends ToolBase {
 // the toolbar's muted/active text color.
 export const gradientTool: ToolDescriptor = {
     id: 'gradient',
-    icon: 'local:gradient',
     group: 'paint',
     cluster: 'fill',
     hotkeyAction: 'gradientTool',

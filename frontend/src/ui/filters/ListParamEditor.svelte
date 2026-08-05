@@ -6,7 +6,8 @@
         listItemSchema,
         newListEntry,
         cloneParamValue,
-        type FilterParam,
+        channelLabel,
+        type ParamInfo,
         type FilterParamValue,
         type ListValue,
         type ColorValue,
@@ -24,7 +25,7 @@
     // drag-reordered by its header. Collapse is ephemeral UI state kept in a
     // parallel array that moves/splices in lockstep with the entries.
     type Props = {
-        param: FilterParam;
+        param: ParamInfo;
         oninput?: () => void;
         onchange?: () => void;
     };
@@ -133,7 +134,9 @@
 
 <div class="list-editor">
     <div class="list-head">
-        <span class="label">{param.name}</span>
+        <span class="label" title={param.description ?? undefined}
+            >{param.label ?? channelLabel(param.name)}</span
+        >
         <span class="count">{entries.length}{maxLen !== Infinity ? ` / ${maxLen}` : ''}</span>
     </div>
 

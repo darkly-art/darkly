@@ -15,20 +15,7 @@
         if (!open) onclose();
     });
 
-    let voidTypes = $state<any[]>([]);
-
-    $effect(() => {
-        const engine = app.engine;
-        if (!engine) return;
-        (async () => {
-            try {
-                const list = await engine.api.voidTypes();
-                voidTypes = Array.isArray(list) ? list : [];
-            } catch {
-                voidTypes = [];
-            }
-        })();
-    });
+    let voidTypes = $derived(app.entries?.('voids') ?? []);
 
     async function pick(vt: any) {
         if (!app.engine) return;
@@ -89,7 +76,7 @@
                     <EffectPreview kind="void" type={vt.type} />
                 {:else}
                     <div class="preview preview-icon">
-                        <Icon name={vt.icon} />
+                        <Icon name={vt.icon ?? ''} />
                     </div>
                 {/if}
                 <span class="card-name">{vt.displayName}</span>

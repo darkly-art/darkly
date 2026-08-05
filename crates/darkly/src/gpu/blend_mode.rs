@@ -26,6 +26,9 @@ use std::sync::OnceLock;
 pub struct BlendModeRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
+    /// One-sentence summary of what this mode does to the colours beneath it —
+    /// the dropdown's tooltip and the reference manual's row for it.
+    pub description: &'static str,
     /// Visual grouping label for the UI dropdown ("Darken", "Lighten", etc.).
     pub category: &'static str,
     /// Integer the composite shader switches on. The shader's blend dispatch
@@ -38,6 +41,34 @@ pub struct BlendModeRegistration {
     /// statements (use `\n`-separated WGSL); helpers declared above the
     /// `blend()` function in `shaders/composite.wgsl` are in scope.
     pub wgsl_math: &'static str,
+}
+
+/// Id of the catalog this registry projects into.
+pub const CATALOG_ID: &str = "blendModes";
+
+impl BlendModeRegistration {
+    pub fn catalog_entry(&self) -> crate::catalog::CatalogEntry {
+        // Blend modes have no icons anywhere — the dropdown is text, grouped by
+        // `category`.
+        crate::catalog::CatalogEntry::new(self.type_id, self.display_name)
+            .with_description(self.description)
+            .with_category(self.category)
+    }
+}
+
+/// The blend-mode catalog, in GPU-value order — the conventional
+/// Photoshop / Krita ordering the dropdown lists, not alphabetic.
+pub fn catalog() -> crate::catalog::Catalog {
+    crate::catalog::Catalog::new(
+        CATALOG_ID,
+        "Blend Modes",
+        registry()
+            .all()
+            .into_iter()
+            .map(BlendModeRegistration::catalog_entry)
+            .collect(),
+    )
+    .with_description("How a layer's colour combines with the composite beneath it.")
 }
 
 pub struct BlendModeRegistry {

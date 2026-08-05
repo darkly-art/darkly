@@ -4,6 +4,7 @@ pub fn register() -> BlendModeRegistration {
     BlendModeRegistration {
         type_id: "lighten",
         display_name: "Lighten",
+        description: "Keeps whichever of the two colours is lighter, channel by channel.",
         category: "Lighten",
         gpu_value: 4,
         wgsl_math: "Cs = max(fg.rgb, bg.rgb);",

@@ -4,6 +4,8 @@ pub fn register() -> BlendModeRegistration {
     BlendModeRegistration {
         type_id: "overlay",
         display_name: "Overlay",
+        description:
+            "Multiplies dark areas and screens light ones, boosting contrast around mid grey.",
         category: "Contrast",
         gpu_value: 8,
         wgsl_math: "\

@@ -63,11 +63,16 @@ describe('icon bundle completeness (offline)', () => {
         expect(missing).toEqual([]);
     });
 
-    it('bundles every registered tool icon', async () => {
+    it('bundles every session-dependent tool icon override', async () => {
         await import('../tools/index'); // side effect: populates toolRegistry
         const tools = toolRegistry.all();
         expect(tools.length).toBeGreaterThan(0);
+        // A tool's own glyph lives on its Rust registration, and
+        // `gen-icon-bundle.mjs` scans `crates/darkly/src` for those. What is
+        // still declared here is the session-dependent override (the brush's
+        // erase-mode getter), so that is what this asserts.
         const missing = tools
+            .map(t => ({ id: t.id, icon: typeof t.icon === 'function' ? t.icon() : t.icon }))
             .filter(t => t.icon && !resolves(t.icon))
             .map(t => `${t.id} -> ${t.icon}`);
         expect(missing).toEqual([]);

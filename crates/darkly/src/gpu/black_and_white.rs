@@ -24,9 +24,9 @@ formulas or custom channel weights, with an optional color tint.";
 /// the tint applies in every mode. A `static` rather than a `const` so both
 /// registrations hold the same address — pinned by the identity test below.
 pub static PARAMS: &[ParamDef] = &[
-    ParamDef::Enum {
-        name: "mode",
-        options: &[
+    ParamDef::enumeration(
+        "mode",
+        &[
             "Lightness",
             "Luminosity (BT.709)",
             "Luminosity (BT.601)",
@@ -35,38 +35,25 @@ pub static PARAMS: &[ParamDef] = &[
             "Max",
             "Custom Weights",
         ],
-        default: 0,
-    },
-    ParamDef::Float {
-        name: "red_weight",
-        min: 0.0,
-        max: 1.0,
-        default: 0.299,
-    },
-    ParamDef::Float {
-        name: "green_weight",
-        min: 0.0,
-        max: 1.0,
-        default: 0.587,
-    },
-    ParamDef::Float {
-        name: "blue_weight",
-        min: 0.0,
-        max: 1.0,
-        default: 0.114,
-    },
-    ParamDef::Float {
-        name: "tint_hue",
-        min: 0.0,
-        max: 360.0,
-        default: 0.0,
-    },
-    ParamDef::Float {
-        name: "tint_strength",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-    },
+        0,
+    )
+    .with_label("Mode")
+    .with_description("How colour is weighed when collapsing it to grey."),
+    ParamDef::float("red_weight", 0.0, 1.0, 0.299)
+        .with_label("Red Weight")
+        .with_description("How much the red channel contributes, in Custom Weights mode."),
+    ParamDef::float("green_weight", 0.0, 1.0, 0.587)
+        .with_label("Green Weight")
+        .with_description("How much the green channel contributes, in Custom Weights mode."),
+    ParamDef::float("blue_weight", 0.0, 1.0, 0.114)
+        .with_label("Blue Weight")
+        .with_description("How much the blue channel contributes, in Custom Weights mode."),
+    ParamDef::float("tint_hue", 0.0, 360.0, 0.0)
+        .with_label("Tint Hue")
+        .with_description("Which colour the finished grey is toned toward."),
+    ParamDef::float("tint_strength", 0.0, 1.0, 0.0)
+        .with_label("Tint Strength")
+        .with_description("How strongly the tint colour shows through the grey."),
 ];
 
 /// The shared WGSL transform (`BwParams` / `bw_gray` / `bw_transform`),

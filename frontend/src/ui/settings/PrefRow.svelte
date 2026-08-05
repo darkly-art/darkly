@@ -1,5 +1,5 @@
 <script lang="ts">
-    import type { PrefInfo } from '../../config/schema';
+    import type { ParamInfo } from '../../engine/protocol_gen';
     import { config } from '../../config/store.svelte';
     import BoolToggle from './widgets/BoolToggle.svelte';
     import Slider from './widgets/Slider.svelte';
@@ -10,31 +10,31 @@
     import ChordCapture from './widgets/ChordCapture.svelte';
     import Icon from '../../icons/Icon.svelte';
 
-    type Props = { pref: PrefInfo };
+    type Props = { pref: ParamInfo };
     let { pref }: Props = $props();
 
-    const value = $derived(config.get(pref.key));
-    const hasOverride = $derived(config.hasOverride(pref.key));
+    const value = $derived(config.get(pref.name));
+    const hasOverride = $derived(config.hasOverride(pref.name));
     /** Layer-below-user value (overlay → defaults). Drives the tooltip's
      *  "Reset to …" description so the user can see what would be revealed. */
-    const baseValue = $derived(config.baseValue(pref.key));
+    const baseValue = $derived(config.baseValue(pref.name));
     const resetTitle = $derived(
         baseValue == null ? 'Reset' : `Reset to ${String(baseValue)}`,
     );
 
     function onchange(v: unknown) {
-        config.set(pref.key, v);
+        config.set(pref.name, v);
     }
 
     function reset() {
-        config.resetKey(pref.key);
+        config.resetKey(pref.name);
     }
 </script>
 
 {#if pref.widget !== 'hidden'}
     <div class="pref-row">
         <div class="label-col">
-            <div class="label">{pref.displayName}</div>
+            <div class="label">{pref.label ?? pref.name}</div>
             {#if pref.description}<div class="desc">{pref.description}</div>{/if}
         </div>
         <div class="widget-col">
@@ -47,15 +47,15 @@
             {:else if pref.kind === 'enum'}
                 <EnumDropdown
                     value={value as string}
-                    options={pref.options ?? []}
+                    options={(pref.options ?? []) as [string, string][]}
                     {onchange}
                 />
             {:else if pref.kind === 'int' || pref.kind === 'float'}
                 {#if pref.widget === 'numberInput'}
                     <NumberInput
                         value={value as number}
-                        min={pref.min}
-                        max={pref.max}
+                        min={pref.min ?? undefined}
+                        max={pref.max ?? undefined}
                         integer={pref.kind === 'int'}
                         {onchange}
                     />

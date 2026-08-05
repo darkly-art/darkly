@@ -12,20 +12,7 @@
         if (!open) onclose();
     });
 
-    let veilTypes = $state<any[]>([]);
-
-    $effect(() => {
-        const engine = app.engine;
-        if (!engine) return;
-        (async () => {
-            try {
-                const list = await engine.api.veilTypes();
-                veilTypes = Array.isArray(list) ? list : [];
-            } catch {
-                veilTypes = [];
-            }
-        })();
-    });
+    let veilTypes = $derived(app.entries?.('veils') ?? []);
 
     async function pick(vt: any) {
         if (!app.engine) return;
@@ -43,7 +30,7 @@
 <Modal bind:open title="Add Veil" size="md">
     <div class="grid">
         {#each veilTypes as vt (vt.type)}
-            <button class="card" title={vt.description} onclick={() => pick(vt)}>
+            <button class="card" title={vt.description ?? undefined} onclick={() => pick(vt)}>
                 <EffectPreview kind="veil" type={vt.type} />
                 <span class="card-name">{vt.displayName}</span>
             </button>

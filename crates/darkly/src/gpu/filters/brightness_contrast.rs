@@ -20,18 +20,12 @@ use crate::gpu::param_filter::{ParamFilter, SrcSampling};
 use crate::gpu::params::{ParamDef, ParamValue};
 
 pub const PARAMS: &[ParamDef] = &[
-    ParamDef::Float {
-        name: "brightness",
-        min: -100.0,
-        max: 100.0,
-        default: 0.0,
-    },
-    ParamDef::Float {
-        name: "contrast",
-        min: -100.0,
-        max: 100.0,
-        default: 0.0,
-    },
+    ParamDef::float("brightness", -100.0, 100.0, 0.0)
+        .with_label("Brightness")
+        .with_description("Lifts or lowers every tone by the same amount."),
+    ParamDef::float("contrast", -100.0, 100.0, 0.0)
+        .with_label("Contrast")
+        .with_description("Spreads tones away from mid grey, or gathers them toward it."),
 ];
 
 fn float_param(params: &[ParamValue], idx: usize) -> f32 {

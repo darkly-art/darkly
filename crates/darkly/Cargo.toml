@@ -61,6 +61,12 @@ pollster = "1.0"
 naga = { version = "29.0", features = ["wgsl-in"] }
 syn = { version = "3", features = ["visit", "full"] }
 
+# The hyphenated name does not match the file stem, so cargo cannot infer the
+# path from it. No `required-features`: the exporter needs no GPU.
+[[bin]]
+name = "export-docs"
+path = "src/bin/export_docs.rs"
+
 [[bin]]
 name = "stroke_replay_bench"
 required-features = ["testing"]

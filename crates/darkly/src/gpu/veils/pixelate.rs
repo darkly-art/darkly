@@ -1,18 +1,16 @@
 use crate::gpu::effect::{create_blit_pipeline, EffectCache, EffectPipeline};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
+use crate::units::UnitType;
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Int {
-        name: "scale",
-        min: 1,
-        max: 6,
-        default: 2,
-    },
-    ParamDef::Bool {
-        name: "soft",
-        default: false,
-    },
+    ParamDef::int("scale", 1, 6, 2)
+        .with_label("Block Size")
+        .with_description("Width of each block the image is averaged into.")
+        .with_unit(UnitType::Pixels),
+    ParamDef::boolean("soft", false)
+        .with_label("Soft Edges")
+        .with_description("Blends between blocks instead of leaving hard square edges."),
 ];
 
 pub fn register() -> VeilRegistration {

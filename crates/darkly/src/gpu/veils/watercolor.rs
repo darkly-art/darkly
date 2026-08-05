@@ -3,18 +3,12 @@ use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Int {
-        name: "iterations",
-        min: 1,
-        max: 50,
-        default: 5,
-    },
-    ParamDef::Float {
-        name: "wetness",
-        min: 0.0,
-        max: 2.0,
-        default: 0.5,
-    },
+    ParamDef::int("iterations", 1, 50, 5)
+        .with_label("Iterations")
+        .with_description("How many times the pigment is allowed to bleed; more softens further."),
+    ParamDef::float("wetness", 0.0, 2.0, 0.5)
+        .with_label("Wetness")
+        .with_description("How freely pigment runs — dry holds its edge, wet pools outward."),
 ];
 
 /// Size of the generated RGBA noise texture used as a flow map.

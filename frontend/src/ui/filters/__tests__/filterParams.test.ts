@@ -9,11 +9,31 @@ import {
     paramIsResettable,
     listItemSchema,
     newListEntry,
-    type FilterParam,
+    type ParamInfo,
     type ListValue,
 } from '../filterParams';
 
-const curve = (name: string): FilterParam => ({
+
+/** Fill the fields every `ParamInfo` carries but these cases don't exercise, so
+ *  each fixture below states only what it is actually testing. Keeping the
+ *  fixtures typed as the generated `ParamInfo` is the point: this file is the
+ *  guard that the generated type still satisfies every panel helper. */
+function param(p: Partial<ParamInfo> & Pick<ParamInfo, 'kind' | 'name' | 'default'>): ParamInfo {
+    return {
+        label: null,
+        description: null,
+        widget: 'auto',
+        unit: 'Raw',
+        min: null,
+        max: null,
+        value: null,
+        options: null,
+        display: { min: null, max: null, default: null, unit: '' },
+        ...p,
+    };
+}
+
+const curve = (name: string): ParamInfo => param({
     kind: 'curve',
     name,
     default: [
@@ -21,12 +41,12 @@ const curve = (name: string): FilterParam => ({
         [1, 1],
     ],
 });
-const levels = (name: string): FilterParam => ({
+const levels = (name: string): ParamInfo => param({
     kind: 'levels',
     name,
     default: [0, 1, 1, 0, 1],
 });
-const scalar = (name: string): FilterParam => ({ kind: 'float', name, default: 0 });
+const scalar = (name: string): ParamInfo => param({ kind: 'float', name, default: 0 });
 
 describe('partitionFilterParams', () => {
     it("groups the curves layer's eight Krita channels under the selector", () => {
@@ -60,18 +80,18 @@ describe('partitionFilterParams', () => {
 });
 
 // The HSV filter's schema: an enum model, three scalars, and a colorize bool.
-const enumParam = (): FilterParam => ({
+const enumParam = (): ParamInfo => param({
     kind: 'enum',
     name: 'model',
     default: 0,
     options: ['HSV', 'HSL', 'HSY'],
 });
-const bool = (name: string, def = false): FilterParam => ({ kind: 'bool', name, default: def });
-const hsvSchema = (): FilterParam[] => [
+const bool = (name: string, def = false): ParamInfo => param({ kind: 'bool', name, default: def });
+const hsvSchema = (): ParamInfo[] => [
     enumParam(),
-    { kind: 'float', name: 'hue', min: -180, max: 180, default: 0 },
-    { kind: 'float', name: 'saturation', min: -100, max: 100, default: 0 },
-    { kind: 'float', name: 'value', min: -100, max: 100, default: 0 },
+    param({ kind: 'float', name: 'hue', min: -180, max: 180, default: 0 }),
+    param({ kind: 'float', name: 'saturation', min: -100, max: 100, default: 0 }),
+    param({ kind: 'float', name: 'value', min: -100, max: 100, default: 0 }),
     bool('colorize'),
 ];
 
@@ -97,9 +117,9 @@ describe('colorizeActive', () => {
 
 describe('seedScratchParams', () => {
     it('seeds each value from a deep-cloned default (no aliasing)', () => {
-        const schema: FilterParam[] = [
-            { kind: 'curve', name: 'rgb', default: [[0, 0], [1, 1]] },
-            { kind: 'float', name: 'hue', default: 30 },
+        const schema: ParamInfo[] = [
+            param({ kind: 'curve', name: 'rgb', default: [[0, 0], [1, 1]] }),
+            param({ kind: 'float', name: 'hue', default: 30 }),
         ];
         const scratch = seedScratchParams(schema);
         expect(scratch.map((p) => p.value)).toEqual([[[0, 0], [1, 1]], 30]);
@@ -123,13 +143,13 @@ describe('seedScratchParams', () => {
 
 // The chromatic-aberration schema shape: one `list` param whose `options`
 // carries the per-entry item schema (vec2/float/color/float).
-const itemSchema = (): FilterParam[] => [
-    { kind: 'vec2', name: 'offset', max: 64, default: [0, 0] },
-    { kind: 'float', name: 'scale', min: 0.9, max: 1.1, default: 1 },
-    { kind: 'color', name: 'color', default: [1, 1, 1] },
-    { kind: 'float', name: 'blur', min: 0, max: 6, default: 0 },
+const itemSchema = (): ParamInfo[] => [
+    param({ kind: 'vec2', name: 'offset', max: 64, default: [0, 0] }),
+    param({ kind: 'float', name: 'scale', min: 0.9, max: 1.1, default: 1 }),
+    param({ kind: 'color', name: 'color', default: [1, 1, 1] }),
+    param({ kind: 'float', name: 'blur', min: 0, max: 6, default: 0 }),
 ];
-const listParam = (): FilterParam => ({
+const listParam = (): ParamInfo => param({
     kind: 'list',
     name: 'aberrations',
     max: 16,
@@ -196,15 +216,15 @@ describe('list param helpers', () => {
 
 describe('paramIsResettable', () => {
     it('is true for the offset pad and the interior-default scale slider', () => {
-        const offset: FilterParam = { kind: 'vec2', name: 'offset', max: 64, default: [0, 0] };
-        const scale: FilterParam = { kind: 'float', name: 'scale', min: 0.9, max: 1.1, default: 1 };
+        const offset: ParamInfo = param({ kind: 'vec2', name: 'offset', max: 64, default: [0, 0] });
+        const scale: ParamInfo = param({ kind: 'float', name: 'scale', min: 0.9, max: 1.1, default: 1 });
         expect(paramIsResettable(offset)).toBe(true);
         expect(paramIsResettable(scale)).toBe(true);
     });
 
     it('is false for an endpoint-default slider (blur) and a deliberate pick (color)', () => {
-        const blur: FilterParam = { kind: 'float', name: 'blur', min: 0, max: 6, default: 0 };
-        const color: FilterParam = { kind: 'color', name: 'color', default: [1, 1, 1] };
+        const blur: ParamInfo = param({ kind: 'float', name: 'blur', min: 0, max: 6, default: 0 });
+        const color: ParamInfo = param({ kind: 'color', name: 'color', default: [1, 1, 1] });
         expect(paramIsResettable(blur)).toBe(false);
         expect(paramIsResettable(color)).toBe(false);
     });

@@ -34,8 +34,7 @@ pub use process_recording::{ProcessRecorder, RecordedFrame};
 pub use rendering::{PickSource, DEFAULT_THUMB_SIZE};
 pub use save::{SaveError, SaveJob, SavePurpose, SaveReadbackKind};
 pub use types::{
-    BlendModeTypeInfo, ClipboardExport, EngineState, LayerInfo, LayerKindTypeInfo, ModifierInfo,
-    ModifierTypeInfo, ParamInfo, StrokeOp, ToolTypeInfo, VeilInfo, VeilTypeInfo, VoidTypeInfo,
+    ClipboardExport, EngineState, LayerInfo, ModifierInfo, ParamInfo, StrokeOp, VeilInfo,
 };
 
 pub use perf::{BrushPerfDelta, FrameRenderPhases};
@@ -1382,12 +1381,7 @@ mod tests {
 
     #[test]
     fn param_info_serializes_flat() {
-        let def = ParamDef::Float {
-            name: "speed",
-            min: 0.0,
-            max: 10.0,
-            default: 1.0,
-        };
+        let def = ParamDef::float("speed", 0.0, 10.0, 1.0);
         let info = ParamInfo::from_def(&def, Some(&ParamValue::Float(2.5)));
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["kind"], "float");
@@ -1400,10 +1394,7 @@ mod tests {
 
     #[test]
     fn param_info_bool_omits_min_max() {
-        let def = ParamDef::Bool {
-            name: "soft",
-            default: true,
-        };
+        let def = ParamDef::boolean("soft", true);
         let info = ParamInfo::from_def(&def, None);
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["kind"], "bool");
@@ -1421,20 +1412,9 @@ mod tests {
             visible: true,
             index: 0,
             params: vec![
+                ParamInfo::from_def(&ParamDef::int("scale", 1, 32, 2), Some(&ParamValue::Int(4))),
                 ParamInfo::from_def(
-                    &ParamDef::Int {
-                        name: "scale",
-                        min: 1,
-                        max: 32,
-                        default: 2,
-                    },
-                    Some(&ParamValue::Int(4)),
-                ),
-                ParamInfo::from_def(
-                    &ParamDef::Bool {
-                        name: "soft",
-                        default: true,
-                    },
+                    &ParamDef::boolean("soft", true),
                     Some(&ParamValue::Bool(false)),
                 ),
             ],

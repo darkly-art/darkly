@@ -3,27 +3,20 @@
 
 use crate::gpu::effect::{EffectCache, EffectPipeline};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
+use crate::units::UnitType;
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Int {
-        name: "kernel_size",
-        min: 1,
-        max: 7,
-        default: 6,
-    },
-    ParamDef::Float {
-        name: "sharpness",
-        min: 1.0,
-        max: 18.0,
-        default: 8.0,
-    },
-    ParamDef::Float {
-        name: "hardness",
-        min: 1.0,
-        max: 200.0,
-        default: 100.0,
-    },
+    ParamDef::int("kernel_size", 1, 7, 6)
+        .with_label("Brush Size")
+        .with_description("Width of the region each output pixel is averaged from — larger reads as broader strokes.")
+        .with_unit(UnitType::Pixels),
+    ParamDef::float("sharpness", 1.0, 18.0, 8.0)
+        .with_label("Sharpness")
+        .with_description("How crisply one painted region ends and the next begins."),
+    ParamDef::float("hardness", 1.0, 200.0, 100.0)
+        .with_label("Hardness")
+        .with_description("How strongly the strongest-oriented region wins, flattening detail into flat patches."),
 ];
 
 pub fn register() -> VeilRegistration {

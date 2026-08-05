@@ -15,7 +15,6 @@ use super::super::rendering::commit_undo_region;
 use super::super::{DarklyEngine, FilterPreview, PendingFilter};
 use crate::coord::{CanvasRect, WindowRect};
 use crate::engine::protocol::{params_from_json, RawParams};
-use crate::engine::types::{ParamInfo, VeilTypeInfo};
 use crate::gpu::params::ParamValue;
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
@@ -35,31 +34,6 @@ pub(crate) enum FilterRegion {
 
 #[handlers]
 impl DarklyEngine {
-    /// All registered filter types (id + display name + param schema), as the
-    /// same `VeilTypeInfo` shape veils/voids use. Parameter-free filters (invert)
-    /// carry an empty `params`; parametric ones (curves) carry their schema.
-    /// Drives both the frontend's dynamic Colors-menu action registration and
-    /// the filter-layer properties panel.
-    #[handler]
-    pub fn filter_types(&self) -> Vec<VeilTypeInfo> {
-        let registry = self.compositor.filter_pipeline_registry();
-        registry
-            .types()
-            .into_iter()
-            .map(|(type_id, display_name, icon, description)| VeilTypeInfo {
-                type_id,
-                display_name,
-                icon,
-                description,
-                params: registry
-                    .params(type_id)
-                    .iter()
-                    .map(|d| ParamInfo::from_def(d, None))
-                    .collect(),
-            })
-            .collect()
-    }
-
     /// Wire entry for `apply_filter` — coerces `params` against the filter
     /// type's schema (defaults fill any omitted values), then
     /// [`Self::apply_filter_typed`]. Parameter-free filters (invert) carry an

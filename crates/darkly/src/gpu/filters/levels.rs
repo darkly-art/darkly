@@ -29,38 +29,32 @@ const IDENTITY: [f32; 5] = [0.0, 1.0, 1.0, 0.0, 1.0];
 /// [Curves](super::curves::PARAMS). Load-bearing: [`build_lut`] indexes these
 /// positionally (matching [`Channel`](crate::gpu::lut_filter::Channel)).
 pub const PARAMS: &[ParamDef] = &[
-    ParamDef::Levels {
-        name: "rgb",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "red",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "green",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "blue",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "alpha",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "hue",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "saturation",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "lightness",
-        default: IDENTITY,
-    },
+    ParamDef::levels("rgb", IDENTITY)
+        .with_label("RGB")
+        .with_description(
+            "Black point, white point and gamma for all three colour channels together.",
+        ),
+    ParamDef::levels("red", IDENTITY)
+        .with_label("Red")
+        .with_description("Black point, white point and gamma for the red channel alone."),
+    ParamDef::levels("green", IDENTITY)
+        .with_label("Green")
+        .with_description("Black point, white point and gamma for the green channel alone."),
+    ParamDef::levels("blue", IDENTITY)
+        .with_label("Blue")
+        .with_description("Black point, white point and gamma for the blue channel alone."),
+    ParamDef::levels("alpha", IDENTITY)
+        .with_label("Alpha")
+        .with_description("Black point, white point and gamma for opacity."),
+    ParamDef::levels("hue", IDENTITY)
+        .with_label("Hue")
+        .with_description("Black point, white point and gamma applied to hue."),
+    ParamDef::levels("saturation", IDENTITY)
+        .with_label("Saturation")
+        .with_description("Black point, white point and gamma applied to saturation."),
+    ParamDef::levels("lightness", IDENTITY)
+        .with_label("Lightness")
+        .with_description("Black point, white point and gamma applied to lightness."),
 ];
 
 /// Read a levels param by index, falling back to identity when missing/malformed.

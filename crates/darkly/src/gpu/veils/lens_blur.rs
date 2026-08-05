@@ -7,18 +7,12 @@ const PARAMS: &[ParamDef] = &[
     // blur radius as a fraction of sqrt(canvas area), so user 1.0 = 3% of
     // sqrt(area) (≈ 30 px on a 1024² canvas) and the default user 1/3
     // ≈ 0.01 of sqrt(area) (≈ 10 px on 1024²).
-    ParamDef::Float {
-        name: "radius",
-        min: 0.0,
-        max: 1.0,
-        default: 1.0 / 3.0,
-    },
-    ParamDef::Float {
-        name: "threshold",
-        min: 0.01,
-        max: 1.0,
-        default: 0.1,
-    },
+    ParamDef::float("radius", 0.0, 1.0, 1.0 / 3.0)
+        .with_label("Radius")
+        .with_description("Size of the defocus circle — how far out of focus the image sits."),
+    ParamDef::float("threshold", 0.01, 1.0, 0.1)
+        .with_label("Threshold")
+        .with_description("How bright a pixel must be before it blooms into a bokeh highlight."),
 ];
 
 pub fn register() -> VeilRegistration {

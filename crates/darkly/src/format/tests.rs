@@ -68,7 +68,7 @@ fn round_trip_every_veil() {
     let types: Vec<(&'static str, &'static [ParamDef])> = registry
         .types()
         .into_iter()
-        .map(|(id, _name, _description, params)| (id, params))
+        .map(|reg| (reg.type_id, reg.params))
         .collect();
     assert!(
         !types.is_empty(),
@@ -456,7 +456,7 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
         .registry()
         .types()
         .into_iter()
-        .map(|(id, _name, _description, params)| (id, params))
+        .map(|reg| (reg.type_id, reg.params))
         .collect();
     for (type_id, schema) in veil_types {
         let defaults = defaults_of(schema);
@@ -488,7 +488,7 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
         .filter_pipeline_registry()
         .types()
         .into_iter()
-        .map(|(id, _name, _icon, _description)| id.to_string())
+        .map(|reg| reg.type_id.to_string())
         .collect();
     for pipeline in filter_types {
         engine.add_filter_layer(&pipeline, Vec::new(), None);
@@ -1281,9 +1281,9 @@ fn legacy_type_id_migration() {
     // registry — confirms the registry interface is the dispatch
     // surface the migration will plug into.
     let registry = VeilRegistry::new();
-    for (type_id, _name, _description, _params) in registry.types() {
+    for reg in registry.types() {
         assert!(
-            registry.has(type_id),
+            registry.has(reg.type_id),
             "legacy migration scaffold: registry must resolve every registered \
              type_id back through itself — drift suggests the dispatch surface \
              a future migration would plug into has changed"

@@ -4,6 +4,7 @@ pub fn register() -> BlendModeRegistration {
     BlendModeRegistration {
         type_id: "normal",
         display_name: "Normal",
+        description: "Replaces the colours beneath it, scaled by opacity.",
         category: "Normal",
         gpu_value: 0,
         wgsl_math: "Cs = fg.rgb;",

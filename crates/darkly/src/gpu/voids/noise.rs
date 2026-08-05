@@ -13,6 +13,7 @@ use crate::gpu::effect::{
     create_blit_bind_group, create_blit_pipeline, EffectCache, EffectPipeline,
 };
 use crate::gpu::void::{DirtyFlag, ParamDef, ParamValue, Void, VoidRegistration};
+use crate::units::UnitType;
 use std::cell::Cell;
 use std::sync::Arc;
 
@@ -39,66 +40,54 @@ const PARAMS: &[ParamDef] = &[
     // Seed indexes the procedural field — every integer produces a different
     // noise pattern, so a randomize button (or just typing a number) gives
     // the "infinite combinations of entropy" the README promises.
-    ParamDef::Int {
-        name: "seed",
-        min: 0,
-        max: i32::MAX,
-        default: 42,
-    },
+    ParamDef::int("seed", 0, i32::MAX, 42)
+        .with_label("Seed")
+        .with_description("Picks which noise pattern is generated; any two seeds look unrelated."),
     // Octave count of the underlying FBM. More octaves = more detail; cost
     // scales linearly. 5 is a good cloud-like default.
-    ParamDef::Int {
-        name: "octaves",
-        min: 1,
-        max: 8,
-        default: 5,
-    },
+    ParamDef::int("octaves", 1, 8, 5)
+        .with_label("Detail")
+        .with_description("How many layers of ever-finer noise are stacked up."),
     // Feature size in canvas pixels. Higher = larger blobs; lower =
     // grainier. The default is tuned for 1k–2k canvases producing visible
     // cloud structure without going either flat or noisy. Converted to
     // a frequency multiplier (1 / size) at uniform-write time.
-    ParamDef::Float {
-        name: "size",
-        min: 20.0,
-        max: 2000.0,
-        default: 200.0,
-    },
+    ParamDef::float("size", 20.0, 2000.0, 200.0)
+        .with_label("Size")
+        .with_description("How large the noise features are on the canvas.")
+        .with_unit(UnitType::Pixels),
     // Domain-warp strength. 0 = pure FBM, increasing values produce more
     // marbled / swirly deformation per Quilez's warp.
-    ParamDef::Float {
-        name: "warp",
-        min: 0.0,
-        max: 3.0,
-        default: 1.5,
-    },
+    ParamDef::float("warp", 0.0, 3.0, 1.5)
+        .with_label("Warp")
+        .with_description("Bends the noise into marbled, swirling shapes."),
     // Darkness / tonal contrast. Applied as `pow(value, 1.0 + darkness)`
     // in the shader. 0 = linear (washed-out grayscale); higher values
     // push midtones toward black, giving a Watery-style deep base with
     // brighter peaks. Range tuned so the default looks like a moodier
     // cloud field, not a flat gray ramp.
-    ParamDef::Float {
-        name: "darkness",
-        min: 0.0,
-        max: 3.0,
-        default: 1.0,
-    },
+    ParamDef::float("darkness", 0.0, 3.0, 1.0)
+        .with_label("Darkness")
+        .with_description(
+            "Pushes the midtones down, deepening the field beneath the bright peaks.",
+        ),
     // Time slider — z-coordinate into the 3D noise volume. Each value
     // produces a different cross-section of the same FBM field; scrub to
     // explore variations of the current seed without changing pattern
     // identity. Range chosen so the full slider covers many full noise-cell
     // crossings at the default Z scale (Z_SCALE = 0.15 in the shader).
-    ParamDef::Float {
-        name: "time",
-        min: 0.0,
-        max: 100.0,
-        default: 0.0,
-    },
+    ParamDef::float("time", 0.0, 100.0, 0.0)
+        .with_label("Time")
+        .with_description(
+            "Scrubs through variations of the same seed without changing its character.",
+        ),
 ];
 
 pub fn register() -> VoidRegistration {
     VoidRegistration {
         type_id: TYPE_ID,
         display_name: "Noise",
+        description: "Procedural fractal noise — clouds, grain and organic texture from a seed.",
         params: PARAMS,
         icon: "tabler:galaxy",
         supports_preview: true,
