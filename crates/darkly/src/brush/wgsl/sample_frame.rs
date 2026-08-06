@@ -104,7 +104,8 @@ pub fn frame_sample_coord_expr(
             preamble.push_str(&format!(
                 "    let {ident}_radius_px = 1.0 / d.inv_radius_target_px;\n"
             ));
-            let coord = format!("({ident}_dab_local * {ident}_radius_px) / ({scale_expr}) + {offset}");
+            let coord =
+                format!("({ident}_dab_local * {ident}_radius_px) / ({scale_expr}) + {offset}");
             (preamble, coord)
         }
     }
@@ -135,14 +136,8 @@ mod tests {
 
     #[test]
     fn dab_rotates_local_uv_by_rotation_expr() {
-        let (pre, _coord) = frame_sample_coord_expr(
-            SampleFrame::Dab,
-            "8.000000",
-            "1.5",
-            "0.0",
-            16.0,
-            "noise_3",
-        );
+        let (pre, _coord) =
+            frame_sample_coord_expr(SampleFrame::Dab, "8.000000", "1.5", "0.0", 16.0, "noise_3");
         // Oriented basis rotates local_uv by the rotation expression.
         assert!(pre.contains("cos(1.5)"));
         assert!(pre.contains("sin(1.5)"));
@@ -152,14 +147,8 @@ mod tests {
 
     #[test]
     fn dab_reconstructs_radius_so_scale_is_canvas_pixels() {
-        let (pre, coord) = frame_sample_coord_expr(
-            SampleFrame::Dab,
-            "8.000000",
-            "0.0",
-            "0.0",
-            1.0,
-            "img_5",
-        );
+        let (pre, coord) =
+            frame_sample_coord_expr(SampleFrame::Dab, "8.000000", "0.0", "0.0", 1.0, "img_5");
         // Dab space always multiplies the unit-disc offset back to oriented
         // dab-pixels, so `scale` is a canvas-pixel feature size.
         assert!(pre.contains("let img_5_radius_px = 1.0 / d.inv_radius_target_px;"));
