@@ -348,32 +348,19 @@ impl DarklyEngine {
     /// supports mask filters; the loop is generic so other future pixel-
     /// bearing filters fall in by the same path.
     ///
-    /// Goes through `Document::add_mask_filter` + compositor allocation
-    /// directly instead of [`Self::add_mask`] so we don't push a spurious
-    /// `FilterAddAction` that the parent [`DuplicateAction`] already
-    /// covers (a single undo step should reverse the whole duplicate).
+    /// Goes through [`Self::add_mask_unseeded`] (not [`Self::add_mask`]) so we
+    /// don't push a spurious `FilterAddAction` that the parent
+    /// [`DuplicateAction`] already covers, and don't seed from the active
+    /// selection — the pixels come from the source mask below.
     fn clone_modifiers(&mut self, src_host: LayerId, dst_host: LayerId) {
         let src_mod_ids = self.doc.filters_of(src_host).to_vec();
         for src_mod_id in src_mod_ids {
             if self.doc.mask_filter_id(src_host) != Some(src_mod_id) {
                 continue; // Non-mask filters don't ship in v1.
             }
-            let Some(new_mod_id) = self.doc.add_mask_filter(dst_host) else {
+            let Some(new_mod_id) = self.add_mask_unseeded(dst_host) else {
                 continue;
             };
-            let bounds = match self.doc.find_filter(new_mod_id).and_then(|m| m.pixels()) {
-                Some(p) => p.bounds,
-                None => continue,
-            };
-            self.compositor.ensure_node_texture(
-                &self.gpu.device,
-                &self.gpu.queue,
-                new_mod_id,
-                wgpu::TextureFormat::R8Unorm,
-                bounds,
-            );
-            self.compositor
-                .ensure_mask_snapshot_state(&self.gpu.device, dst_host);
             // clone_filter_pixels marks `new_mod_id` dirty internally per
             // the write-site invariant.
             self.clone_filter_pixels(src_mod_id, new_mod_id);

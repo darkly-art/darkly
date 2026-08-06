@@ -13,7 +13,7 @@ use crate::gpu::blend_mode;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::readback;
 use crate::layer::{Layer, LayerId};
-use crate::undo::{GpuRegionAction, LayerAddAction};
+use crate::undo::{CompoundAction, GpuRegionAction, LayerAddAction, PixelBoundsAction, UndoAction};
 
 #[handlers]
 impl DarklyEngine {
@@ -467,8 +467,129 @@ impl DarklyEngine {
         None
     }
 
+    /// If `active_layer_id` is an editable mask filter (the mask-editing paint
+    /// target), write `rgba` into the mask's R8 pixels at `(offset_x,
+    /// offset_y)` as an undoable region op and return `Some(mask_id)`. Returns
+    /// `None` when the active target is not a paste-able mask, so callers fall
+    /// through to their layer-creating paste.
+    ///
+    /// RGBA collapses to R8 by taking the **red channel**, bit-for-bit
+    /// identical to the R8 branch of `transform_commit.wgsl` (the floating
+    /// commit's mask write) — one conversion, no path divergence.
+    pub(crate) fn paste_into_mask(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        offset_x: i32,
+        offset_y: i32,
+        active_layer_id: Option<LayerId>,
+    ) -> Option<LayerId> {
+        let mask_id = active_layer_id.filter(|id| self.doc.is_filter(*id))?;
+        // Only masks are R8 pixel-writable filter targets today.
+        if self.doc.find_filter(mask_id).map(|m| m.is_mask()) != Some(true) {
+            return None;
+        }
+        if !self.doc.is_node_editable(mask_id) || width == 0 || height == 0 {
+            return None;
+        }
+
+        let paste_rect = crate::coord::CanvasRect::from_xywh(offset_x, offset_y, width, height);
+        let old_bounds = self.doc.node_pixel_bounds(mask_id);
+        // Grow the mask to cover the paste BEFORE snapshotting, so the undo
+        // snapshot spans the grown extent (snapshotting the pre-grow, smaller
+        // texture would miss the newly exposed region).
+        let grew = self.grow_filter(mask_id, paste_rect).is_some();
+
+        // RGBA → R8: red channel only, matching the shader. Uploaded into a
+        // transient R8 staging texture, then blitted into the mask.
+        let r8: Vec<u8> = (0..(width * height) as usize)
+            .map(|i| rgba[i * 4])
+            .collect();
+        let (staging, _staging_view) = crate::gpu::create_texture_with_view(
+            &self.gpu.device,
+            width,
+            height,
+            wgpu::TextureFormat::R8Unorm,
+            "paste-mask-staging",
+            wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+        );
+        self.gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &staging,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &r8,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        // Snapshot the pre-paste mask region (after grow) into an undo entry,
+        // then blit the staged R8 in. Snapshot-before-blit ordering mirrors
+        // `commit_floating`: the region scratch must hold pre-mutation pixels.
+        let entry = self.snapshot_region_entry(
+            mask_id,
+            paste_rect,
+            wgpu::TextureFormat::R8Unorm,
+            "paste-mask-save",
+            "paste-mask-undo",
+        )?;
+
+        {
+            let mask_tex = self.compositor.node_texture(mask_id)?;
+            let dst_local = mask_tex.canvas_frame().canvas_to_layer_rect(paste_rect)?;
+            let dst_tex = mask_tex.texture();
+            let mut encoder = crate::gpu::paint_target::PaintCommandEncoder::new(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &self.paint_pipelines,
+                "paste-mask-blit",
+                1,
+            );
+            encoder.with_raw(|raw| {
+                crate::gpu::blit_region(
+                    raw,
+                    &staging,
+                    (0, 0),
+                    dst_tex,
+                    (dst_local.x0(), dst_local.y0()),
+                    dst_local.width,
+                    dst_local.height,
+                );
+            });
+            encoder.submit();
+        }
+
+        // A grow moved the mask's bounds, which the bare region undo can't
+        // reverse — pair it with a PixelBoundsAction in a compound so undo
+        // restores both pixels and extent.
+        if grew {
+            let mut actions: Vec<Box<dyn UndoAction>> = Vec::new();
+            if let Some(old) = old_bounds {
+                actions.push(Box::new(PixelBoundsAction::new(mask_id, old)));
+            }
+            actions.push(Box::new(GpuRegionAction::new(entry)));
+            self.push_undo(Box::new(CompoundAction::new(actions)));
+        } else {
+            self.push_undo(Box::new(GpuRegionAction::new(entry)));
+        }
+        self.compositor.mark_node_pixels_dirty(mask_id);
+        Some(mask_id)
+    }
+
     /// Paste raw RGBA bytes as a new layer. Used for both internal and external
-    /// clipboard content. Returns the new layer ID.
+    /// clipboard content. Returns the new layer ID — or, when the active target
+    /// is a mask, the mask's id after writing the pixels into it.
     pub fn paste_image(
         &mut self,
         width: u32,
@@ -478,6 +599,13 @@ impl DarklyEngine {
         offset_y: i32,
         active_layer_id: Option<LayerId>,
     ) -> LayerId {
+        // A mask edit target receives the pixels directly, no new layer.
+        if let Some(mask_id) =
+            self.paste_into_mask(width, height, rgba, offset_x, offset_y, active_layer_id)
+        {
+            return mask_id;
+        }
+
         // Size the new layer to fit the paste exactly, so out-of-canvas
         // pixels are preserved.
         let layer_bounds = crate::coord::CanvasRect::from_xywh(offset_x, offset_y, width, height);
@@ -517,6 +645,18 @@ impl DarklyEngine {
     /// Paste from the internal clipboard at its original position.
     /// Returns the new layer ID, or None if clipboard is empty.
     pub fn paste_in_place(&mut self, active_layer_id: Option<LayerId>) -> Option<LayerId> {
+        // A rich layer clip (the normal copy path) carries metadata + pixels;
+        // route it through `paste_layer_rich` so paste-in-place restores blend
+        // mode / opacity and honors a mask edit target. Flat image clips take
+        // the pixel path below.
+        if let Some(json) = self
+            .clipboard
+            .as_ref()
+            .and_then(|c| c.as_layer())
+            .map(|l| l.to_json())
+        {
+            return self.paste_layer_rich(&json, active_layer_id);
+        }
         let clip = self.clipboard.as_ref()?.as_image()?;
         let width = clip.width;
         let height = clip.height;
@@ -551,20 +691,29 @@ impl DarklyEngine {
         // builds an image clip). Voids regenerate from params, so there's
         // nothing to read back; cross-tab clipboard for voids would need its
         // own JSON path (out of scope for this change).
+        // A region copy (selection active) captures flat composited pixels and
+        // must NOT carry the mask — a mask belongs only to a whole-layer copy
+        // (which is a layer duplication in spirit). Gate the mask capture on
+        // provenance.
+        let is_region_copy = self.has_selection();
         let meta = match self.doc.layer(id) {
             Some(Layer::Raster(layer)) => {
-                let mask = layer.filters.iter().find_map(|mid| {
-                    let m = self.doc.find_filter(*mid)?;
-                    if !m.is_mask() {
-                        return None;
-                    }
-                    let bounds = m.pixels().map(|p| p.bounds).unwrap_or(layer.pixels.bounds);
-                    Some(RichCopyMask {
-                        name: m.common.name.clone(),
-                        visible: m.common.visible,
-                        bounds,
+                let mask = if is_region_copy {
+                    None
+                } else {
+                    layer.filters.iter().find_map(|mid| {
+                        let m = self.doc.find_filter(*mid)?;
+                        if !m.is_mask() {
+                            return None;
+                        }
+                        let bounds = m.pixels().map(|p| p.bounds).unwrap_or(layer.pixels.bounds);
+                        Some(RichCopyMask {
+                            name: m.common.name.clone(),
+                            visible: m.common.visible,
+                            bounds,
+                        })
                     })
-                });
+                };
                 Some(RichCopyMetadata {
                     name: layer.common.name.clone(),
                     visible: layer.common.visible,
@@ -624,6 +773,20 @@ impl DarklyEngine {
             return None;
         }
 
+        // A mask edit target receives the pixels directly — a rich layer pasted
+        // onto a mask is pixels-only; blend mode / opacity / mask metadata are
+        // layer concepts with no meaning on a mask.
+        if let Some(mask_id) = self.paste_into_mask(
+            clip.bounds.width,
+            clip.bounds.height,
+            &pixels,
+            clip.bounds.x,
+            clip.bounds.y,
+            active_layer_id,
+        ) {
+            return Some(mask_id);
+        }
+
         let id = self.paste_image(
             clip.bounds.width,
             clip.bounds.height,
@@ -644,9 +807,13 @@ impl DarklyEngine {
             }
         }
 
-        // Restore mask presence (without pixels — v1).
+        // Restore mask presence (without pixels — v1). Use the unseeded attach:
+        // the pasted layer's `LayerAddAction` already covers the mask in its
+        // subtree, and seeding from the receiving document's active selection
+        // would wrongly turn that selection into the mask.
         if clip.mask.is_some() {
-            self.add_mask(id);
+            self.add_mask_unseeded(id);
+            self.compositor.mark_dirty();
         }
 
         Some(id)

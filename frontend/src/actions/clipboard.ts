@@ -82,6 +82,11 @@ export function registerClipboardActions(): void {
             const engine = app.engine;
             if (!engine) return;
 
+            // Pasting while a mask is the active edit target writes into the
+            // mask (engine-side) instead of creating a floating layer — so we
+            // take the direct path and never activate the transform tool.
+            const intoMask = app.activeNodeIsMask;
+
             // Prefer the rich-layer payload if a Darkly tab put one on the
             // clipboard. Cross-tab paste this way preserves blend mode and
             // opacity, which the PNG fallback cannot. Brush-builder pastes
@@ -95,7 +100,7 @@ export function registerClipboardActions(): void {
                         app.selectLayer(layerId);
                         const activateTransform =
                             config.get('edit.activateTransformAfterPaste') !== false;
-                        if (activateTransform) enterTransformTool();
+                        if (activateTransform && !intoMask) enterTransformTool();
                         await app.refreshLayerTree();
                         app.requestFrame();
                         return;
@@ -140,7 +145,7 @@ export function registerClipboardActions(): void {
             const oy = Math.round((app.docH - clip.height) / 2);
             const activeId = app.activeLayerId ?? -1;
             const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
-            if (activateTransform) {
+            if (activateTransform && !intoMask) {
                 const { id: layerId } = await engine.api.pasteImageFloating({ width: clip.width, height: clip.height, offset_x: ox, offset_y: oy, active_layer_id: activeId },
                     clip.rgba,
                 );
@@ -167,7 +172,9 @@ export function registerClipboardActions(): void {
             const engine = app.engine;
             if (!engine || app.activeLayerId == null) return;
             const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
-            if (activateTransform) {
+            // A mask edit target takes the direct (non-floating) path so the
+            // paste lands in the mask instead of a floating transform gizmo.
+            if (activateTransform && !app.activeNodeIsMask) {
                 const ok = await engine.api.pasteInPlaceFloating({ id: app.activeLayerId });
                 if (ok) {
                     enterTransformTool();

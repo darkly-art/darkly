@@ -3718,32 +3718,29 @@ fn copy_selected_mask_region_populates_clipboard() {
     );
 }
 
-/// Pasting while a mask is the active edit target must place the new layer as
-/// the host's SIBLING, not nest it under the (raster) host. The active id is
-/// the mask *filter* id, and `parent_of(mask) == host`, so a naive
-/// `MoveTarget::After(mask_id)` linked the pasted layer as a child of the
-/// raster host — an invalid tree that left the paste off the published layer
-/// tree (raster layers publish no children) and invisible on canvas.
+/// Pasting while a mask is the active edit target writes the clipboard pixels
+/// INTO the mask — it must not create a new layer at all. (Pixel-level and
+/// undo behavior is covered by `tests/paste_mask.rs`; this guards the tree
+/// shape from the engine side: no spurious layer appears.)
 #[test]
-fn paste_while_editing_mask_places_layer_at_top_level() {
-    use darkly::engine::types::LayerInfo;
-
+fn paste_while_editing_mask_writes_into_mask_no_new_layer() {
     let mut engine = test_engine(64, 64);
     let host = engine.add_raster_layer(None);
     engine.add_mask(host);
     let mask_id = engine.host_mask_id(host).expect("host has a mask");
 
+    let layers_before = engine.layer_tree().len();
     let rgba = vec![255u8; 8 * 8 * 4];
     let pasted = engine.paste_image(8, 8, &rgba, 4, 4, Some(mask_id));
 
-    let in_tree = engine
-        .layer_tree()
-        .iter()
-        .any(|n| matches!(n, LayerInfo::Raster { id, .. } if *id == pasted.to_ffi() as f64));
-    assert!(
-        in_tree,
-        "pasted layer must be a top-level sibling of the host, not nested under \
-         the raster host (invalid tree → invisible paste)"
+    assert_eq!(
+        pasted, mask_id,
+        "pasting onto a mask must return the mask id, not a new layer"
+    );
+    assert_eq!(
+        engine.layer_tree().len(),
+        layers_before,
+        "pasting onto a mask must not add a layer to the tree"
     );
 }
 

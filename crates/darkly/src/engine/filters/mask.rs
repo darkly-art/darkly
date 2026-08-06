@@ -37,29 +37,9 @@ impl DarklyEngine {
             return;
         }
 
-        let mod_id = match self.doc.add_mask_filter(id) {
-            Some(id) => id,
-            None => return,
+        let Some(mod_id) = self.add_mask_unseeded(id) else {
+            return;
         };
-
-        let bounds = match self.doc.find_filter(mod_id).and_then(|m| m.pixels()) {
-            Some(buf) => buf.bounds,
-            None => return,
-        };
-        self.compositor.ensure_node_texture(
-            &self.gpu.device,
-            &self.gpu.queue,
-            mod_id,
-            wgpu::TextureFormat::R8Unorm,
-            bounds,
-        );
-
-        // Per-host snapshot+lerp resource for the in-place masked-host path
-        // (passthrough group or filter layer). Idempotent across every host
-        // kind; only the in-place composite paths consume it, but the engine
-        // doesn't need to branch — the compositor reads it lazily.
-        self.compositor
-            .ensure_mask_snapshot_state(&self.gpu.device, id);
 
         // If a selection is active, seed the mask pixels from the selection.
         // Grow the mask to the union of its bounds and the selection's plane
@@ -78,6 +58,38 @@ impl DarklyEngine {
         self.compositor.mark_dirty();
 
         self.push_undo(Box::new(FilterAddAction::new(mod_id, id)));
+    }
+
+    /// Allocate an empty (unseeded) mask filter on `id`: create the filter,
+    /// allocate its R8 node texture, and ensure the per-host snapshot/lerp
+    /// resource. Does NOT seed from the active selection and does NOT push an
+    /// undo entry — callers frame it. [`Self::add_mask`] adds selection
+    /// seeding and a `FilterAddAction`; duplicate and rich paste fold the mask
+    /// into the subtree undo their own action already covers, so they must not
+    /// seed from (nor consume) the receiving document's selection.
+    ///
+    /// Returns the new mask filter id, or `None` if the host can't take one.
+    pub(crate) fn add_mask_unseeded(&mut self, id: LayerId) -> Option<LayerId> {
+        let mod_id = self.doc.add_mask_filter(id)?;
+        let bounds = self
+            .doc
+            .find_filter(mod_id)
+            .and_then(|m| m.pixels())?
+            .bounds;
+        self.compositor.ensure_node_texture(
+            &self.gpu.device,
+            &self.gpu.queue,
+            mod_id,
+            wgpu::TextureFormat::R8Unorm,
+            bounds,
+        );
+        // Per-host snapshot+lerp resource for the in-place masked-host path
+        // (passthrough group or filter layer). Idempotent across every host
+        // kind; only the in-place composite paths consume it, but the engine
+        // doesn't need to branch — the compositor reads it lazily.
+        self.compositor
+            .ensure_mask_snapshot_state(&self.gpu.device, id);
+        Some(mod_id)
     }
 
     /// Set the transform relationship state owned by a mask filter entity.

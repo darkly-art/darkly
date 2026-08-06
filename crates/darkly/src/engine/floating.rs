@@ -248,6 +248,16 @@ impl DarklyEngine {
         // Auto-commit any existing floating content first.
         self.auto_commit_floating();
 
+        // A mask edit target receives the pixels directly through the single
+        // direct-write path — never a floating layer. (The frontend routes mask
+        // pastes to the non-floating path; this guard keeps every entry point
+        // honest.)
+        if let Some(mask_id) =
+            self.paste_into_mask(width, height, rgba, offset_x, offset_y, active_layer_id)
+        {
+            return mask_id;
+        }
+
         // Size the new layer to fit the paste, so off-canvas pixels are
         // preserved when the floating commits.
         let layer_bounds = crate::coord::CanvasRect::from_xywh(offset_x, offset_y, width, height);
