@@ -20,7 +20,10 @@ pub fn register() -> VeilRegistration {
         display_name: "Pixelate",
         description: "Downsample the view into a blocky pixel mosaic.",
         params: PARAMS,
-        preview: Some(PreviewAnim::LOOPING),
+        // Half-way rather than at the peak: `swing(0.25)` is exactly 0.5, so the
+        // still lands mid-band — blocks big enough to read as a mosaic without
+        // the coarsest setting's near-total loss of the image.
+        preview: Some(PreviewAnim::LOOPING.with_still_at(0.25)),
         create_pipeline: create_pixelate_pipeline,
         from_params: |params, shared| {
             let scale = match params.first() {
