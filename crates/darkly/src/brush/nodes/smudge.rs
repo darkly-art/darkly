@@ -28,6 +28,7 @@ use crate::brush::read_mirror_terminal::{
 };
 use crate::brush::wgsl::{CompileWgslCtx, NodeWgsl};
 use crate::brush::wire::{BrushWireType, ScalarValue};
+use crate::gpu::preview::{PreviewBackdrop, PreviewStaging};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 /// Motion magnitude (canvas pixels) below which the dab is treated as
@@ -91,7 +92,10 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: true,
             is_terminal: true,
             supports_erase: false,
-            preview_fallback_icon: Some("mdi:gesture-swipe"),
+            preview_staging: Some(PreviewStaging {
+                icon: "mdi:gesture-swipe",
+                backdrop: PreviewBackdrop::Stripes,
+            }),
         },
     }
 }

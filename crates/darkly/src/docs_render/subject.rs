@@ -12,7 +12,7 @@
 //! resolution is asked for. That is what makes a `2 · dim` render a genuine
 //! supersample of the `dim` one rather than a different picture.
 
-use crate::gpu::preview::PREVIEW_MAX_DIM;
+use crate::gpu::preview::{field_rgba, PREVIEW_MAX_DIM};
 
 /// Edge length of every rendered documentation frame.
 ///
@@ -55,12 +55,6 @@ const SHAPES: &[Shape] = &[
     Shape::Rect([0.66, 0.62, 0.94, 0.86], [0.97, 0.97, 0.95]),
 ];
 
-/// Sample a normalized coordinate pair at the centre of pixel `(x, y)`.
-fn centre(x: u32, y: u32, dim: u32) -> (f32, f32) {
-    let d = dim as f32;
-    ((x as f32 + 0.5) / d, (y as f32 + 0.5) / d)
-}
-
 /// Fully-saturated colour at `hue` degrees, at value `v`.
 fn hue_ramp(hue: f32, v: f32) -> [f32; 3] {
     let h = (hue / 60.0).rem_euclid(6.0);
@@ -77,19 +71,13 @@ fn hue_ramp(hue: f32, v: f32) -> [f32; 3] {
     [rgb[0] * v, rgb[1] * v, rgb[2] * v]
 }
 
+/// The subject's fields are square and fully opaque; everything else about the
+/// rasterization is [`field_rgba`]'s.
 fn pack(dim: u32, field: impl Fn(f32, f32) -> [f32; 3]) -> Vec<u8> {
-    let mut out = Vec::with_capacity((dim * dim * 4) as usize);
-    for y in 0..dim {
-        for x in 0..dim {
-            let (u, v) = centre(x, y, dim);
-            let c = field(u, v);
-            for ch in c {
-                out.push((ch.clamp(0.0, 1.0) * 255.0).round() as u8);
-            }
-            out.push(255);
-        }
-    }
-    out
+    field_rgba(dim, dim, |u, v| {
+        let c = field(u, v);
+        [c[0], c[1], c[2], 1.0]
+    })
 }
 
 /// The documentation subject at `dim × dim`, RGBA8 and fully opaque.
@@ -131,6 +119,7 @@ pub fn blend_source_rgba(dim: u32) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gpu::preview::pixel_centre;
 
     /// Both fields are pure functions of position — no RNG, no clock, no I/O.
     /// A seed or a timestamp leaking in would make every asset unreproducible
@@ -169,7 +158,7 @@ mod tests {
     /// Asked of the real [`SHAPES`] rather than a second copy of their geometry.
     fn straddles_a_shape(x: u32, y: u32, dim: u32) -> bool {
         let covered = |x: u32, y: u32, d: u32| {
-            let (u, v) = centre(x, y, d);
+            let (u, v) = pixel_centre(x, y, d, d);
             SHAPES.iter().position(|s| s.covers(u, v).is_some())
         };
         let here = covered(x, y, dim);

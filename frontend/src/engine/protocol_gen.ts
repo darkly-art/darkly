@@ -72,12 +72,20 @@ export type BrushGraphCapabilities = {
  */
 supports_erase: boolean, 
 /**
- * Iconify icon to show in place of baked dab/stroke thumbnails,
- * contributed by the first node whose registration sets
- * `preview_fallback_icon` — content-dependent nodes (clone, blur,
- * smudge, liquify) whose preview bake renders blank.
+ * Iconify icon to show in the dab slot in place of a baked thumbnail,
+ * contributed by the first node whose registration declares
+ * `preview_staging` — content-dependent nodes (clone, blur, smudge,
+ * liquify) whose still-dab bake renders blank.
  */
-preview_fallback_icon: string | null, };
+preview_fallback_icon: string | null, 
+/**
+ * Field the stroke preview is rendered over, from the same declaration
+ * the icon comes from. [`PreviewBackdrop::Flat`] for a brush that deposits
+ * pigment and so needs nothing staged under it.
+ */
+preview_backdrop: PreviewBackdrop, };
+
+export type PreviewBackdrop = "Flat" | "Stripes";
 
 export type BrushDabThumbnailReq = { name: string, };
 
@@ -167,12 +175,6 @@ icon: string | null, };
 export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
-
-export type PortDir = "Input" | "Output";
-
-export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
-
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -366,6 +368,24 @@ preview_image: boolean,
  */
 source: boolean, };
 
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+
+export type PortDir = "Input" | "Output";
+
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+
+export type PreviewStaging = { 
+/**
+ * Iconify glyph shown in the dab slot, where a single stationary sample
+ * has no motion to make the effect visible at all.
+ */
+icon: string, 
+/**
+ * Field painted under the stroke preview, giving the node something to
+ * transport.
+ */
+backdrop: PreviewBackdrop, };
+
 export type NodeRegistration = { 
 /**
  * Unique identifier (e.g. "pen_input", "multiply").
@@ -417,12 +437,13 @@ is_terminal: boolean,
  */
 supports_erase: boolean, 
 /**
- * Iconify icon shown in place of baked dab/stroke thumbnails for any
- * brush whose graph contains this node. Set by nodes whose output
- * depends on existing canvas content — stroking the flat preview
- * background renders blank, so the picker shows this icon instead.
+ * How a preview of any brush containing this node must be staged. Set by
+ * nodes whose output depends on existing canvas content — over a flat
+ * preview background they render blank, so the stroke gets a field to
+ * transport and the dab slot gets a glyph. `None` for a node that makes
+ * its own marks, which is every node that does not sample the canvas.
  */
-preview_fallback_icon: string | null, };
+preview_staging: PreviewStaging | null, };
 
 export type BrushSaveReq = { name: string, category: string, };
 
@@ -439,33 +460,6 @@ export type CanMergeDownReq = { source_id: number, };
 export type CanvasDimensionsResp = { width: number, height: number, };
 
 export type CanvasRectResp = { origin_x: number, origin_y: number, width: number, height: number, };
-
-export type ParamInfo = { kind: string, name: string, 
-/**
- * Display label. `None` → the UI title-cases `name`.
- */
-label: string | null, description: string | null, 
-/**
- * How to render this parameter's editor. One closed set, which both
- * `ParamKind` and the settings schema's `WidgetHint` map into:
- * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
- */
-widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
-/**
- * Enum: `["Label1", "Label2", ...]`.
- * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
- */
-options: JsonValue | null, display: ParamDisplay, };
-
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
-export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
-/**
- * The unit suffix alone, for a column header. Empty for unitless values.
- */
-unit: string, };
-
-export type CaptureKind = "camera" | "display" | "stream";
 
 export type CatalogEntry = { type: string, displayName: string, 
 /**
@@ -500,6 +494,33 @@ supportsPreview: boolean,
  * How the browser captures this variant's external frames; voids only.
  */
 captureKind: CaptureKind | null, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
+export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
+/**
+ * The unit suffix alone, for a column header. Empty for unitless values.
+ */
+unit: string, };
+
+export type ParamInfo = { kind: string, name: string, 
+/**
+ * Display label. `None` → the UI title-cases `name`.
+ */
+label: string | null, description: string | null, 
+/**
+ * How to render this parameter's editor. One closed set, which both
+ * `ParamKind` and the settings schema's `WidgetHint` map into:
+ * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
+ */
+widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
+/**
+ * Enum: `["Label1", "Label2", ...]`.
+ * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
+ */
+options: JsonValue | null, display: ParamDisplay, };
+
+export type CaptureKind = "camera" | "display" | "stream";
 
 export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
 /**

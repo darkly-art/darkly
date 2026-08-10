@@ -946,6 +946,7 @@ impl DarklyEngine {
                 self.active_base_size(),
                 stabilizer,
                 clone_source_anchor,
+                StrokeEngine::random_seed(),
             ));
 
             // Merged clone freezes the root composite, so make sure it's

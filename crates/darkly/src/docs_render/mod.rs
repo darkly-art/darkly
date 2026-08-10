@@ -15,11 +15,14 @@
 //! synthetic subject instead of the user's canvas, a blocking capture sink
 //! instead of an asynchronous one, PNGs on disk, and an index beside them.
 //!
-//! **One leftover renderer.** A blend mode is a relation between two images
+//! **Two leftover renderers.** A blend mode is a relation between two images
 //! rather than an effect over one, so there is no `src → out` mechanism to open
 //! for it; it is rendered through a real [`DarklyEngine`] document whose top
-//! layer's opacity this module drives directly. That is a second *caller* of the
-//! same `PreviewAnim`, not a second preview system.
+//! layer's opacity this module drives directly. A brush is a stroke driven
+//! through the brush engine rather than an effect over one image, so it has no
+//! mechanism either; it is rendered through the same `BrushStrokePreviewRenderer`
+//! and the same framer the editor's picker goes through. Both are further
+//! *callers* of the same `PreviewAnim`, not further preview systems.
 //!
 //! Everything in this module performs blocking GPU readbacks and is therefore
 //! gated behind the `testing` feature exactly as `gpu::test_utils` is. Engine,
@@ -31,6 +34,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::brush::pipeline::BrushPipelines;
+use crate::brush::preview_renderer::BrushStrokePreviewRenderer;
 use crate::catalog::preview_mechanisms;
 use crate::engine::DarklyEngine;
 use crate::gpu::context::{GpuContext, GpuDevice};
@@ -120,12 +125,17 @@ impl From<image::ImageError> for DocsRenderError {
 // The index written beside the frames
 // ---------------------------------------------------------------------------
 
-/// The four things a consumer cannot derive from a directory listing: how many
-/// files, how fast to play them, whether the last frame hands back to the first
-/// without a visible jump, and which frame stands for the whole.
+/// What a consumer cannot derive from a directory listing: how big the frames
+/// are, how many files, how fast to play them, whether the last frame hands back
+/// to the first without a visible jump, and which frame stands for the whole.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Asset {
     pub dir: String,
+    /// Frame dimensions. Per-asset rather than per-manifest: an effect is
+    /// documented against the fixed square subject, but a brush stroke is a
+    /// left-to-right line framed to the picker strip's own shape.
+    pub width: u32,
+    pub height: u32,
     pub frames: u32,
     pub fps: u32,
     #[serde(rename = "loop")]
@@ -143,8 +153,6 @@ pub struct Manifest {
     /// a consumer check that a JSON artifact and an asset directory came from
     /// one build.
     pub version: String,
-    pub width: u32,
-    pub height: u32,
     /// Catalog id → entry type id → what was written for it.
     pub assets: BTreeMap<String, BTreeMap<String, Asset>>,
 }
@@ -156,6 +164,10 @@ pub type Frames = Vec<Vec<u8>>;
 /// determines.
 pub struct Rendered {
     pub frames: Frames,
+    /// Dimensions of every frame in [`Self::frames`]. Carried alongside the
+    /// pixels because the renderers do not all produce the same shape.
+    pub width: u32,
+    pub height: u32,
     pub fps: u32,
     pub loops: bool,
     pub still: u32,
@@ -183,7 +195,19 @@ pub struct Gpu {
     voids: VoidRegistry,
     filters: FilterPipelineRegistry,
     blend_doc: Option<BlendDoc>,
+    /// The brush engine's GPU pipelines and its stroke-preview scratch target.
+    /// Both are reusable for the whole run and both are expensive to build, for
+    /// the same reason `blend_doc` is kept.
+    brush: Option<(BrushPipelines, BrushStrokePreviewRenderer)>,
 }
+
+/// The theme every documentation brush stroke is rendered in — a white stroke
+/// on black, which is also the engine's own default (`preview_theme_fg` /
+/// `preview_theme_bg`). Named here rather than read off an engine so a headless
+/// run depends on nothing ambient, and stated once so the two stripe tones and
+/// the stroke colour cannot drift apart.
+const DOCS_STROKE_FG: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+const DOCS_STROKE_BG: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 /// The subject with a second, differently-oriented field stacked over it — the
 /// layer whose blend mode and opacity the preview drives.
@@ -210,6 +234,7 @@ impl Gpu {
             voids: VoidRegistry::new(),
             filters: FilterPipelineRegistry::new(),
             blend_doc: None,
+            brush: None,
         }
     }
 
@@ -346,6 +371,8 @@ impl Gpu {
         }
         Ok(Rendered {
             frames,
+            width: w,
+            height: h,
             fps: anim.fps,
             loops: anim.loops,
             still: anim.still_frame(),
@@ -377,6 +404,95 @@ impl Gpu {
         doc.engine.set_opacity(doc.top, 1.0);
         Ok(Rendered {
             frames,
+            width: DOCS_SUBJECT_DIM,
+            height: DOCS_SUBJECT_DIM,
+            fps: anim.fps,
+            loops: anim.loops,
+            still: anim.still_frame(),
+        })
+    }
+
+    /// Render one brush's preview stroke — the same synthetic S-curve, through
+    /// the same stroke engine and the same framer the editor's picker uses, so
+    /// the documentation and the picker show one image of a brush rather than
+    /// two.
+    ///
+    /// A brush is a stroke driven through the brush engine rather than an effect
+    /// over one image, so like a blend mode it has no `src → out` mechanism to
+    /// open — it is a second caller of the same `PreviewAnim`, not a second
+    /// preview system.
+    fn render_brush_stroke(&mut self, type_id: &str) -> Result<Rendered, DocsRenderError> {
+        let no_recipe = || DocsRenderError::NoRecipe {
+            catalog: crate::brush::builtin_brushes::CATALOG_ID.to_string(),
+            type_id: type_id.to_string(),
+        };
+        let anim = crate::brush::builtin_brushes::preview(type_id).ok_or_else(no_recipe)?;
+
+        // Brushes are keyed by file stem in the catalog and by name in the
+        // library, and `docs()` is what pairs the two.
+        let position = crate::brush::builtin_brushes::docs()
+            .iter()
+            .position(|(stem, _)| *stem == type_id)
+            .ok_or_else(no_recipe)?;
+        let mut graph = crate::brush::builtin_brushes::all()
+            .swap_remove(position)
+            .metadata
+            .graph;
+
+        // The same two steps `request_stroke_preview_readback` takes, in the
+        // same order, so the artifact and the picker render the same brush.
+        graph.apply_preview_overrides();
+        let backdrop = crate::brush::graph_capabilities(&graph).preview_backdrop;
+
+        let (rw, rh) = crate::engine::brush_library::BRUSH_STROKE_RENDER_SIZE;
+        let inset =
+            rw.min(rh) as f32 * crate::engine::brush_library::BRUSH_STROKE_PATH_INSET_FRACTION;
+        let path =
+            crate::brush::preview_renderer::synthesize_stroke_path(rw as f32, rh as f32, 30, inset);
+
+        let (device, queue) = (&self.gpu.device, &self.gpu.queue);
+        let (pipelines, renderer) = self.brush.get_or_insert_with(|| {
+            (
+                BrushPipelines::new(
+                    device,
+                    queue,
+                    &crate::gpu::selection::selection_mask_bgl(device),
+                ),
+                BrushStrokePreviewRenderer::new(),
+            )
+        });
+        let texture = renderer
+            .render_stroke(
+                device,
+                queue,
+                pipelines,
+                &graph,
+                &path,
+                DOCS_STROKE_FG,
+                DOCS_STROKE_BG,
+                backdrop,
+                rw,
+                rh,
+                None,
+            )
+            .ok_or_else(no_recipe)?;
+        let pixels = readback_texture(device, queue, texture, PREVIEW_FORMAT, rw, rh);
+
+        let (tw, th) = crate::engine::brush_library::BRUSH_THUMBNAIL_SIZE;
+        let framed = crate::engine::rendering::frame_stroke_thumbnail(
+            &pixels,
+            rw,
+            rh,
+            tw,
+            th,
+            backdrop,
+            DOCS_STROKE_FG,
+            DOCS_STROKE_BG,
+        );
+        Ok(Rendered {
+            frames: vec![framed],
+            width: tw,
+            height: th,
             fps: anim.fps,
             loops: anim.loops,
             still: anim.still_frame(),
@@ -389,7 +505,8 @@ impl Gpu {
 /// re-implements the dispatch.
 ///
 /// A catalog with an offscreen mechanism goes through the shared driver; the
-/// one catalog without goes through its document. A catalog with neither is
+/// two catalogs without go through a document and through the brush engine
+/// respectively. A catalog with none of the three is
 /// [`DocsRenderError::NoRenderer`] — what a new previewable registry that has
 /// not declared a mechanism looks like from here.
 pub fn render_entry(
@@ -405,6 +522,9 @@ pub fn render_entry(
     }
     if catalog == crate::gpu::blend_mode::CATALOG_ID {
         return gpu.render_blend_mode(type_id);
+    }
+    if catalog == crate::brush::builtin_brushes::CATALOG_ID {
+        return gpu.render_brush_stroke(type_id);
     }
     Err(DocsRenderError::NoRenderer {
         catalog: catalog.to_string(),
@@ -457,7 +577,6 @@ fn write_frames(dir: &Path, frames: &[Vec<u8>], w: u32, h: u32) -> Result<(), Do
 /// appears in the layout — so the asset directory and the metadata artifact
 /// cannot disagree about what a thing is called.
 pub fn render_all(out: &Path) -> Result<Manifest, DocsRenderError> {
-    let dim = DOCS_SUBJECT_DIM;
     let mut gpu = Gpu::new();
     let mut assets: BTreeMap<String, BTreeMap<String, Asset>> = BTreeMap::new();
 
@@ -465,11 +584,18 @@ pub fn render_all(out: &Path) -> Result<Manifest, DocsRenderError> {
         for entry in catalog.entries.iter().filter(|e| e.supports_preview) {
             let rendered = render_entry(&mut gpu, catalog.id, entry.type_id)?;
             let rel = PathBuf::from(catalog.id).join(entry.type_id);
-            write_frames(&out.join(&rel), &rendered.frames, dim, dim)?;
+            write_frames(
+                &out.join(&rel),
+                &rendered.frames,
+                rendered.width,
+                rendered.height,
+            )?;
             assets.entry(catalog.id.to_string()).or_default().insert(
                 entry.type_id.to_string(),
                 Asset {
                     dir: rel.to_string_lossy().replace('\\', "/"),
+                    width: rendered.width,
+                    height: rendered.height,
                     frames: rendered.frames.len() as u32,
                     fps: rendered.fps,
                     loops: rendered.loops,
@@ -481,8 +607,6 @@ pub fn render_all(out: &Path) -> Result<Manifest, DocsRenderError> {
 
     let manifest = Manifest {
         version: crate::VERSION.to_string(),
-        width: dim,
-        height: dim,
         assets,
     };
     std::fs::create_dir_all(out)?;

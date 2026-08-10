@@ -205,7 +205,7 @@ export class BrushGraphState {
      *  active graph contains a content-dependent node (clone, blur,
      *  smudge, liquify) — its bake against the flat preview background
      *  renders blank. Declared per node type via the registration's
-     *  `preview_fallback_icon`; refreshed alongside `supportsErase`. */
+     *  `preview_staging`; refreshed alongside `supportsErase`. */
     previewIcon = $state<string | null>(null);
 
     /**

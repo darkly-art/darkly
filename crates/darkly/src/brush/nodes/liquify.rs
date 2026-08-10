@@ -49,6 +49,7 @@ use crate::brush::read_mirror_terminal::{
 };
 use crate::brush::wgsl::{CompileWgslCtx, NodeWgsl};
 use crate::brush::wire::{BrushWireType, ScalarValue};
+use crate::gpu::preview::{PreviewBackdrop, PreviewStaging};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 // ── Constants ───────────────────────────────────────────────────────────
@@ -156,7 +157,10 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: true,
             is_terminal: true,
             supports_erase: false,
-            preview_fallback_icon: Some("tabler:ripple"),
+            preview_staging: Some(PreviewStaging {
+                icon: "tabler:ripple",
+                backdrop: PreviewBackdrop::Stripes,
+            }),
         },
     }
 }

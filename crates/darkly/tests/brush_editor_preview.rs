@@ -10,6 +10,7 @@ use darkly::brush::{
     pipeline::BrushPipelines,
     preview_renderer::{synthesize_stroke_path, BrushStrokePreviewRenderer},
 };
+use darkly::gpu::preview::PreviewBackdrop;
 use darkly::gpu::test_utils::{readback_texture, test_device};
 
 #[test]
@@ -32,7 +33,17 @@ fn renders_s_curve_over_black_background() {
 
     let texture = renderer
         .render_stroke(
-            &device, &queue, &pipelines, &graph, &path, fg, bg, width, height, None,
+            &device,
+            &queue,
+            &pipelines,
+            &graph,
+            &path,
+            fg,
+            bg,
+            PreviewBackdrop::Flat,
+            width,
+            height,
+            None,
         )
         .expect("render_stroke should return a texture for the default graph");
 
@@ -114,6 +125,7 @@ fn renderer_reuses_target_across_renders_of_same_size() {
         &path,
         [1.0, 1.0, 1.0, 1.0],
         [0.0, 0.0, 0.0, 1.0],
+        PreviewBackdrop::Flat,
         320,
         120,
         None,
@@ -129,6 +141,7 @@ fn renderer_reuses_target_across_renders_of_same_size() {
         &path,
         [1.0, 0.0, 0.0, 1.0],
         [1.0, 1.0, 1.0, 1.0],
+        PreviewBackdrop::Flat,
         320,
         120,
         None,
@@ -621,6 +634,7 @@ fn empty_path_returns_none() {
         &[],
         [1.0, 1.0, 1.0, 1.0],
         [0.0, 0.0, 0.0, 1.0],
+        PreviewBackdrop::Flat,
         320,
         120,
         None,

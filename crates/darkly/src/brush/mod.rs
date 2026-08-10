@@ -36,6 +36,7 @@ pub mod wire;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use crate::gpu::preview::PreviewBackdrop;
 use crate::nodegraph::NodeRegistration;
 use wire::BrushWireType;
 
@@ -190,20 +191,24 @@ pub struct BrushGraphCapabilities {
     /// terminal registers `supports_erase = false`. The brush-tool
     /// options bar hides the erase toggle when false.
     pub supports_erase: bool,
-    /// Iconify icon to show in place of baked dab/stroke thumbnails,
-    /// contributed by the first node whose registration sets
-    /// `preview_fallback_icon` — content-dependent nodes (clone, blur,
-    /// smudge, liquify) whose preview bake renders blank.
+    /// Iconify icon to show in the dab slot in place of a baked thumbnail,
+    /// contributed by the first node whose registration declares
+    /// `preview_staging` — content-dependent nodes (clone, blur, smudge,
+    /// liquify) whose still-dab bake renders blank.
     pub preview_fallback_icon: Option<&'static str>,
+    /// Field the stroke preview is rendered over, from the same declaration
+    /// the icon comes from. [`PreviewBackdrop::Flat`] for a brush that deposits
+    /// pigment and so needs nothing staged under it.
+    pub preview_backdrop: PreviewBackdrop,
 }
 
 /// Derive [`BrushGraphCapabilities`] from a graph in one registry walk.
 ///
 /// Type-owned dispatch — each node's `register()` declares its own
-/// `supports_erase` / `preview_fallback_icon`; nothing here knows which
+/// `supports_erase` / `preview_staging`; nothing here knows which
 /// node types exist. Nodes are visited terminals-first, then ascending
 /// id ([`Graph::nodes`] is a HashMap, so raw iteration order would make
-/// the "first icon wins" rule nondeterministic on multi-icon graphs).
+/// the "first staging wins" rule nondeterministic on multi-staging graphs).
 pub fn graph_capabilities(
     graph: &crate::nodegraph::Graph<BrushWireType>,
 ) -> BrushGraphCapabilities {
@@ -224,13 +229,17 @@ pub fn graph_capabilities(
     let mut caps = BrushGraphCapabilities {
         supports_erase: true,
         preview_fallback_icon: None,
+        preview_backdrop: PreviewBackdrop::Flat,
     };
+    let mut staged = false;
     for (_, reg) in nodes {
         if reg.is_terminal && !reg.supports_erase {
             caps.supports_erase = false;
         }
-        if caps.preview_fallback_icon.is_none() {
-            caps.preview_fallback_icon = reg.preview_fallback_icon;
+        if let (false, Some(staging)) = (staged, reg.preview_staging) {
+            caps.preview_fallback_icon = Some(staging.icon);
+            caps.preview_backdrop = staging.backdrop;
+            staged = true;
         }
     }
     caps

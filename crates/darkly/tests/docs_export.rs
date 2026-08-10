@@ -360,9 +360,25 @@ fn export_is_a_faithful_projection() {
         }
     }
     assert_eq!(
-        previewable, 34,
-        "7 filters + 10 veils + 1 void + 16 blend modes declare a preview recipe"
+        previewable, 48,
+        "7 filters + 10 veils + 1 void + 16 blend modes + 14 brushes declare a \
+         preview recipe"
     );
+
+    // Brushes carry no `preview` field of their own — the recipe lives on the
+    // catalog — so the exported flag must be the same question put to the same
+    // authority the catalog itself asks, per entry rather than a blanket claim.
+    for e in catalog(&json, darkly::brush::builtin_brushes::CATALOG_ID)["entries"]
+        .as_array()
+        .unwrap()
+    {
+        let stem = e["type"].as_str().unwrap();
+        assert_eq!(
+            e["supportsPreview"].as_bool(),
+            Some(darkly::brush::builtin_brushes::preview(stem).is_some()),
+            "`brushes/{stem}` supportsPreview disagrees with its declared preview"
+        );
+    }
 
     // Settings ride on the same footing, against the section schema minus the
     // prefs the UI does not treat as settings.

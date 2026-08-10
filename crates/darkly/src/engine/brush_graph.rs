@@ -9,6 +9,7 @@ use super::{DarklyEngine, ReadbackContext};
 use crate::brush::input_value::InputValue;
 use crate::brush::state::BrushState;
 use crate::brush::wire::BrushWireType;
+use crate::gpu::preview::PreviewBackdrop;
 use crate::nodegraph::Graph;
 use crate::nodegraph::{NodeId, PortDir, PortRef, UnitType};
 
@@ -518,13 +519,15 @@ impl DarklyEngine {
             return cached.unwrap_or_default();
         }
 
-        self.request_stroke_preview_readback(self.active_brush_graph(), |width, height| {
-            ReadbackContext::BrushStrokePreview {
+        self.request_stroke_preview_readback(
+            self.active_brush_graph(),
+            |width, height, backdrop| ReadbackContext::BrushStrokePreview {
                 width,
                 height,
+                backdrop,
                 graph_version: current_graph_version,
-            }
-        });
+            },
+        );
         self.last_rendered_stroke_preview_version = current_graph_version;
 
         cached.unwrap_or_default()
@@ -673,6 +676,7 @@ impl DarklyEngine {
         height: u32,
         fg: [f32; 4],
         bg: [f32; 4],
+        backdrop: PreviewBackdrop,
         base_size_override: Option<f32>,
         context: ReadbackContext,
     ) {
@@ -684,6 +688,7 @@ impl DarklyEngine {
             path,
             fg,
             bg,
+            backdrop,
             width,
             height,
             base_size_override,
@@ -726,10 +731,14 @@ impl DarklyEngine {
     /// show brush *identity*, not the momentary scrub value the user happened
     /// to have. Per-node knowledge of what to neutralize lives on the port
     /// registrations — this pipeline never introspects node types.
+    /// The backdrop travels with the request rather than being read off the
+    /// engine when the readback lands: two brushes can have bakes in flight at
+    /// once, and the framer must measure each against the field its own stroke
+    /// was drawn over.
     pub(crate) fn request_stroke_preview_readback(
         &mut self,
         mut graph: Graph<BrushWireType>,
-        make_context: impl FnOnce(u32, u32) -> ReadbackContext,
+        make_context: impl FnOnce(u32, u32, PreviewBackdrop) -> ReadbackContext,
     ) {
         graph.apply_preview_overrides();
         let (rw, rh) = super::brush_library::BRUSH_STROKE_RENDER_SIZE;
@@ -738,6 +747,7 @@ impl DarklyEngine {
             crate::brush::preview_renderer::synthesize_stroke_path(rw as f32, rh as f32, 30, inset);
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
+        let backdrop = crate::brush::graph_capabilities(&graph).preview_backdrop;
         self.render_preview_and_request_readback(
             &graph,
             &path,
@@ -745,8 +755,9 @@ impl DarklyEngine {
             rh,
             fg,
             bg,
+            backdrop,
             None,
-            make_context(rw, rh),
+            make_context(rw, rh, backdrop),
         );
     }
 
@@ -758,6 +769,11 @@ impl DarklyEngine {
     /// differ only in the graph and the [`ReadbackContext`] variant. The dab
     /// thumbnail represents brush identity (shape, texture, dynamics), so
     /// user-facing scrubs that vary across instances shouldn't bias it.
+    ///
+    /// Always [`PreviewBackdrop::Flat`]: a stationary full-pressure sample has
+    /// no motion for a displacement to reveal, so a field under it would show
+    /// the field with a barely perturbed centre. The four brushes that would
+    /// want one show their declared glyph in this slot instead.
     pub(crate) fn request_dab_preview_readback(
         &mut self,
         mut graph: Graph<BrushWireType>,
@@ -775,6 +791,7 @@ impl DarklyEngine {
             rh,
             fg,
             bg,
+            PreviewBackdrop::Flat,
             Some(super::brush_library::DAB_PREVIEW_BASE_SIZE),
             make_context(rw, rh),
         );

@@ -1,6 +1,6 @@
 mod bake_common;
 mod brush_graph;
-mod brush_library;
+pub(crate) mod brush_library;
 mod canvas_resize;
 mod canvas_transform;
 mod clipboard;
@@ -29,6 +29,7 @@ mod veils;
 mod voids;
 
 pub use brush_graph::{ExposedPortInfo, ExposedValue};
+pub use brush_library::BRUSH_THUMBNAIL_SIZE;
 pub use export::ExportImageResult;
 pub use load::LoadDocument;
 pub use process_recording::{ProcessRecorder, RecordedFrame};
@@ -58,7 +59,7 @@ use crate::gpu::context::GpuContext;
 use crate::gpu::diff_rect::DiffRectPass;
 use crate::gpu::overlay::OverlayPrimitive;
 use crate::gpu::paint_target::PaintPipelines;
-use crate::gpu::preview::PreviewTarget;
+use crate::gpu::preview::{PreviewBackdrop, PreviewTarget};
 use crate::gpu::readback::ReadbackScheduler;
 use crate::gpu::region_store::{EntryPixels, RegionScratch};
 use crate::gpu::selection::SelectionPipelines;
@@ -221,6 +222,11 @@ pub(crate) enum ReadbackContext {
     BrushStrokePreview {
         width: u32,
         height: u32,
+        /// The field the stroke was rendered over. The framer finds the stroke
+        /// by looking for pixels the backdrop did not put there, so it has to
+        /// travel with the request — the engine's theme may have moved on, and
+        /// another brush's bake may be in flight alongside this one.
+        backdrop: PreviewBackdrop,
         /// Graph version at the time the render was issued — used to skip
         /// caching stale results if another render has superseded this one.
         graph_version: u64,
@@ -233,6 +239,8 @@ pub(crate) enum ReadbackContext {
         name: String,
         width: u32,
         height: u32,
+        /// See [`ReadbackContext::BrushStrokePreview::backdrop`].
+        backdrop: PreviewBackdrop,
     },
     /// Async readback of a single-dab preview rendered from a library
     /// brush's graph. Completion PNG-encodes the pixels and installs the
@@ -1160,7 +1168,8 @@ impl DarklyEngine {
         let inset = rw.min(rh) as f32 * brush_library::BRUSH_STROKE_PATH_INSET_FRACTION;
         let path =
             crate::brush::preview_renderer::synthesize_stroke_path(rw as f32, rh as f32, 30, inset);
-        self.test_render_preview_canvas(&graph, &path, rw, rh, None)
+        let backdrop = crate::brush::graph_capabilities(&graph).preview_backdrop;
+        self.test_render_preview_canvas(&graph, &path, backdrop, rw, rh, None)
     }
 
     /// Blocking readback of the raw dab-preview **render canvas** for the
@@ -1176,6 +1185,7 @@ impl DarklyEngine {
         self.test_render_preview_canvas(
             &graph,
             &path,
+            crate::gpu::preview::PreviewBackdrop::Flat,
             rw,
             rh,
             Some(brush_library::DAB_PREVIEW_BASE_SIZE),
@@ -1190,6 +1200,7 @@ impl DarklyEngine {
         &mut self,
         graph: &crate::nodegraph::Graph<BrushWireType>,
         path: &[crate::brush::paint_info::PaintInformation],
+        backdrop: crate::gpu::preview::PreviewBackdrop,
         rw: u32,
         rh: u32,
         base_size_override: Option<f32>,
@@ -1206,6 +1217,7 @@ impl DarklyEngine {
                 path,
                 fg,
                 bg,
+                backdrop,
                 rw,
                 rh,
                 base_size_override,

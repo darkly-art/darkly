@@ -40,6 +40,7 @@ use crate::brush::read_mirror_terminal::{
 };
 use crate::brush::wgsl::{CompileWgslCtx, DabField, NodeWgsl, WgslType};
 use crate::brush::wire::{BrushWireType, ScalarValue};
+use crate::gpu::preview::{PreviewBackdrop, PreviewStaging};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 /// Per-dab strength below which the dab is dropped — `mix(orig, blurred, 0)`
@@ -115,7 +116,10 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: true,
             is_terminal: true,
             supports_erase: false,
-            preview_fallback_icon: Some("mdi:blur"),
+            preview_staging: Some(PreviewStaging {
+                icon: "mdi:blur",
+                backdrop: PreviewBackdrop::Stripes,
+            }),
         },
     }
 }

@@ -154,6 +154,197 @@ pub fn swing_signed(t: f32) -> f32 {
     (t * std::f32::consts::TAU).sin()
 }
 
+/// The normalized coordinate at the centre of pixel `(x, y)` in a
+/// `width × height` image.
+///
+/// Each axis is divided by its own extent, so a field described this way is one
+/// continuous image evaluated at whatever resolution — and whatever aspect
+/// ratio — is asked for.
+pub fn pixel_centre(x: u32, y: u32, width: u32, height: u32) -> (f32, f32) {
+    (
+        (x as f32 + 0.5) / width.max(1) as f32,
+        (y as f32 + 0.5) / height.max(1) as f32,
+    )
+}
+
+/// Rasterize a field described in normalized coordinates into a `width × height`
+/// RGBA8 buffer, sampling at pixel centres.
+///
+/// The framing shared by every generated preview image: the documentation
+/// subject, the blend-mode source layer, and the backdrop a brush preview stroke
+/// is staged over. Describing the image as a function of position rather than of
+/// pixel indices is what makes a render at one size a genuine resample of the
+/// same picture at another.
+pub fn field_rgba(width: u32, height: u32, field: impl Fn(f32, f32) -> [f32; 4]) -> Vec<u8> {
+    let mut out = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            let (u, v) = pixel_centre(x, y, width, height);
+            for ch in field(u, v) {
+                out.push((ch.clamp(0.0, 1.0) * 255.0).round() as u8);
+            }
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Staging a preview for an entry that transports content rather than making it
+// ---------------------------------------------------------------------------
+
+/// How a preview must be staged for a node whose output depends on canvas
+/// content it did not write.
+///
+/// Such a node transports the destination rather than writing to it, so over a
+/// flat preview backdrop it produces that same flat backdrop and renders
+/// nothing. Both halves answer that one problem — a still dab has no motion for
+/// a displacement to reveal at all, so it shows the glyph, while a stroke gets
+/// something to transport — which is why a node declares them together or not
+/// at all.
+///
+/// Declared by the node, because whether a node reads what is already there is
+/// a fact about the node. A brush inherits it from whichever of its nodes
+/// declares one.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct PreviewStaging {
+    /// Iconify glyph shown in the dab slot, where a single stationary sample
+    /// has no motion to make the effect visible at all.
+    pub icon: &'static str,
+    /// Field painted under the stroke preview, giving the node something to
+    /// transport.
+    pub backdrop: PreviewBackdrop,
+}
+
+/// What is painted under a preview stroke, as a field in normalized coordinates
+/// sampled at pixel centres — the same framing [`field_rgba`] gives the
+/// documentation subject, for the same reason.
+///
+/// [`Stripes`](Self::Stripes) is the only staging that exists;
+/// [`Flat`](Self::Flat) means "none". A second field — a checkerboard, a
+/// gradient — slots in beside them without any consumer changing, which is what
+/// this is an enum rather than a bool for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub enum PreviewBackdrop {
+    /// One theme background colour. What every brush that deposits pigment
+    /// wants, and what the render path expresses as a plain clear.
+    Flat,
+    /// Alternating vertical bands between two mid-tones drawn from the theme,
+    /// so a displacement, a smear or a blur has a boundary to act on wherever
+    /// the stroke passes — following Krita's
+    /// `KisPresetLivePreviewView::paintBackground`
+    /// (`libs/ui/widgets/kis_preset_live_preview_view.cpp:120-154`), which
+    /// stripes the background for its `colorsmudge`, `deformbrush` and `filter`
+    /// engines for exactly this reason.
+    Stripes,
+}
+
+impl PreviewBackdrop {
+    /// Bands across the render width. Normalized, so the period does not depend
+    /// on the render size, and the crop the framer applies afterwards cannot
+    /// change it. Krita's ratio is twenty bands across a 320 px widget.
+    const BANDS: f32 = 16.0;
+
+    /// Colour at normalized position `(u, v)` for a theme running from `bg` to
+    /// `fg`. Both stripe tones are held between the poles so a brush that *does*
+    /// deposit still contrasts against either band — Krita paints `80,80,80` and
+    /// `140,140,140` under a stroke forced to white, and these are the same two
+    /// tones expressed in whichever direction the theme runs.
+    pub fn sample(self, u: f32, _v: f32, fg: [f32; 4], bg: [f32; 4]) -> [f32; 4] {
+        let mix = |t: f32| {
+            let mut c = bg;
+            for ch in 0..3 {
+                c[ch] = bg[ch] + (fg[ch] - bg[ch]) * t;
+            }
+            c
+        };
+        match self {
+            Self::Flat => bg,
+            Self::Stripes => {
+                let band = (u * Self::BANDS).floor() as i32;
+                mix(if band.rem_euclid(2) == 0 { 0.28 } else { 0.55 })
+            }
+        }
+    }
+
+    /// Write this backdrop into `view` / `texture`, which must be the same
+    /// `Rgba8Unorm` render target.
+    ///
+    /// [`Flat`](Self::Flat) is a plain clear — the fast path every depositing
+    /// brush and every dab preview takes; [`Stripes`](Self::Stripes) builds the
+    /// field on the CPU and uploads it. The queue write is ordered before the
+    /// submission that carries `encoder`, so either variant is in place by the
+    /// time anything reads the target.
+    pub fn fill(
+        self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        texture: &wgpu::Texture,
+        (width, height): (u32, u32),
+        fg: [f32; 4],
+        bg: [f32; 4],
+    ) {
+        match self {
+            Self::Flat => {
+                let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("preview-backdrop-clear"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: bg[0] as f64,
+                                g: bg[1] as f64,
+                                b: bg[2] as f64,
+                                a: bg[3] as f64,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+            }
+            Self::Stripes => {
+                let pixels = field_rgba(width, height, |u, v| self.sample(u, v, fg, bg));
+                queue.write_texture(
+                    texture.as_image_copy(),
+                    &pixels,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(width * 4),
+                        rows_per_image: Some(height),
+                    },
+                    wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Offset, in normalized canvas units, at which a copy of this backdrop
+    /// reads as *distinct from* the backdrop — what a node that transports
+    /// pixels from elsewhere (clone) needs its source anchor set to.
+    ///
+    /// Owned here because only the field that defines the period can say what
+    /// offset escapes it. [`Stripes`](Self::Stripes) repeats every *two* bands —
+    /// one of each tone — so the offset is one band, which is half that period
+    /// and lands the copied bands exactly out of phase with the ones underneath.
+    /// A vertical component would be useless (the field is constant in `v`), and
+    /// an offset of a whole period would be the identity.
+    pub fn source_offset(self) -> [f32; 2] {
+        match self {
+            Self::Flat => [0.0, 0.0],
+            Self::Stripes => [1.0 / Self::BANDS, 0.0],
+        }
+    }
+}
+
 /// Fit a `w × h` source into a box of [`PREVIEW_MAX_DIM`] on its longest edge,
 /// preserving aspect ratio. Sources already within the box are kept as-is.
 pub fn fit_preview_dims(w: u32, h: u32) -> (u32, u32) {

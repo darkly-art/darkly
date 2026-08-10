@@ -7,6 +7,7 @@ use crate::coord::{CanvasPoint, CanvasRect, LayerRect};
 use crate::gpu::atlas::CanvasFrame;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::context::GpuContext;
+use crate::gpu::preview::PreviewBackdrop;
 use crate::gpu::readback::{self, ReadbackScheduler};
 use crate::gpu::region_store::{EntryPixels, RegionScratch, Snapshot, UndoRegionEntry};
 use crate::gpu::view::{ViewParams, ViewTransform};
@@ -435,6 +436,7 @@ impl DarklyEngine {
             ReadbackContext::BrushStrokePreview {
                 width,
                 height,
+                backdrop,
                 graph_version,
             } => {
                 // Drop stale results — if the graph has changed since
@@ -448,6 +450,8 @@ impl DarklyEngine {
                         height,
                         tw,
                         th,
+                        backdrop,
+                        self.preview_theme_fg,
                         self.preview_theme_bg,
                     );
                     let png_bytes = encode_rgba_as_png(&framed, tw, th);
@@ -460,10 +464,19 @@ impl DarklyEngine {
                 name,
                 width,
                 height,
+                backdrop,
             } => {
                 let (tw, th) = super::brush_library::BRUSH_THUMBNAIL_SIZE;
-                let framed =
-                    frame_stroke_thumbnail(&pixels, width, height, tw, th, self.preview_theme_bg);
+                let framed = frame_stroke_thumbnail(
+                    &pixels,
+                    width,
+                    height,
+                    tw,
+                    th,
+                    backdrop,
+                    self.preview_theme_fg,
+                    self.preview_theme_bg,
+                );
                 let png_bytes = encode_rgba_as_png(&framed, tw, th);
                 if !png_bytes.is_empty() {
                     self.brush_library.set_thumbnail(&name, png_bytes);
@@ -1219,16 +1232,20 @@ const CURSOR_PREVIEW_MAX_BOOST: f32 = 8.0;
 /// This is the single CPU implementation of "bounding box of the changed
 /// pixels" — the same min/max reduction the GPU [`BboxReduction`] runs, on
 /// the CPU side of an already-read-back buffer. The two thumbnail framers
-/// pass a "differs from the theme bg" predicate; the cursor-preview coverage
+/// pass a "differs from the backdrop" predicate; the cursor-preview coverage
 /// scan passes an alpha-threshold predicate. Keeping the scan in one place
 /// means a border/empty-region convention can't drift between the callers.
+///
+/// The predicate is given the pixel's position as well as its value, because a
+/// stroke staged over a field is only "changed" relative to what that field put
+/// at that position.
 ///
 /// [`BboxReduction`]: crate::gpu::bbox::BboxReduction
 pub(crate) fn changed_pixels_bbox(
     pixels: &[u8],
     width: u32,
     height: u32,
-    interesting: impl Fn([u8; 4]) -> bool,
+    interesting: impl Fn(u32, u32, [u8; 4]) -> bool,
 ) -> Option<[u32; 4]> {
     let mut min_x = width;
     let mut min_y = height;
@@ -1238,7 +1255,11 @@ pub(crate) fn changed_pixels_bbox(
     for y in 0..height {
         for x in 0..width {
             let i = ((y * width + x) * 4) as usize;
-            if interesting([pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]) {
+            if interesting(
+                x,
+                y,
+                [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]],
+            ) {
                 min_x = min_x.min(x);
                 min_y = min_y.min(y);
                 max_x = max_x.max(x);
@@ -1254,6 +1275,10 @@ pub(crate) fn changed_pixels_bbox(
 /// solid `bg` on any RGB channel by more than `tol`? The tolerance
 /// accommodates the GPU's premultiplied-alpha rounding and any
 /// color-management drift while still catching a pale stroke against the bg.
+fn quantize_rgb(c: [f32; 4]) -> [u8; 3] {
+    std::array::from_fn(|i| (c[i].clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
 fn differs_from_bg(px: [u8; 4], bg: [u8; 3], tol: i32) -> bool {
     (px[0] as i32 - bg[0] as i32).abs() > tol
         || (px[1] as i32 - bg[1] as i32).abs() > tol
@@ -1285,13 +1310,9 @@ pub fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4])
         );
         return Vec::new();
     }
-    let bg_u8 = [
-        (bg[0].clamp(0.0, 1.0) * 255.0).round() as u8,
-        (bg[1].clamp(0.0, 1.0) * 255.0).round() as u8,
-        (bg[2].clamp(0.0, 1.0) * 255.0).round() as u8,
-    ];
+    let bg_u8 = quantize_rgb(bg);
     const TOLERANCE: i32 = 12;
-    let bbox = changed_pixels_bbox(pixels, width, height, |px| {
+    let bbox = changed_pixels_bbox(pixels, width, height, |_, _, px| {
         differs_from_bg(px, bg_u8, TOLERANCE)
     });
 
@@ -1367,7 +1388,7 @@ pub(crate) fn cursor_preview_scale_from_mask(pixels: &[u8], width: u32, height: 
     // "no content" pixel value 0 exactly).
     const TOLERANCE: u8 = 12;
     let Some([min_x, min_y, max_x, max_y]) =
-        changed_pixels_bbox(pixels, width, height, |px| px[3] > TOLERANCE)
+        changed_pixels_bbox(pixels, width, height, |_, _, px| px[3] > TOLERANCE)
     else {
         return 1.0;
     };
@@ -1404,7 +1425,8 @@ pub(crate) fn cursor_preview_scale_from_mask(pixels: &[u8], width: u32, height: 
 /// Frame a rendered stroke into the cache aspect ratio and resize.
 ///
 /// Same shape as `frame_dab_thumbnail` but for the S-curve preview:
-///   1. Scan for non-bg pixels and compute their bounding box.
+///   1. Scan for pixels the backdrop did not put there and compute their
+///      bounding box.
 ///   2. Expand the bbox to match the target aspect ratio so the stroke
 ///      isn't squashed by the resize.
 ///   3. Inflate by a 10% margin on each axis, then re-center on the
@@ -1414,12 +1436,20 @@ pub(crate) fn cursor_preview_scale_from_mask(pixels: &[u8], width: u32, height: 
 /// Brush size doesn't enter into any of this — bigger dabs paint a
 /// bigger bbox, smaller dabs paint a smaller bbox, the framer fits
 /// either to the target. The preview path is the same for every brush.
-fn frame_stroke_thumbnail(
+///
+/// "Non-bg" is measured against `backdrop` rather than against a colour,
+/// because a stroke staged over a field was not drawn over one colour. A
+/// [`PreviewBackdrop::Flat`] backdrop answers `bg` at every position, so the
+/// general form degenerates to the flat comparison for the ten brushes that
+/// stage nothing, and no call site branches on which backdrop it got.
+pub(crate) fn frame_stroke_thumbnail(
     pixels: &[u8],
     src_w: u32,
     src_h: u32,
     dst_w: u32,
     dst_h: u32,
+    backdrop: PreviewBackdrop,
+    fg: [f32; 4],
     bg: [f32; 4],
 ) -> Vec<u8> {
     let expected = (src_w * src_h * 4) as usize;
@@ -1430,16 +1460,12 @@ fn frame_stroke_thumbnail(
         );
         return Vec::new();
     }
-    let bg_u8 = [
-        (bg[0].clamp(0.0, 1.0) * 255.0).round() as u8,
-        (bg[1].clamp(0.0, 1.0) * 255.0).round() as u8,
-        (bg[2].clamp(0.0, 1.0) * 255.0).round() as u8,
-    ];
     // Same tolerance shape as frame_dab_thumbnail — accommodates
     // premultiplied-alpha rounding on the GPU side.
     const TOLERANCE: i32 = 12;
-    let bbox = changed_pixels_bbox(pixels, src_w, src_h, |px| {
-        differs_from_bg(px, bg_u8, TOLERANCE)
+    let bbox = changed_pixels_bbox(pixels, src_w, src_h, |x, y, px| {
+        let (u, v) = crate::gpu::preview::pixel_centre(x, y, src_w, src_h);
+        differs_from_bg(px, quantize_rgb(backdrop.sample(u, v, fg, bg)), TOLERANCE)
     });
 
     let Some(src) = image::RgbaImage::from_raw(src_w, src_h, pixels.to_vec()) else {
@@ -1474,10 +1500,12 @@ fn frame_stroke_thumbnail(
         let crop_y = cy.saturating_sub(crop_h / 2).min(src_h - crop_h);
         image::imageops::crop_imm(&src, crop_x, crop_y, crop_w, crop_h).to_image()
     } else {
-        // Empty render — return a flat field of bg at the target size.
-        // Skip the resize entirely; constructing it directly is cheaper
-        // and avoids the resize filter introducing rounding.
+        // Nothing was drawn — return a flat field of bg at the target size,
+        // whatever was staged under it. Skip the resize entirely; constructing
+        // it directly is cheaper and avoids the resize filter introducing
+        // rounding.
         let mut buf = Vec::with_capacity((dst_w * dst_h * 4) as usize);
+        let bg_u8 = quantize_rgb(bg);
         let bg_a = (bg[3].clamp(0.0, 1.0) * 255.0).round() as u8;
         for _ in 0..(dst_w * dst_h) {
             buf.extend_from_slice(&[bg_u8[0], bg_u8[1], bg_u8[2], bg_a]);
@@ -1557,6 +1585,11 @@ fn generate_mask_thumbnail_from_pixels(
 mod tests {
     use super::*;
 
+    /// Theme foreground for the framing tests. Only ever reaches
+    /// [`PreviewBackdrop::Flat::sample`], which ignores it — the framing cases
+    /// below are about the crop, not about the staging.
+    const FG: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+
     /// Build a `src_w * src_h` RGBA buffer filled with `bg`, then paint a
     /// solid rectangle of `fg` at `(x0..x1, y0..y1)`.
     fn fill_with_rect(
@@ -1589,7 +1622,8 @@ mod tests {
         let bg = [0.05, 0.05, 0.05, 1.0];
         let bg_u8 = [13u8, 13, 13, 255];
         let pixels = fill_with_rect(640, 240, bg_u8, bg_u8, 0, 0, 0, 0);
-        let framed = frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, bg);
+        let framed =
+            frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, PreviewBackdrop::Flat, FG, bg);
         assert_eq!(framed.len(), (320 * 120 * 4) as usize);
         // Every pixel matches bg.
         for chunk in framed.chunks_exact(4) {
@@ -1614,7 +1648,8 @@ mod tests {
             325,
             125,
         );
-        let framed = frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, bg);
+        let framed =
+            frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, PreviewBackdrop::Flat, FG, bg);
         assert_eq!(framed.len(), (320 * 120 * 4) as usize);
         // Center 80x40 region should be predominantly bright.
         let mut bright = 0;
@@ -1648,7 +1683,8 @@ mod tests {
             640,
             130,
         );
-        let framed = frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, bg);
+        let framed =
+            frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, PreviewBackdrop::Flat, FG, bg);
         let bright = framed.chunks_exact(4).filter(|p| p[0] > 128).count();
         assert!(
             bright > 100,
@@ -1672,7 +1708,8 @@ mod tests {
             120,
             30,
         );
-        let framed = frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, bg);
+        let framed =
+            frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, PreviewBackdrop::Flat, FG, bg);
         let bright = framed.chunks_exact(4).filter(|p| p[0] > 128).count();
         assert!(
             bright > 200,

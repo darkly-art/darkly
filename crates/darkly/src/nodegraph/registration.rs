@@ -3,6 +3,7 @@ use serde::Serialize;
 use super::graph::PortDef;
 use super::WireKind;
 use crate::catalog::CatalogEntry;
+use crate::gpu::preview::PreviewStaging;
 
 /// Static metadata describing a node type in a particular domain.
 ///
@@ -49,11 +50,12 @@ pub struct NodeRegistration<W: WireKind> {
     /// pixels (smudge, watercolor, liquify) override to `false` so the
     /// brush-tool options bar hides the erase toggle.
     pub supports_erase: bool,
-    /// Iconify icon shown in place of baked dab/stroke thumbnails for any
-    /// brush whose graph contains this node. Set by nodes whose output
-    /// depends on existing canvas content — stroking the flat preview
-    /// background renders blank, so the picker shows this icon instead.
-    pub preview_fallback_icon: Option<&'static str>,
+    /// How a preview of any brush containing this node must be staged. Set by
+    /// nodes whose output depends on existing canvas content — over a flat
+    /// preview background they render blank, so the stroke gets a field to
+    /// transport and the dab slot gets a glyph. `None` for a node that makes
+    /// its own marks, which is every node that does not sample the canvas.
+    pub preview_staging: Option<PreviewStaging>,
 }
 
 impl<W: WireKind> NodeRegistration<W> {
@@ -70,7 +72,7 @@ impl<W: WireKind> NodeRegistration<W> {
     /// Documenting ports wants the registration serialized whole, which it
     /// already can be, not flattened into the wrong shape.
     ///
-    /// No icon: `preview_fallback_icon` is a substitute for a brush preview
+    /// No icon: `preview_staging`'s glyph is a substitute for a brush preview
     /// that cannot be baked, not a palette glyph, and only four node types
     /// declare one.
     pub fn catalog_entry(&self) -> CatalogEntry {

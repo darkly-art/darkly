@@ -34,15 +34,19 @@ fn main() -> ExitCode {
         Ok(manifest) => {
             for (catalog, entries) in &manifest.assets {
                 let frames: u32 = entries.values().map(|a| a.frames).sum();
-                println!("{catalog}: {} assets, {frames} frames", entries.len());
+                // Every entry in a catalog is rendered by one renderer, so one
+                // entry's size describes the whole catalog.
+                let size = entries
+                    .values()
+                    .next()
+                    .map(|a| format!("{} × {}", a.width, a.height))
+                    .unwrap_or_default();
+                println!(
+                    "{catalog}: {} assets, {frames} frames, {size}",
+                    entries.len()
+                );
             }
-            println!(
-                "{} — {} × {}, version {}",
-                out.display(),
-                manifest.width,
-                manifest.height,
-                manifest.version
-            );
+            println!("{} — version {}", out.display(), manifest.version);
             ExitCode::SUCCESS
         }
         Err(e) => {
