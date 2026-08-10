@@ -1,3 +1,5 @@
+name: Sponge
+category: Dry Media
 nodes:
   add:
     type: add

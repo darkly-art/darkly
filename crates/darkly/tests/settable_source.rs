@@ -26,7 +26,7 @@ fn expected_base(name: &str) -> f32 {
         "Charcoal" => 0.25,
         "Calligraphy" => 0.05,
         "Hair" => 0.2,
-        "Twirly Hair" => 0.2,
+        "Sponge" => 0.2,
         _ => 0.1,
     }
 }
