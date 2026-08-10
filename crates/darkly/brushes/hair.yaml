@@ -1,5 +1,6 @@
 name: Hair
 category: Dry Media
+description: A bundle of fine strands that breaks each dab into separate hairs, for fur, grass and dry-bristle texture.
 nodes:
   add:
     type: add

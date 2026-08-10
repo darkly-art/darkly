@@ -1,5 +1,6 @@
 name: Round
 category: Basic
+description: A plain soft disc that grows with pressure — the default brush, and the starting point for most of the others.
 nodes:
   pen_input:
     type: pen_input

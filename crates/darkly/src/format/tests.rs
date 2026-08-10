@@ -201,7 +201,11 @@ fn round_trip_every_stabilizer() {
 #[test]
 fn round_trip_every_brush_node() {
     let registry = registry();
-    let types: Vec<&str> = registry.types().map(|reg| reg.type_id).collect();
+    let types: Vec<&str> = registry
+        .types()
+        .into_iter()
+        .map(|reg| reg.type_id)
+        .collect();
     assert!(
         !types.is_empty(),
         "brush node registry must contain at least one node type"

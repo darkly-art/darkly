@@ -1,5 +1,6 @@
 name: Twirly Hair
 category: Dry Media
+description: Hair strands that coil as the stroke moves, for curled fur, smoke and windblown texture.
 nodes:
   add:
     type: add

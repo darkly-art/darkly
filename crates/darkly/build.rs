@@ -100,9 +100,11 @@ fn main() {
         &mut catalog_sources,
     );
 
-    generate_registry(
+    generate_catalog_registry(
         &src.join("brush/nodes"),
         "crate::brush::BrushNodeRegistration",
+        &src,
+        &mut catalog_sources,
     );
 
     generate_registry(
@@ -136,13 +138,17 @@ fn main() {
         &mut catalog_sources,
     );
 
+    // Brushes are a directory of YAML data rather than of `register()` modules,
+    // so they record their catalog source from inside their own scan. Must run
+    // before `generate_catalog_sources`, which consumes the vector.
+    generate_builtin_brushes(
+        &PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("brushes"),
+        &mut catalog_sources,
+    );
+
     generate_catalog_sources(catalog_sources, &src);
 
     generate_yaml_presets(&PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("presets"));
-
-    generate_builtin_brushes(
-        &PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("brushes"),
-    );
 
     generate_texture_registry(
         &PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("resources/textures"),
@@ -174,10 +180,22 @@ fn generate_catalog_registry(
         .to_str()
         .unwrap()
         .replace('\\', "/");
-    sources.push((
-        rel,
-        registration_type.rsplit_once("::").unwrap().0.to_string(),
-    ));
+    record_catalog_source(
+        &rel,
+        registration_type.rsplit_once("::").unwrap().0,
+        sources,
+    );
+}
+
+/// Record a scanned directory as a source of browsable catalog metadata.
+///
+/// Split out from [`generate_catalog_registry`] for the scans whose directory
+/// holds data rather than `register()` modules — `brushes/` is a directory of
+/// YAML, but its catalog is documentation on the same footing as a registry's.
+/// `module` must export `CATALOG_ID` and `catalog()`, and may export a preview
+/// mechanism.
+fn record_catalog_source(dir: &str, module: &str, sources: &mut Vec<(String, String)>) {
+    sources.push((dir.to_string(), module.to_string()));
 }
 
 /// Resolve a module path (`crate::a::b`) to the file that holds it, trying
@@ -208,7 +226,9 @@ fn generate_catalog_sources(mut sources: Vec<(String, String)>, src: &Path) {
 
     code.push_str("/// A registry directory the build scan found to produce a catalog.\n");
     code.push_str("pub struct CatalogSource {\n");
-    code.push_str("    /// Module directory, relative to `crates/darkly/src`.\n");
+    code.push_str("    /// The directory the build scan walked, as that scan named it:\n");
+    code.push_str("    /// `gpu/veils` and friends relative to `crates/darkly/src`,\n");
+    code.push_str("    /// `brushes` beside it.\n");
     code.push_str("    pub dir: &'static str,\n");
     code.push_str("    /// Id of the catalog the registry in that directory produces.\n");
     code.push_str("    pub id: &'static str,\n");
@@ -600,7 +620,20 @@ fn titlecase(s: &str) -> String {
 /// brushes are loaded by `crate::brush::builtin_brushes::all()` at
 /// engine startup — adding a new one is "drop a `.yaml` file in the
 /// directory" with no other code touched.
-fn generate_builtin_brushes(dir: &Path) {
+///
+/// Also records the directory as a catalog source, from the scan itself
+/// rather than from a second hand-written name — the same "derived from
+/// what is on disk" property [`generate_catalog_registry`] gives the
+/// module directories, and what `every_catalog_source_is_exported` rests on.
+fn generate_builtin_brushes(dir: &Path, catalog_sources: &mut Vec<(String, String)>) {
+    record_catalog_source(
+        dir.file_name()
+            .and_then(|s| s.to_str())
+            .expect("brush directory has a name"),
+        "crate::brush::builtin_brushes",
+        catalog_sources,
+    );
+
     let mut brushes: Vec<(String, PathBuf)> = Vec::new();
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {

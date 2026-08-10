@@ -1,5 +1,6 @@
 name: Charcoal
 category: Dry Media
+description: A grainy stick that catches on the paper's tooth, laying color down heavily where you press and skipping where you don't.
 nodes:
   brush_settings:
     type: brush_settings

@@ -61,7 +61,11 @@ impl DarklyEngine {
     #[handler]
     pub fn brush_node_types(&self) -> Vec<crate::nodegraph::NodeRegistration<BrushWireType>> {
         let registry = crate::brush::registry();
-        registry.types().map(|r| r.node.clone()).collect()
+        registry
+            .types()
+            .into_iter()
+            .map(|r| r.node.clone())
+            .collect()
     }
 
     /// Capabilities the active brush graph derives from its nodes'

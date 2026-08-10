@@ -265,6 +265,45 @@ fn export_is_a_faithful_projection() {
             .collect(),
     );
 
+    check(
+        &json,
+        "brushes",
+        darkly::brush::builtin_brushes::docs()
+            .iter()
+            .map(|(stem, info)| {
+                (
+                    *stem,
+                    info.name.as_str(),
+                    info.icon,
+                    some(info.description.as_str()),
+                    some(info.category.as_str()),
+                    None,
+                )
+            })
+            .collect(),
+    );
+
+    check(
+        &json,
+        "brushNodes",
+        darkly::brush::registry()
+            .types()
+            .into_iter()
+            .map(|r| {
+                (
+                    r.node.type_id,
+                    r.node.display_name,
+                    // Ports are not parameters and a preview-fallback glyph is
+                    // not a palette icon — both deliberately absent.
+                    None,
+                    some(r.node.description),
+                    some(r.node.category),
+                    None,
+                )
+            })
+            .collect(),
+    );
+
     // The capture kind is voids' alone, and it rides beside the previewability
     // every catalog now answers.
     for r in darkly::gpu::void::VoidRegistry::new().types() {
