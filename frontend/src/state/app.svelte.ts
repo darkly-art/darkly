@@ -12,6 +12,13 @@ import { HttpStreamSource } from '../lib/httpStreamSource';
 import type { FrameSource, CaptureKind } from '../lib/frameSource';
 import { processRecording } from '../recording/recorder.svelte';
 import { freshDocument } from './freshDocument';
+import {
+    appearedRoots,
+    collapsedAncestorsOf,
+    indexLayerTree,
+    nextActiveAfterRemoval,
+    type LayerTreeIndex,
+} from './layerTree';
 
 export interface Color {
     r: number; g: number; b: number; a: number;
@@ -331,6 +338,12 @@ export class DarklyInstance {
     // `clearSelection` so the invariant with `activeLayerId` holds.
     selectedLayerIds = $state<Set<number>>(new Set());
 
+    // The layer tree's shape as of the last `refreshLayerTree`. Plain, not
+    // `$state`: the reconciler consults the pre-mutation shape to work out which
+    // row replaced a deleted one, and reading `layerTree` there would tie the
+    // layer panel's `$effect` to the very state the refresh just wrote.
+    private treeIndex: LayerTreeIndex = indexLayerTree([]);
+
     // Active veil. Mutually exclusive with activeLayerId — the right
     // sidebar's properties pane shows the props of whichever is non-null.
     activeVeilIndex = $state<number | null>(null);
@@ -445,6 +458,14 @@ export class DarklyInstance {
         if (this.isolatedNodeId !== null && id !== this.isolatedNodeId) {
             void this.setIsolatedNode(null);
         }
+        this.setSoleSelection(id);
+    }
+
+    /** Make `id` the entire selection. The single mutator of the
+     *  `activeLayerId` / `selectedLayerIds` pair; `selectLayer` layers the
+     *  isolation-exit policy on top, which the reconciler deliberately does not
+     *  want (it clears isolation only when the isolated node itself dies). */
+    private setSoleSelection(id: number | null) {
         this.activeLayerId = id;
         this.selectedLayerIds = id === null ? new Set() : new Set([id]);
         this.activeVeilIndex = null;
@@ -527,7 +548,9 @@ export class DarklyInstance {
             this.selectLayer(id);
             return;
         }
-        const order = this.flattenedVisibleIds();
+        // Visible order only: shift-click spans the rows the user can see, so
+        // it never reaches into a collapsed group.
+        const order = indexLayerTree(this.layerTree).visibleOrder;
         const anchorIdx = order.indexOf(this.activeLayerId);
         const targetIdx = order.indexOf(id);
         if (anchorIdx < 0 || targetIdx < 0) {
@@ -575,82 +598,81 @@ export class DarklyInstance {
         else this.selectLayer(id);
     }
 
-    /** Walk the visible tree depth-first, returning every clickable node
-     *  id in panel-top-to-panel-bottom order. Children of collapsed
-     *  groups are skipped (the user can't see them, so shift-click
-     *  shouldn't reach them). */
-    private flattenedVisibleIds(): number[] {
-        const out: number[] = [];
-        const walk = (nodes: any[]) => {
-            for (const n of nodes) {
-                if (n?.id === undefined) continue;
-                out.push(n.id);
-                if (n.type === 'group' && !n.collapsed && Array.isArray(n.children)) {
-                    walk(n.children);
-                }
-            }
-        };
-        walk(this.layerTree);
-        return out;
-    }
-
-    /** Pick the first id in `set` that appears in panel order. Returns
-     *  null when the set is empty or none of its ids are still in the
-     *  tree. Caller is the active-layer demotion path for ctrl-click. */
+    /** Pick the first id in `set` that appears in panel order, skipping rows
+     *  inside collapsed groups — the caller is the ctrl-click demotion path, so
+     *  the answer should be a row the user can see. Returns null when the set is
+     *  empty or none of its ids are still visible. Indexed fresh from the live
+     *  tree, since callers may have assigned `layerTree` without a refresh. */
     private firstInTreeOrder(set: Set<number>): number | null {
         if (set.size === 0) return null;
-        for (const id of this.flattenedVisibleIds()) {
+        for (const id of indexLayerTree(this.layerTree).visibleOrder) {
             if (set.has(id)) return id;
         }
         return null;
     }
 
-    /** Reconcile `selectedLayerIds` and `activeLayerId` against the latest
-     *  layer tree. Ids that no longer exist (deleted, undone, replaced by a
-     *  bake result, etc.) drop out; if the active id disappeared, demote
-     *  to the next remaining selected id in panel order or null. Called
-     *  from `refreshLayerTree` so batch-delete / undo / cross-tab swap
-     *  fallout is handled in one place.
+    /** Reconcile session state that references layer ids against the latest
+     *  layer tree: the selection and the isolation target. Ids that no longer
+     *  exist (deleted, undone, replaced by a bake result, etc.) drop out, and
+     *  when the active row itself disappeared, the row that took its place
+     *  becomes active — so no removal path has to know about reselection.
+     *  Called from `refreshLayerTree`, which every tree mutation funnels
+     *  through, so delete / batch-delete / undo fallout is handled in one place.
+     *
+     *  `adoptAppeared` asks for the opposite direction: rows that just came into
+     *  existence become the selection. Only undo/redo pass it — an ordinary
+     *  refresh must never seize the selection just because it noticed a row for
+     *  the first time.
      *
      *  Takes the tree as a parameter (rather than reading `this.layerTree`)
      *  so this code path stays write-only on `layerTree` — reading it here
      *  would tie the LayerPanel's `$effect` to the very state the method
      *  just wrote, looping Svelte's update guard. Same pattern as
      *  `reconcileStreamSources(next)`. */
-    private pruneSelectionAgainstTree(tree: any[]) {
-        const alive = new Set<number>();
-        const visibleOrder: number[] = [];
-        const walk = (nodes: any[]) => {
-            for (const n of nodes) {
-                if (n?.id === undefined) continue;
-                alive.add(n.id);
-                visibleOrder.push(n.id);
-                if (Array.isArray(n.modifiers)) {
-                    for (const m of n.modifiers) {
-                        if (m?.id !== undefined) alive.add(m.id);
-                    }
-                }
-                if (n.type === 'group' && !n.collapsed && Array.isArray(n.children)) {
-                    walk(n.children);
-                }
-            }
-        };
-        walk(tree);
+    private reconcileSelection(tree: any[], adoptAppeared = false) {
+        const prev = this.treeIndex;
+        const next = indexLayerTree(tree);
+        this.treeIndex = next;
 
-        let mutated = false;
-        const nextSelected = new Set<number>();
-        for (const id of this.selectedLayerIds) {
-            if (alive.has(id)) nextSelected.add(id);
-            else mutated = true;
+        // The isolation target is session state pointing at a document node: if
+        // it leaves the tree it becomes unreachable from the compositor's root
+        // walk, every node tests as off-path, and the canvas goes blank until
+        // something happens to reset it. Checked independently of the selection
+        // below, because the isolated node can die while a different, still-live
+        // layer is active. Krita ends isolation the same way when its isolation
+        // root is removed (`KisImage::aboutToRemoveANode`).
+        if (this.isolatedNodeId !== null && !next.ids.has(this.isolatedNodeId)) {
+            void this.setIsolatedNode(null);
         }
-        if (mutated) this.selectedLayerIds = nextSelected;
 
-        if (this.activeLayerId !== null && !alive.has(this.activeLayerId)) {
-            let replacement: number | null = null;
-            for (const id of visibleOrder) {
-                if (nextSelected.has(id)) { replacement = id; break; }
+        const survivors = [...this.selectedLayerIds].filter((id) => next.ids.has(id));
+        if (survivors.length !== this.selectedLayerIds.size) {
+            this.selectedLayerIds = new Set(survivors);
+        }
+
+        const appeared = adoptAppeared ? appearedRoots(prev, next) : [];
+        if (appeared.length > 0) {
+            this.selectedLayerIds = new Set(appeared);
+            this.activeLayerId = appeared[0];
+            this.activeVeilIndex = null;
+        } else {
+            const active = this.activeLayerId;
+            if (active !== null && !next.ids.has(active)) {
+                // Prefer a surviving member of the selection, keeping the rest
+                // of it intact; otherwise adopt whatever replaced the dead row.
+                const demoted = next.order.find((id) => this.selectedLayerIds.has(id));
+                if (demoted !== undefined) this.activeLayerId = demoted;
+                else this.setSoleSelection(nextActiveAfterRemoval(prev, next.ids, active));
             }
-            this.activeLayerId = replacement;
+        }
+
+        // A row the panel doesn't draw reads to the user as "nothing selected",
+        // which is the complaint reselection exists to fix. Open whatever hides
+        // it, as GIMP's tree view does for every newly selected item.
+        if (this.activeLayerId !== null) {
+            for (const id of collapsedAncestorsOf(next, this.activeLayerId)) {
+                this.engine?.api.setGroupCollapsed({ id, collapsed: false });
+            }
         }
     }
 
@@ -1024,7 +1046,13 @@ export class DarklyInstance {
         return [r.origin_x, r.origin_y, r.width, r.height];
     }
 
-    async refreshLayerTree(): Promise<void> {
+    /** Re-read the layer tree and reconcile session state against it.
+     *
+     *  `adoptAppeared` makes rows that just came into existence the selection —
+     *  passed by undo/redo so undoing a delete lands on the layer it brought
+     *  back, matching both GIMP (which selects the restored layer) and Krita
+     *  (which restores the pre-delete selection set). */
+    async refreshLayerTree(opts?: { adoptAppeared?: boolean }): Promise<void> {
         if (!this.engine) return;
         const parsed = await this.engine.api.layerTree();
         const next: any[] = Array.isArray(parsed) ? parsed : [];
@@ -1036,7 +1064,7 @@ export class DarklyInstance {
         // keeping it out of any enclosing effect's dependency set — otherwise
         // the write loops back through it.
         this.reconcileStreamSources(next);
-        this.pruneSelectionAgainstTree(next);
+        this.reconcileSelection(next, opts?.adoptAppeared ?? false);
         this.layerTree = next;
         // Schedule a render frame: callers invoke this after layer mutations
         // (undo/redo, add/remove, drag/drop, etc.), and the engine may have

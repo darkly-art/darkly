@@ -23,9 +23,21 @@
 //!
 //! The two sides are managed atomically by this type — there is no public
 //! API by which a caller can resize one without going through `Scratch`.
-//! The R/W hazard is internal; consumers see a single object that handles
-//! the WebGPU quirk and call [`Scratch::sync_read_mirror`] with the dab
-//! footprint when they need to read the in-flight scratch state.
+//!
+//! There are two ways to read the in-flight scratch, and which one applies
+//! is decided by the reader's own render target:
+//!
+//! - A pass that **also writes** the scratch (its color attachment is
+//!   [`Scratch::write_view`]) must go through [`Scratch::sync_read_mirror`].
+//!   Sampling the write side from such a pass is the R/W alias WebGPU
+//!   forbids; the mirror is what makes it legal.
+//! - A pass that **does not** target the scratch may sample the write side
+//!   directly via [`Scratch::live_canvas_bind_group`] — no alias, no copy.
+//!   Watercolor's pickup atlas pass does this: it renders to the atlas and
+//!   reads the scratch to see the wet paint under each dab.
+//!
+//! The mirror is the more expensive of the two (a `copy_texture_to_texture`
+//! per dab), so prefer the direct read whenever the target allows it.
 //!
 //! Ownership: owned by `StrokeBuffer`, allocated at stroke start, freed at
 //! stroke end.
@@ -203,6 +215,15 @@ impl Scratch {
     }
     pub fn read_mirror_bind_group(&self) -> &wgpu::BindGroup {
         &self.read_mirror_bind_group
+    }
+    /// The write side bound for sampling, for passes that read the
+    /// in-flight stroke pixels **without** targeting the scratch — see the
+    /// module docs for which of the two read paths applies. Callers whose
+    /// render target *is* the scratch must use
+    /// [`Scratch::sync_read_mirror`] instead; sampling here from such a
+    /// pass is the read/write alias WebGPU forbids.
+    pub fn live_canvas_bind_group(&self) -> &wgpu::BindGroup {
+        &self.write_bind_group
     }
     pub fn read_mirror_texture(&self) -> &wgpu::Texture {
         &self.read_mirror_texture

@@ -5,12 +5,15 @@
 //! with one extra pass at the front:
 //!
 //! 1. **Pickup atlas pass.** N instances, each writes the 8×8 alpha-
-//!    weighted neighborhood average of `pre_stroke_texture` at the
-//!    dab's footprint into its cell in a 128×128 atlas. The shader
-//!    (`watercolor_pickup.wgsl`) is brush-agnostic in math
-//!    but built per-brush so its `DabRecord` struct stride matches
-//!    the compiled brush's. Cell layout is `(idx % atlas_w, idx /
-//!    atlas_w)`.
+//!    weighted neighborhood average of the *live canvas* at the dab's
+//!    footprint into its cell in a 128×128 atlas. Live canvas means
+//!    `pre_stroke_texture` with the stroke scratch composited over it —
+//!    the dry layer plus the wet paint deposited so far — which is what
+//!    lets a mark keep building where the brush passes more than once.
+//!    Reading the scratch here is legal because this pass targets the
+//!    atlas, not the scratch. The shader is brush-agnostic in math but
+//!    built per-brush so its `DabRecord` struct stride matches the
+//!    compiled brush's. Cell layout is `(idx % atlas_w, idx / atlas_w)`.
 //! 2. **Composite pass.** One instanced draw, N quads. The fragment
 //!    shader is the framework-assembled per-brush WGSL: upstream
 //!    nodes (`circle`, `paint_color`, etc.) compile inline; this
@@ -59,6 +62,18 @@ use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 const ATLAS_WIDTH: u32 = 128;
 const ATLAS_HEIGHT: u32 = 128;
+
+/// The atlas holds one cell per dab, addressed by instance index as
+/// `(idx % ATLAS_WIDTH, idx / ATLAS_WIDTH)`. If it ever holds fewer cells
+/// than a phase can queue, dab `ATLAS_WIDTH * ATLAS_HEIGHT` silently
+/// aliases onto cell 0 and picks up the wrong canvas colour — no panic, no
+/// validation error, just wrong pixels. The two constants are currently
+/// equal, so this is exactly load-bearing.
+const _: () = assert!(
+    (ATLAS_WIDTH as u64) * (ATLAS_HEIGHT as u64) >= MAX_DABS_PER_PHASE as u64,
+    "watercolor pickup atlas has fewer cells than MAX_DABS_PER_PHASE; \
+     grow the atlas or lower the cap",
+);
 
 const MAX_UNIFORM_BYTES: usize = 1024;
 
@@ -169,6 +184,7 @@ impl PerBrushPipeline {
                     Some(ctx.uniform_bgl),
                     Some(&dabs_bgl),
                     Some(ctx.canvas_copy_bgl), // pre_stroke texture+sampler
+                    Some(ctx.canvas_copy_bgl), // stroke scratch texture+sampler
                 ],
                 immediate_size: 0,
             });
@@ -431,6 +447,9 @@ fn watercolor_pipeline_reg() -> BrushPipelineRegistration {
 /// generated per brush — the file-level shader-compile test parses
 /// every `.wgsl` in isolation and a placeholder-bearing template
 /// fails that pass.
+///
+/// Depends on `source_over` from `shaders/source_over.wgsl`, which
+/// [`build_pickup_shader`] prepends.
 const PICKUP_SHADER_TAIL: &str = r#"
 struct PickupUniforms {
     pre_stroke_origin: vec2<i32>,
@@ -445,6 +464,11 @@ struct PickupUniforms {
 @group(1) @binding(0) var<storage, read> dabs: array<DabRecord>;
 @group(2) @binding(0) var t_pre_stroke: texture_2d<f32>;
 @group(2) @binding(1) var s_pre_stroke: sampler;
+// The in-flight stroke scratch — premultiplied paint deposited so far this
+// stroke. Sampling it here is safe: this pass renders to the atlas, so the
+// scratch is read-only for the duration and there is no read/write alias.
+@group(3) @binding(0) var t_scratch: texture_2d<f32>;
+@group(3) @binding(1) var s_scratch: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -513,9 +537,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
                 continue;
             }
-            let s = textureSampleLevel(t_pre_stroke, s_pre_stroke, uv, 0.0);
-            sum_rgb = sum_rgb + s.rgb * s.a;
-            sum_a = sum_a + s.a;
+            // The canvas the brush is actually touching: wet paint from this
+            // stroke over the dry layer beneath it. Reading only the dry
+            // layer would freeze the load for the whole stroke, so a mark
+            // could never build past its first pass.
+            let dry = textureSampleLevel(t_pre_stroke, s_pre_stroke, uv, 0.0);
+            let wet = textureSampleLevel(t_scratch, s_scratch, uv, 0.0);
+            let live = source_over(wet.rgb, wet.a, dry);
+            sum_rgb = sum_rgb + live.rgb * live.a;
+            sum_a = sum_a + live.a;
         }
     }
     let avg_rgb = select(vec3<f32>(0.0), sum_rgb / sum_a, sum_a > 0.0001);
@@ -529,7 +559,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 /// must match the brush's dab layout — so each brush gets its own
 /// pickup pipeline with the matching struct definition prepended.
 fn build_pickup_shader(compiled: &CompiledBrush) -> String {
-    let mut out = String::with_capacity(PICKUP_SHADER_TAIL.len() + 256);
+    let mut out = String::with_capacity(PICKUP_SHADER_TAIL.len() + 1024);
+    out.push_str(include_str!("../../../shaders/source_over.wgsl"));
+    out.push('\n');
     out.push_str("struct DabRecord {\n");
     for f in &compiled.dab_layout {
         out.push_str(&format!("    {}: {},\n", f.name, f.ty.wgsl_name()));
@@ -753,6 +785,16 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         // default (or the value the brush graph baked into the port).
         // A wired-per-dab `pickup_size` would need to flow through the
         // dab record; not in scope.
+        // The pickup shader maps both `t_pre_stroke` and `t_scratch` with one
+        // set of origin/size uniforms, which is only valid because the two
+        // share the layer frame. `StrokeBuffer` grows them together.
+        debug_assert_eq!(
+            scratch.write_dimensions(),
+            (pre_stroke_size[0], pre_stroke_size[1]),
+            "scratch and pre_stroke must share the layer frame — the pickup \
+             shader derives both UVs from `pre_stroke_origin`/`pre_stroke_size`",
+        );
+
         let pickup_size = ctx.input_f32("pickup_size").clamp(0.0, 2.0);
         let pickup_uniforms = PickupUniforms {
             pre_stroke_origin,
@@ -799,6 +841,7 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
                 pass.set_bind_group(0, &per_brush.pickup_uniform_bind_group, &[pickup_offset]);
                 pass.set_bind_group(1, &per_brush.dabs_bind_group_pickup, &[]);
                 pass.set_bind_group(2, pre_stroke_bg, &[]);
+                pass.set_bind_group(3, scratch.live_canvas_bind_group(), &[]);
                 pass.draw(0..6, 0..total_dabs);
             }
 

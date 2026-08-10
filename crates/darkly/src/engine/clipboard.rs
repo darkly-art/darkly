@@ -13,7 +13,7 @@ use crate::gpu::blend_mode;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::readback;
 use crate::layer::{Layer, LayerId};
-use crate::undo::{GpuRegionAction, LayerAddAction};
+use crate::undo::{EntityAddAction, GpuRegionAction};
 
 #[handlers]
 impl DarklyEngine {
@@ -509,7 +509,7 @@ impl DarklyEngine {
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(LayerAddAction::new(id, parent, pos)));
+        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
 
         id
     }
@@ -659,7 +659,7 @@ impl DarklyEngine {
         }
 
         // Restore mask presence (without pixels — v1). Use the unseeded attach:
-        // the pasted layer's `LayerAddAction` already covers the mask in its
+        // the pasted layer's `EntityAddAction` already covers the mask in its
         // subtree, and seeding from the receiving document's active selection
         // would wrongly turn that selection into the mask.
         if clip.mask.is_some() {

@@ -475,7 +475,7 @@ fn paste_floating_target_layer_matches_created() {
 }
 
 /// Companion: committing a floating paste keeps the layer and registers
-/// exactly one undoable LayerAddAction (so a single undo removes the paste).
+/// exactly one undoable EntityAddAction (so a single undo removes the paste).
 #[test]
 fn paste_floating_commit_is_one_undo() {
     let (w, h) = (128, 128);
@@ -1536,7 +1536,7 @@ fn add_remove_cycles_dont_leak_layer_textures() {
 
 /// Regression: undoing a layer removal must restore the layer's pixel
 /// content, not just its tree slot. Previously `remove_layer` disposed
-/// the GPU texture immediately and `LayerRemoveAction` carried no pixel
+/// the GPU texture immediately and `EntityRemoveAction` carried no pixel
 /// state, so undo reattached the node but the compositor allocated a
 /// fresh blank texture.
 #[test]
@@ -5932,7 +5932,7 @@ fn delete_refuses_to_empty_document() {
 
 /// Selecting a group AND one of its descendants and deleting both must
 /// dedupe — the descendant comes out with its ancestor, so issuing a
-/// second `LayerRemoveAction` would corrupt the undo stack.
+/// second `EntityRemoveAction` would corrupt the undo stack.
 #[test]
 fn delete_dedupes_ancestor_descendant() {
     use darkly::document::MoveTarget;

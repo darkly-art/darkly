@@ -570,7 +570,7 @@ pub struct DarklyEngine {
     /// strokes and brush / tool switches, never serialized. Kept across
     /// layer deletion too — `LayerId` is a generational slotmap key, so a
     /// stale pin can't alias a new layer, and undoing the deletion
-    /// reinserts the same id (`LayerRemoveAction::undo`), reviving the
+    /// reinserts the same id (`EntityRemoveAction::undo`), reviving the
     /// pin. Stroke start validates it: a dead or group id falls back to
     /// the painted layer.
     pub(crate) clone_source_layer: Option<LayerId>,

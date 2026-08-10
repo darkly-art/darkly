@@ -255,7 +255,14 @@ export function registerActions() {
         description: 'Undo the last action.',
         icon: 'fa6-solid:rotate-left',
         menuPath: ['Edit:10'],
-        handler: async () => { app.engine?.api.undo(); await app.syncCanvasRect(); await app.refreshLayerTree(); },
+        // The layer-tree refresh goes first: it diffs the tree against the
+        // pre-undo shape to find what the operation restored, and any await in
+        // between could let an unrelated refresh consume that difference.
+        handler: async () => {
+            app.engine?.api.undo();
+            await app.refreshLayerTree({ adoptAppeared: true });
+            await app.syncCanvasRect();
+        },
     });
     actions.register({
         id: 'redo',
@@ -264,7 +271,11 @@ export function registerActions() {
         description: 'Redo the last undone action.',
         icon: 'fa6-solid:rotate-right',
         menuPath: ['Edit:20'],
-        handler: async () => { app.engine?.api.redo(); await app.syncCanvasRect(); await app.refreshLayerTree(); },
+        handler: async () => {
+            app.engine?.api.redo();
+            await app.refreshLayerTree({ adoptAppeared: true });
+            await app.syncCanvasRect();
+        },
     });
 
     // -- Colors --
@@ -791,7 +802,6 @@ export function registerActions() {
                 for (const id of targets) app.stopStreamSource(id);
                 if (targets.length === 1) {
                     await engine.api.removeLayer({ id: targets[0] });
-                    app.clearSelection();
                 } else {
                     const skipped = await engine.api.removeLayers({ ids: targets });
                     if (skipped > 0) {

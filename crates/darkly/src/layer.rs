@@ -525,6 +525,18 @@ pub enum LayerNode {
     Group(LayerGroup),
 }
 
+/// Which of a node's two child lists an id lives in. A node owns both a
+/// `filters` list (modifiers such as masks) and — for groups — a `children`
+/// list of tree nodes; the two are disjoint. Detach reports the slot it found
+/// an id in so reattach can put it back in the same one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildSlot {
+    /// The host's `filters` list.
+    Filter,
+    /// A group's `children` list.
+    Child,
+}
+
 impl LayerNode {
     pub fn id(&self) -> LayerId {
         match self {
@@ -573,6 +585,64 @@ impl LayerNode {
             LayerNode::Layer(l) => l.modifiers_mut(),
             LayerNode::Group(g) => &mut g.filters,
         }
+    }
+
+    /// Group children, empty for a leaf layer. Pairs with
+    /// [`LayerNode::children_mut`] so callers can treat "the node's children"
+    /// uniformly without matching on the variant.
+    pub fn children(&self) -> &[LayerId] {
+        match self {
+            LayerNode::Group(g) => &g.children,
+            LayerNode::Layer(_) => &[],
+        }
+    }
+
+    /// Mutable group children, `None` for a leaf layer — a layer has no
+    /// children list to insert into, and that distinction is the node's to
+    /// report rather than the caller's to test for.
+    pub fn children_mut(&mut self) -> Option<&mut Vec<LayerId>> {
+        match self {
+            LayerNode::Group(g) => Some(&mut g.children),
+            LayerNode::Layer(_) => None,
+        }
+    }
+
+    /// Remove `child` from whichever of this node's two lists holds it, and
+    /// report which one that was. Ids are unique across the document's
+    /// slotmap, so a child can only be in one — which is what lets detach be
+    /// kind-agnostic instead of asking the caller to know whether it holds a
+    /// filter or a tree node.
+    pub fn detach_child(&mut self, child: LayerId) -> Option<ChildSlot> {
+        let filters = self.modifiers_mut();
+        if let Some(i) = filters.iter().position(|c| *c == child) {
+            filters.remove(i);
+            return Some(ChildSlot::Filter);
+        }
+        let children = self.children_mut()?;
+        let i = children.iter().position(|c| *c == child)?;
+        children.remove(i);
+        Some(ChildSlot::Child)
+    }
+
+    /// Insert `child` into the list named by `slot`, at `position` (clamped) or
+    /// at the end. Returns false when the node has no such list — a leaf layer
+    /// asked to take a tree child.
+    pub fn attach_child(
+        &mut self,
+        child: LayerId,
+        slot: ChildSlot,
+        position: Option<usize>,
+    ) -> bool {
+        let list = match slot {
+            ChildSlot::Filter => self.modifiers_mut(),
+            ChildSlot::Child => match self.children_mut() {
+                Some(list) => list,
+                None => return false,
+            },
+        };
+        let at = position.map_or(list.len(), |p| p.min(list.len()));
+        list.insert(at, child);
+        true
     }
 
     pub fn pixels(&self) -> Option<&PixelBuffer> {
