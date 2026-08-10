@@ -188,6 +188,5 @@ export const polygonSelectTool: ToolDescriptor = {
     id: 'polygon_select',
     group: 'select',
     cluster: 'select',
-    hotkeyAction: 'polygonSelectTool',
     create: (inst: DarklyInstance) => new PolygonSelectTool(inst),
 };

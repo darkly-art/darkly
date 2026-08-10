@@ -172,6 +172,5 @@ export const gradientTool: ToolDescriptor = {
     id: 'gradient',
     group: 'paint',
     cluster: 'fill',
-    hotkeyAction: 'gradientTool',
     create: (inst: DarklyInstance) => new GradientTool(inst),
 };

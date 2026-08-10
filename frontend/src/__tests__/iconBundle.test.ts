@@ -4,12 +4,14 @@ import '../icons/bundle.generated';
 import { generateIcon } from '@iconify/svelte/dist/offline-functions.js';
 import { registerActions } from '../actions/index';
 import { actions } from '../actions/registry';
+import { rustActionDocs } from '../actions/__tests__/rust_action_docs';
 import { toolRegistry } from '../tools/registry';
 
 // Register the menu/palette actions. Tools are imported lazily inside the tool
 // test instead — registering tool-switch actions needs app methods that aren't
 // stood up in the node test env, exactly as in menu_actions.test.ts.
 beforeAll(() => {
+    actions.setDocs(rustActionDocs());
     registerActions();
 });
 
@@ -55,6 +57,9 @@ function markupIconNames(): { file: string; name: string }[] {
 }
 
 describe('icon bundle completeness (offline)', () => {
+    // Action glyphs live in `crates/darkly/src/actions/`, which the generator
+    // scans along with the rest of the crate — this is what proves that scan
+    // reaches them.
     it('bundles every registered action icon', () => {
         const missing = actions
             .all()

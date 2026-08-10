@@ -37,6 +37,7 @@ pub fn register() -> FilterPipelineRegistration {
         display_name: "Invert Colors",
         icon: "fa6-solid:circle-half-stroke",
         description: "Invert every color channel for a photo-negative.",
+        hotkey_action: "filterInvert",
         params: &[],
         // Invert takes no parameters, so there is nothing to sweep and nothing
         // to declare: one frame of the filter fully applied, which is the whole

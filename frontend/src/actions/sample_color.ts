@@ -12,11 +12,6 @@ import { screenToCanvas } from '../canvas/coordinates';
 export function registerSampleColorAction(): void {
     actions.register({
         id: 'sampleColor',
-        displayName: 'Sample Color',
-        category: 'colors',
-        description:
-            'Hold the modifier and drag on the canvas to sample a color into the foreground swatch.',
-        icon: 'fa6-solid:eye-dropper',
         type: 'hold',
         handler: (ctx) => {
             if (!app.engine) return;

@@ -1,3 +1,5 @@
+pub mod action;
+pub mod actions;
 pub mod brush;
 pub mod catalog;
 pub mod clipboard;

@@ -80,6 +80,11 @@ pub struct FilterPipelineRegistration {
     /// Colors-menu action description, where the command palette's substring
     /// search indexes it — include the terms users would search for.
     pub description: &'static str,
+    /// Id of the action that applies this filter to the active layer. Bindings
+    /// in `presets/*.yaml` name this string; declaring it here rather than
+    /// deriving it from `type_id` is what gives those bindings a compile-time
+    /// target, the same way `ToolRegistration` does for tool selection.
+    pub hotkey_action: &'static str,
     pub params: &'static [ParamDef],
     /// How long this filter's preview runs, or `None` for a filter with nothing
     /// worth showing. Declaring an animation is what makes a filter previewable
@@ -108,6 +113,7 @@ impl FilterPipelineRegistration {
         CatalogEntry::new(self.type_id, self.display_name)
             .with_icon(self.icon)
             .with_description(self.description)
+            .with_hotkey_action(self.hotkey_action)
             .with_params(self.params)
             .with_supports_preview(self.preview.is_some())
     }

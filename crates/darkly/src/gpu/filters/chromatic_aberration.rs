@@ -301,6 +301,7 @@ pub fn register() -> FilterPipelineRegistration {
         display_name: "Chromatic Aberration",
         icon: "lucide-lab:venn",
         description: DESCRIPTION,
+        hotkey_action: "filterChromatic_aberration",
         params: PARAMS,
         preview: Some(PREVIEW),
         preview_at: Some(preview_params),

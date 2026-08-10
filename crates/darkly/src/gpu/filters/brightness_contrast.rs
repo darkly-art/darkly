@@ -113,6 +113,7 @@ pub fn register() -> FilterPipelineRegistration {
         display_name: "Brightness/Contrast",
         icon: "fa6-solid:sun",
         description: "The classic two-slider brightness and contrast adjustment.",
+        hotkey_action: "filterBrightness_contrast",
         params: PARAMS,
         // A signed sweep rests in the middle, so the default still would be the
         // frame that looks like no effect at all. The quarter point is its

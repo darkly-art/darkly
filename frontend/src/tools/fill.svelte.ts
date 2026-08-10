@@ -34,6 +34,5 @@ export const fillTool: ToolDescriptor = {
     id: 'fill',
     group: 'paint',
     cluster: 'fill',
-    hotkeyAction: 'fillTool',
     create: (inst: DarklyInstance) => new FillTool(inst),
 };

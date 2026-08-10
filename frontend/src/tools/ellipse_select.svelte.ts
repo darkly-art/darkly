@@ -103,6 +103,5 @@ export const ellipseSelectTool: ToolDescriptor = {
     id: 'ellipse_select',
     group: 'select',
     cluster: 'select',
-    hotkeyAction: 'ellipseSelectTool',
     create: (inst: DarklyInstance) => new EllipseSelectTool(inst),
 };

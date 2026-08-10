@@ -143,6 +143,7 @@ pub fn register() -> FilterPipelineRegistration {
         display_name: "Hue/Saturation",
         icon: "fa6-solid:palette",
         description: "Rotate hue and scale saturation and value, with optional colorize.",
+        hotkey_action: "filterHsv",
         params: PARAMS,
         // A signed sweep rests in the middle, so the default still would be the
         // frame that looks like no effect at all. The quarter point is its

@@ -103,6 +103,5 @@ export const rectSelectTool: ToolDescriptor = {
     id: 'rect_select',
     group: 'select',
     cluster: 'select',
-    hotkeyAction: 'rectSelectTool',
     create: (inst: DarklyInstance) => new RectSelectTool(inst),
 };

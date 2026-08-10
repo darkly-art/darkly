@@ -125,6 +125,21 @@ pub struct Catalog {
     /// not; settings sections do.
     pub order: Option<i32>,
     pub entries: Vec<CatalogEntry>,
+    /// Whether an entry's icon identifies it within the catalog.
+    ///
+    /// True for the registries whose entries are picker variants, where the
+    /// glyph is most of what the user has to tell two of them apart and a
+    /// duplicate is a copy-pasted `register()` that kept the donor's. Actions
+    /// declare it false: an action's glyph depicts the *operation*, so the same
+    /// operation at another scope wants the same glyph (flipping the canvas and
+    /// flipping a layer are both `arrows-left-right`), and an action is never
+    /// shown without its label.
+    ///
+    /// Says how to read the icons rather than what they are, so it stays out of
+    /// the exported artifact.
+    #[serde(skip)]
+    #[cfg_attr(feature = "ts-export", ts(skip))]
+    pub icons_identify_entries: bool,
 }
 
 impl Catalog {
@@ -136,7 +151,15 @@ impl Catalog {
             icon: None,
             order: None,
             entries,
+            icons_identify_entries: true,
         }
+    }
+
+    /// Declare that entries in this catalog may share a glyph — see
+    /// [`Catalog::icons_identify_entries`].
+    pub fn with_shared_icons(mut self) -> Self {
+        self.icons_identify_entries = false;
+        self
     }
 
     pub fn with_description(mut self, description: &'static str) -> Self {
@@ -280,7 +303,9 @@ mod tests {
 
     /// Generalizes the per-registry uniqueness check `gpu/filter.rs` used to
     /// carry: a copy-pasted `register()` that kept the donor's glyph shows up
-    /// as two entries in one catalog claiming the same icon.
+    /// as two entries in one catalog claiming the same icon. Catalogs whose
+    /// glyphs are not identifying opt out of the uniqueness half — see
+    /// [`Catalog::icons_identify_entries`] — but not the wellformedness half.
     #[test]
     fn icons_are_wellformed_and_unique_within_a_catalog() {
         for cat in catalogs() {
@@ -299,6 +324,9 @@ mod tests {
                     cat.id,
                     e.type_id
                 );
+                if !cat.icons_identify_entries {
+                    continue;
+                }
                 if let Some((owner, _)) = seen.iter().find(|(_, i)| *i == icon) {
                     panic!(
                         "`{}/{}` and `{}/{}` both use icon `{icon}`",

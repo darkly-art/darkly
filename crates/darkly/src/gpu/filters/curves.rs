@@ -114,6 +114,7 @@ pub fn register() -> FilterPipelineRegistration {
         display_name: "Curves",
         icon: "fa6-solid:chart-line",
         description: "Remap tones and colors with editable per-channel curves.",
+        hotkey_action: "filterCurves",
         params: PARAMS,
         // A signed sweep rests in the middle, so the default still would be the
         // frame that looks like no effect at all. The quarter point is its

@@ -382,6 +382,30 @@ impl Binding {
     }
 }
 
+/// The action id a config key binds, or `None` when the key binds no action.
+///
+/// Bindings live under `hotkeys.` / `mouseclicks.`, with one exception: the
+/// canvas-navigation held modifiers (`hotkeys.nav.trigger` and friends) are
+/// prefs declared by [`sections`], sharing the prefix because that is where a
+/// user looks for them. Nothing dispatches an action from a pref, so asking the
+/// schema is what separates the two — no rule about dots in ids.
+pub fn bound_action_id(key: &str) -> Option<&str> {
+    use std::collections::HashSet;
+    use std::sync::OnceLock;
+    static PREF_KEYS: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    let prefs = PREF_KEYS.get_or_init(|| {
+        sections::registrations()
+            .iter()
+            .flat_map(|s| s.prefs.iter())
+            .map(|p| p.key)
+            .collect()
+    });
+    let id = key
+        .strip_prefix("hotkeys.")
+        .or_else(|| key.strip_prefix("mouseclicks."))?;
+    (!prefs.contains(key)).then_some(id)
+}
+
 /// Every hotkey and mouse binding a named preset resolves to, with no user
 /// layer. `None` resolves the editor-agnostic baseline alone.
 ///
@@ -422,10 +446,7 @@ pub fn preset_bindings(overlay: Option<&str>) -> BTreeMap<String, Vec<Binding>> 
 
     let mut out: BTreeMap<String, Vec<Binding>> = BTreeMap::new();
     for key in keys {
-        let Some(action) = key
-            .strip_prefix("hotkeys.")
-            .or_else(|| key.strip_prefix("mouseclicks."))
-        else {
+        let Some(action) = bound_action_id(key) else {
             continue;
         };
         let Some(ConfigValue::Str(raw)) = config.resolve(overlay, key, false) else {
@@ -574,11 +595,7 @@ mod tests {
                         _ => None,
                     }
                 })
-                .filter_map(|k| {
-                    k.strip_prefix("hotkeys.")
-                        .or_else(|| k.strip_prefix("mouseclicks."))
-                        .map(str::to_string)
-                })
+                .filter_map(|k| bound_action_id(&k).map(str::to_string))
                 .collect()
         };
 
@@ -710,43 +727,37 @@ mod tests {
         println!("union: {}", union.len());
     }
 
-    /// Every tool-selecting binding in every preset names a tool that actually
-    /// registers it. A preset naming an id no registration declares is a key
-    /// that silently does nothing — the bug class that once shipped a dead
-    /// Ctrl+I. The ids are deliberately not derivable from `type_id`
-    /// (`colorpicker` declares `colorPickerTool`), so nothing but this
-    /// comparison catches a typo on either side.
+    /// Every binding in every preset names something that actually exists.
+    ///
+    /// A preset can name any id; one nothing registers is a key that silently
+    /// does nothing — the bug class that once shipped a dead Ctrl+I. Everything
+    /// a chord can reach declares the id that reaches it on its catalog entry
+    /// (`hotkey_action`), so reading the whole of that surface covers the
+    /// actions, the tool selections and the filters in one comparison. The ids
+    /// are deliberately not derivable from a `type_id` (`colorpicker` declares
+    /// `colorPickerTool`), so nothing else catches a typo on either side.
+    ///
+    /// Checked over [`preset_bindings`] rather than the raw YAML so the "which
+    /// keys are bindings" rule has one home.
     #[test]
     fn every_preset_binding_names_a_registered_target() {
-        let registered: Vec<&'static str> = crate::tool::registry()
-            .types()
-            .into_iter()
-            .map(|reg| reg.hotkey_action)
+        let catalogs = crate::catalog::catalogs();
+        let registered: std::collections::BTreeSet<&'static str> = catalogs
+            .iter()
+            .flat_map(|c| c.entries.iter())
+            .filter_map(|e| e.hotkey_action)
             .collect();
 
-        let mut presets: Vec<(&str, &str)> = vec![("defaults", presets_gen::DEFAULTS_YAML)];
-        presets.extend(presets_gen::OVERLAYS.iter().copied());
+        let mut presets: Vec<Option<&str>> = vec![None];
+        presets.extend(presets_gen::OVERLAYS.iter().map(|(name, _)| Some(*name)));
 
         let mut checked = 0usize;
-        for (preset, yaml) in presets {
-            let map = parse_yaml_preset(yaml)
-                .unwrap_or_else(|e| panic!("failed to parse preset {preset}: {e}"));
-            for key in map.keys() {
-                let Some(action) = key
-                    .strip_prefix("hotkeys.")
-                    .or_else(|| key.strip_prefix("mouseclicks."))
-                else {
-                    continue;
-                };
-                // Tool-selecting actions are the ones this registry owns; the
-                // rest of the binding surface belongs to the TypeScript action
-                // registry and is out of scope here.
-                if !action.ends_with("Tool") {
-                    continue;
-                }
+        for preset in presets {
+            let label = preset.unwrap_or("defaults");
+            for action in preset_bindings(preset).keys() {
                 assert!(
-                    registered.contains(&action),
-                    "preset `{preset}` binds `{action}`, which no tool registers \
+                    registered.contains(action.as_str()),
+                    "preset `{label}` binds `{action}`, which nothing registers \
                      (registered: {registered:?})"
                 );
                 checked += 1;
@@ -754,7 +765,7 @@ mod tests {
         }
         assert!(
             checked > 0,
-            "no tool bindings found in any preset — the scan is looking in the wrong place"
+            "no bindings found in any preset — the scan is looking in the wrong place"
         );
     }
 }

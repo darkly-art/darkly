@@ -88,10 +88,6 @@ export interface ToolDescriptor {
      *  metadata (icon, default sub-tool, order) lives in {@link ToolCluster}. */
     readonly cluster?: string;
 
-    /** Key name in HotkeyMap that activates this tool (e.g. 'brushTool').
-     *  Used by hotkey registration to wire up tool switching automatically. */
-    readonly hotkeyAction: string;
-
     /** Optional Svelte component rendered inside the always-visible bottom
      *  options strip. Owns the per-tool widgets (sliders, toggles, pickers).
      *  When absent, the strip shows a generic placeholder. */

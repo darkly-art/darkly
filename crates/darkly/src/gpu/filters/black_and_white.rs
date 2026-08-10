@@ -57,13 +57,10 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
 
 pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
-        // A string literal rather than `bw::TYPE_ID`: the frontend's
-        // preset_hotkey_ids test derives filter action ids by scanning this
-        // directory's sources for `type_id: "…"`. Equality with the shared
-        // const is pinned by `gpu::black_and_white`'s identity test.
-        type_id: "black_and_white",
+        type_id: bw::TYPE_ID,
         display_name: bw::DISPLAY_NAME,
         description: bw::DESCRIPTION,
+        hotkey_action: "filterBlack_and_white",
         icon: "fa6-solid:droplet-slash",
         params: bw::PARAMS,
         preview: Some(bw::PREVIEW),

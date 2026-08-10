@@ -277,6 +277,5 @@ export function focusedTextTool(): TextTool | null {
 export const textTool: ToolDescriptor = {
     id: 'text',
     group: 'paint',
-    hotkeyAction: 'textTool',
     create: (inst: DarklyInstance) => new TextTool(inst),
 };

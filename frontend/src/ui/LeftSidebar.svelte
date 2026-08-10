@@ -100,7 +100,7 @@
                         class="tool"
                         class:active={app.activeToolId === item.tool.id}
                         onclick={() => app.activeToolId = item.tool.id}
-                        title={tooltipForAction(app.displayName('tools', item.tool.id), item.tool.hotkeyAction)}
+                        title={app.toolTooltip(item.tool.id)}
                     >
                         <Icon name={app.toolGlyph(item.tool.id)} />
                     </button>

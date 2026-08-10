@@ -48,7 +48,6 @@ export const magicWandTool: ToolDescriptor = {
     id: 'magic_wand',
     group: 'select',
     cluster: 'select',
-    hotkeyAction: 'magicWandTool',
     optionsComponent: MagicWandOptions,
     create: (inst: DarklyInstance) => new MagicWandTool(inst),
 };

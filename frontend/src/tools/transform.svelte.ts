@@ -256,16 +256,11 @@ export function focusedTransformTool(): TransformTool | null {
 }
 
 /** Descriptor factory for a transform cluster variant. */
-function transformDescriptor(opts: {
-    id: string;
-    hotkeyAction: string;
-    entry: number;
-}): ToolDescriptor {
+function transformDescriptor(opts: { id: string; entry: number }): ToolDescriptor {
     return {
         id: opts.id,
         group: 'transform',
         cluster: 'transform',
-        hotkeyAction: opts.hotkeyAction,
         create: (inst): Tool => new TransformTool(inst, opts.entry),
     };
 }
@@ -273,13 +268,11 @@ function transformDescriptor(opts: {
 /** Free (affine) transform — pan / scale / rotate. The cluster default. */
 export const transformTool: ToolDescriptor = transformDescriptor({
     id: 'transform',
-    hotkeyAction: 'transformTool',
     entry: 0,
 });
 
 /** Perspective transform — enters the four-corner homography mode directly. */
 export const transformPerspectiveTool: ToolDescriptor = transformDescriptor({
     id: 'transform_perspective',
-    hotkeyAction: 'transformPerspectiveTool',
     entry: 1,
 });

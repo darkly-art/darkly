@@ -40,11 +40,10 @@ beforeEach(() => {
 withApi(engine);
 
 describe('sampleColor action registration', () => {
-    it('registers under the id "sampleColor" with the colors category', () => {
+    it('registers under the id "sampleColor" as a hold action', () => {
         registerSampleColorAction();
         const action = actions.get('sampleColor');
         expect(action).toBeDefined();
-        expect(action!.category).toBe('colors');
         expect(action!.type).toBe('hold');
     });
 

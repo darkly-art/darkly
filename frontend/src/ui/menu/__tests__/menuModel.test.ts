@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { buildTopMenus, buildHamburgerEntries, type MenuEntry } from '../menuModel';
-import type { ActionRegistration } from '../../../actions/registry';
+import type { Action } from '../../../actions/registry';
 
-function reg(id: string, displayName: string, menuPath?: string[]): ActionRegistration {
+function reg(id: string, displayName: string, menuPath?: string[]): Action {
     return { id, displayName, category: 'edit', icon: 'fa6-solid:circle', menuPath, handler: () => {} };
 }
 

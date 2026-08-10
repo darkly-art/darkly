@@ -3,6 +3,7 @@ import type { Catalog, CatalogEntry, JsonValue } from '../engine/protocol_gen';
 import type { SaveBundle } from '../storage/saveDocument';
 import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry, type Tool } from '../tools/registry';
+import { tooltipForAction } from '../config/store.svelte';
 import { pollPick } from '../tools/color_pick_sync';
 import { SessionEngine, runHook } from '../tools/tool_session';
 import { tickColorPickerCursor } from '../tools/colorpicker_cursor';
@@ -228,6 +229,15 @@ export class DarklyInstance {
         const override = toolRegistry.get(typeId)?.icon;
         const resolved = typeof override === 'function' ? override() : override;
         return resolved ?? this.entry('tools', typeId)?.icon ?? 'fa6-solid:wrench';
+    }
+
+    /** A tool button's `title` — its label plus the chord currently bound to
+     *  the action that selects it. Both the label and that action id are the
+     *  tool's own registry metadata, so resolving them together here keeps the
+     *  toolbar and the cluster flyout from each doing the lookup. */
+    toolTooltip(typeId: string): string {
+        const entry = this.entry('tools', typeId);
+        return tooltipForAction(entry?.displayName ?? typeId, entry?.hotkeyAction ?? '');
     }
 
     /** Populate every registry projection from the Rust core in one pass.

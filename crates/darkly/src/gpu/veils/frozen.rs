@@ -63,8 +63,11 @@ struct FrozenUniforms {
 pub struct Frozen {
     /// UV displacement magnitude. 0 = no refraction, 0.2 = heavy distortion.
     pub strength: f32,
-    /// Tile density for the ice pattern. 1.0 = one tile across the shorter
-    /// screen dimension; higher = more, finer crystals.
+    /// Size of the ice crystals. 1.0 = one tile of the normal map across
+    /// `sqrt(area)`; higher = **fewer, larger** crystals, because the shader
+    /// divides the sampling extent by this. Note the refraction magnitude does
+    /// *not* ride along — `strength` is absolute UV displacement, so raising
+    /// `scale` alone makes the frost read as milder.
     pub scale: f32,
     /// Chromatic aberration: 0 = clean refraction, 1 = pronounced prism edge.
     pub chromatic: f32,
@@ -119,13 +122,20 @@ impl Veil for Frozen {
         ]
     }
 
-    /// The ice crystals tighten and loosen — `scale` sweeps from its schema
-    /// default out to twice that and back, which reads as the frost pattern
-    /// growing finer and coarsening again. `strength` and `chromatic` hold at
-    /// their schema defaults so the eye reads crystal size, not displacement or
-    /// colour fringing.
+    /// The ice crystals coarsen and tighten again — `scale` sweeps across a
+    /// wide band so the frost pattern visibly grows and shrinks.
+    ///
+    /// `strength` rides with it rather than holding at its schema default.
+    /// Displacement is absolute UV (`disp = n.xy * strength * …` in the
+    /// shader, with no `scale` term), so a fixed `strength` against a zooming
+    /// pattern halves the warp *per crystal* as the crystals double — which
+    /// the eye reads as the refraction weakening, not as the crystals growing.
+    /// Sweeping the two together holds warp-per-crystal constant, and that is
+    /// what makes the motion read as size. `chromatic` holds, so no colour
+    /// fringing rides along.
     fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
-        self.scale = 1.0 + swing(t);
+        self.scale = 0.6 + 1.8 * swing(t);
+        self.strength = 0.04 * self.scale;
         cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
         true
     }

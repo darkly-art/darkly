@@ -83,6 +83,5 @@ export const lassoSelectTool: ToolDescriptor = {
     id: 'lasso_select',
     group: 'select',
     cluster: 'select',
-    hotkeyAction: 'lassoSelectTool',
     create: (inst: DarklyInstance) => new LassoSelectTool(inst),
 };

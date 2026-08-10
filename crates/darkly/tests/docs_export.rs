@@ -145,7 +145,7 @@ fn export_is_a_faithful_projection() {
                     some(r.icon),
                     some(r.description),
                     None,
-                    None,
+                    some(r.hotkey_action),
                 )
             })
             .collect(),
@@ -300,6 +300,29 @@ fn export_is_a_faithful_projection() {
                     some(r.node.category),
                     None,
                 )
+            })
+            .collect(),
+    );
+
+    // Actions carry their own id in `hotkeyAction` as well as in `type`: the
+    // docs table joins `bindings` to a row through that one field, whichever
+    // catalog the row came from.
+    check(
+        &json,
+        "actions",
+        darkly::actions::registrations()
+            .iter()
+            .flat_map(|cat| {
+                cat.actions.iter().map(move |a| {
+                    (
+                        a.id,
+                        a.display_name,
+                        some(a.icon),
+                        some(a.description),
+                        some(cat.id),
+                        some(a.id),
+                    )
+                })
             })
             .collect(),
     );

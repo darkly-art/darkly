@@ -73,6 +73,13 @@ fn main() {
     let mut catalog_sources: Vec<(String, String)> = Vec::new();
 
     generate_catalog_registry(
+        &src.join("actions"),
+        "crate::action::ActionCategory",
+        &src,
+        &mut catalog_sources,
+    );
+
+    generate_catalog_registry(
         &src.join("gpu/veils"),
         "crate::gpu::veil::VeilRegistration",
         &src,

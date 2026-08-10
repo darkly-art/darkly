@@ -132,6 +132,7 @@ pub fn register() -> FilterPipelineRegistration {
         display_name: "Levels",
         icon: "fa6-solid:sliders",
         description: "Tone mapping with black point, white point, gamma, and output range.",
+        hotkey_action: "filterLevels",
         params: PARAMS,
         // A signed sweep rests in the middle, so the default still would be the
         // frame that looks like no effect at all. The quarter point is its

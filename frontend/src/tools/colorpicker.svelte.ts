@@ -51,7 +51,6 @@ class ColorPickerTool extends ToolBase {
 export const colorPickerTool: ToolDescriptor = {
     id: 'colorpicker',
     group: 'paint',
-    hotkeyAction: 'colorPickerTool',
     optionsComponent: ColorPickerOptions,
     create: (inst: DarklyInstance) => new ColorPickerTool(inst),
 };
