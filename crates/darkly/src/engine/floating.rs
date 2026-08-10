@@ -186,22 +186,24 @@ impl DarklyEngine {
         // Auto-commit any existing floating content first.
         self.auto_commit_floating();
 
-        let clip = match self.clipboard.as_ref().and_then(|c| c.as_image()) {
-            Some(c) => c,
-            None => return false,
-        };
-
-        let source_origin = (clip.offset_x, clip.offset_y);
-        let source_width = clip.width;
-        let source_height = clip.height;
+        // Pull pixels from either clipboard variant — a normal copy produces a
+        // rich `Layer` clip, so reading only flat image clips here made
+        // paste-in-place silently no-op after any copy.
+        let (rgba, source_width, source_height, offset_x, offset_y) =
+            match self.clipboard.as_ref().and_then(|c| c.paste_pixels()) {
+                Some(v) => v,
+                None => return false,
+            };
+        let source_origin = (offset_x, offset_y);
 
         // Upload flat RGBA data to GPU for preview. The target node's format
         // is read off `compositor.node_texture(id).format` inside the
-        // compositor — the engine never speaks the word "mask" here.
+        // compositor — the engine never speaks the word "mask" here, so this
+        // floats onto a raster layer or an R8 mask alike.
         self.compositor.set_floating_content(
             &self.gpu.device,
             &self.gpu.queue,
-            &clip.data,
+            &rgba,
             source_origin,
             source_width,
             source_height,
@@ -247,16 +249,6 @@ impl DarklyEngine {
     ) -> LayerId {
         // Auto-commit any existing floating content first.
         self.auto_commit_floating();
-
-        // A mask edit target receives the pixels directly through the single
-        // direct-write path — never a floating layer. (The frontend routes mask
-        // pastes to the non-floating path; this guard keeps every entry point
-        // honest.)
-        if let Some(mask_id) =
-            self.paste_into_mask(width, height, rgba, offset_x, offset_y, active_layer_id)
-        {
-            return mask_id;
-        }
 
         // Size the new layer to fit the paste, so off-canvas pixels are
         // preserved when the floating commits.

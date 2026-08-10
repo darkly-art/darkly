@@ -1,8 +1,11 @@
 //! Regression tests for the copy/paste ↔ mask interaction.
 //!
-//! Three defects are covered:
-//!   1. Pasting while a mask is the active edit target must write the clipboard
-//!      pixels INTO the mask's R8 texture, not spawn a new sibling layer.
+//! Model: plain paste always makes its own layer; pasting INTO the active
+//! target (a layer or a mask) is the "paste in place" verb, which floats the
+//! clip onto the active node and commits through the shared `commit_floating`
+//! path (RGBA layers and R8 masks alike). The three defects covered:
+//!   1. Paste-in-place must write into the active mask (not silently no-op,
+//!      and not create a new layer), and be undoable.
 //!   2. Copying a *region* (selection active) of a masked layer must produce a
 //!      flat paste with no mask.
 //!   3. Pasting must never seed the restored mask from the receiving document's
@@ -23,7 +26,8 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
     DarklyEngine::new(gpu, width, height)
 }
 
-fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32) {
+/// Paint a dab of the given straight-alpha colour and render one frame.
+fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, rgb: (f32, f32, f32)) {
     engine.begin_stroke(layer_id);
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
@@ -34,9 +38,9 @@ fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32) {
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: 1.0,
-        cg: 0.0,
-        cb: 0.0,
+        cr: rgb.0,
+        cg: rgb.1,
+        cb: rgb.2,
         ca: 1.0,
     });
     engine.end_stroke();
@@ -49,6 +53,13 @@ fn settle(engine: &mut DarklyEngine) {
         engine.test_flush_readbacks();
         engine.render(0.0);
     }
+}
+
+/// Copy `src`'s pixels into the internal clipboard (async readback drained),
+/// so the paste verbs have something to paste.
+fn copy_into_clipboard(engine: &mut DarklyEngine, src: LayerId) {
+    engine.copy(src);
+    settle(engine);
 }
 
 /// Block until the rich-copy readback completes and return its JSON.
@@ -80,103 +91,93 @@ fn raster_props(engine: &DarklyEngine, id: LayerId) -> (String, f32, String, usi
     panic!("layer {id_f} not found in tree");
 }
 
-/// A `pw`×`ph` RGBA buffer whose red channel (64) differs from its luminance
-/// (≈140). Pins the RGBA→R8 conversion to the red channel: a luminance
-/// implementation would write ≈140 into the mask, not 64.
-fn red_distinct_buffer(pw: u32, ph: u32) -> Vec<u8> {
-    let mut rgba = vec![0u8; (pw * ph * 4) as usize];
-    for px in rgba.chunks_exact_mut(4) {
-        px[0] = 64; // R  — the value that must land in the mask
-        px[1] = 200; // G
-        px[2] = 32; // B
-        px[3] = 255; // A
-    }
-    rgba
-}
-
-/// Bug 1: pasting onto a mask edit target writes the mask, not a new layer.
+/// Bug 1 (floating verb): paste-in-place floats the clipboard onto the active
+/// MASK and commits into it — no new layer, and undoable. This is the path the
+/// UI takes when "activate transform after paste" is on.
 #[test]
-fn paste_into_active_mask_writes_mask_pixels_not_new_layer() {
+fn paste_in_place_floating_writes_into_active_mask() {
     let (w, h) = (64u32, 64u32);
     let mut e = test_engine(w, h);
+
+    // A source layer to copy from, plus the masked host we paste into.
+    let src = e.add_raster_layer(None);
+    paint_dot(&mut e, src, 32.0, 32.0, (0.25, 0.78, 0.13));
     let host = e.add_raster_layer(None);
     e.add_mask(host);
     let mask = e.test_mask_id(host).expect("host has a mask filter");
     settle(&mut e);
 
+    copy_into_clipboard(&mut e, src);
+
+    // Baseline: the fresh mask is uniform.
+    let base = e.test_readback_mask(host);
+    let v0 = base[0];
+    assert!(base.iter().all(|&v| v == v0), "fresh mask must be uniform");
+
     let layers_before = e.layer_tree().len();
-
-    let (pw, ph) = (16u32, 16u32);
-    let rgba = red_distinct_buffer(pw, ph);
-    // Active target is the mask filter id — the mask-editing state.
-    let returned = e.paste_image(pw, ph, &rgba, 8, 8, Some(mask));
-
-    assert_eq!(
-        returned, mask,
-        "paste into a mask must return the mask id, not a freshly created layer"
+    assert!(
+        e.paste_in_place_floating(mask),
+        "paste-in-place must float the clipboard onto the mask (not no-op)"
     );
+    e.commit_floating();
+    settle(&mut e);
+
     assert_eq!(
         e.layer_tree().len(),
         layers_before,
-        "pasting into a mask must not create a new layer"
+        "pasting into a mask must not add a layer"
+    );
+    let after = e.test_readback_mask(host);
+    assert!(
+        after.iter().any(|&v| v != v0),
+        "paste-in-place must write pixels into the mask"
     );
 
-    settle(&mut e);
-    let m = e.test_readback_mask(host);
-    assert!(
-        m.contains(&64),
-        "the mask must contain the pasted red-channel value (64)"
-    );
-    assert!(
-        !m.contains(&140),
-        "the mask must not contain a luminance-converted value (~140); \
-         conversion must take the red channel to match transform_commit.wgsl"
-    );
-
-    // Undoable: the paste reverts the mask to its pre-paste pixels.
+    // Undoable: the mask returns to its pre-paste (uniform) state.
     e.undo();
     settle(&mut e);
-    let m = e.test_readback_mask(host);
+    let undone = e.test_readback_mask(host);
     assert!(
-        !m.contains(&64),
-        "undo must remove the pasted pixels from the mask"
+        undone.iter().all(|&v| v == v0),
+        "undo must restore the mask to its pre-paste pixels"
     );
 }
 
-/// Bug 1 (grow case): a paste larger than the mask grows it, and undo restores
-/// both the pixels and the mask's bounds — proving the compound
-/// `PixelBoundsAction + GpuRegionAction`, not a bare region undo.
+/// Bug 1 (committed verb): with transform-after-paste off, paste-in-place
+/// commits the clipboard straight into the active mask.
 #[test]
-fn paste_into_mask_grows_and_undo_restores_bounds() {
+fn paste_in_place_committed_writes_into_active_mask() {
     let (w, h) = (64u32, 64u32);
     let mut e = test_engine(w, h);
+
+    let src = e.add_raster_layer(None);
+    paint_dot(&mut e, src, 32.0, 32.0, (0.25, 0.78, 0.13));
     let host = e.add_raster_layer(None);
     e.add_mask(host);
     let mask = e.test_mask_id(host).expect("host has a mask filter");
     settle(&mut e);
 
-    // The mask texture's byte count tracks its extent (R8 = 1 byte/px).
-    let len_before = e.test_readback_mask(host).len();
+    copy_into_clipboard(&mut e, src);
 
-    // Paste a rect that extends past the mask's extent, forcing a grow.
-    let (pw, ph) = (32u32, 32u32);
-    let rgba = red_distinct_buffer(pw, ph);
-    e.paste_image(pw, ph, &rgba, (w as i32) - 8, (h as i32) - 8, Some(mask));
+    let base = e.test_readback_mask(host);
+    let v0 = base[0];
+    let layers_before = e.layer_tree().len();
+
+    let target = e
+        .paste_in_place(Some(mask))
+        .expect("committed paste-in-place must succeed");
+    assert_eq!(target, mask, "committed paste-in-place targets the mask");
     settle(&mut e);
 
-    let len_grown = e.test_readback_mask(host).len();
-    assert!(
-        len_grown > len_before,
-        "a paste beyond the mask extent must grow the mask texture \
-         (before={len_before}, grown={len_grown})"
-    );
-
-    e.undo();
-    settle(&mut e);
-    let len_after = e.test_readback_mask(host).len();
     assert_eq!(
-        len_after, len_before,
-        "undo must restore the mask's bounds (texture size), not just its pixels"
+        e.layer_tree().len(),
+        layers_before,
+        "committed paste into a mask must not add a layer"
+    );
+    let after = e.test_readback_mask(host);
+    assert!(
+        after.iter().any(|&v| v != v0),
+        "committed paste-in-place must write pixels into the mask"
     );
 }
 
@@ -187,7 +188,7 @@ fn region_copy_of_masked_layer_pastes_without_mask() {
     let (w, h) = (32u32, 32u32);
     let mut source = test_engine(w, h);
     let layer = source.add_raster_layer(None);
-    paint_dot(&mut source, layer, 16.0, 16.0);
+    paint_dot(&mut source, layer, 16.0, 16.0, (1.0, 0.0, 0.0));
     source.add_mask(layer);
 
     // Active selection ⇒ this is a region copy, not a whole-layer copy.
@@ -216,7 +217,7 @@ fn paste_does_not_seed_mask_from_active_selection() {
     // Whole-layer copy (no selection) — the mask travels with the layer.
     let mut source = test_engine(w, h);
     let layer = source.add_raster_layer(None);
-    paint_dot(&mut source, layer, 16.0, 16.0);
+    paint_dot(&mut source, layer, 16.0, 16.0, (1.0, 0.0, 0.0));
     source.add_mask(layer);
     source.copy_layer_rich(layer);
     let json = drain_rich_copy(&mut source);

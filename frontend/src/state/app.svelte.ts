@@ -500,29 +500,6 @@ export class DarklyInstance {
         return found;
     }
 
-    /** True when the active node IS a mask modifier (its thumbnail was
-     *  clicked to make it the paint target), as opposed to a host that merely
-     *  owns a mask. Drives paste routing: a paste while a mask is the active
-     *  target writes into the mask instead of creating a new layer. */
-    get activeNodeIsMask(): boolean {
-        const active = this.activeLayerId;
-        if (active === null) return false;
-        let found = false;
-        const walk = (nodes: any[]): boolean => {
-            for (const n of nodes) {
-                const mask = n.modifiers?.find((m: any) => m.kind === 'mask') ?? null;
-                if (mask && mask.id === active) {
-                    found = true;
-                    return true;
-                }
-                if (Array.isArray(n.children) && walk(n.children)) return true;
-            }
-            return false;
-        };
-        walk(this.layerTree);
-        return found;
-    }
-
     /** Ctrl/Cmd-click router. Adds `id` if absent, removes if present.
      *  When removing the active id, demotes `activeLayerId` to the next
      *  remaining selected id in panel order (or null when empty). */

@@ -82,11 +82,6 @@ export function registerClipboardActions(): void {
             const engine = app.engine;
             if (!engine) return;
 
-            // Pasting while a mask is the active edit target writes into the
-            // mask (engine-side) instead of creating a floating layer — so we
-            // take the direct path and never activate the transform tool.
-            const intoMask = app.activeNodeIsMask;
-
             // Prefer the rich-layer payload if a Darkly tab put one on the
             // clipboard. Cross-tab paste this way preserves blend mode and
             // opacity, which the PNG fallback cannot. Brush-builder pastes
@@ -100,7 +95,7 @@ export function registerClipboardActions(): void {
                         app.selectLayer(layerId);
                         const activateTransform =
                             config.get('edit.activateTransformAfterPaste') !== false;
-                        if (activateTransform && !intoMask) enterTransformTool();
+                        if (activateTransform) enterTransformTool();
                         await app.refreshLayerTree();
                         app.requestFrame();
                         return;
@@ -145,7 +140,7 @@ export function registerClipboardActions(): void {
             const oy = Math.round((app.docH - clip.height) / 2);
             const activeId = app.activeLayerId ?? -1;
             const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
-            if (activateTransform && !intoMask) {
+            if (activateTransform) {
                 const { id: layerId } = await engine.api.pasteImageFloating({ width: clip.width, height: clip.height, offset_x: ox, offset_y: oy, active_layer_id: activeId },
                     clip.rgba,
                 );
@@ -163,27 +158,30 @@ export function registerClipboardActions(): void {
     });
     actions.register({
         id: 'pasteInPlace',
-        displayName: 'Paste in Place',
+        displayName: 'Paste into Active Layer',
         category: 'edit',
-        description: 'Paste from the clipboard at its original position.',
+        description: 'Paste the clipboard into the active layer or mask at its original position.',
         icon: 'fa6-solid:clipboard',
         menuPath: ['Edit:60'],
         handler: async () => {
             const engine = app.engine;
             if (!engine || app.activeLayerId == null) return;
+            // Paste into the active target — a raster layer or, when a mask is
+            // the active edit target, the mask. Both flow through the same
+            // floating→commit path (`pasteInPlaceFloating` / `pasteInPlace`),
+            // which writes RGBA layers and R8 masks alike.
             const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
-            // A mask edit target takes the direct (non-floating) path so the
-            // paste lands in the mask instead of a floating transform gizmo.
-            if (activateTransform && !app.activeNodeIsMask) {
+            if (activateTransform) {
+                // Float onto the target so it can be repositioned before commit.
                 const ok = await engine.api.pasteInPlaceFloating({ id: app.activeLayerId });
                 if (ok) {
                     enterTransformTool();
                     app.requestFrame();
                 }
             } else {
-                const { id: layerId } = await engine.api.pasteInPlace({ active_layer_id: app.activeLayerId });
-                if (layerId >= 0) {
-                    app.selectLayer(layerId);
+                // Commit into the target immediately at the source's position.
+                const { id } = await engine.api.pasteInPlace({ active_layer_id: app.activeLayerId });
+                if (id >= 0) {
                     await app.refreshLayerTree();
                     app.requestFrame();
                 }
