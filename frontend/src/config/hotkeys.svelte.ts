@@ -1,5 +1,5 @@
 import { tinykeys } from 'tinykeys';
-import { config } from './store.svelte';
+import { effectiveHotkeys } from './store.svelte';
 import { actions } from '../actions/registry';
 import { app } from '../state/app.svelte';
 import { activeSiteChain } from '../actions/active_site';
@@ -14,36 +14,13 @@ import {
 } from '../actions/hotkey_resolve';
 
 // Re-export the pure helpers so existing import paths (cheatsheet, settings
-// widgets) keep resolving. The resolution logic itself lives in
-// `actions/hotkey_resolve.ts` so it can be unit-tested without DOM.
+// widgets) keep resolving. Chord resolution lives in
+// `actions/hotkey_resolve.ts` so it can be unit-tested without DOM; the
+// config reads live on the config store.
 export { parseBinding, type ChordEntry };
+export { effectiveHotkeys, effectiveHotkey } from './store.svelte';
 
 let cleanup: (() => void) | null = null;
-
-/**
- * Resolve an action's effective keyboard trigger list. The full binding
- * lives in `hotkeys.<id>` under the three-layer config — defaults.yaml +
- * overlay + user override. Multi-binding actions (e.g. `isolateLayer` from
- * `layerThumb:alt+click` + `maskThumb:alt+click`) are joined with `|` in
- * the YAML parser; we split them back into a list here.
- *
- * Empty string means "no keyboard trigger" — used by overlays that
- * explicitly want to disable a binding the previous layer set
- * (e.g. Photoshop sets `hotkeys.isolateLayer = ""`).
- */
-export function effectiveHotkeys(actionId: string): string[] {
-    const v = config.get(`hotkeys.${actionId}`);
-    if (typeof v !== 'string') return [];
-    if (!v) return [];
-    return v.split('|').filter(Boolean);
-}
-
-/** Single-string view for callers that show one binding per action
- *  (settings UI row, cheatsheet). Returns the first effective binding,
- *  or `""` if none. */
-export function effectiveHotkey(actionId: string): string {
-    return effectiveHotkeys(actionId)[0] ?? '';
-}
 
 /**
  * Register all hotkeys from the action registry + Rust config.

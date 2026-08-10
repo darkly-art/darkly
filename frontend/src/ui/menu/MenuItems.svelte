@@ -1,7 +1,7 @@
 <script lang="ts">
     import type { MenuEntry } from './menuModel';
     import { actions, actionEnablement } from '../../actions/registry';
-    import { config, formatHotkey } from '../../config/store.svelte';
+    import { hotkeyLabel } from '../../config/store.svelte';
     import ThemeControl from './ThemeControl.svelte';
     import MenuItemsSelf from './MenuItems.svelte';
     import Icon from '../../icons/Icon.svelte';
@@ -15,7 +15,7 @@
     let openSubmenu = $state<string | null>(null);
 
     function hotkey(id: string): string | undefined {
-        return formatHotkey(config.get('hotkeys.' + id) as string | undefined);
+        return hotkeyLabel(id);
     }
     function enablement(id: string): { enabled: boolean; reason?: string } {
         const r = actions.get(id);
