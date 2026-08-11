@@ -8,7 +8,8 @@ use crate::engine::protocol::{params_from_json, RawParams};
 use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::property::Property;
 use crate::undo::{
-    CompoundAction, LayerAddAction, LayerMoveAction, LayerRemoveAction, PropertyAction, UndoAction,
+    CompoundAction, EntityAddAction, EntityRemoveAction, LayerMoveAction, PropertyAction,
+    UndoAction,
 };
 
 /// Convert Darkly's row-major `[a, b, tx, c, d, ty]` affine (point map
@@ -108,7 +109,7 @@ impl DarklyEngine {
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(LayerAddAction::new(id, parent, pos)));
+        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
 
         id
     }
@@ -285,7 +286,7 @@ impl DarklyEngine {
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(LayerAddAction::new(id, parent, pos)));
+        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
         (id, object_id)
     }
 
@@ -594,7 +595,7 @@ impl DarklyEngine {
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(LayerAddAction::new(id, parent, pos)));
+        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
 
         id
     }
@@ -657,7 +658,7 @@ impl DarklyEngine {
         let group_initial_pos = self.doc.position_in_parent(group_id).unwrap_or(0);
 
         let mut actions: Vec<Box<dyn UndoAction>> = Vec::with_capacity(editable.len() + 2);
-        actions.push(Box::new(LayerAddAction::new(
+        actions.push(Box::new(EntityAddAction::new(
             group_id,
             group_initial_parent,
             group_initial_pos,
@@ -694,7 +695,7 @@ impl DarklyEngine {
             None => self.doc.children_of(self.doc.root_id()).len(),
         });
         self.doc
-            .reinsert_node(group_id, topmost_parent, clamped_pos);
+            .reinsert_entity(group_id, topmost_parent, clamped_pos);
         let group_final_parent = self.doc.parent_of(group_id);
         let group_final_pos = self.doc.position_in_parent(group_id).unwrap_or(0);
         if (group_pre_move_parent, group_pre_move_pos) != (group_final_parent, group_final_pos) {
@@ -764,7 +765,7 @@ impl DarklyEngine {
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(LayerAddAction::new(id, parent, pos)));
+        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
 
         Some(id)
     }
@@ -798,7 +799,7 @@ impl DarklyEngine {
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(LayerAddAction::new(id, parent, pos)));
+        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
 
         Some(id)
     }
@@ -1066,32 +1067,48 @@ impl DarklyEngine {
         if !self.doc.is_node_editable(id) {
             return Err("Layer is locked".into());
         }
-        if self.doc.node_count() <= 1 {
+        // A modifier is a selectable row, so the delete hotkey forwards its id
+        // here — but it hangs off a host rather than occupying a slot in the
+        // tree, so it never counts toward the last-layer floor.
+        if !self.doc.is_filter(id) && self.doc.node_count() <= 1 {
             return Err("Cannot delete the last layer".into());
         }
 
-        if let Some(action) = self.detach_layer_for_remove(id) {
+        if let Some(action) = self.detach_for_remove(id) {
             self.push_undo(action);
         }
         self.compositor.mark_dirty();
         Ok(())
     }
 
-    /// Detach a single layer for removal and return the matching undo
-    /// action without pushing it. Returns `None` if `layer_id` isn't in
-    /// the tree. The caller is responsible for any editability or
-    /// "last layer" checks; this is the raw mutation half shared between
-    /// [`Self::remove_layer`] and [`Self::remove_layers`].
-    fn detach_layer_for_remove(&mut self, layer_id: LayerId) -> Option<Box<dyn UndoAction>> {
-        let parent = self.doc.parent_of(layer_id);
-        let pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
+    /// Detach a single entity for removal and return the matching undo action
+    /// without pushing it. Returns `None` if `id` isn't attached. The caller is
+    /// responsible for any editability or "last layer" checks; this is the raw
+    /// mutation half shared between [`Self::remove_layer`] and
+    /// [`Self::remove_layers`].
+    ///
+    /// Dispatches on the entity's own kind: modifiers go to the modifier path,
+    /// which owns the GPU bookkeeping their pixels need, and everything else is
+    /// a tree node. Callers pass an id and don't ask what it is.
+    pub(crate) fn detach_for_remove(&mut self, id: LayerId) -> Option<Box<dyn UndoAction>> {
+        // Session state must not outlive the entity it points at: an isolation
+        // target detached from the tree is unreachable from the root walk, so
+        // every node would test as off-path and the canvas would go blank.
+        if self.isolated_node == Some(id) {
+            self.isolated_node = None;
+        }
+        if self.doc.is_filter(id) {
+            return self.detach_modifier_for_remove(id);
+        }
+        let parent = self.doc.parent_of(id);
+        let pos = self.doc.position_in_parent(id).unwrap_or(0);
         // Collect tombstones before detaching — `detach_for_undo` severs
         // the parent links `collect_pixel_node_ids` walks to enumerate
         // the subtree.
-        let tombstones = self.collect_pixel_node_ids(layer_id);
-        self.doc.detach_for_undo(layer_id)?;
-        Some(Box::new(LayerRemoveAction::new(
-            layer_id, parent, pos, tombstones,
+        let tombstones = self.collect_pixel_node_ids(id);
+        self.doc.detach_for_undo(id)?;
+        Some(Box::new(EntityRemoveAction::new(
+            id, parent, pos, tombstones,
         )))
     }
 
@@ -1107,8 +1124,12 @@ impl DarklyEngine {
         }
         let mut editable = Vec::with_capacity(ids.len());
         let mut skipped_locked = 0usize;
+        let mut node_removals = 0usize;
         for &id in &ids {
-            if self.doc.find_node(id).is_none() {
+            // Modifiers are selectable rows and so can arrive in a batch; they
+            // resolve through their host rather than the tree.
+            let is_modifier = self.doc.is_filter(id);
+            if !is_modifier && self.doc.find_node(id).is_none() {
                 continue;
             }
             if !self.doc.is_node_editable(id) {
@@ -1117,11 +1138,16 @@ impl DarklyEngine {
             }
             // Drop any id that's a descendant of another id already in
             // the batch — removing the ancestor takes the subtree with it.
+            // A modifier whose host is also in the batch is covered the same
+            // way: the host's removal takes its filters along.
             if ids
                 .iter()
                 .any(|&other| other != id && self.doc.is_ancestor_of(other, id))
             {
                 continue;
+            }
+            if !is_modifier {
+                node_removals += 1;
             }
             editable.push(id);
         }
@@ -1129,11 +1155,13 @@ impl DarklyEngine {
             self.compositor.mark_dirty();
             return Ok(skipped_locked);
         }
-        if self.doc.node_count().saturating_sub(editable.len()) == 0 {
+        // Only tree nodes count against the floor — removing every modifier in
+        // the document still leaves its layers behind.
+        if node_removals > 0 && self.doc.node_count().saturating_sub(node_removals) == 0 {
             return Err("Cannot delete the last layer".into());
         }
 
-        self.batched_undo(&editable, |engine, id| engine.detach_layer_for_remove(id));
+        self.batched_undo(&editable, |engine, id| engine.detach_for_remove(id));
         self.compositor.mark_dirty();
         Ok(skipped_locked)
     }

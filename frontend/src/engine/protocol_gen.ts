@@ -170,12 +170,6 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
 
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
-
-export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
-
-export type PortDir = "Input" | "Output";
-
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
  * Slider min when the port is disconnected (UI metadata only).
@@ -343,7 +337,7 @@ persist_in_thumbnail: boolean,
 /**
  * This output port emits a *spatial, per-fragment image* — a coverage
  * mask or colour field that varies across the dab — so a node carrying it
- * is worth a preview thumbnail (`shape.mask`, `image.color`,
+ * is worth a preview thumbnail (`circle.mask`, `image.color`,
  * `noise.color`, `stamp.dab`). Declared per port rather than inferred
  * from `wire_type`, because wire type can't tell a spatial field from a
  * per-dab constant: `random.value` and `paint_color.color` share the
@@ -367,6 +361,12 @@ preview_image: boolean,
  * source (skipped by wire-range remap, unreachable by `find_port`).
  */
 source: boolean, };
+
+export type PortDir = "Input" | "Output";
+
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
 
 export type NodeRegistration = { 
 /**
@@ -720,7 +720,8 @@ export type StrokeToReq = { op: StrokeOp, };
 
 export type StrokeOp = { "op": "flood_fill", x: number, y: number, r: number, g: number, b: number, a: number, tolerance: number, } | { "op": "linear_gradient", x0: number, y0: number, x1: number, y1: number, r0: number, g0: number, b0: number, a0: number, r1: number, g1: number, b1: number, a1: number, } | { "op": "brush_stroke", x: number, y: number, pressure: number, x_tilt: number, y_tilt: number, rotation: number, tangential_pressure: number, time_ms: number, 
 /**
- * Foreground color as linear RGBA floats (0-1).
+ * Foreground color as raw sRGB RGBA floats (0-1), as picked — the
+ * compositor is display-referred, so no gamma conversion is applied.
  */
 cr: number, cg: number, cb: number, ca: number, };
 
@@ -952,6 +953,7 @@ export type RequestKind =
     | 'veil_types'
     | 'void_transform_info'
     | 'void_types'
+    | 'warm_vector_renderer'
     ;
 
 export const REQUEST_KINDS: readonly RequestKind[] = [
@@ -1145,6 +1147,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'veil_types',
     'void_transform_info',
     'void_types',
+    'warm_vector_renderer',
 ] as const;
 
 /** The request boundary the generated client closes over. `request`
@@ -1346,6 +1349,7 @@ export interface EngineApi {
     veilTypes(): Promise<Array<VeilTypeInfo>>;
     voidTransformInfo(req: VoidTransformInfoReq): Promise<VoidTransformInfoResp | null>;
     voidTypes(): Promise<Array<VoidTypeInfo>>;
+    warmVectorRenderer(): void;
 }
 
 /** Build the typed client over a transport (in-process today, Tauri later). */
@@ -1541,5 +1545,6 @@ export function makeApi(t: Transport): EngineApi {
         veilTypes: () => t.request('veil_types'),
         voidTransformInfo: (req) => t.request('void_transform_info', req),
         voidTypes: () => t.request('void_types'),
+        warmVectorRenderer: () => t.postFF('warm_vector_renderer'),
     };
 }

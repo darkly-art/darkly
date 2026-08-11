@@ -6,28 +6,42 @@ nodes:
   brush_settings:
     type: brush_settings
     inputs:
-      size: 0.5685366988182068
-      spacing: 0.009999999776482582
+      size: 0.2
+      spacing: 0.01
       stabilize: 1.0
   circle:
     type: circle
   curve:
     type: curve
+    comment: pen pressure affects the threshold of hair volume
     inputs:
       curve:
       - - 0.0
         - 1.0
-      - - 0.6688293
-        - 0.49044272
+      - - 0.682973
+        - 0.5305826
       - - 1.0
         - 0.0
+  divide:
+    type: divide
   levels:
     type: levels
+  multiply:
+    type: multiply
+    inputs:
+      b: 2.56
+  multiply_2:
+    type: multiply
+    inputs:
+      a: 0.5
+  multiply_3:
+    type: multiply
+    inputs:
+      b: 0.085
   noise:
     type: noise
     inputs:
-      scale: 12.040367126464844
-      scale_with_brush: false
+      scale: 12.0
       space: 1
   paint:
     type: paint
@@ -40,14 +54,21 @@ nodes:
   subtract:
     type: subtract
     inputs:
-      a: 0.11924592405557632
+      a: 0.12
 connections:
 - add.result -> levels.input
+- brush_settings.size -> divide.b
+- brush_settings.size -> multiply_3.a
 - circle.mask -> add.b
 - curve.output -> levels.in_low
+- divide.result -> multiply.a
 - levels.output -> stamp.tip
+- multiply.result -> multiply_2.b
+- multiply_2.result -> noise.rotation
+- multiply_3.result -> noise.scale
 - noise.value -> subtract.b
 - paint_color.color -> stamp.color
+- pen_input.distance -> divide.a
 - pen_input.position -> paint.position
 - pen_input.pressure -> curve.input
 - stamp.dab -> paint.rgba
@@ -55,5 +76,13 @@ connections:
 exposed_ports:
   brush_settings.stabilize: {}
   brush_settings.size: {}
+  multiply_2.a:
+    label: Twirl
+    description: Twirliness factor
+    icon: tabler:galaxy
   paint.flow: {}
   paint.opacity: {}
+  multiply_3.b:
+    label: Hair Thickness
+    description: Controls how many and how thick are the individual strands
+    icon: fa6-solid:arrows-left-right

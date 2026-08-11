@@ -19,7 +19,7 @@
 //! | Action                               | Polarity             |
 //! |--------------------------------------|----------------------|
 //! | [`super::DuplicateAction`]           | `false` (detached when undone) |
-//! | [`super::LayerRemoveAction`]         | `true`  (detached when applied) |
+//! | [`super::EntityRemoveAction`]         | `true`  (detached when applied) |
 //! | [`super::BakeLayersAction`] sources  | `true`  (detached when applied) |
 //! | [`super::BakeLayersAction`] result   | `false` (detached when undone) |
 

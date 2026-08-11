@@ -15,11 +15,6 @@ hotkeys:
   # Krita has no native Preferences hotkey. Fall through to Darkly's
   # macOS-convention pick; users can rebind via the settings UI.
   openSettings: $mod+Comma
-  # Krita's `file_export_file` is explicitly `none` (see
-  # kritamenu.action). GIMP binds Export As to <primary><shift>E
-  # (gimp/app/actions/file-actions.c — `file-export-as`); Darkly inherits
-  # that key here.
-  exportImage: $mod+Shift+KeyE
   # View > Mirror View. Krita binds M (kritamenu.action `mirror_canvas`,
   # <shortcut>M</shortcut>). Photoshop and GIMP have no opinion; their
   # overlays leave mirrorViewH unbound rather than reuse M (Photoshop's

@@ -154,6 +154,17 @@ fn fbm_seed_xform(seed: u32) -> vec3f {
     return vec3f(a, ox, oy);
 }
 
+/// Seed → a 2D point scattered uniformly over `[0, period)²`. Two independent
+/// `fbm_pcg` draws (the golden-ratio salt makes the y draw independent of the
+/// x draw), so the point covers the plane rather than collapsing onto the
+/// `x == y` diagonal a single scaled scalar would trace. Used to decorrelate
+/// per-dab sampling of a period-`period` field.
+fn fbm_offset2(seed: u32, period: f32) -> vec2f {
+    let ox = f32(fbm_pcg(seed)) / 4294967295.0;
+    let oy = f32(fbm_pcg(seed ^ 0x9e3779b9u)) / 4294967295.0;
+    return vec2f(ox, oy) * period;
+}
+
 /// Domain-warped, **tileable** fBm of value noise. The lattice wraps at
 /// `base_period` cells (and `base_period * 2^i` per octave, so every octave is
 /// co-periodic), giving a field that is exactly seamless with period

@@ -85,7 +85,7 @@ impl DarklyEngine {
         // Reposition result to root position 0 (bottom of stack — flatten
         // makes the result the new "Background").
         self.doc.detach_for_undo(result_id);
-        self.doc.reinsert_node(result_id, Some(root_id), 0);
+        self.doc.reinsert_entity(result_id, Some(root_id), 0);
 
         let result_parent = self.doc.parent_of(result_id);
         let result_position = self.doc.position_in_parent(result_id).unwrap_or(0);
@@ -234,7 +234,7 @@ impl DarklyEngine {
 
         // Reposition the result to take the group's slot.
         self.doc.detach_for_undo(result_id);
-        self.doc.reinsert_node(result_id, parent, position);
+        self.doc.reinsert_entity(result_id, parent, position);
 
         let result_parent = self.doc.parent_of(result_id);
         let result_position = self.doc.position_in_parent(result_id).unwrap_or(0);

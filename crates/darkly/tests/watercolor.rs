@@ -42,6 +42,57 @@ fn solid_canvas(rgba: [u8; 4]) -> Vec<u8> {
     out
 }
 
+/// One `flush_dabs` worth of dabs, plus whether the stroke restarts in
+/// front of it.
+///
+/// Flush boundaries are semantically load-bearing for watercolor: the
+/// pickup atlas is rebuilt once per flush, so a mark's buildup depends on
+/// how the dabs are grouped. Tests must therefore be able to say "these
+/// dabs in one flush" versus "one dab per flush" — hence groups rather
+/// than a flat dab list.
+struct FlushGroup<'a> {
+    dabs: &'a [(f32, f32)],
+    /// Re-enter `begin_stroke` before this group — the stabilizer-rewind
+    /// path. `begin_stroke` always runs before the first group; this only
+    /// affects later ones.
+    restart: bool,
+    /// Brush colour for this group, overriding the render call's default.
+    color: Option<[f32; 4]>,
+}
+
+fn group(dabs: &[(f32, f32)]) -> FlushGroup<'_> {
+    FlushGroup {
+        dabs,
+        restart: false,
+        color: None,
+    }
+}
+
+fn restart_group(dabs: &[(f32, f32)]) -> FlushGroup<'_> {
+    FlushGroup {
+        dabs,
+        restart: true,
+        color: None,
+    }
+}
+
+impl<'a> FlushGroup<'a> {
+    fn with_color(mut self, color: [f32; 4]) -> Self {
+        self.color = Some(color);
+        self
+    }
+}
+
+/// `n` groups of one dab each at the same spot — the shape that exposes
+/// cross-flush pigment buildup.
+fn repeat_at(pos: (f32, f32), n: usize) -> Vec<[(f32, f32); 1]> {
+    vec![[pos]; n]
+}
+
+fn groups_of<'a>(runs: &'a [[(f32, f32); 1]]) -> Vec<FlushGroup<'a>> {
+    runs.iter().map(|r| group(r.as_slice())).collect()
+}
+
 fn render_dabs(
     brush_name: &str,
     size_override: f32,
@@ -56,6 +107,29 @@ fn render_dabs_on(
     size_override: f32,
     color: [f32; 4],
     dabs: &[(f32, f32)],
+    canvas: &[u8],
+) -> Vec<u8> {
+    render_flush_groups(brush_name, size_override, color, &[group(dabs)], canvas)
+}
+
+/// The single rendering primitive every test in this file goes through.
+///
+/// Each group gets its own `BrushGpuContext` and its own `queue.submit()`,
+/// mirroring production where each render phase has its own encoder and
+/// `submit_final` (`engine/painting.rs`). **The submit between groups is
+/// load-bearing, not incidental:** `flush_dabs` writes the dab buffer and
+/// the uniform rings through `queue.write_buffer`, which is on the queue
+/// timeline rather than the encoder timeline. Two `flush_dabs` calls
+/// recorded into one encoder would both read the *second* batch, and a
+/// multi-flush test would silently collapse into a single flush while
+/// still appearing to pass.
+///
+/// `commit` runs once, in the final group's context.
+fn render_flush_groups(
+    brush_name: &str,
+    size_override: f32,
+    color: [f32; 4],
+    groups: &[FlushGroup<'_>],
     canvas: &[u8],
 ) -> Vec<u8> {
     let brush = darkly::brush::builtin_brushes::all()
@@ -132,25 +206,29 @@ fn render_dabs_on(
         }};
     }
 
-    {
-        let mut ctx = make_ctx!("watercolor-compiled-test-begin");
-        runner.begin_stroke(&mut ctx);
-        queue.submit([ctx.encoder.finish()]);
-    }
-    {
+    let mut dab_index = 0u32;
+    for (gi, g) in groups.iter().enumerate() {
         let mut ctx = make_ctx!("watercolor-compiled-test-flush");
-        for (i, (x, y)) in dabs.iter().enumerate() {
+        if gi == 0 || g.restart {
+            runner.begin_stroke(&mut ctx);
+        }
+        for (x, y) in g.dabs {
             let info = PaintInformation {
                 pos: [*x, *y],
                 pressure: 1.0,
                 ..Default::default()
             };
-            runner.seed_sensors(&info, color, 0xC0FFEE, i as u32);
+            runner.seed_sensors(&info, g.color.unwrap_or(color), 0xC0FFEE, dab_index);
             runner.execute_cpu();
             runner.execute_gpu(&mut ctx);
+            dab_index += 1;
         }
         runner.flush_dabs(&mut ctx);
-        runner.commit(&mut ctx);
+        if gi + 1 == groups.len() {
+            runner.commit(&mut ctx);
+        }
+        // Per-group submit — see the doc comment; without this the next
+        // group's queue writes would land before this group's passes run.
         queue.submit([ctx.encoder.finish()]);
     }
 
@@ -264,128 +342,21 @@ fn rough_watercolor_renders_multiple_dabs_in_one_flush() {
 /// `begin_stroke`.
 #[test]
 fn begin_stroke_clears_scratch_so_rewind_drops_defunct_pigment() {
-    let brush = darkly::brush::builtin_brushes::all()
-        .into_iter()
-        .find(|b| b.metadata.name == "Smooth Watercolor")
-        .expect("Smooth Watercolor brush registered");
-
-    let mut graph = brush.metadata.graph.clone();
-    let _term_id = darkly::brush::find_terminal(&graph).expect("watercolor terminal");
     // Small dab — at `size = 0.05` the dab radius is ~13 px (size *
-    // DAB_REFERENCE_SIZE / 2 ≈ 12.8), so the two dab positions chosen
-    // below (40, 64) and (88, 64) are well isolated and don't overlap.
-    graph
-        .set_port_default(
-            &darkly::brush::nodes::brush_settings::node_id(&graph).unwrap(),
-            "size",
-            0.05,
-        )
-        .unwrap();
-
-    let canvas = light_blue_canvas();
-    let (device, queue) = shared_device();
-    let (layer_texture, layer_view) = create_test_texture(&device, &queue, CANVAS, CANVAS, &canvas);
-    let pipelines = BrushPipelines::new(
-        &device,
-        &queue,
-        &darkly::gpu::selection::selection_mask_bgl(&device),
-    );
-    let mut stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
-
-    let pre_stroke = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
-        &layer_texture,
-        &layer_view,
-        wgpu::TextureFormat::Rgba8Unorm,
-        darkly::coord::CanvasRect::from_xywh(0, 0, CANVAS, CANVAS),
-    );
-    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("watercolor-rewind-pre-stroke"),
-    });
-    stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke);
-    queue.submit([enc.finish()]);
-
-    let mut runner: BrushGraphRunner = compile_graph(&graph).expect("brush compiles");
-    macro_rules! make_ctx {
-        ($label:expr) => {{
-            let (scratch, pre_stroke_tex, pre_stroke_bg, source_override) =
-                stroke_buffer.parts_for_brush_ctx();
-            BrushGpuContext {
-                encoder: device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some($label),
-                }),
-                device: &device,
-                queue: &queue,
-                pipelines: &pipelines,
-                selection_bind_group: pipelines.default_selection_bind_group(),
-                canvas_width: CANVAS,
-                canvas_height: CANVAS,
-                canvas_origin: [0, 0],
-                blend_mode: 0,
-                view_rotation: 0.0,
-                perf: BrushPerfCounters::default(),
-                stroke: Some(StrokeResources {
-                    scratch,
-                    paint_target: darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
-                        &layer_texture,
-                        &layer_view,
-                        wgpu::TextureFormat::Rgba8Unorm,
-                        darkly::coord::CanvasRect::from_xywh(0, 0, CANVAS, CANVAS),
-                    ),
-                    pre_stroke_texture: pre_stroke_tex,
-                    pre_stroke_bind_group: pre_stroke_bg,
-                    source_override,
-                }),
-                preview: None,
-                dab_batch: DabBatch::default(),
-            }
-        }};
-    }
-
-    // Phase 1: begin_stroke + render a dab at (40, 64) into the scratch.
-    // Do NOT commit — the painting loop's rewind branch does the same
-    // thing: stale dabs sit in the scratch when the next begin_stroke runs.
-    {
-        let mut ctx = make_ctx!("watercolor-rewind-begin-1");
-        runner.begin_stroke(&mut ctx);
-        let info = PaintInformation {
-            pos: [40.0, 64.0],
-            pressure: 1.0,
-            ..Default::default()
-        };
-        runner.seed_sensors(&info, [1.0, 0.0, 0.0, 1.0], 0xC0FFEE, 0);
-        runner.execute_cpu();
-        runner.execute_gpu(&mut ctx);
-        runner.flush_dabs(&mut ctx);
-        queue.submit([ctx.encoder.finish()]);
-    }
-
-    // Phase 2: simulate stabilizer rewind. begin_stroke again, then a
-    // different dab at (88, 64), then commit. The (40, 64) pigment must
-    // not survive — that's exactly the defunct stroke the rewind throws
-    // away.
-    {
-        let mut ctx = make_ctx!("watercolor-rewind-begin-2");
-        runner.begin_stroke(&mut ctx);
-        let info = PaintInformation {
-            pos: [88.0, 64.0],
-            pressure: 1.0,
-            ..Default::default()
-        };
-        runner.seed_sensors(&info, [1.0, 0.0, 0.0, 1.0], 0xC0FFEE, 1);
-        runner.execute_cpu();
-        runner.execute_gpu(&mut ctx);
-        runner.flush_dabs(&mut ctx);
-        runner.commit(&mut ctx);
-        queue.submit([ctx.encoder.finish()]);
-    }
-
-    let rgba = readback_texture(
-        &device,
-        &queue,
-        &layer_texture,
-        wgpu::TextureFormat::Rgba8Unorm,
-        CANVAS,
-        CANVAS,
+    // DAB_REFERENCE_SIZE / 2 ≈ 12.8), so the two dab positions (40, 64)
+    // and (88, 64) are well isolated and don't overlap.
+    //
+    // Two flush groups, each preceded by `begin_stroke`: the first lays
+    // the defunct dab, the second is the rewind that must wipe it.
+    let rgba = render_flush_groups(
+        "Smooth Watercolor",
+        0.05,
+        [1.0, 0.0, 0.0, 1.0],
+        &[
+            restart_group(&[(40.0, 64.0)]),
+            restart_group(&[(88.0, 64.0)]),
+        ],
+        &light_blue_canvas(),
     );
 
     // The defunct dab at (40, 64) must be wiped. Allow ±1 LSB for rounding.
@@ -405,5 +376,179 @@ fn begin_stroke_clears_scratch_so_rewind_drops_defunct_pigment() {
     assert!(
         surviving[0] > 130,
         "surviving dab at (88, 64) should still show red lift, got {surviving:?}"
+    );
+}
+
+/// Regression: pigment must keep building where the brush passes more than
+/// once.
+///
+/// The watercolor pickup atlas samples the canvas under each dab to decide
+/// what colour to deposit. That sample used to come from the pre-stroke
+/// snapshot — a texture frozen when the stroke began — so the deposited
+/// load was identical on the first pass and the twentieth. The mark
+/// converged after two or three passes and then stopped changing, well
+/// short of the brush colour, no matter how long the brush dwelled.
+///
+/// Painting one dab per flush at a fixed spot, three flushes versus eight:
+/// with the pickup frozen, both land on the same colour (measured
+/// `(177, 75, 116)` vs `(177, 74, 114)` — identical red, and blue moving
+/// 2 LSB the *wrong* way). Reading the live canvas instead, the eight-pass
+/// mark is visibly further along toward red.
+#[test]
+fn watercolor_pigment_builds_up_across_flushes() {
+    let canvas = light_blue_canvas();
+    let runs_3 = repeat_at((64.0, 64.0), 3);
+    let runs_8 = repeat_at((64.0, 64.0), 8);
+
+    let after_3 = pixel(
+        &render_flush_groups(
+            "Smooth Watercolor",
+            0.2,
+            [1.0, 0.0, 0.0, 1.0],
+            &groups_of(&runs_3),
+            &canvas,
+        ),
+        64,
+        64,
+    );
+    let after_8 = pixel(
+        &render_flush_groups(
+            "Smooth Watercolor",
+            0.2,
+            [1.0, 0.0, 0.0, 1.0],
+            &groups_of(&runs_8),
+            &canvas,
+        ),
+        64,
+        64,
+    );
+
+    // Margin 8 clears the 1–2 LSB of rounding headroom by ~4×.
+    assert!(
+        after_8[0] > after_3[0] + 8,
+        "red must keep building past three passes: 3 flushes {after_3:?}, 8 flushes {after_8:?}",
+    );
+    assert!(
+        after_8[2] + 8 < after_3[2],
+        "blue must keep receding past three passes: 3 flushes {after_3:?}, 8 flushes {after_8:?}",
+    );
+}
+
+/// The pickup is a *neighbourhood* average, not a point sample — that is
+/// the whole reason the atlas pass exists. A dab laid next to wet paint
+/// must pull colour from it laterally.
+///
+/// Without this, `watercolor_pigment_builds_up_across_flushes` would pass
+/// for any per-flush-varying input at all; this pins the mechanism.
+#[test]
+fn watercolor_pickup_bleeds_neighbouring_wet_paint() {
+    let canvas = light_blue_canvas();
+    // At size 0.2 the dab radius is 51.2 px (0.2 × DAB_REFERENCE_SIZE × 0.5)
+    // and `pickup_size` defaults to 1.0, so the target dab's pickup window
+    // is also ±51.2 px about its centre.
+    //
+    // The probe pixel is the crux. The atlas holds ONE pickup value per dab,
+    // sampled around that dab's centre and then applied across its whole
+    // footprint. So probe at a pixel the *target* covers but the neighbour
+    // does not: the only way the neighbour's colour can reach it is through
+    // the target's pickup.
+    //
+    //   target   (64, 64) covers x ∈ [12.8, 115.2]
+    //   neighbour(94, 64) covers x ∈ [42.8, 145.2]
+    //   probe    (30, 64) — inside the target, 12.8 px clear of the neighbour,
+    //                       and the neighbour's paint sits inside the
+    //                       target's [12.8, 115.2] pickup window.
+    let neighbour = (94.0, 64.0);
+    let target = (64.0, 64.0);
+    const PROBE: (u32, u32) = (30, 64);
+
+    const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+    const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+
+    // A red dab in the first flush, then white over the overlap.
+    let with_neighbour = render_flush_groups(
+        "Smooth Watercolor",
+        0.2,
+        WHITE,
+        &[
+            group(&[neighbour]).with_color(RED),
+            group(&[target]).with_color(WHITE),
+        ],
+        &canvas,
+    );
+    // The same white dab, but the first flush lays white too — identical
+    // flush structure and coverage, only the neighbour's colour differs.
+    let alone = render_flush_groups(
+        "Smooth Watercolor",
+        0.2,
+        WHITE,
+        &[
+            group(&[neighbour]).with_color(WHITE),
+            group(&[target]).with_color(WHITE),
+        ],
+        &canvas,
+    );
+
+    let bled = pixel(&with_neighbour, PROBE.0, PROBE.1);
+    let clean = pixel(&alone, PROBE.0, PROBE.1);
+    // Both runs paint white here with identical geometry and identical
+    // flush structure; only the neighbour's colour differs. A white brush
+    // over a red-tinted pickup lands pinker — less green and less blue —
+    // than the same brush over a white pickup.
+    assert!(
+        bled[1] + 4 < clean[1] && bled[2] + 4 < clean[2],
+        "the target dab's pickup should carry its red neighbour's wet paint to {PROBE:?}, \
+         which the neighbour itself never covers: with red neighbour {bled:?}, \
+         with white neighbour {clean:?}",
+    );
+}
+
+/// Buildup must also work from nothing. On an empty layer the pickup
+/// alpha is zero, so the pickup branch stays disabled and watercolor
+/// degenerates to plain paint on the first flush; from the second flush
+/// on, the wet paint it just laid down is what it picks up. Guards
+/// against an unpremultiply-by-zero drift toward black and against alpha
+/// running away.
+#[test]
+fn watercolor_builds_up_on_transparent_canvas() {
+    let transparent = solid_canvas([0, 0, 0, 0]);
+    let runs_1 = repeat_at((64.0, 64.0), 1);
+    let runs_6 = repeat_at((64.0, 64.0), 6);
+
+    let after_1 = pixel(
+        &render_flush_groups(
+            "Smooth Watercolor",
+            0.2,
+            [1.0, 0.0, 0.0, 1.0],
+            &groups_of(&runs_1),
+            &transparent,
+        ),
+        64,
+        64,
+    );
+    let after_6 = pixel(
+        &render_flush_groups(
+            "Smooth Watercolor",
+            0.2,
+            [1.0, 0.0, 0.0, 1.0],
+            &groups_of(&runs_6),
+            &transparent,
+        ),
+        64,
+        64,
+    );
+
+    assert!(
+        after_6[3] > after_1[3],
+        "coverage must strengthen across flushes on an empty layer: 1 flush {after_1:?}, 6 flushes {after_6:?}",
+    );
+    assert!(
+        after_6[0] >= after_1[0],
+        "red must not drift backwards (unpremultiply-by-zero would pull toward black): \
+         1 flush {after_1:?}, 6 flushes {after_6:?}",
+    );
+    assert!(
+        after_6[1] < 40 && after_6[2] < 40,
+        "a pure red brush must stay red, not grey out: 6 flushes {after_6:?}",
     );
 }

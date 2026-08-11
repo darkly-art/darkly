@@ -1,4 +1,4 @@
-name: Twirly Hair
+name: Sponge
 category: Dry Media
 nodes:
   add:
@@ -6,40 +6,35 @@ nodes:
   brush_settings:
     type: brush_settings
     inputs:
-      size: 0.4
-      spacing: 0.01
+      size: 0.2
+      spacing: 0.02
       stabilize: 1.0
-  circle:
-    type: circle
   curve:
     type: curve
-    comment: pen pressure affects the threshold of hair volume
     inputs:
       curve:
       - - 0.0
-        - 1.0
-      - - 0.682973
-        - 0.5305826
+        - 0.70523924
+      - - 0.59307975
+        - 0.36470732
       - - 1.0
         - 0.0
-  divide:
-    type: divide
-    comment: we have to divide the distance factor by the brush size, to keep the 'twirl' setting consistent
+  curve_2:
+    type: curve
+    inputs:
+      curve:
+      - - 0.0
+        - 0.0
+      - - 0.6392242
+        - 0.36304563
+      - - 1.0
+        - 1.0
   levels:
     type: levels
-  multiply:
-    type: multiply
-    inputs:
-      b: 0.005
-  multiply_2:
-    type: multiply
-    inputs:
-      a: 0.5
   noise:
     type: noise
     inputs:
-      scale: 12
-      scale_with_brush: false
+      scale: 6.0
       space: 1
   paint:
     type: paint
@@ -47,6 +42,18 @@ nodes:
     type: paint_color
   pen_input:
     type: pen_input
+  polygon:
+    type: polygon
+    inputs:
+      points: 4
+      rounding: 0.30
+      softness: 0.30
+      squeeze: 0.35
+      squeeze_angle: -0.7853981852531433
+  random:
+    type: random
+  random_2:
+    type: random
   stamp:
     type: stamp
   subtract:
@@ -55,26 +62,24 @@ nodes:
       a: 0.11924592405557632
 connections:
 - add.result -> levels.input
-- brush_settings.size -> divide.b
-- circle.mask -> add.b
 - curve.output -> levels.in_low
-- divide.result -> multiply.a
+- curve_2.output -> paint.flow
 - levels.output -> stamp.tip
-- multiply.result -> multiply_2.b
-- multiply_2.result -> noise.rotation
 - noise.value -> subtract.b
 - paint_color.color -> stamp.color
-- pen_input.distance -> divide.a
+- pen_input.drawing_angle -> polygon.rotation_input
 - pen_input.position -> paint.position
 - pen_input.pressure -> curve.input
+- pen_input.pressure -> curve_2.input
+- polygon.mask -> add.b
+- random.value -> noise.rotation
+- random_2.value -> noise.variation
 - stamp.dab -> paint.rgba
 - subtract.result -> add.a
 exposed_ports:
   brush_settings.stabilize: {}
   brush_settings.size: {}
-  multiply_2.a:
-    label: Twirl
-    description: Twirliness factor
-    icon: tabler:galaxy
   paint.flow: {}
   paint.opacity: {}
+  polygon.softness: {}
+  polygon.rounding: {}

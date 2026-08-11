@@ -31,6 +31,14 @@ impl DarklyEngine {
         }
         // Resolve target: the sibling at (source_position - 1) in the same
         // parent. If source is at position 0 (or has no parent), fail.
+        //
+        // `position_in_parent` indexes whichever list holds the entity, so a
+        // modifier id would yield a *filter* index and then read the host's
+        // `children` with it. A modifier has no sibling below to merge into, so
+        // reject it before the arithmetic rather than indexing the wrong list.
+        if self.doc.is_filter(source_id) {
+            return Err("Layer not in tree".into());
+        }
         let parent = self.doc.parent_of(source_id);
         let pos = self
             .doc
@@ -124,7 +132,8 @@ impl DarklyEngine {
         // Reposition the result to the target's old position. Simplest:
         // detach then re-insert.
         self.doc.detach_for_undo(result_id);
-        self.doc.reinsert_node(result_id, parent, target_pos_before);
+        self.doc
+            .reinsert_entity(result_id, parent, target_pos_before);
 
         let result_parent = self.doc.parent_of(result_id);
         let result_position = self.doc.position_in_parent(result_id).unwrap_or(0);
@@ -270,7 +279,7 @@ impl DarklyEngine {
         // reinsert is the simplest exact-slot landing.
         self.doc.detach_for_undo(result_id);
         self.doc
-            .reinsert_node(result_id, topmost_parent, topmost_pos);
+            .reinsert_entity(result_id, topmost_parent, topmost_pos);
 
         let result_parent = self.doc.parent_of(result_id);
         let result_position = self.doc.position_in_parent(result_id).unwrap_or(0);

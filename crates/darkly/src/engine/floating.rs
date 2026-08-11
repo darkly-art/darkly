@@ -79,7 +79,7 @@ pub(crate) struct TransformSession {
 }
 use crate::layer::{Layer, LayerId};
 use crate::undo::{
-    CompoundAction, GpuRegionAction, LayerAddAction, PixelBoundsAction, SelectionAction,
+    CompoundAction, EntityAddAction, GpuRegionAction, PixelBoundsAction, SelectionAction,
     SelectionMetadataAction, UndoAction,
 };
 
@@ -186,22 +186,24 @@ impl DarklyEngine {
         // Auto-commit any existing floating content first.
         self.auto_commit_floating();
 
-        let clip = match self.clipboard.as_ref().and_then(|c| c.as_image()) {
-            Some(c) => c,
-            None => return false,
-        };
-
-        let source_origin = (clip.offset_x, clip.offset_y);
-        let source_width = clip.width;
-        let source_height = clip.height;
+        // Pull pixels from either clipboard variant — a normal copy produces a
+        // rich `Layer` clip, so reading only flat image clips here made
+        // paste-in-place silently no-op after any copy.
+        let (rgba, source_width, source_height, offset_x, offset_y) =
+            match self.clipboard.as_ref().and_then(|c| c.paste_pixels()) {
+                Some(v) => v,
+                None => return false,
+            };
+        let source_origin = (offset_x, offset_y);
 
         // Upload flat RGBA data to GPU for preview. The target node's format
         // is read off `compositor.node_texture(id).format` inside the
-        // compositor — the engine never speaks the word "mask" here.
+        // compositor — the engine never speaks the word "mask" here, so this
+        // floats onto a raster layer or an R8 mask alike.
         self.compositor.set_floating_content(
             &self.gpu.device,
             &self.gpu.queue,
-            &clip.data,
+            &rgba,
             source_origin,
             source_width,
             source_height,
@@ -232,7 +234,7 @@ impl DarklyEngine {
 
     /// Paste raw RGBA bytes as floating content on a NEW raster layer.
     /// The caller is expected to switch to the transform tool. On commit, the
-    /// pixel data is rendered into the new layer and a single LayerAddAction
+    /// pixel data is rendered into the new layer and a single EntityAddAction
     /// is pushed to undo. On cancel, the new layer is removed silently.
     ///
     /// Returns the new layer id.
@@ -941,7 +943,7 @@ impl DarklyEngine {
         let grew = self.grow_node_to_fit(layer_id, affected_canvas).is_some();
 
         // Path A — paste onto a layer auto-created for this paste.
-        // The layer is empty by construction, so a single LayerAddAction
+        // The layer is empty by construction, so a single EntityAddAction
         // captures the whole paste as one undo step (no GpuRegionAction).
         let FloatingMode::Paste { created_layer_id } = fc.mode;
         if created_layer_id.is_some() {
@@ -959,7 +961,7 @@ impl DarklyEngine {
 
             let parent = self.doc.parent_of(layer_id);
             let pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
-            self.push_undo(Box::new(LayerAddAction::new(layer_id, parent, pos)));
+            self.push_undo(Box::new(EntityAddAction::new(layer_id, parent, pos)));
 
             self.compositor.mark_node_pixels_dirty(layer_id);
             self.compositor.clear_floating_content();
@@ -1154,7 +1156,7 @@ impl DarklyEngine {
         let FloatingMode::Paste { created_layer_id } = fc.mode;
         if let Some(id) = created_layer_id {
             // Paste auto-created a target layer; drop it silently. No undo
-            // entry to maintain — `LayerAddAction` is only pushed on commit.
+            // entry to maintain — `EntityAddAction` is only pushed on commit.
             self.doc.detach_for_undo(id);
             self.compositor.dispose_layer(id);
             self.compositor.mark_dirty();

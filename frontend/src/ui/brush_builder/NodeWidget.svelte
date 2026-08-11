@@ -33,6 +33,13 @@
     let typeInfo = $derived(brushGraph.getNodeType(node.type_id));
     let displayName = $derived(typeInfo?.display_name ?? node.type_id);
 
+    /** The scalar math nodes (add/subtract/multiply/divide) offer an editor
+     *  toggle that unlocks their numeric-input sliders from `0–1` to the
+     *  extended range, for entering large gains. Frontend-only — see
+     *  `brushGraph.extendedRangeNodes`. */
+    let isMathNode = $derived(typeInfo?.category === 'math');
+    let extendedRange = $derived(brushGraph.extendedRangeNodes.has(node.id));
+
     /** Apply the port's `visible_when` rule against the referenced sibling
      *  input's current value. Engine-side the port still works regardless —
      *  this is purely UI. */
@@ -164,6 +171,17 @@
                     <PortWidget {port} nodeId={node.id} side="left" />
                 {/each}
             </div>
+        {/if}
+
+        {#if isMathNode}
+            <label class="extended-range" title="Unlock the sliders to 0–1000 for large gains (editor only — the value is unchanged)">
+                <input
+                    type="checkbox"
+                    checked={extendedRange}
+                    onchange={() => brushGraph.toggleExtendedRange(node.id)}
+                />
+                Extended range
+            </label>
         {/if}
 
         {#if isPreviewable}
@@ -301,5 +319,19 @@
         display: flex;
         flex-direction: column;
         gap: 2px;
+    }
+
+    .extended-range {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 8px 0;
+        font-size: 11px;
+        color: var(--text-muted);
+        cursor: pointer;
+        user-select: none;
+    }
+    .extended-range input {
+        cursor: pointer;
     }
 </style>

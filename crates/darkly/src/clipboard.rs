@@ -49,6 +49,33 @@ impl Clipboard {
             _ => None,
         }
     }
+
+    /// The clip's pixels as `(rgba, width, height, offset_x, offset_y)`,
+    /// regardless of variant. A flat `ImageData` clip returns its buffer
+    /// directly; a rich `Layer` clip decodes its base64 pixels. Used by the
+    /// paste-in-place floating path so it works for the `Layer` clip a normal
+    /// copy produces, not just flat image clips. Returns `None` if a rich
+    /// clip's pixels are malformed.
+    pub fn paste_pixels(&self) -> Option<(Vec<u8>, u32, u32, i32, i32)> {
+        match self {
+            Clipboard::ImageData(c) => {
+                Some((c.data.clone(), c.width, c.height, c.offset_x, c.offset_y))
+            }
+            Clipboard::Layer(l) => {
+                let pixels = l.decode_pixels().ok()?;
+                if pixels.len() != (l.bounds.width * l.bounds.height * 4) as usize {
+                    return None;
+                }
+                Some((
+                    pixels,
+                    l.bounds.width,
+                    l.bounds.height,
+                    l.bounds.x,
+                    l.bounds.y,
+                ))
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

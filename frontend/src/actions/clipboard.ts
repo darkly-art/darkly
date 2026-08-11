@@ -158,25 +158,30 @@ export function registerClipboardActions(): void {
     });
     actions.register({
         id: 'pasteInPlace',
-        displayName: 'Paste in Place',
+        displayName: 'Paste into Active Layer',
         category: 'edit',
-        description: 'Paste from the clipboard at its original position.',
+        description: 'Paste the clipboard into the active layer or mask at its original position.',
         icon: 'fa6-solid:clipboard',
         menuPath: ['Edit:60'],
         handler: async () => {
             const engine = app.engine;
             if (!engine || app.activeLayerId == null) return;
+            // Paste into the active target — a raster layer or, when a mask is
+            // the active edit target, the mask. Both flow through the same
+            // floating→commit path (`pasteInPlaceFloating` / `pasteInPlace`),
+            // which writes RGBA layers and R8 masks alike.
             const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
             if (activateTransform) {
+                // Float onto the target so it can be repositioned before commit.
                 const ok = await engine.api.pasteInPlaceFloating({ id: app.activeLayerId });
                 if (ok) {
                     enterTransformTool();
                     app.requestFrame();
                 }
             } else {
-                const { id: layerId } = await engine.api.pasteInPlace({ active_layer_id: app.activeLayerId });
-                if (layerId >= 0) {
-                    app.selectLayer(layerId);
+                // Commit into the target immediately at the source's position.
+                const { id } = await engine.api.pasteInPlace({ active_layer_id: app.activeLayerId });
+                if (id >= 0) {
                     await app.refreshLayerTree();
                     app.requestFrame();
                 }

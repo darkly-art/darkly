@@ -13,7 +13,7 @@ use crate::gpu::blend_mode;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::readback;
 use crate::layer::{Layer, LayerId};
-use crate::undo::{GpuRegionAction, LayerAddAction};
+use crate::undo::{EntityAddAction, GpuRegionAction};
 
 #[handlers]
 impl DarklyEngine {
@@ -509,21 +509,25 @@ impl DarklyEngine {
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(LayerAddAction::new(id, parent, pos)));
+        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
 
         id
     }
 
-    /// Paste from the internal clipboard at its original position.
-    /// Returns the new layer ID, or None if clipboard is empty.
+    /// Paste the internal clipboard INTO the active target (layer or mask) at
+    /// the source's original position, committed immediately — no transform
+    /// session. This is the committed counterpart of `paste_in_place_floating`
+    /// (used when "activate transform after paste" is off); both float the clip
+    /// onto the active node and share the single `commit_floating` path, which
+    /// writes RGBA layers and R8 masks alike. Returns the target id, or `None`
+    /// when there's no active target or nothing to paste.
     pub fn paste_in_place(&mut self, active_layer_id: Option<LayerId>) -> Option<LayerId> {
-        let clip = self.clipboard.as_ref()?.as_image()?;
-        let width = clip.width;
-        let height = clip.height;
-        let offset_x = clip.offset_x;
-        let offset_y = clip.offset_y;
-        let rgba = clip.data.clone();
-        Some(self.paste_image(width, height, &rgba, offset_x, offset_y, active_layer_id))
+        let id = active_layer_id?;
+        if !self.paste_in_place_floating(id) {
+            return None;
+        }
+        self.commit_floating();
+        Some(id)
     }
 
     // -----------------------------------------------------------------------
@@ -551,20 +555,30 @@ impl DarklyEngine {
         // builds an image clip). Voids regenerate from params, so there's
         // nothing to read back; cross-tab clipboard for voids would need its
         // own JSON path (out of scope for this change).
+        //
+        // A region copy (selection active) captures flat composited pixels and
+        // must NOT carry the mask — a mask belongs only to a whole-layer copy
+        // (which is a layer duplication in spirit). Gate the mask capture on
+        // provenance.
+        let is_region_copy = self.has_selection();
         let meta = match self.doc.layer(id) {
             Some(Layer::Raster(layer)) => {
-                let mask = layer.filters.iter().find_map(|mid| {
-                    let m = self.doc.find_filter(*mid)?;
-                    if !m.is_mask() {
-                        return None;
-                    }
-                    let bounds = m.pixels().map(|p| p.bounds).unwrap_or(layer.pixels.bounds);
-                    Some(RichCopyMask {
-                        name: m.common.name.clone(),
-                        visible: m.common.visible,
-                        bounds,
+                let mask = if is_region_copy {
+                    None
+                } else {
+                    layer.filters.iter().find_map(|mid| {
+                        let m = self.doc.find_filter(*mid)?;
+                        if !m.is_mask() {
+                            return None;
+                        }
+                        let bounds = m.pixels().map(|p| p.bounds).unwrap_or(layer.pixels.bounds);
+                        Some(RichCopyMask {
+                            name: m.common.name.clone(),
+                            visible: m.common.visible,
+                            bounds,
+                        })
                     })
-                });
+                };
                 Some(RichCopyMetadata {
                     name: layer.common.name.clone(),
                     visible: layer.common.visible,
@@ -644,9 +658,13 @@ impl DarklyEngine {
             }
         }
 
-        // Restore mask presence (without pixels — v1).
+        // Restore mask presence (without pixels — v1). Use the unseeded attach:
+        // the pasted layer's `EntityAddAction` already covers the mask in its
+        // subtree, and seeding from the receiving document's active selection
+        // would wrongly turn that selection into the mask.
         if clip.mask.is_some() {
-            self.add_mask(id);
+            self.add_mask_unseeded(id);
+            self.compositor.mark_dirty();
         }
 
         Some(id)
