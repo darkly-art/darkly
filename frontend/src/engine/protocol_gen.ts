@@ -269,8 +269,8 @@ exposed: boolean,
  * neutralizer (`reset_exposed_scrubs`) that targets every
  * exposed scrub regardless of `preview_value`.
  *
- * Canonical example: `paint.size` (0.1, so a huge brush's
- * preview still fits the small cursor mask and the editor
+ * Canonical example: `brush_settings.size` (0.1, so a huge
+ * brush's preview still fits the small cursor mask and the editor
  * preview doesn't redraw on every size scrub).
  */
 preview_value: number | null, 
@@ -319,7 +319,7 @@ visible_when: [string, Array<number>] | null,
  * stays "UI hint only, not enforced", and `with_natural_range` is the
  * separate, explicit opt-in for wire-boundary range mapping. Most
  * ports declare both with the same numbers; the two diverge for
- * over-drag sliders like `paint.size`, where the slider range is
+ * over-drag sliders like `brush_settings.size`, where the range is
  * a hint but the wire-side semantics are passthrough.
  */
 natural_range: [number, number] | null, 
@@ -368,11 +368,11 @@ preview_image: boolean,
  */
 source: boolean, };
 
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+
 export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
 
 export type PortDir = "Input" | "Output";
-
-export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
 
 export type PreviewStaging = { 
 /**
@@ -461,6 +461,33 @@ export type CanvasDimensionsResp = { width: number, height: number, };
 
 export type CanvasRectResp = { origin_x: number, origin_y: number, width: number, height: number, };
 
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
+export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
+/**
+ * The unit suffix alone, for a column header. Empty for unitless values.
+ */
+unit: string, };
+
+export type ParamInfo = { kind: string, name: string, 
+/**
+ * Display label. `None` → the UI title-cases `name`.
+ */
+label: string | null, description: string | null, 
+/**
+ * How to render this parameter's editor. One closed set, which both
+ * `ParamKind` and the settings schema's `WidgetHint` map into:
+ * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
+ */
+widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
+/**
+ * Enum: `["Label1", "Label2", ...]`.
+ * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
+ */
+options: JsonValue | null, display: ParamDisplay, };
+
+export type CaptureKind = "camera" | "display" | "stream";
+
 export type CatalogEntry = { type: string, displayName: string, 
 /**
  * Iconify name, or `None` when the variant deliberately declares no icon
@@ -494,33 +521,6 @@ supportsPreview: boolean,
  * How the browser captures this variant's external frames; voids only.
  */
 captureKind: CaptureKind | null, };
-
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
-export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
-/**
- * The unit suffix alone, for a column header. Empty for unitless values.
- */
-unit: string, };
-
-export type ParamInfo = { kind: string, name: string, 
-/**
- * Display label. `None` → the UI title-cases `name`.
- */
-label: string | null, description: string | null, 
-/**
- * How to render this parameter's editor. One closed set, which both
- * `ParamKind` and the settings schema's `WidgetHint` map into:
- * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
- */
-widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
-/**
- * Enum: `["Label1", "Label2", ...]`.
- * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
- */
-options: JsonValue | null, display: ParamDisplay, };
-
-export type CaptureKind = "camera" | "display" | "stream";
 
 export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
 /**

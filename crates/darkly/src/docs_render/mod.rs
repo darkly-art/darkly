@@ -204,8 +204,8 @@ pub struct Gpu {
 /// The theme every documentation brush stroke is rendered in — a white stroke
 /// on black, which is also the engine's own default (`preview_theme_fg` /
 /// `preview_theme_bg`). Named here rather than read off an engine so a headless
-/// run depends on nothing ambient, and stated once so the two stripe tones and
-/// the stroke colour cannot drift apart.
+/// run depends on nothing ambient, and stated once so the staged backdrop's
+/// tones and the stroke colour cannot drift apart.
 const DOCS_STROKE_FG: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const DOCS_STROKE_BG: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 

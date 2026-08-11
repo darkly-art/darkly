@@ -237,6 +237,29 @@ pub enum PreviewBackdrop {
     /// (`libs/ui/widgets/kis_preset_live_preview_view.cpp:120-154`), which
     /// stripes the background for its `colorsmudge`, `deformbrush` and `filter`
     /// engines for exactly this reason.
+    ///
+    /// A multi-octave noise field was built and measured against this and
+    /// **rejected**. On the numbers it wins — it responds to a displacement
+    /// everywhere rather than only where one crosses a band edge, which at the
+    /// few-pixel displacements a liquify stroke produces is the difference
+    /// between a handful of the dab's pixels changing and half of them. On the
+    /// rendered thumbnails it loses, and the thumbnails are the artifact. Two
+    /// reasons, both about legibility rather than about pixel counts:
+    ///
+    /// - **A copy of a homogeneous field is that field.** Clone transports
+    ///   pixels from a fixed offset away; over noise the copied region is
+    ///   statistically identical to what it replaced, so a third of the dab's
+    ///   pixels differ and *nothing reads*. Stripes have a period to be out of
+    ///   phase with, which is what makes the copied region visibly misaligned.
+    /// - **Every operator's mark competes with the field's own texture.** Two
+    ///   flat tones state the boundary and nothing else, so what the stroke did
+    ///   to that boundary is the only structure in the frame.
+    ///
+    /// A single period does leave blur reading poorly — Krita's own comment
+    /// concedes its stripes "may or may not show things depending on the
+    /// filter…but it is better than nothing". `blur.strength`'s
+    /// `preview_value` is the answer to that, and it is a smaller intervention
+    /// than replacing the field.
     Stripes,
 }
 

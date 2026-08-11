@@ -41,7 +41,7 @@ enum ChangeKind {
     /// - `PortDef::preview_value` — caller-side
     ///   `Graph::apply_preview_overrides` replaces the scrubbed value
     ///   with a preview-mode constant before rendering (used by
-    ///   `paint.size`, `watercolor.size`, …).
+    ///   `brush_settings.size`, `blur.strength`).
     /// - `PortDef::preview_irrelevant_scrub` — the preview pipeline
     ///   structurally ignores the port (used by `pen_input.stabilize`,
     ///   which the synthetic-stroke preview's hard-wired `PassThrough`

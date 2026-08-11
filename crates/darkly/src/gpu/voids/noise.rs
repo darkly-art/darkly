@@ -12,6 +12,7 @@
 use crate::gpu::effect::{
     create_blit_bind_group, create_blit_pipeline, EffectCache, EffectPipeline,
 };
+use crate::gpu::hash::pcg_hash;
 use crate::gpu::preview::{swing, PreviewAnim};
 use crate::gpu::void::{DirtyFlag, ParamDef, ParamValue, Void, VoidRegistration};
 use crate::units::UnitType;
@@ -603,12 +604,4 @@ fn seed_noise_volume(dim: u32, seed: u32) -> Vec<u8> {
         *b = (s >> 24) as u8;
     }
     bytes
-}
-
-/// PCG hash matching the GPU-side `fbm_pcg` in `shaders/lib/fbm.wgsl`.
-/// Used to seed the 3D noise volume on the CPU.
-fn pcg_hash(n: u32) -> u32 {
-    let mut h = n.wrapping_mul(747796405).wrapping_add(2891336453);
-    h = ((h >> ((h >> 28) + 4)) ^ h).wrapping_mul(277803737);
-    (h >> 22) ^ h
 }

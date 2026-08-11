@@ -10,7 +10,7 @@
 use darkly::brush::builtin_brushes;
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
-use darkly::gpu::preview::PreviewBackdrop;
+use darkly::gpu::preview::{pixel_centre, PreviewBackdrop};
 use darkly::gpu::test_utils::test_device;
 
 /// Brushes whose graphs sample the canvas, and the glyph each declares.
@@ -21,10 +21,15 @@ const STAGED: [(&str, &str); 4] = [
     ("Clone", "fa6-solid:clone"),
 ];
 
+const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
 fn fresh_engine() -> DarklyEngine {
     let (device, queue) = test_device();
     let gpu = GpuContext::new_headless(device, queue);
-    DarklyEngine::new(gpu, 1024, 768)
+    let mut engine = DarklyEngine::new(gpu, 1024, 768);
+    engine.set_preview_theme(WHITE, BLACK);
+    engine
 }
 
 /// One brush's framed stroke thumbnail, decoded to RGBA8.
@@ -44,60 +49,164 @@ fn luminance(px: &[u8]) -> f32 {
     0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32
 }
 
-/// Standard deviation of luminance. `0.0` means every pixel is the same colour
-/// — the symptom this whole change exists to remove.
+/// Standard deviation of luminance. `0.0` means every pixel is the same colour.
 fn luminance_sd(pixels: &[u8]) -> f32 {
     let lums: Vec<f32> = pixels.chunks_exact(4).map(luminance).collect();
     let mean = lums.iter().sum::<f32>() / lums.len() as f32;
     (lums.iter().map(|l| (l - mean).powi(2)).sum::<f32>() / lums.len() as f32).sqrt()
 }
 
-/// The largest luminance range found within any single column.
-///
-/// The load-bearing statistic. [`PreviewBackdrop::Stripes`] is vertical bands —
-/// constant in `v` — and cropping and resizing preserve that, so a staged
-/// preview that showed nothing but its own backdrop would read `0.0` here no
-/// matter how much horizontal contrast the stripes carry. Anything above the
-/// noise floor is the stroke itself.
-fn max_column_range(pixels: &[u8], w: u32, h: u32) -> f32 {
-    (0..w)
-        .map(|x| {
-            let (mut lo, mut hi) = (f32::MAX, f32::MIN);
-            for y in 0..h {
-                let i = ((y * w + x) * 4) as usize;
-                let l = luminance(&pixels[i..i + 4]);
-                lo = lo.min(l);
-                hi = hi.max(l);
-            }
-            hi - lo
-        })
-        .fold(0.0, f32::max)
-}
-
-/// Comfortably above readback and resize noise, comfortably below the ~43 the
-/// weakest already-working brush (Smooth Watercolor) measures.
+/// Comfortably above readback and resize noise, and far below the ~34 levels of
+/// standard deviation the staged bands alone carry.
 const VISIBLE: f32 = 12.0;
 
+/// What the stroke did, isolated from what it was staged over.
+///
+/// The **raw** render canvas, before the framer crops it, compared pixel by
+/// pixel against a CPU evaluation of the backdrop the render was staged over —
+/// the same `sample()` the framer itself compares against, at the same
+/// tolerance. Every texel the stroke did not touch round-trips through
+/// `write_texture` → `save_pre_stroke` → `color_output::commit` bit-identically,
+/// so a pixel outside the tolerance here is the stroke and nothing else.
+///
+/// That is what makes this backdrop-agnostic: a preview that shows nothing but
+/// its own backdrop scores exactly zero whatever the backdrop is, and swapping
+/// the field for the next one moves the numbers without invalidating the idea.
+struct Stroke {
+    /// Pixels the stroke changed, as a fraction of the render canvas.
+    fraction: f32,
+    /// Their bounding box, in render pixels.
+    bbox: (u32, u32),
+}
+
+fn measure_stroke(engine: &mut DarklyEngine, backdrop: PreviewBackdrop) -> Stroke {
+    /// The framer's own tolerance — accommodates premultiplied-alpha rounding.
+    const TOLERANCE: i32 = 12;
+    let (pixels, w, h) = engine.test_render_stroke_preview_canvas();
+    let mut changed = 0usize;
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (u32::MAX, u32::MAX, 0u32, 0u32);
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            let (u, v) = pixel_centre(x, y, w, h);
+            let want = backdrop.sample(u, v, WHITE, BLACK);
+            let differs = (0..3).any(|c| {
+                let want = (want[c].clamp(0.0, 1.0) * 255.0).round() as i32;
+                (pixels[i + c] as i32 - want).abs() > TOLERANCE
+            });
+            if differs {
+                changed += 1;
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+    Stroke {
+        fraction: changed as f32 / (w * h) as f32,
+        bbox: if changed == 0 {
+            (0, 0)
+        } else {
+            (max_x - min_x + 1, max_y - min_y + 1)
+        },
+    }
+}
+
+/// Floor on how much of the render canvas the stroke must change.
+///
+/// Measured over the shipped backdrop: Blur — the weakest of the four, and the
+/// one this floor exists for — changes 0.121 %, clearing it by 2.4×, and
+/// Liquify, Smudge and Clone clear it by 8.8× / 15.9× / 29.6×. Blur *without*
+/// its preview pin changes 0.022 %, less than half the floor.
+///
+/// A stripe field only responds where an operator's action crosses a band edge,
+/// so these numbers are much closer together than they would be over a field
+/// carrying every spatial frequency. That is the accepted cost of a backdrop
+/// whose *rendered* strokes read better; see [`PreviewBackdrop::Stripes`].
+const MIN_CHANGED_FRACTION: f32 = 0.0005;
+
+/// Floor on the stroke's bounding box, in render pixels.
+///
+/// The framer crops to this box, so it is the only machine check left on what
+/// the thumbnail is a picture *of*: a stroke that only registers in patches
+/// crops to a fragment blown up to fill the tile, which is how the original bug
+/// looked once it stopped being invisible — unpinned Blur's 194 × 35 becomes a
+/// tile showing two stripes and no stroke. Unlike the fraction above it cannot
+/// carry a large margin: the S-curve's own extent is the ceiling, and the
+/// weakest brush measures 323 × 49 against Liquify's 397 × 97.
+const MIN_BBOX: (u32, u32) = (256, 40);
+
 /// **The regression.** Every content-dependent brush's stroke preview shows a
-/// stroke: it is not one flat colour, and — the part its own backdrop cannot
-/// fake — it varies down a column.
+/// stroke: measured against its own backdrop, on the canvas the framer reads,
+/// there is one and it spans the path.
 #[test]
 fn content_dependent_brushes_render_a_visible_stroke() {
     let mut engine = fresh_engine();
     for (name, _) in STAGED {
-        let (pixels, w, h) = stroke_thumbnail(&mut engine, name);
+        engine
+            .brush_load(name)
+            .unwrap_or_else(|e| panic!("'{name}' is a built-in brush: {e}"));
+        let backdrop =
+            darkly::brush::graph_capabilities(&engine.active_brush_graph()).preview_backdrop;
+        let stroke = measure_stroke(&mut engine, backdrop);
         assert!(
-            luminance_sd(&pixels) > VISIBLE,
-            "'{name}' stroke preview is flat (luminance SD {:.2})",
-            luminance_sd(&pixels)
+            stroke.fraction > MIN_CHANGED_FRACTION,
+            "'{name}' changed {:.4}% of its preview canvas — its stroke is its \
+             own backdrop showing through",
+            stroke.fraction * 100.0,
         );
         assert!(
-            max_column_range(&pixels, w, h) > VISIBLE,
-            "'{name}' stroke preview varies only horizontally ({:.2}) — that is \
-             its staged backdrop showing through, not a stroke",
-            max_column_range(&pixels, w, h)
+            stroke.bbox.0 >= MIN_BBOX.0 && stroke.bbox.1 >= MIN_BBOX.1,
+            "'{name}' changed only a {}x{} patch, so the framer crops a \
+             fragment rather than the stroke",
+            stroke.bbox.0,
+            stroke.bbox.1,
         );
     }
+}
+
+/// **Part of the same regression, and the feature test for the preview pin.**
+/// Blur's shipped strength puts a sub-pixel kernel against a ~36 px preview dab,
+/// so the stroke registers only in patches and the framer crops one of them.
+/// The port declares a `preview_value` so the preview renders at a strength that
+/// marks the whole S-curve. Without it Blur fails both thresholds above.
+#[test]
+fn the_preview_pin_is_what_makes_blur_read() {
+    let mut engine = fresh_engine();
+    engine.brush_load("Blur").expect("Blur is a built-in brush");
+
+    let pinned = darkly::brush::registry()
+        .get("blur")
+        .expect("the blur node is registered")
+        .node
+        .ports
+        .iter()
+        .find(|p| p.name == "strength")
+        .expect("blur declares a strength port")
+        .preview_value;
+    let pinned = pinned.expect("blur.strength is pinned for previews");
+    assert!(
+        pinned > 0.05,
+        "a pin at or below the shipped default would render the same \
+         sub-pixel kernel the preview cannot show"
+    );
+
+    let stroke = measure_stroke(&mut engine, PreviewBackdrop::Stripes);
+    assert!(
+        stroke.fraction > 2.0 * MIN_CHANGED_FRACTION,
+        "Blur's pinned preview changed {:.4}% of the canvas — the pin is \
+         supposed to leave the floor twice as much headroom as it needs",
+        stroke.fraction * 100.0,
+    );
+    assert!(
+        stroke.bbox.0 >= 320 && stroke.bbox.1 >= 45,
+        "Blur's pinned preview marks a {}x{} box — the pin exists to grow it \
+         past the point where the framer crops a fragment, which the strength \
+         sweep puts at ~0.15",
+        stroke.bbox.0,
+        stroke.bbox.1,
+    );
 }
 
 /// Every brush that deposits pigment keeps the flat clear, so nothing about its
@@ -169,10 +278,10 @@ fn the_dab_slot_belongs_to_the_icon() {
 #[test]
 fn the_backdrop_follows_the_theme() {
     let mut engine = fresh_engine();
-    engine.set_preview_theme([1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]);
+    engine.set_preview_theme(WHITE, BLACK);
     let (light_on_dark, _, _) = stroke_thumbnail(&mut engine, "Liquify");
 
-    engine.set_preview_theme([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]);
+    engine.set_preview_theme(BLACK, WHITE);
     let (dark_on_light, _, _) = stroke_thumbnail(&mut engine, "Liquify");
 
     assert!(luminance_sd(&light_on_dark) > VISIBLE);
@@ -200,13 +309,11 @@ fn the_clone_offset_escapes_the_stripes() {
     // whatever `BANDS` is set to: shifting by the offset must land on the other
     // tone *everywhere*, which is what "exactly out of phase" means and what an
     // offset of a whole period fails at every position.
-    let fg = [1.0, 1.0, 1.0, 1.0];
-    let bg = [0.0, 0.0, 0.0, 1.0];
     for i in 0..64 {
         let u = i as f32 / 64.0;
         assert_ne!(
-            PreviewBackdrop::Stripes.sample(u, 0.5, fg, bg),
-            PreviewBackdrop::Stripes.sample(u + du, 0.5, fg, bg),
+            PreviewBackdrop::Stripes.sample(u, 0.5, WHITE, BLACK),
+            PreviewBackdrop::Stripes.sample(u + du, 0.5, WHITE, BLACK),
             "at u = {u} the offset {du} lands back on the same band, so a clone \
              of the backdrop is the backdrop"
         );
@@ -256,11 +363,12 @@ fn previews_are_reproducible() {
         "Rough Watercolor",
         "Smooth Watercolor",
         "Round",
+        "Clone",
     ] {
         let (first, _, _) = stroke_thumbnail(&mut engine, name);
         // Drop the bake and take it again from scratch.
         engine.set_preview_theme([0.5, 0.5, 0.5, 1.0], [0.25, 0.25, 0.25, 1.0]);
-        engine.set_preview_theme([1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]);
+        engine.set_preview_theme(WHITE, BLACK);
         let (second, _, _) = stroke_thumbnail(&mut engine, name);
         assert_eq!(first, second, "'{name}' renders differently every bake");
     }

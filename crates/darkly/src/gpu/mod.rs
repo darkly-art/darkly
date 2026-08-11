@@ -110,6 +110,7 @@ pub mod filter;
 pub mod filters;
 pub mod floating_preview;
 pub mod flood_fill;
+pub mod hash;
 pub mod histogram;
 pub mod lut_filter;
 pub mod ortho_transform;

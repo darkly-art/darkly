@@ -1,4 +1,5 @@
 use crate::gpu::effect::{create_effect_pipeline, Binding, EffectCache, EffectPipeline};
+use crate::gpu::hash::pcg_hash;
 use crate::gpu::preview::{PreviewAnim, ANIMATED_FRAMES};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
@@ -369,13 +370,6 @@ impl Veil for Grain {
             rpass.draw(0..3, 0..1);
         }
     }
-}
-
-/// CPU-side PCG hash matching the GPU version.
-fn pcg_hash(n: u32) -> u32 {
-    let mut h = n.wrapping_mul(747796405).wrapping_add(2891336453);
-    h = ((h >> ((h >> 28) + 4)) ^ h).wrapping_mul(277803737);
-    (h >> 22) ^ h
 }
 
 fn create_evolve_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> EffectPipeline {

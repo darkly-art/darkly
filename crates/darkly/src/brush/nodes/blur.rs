@@ -92,6 +92,16 @@ pub fn register() -> BrushNodeRegistration {
                     .with_unit(UnitType::Percent)
                     .with_icon("fa6-solid:gauge-high")
                     .exposed()
+                    // A preview stroke is read at a canonical strength, not at
+                    // the brush's own. The default's kernel is
+                    // `0.05 * 36 * MAX_KERNEL_FRACTION` ≈ 0.45 px against a
+                    // preview dab radius of ~36 px, so at the shipped value the
+                    // stroke changes a 194 x 35 patch of a 1024 x 768 canvas and
+                    // the thumbnail framer crops that fragment and blows it up
+                    // to fill the tile — two stripes and no stroke. Pinned, the
+                    // stroke spans the S-curve and the tile is a picture of it.
+                    // The smallest value measured to do that with margin.
+                    .with_preview_value(0.6)
                     .with_description(
                         "How wide a neighborhood each touch averages, as a fraction of the brush \
                          radius. Higher values soften more per touch.",

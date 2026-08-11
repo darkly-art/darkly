@@ -150,8 +150,8 @@ pub struct PortDef<W: WireKind> {
     /// neutralizer (`reset_exposed_scrubs`) that targets every
     /// exposed scrub regardless of `preview_value`.
     ///
-    /// Canonical example: `paint.size` (0.1, so a huge brush's
-    /// preview still fits the small cursor mask and the editor
+    /// Canonical example: `brush_settings.size` (0.1, so a huge
+    /// brush's preview still fits the small cursor mask and the editor
     /// preview doesn't redraw on every size scrub).
     #[serde(default)]
     pub preview_value: Option<f32>,
@@ -197,7 +197,7 @@ pub struct PortDef<W: WireKind> {
     /// stays "UI hint only, not enforced", and `with_natural_range` is the
     /// separate, explicit opt-in for wire-boundary range mapping. Most
     /// ports declare both with the same numbers; the two diverge for
-    /// over-drag sliders like `paint.size`, where the slider range is
+    /// over-drag sliders like `brush_settings.size`, where the range is
     /// a hint but the wire-side semantics are passthrough.
     #[serde(default)]
     pub natural_range: Option<(f32, f32)>,
