@@ -2,7 +2,7 @@
     import { commandPalette } from '../../state/commandPalette.svelte';
     import { actions, actionEnablement, type Action } from '../../actions/registry';
     import { registryEpoch } from '../../actions/registryEpoch.svelte';
-    import { config, formatHotkey } from '../../config/store.svelte';
+    import { hotkeyLabel } from '../../config/store.svelte';
     import { filterPalette } from './paletteFilter';
     import { backdropDismiss } from '../../lib/backdropDismiss';
     import Icon from '../../icons/Icon.svelte';
@@ -69,7 +69,7 @@
     }
 
     function hotkey(id: string): string | undefined {
-        return formatHotkey(config.get('hotkeys.' + id) as string | undefined);
+        return hotkeyLabel(id);
     }
 
     // An active status() icon (e.g. the toggle check) takes precedence over the

@@ -12,10 +12,14 @@
 //! `size` is additionally a **settable-source** (`.source()`): any node can
 //! wire from `brush_settings.size` to read the stroke's base size as a graph
 //! signal, and the editor hides the source handle once the port is driven.
-//! Because this is an ordinary CPU node (not special-cased in the runner like
-//! `pen_input`), the runner's generic settable-source seeding publishes
-//! `size`'s value on its slot every dab, and [`Self::compile_wgsl`] packs it
-//! into a dab field when — and only when — a node consumes it.
+//! The signal is published **in canvas pixels** — the brush *diameter*
+//! (`base_size * DAB_REFERENCE_SIZE`), not the raw `0..4` normalized knob — so
+//! it lands in the same pixel domain as its sinks (e.g. `noise.scale`) and a
+//! `× 1` gain wired between them is a true no-op. Like `pen_input`, the runner
+//! seeds this slot bespoke (in `seed_sensors`, where the base size and the
+//! pixel projection live) rather than through the generic settable-source
+//! republish; [`Self::compile_wgsl`] then packs the already-projected slot
+//! value into a dab field when — and only when — a node consumes it.
 
 use std::sync::Arc;
 
@@ -165,9 +169,9 @@ pub fn register() -> BrushNodeRegistration {
     )
 }
 
-/// No-op evaluator. `size` is published on its slot by the runner's generic
-/// settable-source seeding; `stabilize`/`spacing`/`spacing_min_px` are read
-/// out-of-band and never flow through the graph.
+/// No-op evaluator. `size` is published on its slot by the runner's bespoke
+/// `seed_sensors` seeding (in canvas pixels); `stabilize`/`spacing`/
+/// `spacing_min_px` are read out-of-band and never flow through the graph.
 pub struct BrushSettingsEvaluator;
 
 impl BrushNodeEvaluator for BrushSettingsEvaluator {
@@ -177,8 +181,9 @@ impl BrushNodeEvaluator for BrushSettingsEvaluator {
 
     /// Emit the `size` settable-source as a per-dab field so it reaches a
     /// compiled brush's fragment shader — but only when a node consumes it,
-    /// so an untapped size costs nothing. The value is packed from the slot
-    /// the runner's generic source-seeding wrote (the ambient base size).
+    /// so an untapped size costs nothing. The value is packed straight from
+    /// the slot the runner seeded — the base size already projected to canvas
+    /// pixels — so the GPU dab field matches the CPU slot exactly.
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
         if cctx.consumed_outputs.contains("size") {

@@ -249,6 +249,31 @@ class ConfigStore {
 export const config = new ConfigStore();
 
 /**
+ * Resolve an action's effective trigger list. The full binding lives in
+ * `hotkeys.<id>` under the three-layer config — defaults.yaml + overlay +
+ * user override. Multi-binding actions (e.g. `commandPalette` from
+ * `$mod+Shift+KeyP` + `$mod+KeyF`) are joined with `|` by the YAML parser;
+ * we split them back into a list here.
+ *
+ * Empty string means "no trigger" — used by overlays that explicitly want to
+ * disable a binding the previous layer set (e.g. Photoshop sets
+ * `hotkeys.isolateLayer = ""`).
+ */
+export function effectiveHotkeys(actionId: string): string[] {
+    const v = config.get(`hotkeys.${actionId}`);
+    if (typeof v !== 'string') return [];
+    if (!v) return [];
+    return v.split('|').filter(Boolean);
+}
+
+/** Single-binding view for callers that show one trigger per action
+ *  (menus, command palette, cheatsheet, tooltips). Returns the first
+ *  effective binding, or `""` if none. */
+export function effectiveHotkey(actionId: string): string {
+    return effectiveHotkeys(actionId)[0] ?? '';
+}
+
+/**
  * Format a binding (`"Shift+KeyR"`, `"$mod+KeyA"`, `"$mod+click"`, …) into
  * a human-readable shortcut string (e.g. `"Shift+R"`, `"Ctrl+A"` / `"Cmd+A"`,
  * `"⌘+click"`). Accepts bindings with an optional site/scope prefix
@@ -267,15 +292,21 @@ export function formatHotkey(binding: string | undefined): string | undefined {
 }
 
 /**
+ * An action's shortcut as shown to the user: its first effective binding,
+ * formatted. This is the single entry point for anything that displays a
+ * hotkey for an action id — menus, the command palette, tooltips. Reactive to
+ * the config, so displays re-render whenever the user rebinds or switches
+ * editor overlays.
+ */
+export function hotkeyLabel(actionId: string): string | undefined {
+    return formatHotkey(effectiveHotkey(actionId));
+}
+
+/**
  * Build a tooltip combining a label with the action's effective hotkey, if
- * any. The binding comes straight from the resolved config (no
- * action-registry default fallback — defaults live in YAML now).
- * Reactive to the config so the tooltip re-renders whenever the user
- * rebinds or switches editor overlays.
+ * any.
  */
 export function tooltipForAction(label: string, actionId: string): string {
-    const v = config.get(`hotkeys.${actionId}`);
-    if (typeof v !== 'string' || !v) return label;
-    const hk = formatHotkey(v.split('|')[0]);
+    const hk = hotkeyLabel(actionId);
     return hk ? `${label} (${hk})` : label;
 }

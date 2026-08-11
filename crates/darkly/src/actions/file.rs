@@ -16,20 +16,14 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         id: "saveDocument",
         display_name: "Save",
-        description: "Save the current document as a `.darkly` file. Re-saves to the same file after the first Save As; otherwise prompts.",
+        description: "Save the current document. Re-saves to the same `.darkly` file after the first Save As; otherwise opens the Save picker (`.darkly`, or PNG / JPEG / WebP to export the canvas).",
         icon: "fa6-solid:floppy-disk",
     },
     ActionDef {
         id: "saveDocumentAs",
         display_name: "Save As",
-        description: "Save the current document to a new `.darkly` file.",
+        description: "Save the current document to a new file — `.darkly`, or PNG / JPEG / WebP to export the canvas.",
         icon: "fa6-solid:file-export",
-    },
-    ActionDef {
-        id: "exportImage",
-        display_name: "Export Image…",
-        description: "Export the canvas composite as PNG, JPEG, or WebP.",
-        icon: "fa6-solid:image",
     },
     ActionDef {
         id: "exportTimelapse",

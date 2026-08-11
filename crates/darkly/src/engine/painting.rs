@@ -1481,10 +1481,11 @@ impl DarklyEngine {
         );
         encoder.submit();
 
-        // 4. Commit undo. The lazy save in `gpu_stroke_to` populated
-        //    `scratch_snapshot` with the full layer; flood fill can change
-        //    any pixel inside the canvas, so commit the canvas-sized
-        //    sub-rect of that snapshot.
+        // 4. Commit undo. The lazy save in `gpu_stroke_to` snapshotted the
+        //    layer texture's extent; the fill can only modify pixels inside
+        //    that texture (the readback and the stamp are both bounded by it),
+        //    so the layer extent is the region to commit — never the canvas
+        //    rect, which may reach past the layer when the window is resized.
         let snap = match self.scratch_snapshot.take() {
             Some(s) => s,
             // No snapshot means the lazy save never ran (stroke_to was
@@ -1502,7 +1503,7 @@ impl DarklyEngine {
                 return;
             }
         };
-        let rect = self.doc.canvas_rect();
+        let rect = layer_frame.canvas_extent;
         let entry = commit_undo_region(
             &self.gpu,
             &self.region_scratch,

@@ -8,7 +8,6 @@ import { imageRescale } from '../state/imageRescale.svelte';
 import { selectionModify } from '../state/selectionModify.svelte';
 import { filterModal } from '../state/filterModal.svelte';
 import type { ParamInfo } from '../ui/filters/filterParams';
-import { exportImage } from '../state/exportImage.svelte';
 import { exportTimelapse } from '../state/exportTimelapse.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
 import { toast } from '../state/toast.svelte';
@@ -24,18 +23,11 @@ import { detectKind, isImageKind, type FileKind } from '../storage/detectKind';
 import { saveDocument } from '../storage/saveDocument';
 import { fontLibrary } from '../state/font_library.svelte';
 import { processRecording } from '../recording/recorder.svelte';
-import { canSave } from '../storage/fileHandle';
 import { shell } from '../multi_tab/shell.svelte';
 import { about } from '../state/about.svelte';
 import { commandPalette } from '../state/commandPalette.svelte';
 import { openCheatsheet } from '../ui/cheatsheet';
 import { links, openExternal } from '../links';
-
-// Tooltip explaining why Save / Save As are disabled when the browser lacks
-// the File System Access API (Firefox). Returned from each save action's
-// `enabled()` as the disabled-reason string, surfaced as the menu row's `title`.
-const NO_SAVE_TOOLTIP =
-    "Filesystem save isn't supported in this browser — try Chrome, Edge, or Safari.";
 
 /** Walk the layer tree to find a node by id. The layer tree is the
  *  JSON shape produced by `app.refreshLayerTree`, with `children` on
@@ -252,12 +244,23 @@ export function registerActions() {
     actions.register({
         id: 'undo',
         menuPath: ['Edit:10'],
-        handler: async () => { app.engine?.api.undo(); await app.syncCanvasRect(); await app.refreshLayerTree(); },
+        // The layer-tree refresh goes first: it diffs the tree against the
+        // pre-undo shape to find what the operation restored, and any await in
+        // between could let an unrelated refresh consume that difference.
+        handler: async () => {
+            app.engine?.api.undo();
+            await app.refreshLayerTree({ adoptAppeared: true });
+            await app.syncCanvasRect();
+        },
     });
     actions.register({
         id: 'redo',
         menuPath: ['Edit:20'],
-        handler: async () => { app.engine?.api.redo(); await app.syncCanvasRect(); await app.refreshLayerTree(); },
+        handler: async () => {
+            app.engine?.api.redo();
+            await app.refreshLayerTree({ adoptAppeared: true });
+            await app.syncCanvasRect();
+        },
     });
 
     // -- Colors --
@@ -433,7 +436,6 @@ export function registerActions() {
     actions.register({
         id: 'saveDocument',
         menuPath: ['File:30'],
-        enabled: () => canSave || NO_SAVE_TOOLTIP,
         handler: () => {
             if (!app.engine) return;
             void saveDocument({ forceAs: false });
@@ -442,7 +444,6 @@ export function registerActions() {
     actions.register({
         id: 'saveDocumentAs',
         menuPath: ['File:40'],
-        enabled: () => canSave || NO_SAVE_TOOLTIP,
         handler: () => {
             if (!app.engine) return;
             void saveDocument({ forceAs: true });
@@ -463,14 +464,6 @@ export function registerActions() {
         menuPath: ['File:20'],
         handler: () => {
             void openFlow();
-        },
-    });
-    actions.register({
-        id: 'exportImage',
-        menuPath: ['File:50'],
-        handler: () => {
-            if (!app.engine) return;
-            exportImage.open = true;
         },
     });
     actions.register({
@@ -653,7 +646,6 @@ export function registerActions() {
                 for (const id of targets) app.stopStreamSource(id);
                 if (targets.length === 1) {
                     await engine.api.removeLayer({ id: targets[0] });
-                    app.clearSelection();
                 } else {
                     const skipped = await engine.api.removeLayers({ ids: targets });
                     if (skipped > 0) {

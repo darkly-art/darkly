@@ -475,7 +475,7 @@ fn paste_floating_target_layer_matches_created() {
 }
 
 /// Companion: committing a floating paste keeps the layer and registers
-/// exactly one undoable LayerAddAction (so a single undo removes the paste).
+/// exactly one undoable EntityAddAction (so a single undo removes the paste).
 #[test]
 fn paste_floating_commit_is_one_undo() {
     let (w, h) = (128, 128);
@@ -1536,7 +1536,7 @@ fn add_remove_cycles_dont_leak_layer_textures() {
 
 /// Regression: undoing a layer removal must restore the layer's pixel
 /// content, not just its tree slot. Previously `remove_layer` disposed
-/// the GPU texture immediately and `LayerRemoveAction` carried no pixel
+/// the GPU texture immediately and `EntityRemoveAction` carried no pixel
 /// state, so undo reattached the node but the compositor allocated a
 /// fresh blank texture.
 #[test]
@@ -3718,12 +3718,14 @@ fn copy_selected_mask_region_populates_clipboard() {
     );
 }
 
-/// Pasting while a mask is the active edit target must place the new layer as
-/// the host's SIBLING, not nest it under the (raster) host. The active id is
-/// the mask *filter* id, and `parent_of(mask) == host`, so a naive
-/// `MoveTarget::After(mask_id)` linked the pasted layer as a child of the
-/// raster host — an invalid tree that left the paste off the published layer
-/// tree (raster layers publish no children) and invisible on canvas.
+/// Plain paste (`paste_image`) while a mask is the active edit target must
+/// place the new layer as the host's SIBLING at top level, not nest it under
+/// the (raster) host. The active id is the mask *filter* id, and
+/// `parent_of(mask) == host`, so a naive `MoveTarget::After(mask_id)` linked
+/// the pasted layer as a child of the raster host — an invalid tree that left
+/// the paste off the published layer tree (raster layers publish no children)
+/// and invisible on canvas. (Plain paste always makes its own layer; pasting
+/// INTO a mask is the `paste_in_place` verb — see `tests/paste_mask.rs`.)
 #[test]
 fn paste_while_editing_mask_places_layer_at_top_level() {
     use darkly::engine::types::LayerInfo;
@@ -5930,7 +5932,7 @@ fn delete_refuses_to_empty_document() {
 
 /// Selecting a group AND one of its descendants and deleting both must
 /// dedupe — the descendant comes out with its ancestor, so issuing a
-/// second `LayerRemoveAction` would corrupt the undo stack.
+/// second `EntityRemoveAction` would corrupt the undo stack.
 #[test]
 fn delete_dedupes_ancestor_descendant() {
     use darkly::document::MoveTarget;

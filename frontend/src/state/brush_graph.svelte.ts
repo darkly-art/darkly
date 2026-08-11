@@ -13,6 +13,13 @@ import type { BrushInfo, JsonValue, ExposedValue, ExposedPortInfo } from '../eng
 
 export type { BrushInfo };
 
+/** Upper bound the editor's "extended range" toggle unlocks numeric sliders to,
+ *  replacing the declared `0..1`. Purely a frontend affordance for entering
+ *  large gains (e.g. a math node scaling a signal into the canvas-pixel domain);
+ *  the engine never enforces slider ranges, so authored/wired values are already
+ *  unbounded — this only relaxes the editor's own slider validation. */
+export const EXTENDED_RANGE_MAX = 1000;
+
 // --- Types mirroring Rust's nodegraph structures ---
 
 /** The authored value on a disconnected input, mirroring Rust's
@@ -138,6 +145,22 @@ export class BrushGraphState {
     /** UI-only node positions, keyed by node id. Populated by `autoLayout`
      *  after every structural change; never sent to Rust. */
     nodePositions = $state<Record<string, [number, number]>>({});
+
+    /** UI-only set of node ids whose numeric-input sliders the user has
+     *  unlocked to [`EXTENDED_RANGE_MAX`]. A pure editor affordance for
+     *  entering large gains on math nodes — never sent to Rust, never
+     *  persisted. The port *value* persists in the graph as normal; this only
+     *  relaxes the editor's slider bound/validation for that node. */
+    extendedRangeNodes = $state<Set<string>>(new Set());
+
+    /** Toggle the extended-range slider unlock for `nodeId`. Reassigns the set
+     *  so Svelte re-runs dependent sliders. */
+    toggleExtendedRange(nodeId: string) {
+        const next = new Set(this.extendedRangeNodes);
+        if (next.has(nodeId)) next.delete(nodeId);
+        else next.add(nodeId);
+        this.extendedRangeNodes = next;
+    }
 
     /** Monotonic token identifying the current graph load. Bumped by
      *  `beginLayoutGeneration` whenever the graph is replaced by a fresh

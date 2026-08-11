@@ -2033,6 +2033,23 @@ impl Compositor {
         self.needs_present = true;
     }
 
+    /// Whether a present is still owed. Set by `mark_needs_present`, cleared by
+    /// `finish_present` after a frame actually reaches the surface. A dropped
+    /// acquire (`Lost`/`Outdated`) reconfigures and returns without presenting,
+    /// leaving this `true` — the frame loop must keep going so the reconfigured
+    /// surface gets a real present on the next frame.
+    pub fn needs_present(&self) -> bool {
+        self.needs_present
+    }
+
+    /// Clear the pending-present flag without a real present. Headless tests
+    /// never reach `finish_present` (no surface), so this gives them a
+    /// deterministic starting point.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_clear_needs_present(&mut self) {
+        self.needs_present = false;
+    }
+
     // --- Content Bounds (GPU compute) ---
 
     /// Return cached content bounds for a layer: `[x, y, w, h]`.
@@ -2684,12 +2701,23 @@ impl Compositor {
         }
     }
 
+    /// Compile the vector renderer's pipelines now (if not already), so the first
+    /// vector layer doesn't stall on the shader-compile cost. Building it compiles
+    /// Vello's full compute-pipeline set (a >1s one-time cost). Called when the
+    /// text tool is selected — the compile then overlaps the gap before the user
+    /// commits a text box, rather than blocking the frame that would show it.
+    /// Idempotent: a no-op once the renderer exists.
+    pub fn ensure_vector_renderer(&mut self, device: &wgpu::Device) {
+        self.vector_renderer
+            .get_or_insert_with(|| crate::gpu::vector_renderer::VectorRenderer::new(device));
+    }
+
     /// Rasterize every dirty vector layer's scene into its storage texture.
     /// Runs before the composite pass (in `render_offscreen`) so the blend
     /// walk samples up-to-date pixels. Lazily constructs the shared
-    /// [`VectorRenderer`] on first use. Vello submits its own command buffer
-    /// per layer; those submits are ordered before the compositor's, so GPU
-    /// ordering is preserved.
+    /// [`VectorRenderer`] on first use (see [`Self::ensure_vector_renderer`]).
+    /// Vello submits its own command buffer per layer; those submits are ordered
+    /// before the compositor's, so GPU ordering is preserved.
     fn realize_dirty_vector_layers(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let dirty: Vec<LayerId> = self
             .vector_scenes

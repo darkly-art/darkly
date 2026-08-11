@@ -70,24 +70,38 @@ pub struct BakeSpec {
 }
 
 impl BakeSpec {
-    /// How many field units the baked tile spans on each axis. This is the
-    /// seam / decorrelation lever (§ plan): a large span relative to the
-    /// feature size means the repeat-wrap boundary is crossed rarely per
-    /// unit canvas area, so the seam reads as soft, and `variation`-offset
-    /// dabs land on effectively random tile phases. The bake shader maps a
-    /// texel `uv ∈ [0,1)` to `uv * TILE_SPAN` before calling the fBm.
-    pub const TILE_SPAN: f32 = 16.0;
+    /// How many field units the baked tile spans on each axis — equivalently,
+    /// the field's **repeat period**: sampled through the Repeat sampler the
+    /// tile wraps once per `FIELD_SPAN` field units. Made large so the field
+    /// does not visibly repeat within a normal view. The bake shader maps a
+    /// texel `uv ∈ [0,1)` to `uv * FIELD_SPAN` before calling the fBm.
+    ///
+    /// Independent of [`resolution_for_octaves`](Self::resolution_for_octaves):
+    /// the period sets how far the fixed texel budget is stretched across the
+    /// plane, not how many texels the tile holds. Enlarging it costs no memory
+    /// — it softens fine detail instead (the texels cover more field units).
+    pub const FIELD_SPAN: f32 = 128.0;
+
+    /// Reference detail window (field units) the tile is sized to resolve at
+    /// Nyquist — the detail axis, held **separate** from [`FIELD_SPAN`] (the
+    /// period axis) so neither constant is overloaded. The tile holds enough
+    /// texels to resolve the finest octave across *this* window; the larger
+    /// real [`FIELD_SPAN`] stretches those texels further, so fine octaves
+    /// soften rather than the tile growing. Raise this toward `FIELD_SPAN`
+    /// (and the memory clamp) to trade memory for sharpness across the span.
+    const DETAIL_SPAN: u32 = 16;
 
     /// Tile edge resolution (texels) that resolves the finest fBm frequency
-    /// for `octaves`, clamped to a sane memory band. With a base cell of 1
-    /// field unit and octaves doubling frequency, the finest feature is
-    /// `TILE_SPAN / 2^(octaves-1)` field units; at ~2 texels per finest
-    /// half-feature that is `TILE_SPAN * 2^(octaves-1) * 2` texels. Clamped
-    /// to `[512, 2048]` (1–16 MiB RGBA8; ¼ that for R8), trading fine
-    /// detail at high octaves for bounded memory.
+    /// for `octaves` across [`DETAIL_SPAN`], clamped to a sane memory band.
+    /// With a base cell of 1 field unit and octaves doubling frequency, the
+    /// finest feature is `DETAIL_SPAN / 2^(octaves-1)` field units; at ~2
+    /// texels per finest half-feature that is `DETAIL_SPAN * 2^(octaves-1) *
+    /// 2` texels. Clamped to `[512, 2048]` (1–16 MiB RGBA8; ¼ that for R8),
+    /// trading fine detail at high octaves for bounded memory. Deliberately
+    /// does not scale with [`FIELD_SPAN`] — see there.
     pub fn resolution_for_octaves(octaves: i32) -> u32 {
         let finest = 1u32 << (octaves.clamp(1, 8) - 1) as u32;
-        (Self::TILE_SPAN as u32 * finest * 2).clamp(512, 2048)
+        (Self::DETAIL_SPAN * finest * 2).clamp(512, 2048)
     }
 }
 

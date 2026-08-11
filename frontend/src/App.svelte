@@ -4,7 +4,7 @@
     import LoadErrorToast from './ui/LoadErrorToast.svelte';
     import PresetPicker from './ui/PresetPicker.svelte';
     import SettingsModal from './ui/settings/SettingsModal.svelte';
-    import ExportImageModal from './ui/ExportImageModal.svelte';
+    import SaveModal from './ui/SaveModal.svelte';
     import ExportTimelapseModal from './ui/ExportTimelapseModal.svelte';
     import NewDocumentModal from './ui/NewDocumentModal.svelte';
     import ResizeCanvasModal from './ui/ResizeCanvasModal.svelte';
@@ -60,7 +60,7 @@
 <LoadErrorToast />
 <PresetPicker />
 <SettingsModal />
-<ExportImageModal />
+<SaveModal />
 <ExportTimelapseModal />
 <NewDocumentModal />
 <ResizeCanvasModal />

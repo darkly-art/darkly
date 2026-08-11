@@ -14,6 +14,7 @@ use crate::nodegraph::{
 
 use super::curve_math::CurveLut;
 use super::nodes::{brush_settings, clone_source, paint_color, pen_input};
+use super::DAB_REFERENCE_SIZE;
 
 use super::gpu_context::BrushGpuContext;
 use super::wgsl::CompiledBrush;
@@ -470,6 +471,16 @@ pub struct BrushGraphRunner {
     /// Pre-resolved slot index for paint_color's output.  Same rationale
     /// as `pen_input_slots` — avoid plan traversal on the hot path.
     paint_color_slot: Option<usize>,
+    /// Pre-resolved slot index of `brush_settings.size`'s source output.
+    /// Seeded per dab in `seed_sensors` with the base size projected to
+    /// canvas pixels (`base_size * DAB_REFERENCE_SIZE` — the brush
+    /// *diameter*), so the graph signal is a pixel-domain quantity like
+    /// `pen_input.position`. This is why `brush_settings` is skipped in
+    /// `execute_cpu`'s generic settable-source republish (which would
+    /// otherwise overwrite it with the raw normalized knob value): the
+    /// projection lives here, at the one seeding point, keeping the CPU
+    /// slot and the GPU-packed dab field numerically identical.
+    brush_settings_size_slot: Option<usize>,
     /// Node id of the (first) `clone_source` node, resolved at build.
     /// When set alongside [`Self::clone_state`], `build_slot_outputs`
     /// injects the stroke's anchor uniforms under this node's keys so the
@@ -606,6 +617,16 @@ impl BrushGraphRunner {
             .and_then(|s| s.output_slots.iter().find(|(name, _)| name == "color"))
             .map(|(_, slot)| *slot);
 
+        // Find brush_settings' `size` source output slot — seeded per dab in
+        // pixels (see the field doc). The `size` port is a settable-source, so
+        // the compiler assigns it an output slot even though it's an input.
+        let brush_settings_size_slot = plan
+            .steps
+            .iter()
+            .find(|s| s.type_id == brush_settings::TYPE_ID)
+            .and_then(|s| s.output_slots.iter().find(|(name, _)| name == "size"))
+            .map(|(_, slot)| *slot);
+
         // Find the (first) clone_source node for anchor-uniform seeding.
         let clone_source_node = plan
             .steps
@@ -642,6 +663,7 @@ impl BrushGraphRunner {
             node_data,
             pen_input_slots,
             paint_color_slot,
+            brush_settings_size_slot,
             clone_source_node,
             clone_state: None,
             dab_size_slot,
@@ -806,6 +828,16 @@ impl BrushGraphRunner {
         if let Some(slot) = self.paint_color_slot {
             self.slots[slot] = Some(ScalarValue::Vec4(color));
         }
+
+        // Seed the `brush_settings.size` graph signal in canvas pixels: the
+        // stroke's base size projected to the brush diameter. Downstream nodes
+        // (noise.scale, math) then operate in the same pixel domain as their
+        // sinks, so a `× 1` gain is a true no-op and feature size tracks the
+        // brush directly.
+        if let Some(slot) = self.brush_settings_size_slot {
+            let size_px = self.base_size * DAB_REFERENCE_SIZE as f32;
+            self.slots[slot] = Some(ScalarValue::Scalar(size_px));
+        }
     }
 
     /// Execute all CPU nodes in topological order.
@@ -822,8 +854,13 @@ impl BrushGraphRunner {
             let step = &self.plan.steps[idx];
             if step.type_id == pen_input::TYPE_ID
                 || step.type_id == paint_color::TYPE_ID
+                || step.type_id == brush_settings::TYPE_ID
                 || step.is_gpu
             {
+                // `brush_settings` is seeded bespoke in `seed_sensors` (its
+                // `size` source in pixels); its only other job is publishing
+                // that signal, so the generic republish below must not run and
+                // overwrite it with the raw normalized knob value.
                 continue;
             }
 

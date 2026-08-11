@@ -14,9 +14,9 @@
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
-Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophies. Harness the **[dark arts](#dark-arts)**, and craft a chaotic masterpiece that will make your graphic design professor roll over in his grave. Madness isn't a bug, it's a feature.
+Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), the home of happy accidents and beautiful catastrophies. Madness isn't a bug, it's a feature.
 
-Darkly is an open source Photoshop alternative written in Rust. Digital painters are first-class citizens.
+Darkly is a Photoshop alternative where painters are first-class citizens. It has a powerful brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
 
 **Try the demo [here](https://demo.darkly.art).**
 

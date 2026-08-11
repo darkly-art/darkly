@@ -579,7 +579,7 @@ pub struct DarklyEngine {
     /// strokes and brush / tool switches, never serialized. Kept across
     /// layer deletion too — `LayerId` is a generational slotmap key, so a
     /// stale pin can't alias a new layer, and undoing the deletion
-    /// reinserts the same id (`LayerRemoveAction::undo`), reviving the
+    /// reinserts the same id (`EntityRemoveAction::undo`), reviving the
     /// pin. Stroke start validates it: a dead or group id falls back to
     /// the painted layer.
     pub(crate) clone_source_layer: Option<LayerId>,
@@ -855,6 +855,27 @@ impl DarklyEngine {
     #[cfg(any(test, feature = "testing"))]
     pub fn compositor_cursor_preview_mask_size(&self) -> (u32, u32) {
         self.compositor.tool_overlay().cursor_preview_mask_size()
+    }
+
+    /// Whether the frame loop would schedule another frame right now — the
+    /// `needs_more` value `render` returns to JS. Test-only.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_frame_needs_more(&self) -> bool {
+        self.frame_needs_more()
+    }
+
+    /// Mark a present as owed, mimicking the compositor's `Lost`/`Outdated`
+    /// early-return that reconfigures without presenting. Test-only.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_mark_needs_present(&mut self) {
+        self.compositor.mark_needs_present();
+    }
+
+    /// Clear the pending-present flag (no real present happens headlessly).
+    /// Test-only, for establishing a deterministic baseline.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_clear_needs_present(&mut self) {
+        self.compositor.test_clear_needs_present();
     }
 
     /// Current cursor-preview coverage scale uniform — the multiplier the

@@ -14,11 +14,11 @@ mod tombstones;
 pub use canvas_geometry::CanvasGeometryAction;
 pub use canvas_resize::CanvasResizeAction;
 pub use compound::CompoundAction;
-pub use filter::{FilterAddAction, FilterRemoveAction, NodeLockedAction, NodeVisibleAction};
+pub use filter::{NodeLockedAction, NodeVisibleAction};
 pub use gpu_region::GpuRegionAction;
 pub use layer::{
-    BakeLayersAction, BakeSourceSlot, DuplicateAction, LayerAddAction, LayerMoveAction,
-    LayerRemoveAction,
+    BakeLayersAction, BakeSourceSlot, DuplicateAction, EntityAddAction, EntityRemoveAction,
+    LayerMoveAction,
 };
 pub use mask_property::MaskLinkedToHostAction;
 pub use pixel_bounds::PixelBoundsAction;
@@ -302,7 +302,7 @@ mod tests {
         // Record the add as undoable.
         let parent = doc.parent_of(id);
         let pos = doc.position_in_parent(id).unwrap();
-        let _ = undo.push(&mut doc, Box::new(LayerAddAction::new(id, parent, pos)));
+        let _ = undo.push(&mut doc, Box::new(EntityAddAction::new(id, parent, pos)));
 
         assert_eq!(doc.flat_layers().len(), 1);
 
@@ -328,7 +328,7 @@ mod tests {
         let node = doc.detach_for_undo(id).unwrap();
         let _ = undo.push(
             &mut doc,
-            Box::new(LayerRemoveAction::new(node, parent, pos, Vec::new())),
+            Box::new(EntityRemoveAction::new(node, parent, pos, Vec::new())),
         );
 
         assert_eq!(doc.flat_layers().len(), 0);
@@ -486,7 +486,7 @@ mod tests {
         let id = doc.add_raster_layer(None);
         let parent = doc.parent_of(id);
         let pos = doc.position_in_parent(id).unwrap();
-        let _ = undo.push(&mut doc, Box::new(LayerAddAction::new(id, parent, pos)));
+        let _ = undo.push(&mut doc, Box::new(EntityAddAction::new(id, parent, pos)));
         assert!(doc.dirty, "push must flip dirty");
     }
 
@@ -531,7 +531,7 @@ mod tests {
         let id = doc.add_raster_layer(None);
         let parent = doc.parent_of(id);
         let pos = doc.position_in_parent(id).unwrap();
-        let _ = undo.push(&mut doc, Box::new(LayerAddAction::new(id, parent, pos)));
+        let _ = undo.push(&mut doc, Box::new(EntityAddAction::new(id, parent, pos)));
         assert!(doc.dirty);
 
         undo.undo(&mut doc);
@@ -556,7 +556,7 @@ mod tests {
         let id = doc.add_raster_layer(None);
         let parent = doc.parent_of(id);
         let pos = doc.position_in_parent(id).unwrap();
-        let _ = undo.push(&mut doc, Box::new(LayerAddAction::new(id, parent, pos)));
+        let _ = undo.push(&mut doc, Box::new(EntityAddAction::new(id, parent, pos)));
         assert!(doc.revision > before, "push must bump revision");
     }
 
@@ -606,7 +606,10 @@ mod tests {
         let new_id = doc.add_raster_layer(Some(l1));
         let parent = doc.parent_of(new_id);
         let pos = doc.position_in_parent(new_id).unwrap();
-        let _ = undo.push(&mut doc, Box::new(LayerAddAction::new(new_id, parent, pos)));
+        let _ = undo.push(
+            &mut doc,
+            Box::new(EntityAddAction::new(new_id, parent, pos)),
+        );
 
         let flat: Vec<_> = doc.flat_layers().iter().map(|l| l.id()).collect();
         assert_eq!(flat, vec![l1, new_id, l2]);

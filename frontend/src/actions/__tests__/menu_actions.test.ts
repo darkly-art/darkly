@@ -128,15 +128,15 @@ describe('menu action registrations', () => {
         expect(actionEnablement(crop).reason).toBe('No active selection');
     });
 
-    it("save actions' enabled() follows canSave (disabled-with-reason here)", () => {
-        // The test environment has no File System Access API, so canSave is
-        // false; enabled() returns the disabled-reason string (not `true`).
-        const save = actions.get('saveDocument');
-        const e = save?.enabled?.();
-        expect(e).not.toBe(true);
-        expect(typeof e).toBe('string');
-        expect(actionEnablement(save!)).toMatchObject({ enabled: false });
-        expect(actionEnablement(save!).reason).toBeTruthy();
+    it('leaves save actions always enabled (download fallback works everywhere)', () => {
+        // Save no longer gates on the File System Access API — browsers without
+        // it (Firefox/Safari) fall back to a download, so there's no `enabled`
+        // gate at all.
+        for (const id of ['saveDocument', 'saveDocumentAs']) {
+            const save = actions.get(id)!;
+            expect(save.enabled).toBeUndefined();
+            expect(actionEnablement(save)).toMatchObject({ enabled: true });
+        }
     });
 
     it('orders items within a menu by the menuPath order suffix, not registration sequence', () => {
@@ -149,7 +149,6 @@ describe('menu action registrations', () => {
             'open',
             'saveDocument',
             'saveDocumentAs',
-            'exportImage',
             'exportTimelapse',
         ]);
     });

@@ -906,74 +906,59 @@ impl Document {
             .is_some_and(|m| m.common.visible)
     }
 
-    /// Move a node to a new position in the tree.
+    /// Move a tree node to a new position. Filters have no position in the
+    /// tree — they hang off a host — so a filter id is refused rather than
+    /// smuggled into some group's children.
     pub fn move_layer(&mut self, layer_id: LayerId, target: MoveTarget) {
-        if self.unlink_node(layer_id).is_none() {
+        if self.is_filter(layer_id) {
+            return;
+        }
+        if self.unlink(layer_id).is_none() {
             return;
         }
         self.attach_at_target(layer_id, target);
     }
 
-    /// Detach a node from the tree for undo purposes, leaving it parked in
-    /// `entities` so its id stays stable across undo/redo. Returns the id on
-    /// success. Reattach with [`Document::reinsert_node`]; if the undo entry
-    /// is later discarded, call [`Document::remove_node`] to actually free it.
+    /// Detach an entity — tree node or filter — from its parent, leaving it
+    /// parked in `entities` so its id stays stable across undo/redo. Returns
+    /// the id on success. Reattach with [`Document::reinsert_entity`]; if the
+    /// undo entry is later discarded, call [`Document::remove_entity`] to
+    /// actually free it.
     pub fn detach_for_undo(&mut self, id: LayerId) -> Option<LayerId> {
-        self.unlink_node(id)
+        self.unlink(id)
     }
 
-    /// Reinsert a previously detached node at a specific position.
-    pub fn reinsert_node(&mut self, id: LayerId, parent: Option<LayerId>, position: usize) {
+    /// Reattach a previously detached entity under `parent` at `position`.
+    /// `parent` of `None` means the root. The entity's kind decides which of
+    /// the parent's lists it lands in, so a filter always returns to a
+    /// `filters` list and a node to a `children` list.
+    pub fn reinsert_entity(&mut self, id: LayerId, parent: Option<LayerId>, position: usize) {
         if !self.entities.contains_key(id) {
             return;
         }
-        let parent_id = self.resolve_parent_group(parent);
-        self.link_child(id, parent_id, Some(position));
+        let parent_id = match parent {
+            Some(p) if self.find_node(p).is_some() => p,
+            _ => self.root,
+        };
+        self.link(id, parent_id, Some(position));
     }
 
-    /// Detach a filter from its host for undo purposes. The filter stays
-    /// in `entities`, so reattach via [`Document::reinsert_filter`] preserves
-    /// the id.
-    pub fn detach_filter_for_undo(&mut self, id: LayerId) -> Option<LayerId> {
-        self.unlink_filter(id)
-    }
-
-    /// Reattach a previously detached filter to a host. Append-only — the
-    /// model doesn't expose a position parameter today because masks use
-    /// "first mask" lookup rather than positional access.
-    pub fn reinsert_filter(&mut self, filter_id: LayerId, host_id: LayerId) {
-        if !self.is_filter(filter_id) {
-            return;
-        }
-        if let Some(host) = self.find_node_mut(host_id) {
-            host.modifiers_mut().push(filter_id);
-            self.parent.insert(filter_id, host_id);
-        }
-    }
-
-    /// Remove a node (layer or group) and everything beneath it (descendant
-    /// nodes, all filters on every node in the subtree) from `entities`.
-    /// Permanent — call [`Document::detach_for_undo`] instead if the caller
-    /// wants id-stable detach for undo.
-    pub fn remove_node(&mut self, id: LayerId) {
+    /// Permanently remove an entity — tree node or filter — from `entities`,
+    /// along with everything beneath it (descendant nodes, and all filters on
+    /// every node in the subtree). Call [`Document::detach_for_undo`] instead
+    /// when the caller wants an id-stable detach for undo.
+    pub fn remove_entity(&mut self, id: LayerId) {
         if id == self.root {
             return;
         }
-        // Unlink first so the parent's children Vec is consistent if anyone
-        // observes mid-purge.
-        self.unlink_node(id);
-        self.purge_subtree(id);
-    }
-
-    /// Permanently remove a filter from `entities` (and its host's filter
-    /// list, if still attached).
-    pub fn remove_filter(&mut self, id: LayerId) {
-        self.unlink_filter(id);
+        // Unlink first so the parent's list is consistent if anyone observes
+        // mid-purge.
+        self.unlink(id);
         // Selection sentinel: if this was the selection, clear the field too.
         if self.selection == Some(id) {
             self.selection = None;
         }
-        self.entities.remove(id);
+        self.purge_subtree(id);
     }
 
     // ---------------------------------------------------------------
@@ -990,40 +975,38 @@ impl Document {
         }
     }
 
-    /// Insert `child` into `group`'s children Vec at `position` (or at the end
-    /// if `None`), and update the parent map. Caller guarantees `child` is in
-    /// `entities` and `group` is a group.
-    fn link_child(&mut self, child: LayerId, group: LayerId, position: Option<usize>) {
-        let Some(LayerNode::Group(g)) = self.find_node_mut(group) else {
+    /// Link `child` under `parent`, into the list its kind belongs in — a
+    /// filter joins `parent`'s modifiers, a tree node joins its children — at
+    /// `position` (clamped) or at the end. No-op when `parent` can't hold the
+    /// child, so a leaf layer never acquires tree children.
+    fn link(&mut self, child: LayerId, parent: LayerId, position: Option<usize>) {
+        let slot = if self.is_filter(child) {
+            ChildSlot::Filter
+        } else {
+            ChildSlot::Child
+        };
+        let Some(node) = self.find_node_mut(parent) else {
             return;
         };
-        let pos = position
-            .map(|p| p.min(g.children.len()))
-            .unwrap_or(g.children.len());
-        g.children.insert(pos, child);
-        self.parent.insert(child, group);
+        if node.attach_child(child, slot, position) {
+            self.parent.insert(child, parent);
+        }
     }
 
-    /// Unlink a node from its parent's children Vec and from the parent map.
-    /// Returns the node's id if it was linked, `None` if it was the root or
-    /// already orphaned.
-    fn unlink_node(&mut self, id: LayerId) -> Option<LayerId> {
+    /// Unlink an entity from its parent, whichever of the parent's two lists
+    /// held it, and drop the parent-map entry. Returns the id if it was
+    /// linked, `None` if it was the root or already orphaned.
+    ///
+    /// Kind-agnostic on purpose: the parent knows which list a child is in, so
+    /// no caller has to, and a filter can't be half-detached by being unlinked
+    /// through the wrong path.
+    fn unlink(&mut self, id: LayerId) -> Option<LayerId> {
         if id == self.root {
             return None;
         }
         let parent_id = self.parent.remove(id)?;
-        if let Some(LayerNode::Group(g)) = self.find_node_mut(parent_id) {
-            g.children.retain(|c| *c != id);
-        }
-        Some(id)
-    }
-
-    /// Unlink a filter from its host's filters Vec and from the parent
-    /// map. Returns the filter's id if it was linked.
-    fn unlink_filter(&mut self, id: LayerId) -> Option<LayerId> {
-        let host_id = self.parent.remove(id)?;
-        if let Some(host) = self.find_node_mut(host_id) {
-            host.modifiers_mut().retain(|m| *m != id);
+        if let Some(parent) = self.find_node_mut(parent_id) {
+            parent.detach_child(id);
         }
         Some(id)
     }
@@ -1063,9 +1046,9 @@ impl Document {
                         .iter()
                         .position(|c| *c == ref_id)
                         .unwrap_or(0);
-                    self.link_child(node, parent_id, Some(pos));
+                    self.link(node, parent_id, Some(pos));
                 } else {
-                    self.link_child(node, self.root, None);
+                    self.link(node, self.root, None);
                 }
             }
             MoveTarget::After(ref_id) => {
@@ -1076,18 +1059,18 @@ impl Document {
                         .position(|c| *c == ref_id)
                         .map(|p| p + 1)
                         .unwrap_or_else(|| self.children_of(parent_id).len());
-                    self.link_child(node, parent_id, Some(pos));
+                    self.link(node, parent_id, Some(pos));
                 } else {
-                    self.link_child(node, self.root, None);
+                    self.link(node, self.root, None);
                 }
             }
             MoveTarget::IntoGroupTop(group_id) => {
                 let group = self.resolve_parent_group(Some(group_id));
-                self.link_child(node, group, None);
+                self.link(node, group, None);
             }
             MoveTarget::IntoGroupBottom(group_id) => {
                 let group = self.resolve_parent_group(Some(group_id));
-                self.link_child(node, group, Some(0));
+                self.link(node, group, Some(0));
             }
         }
     }
@@ -1289,7 +1272,7 @@ mod tests {
         let g1 = doc.add_group(None);
         let _l1 = doc.add_raster_layer(Some(g1));
 
-        doc.remove_node(g1);
+        doc.remove_entity(g1);
         assert!(doc.flat_layers().is_empty());
     }
 
@@ -1327,7 +1310,7 @@ mod tests {
         let l = doc.add_raster_layer(None);
         let mod_id = doc.add_mask_filter(l).unwrap();
 
-        doc.remove_filter(mod_id);
+        doc.remove_entity(mod_id);
         assert!(doc.filters_of(l).is_empty());
         assert!(!doc.is_filter(mod_id));
         // Truly purged from entities (not just unlinked).
@@ -1372,7 +1355,7 @@ mod tests {
         // layer is allocated into the same slot.
         let mut doc = Document::new(256, 256);
         let stale = doc.add_raster_layer(None);
-        doc.remove_node(stale);
+        doc.remove_entity(stale);
         // Allocate something else; the slot may be recycled with a bumped
         // generation. The stale key must still not resolve.
         let _other = doc.add_raster_layer(None);
@@ -1419,7 +1402,7 @@ mod tests {
         // Not in the tree.
         assert!(doc.flat_layers().is_empty());
 
-        doc.reinsert_node(l, parent, pos);
+        doc.reinsert_entity(l, parent, pos);
         assert_eq!(doc.parent_of(l), parent.or(Some(doc.root)));
         assert_eq!(doc.flat_layers().len(), 1);
         assert_eq!(doc.mask_filter_id(l), Some(m));
@@ -1437,7 +1420,7 @@ mod tests {
         doc.move_layer(inner_g, MoveTarget::IntoGroupTop(g));
         let inner_l = doc.add_raster_layer(Some(inner_g));
 
-        doc.remove_node(g);
+        doc.remove_entity(g);
         for id in [g, l, m, inner_g, inner_l] {
             assert!(
                 doc.entities.get(id).is_none(),
@@ -1507,7 +1490,7 @@ mod tests {
     fn add_raster_layer_with_stale_anchor_falls_back_to_root_top() {
         let mut doc = Document::new(256, 256);
         let stale = doc.add_raster_layer(None);
-        doc.remove_node(stale);
+        doc.remove_entity(stale);
         let _other = doc.add_raster_layer(None);
         let new_id = doc.add_raster_layer(Some(stale));
         assert_eq!(doc.children_of(doc.root).last().copied(), Some(new_id));
@@ -1530,5 +1513,106 @@ mod tests {
         let new_g = doc.add_group(Some(outer));
         assert_eq!(doc.parent_of(new_g), Some(outer));
         assert_eq!(doc.children_of(outer), &[inner_l, new_g]);
+    }
+
+    /// A filter belongs to its host's `filters` list and to no `children`
+    /// list, whichever detach/attach pair moved it. The two lists used to be
+    /// reachable from the wrong primitive, so a mask could be detached as a
+    /// node (leaving it in `filters`) or reattached as one (landing it in
+    /// `root.children`).
+    #[test]
+    fn detaching_a_filter_by_the_node_path_still_unlinks_it_from_its_host() {
+        let mut doc = Document::new(256, 256);
+        let host = doc.add_raster_layer(None);
+        let mask = doc.add_mask_filter(host).expect("mask");
+
+        doc.detach_for_undo(mask);
+
+        assert!(
+            !doc.filters_of(host).contains(&mask),
+            "mask must leave its host's filter list, got {:?}",
+            doc.filters_of(host)
+        );
+        assert_eq!(doc.parent_of(mask), None);
+    }
+
+    #[test]
+    fn reinserting_a_filter_puts_it_back_on_its_host_not_in_root_children() {
+        let mut doc = Document::new(256, 256);
+        let host = doc.add_raster_layer(None);
+        let mask = doc.add_mask_filter(host).expect("mask");
+        let position = doc.position_in_parent(mask).expect("filter position");
+
+        doc.detach_for_undo(mask);
+        doc.reinsert_entity(mask, Some(host), position);
+
+        assert_eq!(doc.filters_of(host), &[mask]);
+        assert_eq!(doc.parent_of(mask), Some(host));
+        assert!(
+            !doc.children_of(doc.root).contains(&mask),
+            "a filter must never appear in a children list, got {:?}",
+            doc.children_of(doc.root)
+        );
+    }
+
+    /// Restoring a filter puts it back at its original index rather than
+    /// appending, so undoing the removal of one of several modifiers doesn't
+    /// silently reorder the stack.
+    #[test]
+    fn reinserting_a_filter_restores_its_original_index() {
+        let mut doc = Document::new(256, 256);
+        let host = doc.add_raster_layer(None);
+        let first = doc.add_mask_filter(host).expect("first filter");
+        let second = doc.add_mask_filter(host).expect("second filter");
+        assert_eq!(doc.filters_of(host), &[first, second]);
+
+        let position = doc.position_in_parent(first).expect("filter position");
+        doc.detach_for_undo(first);
+        doc.reinsert_entity(first, Some(host), position);
+
+        assert_eq!(doc.filters_of(host), &[first, second]);
+    }
+
+    /// Moving a filter id through the node-move path must not smuggle it into
+    /// a `children` list — a mask has no position in the tree.
+    #[test]
+    fn move_layer_refuses_to_relocate_a_filter() {
+        let mut doc = Document::new(256, 256);
+        let host = doc.add_raster_layer(None);
+        let other = doc.add_raster_layer(None);
+        let mask = doc.add_mask_filter(host).expect("mask");
+
+        doc.move_layer(mask, MoveTarget::Before(other));
+
+        assert_eq!(
+            doc.filters_of(host),
+            &[mask],
+            "mask must stay on its host after an attempted node move"
+        );
+        assert_eq!(doc.parent_of(mask), Some(host));
+        assert!(!doc.children_of(doc.root).contains(&mask));
+    }
+
+    /// `remove_entity` frees descendants as well as the entity itself, for both
+    /// kinds — the node path used to purge the subtree while the filter path
+    /// only dropped the entity.
+    #[test]
+    fn remove_entity_purges_a_subtree_and_a_filter_alike() {
+        let mut doc = Document::new(256, 256);
+        let group = doc.add_group(None);
+        let child = doc.add_raster_layer(Some(group));
+        let child_mask = doc.add_mask_filter(child).expect("mask");
+
+        doc.remove_entity(group);
+        assert!(doc.find_node(group).is_none());
+        assert!(doc.find_node(child).is_none());
+        assert!(doc.find_filter(child_mask).is_none());
+
+        let host = doc.add_raster_layer(None);
+        let mask = doc.add_mask_filter(host).expect("mask");
+        doc.remove_entity(mask);
+        assert!(doc.find_filter(mask).is_none());
+        assert!(doc.filters_of(host).is_empty());
+        assert!(doc.find_node(host).is_some());
     }
 }

@@ -116,10 +116,13 @@ class MultiTabShell {
         if (idx === -1) return;
         const [removed] = this.instances.splice(idx, 1);
 
-        // Free the WASM handle: drops the Rust DarklyEngine, returning all
-        // its GPU textures to the shared device. No effect on sibling
-        // instances since the device is `Arc`-shared.
-        removed.engine?.free();
+        // Tear the instance down: stops its tool session and stream sources,
+        // frees the WASM handle (dropping the Rust DarklyEngine and returning
+        // its GPU textures to the shared device), and nulls the engine so any
+        // frame still queued on the instance's render loop bails instead of
+        // rendering on a freed handle. No effect on sibling instances since the
+        // device is `Arc`-shared.
+        removed.dispose();
         if (id in this.names) {
             const { [id]: _removed, ...rest } = this.names;
             this.names = rest;

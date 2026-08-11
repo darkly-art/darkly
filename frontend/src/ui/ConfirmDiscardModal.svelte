@@ -1,14 +1,10 @@
 <script lang="ts">
     import Modal from './Modal.svelte';
     import { closeGuard } from '../multi_tab/closeGuard.svelte';
-    import { canSave } from '../storage/fileHandle';
 
     function onSave() { void closeGuard.save(); }
     function onDiscard() { closeGuard.discard(); }
     function onCancel() { closeGuard.cancel(); }
-
-    const noSaveTooltip =
-        "Filesystem save isn't supported in this browser — try Chrome, Edge, or Safari.";
 </script>
 
 <Modal bind:open={closeGuard.open} title="Unsaved changes" size="sm">
@@ -22,8 +18,6 @@
         <button
             type="button"
             class="primary"
-            disabled={!canSave}
-            title={canSave ? undefined : noSaveTooltip}
             onclick={onSave}
         >Save</button>
     </div>

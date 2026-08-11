@@ -15,9 +15,6 @@ hotkeys:
   pasteInPlace: $mod+Alt+KeyV
   # GIMP has no native Preferences hotkey. Fall through to Darkly's pick.
   openSettings: $mod+Comma
-  # GIMP binds File > Export As… to <primary><shift>E (see
-  # gimp/app/actions/file-actions.c — `file-export-as`).
-  exportImage: $mod+Shift+KeyE
   # mirrorViewH: intentionally unbound. GIMP has no native mirror-view
   # hotkey, and Krita's M would set no established GIMP-user expectation
   # — leave it for explicit user binding rather than invent a default.
