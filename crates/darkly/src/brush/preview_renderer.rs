@@ -38,13 +38,24 @@ const PREVIEW_STROKE_SEED: u32 = 0x5EED_B00C;
 struct PreviewTarget {
     width: u32,
     height: u32,
+    /// Scratch format the cached `stroke_buffer` was built for. Part of
+    /// the cache key: this renderer is reused across brushes, and a warp
+    /// terminal's scratch holds a float field rather than colour, so a
+    /// buffer cached for one is unbindable by the other.
+    scratch_format: wgpu::TextureFormat,
     layer_texture: wgpu::Texture,
     layer_view: wgpu::TextureView,
     stroke_buffer: StrokeBuffer,
 }
 
 impl PreviewTarget {
-    fn new(device: &wgpu::Device, width: u32, height: u32, pipelines: &BrushPipelines) -> Self {
+    fn new(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        pipelines: &BrushPipelines,
+        scratch_format: wgpu::TextureFormat,
+    ) -> Self {
         let layer_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("brush-preview-layer"),
             size: wgpu::Extent3d {
@@ -63,10 +74,11 @@ impl PreviewTarget {
             view_formats: &[],
         });
         let layer_view = layer_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let stroke_buffer = StrokeBuffer::new(device, width, height, pipelines);
+        let stroke_buffer = StrokeBuffer::new(device, width, height, pipelines, scratch_format);
         Self {
             width,
             height,
+            scratch_format,
             layer_texture,
             layer_view,
             stroke_buffer,
@@ -111,13 +123,23 @@ impl BrushStrokePreviewRenderer {
         // Fresh compile so callers can edit the graph between renders.
         let runner = super::compile_graph(graph).ok()?;
 
-        // Ensure scratch + layer textures match the requested size.
+        // Ensure scratch + layer textures match the requested size *and*
+        // the brush's scratch format — the cached target is shared across
+        // brushes, so previewing a warp terminal after a colour one must
+        // reallocate rather than bind a colour scratch to a field pipeline.
+        let scratch_format = runner.scratch_format();
         let target_changed = match &self.target {
-            Some(t) => t.width != width || t.height != height,
+            Some(t) => t.width != width || t.height != height || t.scratch_format != scratch_format,
             None => true,
         };
         if target_changed {
-            self.target = Some(PreviewTarget::new(device, width, height, pipelines));
+            self.target = Some(PreviewTarget::new(
+                device,
+                width,
+                height,
+                pipelines,
+                scratch_format,
+            ));
         }
         let target = self.target.as_mut().unwrap();
 

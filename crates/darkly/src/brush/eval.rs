@@ -703,6 +703,26 @@ impl BrushGraphRunner {
         self.plan.steps.iter().any(|step| step.is_terminal)
     }
 
+    /// Texel format the stroke scratch must be allocated in for this
+    /// brush — the terminal's declared
+    /// [`scratch_format`](crate::brush::node::BrushNodeRegistration::scratch_format).
+    ///
+    /// Type-owned dispatch, same shape as [`Self::has_terminal`]: the
+    /// terminal answers what its scratch holds, and callers
+    /// (`StrokeBuffer::new`, the preview renderer) just pass the answer
+    /// through. A terminal-less graph gets the colour default; it never
+    /// renders anyway.
+    pub fn scratch_format(&self) -> wgpu::TextureFormat {
+        let registry = crate::brush::registry();
+        self.plan
+            .steps
+            .iter()
+            .filter(|step| step.is_terminal)
+            .find_map(|step| registry.get(&step.type_id))
+            .map(|reg| reg.scratch_format)
+            .unwrap_or(crate::brush::node::COLOR_SCRATCH_FORMAT)
+    }
+
     /// Build a name → value map of every output slot in the graph,
     /// keyed by `n{node_id}_{port_name}` (matching the convention
     /// [`crate::brush::wgsl::CompileWgslCtx::dab_field_name`]

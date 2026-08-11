@@ -69,6 +69,7 @@ pub fn register() -> BrushNodeRegistration {
         pipelines: vec![read_mirror_pipeline_reg("blur")],
         evaluator: || Box::new(BlurEvaluator),
         lifecycle: crate::brush::node::Lifecycle::SeedScratchFromPreStroke,
+        scratch_format: crate::brush::node::COLOR_SCRATCH_FORMAT,
         node: NodeRegistration {
             type_id: TYPE_ID,
             category: "output",

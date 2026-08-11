@@ -137,6 +137,15 @@ impl StrokeEngine {
     /// scatter differently. What a stroke the painter is making wants — and
     /// what a stroke rendered into a cached thumbnail or a documentation asset
     /// must not have, which is why it is the caller's to choose.
+    /// Texel format the stroke scratch must be allocated in for this
+    /// stroke's brush — see
+    /// [`BrushGraphRunner::scratch_format`](crate::brush::eval::BrushGraphRunner::scratch_format).
+    /// The engine builds its `StrokeEngine` before its `StrokeBuffer`, so
+    /// this is available at allocation time.
+    pub fn scratch_format(&self) -> wgpu::TextureFormat {
+        self.runner.scratch_format()
+    }
+
     pub fn random_seed() -> u32 {
         web_time::SystemTime::now()
             .duration_since(web_time::SystemTime::UNIX_EPOCH)

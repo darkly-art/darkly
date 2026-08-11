@@ -100,7 +100,10 @@ fn run_begin_stroke(graph: &Graph<BrushWireType>, setup: Setup) -> Vec<u8> {
     // which is the exact bundle `StrokeResources` wants. Whichever lifecycle
     // the terminal declares, only one of the two textures is read — the
     // other is harmlessly present.
-    let mut stroke_buffer = StrokeBuffer::new(&device, W, H, &pipelines);
+    // Compile first: the terminal's declared scratch format decides how
+    // the scratch is allocated, and a warp terminal's is not colour.
+    let mut runner: BrushGraphRunner = compile_graph(graph).expect("brush compiles");
+    let mut stroke_buffer = StrokeBuffer::new(&device, W, H, &pipelines, runner.scratch_format());
     // Dummy paint target — `apply_lifecycle` never reads it, but the new
     // `StrokeResources` shape requires it. Reuse the pre-stroke texture as
     // a stand-in (same RGBA8 / W×H format).
@@ -133,7 +136,6 @@ fn run_begin_stroke(graph: &Graph<BrushWireType>, setup: Setup) -> Vec<u8> {
         }
     };
 
-    let mut runner: BrushGraphRunner = compile_graph(graph).expect("brush compiles");
     let encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("begin-stroke"),
     });
@@ -173,7 +175,7 @@ fn run_begin_stroke(graph: &Graph<BrushWireType>, setup: Setup) -> Vec<u8> {
         &device,
         &queue,
         stroke_buffer.scratch().write_texture(),
-        wgpu::TextureFormat::Rgba8Unorm,
+        stroke_buffer.scratch().format(),
         W,
         H,
     )
@@ -248,8 +250,34 @@ fn smudge_terminal_seeds_scratch_from_pre_stroke() {
     assert_all(&rgba, SENTINEL_RGBA);
 }
 
+/// Liquify's scratch holds a displacement field, not colour, so its
+/// prologue clears rather than seeds — a transparent clear *is* a zero
+/// field, and a zero field resolves to the pre-stroke image unchanged.
+/// Seeding colour into it would be meaningless (and would decode as
+/// enormous bogus displacements).
+///
+/// Pre-fill with a non-zero field first, so a missed clear is visible:
+/// stale displacement surviving into a new stroke would warp the image
+/// before the user has moved the pen.
 #[test]
-fn liquify_terminal_seeds_scratch_from_pre_stroke() {
-    let rgba = run_begin_stroke(&builtin_graph("Liquify"), Setup::PreStrokeWithSentinel);
-    assert_all(&rgba, SENTINEL_RGBA);
+fn liquify_terminal_clears_scratch_to_zero_field() {
+    let raw = run_begin_stroke(
+        &builtin_graph("Liquify"),
+        Setup::ScratchPrefilled(wgpu::Color {
+            r: 37.0,
+            g: -19.0,
+            b: 0.0,
+            a: 0.0,
+        }),
+    );
+    let field: Vec<f32> = raw
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
+    let worst = field.iter().cloned().fold(0.0_f32, |a, b| a.max(b.abs()));
+    assert_eq!(
+        worst, 0.0,
+        "begin_stroke must leave liquify's warp field at zero; largest \
+         surviving displacement was {worst} px",
+    );
 }

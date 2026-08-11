@@ -971,11 +971,19 @@ impl DarklyEngine {
                 // canvas this means dabs landing on off-canvas pixels are
                 // saved/restored correctly on undo.
                 let layer_extent = layer_tex.layer_extent();
+                // The terminal decides what its scratch holds — colour for
+                // most brushes, a displacement field for liquify.
+                let scratch_format = self
+                    .brush_stroke_engine
+                    .as_ref()
+                    .map(|e| e.scratch_format())
+                    .unwrap_or(crate::brush::node::COLOR_SCRATCH_FORMAT);
                 let mut stroke_buffer = StrokeBuffer::new(
                     &self.gpu.device,
                     layer_extent.width,
                     layer_extent.height,
                     &self.brush_pipelines,
+                    scratch_format,
                 );
                 let paint_target = GpuPaintTarget::from_node(layer_tex, self.doc.canvas_rect());
                 self.gpu.encode("stroke-buffer-init", |encoder| {

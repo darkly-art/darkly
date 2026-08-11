@@ -139,7 +139,13 @@ fn harness(initial: &[u8], graph: Graph<BrushWireType>) -> Harness {
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
-    let stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
+    let stroke_buffer = StrokeBuffer::new(
+        &device,
+        CANVAS,
+        CANVAS,
+        &pipelines,
+        darkly::brush::node::COLOR_SCRATCH_FORMAT,
+    );
 
     let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
         &layer_texture,
@@ -360,7 +366,13 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
-    let stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
+    let stroke_buffer = StrokeBuffer::new(
+        &device,
+        CANVAS,
+        CANVAS,
+        &pipelines,
+        darkly::brush::node::COLOR_SCRATCH_FORMAT,
+    );
     let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
         &layer_texture,
         &layer_view,

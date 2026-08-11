@@ -222,7 +222,10 @@ pub struct BrushPipelineRegistration {
 /// dropping its registration into this list; the harvest loop picks
 /// it up automatically.
 pub fn plumbing_registrations() -> Vec<BrushPipelineRegistration> {
-    vec![crate::brush::composite_pipeline::composite_pipeline_registration()]
+    vec![
+        crate::brush::composite_pipeline::composite_pipeline_registration(),
+        crate::brush::warp_field::warp_field_resolve_registration(),
+    ]
 }
 
 // ── BrushPipelines: shared infra + plumbing + per-node registry ──────────
@@ -250,9 +253,14 @@ pub struct BrushPipelines {
     uniform_bgl: wgpu::BindGroupLayout,
     selection_bgl: wgpu::BindGroupLayout,
     canvas_copy_bgl: wgpu::BindGroupLayout,
+    /// Non-filtering twin of `canvas_copy_bgl`, for scratches holding a
+    /// float32 warp field rather than colour.
+    canvas_copy_unfilterable_bgl: wgpu::BindGroupLayout,
 
     // ── Shared samplers / default bind groups ────────────────────────
     canvas_copy_sampler: wgpu::Sampler,
+    /// Nearest sampler paired with `canvas_copy_unfilterable_bgl`.
+    canvas_copy_nearest_sampler: wgpu::Sampler,
     /// 1×1 white selection (= fully selected).  Bound when no selection
     /// is active.  `pub` because hot-path call sites take its address
     /// directly via `unwrap_or(&self.brush_pipelines.default_selection_bind_group)`.
@@ -351,6 +359,35 @@ impl BrushPipelines {
             ],
         });
 
+        // Same shape, non-filtering. Warp terminals put a float32
+        // displacement field in the scratch, and `Rg32Float` is not
+        // filterable in core WebGPU (only with the optional
+        // `float32-filterable` feature). Their shaders fetch it with
+        // `textureLoad` and interpolate by hand, so a non-filtering
+        // layout costs them nothing.
+        let canvas_copy_unfilterable_bgl =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("brush-canvas-copy-unfilterable-bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        count: None,
+                    },
+                ],
+            });
+
         // ── Default selection (1×1 white = fully selected) ─────────
         let sel_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("brush-default-selection"),
@@ -414,6 +451,17 @@ impl BrushPipelines {
             label: Some("brush-canvas-copy-sampler"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        // Nearest counterpart, for the non-filtering layout above. Warp
+        // terminals never sample through it — it exists because the
+        // layout declares a sampler slot — but a `Filtering` sampler is
+        // illegal against a `NonFiltering` entry, so it must be nearest.
+        let canvas_copy_nearest_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("brush-canvas-copy-nearest-sampler"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
 
@@ -591,7 +639,9 @@ impl BrushPipelines {
             uniform_bgl,
             selection_bgl,
             canvas_copy_bgl,
+            canvas_copy_unfilterable_bgl,
             canvas_copy_sampler,
+            canvas_copy_nearest_sampler,
             default_selection_bind_group,
             blit_pipeline,
             blit_uniform_ring,
@@ -711,6 +761,30 @@ impl BrushPipelines {
     /// Linear sampler shared by every `Scratch`'s read-mirror bind group.
     pub fn canvas_copy_sampler(&self) -> &wgpu::Sampler {
         &self.canvas_copy_sampler
+    }
+
+    /// The canvas-copy BGL + sampler a `Scratch` of `format` must be built
+    /// against. Colour scratches get the filtering pair; float32 warp
+    /// fields get the non-filtering pair, because `Rg32Float` is not
+    /// filterable without the optional `float32-filterable` feature.
+    /// Callers pass the result straight to `Scratch::new` — this is the
+    /// single place the pairing is decided.
+    pub fn canvas_copy_layout_for(
+        &self,
+        format: wgpu::TextureFormat,
+    ) -> (&wgpu::BindGroupLayout, &wgpu::Sampler) {
+        if format
+            .guaranteed_format_features(wgpu::Features::empty())
+            .flags
+            .contains(wgpu::TextureFormatFeatureFlags::FILTERABLE)
+        {
+            (&self.canvas_copy_bgl, &self.canvas_copy_sampler)
+        } else {
+            (
+                &self.canvas_copy_unfilterable_bgl,
+                &self.canvas_copy_nearest_sampler,
+            )
+        }
     }
 
     /// The 1×1 white selection bind group — bound when no selection is

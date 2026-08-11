@@ -1,4 +1,4 @@
-//! Liquify terminal — per-dab fragment-pass warp with a per-brush
+//! Liquify terminal — per-dab displacement-field warp with a per-brush
 //! compiled WGSL shader.
 //!
 //! Rides the shared [read-mirror terminal](crate::brush::read_mirror_terminal)
@@ -7,11 +7,30 @@
 //! file owns only what's liquify-specific: the read half-extent and the
 //! variant WGSL (including the softness falloff helper).
 //!
-//! Per dab the fragment shader samples the scratch read mirror at a
-//! *displaced* UV inside a circular brush disc and writes the warped
-//! sample back into the scratch. Successive dabs compound because each
-//! reads the cumulatively-warped scratch — the per-dab serialization is
-//! semantically required, not a perf bug.
+//! Unlike its read-mirror siblings, liquify's scratch holds a
+//! [warp field](crate::brush::warp_field) rather than colour. Per dab the
+//! fragment shader advects the accumulated displacement and adds this
+//! dab's own — it never touches a pixel. The picture is produced once, at
+//! commit, by sampling the pre-stroke snapshot through the finished
+//! field.
+//!
+//! That is not a shortcut around per-dab compounding, it is how the
+//! compounding is made lossless. Later dabs still displace content
+//! earlier dabs displaced: the `field(p + nv)` term reads the previous
+//! field at the displaced location and carries it along, which composes
+//! the two maps exactly. What it does *not* do is resample the picture
+//! each time — at 4 px spacing under a 77 px brush that was ~38 chained
+//! bilinear filters per swipe, and a chain of bilinear filters is a
+//! low-pass cascade. Detail is now independent of dab count.
+//!
+//! The per-dab serialization is therefore still semantically required,
+//! not a perf bug: dab *n+1* must read dab *n*'s field.
+//!
+//! Inherited caveat, unchanged by the field model: the read-mirror fetch
+//! addresses the mirror by `textureDimensions`, while only the copied
+//! `copy_w × copy_h` sub-rect of that lazily-grown texture is valid
+//! (`scratch.rs`), so a dab clipped at the layer edge can address stale
+//! texels. The helper clamps to the texture, not to the valid rect.
 //!
 //! Displacement magnitude is `strength × |pen.motion|` — the cursor's
 //! per-dab travel scaled by strength. With the Liquify brush's fixed
@@ -70,8 +89,9 @@ use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 /// brushes (perf scales with `diameter / spacing`).
 pub const LIQUIFY_SPACING_PX: f32 = 4.0;
 
-/// Per-dab strength below which the dab is dropped — `mix(orig, warped, _·sel)`
-/// collapses to identity and the per-dab pass would be a no-op.
+/// Per-dab strength below which the dab is dropped — the dab's
+/// displacement collapses to zero, so advecting the field by it and
+/// adding it back is an identity write.
 const STRENGTH_EPSILON: f32 = 1.0e-4;
 
 /// Brush radius below which the dab is dropped — sub-pixel discs warp
@@ -89,7 +109,12 @@ pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![read_mirror_pipeline_reg("liquify")],
         evaluator: || Box::new(LiquifyEvaluator),
-        lifecycle: crate::brush::node::Lifecycle::SeedScratchFromPreStroke,
+        // A transparent clear *is* a zero field: no displacement
+        // anywhere, so the first resolve reproduces the pre-stroke image
+        // exactly. Seeding from pre-stroke would be meaningless — the
+        // scratch holds offsets, not colour.
+        lifecycle: crate::brush::node::Lifecycle::ClearScratchToTransparent,
+        scratch_format: crate::brush::warp_field::FIELD_FORMAT,
         node: NodeRegistration {
             type_id: TYPE_ID,
             category: "output",
@@ -234,17 +259,28 @@ impl ReadMirrorTerminal for LiquifyEvaluator {
              \x20       let t = (softness - sine_break) / (1.0 - sine_break);\n\
              \x20       return mix(sine, 1.0, t);\n\
              \x20   }}\n\
-             }}\n"
+             }}\n\
+             {}\n",
+            crate::brush::warp_field::FIELD_HELPERS_WGSL,
         );
 
         // Fragment body: `local_dist` and `target_pos` come from the
         // framework wrapper; the framework already discards past
         // `d.bbox_target_px`. We additionally discard past
-        // `local_dist >= 1.0` so the warp stays inside the disc.
+        // `local_dist >= 1.0` so the warp stays outside the disc alone.
         // The falloff helper takes `0 = spike` / `1 = square`. The
         // user-facing slider is labelled "Softness" with the opposite
         // intuition — `1 = soft / feathery`, `0 = hard / sharp`. Invert
         // before passing to the helper so the slider matches the label.
+        //
+        // `sel` and `warp_mask` scale the *displacement*, never the
+        // result. A geometric operation that cross-faded warped against
+        // unwarped colour would be a literal double exposure inside a
+        // soft selection edge; here every output pixel remains exactly
+        // one sample of the source, and a masked-out fragment simply
+        // contributes a zero offset (leaving the accumulated field
+        // untouched).
+        let offset_expr = "-dir * (length(motion_vec) * strength) * f * sel * warp_mask";
         wgsl.body = format!(
             "    if (local_dist >= 1.0) {{ discard; }}\n\
              \x20   let warp_mask = clamp({mask_expr}, 0.0, 1.0);\n\
@@ -255,14 +291,8 @@ impl ReadMirrorTerminal for LiquifyEvaluator {
              \x20   let motion_vec = {motion_expr};\n\
              \x20   let f = {falloff_fn}(local_dist, falloff_param);\n\
              \x20   let dir = vec2<f32>(cos(direction_angle), sin(direction_angle));\n\
-             \x20   let displacement = length(motion_vec) * strength;\n\
-             \x20   let source_pos = target_pos - dir * displacement * f;\n\
-             \x20   let mirror_dims = vec2<f32>(textureDimensions(scratch_mirror_tex));\n\
-             \x20   let copy_uv    = (source_pos - d.{copy_origin_field}) / mirror_dims;\n\
-             \x20   let warped     = textureSampleLevel(scratch_mirror_tex, scratch_mirror_smp, copy_uv,    0.0);\n\
-             \x20   let original_uv = (target_pos  - d.{copy_origin_field}) / mirror_dims;\n\
-             \x20   let original   = textureSampleLevel(scratch_mirror_tex, scratch_mirror_smp, original_uv, 0.0);\n\
-             \x20   return mix(original, warped, sel * warp_mask);\n",
+             {}",
+            crate::brush::warp_field::advect_wgsl(offset_expr, copy_origin_field),
         );
 
         Ok(wgsl)

@@ -141,7 +141,12 @@ struct PerBrushPipeline {
 }
 
 impl PerBrushPipeline {
-    fn build(ctx: &BuildContext, compiled: &CompiledBrush, label: &str) -> Self {
+    fn build(
+        ctx: &BuildContext,
+        compiled: &CompiledBrush,
+        label: &str,
+        target_format: wgpu::TextureFormat,
+    ) -> Self {
         let shader = ctx
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -181,9 +186,13 @@ impl PerBrushPipeline {
                 immediate_size: 0,
             });
 
-        // REPLACE blend — the fragment shader writes the final pixel;
+        // No blending — the fragment shader writes the final value;
         // outside the disc it discards so LoadOp::Load preserves the
-        // scratch.
+        // scratch. `blend: None` rather than `BlendState::REPLACE`
+        // because a warp terminal's target is `Rg32Float`, and wgpu gates
+        // *any* blend state on a format being BLENDABLE, which float32
+        // formats are not without the optional `FLOAT32_BLENDABLE`
+        // feature. A pure replace is what REPLACE meant anyway.
         let pipeline = ctx
             .device
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -199,8 +208,8 @@ impl PerBrushPipeline {
                     module: &shader,
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        blend: Some(wgpu::BlendState::REPLACE),
+                        format: target_format,
+                        blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                     compilation_options: Default::default(),
@@ -281,11 +290,17 @@ impl ReadMirrorPipeline {
         }
     }
 
-    fn ensure_pipeline(&self, ctx: &BuildContext, compiled: &CompiledBrush, label: &str) {
+    fn ensure_pipeline(
+        &self,
+        ctx: &BuildContext,
+        compiled: &CompiledBrush,
+        label: &str,
+        target_format: wgpu::TextureFormat,
+    ) {
         let mut cache = self.cache.borrow_mut();
         cache
             .entry(compiled.topology_hash)
-            .or_insert_with(|| PerBrushPipeline::build(ctx, compiled, label));
+            .or_insert_with(|| PerBrushPipeline::build(ctx, compiled, label, target_format));
     }
 
     fn with_pipeline<R>(&self, hash: u64, f: impl FnOnce(&PerBrushPipeline) -> R) -> R {
@@ -489,8 +504,16 @@ pub fn flush_dabs<T: ReadMirrorTerminal>(gpu: &mut BrushGpuContext) {
     gpu.perf
         .record_dab_flush_workload(total_dabs, union_w, union_h);
 
+    // The pass renders into the scratch, so the pipeline's colour target
+    // and its `@group(3)` layout both follow the scratch's format — colour
+    // for smudge/blur, a float displacement field for liquify.
+    let target_format = gpu
+        .stroke
+        .as_ref()
+        .map(|s| s.scratch.format())
+        .unwrap_or(crate::brush::node::COLOR_SCRATCH_FORMAT);
     let pipeline_ref = gpu.pipelines.get::<ReadMirrorPipeline>(T::PIPELINE_ID);
-    ensure_per_brush_pipeline(gpu, pipeline_ref, &compiled, T::LABEL);
+    ensure_per_brush_pipeline(gpu, pipeline_ref, &compiled, T::LABEL, target_format);
 
     let stroke = gpu
         .stroke
@@ -590,13 +613,40 @@ pub fn flush_dabs<T: ReadMirrorTerminal>(gpu: &mut BrushGpuContext) {
     gpu.perf.record_dab_flush(total_dabs);
 }
 
-/// Direct blit scratch → layer. The scratch already holds the finished
-/// image; commit just copies it across. `gpu.blend_mode` is ignored —
-/// erase semantics aren't meaningful for these read-back transforms.
+/// Scratch → layer. `gpu.blend_mode` is ignored — erase semantics aren't
+/// meaningful for these read-back transforms.
+///
+/// Colour terminals (smudge, blur) hold the finished image in the
+/// scratch, so commit is a direct blit. A warp terminal's scratch holds a
+/// displacement field instead, so commit is the single resample that
+/// turns it into pixels — sampling the pre-stroke snapshot (or a
+/// clone-style `source_override`) through the field across the layer's
+/// full extent. Which one runs is decided by the scratch's own format,
+/// not by a list of terminal names here.
 pub fn commit(gpu: &mut BrushGpuContext) {
     let Some(stroke) = gpu.stroke.as_ref() else {
         return;
     };
+
+    if stroke.scratch.format() == crate::brush::warp_field::FIELD_FORMAT {
+        let extent = stroke.paint_target.layer_extent();
+        let source_view = stroke.source_view();
+        gpu.pipelines
+            .get::<crate::brush::warp_field::WarpFieldResolve>(
+                crate::brush::warp_field::RESOLVE_PIPELINE_ID,
+            )
+            .resolve(
+                gpu.device,
+                &mut gpu.encoder,
+                stroke.scratch.write_view(),
+                &source_view,
+                stroke.paint_target.view(),
+                stroke.paint_target.format(),
+                (extent.width, extent.height),
+            );
+        return;
+    }
+
     stroke.paint_target.commit_scratch_blit(
         gpu.device,
         &mut gpu.encoder,
@@ -657,22 +707,27 @@ fn ensure_per_brush_pipeline(
     pipe: &ReadMirrorPipeline,
     compiled: &CompiledBrush,
     label: &str,
+    target_format: wgpu::TextureFormat,
 ) {
     if pipe.cache.borrow().contains_key(&compiled.topology_hash) {
         return;
     }
+    // `@group(3)` binds the scratch's own read-mirror bind group, so the
+    // pipeline layout has to be the one that scratch was built against.
+    let (canvas_copy_bgl, canvas_copy_sampler) =
+        gpu.pipelines.canvas_copy_layout_for(target_format);
     let ctx = BuildContext {
         device: gpu.device,
         queue: gpu.queue,
         uniform_bgl: gpu.pipelines.uniform_bind_group_layout(),
         selection_bgl: gpu.pipelines.selection_bind_group_layout(),
-        canvas_copy_bgl: gpu.pipelines.canvas_copy_bind_group_layout(),
-        canvas_copy_sampler: gpu.pipelines.canvas_copy_sampler(),
+        canvas_copy_bgl,
+        canvas_copy_sampler,
         min_uniform_align: gpu.device.limits().min_uniform_buffer_offset_alignment,
         texture_registry: gpu.pipelines.texture_registry(),
         baked_sources: gpu.pipelines.baked_sources(),
     };
-    pipe.ensure_pipeline(&ctx, compiled, label);
+    pipe.ensure_pipeline(&ctx, compiled, label, target_format);
 }
 
 #[cfg(test)]
