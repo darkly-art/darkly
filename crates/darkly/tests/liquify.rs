@@ -15,13 +15,19 @@ use std::sync::{Arc, OnceLock};
 use darkly::brush::compile_graph;
 use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, StrokeResources};
-use darkly::brush::nodes::liquify::LIQUIFY_SPACING_PX;
+use darkly::brush::nodes::liquify::LIQUIFY_SPACING_RATIO;
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::brush::stroke_buffer::StrokeBuffer;
 use darkly::gpu::test_utils::{create_test_texture, readback_texture, test_device};
 
 const CANVAS: u32 = 128;
+
+/// Dab step these tests hand-place at, in canvas pixels. Independent of
+/// the brush's configured spacing: the harness places dabs at explicit
+/// positions and synthesises the matching `pen.motion`, so this is the
+/// tests' own geometry, not a copy of the brush's.
+const TEST_DAB_STEP_PX: f32 = 4.0;
 
 fn shared_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
     static HANDLES: OnceLock<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> = OnceLock::new();
@@ -170,14 +176,10 @@ fn render_liquify_dabs_on(
         let mut ctx = make_ctx!("liquify-test-flush");
         for (i, (pos, dir, dist)) in dabs.iter().enumerate() {
             // Simulate a real stroke's per-dab motion: in a live
-            // stroke the engine places dabs `LIQUIFY_SPACING_PX`
-            // apart along the cursor's path, so `pen.motion` per
-            // dab has magnitude ≈ `LIQUIFY_SPACING_PX` along the
-            // drawing angle.
-            let motion = [
-                LIQUIFY_SPACING_PX * dir.cos(),
-                LIQUIFY_SPACING_PX * dir.sin(),
-            ];
+            // stroke the engine places dabs a spacing apart along
+            // the cursor's path, so `pen.motion` per dab has that
+            // magnitude along the drawing angle.
+            let motion = [TEST_DAB_STEP_PX * dir.cos(), TEST_DAB_STEP_PX * dir.sin()];
             let info = PaintInformation {
                 pos: *pos,
                 drawing_angle: *dir,
@@ -240,13 +242,13 @@ fn liquify_scrubbing_preserves_high_frequency_detail() {
             std::f32::consts::PI
         };
         let step = if pass % 2 == 0 {
-            LIQUIFY_SPACING_PX
+            TEST_DAB_STEP_PX
         } else {
-            -LIQUIFY_SPACING_PX
+            -TEST_DAB_STEP_PX
         };
         for _ in 0..12 {
             x += step;
-            distance += LIQUIFY_SPACING_PX;
+            distance += TEST_DAB_STEP_PX;
             dabs.push(([x, 64.0], dir, distance));
         }
     }
@@ -306,7 +308,7 @@ fn liquify_scrubbing_preserves_high_frequency_detail() {
 
 /// Confidence test: a single liquify dab at (38, 64) pulling
 /// rightward (direction = 0, strength = 1) lifts red into the dab
-/// centre. With `|motion| = LIQUIFY_SPACING_PX = 4`, displacement at
+/// centre. With `|motion| = TEST_DAB_STEP_PX = 4`, displacement at
 /// strength=1 is 4 px, so the centre fragment sources from (34, 64)
 /// — inside the red bar at `x < 36`. (Size is irrelevant to the
 /// per-dab displacement now — kept at 0.3 only so the disc actually
@@ -334,7 +336,7 @@ fn single_liquify_dab_warps_red_into_center() {
 /// pre-stroke at x = 38 is past the red bar at x < 36).
 #[test]
 fn liquify_dab2_reads_dab1_deposit_not_pre_stroke() {
-    // `|motion| = LIQUIFY_SPACING_PX = 4` → displacement at strength=1
+    // `|motion| = TEST_DAB_STEP_PX = 4` → displacement at strength=1
     // is 4 px, independent of brush size.
     let rgba = render_liquify_dabs(
         0.3,
@@ -369,7 +371,7 @@ fn liquify_dab2_reads_dab1_deposit_not_pre_stroke() {
 /// *intensity*.
 ///
 /// Both runs: one eastward dab at (38, 64) with strength=1 and
-/// `|motion| = LIQUIFY_SPACING_PX = 4`. The pre-stroke red bar lives
+/// `|motion| = TEST_DAB_STEP_PX = 4`. The pre-stroke red bar lives
 /// at `x < 36`. With the (now-fixed) formula `displacement = strength
 /// × |motion| = 4 px`, a fragment at (42, 64) samples from (38, 64)
 /// — background. The brush centre at (38, 64) samples from (34, 64)
@@ -512,4 +514,44 @@ fn liquify_stroke_through_engine_preserves_detail() {
             hi - lo,
         );
     }
+}
+
+/// The brush's configured spacing and [`LIQUIFY_SPACING_RATIO`] are the
+/// same decision written in two files — the YAML the engine actually
+/// reads, and the Rust constant whose doc comment carries the reasoning
+/// (why 0.05, and what banding measurement bounds it). Pin them together
+/// so neither can drift silently.
+///
+/// Spacing is not cosmetic here: pinning it flat in pixels, as this brush
+/// used to, makes per-travel cost `O(radius²)` because the dab count stops
+/// falling as the disc grows.
+#[test]
+fn shipped_liquify_spacing_matches_the_declared_ratio() {
+    let graph = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Liquify")
+        .expect("Liquify is shipped")
+        .metadata
+        .graph;
+    let spacing = darkly::brush::nodes::brush_settings::spacing_config(&graph);
+
+    assert!(
+        (spacing.ratio - LIQUIFY_SPACING_RATIO).abs() < 1e-6,
+        "brushes/liquify.yaml sets spacing {} but LIQUIFY_SPACING_RATIO is {}",
+        spacing.ratio,
+        LIQUIFY_SPACING_RATIO,
+    );
+    assert!(
+        spacing.ratio > 0.0,
+        "liquify spacing must stay proportional to dab size; a zero ratio \
+         falls back to the pixel floor and restores O(radius²) cost",
+    );
+
+    // A large brush must actually get large steps — the whole point.
+    let big_diameter = 1000.0;
+    assert!(
+        spacing.distance(big_diameter) >= 40.0,
+        "a {big_diameter}px-diameter liquify brush should step >= 40px, got {}",
+        spacing.distance(big_diameter),
+    );
 }

@@ -33,19 +33,42 @@
 //! texels. The helper clamps to the texture, not to the valid rect.
 //!
 //! Displacement magnitude is `strength × |pen.motion|` — the cursor's
-//! per-dab travel scaled by strength. With the Liquify brush's fixed
-//! `pen_input.spacing_min_px = LIQUIFY_SPACING_PX`, `|motion|` is the
-//! same constant at any brush size, so:
+//! per-dab travel scaled by strength. So:
 //!   * `strength = 1` locks pixels to the cursor (per-dab push =
 //!     per-dab cursor motion);
-//!   * `strength < 1` produces a strength-fraction drag;
-//!   * brush size controls only the warped *extent* (the disc), never
-//!     the *intensity*.
+//!   * `strength < 1` produces a strength-fraction drag.
 //!
 //! Pen speed enters only via dab density along the path; the per-dab
-//! push is identical for slow and fast drags. **Liquify is deliberately
-//! size-invariant** — the size slider scales the warped extent, not the
-//! push strength.
+//! push is identical for slow and fast drags.
+//!
+//! ## Why spacing is proportional, not pinned
+//!
+//! Dab spacing uses the ordinary proportional rule
+//! ([`SpacingConfig`](crate::brush::spacing::SpacingConfig)) at
+//! [`LIQUIFY_SPACING_RATIO`], rather than the flat pixel floor it once
+//! carried. Total displacement over a drag does not depend on spacing:
+//! per dab it is `strength × |motion| = strength × spacing`, and a drag
+//! of length `L` places `L / spacing` dabs, so the total is
+//! `strength × L` — spacing cancels. It only sets how finely the warp is
+//! discretised.
+//!
+//! That is a property of accumulating a *field*. Under the per-dab image
+//! warp this replaced, spacing also cancelled geometrically, but each dab
+//! cost a resample — so the dab count could not be traded for performance
+//! without trading away detail, and the spacing was pinned flat at 4 px.
+//! Pinned spacing makes cost `O(radius²)` per unit of travel: dab count
+//! stays constant while each dab's mirror copy and fragment pass grow
+//! with the disc. Proportional spacing makes it `O(radius)`.
+//!
+//! The ratio is bounded by banding, not by intensity. Measured on a
+//! straight drag at radius 76.8: peak displacement moves 45.01 → 45.11 px
+//! (+0.2 %) from 4 px to 8 px spacing, then 45.52 at 16 px and 48.71
+//! (+8 %, visibly stepped) at 32 px. Spacing up to ~0.1 × radius is
+//! faithful; beyond that the discretisation starts showing.
+//!
+//! GIMP's warp tool reaches the same place — `step = effect_size ×
+//! stroke_spacing / 100` (`app/tools/gimpwarptool.c:432`), spacing
+//! proportional to brush size, at a comparable default density.
 //!
 //! ## Softness waveshape
 //!
@@ -73,21 +96,19 @@ use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 // ── Constants ───────────────────────────────────────────────────────────
 
-/// Dab spacing for the Liquify brush, in canvas pixels. The brush
-/// pins `pen_input.spacing_min_px` to this value (and sets ratio to
-/// zero) so spacing stays fixed at any brush size. Per-dab
-/// displacement is then `strength × |pen.motion| ≈ strength ×
-/// LIQUIFY_SPACING_PX`, which makes:
-///   * `strength = 1` lock pixels to the cursor (per-dab push equals
-///     per-dab cursor motion);
-///   * `strength = 0.5` lag the cursor by 50% (the "drag" feel);
-///   * the absolute pixel push size-invariant — the size slider
-///     controls the warped *extent* (the disc), not the *intensity*.
+/// Dab spacing for the Liquify brush, as a fraction of dab **diameter**
+/// — the value `brushes/liquify.yaml` sets on `brush_settings.spacing`.
 ///
-/// Tuned to 4 px: tight enough for smooth-looking warps without dab
-/// banding, large enough not to blow up the dab count at huge
-/// brushes (perf scales with `diameter / spacing`).
-pub const LIQUIFY_SPACING_PX: f32 = 4.0;
+/// 0.05 of diameter is 0.1 of radius, the density the module doc's
+/// measurements put at the edge of faithful: at that spacing the warp is
+/// within 0.2 % of a 4 px reference, and it holds the per-unit-travel
+/// cost at `O(radius)` instead of the `O(radius²)` a pinned pixel
+/// spacing forced.
+///
+/// Declared here rather than only in the YAML because it is a property
+/// of how this terminal behaves, and because the module doc's reasoning
+/// is what justifies the number. Keep the two in step.
+pub const LIQUIFY_SPACING_RATIO: f32 = 0.05;
 
 /// Per-dab strength below which the dab is dropped — the dab's
 /// displacement collapses to zero, so advecting the field by it and
