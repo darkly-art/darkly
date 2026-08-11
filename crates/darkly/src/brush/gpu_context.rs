@@ -13,6 +13,7 @@ use std::sync::Arc;
 use super::eval::BrushCursorPreviewInfo;
 use super::pipeline::BrushPipelines;
 use super::scratch::Scratch;
+use super::texture_source::LiveSource;
 use super::wgsl::{CompiledBrush, IntrinsicUniforms};
 use super::wire::ScalarValue;
 use crate::gpu::overlay::ToolOverlay;
@@ -253,6 +254,16 @@ pub struct DabBatch {
     /// `flush_dabs` to know the dab record / uniform layouts and the
     /// pipeline topology hash.
     pub compiled_brush: Option<Arc<CompiledBrush>>,
+    /// `@group(3)` textures published for this flush by the nodes that
+    /// requested them, keyed by which live source they satisfy. A node
+    /// with a [`crate::brush::texture_source::ResolvedSource::Live`] slot
+    /// publishes its view from its own `flush_dabs`; the terminal reads
+    /// them all when it builds the graph-texture bind group. The runner
+    /// dispatches `flush_dabs` in topological order, so every producer
+    /// upstream of the terminal has published before the terminal binds.
+    /// Cleared at the start of each flush — a slot nobody published falls
+    /// back to `_fallback` (the cursor-preview path).
+    pub live_textures: Vec<(LiveSource, wgpu::TextureView)>,
     /// Name → value map of every output slot in the brush graph, built
     /// by the runner's `dispatch_gpu` immediately after `execute_cpu`
     /// and held for the duration of the dispatch pass. Keys follow the
@@ -330,6 +341,31 @@ impl DabBatch {
         self.count = 0;
         self.bbox = None;
         self.meta_bytes.clear();
+        self.live_textures.clear();
+    }
+
+    /// Publish a `@group(3)` texture for this flush. Called by the node
+    /// that requested the matching
+    /// [`crate::brush::texture_source::ResolvedSource::Live`] slot, from
+    /// its own `flush_dabs`, before the terminal binds. Last write wins,
+    /// so a node re-publishing within one flush replaces its own entry
+    /// rather than accumulating.
+    pub fn publish_live_texture(&mut self, kind: LiveSource, view: wgpu::TextureView) {
+        if let Some(slot) = self.live_textures.iter_mut().find(|(k, _)| *k == kind) {
+            slot.1 = view;
+            return;
+        }
+        self.live_textures.push((kind, view));
+    }
+
+    /// The view published for `kind` this flush, if any. `None` means the
+    /// slot binds `_fallback` — the cursor preview, where no stroke exists
+    /// to publish anything.
+    pub fn live_texture(&self, kind: LiveSource) -> Option<&wgpu::TextureView> {
+        self.live_textures
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map(|(_, v)| v)
     }
 
     /// Union a write-pass footprint into [`Self::write_canvas_bbox`].

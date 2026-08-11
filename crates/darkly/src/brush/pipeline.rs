@@ -1005,18 +1005,12 @@ fn build_cursor_preview_pipeline(
         label: Some("brush-preview-shader"),
         source: wgpu::ShaderSource::Wgsl(compiled.cursor_preview_wgsl.clone().into()),
     });
-    // `@group(3)` texture names for the preview pipeline. A brush that
-    // samples the frozen `clone_source` snapshot (`samples_source`) has
-    // no live snapshot at hover, so the source slot is filled with the
-    // registry `_fallback` tile — the shader body samples it and the
-    // cursor thumbnail comes out neutral. Named graph textures resolve
-    // normally; the source slot sits after them (see `assemble_shader`).
-    let mut preview_sources = compiled.graph_sources.clone();
-    if compiled.samples_source {
-        preview_sources.push(crate::brush::texture_source::ResolvedSource::Named(
-            crate::gpu::texture_registry::FALLBACK_TEXTURE.to_string(),
-        ));
-    }
+    // `@group(3)` texture slots for the preview pipeline. Hover has no
+    // stroke and no dabs, so nothing is published for a live slot and
+    // `make_bind_group` resolves it to the registry `_fallback` tile —
+    // the shader body samples it and the cursor thumbnail comes out
+    // neutral. Named and baked slots resolve normally.
+    let preview_sources = compiled.graph_sources.clone();
 
     // Pipeline layout. When the brush samples graph textures, slot 3
     // holds the registry-resolved bind group; the preview shader
@@ -1119,7 +1113,7 @@ fn build_cursor_preview_pipeline(
         None
     } else {
         let (_layout, bg) =
-            texture_registry.make_bind_group(device, queue, baked_sources, &preview_sources);
+            texture_registry.make_bind_group(device, queue, baked_sources, &preview_sources, &[]);
         // Per-pipeline empty bind group bound at @group(2) (matches
         // the cache's `empty_bgl`). Cheap to create — no GPU
         // resources — and keeps `render` self-contained without

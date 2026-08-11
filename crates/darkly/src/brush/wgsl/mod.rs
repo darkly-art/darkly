@@ -131,22 +131,14 @@ pub struct CompiledBrush {
     pub brush_extent_extra_px: f32,
     /// The `@group(3)` texture slots this graph requests, in
     /// `@binding(1+N)` order. Each is a [`crate::brush::texture_source::ResolvedSource`]
-    /// — a named registry texture (`image`) or a baked procedural tile
-    /// (`noise`). Empty for graphs without graph-texture nodes. Resolved
-    /// at pipeline-build time (named → `TextureRegistry`, baked → the
-    /// bake cache); deduplicated by the compiler so two nodes sampling
-    /// the same texture or baking the same field share one binding.
+    /// — a named registry texture (`image`), a baked procedural tile
+    /// (`noise`), or a live per-flush texture (`clone_source`'s stroke
+    /// snapshot, `pickup`'s atlas). Empty for graphs without
+    /// graph-texture nodes. Named and baked slots resolve at
+    /// pipeline-build time; live slots resolve at bind time from whatever
+    /// their producing node published this flush. Deduplicated by the
+    /// compiler so two nodes requesting the same source share one binding.
     pub graph_sources: Vec<crate::brush::texture_source::ResolvedSource>,
-    /// `true` when a node in this graph (`clone_source`) requested the
-    /// frozen pre-stroke source snapshot via
-    /// [`CompileWgslCtx::request_source_texture`]. Drives three
-    /// consumers off one derived fact: `paint`'s `flush_dabs` binds the
-    /// snapshot at `@group(3)`, the engine skips creating a stroke with
-    /// no source set, and the frontend arms the set-source gesture. Both
-    /// shaders declare the source binding in both modes; the neutral
-    /// preview body never samples it (the preview pipeline binds the
-    /// registry `_fallback` tile to that unread slot).
-    pub samples_source: bool,
 }
 
 impl std::fmt::Debug for CompiledBrush {
@@ -248,31 +240,23 @@ pub fn compile_brush_to_wgsl(
     // these — the preview body doesn't sample scratch / atlas.
     let mut terminal_bindings = String::new();
 
-    // Graph-texture names contributed by `image`-style nodes, in the
-    // order each new name was first requested. Each node mutates
-    // this through `CompileWgslCtx::request_texture`; sharing the
-    // accumulator across the walk gives stable, dedup'd slot indices
-    // so two nodes sampling the same paper share a binding.
+    // `@group(3)` slots contributed by `image` / `noise` / live-texture
+    // nodes, in the order each distinct source was first requested. Each
+    // node mutates this through `CompileWgslCtx::request_texture` /
+    // `request_live_texture`; sharing the accumulator across the walk
+    // gives stable, dedup'd slot indices so two nodes sampling the same
+    // paper share a binding.
+    //
+    // The preview walk shares this same accumulator, which is what makes
+    // `graph_tex_N` mean the same slot in both compiled variants —
+    // `assemble_shader` declares the bindings once from this list for
+    // both. Requests dedup by value, so a preview body that re-requests
+    // a source its stroke body already asked for lands on the same index
+    // rather than allocating a second slot, and a node whose preview body
+    // declines to sample (e.g. `clone_source`'s neutral fill) simply
+    // leaves the declared slot unread.
     let graph_sources_cell: std::cell::RefCell<Vec<crate::brush::texture_source::ResolvedSource>> =
         std::cell::RefCell::new(Vec::new());
-
-    // Flagged by `clone_source` through `CompileWgslCtx::request_source_texture`
-    // during the walk; read out onto `CompiledBrush::samples_source` after.
-    let samples_source_cell: std::cell::RefCell<bool> = std::cell::RefCell::new(false);
-
-    // Throwaway allocation cells for the preview recompile. The preview
-    // pass runs `compile_cursor_preview_body` for every step against these
-    // cells and consumes only the emitted `body`; the binding/uniform/dab
-    // layout comes solely from the stroke cells above. Walk order is
-    // identical, so a preview body that samples `graph_tex_N` resolves to
-    // the same slot the stroke pass declared. Isolating the accounting is
-    // what keeps a preview body that re-requests a texture (e.g. `image`'s
-    // default preview, which delegates to `compile_wgsl`) from
-    // double-counting into the stroke layout.
-    let preview_graph_sources_cell: std::cell::RefCell<
-        Vec<crate::brush::texture_source::ResolvedSource>,
-    > = std::cell::RefCell::new(Vec::new());
-    let preview_samples_source_cell: std::cell::RefCell<bool> = std::cell::RefCell::new(false);
 
     // Track each output port's emitted expression so downstream nodes
     // can substitute.
@@ -375,7 +359,6 @@ pub fn compile_brush_to_wgsl(
             lut: lut.as_ref(),
             consumed_outputs,
             graph_sources: &graph_sources_cell,
-            samples_source: &samples_source_cell,
         };
 
         let result =
@@ -437,8 +420,7 @@ pub fn compile_brush_to_wgsl(
                 inputs: preview_inputs,
                 lut: lut.as_ref(),
                 consumed_outputs: preview_consumed,
-                graph_sources: &preview_graph_sources_cell,
-                samples_source: &preview_samples_source_cell,
+                graph_sources: &graph_sources_cell,
             };
             let preview_result = evaluator
                 .compile_cursor_preview_body(&preview_cctx)
@@ -507,44 +489,6 @@ pub fn compile_brush_to_wgsl(
     let stroke_body = format!("{shared_body}{stroke_terminal_body}");
     let preview_body = format!("{preview_shared_body}{preview_terminal_body}");
     let graph_sources = graph_sources_cell.into_inner();
-    let samples_source = samples_source_cell.into_inner();
-    // The preview cells only exist to give preview bodies correct slot
-    // numbering during the walk; the stroke pass owns the actual layout
-    // (Approach A — the preview shader declares the same `@group(3)`
-    // bindings the stroke shader does, per `assemble_shader` below). In a
-    // correct compile they mirror the stroke cells exactly.
-    let preview_graph_sources = preview_graph_sources_cell.into_inner();
-    debug_assert_eq!(
-        preview_graph_sources.len(),
-        graph_sources.len(),
-        "preview graph-texture allocation diverged from the stroke pass",
-    );
-    let _ = preview_graph_sources;
-    let _ = preview_samples_source_cell.into_inner();
-    // A source-sampling node (`clone_source`) owns `@group(3)` for the
-    // frozen pre-stroke snapshot, the same slot named graph textures and
-    // terminal-owned bindings use. Reject either combination now so the
-    // failure mode is "brush won't load" rather than a runtime binding
-    // mismatch; today `clone.yaml` uses neither, and the slot the source
-    // reserves is always 0.
-    if samples_source && !graph_sources.is_empty() {
-        return Err(CompileError::NodeNotCompilable {
-            type_id: "clone_source".into(),
-            reason: format!(
-                "graph combines a source-sampling node with `image` graph textures \
-                 ({}); this combination is not yet supported",
-                source_labels(&graph_sources)
-            ),
-        });
-    }
-    if samples_source && !terminal_bindings.is_empty() {
-        return Err(CompileError::NodeNotCompilable {
-            type_id: "clone_source".into(),
-            reason: "graph combines a source-sampling node with a terminal that owns \
-                     @group(3) bindings; this combination is not yet supported"
-                .into(),
-        });
-    }
     // `@group(3)` collision check. Terminal `terminal_bindings`
     // (e.g. watercolor's pickup atlas) and the `image` node's
     // graph textures both target group 3 — the highest slot WebGPU's
@@ -572,7 +516,6 @@ pub fn compile_brush_to_wgsl(
         &stroke_body,
         &terminal_bindings,
         &graph_sources,
-        samples_source,
     );
     let cursor_preview_wgsl = assemble_shader(
         ShaderMode::CursorPreview,
@@ -582,7 +525,6 @@ pub fn compile_brush_to_wgsl(
         &preview_body,
         "",
         &graph_sources,
-        samples_source,
     );
 
     // Topology hash: stable across runs (uses DefaultHasher; if process
@@ -603,7 +545,6 @@ pub fn compile_brush_to_wgsl(
         brush_extent_factor,
         brush_extent_extra_px,
         graph_sources,
-        samples_source,
     })
 }
 
@@ -898,7 +839,6 @@ fn assemble_shader(
     fs_body: &str,
     terminal_bindings: &str,
     graph_sources: &[crate::brush::texture_source::ResolvedSource],
-    samples_source: bool,
 ) -> String {
     let mut out = String::new();
     // Shared canvas-window helpers (plane_to_selection_uv) — WGSL has no
@@ -968,29 +908,20 @@ fn assemble_shader(
     // rejects graphs that try to claim both — see the early-return
     // check in [`compile_brush_to_wgsl`].
     //
-    // The frozen `clone_source` snapshot (`samples_source`) shares
-    // group 3, bound at the slot after any named textures. It is
-    // declared in *both* modes — the `clone_source` body is a single
-    // non-terminal contribution shared by the stroke and preview
-    // skeletons, so the binding must exist wherever that body samples.
-    // The stroke pipeline binds the live per-stroke snapshot; the
-    // preview pipeline binds the registry's `_fallback` tile (hover has
-    // no snapshot), giving a neutral cursor thumbnail.
-    let source_slot = graph_sources.len();
-    if !graph_sources.is_empty() || samples_source {
+    // Live slots (`clone_source`'s snapshot, `pickup`'s atlas) are
+    // ordinary entries in this list — they differ only in *when* the view
+    // is resolved, not in how the binding is emitted. They are declared in
+    // *both* modes, because a non-terminal node's body is shared by the
+    // stroke and preview skeletons and the binding must exist wherever
+    // that body samples. With no stroke, nothing is published and the
+    // preview binds `_fallback`, giving a neutral cursor thumbnail.
+    if !graph_sources.is_empty() {
         out.push_str("@group(3) @binding(0) var graph_smp: sampler;\n");
         for (i, _) in graph_sources.iter().enumerate() {
             out.push_str(&format!(
                 "@group(3) @binding({}) var graph_tex_{}: texture_2d<f32>;\n",
                 1 + i,
                 i
-            ));
-        }
-        if samples_source {
-            out.push_str(&format!(
-                "@group(3) @binding({}) var graph_tex_{}: texture_2d<f32>;\n",
-                1 + source_slot,
-                source_slot
             ));
         }
     }

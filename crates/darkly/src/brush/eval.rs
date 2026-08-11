@@ -712,7 +712,12 @@ impl BrushGraphRunner {
     /// (has a `clone_source` node requesting the `@group(3)` snapshot).
     /// Drives the engine's no-op gate and the frontend's gesture arming.
     pub fn samples_source(&self) -> bool {
-        self.compiled.as_ref().is_some_and(|c| c.samples_source)
+        use crate::brush::texture_source::{LiveSource, ResolvedSource};
+        self.compiled.as_ref().is_some_and(|c| {
+            c.graph_sources
+                .iter()
+                .any(|s| matches!(s, ResolvedSource::Live(LiveSource::StrokeSnapshot)))
+        })
     }
 
     /// Returns `true` if the graph terminates in a compiled-WGSL
@@ -1052,6 +1057,10 @@ impl BrushGraphRunner {
     /// dispatch before the phase's `submit_final`. Fragment-path
     /// terminals no-op.
     pub fn flush_dabs(&mut self, gpu: &mut BrushGpuContext) {
+        // Live `@group(3)` slots are republished by their owning nodes
+        // during this dispatch; clearing first keeps a stale view from a
+        // previous flush from being bound if its producer drops out.
+        gpu.dab_batch.live_textures.clear();
         self.dispatch_lifecycle(gpu, false, |_id, ev, ctx, gpu| ev.flush_dabs(ctx, gpu));
     }
 

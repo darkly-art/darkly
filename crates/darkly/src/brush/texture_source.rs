@@ -13,15 +13,21 @@
 //!   parameters (the `noise` node, when its field is static). Baking turns an
 //!   ~80-hash per-fragment fBm kernel — re-run per canvas pixel per
 //!   overlapping dab — into a single `textureSample`.
+//! - [`ResolvedSource::Live`] — a texture the requesting node republishes
+//!   every flush (`clone_source`'s stroke snapshot, `pickup`'s per-dab
+//!   atlas). Resolved at bind time from the live table, so the slot
+//!   survives the texture being reallocated mid-stroke, and falls back to
+//!   `_fallback` when nothing has been published — which is what makes the
+//!   cursor preview neutral without a special case.
 //!
-//! Both converge on the identical emission; the only divergence is a two-arm
-//! match at the single bind point (`make_bind_group`). This is data only — no
-//! trait, no registry. When a *third* bakeable field lands (e.g. a procedural
-//! paper/hatch source), promote [`BakeKind`] to a `Bakeable` trait with
-//! per-variant files, mirroring `gpu/veils/*`; two arms in one function is not
-//! yet a subsystem.
+//! All three converge on the identical emission; the only divergence is a
+//! three-arm match at the single bind point (`make_bind_group`). This is data
+//! only — no trait, no registry. When a *third* bakeable field lands (e.g. a
+//! procedural paper/hatch source), promote [`BakeKind`] to a `Bakeable` trait
+//! with per-variant files, mirroring `gpu/veils/*`; the arms here are one
+//! expression each and are not yet a subsystem.
 
-/// How a `@group(3)` slot resolves to a bound texture at build time.
+/// How a `@group(3)` slot resolves to a bound texture.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ResolvedSource {
     /// A texture already in the registry, by name (the `image` node).
@@ -29,6 +35,10 @@ pub enum ResolvedSource {
     /// A procedural tile to bake-or-reuse, keyed by field-defining
     /// parameters (the `noise` node, static-field path).
     Baked(BakeSpec),
+    /// A texture the requesting node republishes every flush. Resolved at
+    /// bind time from the live table rather than at pipeline-build time,
+    /// so the slot survives the texture being reallocated mid-stroke.
+    Live(LiveSource),
 }
 
 impl ResolvedSource {
@@ -38,6 +48,46 @@ impl ResolvedSource {
         match self {
             ResolvedSource::Named(name) => name.clone(),
             ResolvedSource::Baked(spec) => format!("<baked {}>", spec.kind.label()),
+            ResolvedSource::Live(live) => format!("<live {}>", live.label()),
+        }
+    }
+
+    /// Whether this slot is republished per flush. A brush with any live
+    /// slot cannot cache its `@group(3)` bind group on the pipeline.
+    pub fn is_live(&self) -> bool {
+        matches!(self, ResolvedSource::Live(_))
+    }
+}
+
+/// A `@group(3)` texture supplied fresh once per flush by the node that
+/// requested it, rather than resolved against the registry or the bake
+/// cache at pipeline-build time.
+///
+/// Each producer publishes its view through
+/// [`crate::brush::gpu_context::BrushGpuContext::publish_live_texture`]
+/// during its own `flush_dabs`, which the runner dispatches in topological
+/// order — so a producer upstream of the terminal has always published by
+/// the time the terminal binds. A slot with nothing published falls back to
+/// the registry's `_fallback` tile, which is what makes the cursor preview
+/// (no stroke, no dabs, nothing published) render neutrally with no
+/// special-casing in the preview pipeline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LiveSource {
+    /// The stroke's frozen source snapshot — the cross-layer / merged
+    /// snapshot when one was captured, else the pre-stroke snapshot
+    /// (same-layer clone). Published by `clone_source`.
+    StrokeSnapshot,
+    /// The per-dab pickup atlas: one texel per dab holding the
+    /// neighbourhood average of the dry canvas under it. Published by
+    /// `pickup`, which renders it in its own `flush_dabs`.
+    PickupAtlas,
+}
+
+impl LiveSource {
+    fn label(&self) -> &'static str {
+        match self {
+            LiveSource::StrokeSnapshot => "stroke snapshot",
+            LiveSource::PickupAtlas => "pickup atlas",
         }
     }
 }

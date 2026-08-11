@@ -552,3 +552,55 @@ fn watercolor_builds_up_on_transparent_canvas() {
         "a pure red brush must stay red, not grey out: 6 flushes {after_6:?}",
     );
 }
+
+/// A mark must depend only on where the dabs are, never on how they were
+/// batched into `flush_dabs` calls.
+///
+/// Flush boundaries fall on pen events, so a grouping-dependent mark bands
+/// at whatever spatial period the pen happened to report at — light patches
+/// close together in a slow stroke, far apart in a fast one, and neither
+/// under the artist's control. This is the regression test for that
+/// banding: a straight run of dabs rendered as 1, 6, 3 and 1 flushes must
+/// produce the same flat profile every time.
+#[test]
+fn watercolor_mark_is_invariant_to_flush_grouping() {
+    const RADIUS: f32 = 7.68; // size 0.03 × 256
+    let spacing = 0.1 * 2.0 * RADIUS;
+    let black = solid_canvas([0, 0, 0, 255]);
+
+    let dabs: Vec<(f32, f32)> = (0..59)
+        .map(|i| (20.0 + i as f32 * spacing, 64.0))
+        .collect();
+
+    let mut means: Vec<f32> = Vec::new();
+    for k in [1usize, 10, 20, 59] {
+        let chunks: Vec<&[(f32, f32)]> = dabs.chunks(k).collect();
+        let groups: Vec<FlushGroup<'_>> = chunks.iter().map(|c| group(c)).collect();
+        let rgba = render_flush_groups(
+            "Smooth Watercolor",
+            0.03,
+            [1.0, 1.0, 1.0, 1.0],
+            &groups,
+            &black,
+        );
+        // Sample the stroke interior only — the caps taper by construction.
+        let profile: Vec<u8> = (25..105).map(|x| pixel(&rgba, x, 64)[0]).collect();
+        let lo = *profile.iter().min().unwrap();
+        let hi = *profile.iter().max().unwrap();
+        assert!(
+            hi - lo <= 4,
+            "mark must be flat along a straight run, but with {k} dab(s) per flush it \
+             varies {lo}..{hi} — that spread is per-flush banding: {profile:?}",
+        );
+        means.push(profile.iter().map(|&v| v as f32).sum::<f32>() / profile.len() as f32);
+    }
+
+    let lo = means.iter().cloned().fold(f32::INFINITY, f32::min);
+    let hi = means.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        hi - lo <= 4.0,
+        "the same dabs must mark the same regardless of flush grouping, but the mean \
+         differs by {:.1} across groupings (1/10/20/59 dabs per flush): {means:?}",
+        hi - lo,
+    );
+}

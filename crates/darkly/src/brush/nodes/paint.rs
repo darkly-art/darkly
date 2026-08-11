@@ -119,11 +119,11 @@ impl PerBrushPipeline {
         // The compile walk rejects graphs that combine an `image`
         // node with a terminal that also claims @group(3) (e.g.
         // watercolor's pickup atlas).
-        // `@group(3)` texture count = named `image` textures + one for
-        // the `clone_source` frozen snapshot, when present. `samples_source`
-        // brushes carry no named textures today (the compiler rejects the
-        // combination), so the source sits at slot 0.
-        let graph_tex_count = compiled.graph_sources.len() + usize::from(compiled.samples_source);
+        // `@group(3)` texture count — every slot the graph requested,
+        // whatever kind. Live slots (`clone_source`'s snapshot, `pickup`'s
+        // atlas) occupy a binding exactly like a named texture; only the
+        // moment their view resolves differs.
+        let graph_tex_count = compiled.graph_sources.len();
         let graph_layout = if graph_tex_count == 0 {
             None
         } else {
@@ -256,12 +256,14 @@ impl PerBrushPipeline {
         // texture so the pipeline always builds — surfaces a
         // `log::warn` instead of crashing while the user types in
         // the node editor.
-        // The `clone_source` snapshot is per-stroke, so its bind group is
-        // built fresh each `flush_dabs` (from the live snapshot view) and
-        // is `None` here. Static named textures (paper grain) build once
-        // and cache.
+        // A graph with any live slot rebuilds its bind group every
+        // `flush_dabs` from whatever the producing nodes published, so
+        // there is nothing to cache here. Wholly static graphs (named
+        // textures, baked tiles) build once.
         let graph_textures_bind_group =
-            if compiled.samples_source || compiled.graph_sources.is_empty() {
+            if compiled.graph_sources.iter().any(|s| s.is_live())
+                || compiled.graph_sources.is_empty()
+            {
                 None
             } else {
                 let (_layout, bg) = ctx.texture_registry.make_bind_group(
@@ -269,6 +271,7 @@ impl PerBrushPipeline {
                     ctx.queue,
                     ctx.baked_sources,
                     &compiled.graph_sources,
+                    &[],
                 );
                 Some(bg)
             };
@@ -540,34 +543,43 @@ impl BrushNodeEvaluator for PaintEvaluator {
             .expect("paint::flush_dabs requires dab_batch.slot_outputs");
         pack_uniforms(&compiled, outputs, &mut uniform_bytes);
 
-        // `clone_source` brushes bind the stroke's frozen source snapshot
-        // at `@group(3)` — the cross-layer / merged snapshot when one was
-        // captured, else the pre-stroke snapshot (same-layer clone). A
-        // per-stroke resource, so the bind group is built here each flush
-        // rather than cached on the pipeline. The layout matches
-        // `layout_for_count(1)` (shared sampler + one texture); the
-        // compiler guarantees a source-sampling brush has no named graph
-        // textures, so the source is the sole slot-0 texture.
-        let source_bind_group = if compiled.samples_source {
-            let reg = gpu.pipelines.texture_registry();
-            let view = stroke
+        // `@group(3)` for graphs with a live slot: rebuilt here each flush
+        // from the views the producing nodes published during their own
+        // `flush_dabs` (the runner dispatches those first, in topological
+        // order). `clone_source` publishes the stroke snapshot; `pickup`
+        // publishes its atlas. An unpublished slot resolves to `_fallback`
+        // inside `make_bind_group`.
+        let live_bind_group = if compiled.graph_sources.iter().any(|s| s.is_live()) {
+            // The stroke snapshot is a *stroke* resource, so the terminal
+            // that owns the stroke publishes it; node-owned live textures
+            // (the `pickup` atlas) are already in the table, published by
+            // their nodes earlier in this same topological dispatch. Both
+            // then resolve through one uniform lookup below.
+            let snapshot = stroke
                 .source_texture()
                 .create_view(&wgpu::TextureViewDescriptor::default());
-            let layout = reg.layout_for_count(gpu.device, 1);
-            Some(gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("paint-clone-source-bg"),
-                layout: &layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::Sampler(reg.sampler()),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                ],
-            }))
+            gpu.dab_batch.publish_live_texture(
+                crate::brush::texture_source::LiveSource::StrokeSnapshot,
+                snapshot,
+            );
+            let published: Vec<Option<&wgpu::TextureView>> = compiled
+                .graph_sources
+                .iter()
+                .map(|s| match s {
+                    crate::brush::texture_source::ResolvedSource::Live(kind) => {
+                        gpu.dab_batch.live_texture(*kind)
+                    }
+                    _ => None,
+                })
+                .collect();
+            let (_layout, bg) = gpu.pipelines.texture_registry().make_bind_group(
+                gpu.device,
+                gpu.queue,
+                gpu.pipelines.baked_sources(),
+                &compiled.graph_sources,
+                &published,
+            );
+            Some(bg)
         } else {
             None
         };
@@ -617,12 +629,13 @@ impl BrushNodeEvaluator for PaintEvaluator {
             pass.set_bind_group(0, &per_brush.uniform_bind_group, &[uniform_offset]);
             pass.set_bind_group(1, &per_brush.dabs_bind_group, &[]);
             pass.set_bind_group(2, gpu.selection_bind_group, &[]);
-            // `@group(3)` holds the brush's graph textures (paper grain
-            // etc.) when any are requested, or the `clone_source` frozen
-            // snapshot for source-sampling brushes. Paint never uses
-            // group 3 for anything else.
-            if let Some(source_bg) = source_bind_group.as_ref() {
-                pass.set_bind_group(3, source_bg, &[]);
+            // `@group(3)` holds the brush's graph textures — paper grain,
+            // baked noise, the `clone_source` snapshot, the `pickup`
+            // atlas. Graphs with a live slot bind the group assembled
+            // above; wholly static ones bind the pipeline's cached group.
+            // Paint never uses group 3 for anything else.
+            if let Some(live_bg) = live_bind_group.as_ref() {
+                pass.set_bind_group(3, live_bg, &[]);
             } else if let Some(graph_bg) = per_brush.graph_textures_bind_group.as_ref() {
                 pass.set_bind_group(3, graph_bg, &[]);
             }
