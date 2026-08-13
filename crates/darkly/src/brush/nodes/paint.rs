@@ -260,21 +260,20 @@ impl PerBrushPipeline {
         // `flush_dabs` from whatever the producing nodes published, so
         // there is nothing to cache here. Wholly static graphs (named
         // textures, baked tiles) build once.
-        let graph_textures_bind_group =
-            if compiled.graph_sources.iter().any(|s| s.is_live())
-                || compiled.graph_sources.is_empty()
-            {
-                None
-            } else {
-                let (_layout, bg) = ctx.texture_registry.make_bind_group(
-                    ctx.device,
-                    ctx.queue,
-                    ctx.baked_sources,
-                    &compiled.graph_sources,
-                    &[],
-                );
-                Some(bg)
-            };
+        let graph_textures_bind_group = if compiled.graph_sources.iter().any(|s| s.is_live())
+            || compiled.graph_sources.is_empty()
+        {
+            None
+        } else {
+            let (_layout, bg) = ctx.texture_registry.make_bind_group(
+                ctx.device,
+                ctx.queue,
+                ctx.baked_sources,
+                &compiled.graph_sources,
+                &[],
+            );
+            Some(bg)
+        };
 
         Self {
             paint_pipeline,

@@ -568,9 +568,7 @@ fn watercolor_mark_is_invariant_to_flush_grouping() {
     let spacing = 0.1 * 2.0 * RADIUS;
     let black = solid_canvas([0, 0, 0, 255]);
 
-    let dabs: Vec<(f32, f32)> = (0..59)
-        .map(|i| (20.0 + i as f32 * spacing, 64.0))
-        .collect();
+    let dabs: Vec<(f32, f32)> = (0..59).map(|i| (20.0 + i as f32 * spacing, 64.0)).collect();
 
     let mut means: Vec<f32> = Vec::new();
     for k in [1usize, 10, 20, 59] {

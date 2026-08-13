@@ -51,6 +51,7 @@ use crate::brush::paint_target_ext::BrushPaintTargetExt;
 use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
+use crate::brush::scratch::StrokeChannel;
 use crate::brush::wgsl::{
     pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, NodeWgsl, WgslType,
     INTRINSIC_UNIFORMS_SIZE,
@@ -76,6 +77,50 @@ const _: () = assert!(
 );
 
 const MAX_UNIFORM_BYTES: usize = 1024;
+
+/// How much pigment this stroke has delivered to each texel, in `[0, 1]`.
+///
+/// The scratch's own alpha is *coverage* — what the mark looks like — and
+/// saturates almost immediately, which is why a dwelling mark used to stop
+/// changing: every dab after the first few was compositing a fixed colour
+/// under an alpha that had nowhere left to go. Deposit is the other
+/// quantity: it starts at zero, each dab folds its own delivery rate in
+/// under source-over, and the dab's *colour* is a function of it. A texel
+/// that has been visited once sits near the canvas colour; one that has
+/// been dwelt on sits at the pigment.
+///
+/// Source-over accumulation gives `1 − Π(1−rᵢ)` over the dabs that touched
+/// the texel. Being a product it has no memory of how it was parenthesised,
+/// so the value is unchanged by how dabs were grouped into pointer events
+/// or by a checkpoint replay re-deriving them in different batches.
+const DEPOSIT_CHANNEL: StrokeChannel = StrokeChannel {
+    name: "deposit",
+    format: wgpu::TextureFormat::R8Unorm,
+    blend: wgpu::BlendState {
+        color: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        },
+    },
+};
+
+/// Per-dab CPU meta: the dab's layer-local footprint, so the composite
+/// loop can refresh the deposit mirror over exactly what the previous dab
+/// wrote before this one reads it.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct DabRect {
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+}
 
 // ── Pickup uniforms ─────────────────────────────────────────────────────
 
@@ -118,11 +163,16 @@ struct PerBrushPipeline {
     dabs_buffer: wgpu::Buffer,
     dabs_bind_group_pickup: wgpu::BindGroup,
     dabs_bind_group_composite: wgpu::BindGroup,
-    /// Pickup atlas texture + the bind group the composite shader reads
-    /// at `@group(3)`.
+    /// Pickup atlas texture and its two views — one to render into, one
+    /// for the composite shader to sample at `@group(3)`.
     _atlas_texture: wgpu::Texture,
     atlas_attachment_view: wgpu::TextureView,
-    atlas_bind_group: wgpu::BindGroup,
+    atlas_sample_view: wgpu::TextureView,
+    /// Layout for `@group(3)`. Held rather than a prebuilt bind group
+    /// because the deposit mirror in it is reallocated whenever the layer
+    /// grows, so the group is rebuilt each flush.
+    composite_group3_bgl: wgpu::BindGroupLayout,
+    canvas_copy_sampler: wgpu::Sampler,
 }
 
 impl PerBrushPipeline {
@@ -161,7 +211,48 @@ impl PerBrushPipeline {
                 }],
             });
 
-        // ── Composite pipeline layout: group(0..3) standard, group(3) atlas ──
+        // ── Composite `@group(3)`: the pickup atlas plus the deposit
+        // mirror. Both are terminal-private reads, and WebGPU's default
+        // `max_bind_groups = 4` leaves no slot 4 to put the second one in,
+        // so they share the group rather than the atlas reusing
+        // `canvas_copy_bgl`. The mirror is read with `textureLoad`, so it
+        // needs no sampler and imposes no filterability constraint on the
+        // channel format.
+        let composite_group3_bgl =
+            ctx.device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("watercolor-composite-group3-bgl"),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                    ],
+                });
+
+        // ── Composite pipeline layout: group(0..2) standard, group(3) as above ──
         let composite_layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -170,7 +261,7 @@ impl PerBrushPipeline {
                     Some(ctx.uniform_bgl),
                     Some(&dabs_bgl),
                     Some(ctx.selection_bgl),
-                    Some(ctx.canvas_copy_bgl), // atlas: same texture+sampler layout
+                    Some(&composite_group3_bgl),
                 ],
                 immediate_size: 0,
             });
@@ -217,11 +308,21 @@ impl PerBrushPipeline {
                     fragment: Some(wgpu::FragmentState {
                         module: &composite_shader,
                         entry_point: Some("fs_main"),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: wgpu::TextureFormat::Rgba8Unorm,
-                            blend: Some(composite_blend),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
+                        // Two targets, in the order the generated `FsOut`
+                        // declares them: the scratch at `@location(0)`,
+                        // the deposit channel at `@location(1)`.
+                        targets: &[
+                            Some(wgpu::ColorTargetState {
+                                format: wgpu::TextureFormat::Rgba8Unorm,
+                                blend: Some(composite_blend),
+                                write_mask: wgpu::ColorWrites::ALL,
+                            }),
+                            Some(wgpu::ColorTargetState {
+                                format: DEPOSIT_CHANNEL.format,
+                                blend: Some(DEPOSIT_CHANNEL.blend),
+                                write_mask: wgpu::ColorWrites::ALL,
+                            }),
+                        ],
                         compilation_options: Default::default(),
                     }),
                     primitive: wgpu::PrimitiveState {
@@ -352,20 +453,6 @@ impl PerBrushPipeline {
         let atlas_attachment_view =
             atlas_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let atlas_sample_view = atlas_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let atlas_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("watercolor-atlas-bg"),
-            layout: ctx.canvas_copy_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&atlas_sample_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(ctx.canvas_copy_sampler),
-                },
-            ],
-        });
 
         let _ = dab_record_size;
 
@@ -382,7 +469,9 @@ impl PerBrushPipeline {
             dabs_bind_group_composite,
             _atlas_texture: atlas_texture,
             atlas_attachment_view,
-            atlas_bind_group,
+            atlas_sample_view,
+            composite_group3_bgl,
+            canvas_copy_sampler: ctx.canvas_copy_sampler.clone(),
         }
     }
 }
@@ -720,6 +809,14 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
 
         gpu.dab_batch
             .queue_dab(&compiled, position, bbox_radius, radius);
+        gpu.dab_batch
+            .meta_bytes
+            .extend_from_slice(bytemuck::bytes_of(&DabRect {
+                x0: local.x0(),
+                y0: local.y0(),
+                x1: local.x1(),
+                y1: local.y1(),
+            }));
 
         vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))]
     }
@@ -737,9 +834,16 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         let union_w = bbox[2].saturating_sub(bbox[0]);
         let union_h = bbox[3].saturating_sub(bbox[1]);
         let (dab_bytes, total_dabs) = gpu.dab_batch.take();
+        let meta_bytes = gpu.dab_batch.take_meta();
         if total_dabs == 0 {
             return;
         }
+        let rects: Vec<DabRect> = bytemuck::cast_slice(&meta_bytes).to_vec();
+        debug_assert_eq!(
+            rects.len(),
+            total_dabs as usize,
+            "watercolor meta queue out of sync with dab queue",
+        );
         gpu.perf
             .record_dab_flush_workload(total_dabs, union_w, union_h);
 
@@ -755,6 +859,19 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         let pipeline_ref = gpu.pipelines.get::<WatercolorPipeline>("watercolor");
 
         ensure_per_brush_pipeline(gpu, pipeline_ref, &compiled);
+
+        // Allocate the deposit channel, idempotently. A fragment cannot
+        // sample the attachment it blends into, so what a dab reads is a
+        // mirror, refreshed inside the composite loop below.
+        {
+            let device = gpu.device;
+            let Some(stroke) = gpu.stroke.as_mut() else {
+                return;
+            };
+            stroke
+                .scratch
+                .ensure_channels(device, &mut gpu.encoder, &[DEPOSIT_CHANNEL]);
+        }
 
         let stroke = gpu
             .stroke
@@ -821,43 +938,108 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
             gpu.queue
                 .write_buffer(&per_brush.dabs_buffer, 0, &dab_bytes);
 
-            // ── Pass 1: pickup atlas ──
-            {
-                let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("watercolor-pickup"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &per_brush.atlas_attachment_view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    ..Default::default()
-                });
-                pass.set_viewport(0.0, 0.0, ATLAS_WIDTH as f32, ATLAS_HEIGHT as f32, 0.0, 1.0);
-                pass.set_pipeline(&per_brush.pickup_pipeline);
-                pass.set_bind_group(0, &per_brush.pickup_uniform_bind_group, &[pickup_offset]);
-                pass.set_bind_group(1, &per_brush.dabs_bind_group_pickup, &[]);
-                pass.set_bind_group(2, pre_stroke_bg, &[]);
-                pass.set_bind_group(3, scratch.live_canvas_bind_group(), &[]);
-                pass.draw(0..6, 0..total_dabs);
-            }
+            // ── Pickup + composite, one dab at a time ──
+            //
+            // A dab reads two things that earlier dabs wrote: the deposit
+            // under its own footprint, and — through the pickup atlas —
+            // the live scratch around it. Concurrent invocations of one
+            // instanced draw cannot observe each other, so batching either
+            // read would give every dab in the flush the same pre-flush
+            // answer, making the mark a function of how dabs happened to
+            // be grouped into pointer events. That grouping dependence is
+            // the banding in `docs/watercolor.md` §1, whose spatial period
+            // was measured as the pen's travel per pointer event.
+            //
+            // So both passes run per dab. The `copy_texture_to_texture` in
+            // front of each composite carries the implicit barrier that
+            // makes the serialization real, the same way
+            // `read_mirror_terminal` serializes smudge, blur and liquify.
+            // Neither Krita nor GIMP batches when a dab needs feedback
+            // either (`KisColorSmudgeStrategyWithOverlay.cpp:86-106`,
+            // `gimpsmudge.c:510-527`).
+            let deposit_bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("watercolor-composite-group3-bg"),
+                layout: &per_brush.composite_group3_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&per_brush.atlas_sample_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&per_brush.canvas_copy_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(
+                            &scratch.channel_mirror_views()[0],
+                        ),
+                    },
+                ],
+            });
+            let channel_views = scratch.channel_views();
+            let attachments = [
+                Some(wgpu::RenderPassColorAttachment {
+                    view: scratch.write_view(),
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &channel_views[0],
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
+            ];
 
-            // ── Pass 2: composite ──
-            {
+            for (i, rect) in rects.iter().enumerate() {
+                let ii = i as u32;
+
+                // Pickup: this dab's neighbourhood average of the canvas
+                // as it stands *now*, into its own atlas cell. Only cell
+                // `ii` is read by the composite below, so clearing the
+                // atlas each time costs nothing and keeps stale cells from
+                // a previous dab out of reach.
+                {
+                    let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("watercolor-pickup"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &per_brush.atlas_attachment_view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        ..Default::default()
+                    });
+                    pass.set_viewport(0.0, 0.0, ATLAS_WIDTH as f32, ATLAS_HEIGHT as f32, 0.0, 1.0);
+                    pass.set_pipeline(&per_brush.pickup_pipeline);
+                    pass.set_bind_group(0, &per_brush.pickup_uniform_bind_group, &[pickup_offset]);
+                    pass.set_bind_group(1, &per_brush.dabs_bind_group_pickup, &[]);
+                    pass.set_bind_group(2, pre_stroke_bg, &[]);
+                    pass.set_bind_group(3, scratch.live_canvas_bind_group(), &[]);
+                    pass.draw(0..6, ii..ii + 1);
+                }
+
+                scratch.sync_channel_mirrors(
+                    &mut gpu.encoder,
+                    rect.x0,
+                    rect.y0,
+                    rect.x1.saturating_sub(rect.x0),
+                    rect.y1.saturating_sub(rect.y0),
+                );
                 let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("watercolor-composite"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: scratch.write_view(),
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
+                    color_attachments: &attachments,
                     ..Default::default()
                 });
                 pass.set_viewport(
@@ -876,8 +1058,8 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
                 );
                 pass.set_bind_group(1, &per_brush.dabs_bind_group_composite, &[]);
                 pass.set_bind_group(2, gpu.selection_bind_group, &[]);
-                pass.set_bind_group(3, &per_brush.atlas_bind_group, &[]);
-                pass.draw(0..6, 0..total_dabs);
+                pass.set_bind_group(3, &deposit_bind_group, &[]);
+                pass.draw(0..6, ii..ii + 1);
             }
         });
 
@@ -935,8 +1117,10 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         let deposit_expr = cctx.input("deposit").as_f32();
         let wetness_expr = cctx.input("wetness").as_f32();
 
+        wgsl.terminal_outputs = vec![DEPOSIT_CHANNEL.name.to_string()];
         wgsl.terminal_bindings = "@group(3) @binding(0) var atlas_tex: texture_2d<f32>;\n\
-             @group(3) @binding(1) var atlas_smp: sampler;\n"
+             @group(3) @binding(1) var atlas_smp: sampler;\n\
+             @group(3) @binding(2) var deposit_tex: texture_2d<f32>;\n"
             .to_string();
         // Atlas dimensions are baked into the shader — the per-brush
         // pipeline owns its own 128×128 atlas, so embedding the
@@ -961,10 +1145,20 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
              \x20   let pickup = textureSampleLevel(atlas_tex, atlas_smp, atlas_uv, 0.0);\n\
              \x20   let has_canvas = pickup.a > 0.05;\n\
              \x20   let canvas_rgb = select(fg_color.rgb, pickup.rgb, has_canvas);\n\
-             \x20   let load_rgb = mix(canvas_rgb, fg_color.rgb, deposit);\n\
-             \x20   let load_alpha = mix(pickup.a, fg_color.a, deposit);\n\
+             \x20   let layer_px = vec2<i32>(target_pos - vec2<f32>(\n\
+             \x20       f32(u.intrinsic.layer_offset.x),\n\
+             \x20       f32(u.intrinsic.layer_offset.y),\n\
+             \x20   ));\n\
+             \x20   let prior = textureLoad(deposit_tex, layer_px, 0).r;\n\
+             \x20   let rate = mask * sel * flow * deposit;\n\
+             \x20   let laid = prior + (1.0 - prior) * rate;\n\
+             \x20   let load_rgb = mix(canvas_rgb, fg_color.rgb, laid);\n\
+             \x20   let load_alpha = mix(pickup.a, fg_color.a, laid);\n\
              \x20   let fg_a = mask * sel * wetness * load_alpha;\n\
-             \x20   return vec4<f32>(load_rgb * fg_a, fg_a);\n",
+             \x20   return FsOut(\n\
+             \x20       vec4<f32>(load_rgb * fg_a, fg_a),\n\
+             \x20       vec4<f32>(rate, 0.0, 0.0, rate),\n\
+             \x20   );\n",
             atlas_w = ATLAS_WIDTH,
             atlas_h = ATLAS_HEIGHT,
         );

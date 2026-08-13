@@ -1194,9 +1194,15 @@ impl DarklyEngine {
                     texture: stroke_buffer.scratch().write_texture(),
                     canvas_extent: paint_target.canvas_frame().canvas_extent,
                 };
+                // Stroke channels rewind with the scratch. A channel left
+                // holding contributions from dabs this rewind discarded
+                // would feed those values back to the dabs replayed over
+                // the same pixels.
+                let channels: Vec<&wgpu::Texture> =
+                    stroke_buffer.scratch().channel_textures().iter().collect();
                 let restore = self.gpu.encode_ret("stroke-checkpoint-restore", |encoder| {
                     self.checkpoint_ring
-                        .restore_before(encoder, &stroke_frame, div_idx)
+                        .restore_before(encoder, &stroke_frame, &channels, div_idx)
                 });
                 self.brush_perf.submits = self.brush_perf.submits.saturating_add(1);
 
@@ -1259,11 +1265,14 @@ impl DarklyEngine {
                             texture: stroke_buffer.scratch().write_texture(),
                             canvas_extent: paint_target.canvas_frame().canvas_extent,
                         };
+                        let channels: Vec<&wgpu::Texture> =
+                            stroke_buffer.scratch().channel_textures().iter().collect();
                         self.gpu.encode("checkpoint-save", |encoder| {
                             self.checkpoint_ring.save(
                                 &self.gpu.device,
                                 encoder,
                                 &stroke_frame,
+                                &channels,
                                 sp_idx,
                                 boundary,
                                 bbox,
@@ -1304,11 +1313,14 @@ impl DarklyEngine {
                             texture: stroke_buffer.scratch().write_texture(),
                             canvas_extent: paint_target.canvas_frame().canvas_extent,
                         };
+                        let channels: Vec<&wgpu::Texture> =
+                            stroke_buffer.scratch().channel_textures().iter().collect();
                         self.gpu.encode("checkpoint-save", |encoder| {
                             self.checkpoint_ring.save(
                                 &self.gpu.device,
                                 encoder,
                                 &stroke_frame,
+                                &channels,
                                 sp_idx,
                                 tip_vi,
                                 bbox,

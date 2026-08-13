@@ -169,9 +169,8 @@ impl BrushNodeEvaluator for CloneSourceEvaluator {
             return Ok(wgsl);
         }
 
-        let slot = cctx.request_live_texture(
-            crate::brush::texture_source::LiveSource::StrokeSnapshot,
-        );
+        let slot =
+            cctx.request_live_texture(crate::brush::texture_source::LiveSource::StrokeSnapshot);
 
         // Stroke-constant uniforms, seeded per pen event by the runner
         // from `CloneState` (keyed `n{id}_source_anchor` etc.): the two

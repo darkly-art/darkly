@@ -239,6 +239,7 @@ pub fn compile_brush_to_wgsl(
     // (e.g. `watercolor`'s pickup atlas). Preview mode omits
     // these — the preview body doesn't sample scratch / atlas.
     let mut terminal_bindings = String::new();
+    let mut terminal_outputs: Vec<String> = Vec::new();
 
     // `@group(3)` slots contributed by `image` / `noise` / live-texture
     // nodes, in the order each distinct source was first requested. Each
@@ -448,6 +449,7 @@ pub fn compile_brush_to_wgsl(
             }
             terminal_bindings.push_str(&result.terminal_bindings);
         }
+        terminal_outputs.extend(result.terminal_outputs);
 
         // Register this node's outputs so downstream nodes can resolve
         // their wires.
@@ -515,8 +517,12 @@ pub fn compile_brush_to_wgsl(
         &decls,
         &stroke_body,
         &terminal_bindings,
+        &terminal_outputs,
         &graph_sources,
     );
+    // The preview skeleton writes no accumulators — it renders a cursor
+    // thumbnail, not a stroke — so it keeps the single-output signature
+    // and pairs with `compile_cursor_preview_body`'s plain `vec4<f32>`.
     let cursor_preview_wgsl = assemble_shader(
         ShaderMode::CursorPreview,
         &dab_fields,
@@ -524,6 +530,7 @@ pub fn compile_brush_to_wgsl(
         &decls,
         &preview_body,
         "",
+        &[],
         &graph_sources,
     );
 
@@ -838,6 +845,7 @@ fn assemble_shader(
     node_decls: &str,
     fs_body: &str,
     terminal_bindings: &str,
+    terminal_outputs: &[String],
     graph_sources: &[crate::brush::texture_source::ResolvedSource],
 ) -> String {
     let mut out = String::new();
@@ -946,8 +954,24 @@ fn assemble_shader(
     // differs between modes: stroke samples a real texture, preview
     // hard-codes 1.0 (the full footprint, ignoring any active
     // selection — matches master's preview behavior).
-    out.push_str("@fragment\n");
-    out.push_str("fn fs_main(in: VsOut) -> @location(0) vec4<f32> {\n");
+    // A terminal that accumulates extra per-texel quantities alongside
+    // the scratch writes them as additional colour attachments on this
+    // same draw, so `fs_main` returns a struct instead of a bare vec4.
+    // The terminal's pipeline declares one colour target per output, in
+    // the same order, each with its own blend law.
+    if terminal_outputs.is_empty() {
+        out.push_str("@fragment\n");
+        out.push_str("fn fs_main(in: VsOut) -> @location(0) vec4<f32> {\n");
+    } else {
+        out.push_str("struct FsOut {\n");
+        out.push_str("    @location(0) color: vec4<f32>,\n");
+        for (i, name) in terminal_outputs.iter().enumerate() {
+            out.push_str(&format!("    @location({}) {}: vec4<f32>,\n", i + 1, name));
+        }
+        out.push_str("};\n\n");
+        out.push_str("@fragment\n");
+        out.push_str("fn fs_main(in: VsOut) -> FsOut {\n");
+    }
     out.push_str("    let d = dabs[in.dab_idx];\n");
     // `target_pos` is in the target texture's pixel space — canvas px
     // for stroke (target ≡ canvas), preview-mask texels for preview.

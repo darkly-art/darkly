@@ -57,6 +57,19 @@ pub struct NodeWgsl {
     /// extension scoped to the one node that uses it instead of
     /// extending the `BrushNodeEvaluator` trait surface.
     pub terminal_bindings: String,
+    /// Extra fragment-shader outputs the terminal writes beyond
+    /// `@location(0)`, named in location order starting at 1. A
+    /// non-empty list switches `fs_main` from a bare
+    /// `-> @location(0) vec4<f32>` to a generated `FsOut` struct, and
+    /// the terminal's `body` must then return `FsOut(...)`.
+    ///
+    /// These are the per-texel accumulators a terminal writes alongside
+    /// the stroke scratch in one instanced draw — the blend unit
+    /// accumulates each under its own law, and the terminal's pipeline
+    /// declares a matching colour target per name. Stroke mode only:
+    /// the cursor-preview skeleton has no accumulators to write and
+    /// keeps the single-output signature.
+    pub terminal_outputs: Vec<String>,
 }
 
 // ── Input binding ───────────────────────────────────────────────────────
