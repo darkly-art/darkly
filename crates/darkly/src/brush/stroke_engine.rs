@@ -109,6 +109,16 @@ impl StrokeEngine {
         // see one consistent value.
         runner.set_base_size(base_size);
 
+        // How many dabs land on one texel as the brush passes over it once.
+        // A texel is inside every dab whose centre is within a radius of it,
+        // so that is one diameter of travel divided by the step — at the
+        // default 10% spacing, ten. Terminals accumulating a per-dab
+        // quantity divide their rate by this so the knob means "per pass"
+        // and stops moving when the spacing setting does.
+        let diameter = base_size * DAB_REFERENCE_SIZE as f32;
+        let step = spacing.distance(diameter);
+        runner.set_dabs_per_pass((diameter / step).max(1.0));
+
         let stroke_seed = web_time::SystemTime::now()
             .duration_since(web_time::SystemTime::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u32)

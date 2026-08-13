@@ -478,7 +478,11 @@ impl<'a> BrushGpuContext<'a> {
             cursor_preview_centre: [0.0, 0.0],
             cursor_preview_size: [0, 0],
             view_rotation: self.view_rotation,
-            _pad: [0, 0, 0],
+            // Terminals that normalise a per-dab rate overwrite this from
+            // `EvalContext::dabs_per_pass`; 1.0 leaves the normalisation a
+            // no-op for those that don't.
+            dabs_per_pass: 1.0,
+            _pad: [0, 0],
         }
     }
 
@@ -503,7 +507,11 @@ impl<'a> BrushGpuContext<'a> {
             cursor_preview_centre: centre,
             cursor_preview_size: [target_w, target_h],
             view_rotation: self.view_rotation,
-            _pad: [0, 0, 0],
+            // Terminals that normalise a per-dab rate overwrite this from
+            // `EvalContext::dabs_per_pass`; 1.0 leaves the normalisation a
+            // no-op for those that don't.
+            dabs_per_pass: 1.0,
+            _pad: [0, 0],
         }
     }
 

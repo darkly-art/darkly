@@ -149,11 +149,10 @@ struct PickupUniforms {
     /// `pickup_size / dab.inv_radius_target_px`, valid in stroke mode
     /// where target px ≡ canvas px). Stroke-constant — see the
     /// `pickup_size` port on `watercolor`. Sampling the full
-    /// bbox produced visibly too-large pickup neighborhoods (the bbox
-    /// is shape-extent-inflated, ~1.4× the visible disc for Rough
-    /// Watercolor); a third of the nominal radius matches the
-    /// "smudge from where the brush is now" intuition closer to
-    /// Krita's defaults.
+    /// bbox produced visibly too-large pickup neighborhoods — the bbox is
+    /// shape-extent-inflated, ~1.4× the visible disc for Rough Watercolor
+    /// — so the default sits at half the nominal radius, which keeps the
+    /// colour a dab picks up local to where the brush actually is.
     pickup_size: f32,
     _pad: f32,
 }
@@ -718,17 +717,17 @@ pub fn register() -> BrushNodeRegistration {
                     .exposed()
                     .with_description("Stroke-level opacity cap (applied at commit)"),
                 PortDef::input("deposit", BrushWireType::Scalar)
-                    .with_range(0.0, 1.0, 0.5)
+                    .with_range(0.0, 1.0, 0.25)
                     .with_natural_range(0.0, 1.0)
                     .with_label("Deposit")
                     .with_unit(UnitType::Percent)
                     .with_icon("fa6-solid:circle")
                     .exposed()
                     .with_description(
-                        "Fraction of the remaining distance to the brush color that one dab \
-                         closes. The mark reaches the brush color as 1 − (1 − deposit)ⁿ over n \
-                         dabs, so small values are slow washes and large values are near-opaque \
-                         on contact.",
+                        "Fraction of the remaining distance to the brush color that one pass of \
+                         the brush closes. At 25%, one pass over white paper leaves a quarter of \
+                         the way to the paint, a second pass reaches 44%, a third 58%. \
+                         Independent of spacing and pressure.",
                     ),
                 PortDef::input("wetness", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 0.7)
@@ -742,7 +741,7 @@ pub fn register() -> BrushNodeRegistration {
                          passes to read as solid.",
                     ),
                 PortDef::input("pickup_size", BrushWireType::Scalar)
-                    .with_range(0.0, 2.0, 1.0)
+                    .with_range(0.0, 2.0, 0.5)
                     .with_natural_range(0.0, 2.0)
                     .with_label("Pickup Size")
                     .with_unit(UnitType::Percent)
@@ -909,10 +908,11 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
 
         // Build composite uniforms (intrinsic + node-contributed).
         let mut composite_uniform_bytes: Vec<u8> = Vec::with_capacity(MAX_UNIFORM_BYTES);
-        pack_intrinsic_uniforms(
-            &mut composite_uniform_bytes,
-            gpu.intrinsic_header(layer_offset, layer_size),
-        );
+        let mut intrinsic = gpu.intrinsic_header(layer_offset, layer_size);
+        // The `deposit` knob is a per-*pass* figure; the shader divides it
+        // down to a per-dab rate with this. See the body in `compile_wgsl`.
+        intrinsic.dabs_per_pass = ctx.dabs_per_pass();
+        pack_intrinsic_uniforms(&mut composite_uniform_bytes, intrinsic);
         let outputs = gpu
             .dab_batch
             .slot_outputs
@@ -1159,11 +1159,30 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         // gradient across the stroke comes from consecutive dabs differing
         // by one `deposit` step, which is what makes it look continuous.
         //
-        // The deposit *channel* is still written per fragment, shaped by
-        // `mask`, so the field stays a faithful per-texel history — it is
-        // only the read that collapses to one value. At the centre the two
-        // agree: `mask = 1` there, so the field lands on exactly the `laid`
-        // this dab computed.
+        // **`deposit` is per pass of the brush, not per dab.** An artist
+        // setting 30% means a stroke over black leaves 30% grey, and that
+        // has to hold whatever the spacing is. A dab is not a unit anyone
+        // can see: at the default 10% spacing ten of them land on every
+        // texel, so charging `deposit` once per dab compounds it ten times
+        // and 30% arrives as 87%. Worse, spacing is a fraction of dab
+        // *diameter* and diameter tracks pressure, so the overlap count —
+        // and with it the meaning of the knob — drifts inside a single
+        // stroke.
+        //
+        //     per_dab = 1 − (1 − deposit)^(1/dabs_per_pass)
+        //
+        // inverts that exactly: `dabs_per_pass` of them compose back to
+        // `deposit`, and the result no longer depends on how finely the
+        // stroke was subdivided.
+        //
+        // `rate` deliberately carries no `mask`. The shape's falloff would
+        // make the outer dabs deliver less than `per_dab`, so a pass would
+        // land short of `deposit` by an amount set by the tip's softness —
+        // the knob would drift again, this time per brush. The mark still
+        // gets its soft edge, from `fg_a`; what the channel records is how
+        // many times the brush passed over a texel, which is the quantity
+        // the rate is stated against. Coverage stays in `fg_a`, delivery
+        // stays in `rate`.
         //
         // `flow` scales the delivery rate only, and is not folded into
         // `fg_color.a` as well — one knob, counted once.
@@ -1197,14 +1216,16 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
              \x20       ),\n\
              \x20   ));\n\
              \x20   let prior = textureLoad(deposit_tex, dab_px, 0).r;\n\
-             \x20   let laid = prior + (1.0 - prior) * flow * deposit;\n\
+             \x20   let per_dab = 1.0 - pow(1.0 - deposit,\n\
+             \x20       1.0 / max(u.intrinsic.dabs_per_pass, 1.0));\n\
+             \x20   let rate = sel * flow * per_dab;\n\
+             \x20   let laid = prior + (1.0 - prior) * rate;\n\
              \x20   let load_rgb = mix(canvas_rgb, fg_color.rgb, laid);\n\
              \x20   let load_alpha = mix(pickup.a, fg_color.a, laid);\n\
              \x20   let fg_a = mask * sel * wetness * load_alpha;\n\
              \x20   return FsOut(\n\
              \x20       vec4<f32>(load_rgb * fg_a, fg_a),\n\
-             \x20       vec4<f32>(mask * sel * flow * deposit, 0.0, 0.0,\n\
-             \x20                 mask * sel * flow * deposit),\n\
+             \x20       vec4<f32>(rate, 0.0, 0.0, rate),\n\
              \x20   );\n",
             atlas_w = ATLAS_WIDTH,
             atlas_h = ATLAS_HEIGHT,
