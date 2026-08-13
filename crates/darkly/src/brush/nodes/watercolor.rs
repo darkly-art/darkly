@@ -255,7 +255,7 @@ impl PerBrushPipeline {
                             binding: 2,
                             visibility: wgpu::ShaderStages::FRAGMENT,
                             ty: wgpu::BindingType::Texture {
-                                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
                                 view_dimension: wgpu::TextureViewDimension::D2,
                                 multisampled: false,
                             },
@@ -1207,15 +1207,20 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
              \x20       f32(u.intrinsic.layer_offset.x),\n\
              \x20       f32(u.intrinsic.layer_offset.y),\n\
              \x20   );\n\
-             \x20   let dab_px = vec2<i32>(clamp(\n\
-             \x20       dab_local,\n\
-             \x20       vec2<f32>(0.0, 0.0),\n\
-             \x20       vec2<f32>(\n\
-             \x20           f32(u.intrinsic.layer_size.x) - 1.0,\n\
-             \x20           f32(u.intrinsic.layer_size.y) - 1.0,\n\
-             \x20       ),\n\
-             \x20   ));\n\
-             \x20   let prior = textureLoad(deposit_tex, dab_px, 0).r;\n\
+             \x20   let layer_f = vec2<f32>(\n\
+             \x20       f32(u.intrinsic.layer_size.x),\n\
+             \x20       f32(u.intrinsic.layer_size.y),\n\
+             \x20   );\n\
+             \x20   let dab_r = 1.0 / max(d.inv_radius_target_px, 0.0001);\n\
+             \x20   var dep_sum = 0.0;\n\
+             \x20   for (var jj: i32 = -1; jj <= 1; jj = jj + 1) {{\n\
+             \x20       for (var ii: i32 = -1; ii <= 1; ii = ii + 1) {{\n\
+             \x20           let off = vec2<f32>(f32(ii), f32(jj)) * (dab_r * 0.5);\n\
+             \x20           dep_sum = dep_sum + textureSampleLevel(\n\
+             \x20               deposit_tex, atlas_smp, (dab_local + off) / layer_f, 0.0).r;\n\
+             \x20       }}\n\
+             \x20   }}\n\
+             \x20   let prior = dep_sum / 9.0;\n\
              \x20   let per_dab = 1.0 - pow(1.0 - deposit,\n\
              \x20       1.0 / max(u.intrinsic.dabs_per_pass, 1.0));\n\
              \x20   let rate = sel * flow * per_dab;\n\

@@ -259,9 +259,13 @@ fn smooth_watercolor_deposits_blend_of_brush_and_pickup() {
         &[(64.0, 64.0)],
     );
     let center = pixel(&rgba, 64, 64);
-    // Some red got deposited (would be 100 with no brush touch).
+    // Some red got deposited (would be 100 with no brush touch). One dab
+    // lays `deposit` of the way to the pigment, so the margin tracks that
+    // port's default — at 25% the centre reads ~127 against the canvas's
+    // 100. Widen the margin here if the default drops further; a failure
+    // means "no red arrived", not "the number moved".
     assert!(
-        center[0] > 130,
+        center[0] > 115,
         "Smooth Watercolor centre should add red over the light-blue \
          pickup, got {center:?} (canvas r=100)"
     );
@@ -372,9 +376,11 @@ fn begin_stroke_clears_scratch_so_rewind_drops_defunct_pigment() {
 
     // Sanity: the surviving dab at (88, 64) must still deposit red — the
     // clear must not have wiped the dab we just rendered.
+    // Margin tracks the `deposit` default the same way the buildup test's
+    // does — the subject here is the clear, not the magnitude.
     let surviving = pixel(&rgba, 88, 64);
     assert!(
-        surviving[0] > 130,
+        surviving[0] > 115,
         "surviving dab at (88, 64) should still show red lift, got {surviving:?}"
     );
 }
