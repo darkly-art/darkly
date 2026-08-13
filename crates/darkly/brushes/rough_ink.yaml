@@ -2,30 +2,10 @@ name: Rough Ink
 category: Basic
 description: An ink nib whose edge is reshaped at random every dab — line work that looks bitten rather than printed.
 nodes:
-  pen_input:
-    type: pen_input
   brush_settings:
     type: brush_settings
     inputs:
       stabilize: 0.6
-  paint_color:
-    type: paint_color
-  curve:
-    type: curve
-    inputs:
-      curve:
-      - - 0.0
-        - 0.0
-      - - 0.4
-        - 0.7
-      - - 1.0
-        - 1.0
-  random:
-    type: random
-  random_2:
-    type: random
-  random_3:
-    type: random
   circle:
     type: circle
     inputs:
@@ -33,23 +13,32 @@ nodes:
       frequency: 8.0
       octaves: 4.0
       softness: 0.1
-  stamp:
-    type: stamp
   paint:
     type: paint
+  paint_color:
+    type: paint_color
+  pen_input:
+    type: pen_input
+  random:
+    type: random
+  random_2:
+    type: random
+  random_3:
+    type: random
+  stamp:
+    type: stamp
 connections:
-- 'pen_input.position -> paint.position'
-- 'pen_input.pressure -> curve.input'
-- 'pen_input.pressure -> paint.flow'
-- 'paint_color.color -> stamp.color'
-- 'curve.output -> paint.size'
-- 'random.value -> circle.amplitude'
-- 'random_2.value -> circle.rotation_input'
-- 'random_3.value -> circle.seed'
-- 'circle.mask -> stamp.tip'
-- 'stamp.dab -> paint.rgba'
+- circle.mask -> stamp.tip
+- paint_color.color -> stamp.color
+- pen_input.position -> paint.position
+- pen_input.pressure -> paint.flow
+- pen_input.pressure -> paint.size
+- random.value -> circle.amplitude
+- random_2.value -> circle.rotation_input
+- random_3.value -> circle.seed
+- stamp.dab -> paint.rgba
 exposed_ports:
-  "brush_settings.stabilize": {}
-  "brush_settings.size": {}
-  "paint.flow": {}
-  "paint.opacity": {}
+  brush_settings.stabilize: {}
+  brush_settings.size: {}
+  paint.flow: {}
+  paint.opacity: {}

@@ -163,11 +163,6 @@ class GradientTool extends ToolBase {
     }
 }
 
-// Custom icon: no icon set has anything that reads as "linear gradient" at
-// toolbar size. The bespoke SVG lives at src/icons/svg/gradient.svg and is
-// bundled under the `local:` prefix (see scripts/gen-icon-bundle.mjs) — a
-// rounded square painted with a currentColor→transparent fade, so it inherits
-// the toolbar's muted/active text color.
 export const gradientTool: ToolDescriptor = {
     id: 'gradient',
     group: 'paint',

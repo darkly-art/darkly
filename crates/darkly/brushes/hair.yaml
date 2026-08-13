@@ -19,10 +19,10 @@ nodes:
       curve:
       - - 0.0
         - 1.0
-      - - 0.682973
-        - 0.5305826
+      - - 0.48145637
+        - 0.795719
       - - 1.0
-        - 0.0
+        - 0.6756355
   divide:
     type: divide
   levels:
@@ -38,7 +38,7 @@ nodes:
   multiply_3:
     type: multiply
     inputs:
-      b: 0.085
+      b: 0.05
   noise:
     type: noise
     inputs:

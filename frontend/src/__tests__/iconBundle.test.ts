@@ -90,8 +90,8 @@ describe('icon bundle completeness (offline)', () => {
         expect(resolves('fa6-solid:eraser')).toBe(true);
     });
 
-    it('bundles the custom local:gradient icon', () => {
-        expect(resolves('local:gradient')).toBe(true);
+    it('bundles the gradient tool icon', () => {
+        expect(resolves('boxicons:gradient')).toBe(true);
     });
 
     it('bundles Rust-originated icons (crate scan works)', () => {
