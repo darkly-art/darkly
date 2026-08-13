@@ -130,7 +130,7 @@ pub fn catalog() -> Catalog {
             .map(FilterPipelineRegistration::catalog_entry)
             .collect(),
     )
-    .with_description("Colour adjustments applied to everything beneath them in the layer tree.")
+    .with_description("Color adjustments applied to everything beneath them in the layer tree.")
 }
 
 /// Auto-discovered filter registry with lazy effect caching.

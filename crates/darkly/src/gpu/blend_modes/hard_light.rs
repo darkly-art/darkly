@@ -4,7 +4,7 @@ pub fn register() -> BlendModeRegistration {
     BlendModeRegistration {
         type_id: "hard_light",
         display_name: "Hard Light",
-        description: "Overlay with the layers swapped — the blend colour decides the contrast.",
+        description: "Overlay with the layers swapped — the blend color decides the contrast.",
         category: "Contrast",
         gpu_value: 10,
         wgsl_math: "\

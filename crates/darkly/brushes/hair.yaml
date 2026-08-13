@@ -7,8 +7,8 @@ nodes:
   brush_settings:
     type: brush_settings
     inputs:
-      size: 0.2
-      spacing: 0.01
+      size: 0.9002734422683716
+      spacing: 0.009999999776482582
       stabilize: 1.0
   circle:
     type: circle
@@ -23,6 +23,16 @@ nodes:
         - 0.795719
       - - 1.0
         - 0.6756355
+  curve_2:
+    type: curve
+    comment: maps the 0-1 Hair Thickness slider onto the usable band
+    inputs:
+      curve:
+      - - 0.0
+        - 0.03296951
+      - - 1.0
+        - 0.21059628
+      input: 0.5
   divide:
     type: divide
   levels:
@@ -30,15 +40,11 @@ nodes:
   multiply:
     type: multiply
     inputs:
-      b: 2.56
+      b: 5.12
   multiply_2:
     type: multiply
-    inputs:
-      a: 0.5
   multiply_3:
     type: multiply
-    inputs:
-      b: 0.05
   noise:
     type: noise
     inputs:
@@ -55,13 +61,21 @@ nodes:
   subtract:
     type: subtract
     inputs:
-      a: 0.12
+      a: 0.11999999731779099
+  subtract_2:
+    type: subtract
+    comment: recenters the 0-1 Twirl slider on zero, so either half twirls the
+      opposite way
+    inputs:
+      a: 0.75
+      b: 0.5
 connections:
 - add.result -> levels.input
 - brush_settings.size -> divide.b
 - brush_settings.size -> multiply_3.a
 - circle.mask -> add.b
 - curve.output -> levels.in_low
+- curve_2.output -> multiply_3.b
 - divide.result -> multiply.a
 - levels.output -> stamp.tip
 - multiply.result -> multiply_2.b
@@ -74,16 +88,17 @@ connections:
 - pen_input.pressure -> curve.input
 - stamp.dab -> paint.rgba
 - subtract.result -> add.a
+- subtract_2.result -> multiply_2.a
 exposed_ports:
   brush_settings.stabilize: {}
   brush_settings.size: {}
-  multiply_2.a:
+  subtract_2.a:
     label: Twirl
     description: Twirliness factor
     icon: tabler:galaxy
   paint.flow: {}
   paint.opacity: {}
-  multiply_3.b:
+  curve_2.input:
     label: Hair Thickness
     description: Controls how many and how thick are the individual strands
     icon: fa6-solid:arrows-left-right

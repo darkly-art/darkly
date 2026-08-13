@@ -89,7 +89,7 @@ pub fn catalog() -> crate::catalog::Catalog {
             .map(BlendModeRegistration::catalog_entry)
             .collect(),
     )
-    .with_description("How a layer's colour combines with the composite beneath it.")
+    .with_description("How a layer's color combines with the composite beneath it.")
 }
 
 pub struct BlendModeRegistry {

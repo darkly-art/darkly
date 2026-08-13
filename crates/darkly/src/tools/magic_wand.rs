@@ -5,7 +5,7 @@ pub fn register() -> ToolRegistration {
         type_id: "magic_wand",
         display_name: "Magic Wand",
         icon: "fa6-solid:wand-magic-sparkles",
-        description: "Select a contiguous region of similar colour.",
+        description: "Select a contiguous region of similar color.",
         hotkey_action: "magicWandTool",
         params: &[],
     }

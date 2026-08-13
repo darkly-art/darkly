@@ -74,7 +74,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "texture",
             display_name: "Clone Source",
-            description: "Samples pixels from a set source point onto the canvas under your cursor. Set the source with the clone set-source gesture, then paint. Feed into a Stamp Tip's colour input.",
+            description: "Samples pixels from a set source point onto the canvas under your cursor. Set the source with the clone set-source gesture, then paint. Feed into a Stamp Tip's color input.",
             ports: vec![
                 PortDef::input("center", BrushWireType::Vec2)
                     .with_description("Per-dab pen position in canvas pixels (wire Pen Input → Position)."),

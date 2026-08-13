@@ -4,7 +4,7 @@ pub fn register() -> BlendModeRegistration {
     BlendModeRegistration {
         type_id: "color_burn",
         display_name: "Color Burn",
-        description: "Darkens the base by increasing its contrast toward the blend colour.",
+        description: "Darkens the base by increasing its contrast toward the blend color.",
         category: "Darken",
         gpu_value: 3,
         // pd_color_burn: Krita KoCompositeOpFunctions.h:329–361.
