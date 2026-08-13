@@ -4,21 +4,34 @@
 //! Structural shape mirrors [`paint`](super::paint),
 //! with one extra pass at the front:
 //!
-//! 1. **Pickup atlas pass.** N instances, each writes the 8×8 alpha-
-//!    weighted neighborhood average of the *live canvas* at the dab's
-//!    footprint into its cell in a 128×128 atlas. Live canvas means
-//!    `pre_stroke_texture` with the stroke scratch composited over it —
-//!    the dry layer plus the wet paint deposited so far — which is what
-//!    lets a mark keep building where the brush passes more than once.
-//!    Reading the scratch here is legal because this pass targets the
-//!    atlas, not the scratch. The shader is brush-agnostic in math but
-//!    built per-brush so its `DabRecord` struct stride matches the
-//!    compiled brush's. Cell layout is `(idx % atlas_w, idx / atlas_w)`.
-//! 2. **Composite pass.** One instanced draw, N quads. The fragment
-//!    shader is the framework-assembled per-brush WGSL: upstream
-//!    nodes (`circle`, `paint_color`, etc.) compile inline; this
-//!    terminal contributes the watercolor blend math (atlas pickup +
-//!    deposit/wetness load) and the extra atlas bind group.
+//! 1. **Pickup atlas pass.** One instanced draw, N quads: each writes the
+//!    8×8 alpha-weighted neighborhood average of the *pre-stroke snapshot*
+//!    at the dab's footprint into its cell in a 128×128 atlas. That is the
+//!    dry colour the pigment mixes away from, and it is frozen for the
+//!    whole stroke — buildup across passes comes from the deposit channel
+//!    below, not from feeding the mark back into its own input. The shader
+//!    is brush-agnostic in math but built per-brush so its `DabRecord`
+//!    struct stride matches the compiled brush's. Cell layout is
+//!    `(idx % atlas_w, idx / atlas_w)`.
+//! 2. **Composite pass, one draw per dab.** The fragment shader is the
+//!    framework-assembled per-brush WGSL: upstream nodes (`circle`,
+//!    `paint_color`, etc.) compile inline; this terminal contributes the
+//!    watercolor blend math and the `@group(3)` bindings.
+//!
+//! ## How a mark builds up
+//!
+//! The scratch carries *coverage* and saturates almost immediately. How
+//! much pigment has been delivered is a second, independent quantity, and
+//! it lives in a [`StrokeChannel`] hung off the composite draw as a second
+//! colour attachment (see [`DEPOSIT_CHANNEL`]). Each dab folds its own
+//! delivery rate in under source-over, giving `1 − Π(1−rᵢ)`, and reads the
+//! value under itself to decide how far from the dry canvas toward the
+//! pigment its colour sits. A texel touched once sits near the canvas; one
+//! dwelt on converges on the brush colour.
+//!
+//! A dab reads that field **once**, at its own centre, and resolves one
+//! solid colour before it goes down. The stamp is flat; only its coverage
+//! varies across the footprint. See `compile_wgsl`.
 //!
 //! ## Differences from `watercolor_batched`
 //!
@@ -275,12 +288,16 @@ impl PerBrushPipeline {
                     Some(ctx.uniform_bgl),
                     Some(&dabs_bgl),
                     Some(ctx.canvas_copy_bgl), // pre_stroke texture+sampler
-                    Some(ctx.canvas_copy_bgl), // stroke scratch texture+sampler
                 ],
                 immediate_size: 0,
             });
 
         // ── Composite blend: premultiplied source-over ──
+        //
+        // A dab is a stamp of one solid colour, soft-edged in alpha. The
+        // colour is resolved before the dab goes down (see `compile_wgsl`),
+        // so the only thing varying across the footprint is coverage, and
+        // the ROP composites the stamp onto whatever is already there.
         let composite_blend = wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::One,
@@ -536,9 +553,6 @@ fn watercolor_pipeline_reg() -> BrushPipelineRegistration {
 /// generated per brush — the file-level shader-compile test parses
 /// every `.wgsl` in isolation and a placeholder-bearing template
 /// fails that pass.
-///
-/// Depends on `source_over` from `shaders/source_over.wgsl`, which
-/// [`build_pickup_shader`] prepends.
 const PICKUP_SHADER_TAIL: &str = r#"
 struct PickupUniforms {
     pre_stroke_origin: vec2<i32>,
@@ -553,11 +567,6 @@ struct PickupUniforms {
 @group(1) @binding(0) var<storage, read> dabs: array<DabRecord>;
 @group(2) @binding(0) var t_pre_stroke: texture_2d<f32>;
 @group(2) @binding(1) var s_pre_stroke: sampler;
-// The in-flight stroke scratch — premultiplied paint deposited so far this
-// stroke. Sampling it here is safe: this pass renders to the atlas, so the
-// scratch is read-only for the duration and there is no read/write alias.
-@group(3) @binding(0) var t_scratch: texture_2d<f32>;
-@group(3) @binding(1) var s_scratch: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -626,15 +635,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
                 continue;
             }
-            // The canvas the brush is actually touching: wet paint from this
-            // stroke over the dry layer beneath it. Reading only the dry
-            // layer would freeze the load for the whole stroke, so a mark
-            // could never build past its first pass.
+            // The *dry* layer only — the pre-stroke snapshot, frozen for
+            // the whole stroke. This is the colour the pigment is mixing
+            // away from, and it must not move while the stroke mixes away
+            // from it. Compositing the in-flight scratch in here instead
+            // closes a positive feedback loop: the deposit channel already
+            // says how far this texel has travelled, so mixing that far
+            // from a canvas that has itself already travelled multiplies
+            // the two. The distance left to the pigment becomes
+            // `Π(1−laidₖ) = (1−rate)^(n(n+1)/2)` — quadratic in the
+            // exponent, so even a 1% rate saturates within a few passes and
+            // the `deposit` port stops meaning anything. Against the dry
+            // snapshot it is `(1−rate)ⁿ`, which is what the port promises.
             let dry = textureSampleLevel(t_pre_stroke, s_pre_stroke, uv, 0.0);
-            let wet = textureSampleLevel(t_scratch, s_scratch, uv, 0.0);
-            let live = source_over(wet.rgb, wet.a, dry);
-            sum_rgb = sum_rgb + live.rgb * live.a;
-            sum_a = sum_a + live.a;
+            sum_rgb = sum_rgb + dry.rgb * dry.a;
+            sum_a = sum_a + dry.a;
         }
     }
     let avg_rgb = select(vec3<f32>(0.0), sum_rgb / sum_a, sum_a > 0.0001);
@@ -649,8 +664,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 /// pickup pipeline with the matching struct definition prepended.
 fn build_pickup_shader(compiled: &CompiledBrush) -> String {
     let mut out = String::with_capacity(PICKUP_SHADER_TAIL.len() + 1024);
-    out.push_str(include_str!("../../../shaders/source_over.wgsl"));
-    out.push('\n');
     out.push_str("struct DabRecord {\n");
     for f in &compiled.dab_layout {
         out.push_str(&format!("    {}: {},\n", f.name, f.ty.wgsl_name()));
@@ -692,7 +705,10 @@ pub fn register() -> BrushNodeRegistration {
                     .with_unit(UnitType::Percent)
                     .with_icon("fa6-solid:droplet")
                     .exposed()
-                    .with_description("Per-dab flow (folded into color alpha → max-deposit ceiling)"),
+                    .with_description(
+                        "Per-dab delivery rate multiplier — scales how much pigment this dab \
+                         lays down, typically wired from pressure",
+                    ),
                 PortDef::input("opacity", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
                     .with_natural_range(0.0, 1.0)
@@ -709,7 +725,10 @@ pub fn register() -> BrushNodeRegistration {
                     .with_icon("fa6-solid:circle")
                     .exposed()
                     .with_description(
-                        "How strongly the brush color replaces the pickup canvas color",
+                        "Fraction of the remaining distance to the brush color that one dab \
+                         closes. The mark reaches the brush color as 1 − (1 − deposit)ⁿ over n \
+                         dabs, so small values are slow washes and large values are near-opaque \
+                         on contact.",
                     ),
                 PortDef::input("wetness", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 0.7)
@@ -717,7 +736,11 @@ pub fn register() -> BrushNodeRegistration {
                     .with_label("Wetness")
                     .with_unit(UnitType::Percent)
                     .exposed()
-                    .with_description("How much pickup color tints the load"),
+                    .with_description(
+                        "How heavily each dab is laid down — scales the stamp's coverage, so \
+                         lower values give a thinner, more translucent wash that needs more \
+                         passes to read as solid.",
+                    ),
                 PortDef::input("pickup_size", BrushWireType::Scalar)
                     .with_range(0.0, 2.0, 1.0)
                     .with_natural_range(0.0, 2.0)
@@ -938,25 +961,47 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
             gpu.queue
                 .write_buffer(&per_brush.dabs_buffer, 0, &dab_bytes);
 
-            // ── Pickup + composite, one dab at a time ──
+            // ── Pass 1: pickup atlas, one batched draw ──
             //
-            // A dab reads two things that earlier dabs wrote: the deposit
-            // under its own footprint, and — through the pickup atlas —
-            // the live scratch around it. Concurrent invocations of one
-            // instanced draw cannot observe each other, so batching either
-            // read would give every dab in the flush the same pre-flush
-            // answer, making the mark a function of how dabs happened to
-            // be grouped into pointer events. That grouping dependence is
-            // the banding in `docs/watercolor.md` §1, whose spatial period
-            // was measured as the pen's travel per pointer event.
+            // Every dab's cell is a neighbourhood average of the pre-stroke
+            // snapshot, which is frozen for the whole stroke, so the cells
+            // are independent of each other and of anything this flush is
+            // about to draw. One instanced draw fills them all.
+            {
+                let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("watercolor-pickup"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &per_brush.atlas_attachment_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+                pass.set_viewport(0.0, 0.0, ATLAS_WIDTH as f32, ATLAS_HEIGHT as f32, 0.0, 1.0);
+                pass.set_pipeline(&per_brush.pickup_pipeline);
+                pass.set_bind_group(0, &per_brush.pickup_uniform_bind_group, &[pickup_offset]);
+                pass.set_bind_group(1, &per_brush.dabs_bind_group_pickup, &[]);
+                pass.set_bind_group(2, pre_stroke_bg, &[]);
+                pass.draw(0..6, 0..total_dabs);
+            }
+
+            // ── Pass 2: composite, one draw per dab ──
             //
-            // So both passes run per dab. The `copy_texture_to_texture` in
-            // front of each composite carries the implicit barrier that
-            // makes the serialization real, the same way
-            // `read_mirror_terminal` serializes smudge, blur and liquify.
-            // Neither Krita nor GIMP batches when a dab needs feedback
-            // either (`KisColorSmudgeStrategyWithOverlay.cpp:86-106`,
-            // `gimpsmudge.c:510-527`).
+            // A dab's colour depends on the deposit earlier dabs left under
+            // it. Concurrent invocations of one instanced draw cannot
+            // observe each other, so a batched composite would give every
+            // dab in the flush the same pre-flush deposit, making the mark
+            // a function of how dabs happened to be grouped into pointer
+            // events — the banding in `docs/watercolor.md` §1, whose
+            // spatial period was measured as the pen's travel per pointer
+            // event. The `copy_texture_to_texture` in front of each draw
+            // carries the implicit barrier that makes the serialization
+            // real, the same way `read_mirror_terminal` serializes smudge,
+            // blur and liquify.
             let deposit_bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("watercolor-composite-group3-bg"),
                 layout: &per_brush.composite_group3_bgl,
@@ -1001,35 +1046,6 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
 
             for (i, rect) in rects.iter().enumerate() {
                 let ii = i as u32;
-
-                // Pickup: this dab's neighbourhood average of the canvas
-                // as it stands *now*, into its own atlas cell. Only cell
-                // `ii` is read by the composite below, so clearing the
-                // atlas each time costs nothing and keeps stale cells from
-                // a previous dab out of reach.
-                {
-                    let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("watercolor-pickup"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &per_brush.atlas_attachment_view,
-                            resolve_target: None,
-                            depth_slice: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        ..Default::default()
-                    });
-                    pass.set_viewport(0.0, 0.0, ATLAS_WIDTH as f32, ATLAS_HEIGHT as f32, 0.0, 1.0);
-                    pass.set_pipeline(&per_brush.pickup_pipeline);
-                    pass.set_bind_group(0, &per_brush.pickup_uniform_bind_group, &[pickup_offset]);
-                    pass.set_bind_group(1, &per_brush.dabs_bind_group_pickup, &[]);
-                    pass.set_bind_group(2, pre_stroke_bg, &[]);
-                    pass.set_bind_group(3, scratch.live_canvas_bind_group(), &[]);
-                    pass.draw(0..6, ii..ii + 1);
-                }
-
                 scratch.sync_channel_mirrors(
                     &mut gpu.encoder,
                     rect.x0,
@@ -1127,13 +1143,36 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         // constants avoids one more uniform field. If we ever vary
         // atlas size per brush, move these into the composite
         // uniforms.
+        //
+        // **A dab is one solid colour.** `load_rgb` and `load_alpha` are
+        // resolved before the dab goes down and are constant across its
+        // whole footprint; the only thing that varies per fragment is
+        // `fg_a`, the shape's coverage. The stamp then composites onto the
+        // scratch in the ROP.
+        //
+        // That is why `prior` is read at `d.pos` — the dab's own centre —
+        // and not at `target_pos`. Reading the deposit per *fragment* makes
+        // `load_rgb` vary across the footprint, and since neighbouring dabs
+        // then disagree about the colour of the texels they share, the mark
+        // comes out mottled at dab frequency even though the deposit field
+        // itself is smooth. One read per dab keeps each stamp flat, and the
+        // gradient across the stroke comes from consecutive dabs differing
+        // by one `deposit` step, which is what makes it look continuous.
+        //
+        // The deposit *channel* is still written per fragment, shaped by
+        // `mask`, so the field stays a faithful per-texel history — it is
+        // only the read that collapses to one value. At the centre the two
+        // agree: `mask = 1` there, so the field lands on exactly the `laid`
+        // this dab computed.
+        //
+        // `flow` scales the delivery rate only, and is not folded into
+        // `fg_color.a` as well — one knob, counted once.
         wgsl.body = format!(
             "    let mask = clamp({mask_expr}, 0.0, 1.0);\n\
              \x20   if (mask <= 0.0) {{ discard; }}\n\
              \x20   if (sel <= 0.0) {{ discard; }}\n\
-             \x20   var fg_color: vec4<f32> = {color_expr};\n\
+             \x20   let fg_color: vec4<f32> = {color_expr};\n\
              \x20   let flow = clamp({flow_expr}, 0.0, 1.0);\n\
-             \x20   fg_color.a = fg_color.a * flow;\n\
              \x20   let deposit = clamp({deposit_expr}, 0.0, 1.0);\n\
              \x20   let wetness = clamp({wetness_expr}, 0.0, 1.0);\n\
              \x20   let atlas_w: u32 = {atlas_w}u;\n\
@@ -1145,19 +1184,27 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
              \x20   let pickup = textureSampleLevel(atlas_tex, atlas_smp, atlas_uv, 0.0);\n\
              \x20   let has_canvas = pickup.a > 0.05;\n\
              \x20   let canvas_rgb = select(fg_color.rgb, pickup.rgb, has_canvas);\n\
-             \x20   let layer_px = vec2<i32>(target_pos - vec2<f32>(\n\
+             \x20   let dab_local = d.pos - vec2<f32>(\n\
              \x20       f32(u.intrinsic.layer_offset.x),\n\
              \x20       f32(u.intrinsic.layer_offset.y),\n\
+             \x20   );\n\
+             \x20   let dab_px = vec2<i32>(clamp(\n\
+             \x20       dab_local,\n\
+             \x20       vec2<f32>(0.0, 0.0),\n\
+             \x20       vec2<f32>(\n\
+             \x20           f32(u.intrinsic.layer_size.x) - 1.0,\n\
+             \x20           f32(u.intrinsic.layer_size.y) - 1.0,\n\
+             \x20       ),\n\
              \x20   ));\n\
-             \x20   let prior = textureLoad(deposit_tex, layer_px, 0).r;\n\
-             \x20   let rate = mask * sel * flow * deposit;\n\
-             \x20   let laid = prior + (1.0 - prior) * rate;\n\
+             \x20   let prior = textureLoad(deposit_tex, dab_px, 0).r;\n\
+             \x20   let laid = prior + (1.0 - prior) * flow * deposit;\n\
              \x20   let load_rgb = mix(canvas_rgb, fg_color.rgb, laid);\n\
              \x20   let load_alpha = mix(pickup.a, fg_color.a, laid);\n\
              \x20   let fg_a = mask * sel * wetness * load_alpha;\n\
              \x20   return FsOut(\n\
              \x20       vec4<f32>(load_rgb * fg_a, fg_a),\n\
-             \x20       vec4<f32>(rate, 0.0, 0.0, rate),\n\
+             \x20       vec4<f32>(mask * sel * flow * deposit, 0.0, 0.0,\n\
+             \x20                 mask * sel * flow * deposit),\n\
              \x20   );\n",
             atlas_w = ATLAS_WIDTH,
             atlas_h = ATLAS_HEIGHT,
