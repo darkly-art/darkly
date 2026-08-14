@@ -1,0 +1,101 @@
+name: Docs artifact
+
+# Publishes the documentation artifact for a release: the hand-written manual
+# under `docs/manual/` plus `metadata.json`, the projection of every registry
+# Darkly has. Both go in one tarball under one `version`, so a consumer can
+# never pair prose from one build with metadata from another.
+#
+# The consumer is pull-based and is not named here on purpose — this repo is
+# public and knows nothing about who reads the artifact. Whoever wants it
+# resolves this asset off the release and unpacks it.
+#
+# `docs/manual/` is **pure markdown**. It must not reference components from any
+# consumer, or the public repo acquires an invisible dependency on private code.
+# Anything needing a component is a generated page on the consumer side.
+#
+# No GPU and no `render-docs` here: `export-docs` builds from `&'static`
+# registration data alone. Rendered previews are a separate, later artifact.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          Existing release tag to attach the artifact to. Leave blank to build
+          and upload for inspection without touching any release.
+        required: false
+
+jobs:
+  docs-artifact:
+    name: export-docs + manual → release asset
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Full checkout (with .git) so build.rs's `git describe --tags` resolves —
+      # that string is what stamps `version`, and a shallow checkout breaks it.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install fontconfig (native font enumeration via fontique)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Export registry metadata
+        run: cargo run -p darkly --bin export-docs -- --out out/metadata.json
+
+      # An icon name is not self-describing, and `local:` icons exist nowhere but
+      # this repo — so the artifact carries resolved SVG rather than asking a
+      # consumer to own an icon toolchain. Needs the frontend's @iconify deps.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: npm ci
+        working-directory: frontend
+        run: npm ci
+      - name: Resolve icons
+        run: node frontend/scripts/export-doc-icons.mjs --metadata out/metadata.json --out out/icons.json
+
+      - name: Stage the manual
+        run: cp -r docs/manual out/manual
+
+      # Which release this ends up on: the pushed tag, or the one a manual run
+      # names. A dispatch with no tag names nothing and stops after the upload
+      # below — a real dry run of the export that touches no release.
+      - name: Resolve target release
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "TARGET=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+          else
+            echo "TARGET=$INPUT_TAG" >> "$GITHUB_ENV"
+          fi
+
+      - name: Pack
+        run: |
+          NAME="darkly-docs-${TARGET:-${GITHUB_REF_NAME//\//-}}.tar.gz"
+          echo "ARTIFACT=$NAME" >> "$GITHUB_ENV"
+          tar czf "$NAME" -C out .
+          tar tzf "$NAME"
+
+      - name: Upload for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-artifact
+          path: ${{ env.ARTIFACT }}
+
+      # The release object for a tag is produced outside this repo, so this job
+      # may run before or after it exists — create-if-missing plus --clobber
+      # makes either order work, and makes a re-run idempotent.
+      - name: Attach to the release
+        if: env.TARGET != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$TARGET" >/dev/null 2>&1 \
+            || gh release create "$TARGET" --generate-notes
+          gh release upload "$TARGET" "$ARTIFACT" --clobber

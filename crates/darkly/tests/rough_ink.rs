@@ -498,26 +498,11 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
             0.15,
         )
         .unwrap();
-    // Replace the builtin's pressure-shaping curve (a monotone Hermite
-    // spline through `(0,0), (0.4,0.7), (1,1)`) with the identity curve
-    // so this test's `r_a` / `r_b` math (radius ∝ pressure) lines up
-    // with what the CPU side packs into the dab record. The QUAD_R_MAX-
-    // vs-radius divergence we're guarding against is independent of the
-    // curve shape.
-    let curve_id = graph
-        .nodes()
-        .iter()
-        .find(|(_, n)| n.type_id == darkly::brush::nodes::curve::TYPE_ID)
-        .map(|(id, _)| id.clone())
-        .unwrap();
-    graph
-        .set_port_value(
-            &curve_id,
-            "curve",
-            InputValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]]),
-        )
-        .unwrap();
-
+    // Rough Ink wires `pen_input.pressure` straight into `paint.size`, so
+    // radius is already ∝ pressure and the `r_a` / `r_b` math below lines
+    // up with what the CPU side packs into the dab record without any
+    // shaping to undo. The QUAD_R_MAX-vs-radius divergence this guards
+    // against is independent of how pressure is shaped anyway.
     let mut h = harness(&black_canvas(), graph);
     let compiled = h.runner.compiled_brush().expect("compiled brush attached");
     h.begin_stroke();
@@ -542,8 +527,8 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
     let mut dab_a_pixels = 0;
     let mut dab_b_pixels = 0;
     let dab_size = 0.15 * darkly::brush::DAB_REFERENCE_SIZE as f32 * 0.5;
-    // Per-dab effective_radius differs only through the curve(pressure)
-    // wire; the brush's curve is identity-shape so radius ∝ pressure.
+    // Per-dab effective_radius differs only through the pressure → size
+    // wire, which the brush drives directly, so radius ∝ pressure.
     let r_a = (dab_size * 0.5 * bbox_factor) + 1.0;
     let r_b = (dab_size * 1.0 * bbox_factor) + 1.0;
     for y in 0..CANVAS {
