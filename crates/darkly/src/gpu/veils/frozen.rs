@@ -25,7 +25,9 @@ pub fn register() -> VeilRegistration {
         display_name: "Frozen",
         description: "Frost the view behind a pane of refracting ice.",
         params: PARAMS,
-        preview: Some(PreviewAnim::LOOPING),
+        // Just short of the sweep's peak — `swing(0.4375)` is 0.96, so the
+        // still shows the frost within a few percent of its heaviest.
+        preview: Some(PreviewAnim::LOOPING.with_still_at(0.4375)),
         create_pipeline: create_frozen_pipeline,
         from_params: |params, shared| {
             let strength = match params.first() {

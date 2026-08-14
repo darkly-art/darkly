@@ -83,6 +83,12 @@ pub struct PreviewAnim {
     /// An entry whose motion peaks elsewhere overrides it with
     /// [`with_still_at`](Self::with_still_at) — a sweep resting at `t = 0` would
     /// otherwise pick the frame that looks like no effect at all.
+    ///
+    /// **Must land on a frame**: `still_at * frames` has to be a whole number.
+    /// A [`Still`](PreviewVariant::Still) renders at `still_at` itself while
+    /// [`still_frame`](Self::still_frame) indexes the animation, so a value
+    /// between two frames renders a picture the sequence never contains — and
+    /// the hover hand-off it exists to hide becomes a visible jump.
     pub still_at: f32,
 }
 
