@@ -16,11 +16,6 @@ import { setCloneSourceAnchor } from '../tools/clone_source_cursor';
 export function registerCloneSourceAction(): void {
     actions.register({
         id: 'setCloneSource',
-        displayName: 'Set Clone Source',
-        category: 'brush',
-        description:
-            'Hold the modifier and click on the canvas to set the point the Clone brush copies from.',
-        icon: 'fa6-solid:crosshairs',
         type: 'hold',
         handler: (ctx) => {
             const cx = typeof ctx.x === 'number' ? ctx.x : 0;

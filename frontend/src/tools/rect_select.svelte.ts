@@ -101,9 +101,7 @@ class RectSelectTool extends ToolBase {
 
 export const rectSelectTool: ToolDescriptor = {
     id: 'rect_select',
-    icon: 'boxicons:square-dashed',
     group: 'select',
     cluster: 'select',
-    hotkeyAction: 'rectSelectTool',
     create: (inst: DarklyInstance) => new RectSelectTool(inst),
 };

@@ -1,12 +1,12 @@
+use crate::units::UnitType;
 use std::collections::BTreeMap;
 
-/// A `const`-constructible parameter value, used only for schema-level defaults
-/// (a [`ParamDef::List`]'s per-entry overrides). [`ParamValue`] owns `String`s
-/// and `Vec`s that can't be built in a `const`, so the schema carries this
-/// `'static`-friendly mirror and lifts it to a `ParamValue` at registry build.
-#[derive(Clone, Copy, Debug, serde::Serialize)]
-#[serde(untagged)]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+/// A `const`-constructible parameter value, used for schema-level defaults —
+/// today, a [`ParamKind::List`]'s per-entry overrides. [`ParamValue`] owns
+/// `String`s and `Vec`s that can't be built in a `const`, so the schema carries
+/// this `'static`-friendly mirror and lifts it through
+/// [`to_value`](ConstParamValue::to_value).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ConstParamValue {
     Bool(bool),
     Int(i32),
@@ -14,9 +14,20 @@ pub enum ConstParamValue {
     Str(&'static str),
     Color([f32; 3]),
     Vec2([f32; 2]),
+    /// Curve control points, mirroring [`ParamKind::Curve`]'s default.
+    Curve(&'static [[f32; 2]]),
+    /// A levels transfer, mirroring [`ParamKind::Levels`]'s default.
+    Levels([f32; 5]),
+    /// Per-entry named overlays over a list item's own defaults, mirroring
+    /// [`ParamKind::List`]'s default.
+    List(&'static [&'static [(&'static str, ConstParamValue)]]),
 }
 
 impl ConstParamValue {
+    /// Lift to a [`ParamValue`]. Every scalar shape mirrors directly; a nested
+    /// [`List`](ConstParamValue::List) lifts to an empty list, because
+    /// expanding its entries would need the `item` defs it overlays and a
+    /// schema declares no list of lists.
     fn to_value(self) -> ParamValue {
         match self {
             ConstParamValue::Bool(b) => ParamValue::Bool(b),
@@ -25,58 +36,82 @@ impl ConstParamValue {
             ConstParamValue::Str(s) => ParamValue::String(s.to_string()),
             ConstParamValue::Color(c) => ParamValue::Color(c),
             ConstParamValue::Vec2(v) => ParamValue::Vec2(v),
+            ConstParamValue::Curve(pts) => ParamValue::Curve(pts.to_vec()),
+            ConstParamValue::Levels(a) => ParamValue::Levels(a),
+            ConstParamValue::List(_) => ParamValue::List(Vec::new()),
         }
     }
 }
 
 /// Schema definition for a single effect parameter (filter or veil).
 /// Each module defines a `const` array of these describing its parameters.
-#[derive(Clone, Debug, serde::Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-pub enum ParamDef {
+///
+/// Authored through the `const fn` constructors and `with_*` builders, matching
+/// how [`PortDef`](crate::nodegraph::PortDef) is written:
+///
+/// ```ignore
+/// ParamDef::float("hue", -180.0, 180.0, 0.0)
+///     .with_label("Hue")
+///     .with_description("Rotation applied to every pixel's hue.")
+///     .with_unit(UnitType::Degrees)
+/// ```
+///
+/// The metadata every parameter shares lives on the struct; only the
+/// value-shaped part varies, in [`ParamKind`]. Adding the next shared field is
+/// one struct field plus one builder rather than an edit at every declaration.
+#[derive(Clone, Debug)]
+pub struct ParamDef {
+    pub name: &'static str,
+    /// Display label. `None` → the UI title-cases `name`.
+    pub label: Option<&'static str>,
+    /// One-sentence summary of what this parameter does, in the same painter
+    /// vocabulary as a registration's `description`.
+    pub description: Option<&'static str>,
+    /// Display unit. Renders a suffix and, for [`UnitType::Percent`] /
+    /// [`UnitType::Degrees`], converts on the way to the UI — so a parameter
+    /// already stored in display space declares [`UnitType::Raw`].
+    pub unit: UnitType,
+    pub kind: ParamKind,
+}
+
+/// The value-shaped half of a [`ParamDef`] — what this parameter stores, its
+/// range, and its default.
+#[derive(Clone, Debug)]
+pub enum ParamKind {
     Float {
-        name: &'static str,
         min: f32,
         max: f32,
         default: f32,
     },
     Int {
-        name: &'static str,
         min: i32,
         max: i32,
         default: i32,
     },
     Bool {
-        name: &'static str,
         default: bool,
     },
     String {
-        name: &'static str,
         default: &'static str,
     },
     Curve {
-        name: &'static str,
         default: &'static [[f32; 2]],
     },
     /// Levels adjustment — a black/gamma/white/output transfer, stored as
     /// `[inBlack, inWhite, gamma, outBlack, outWhite]` (all normalized `[0,1]`
     /// except `gamma`, the raw `0.1–10` exponent). Baked into the same LUT as a
-    /// [`Curve`](ParamDef::Curve) by the shared LUT-filter scaffold.
+    /// [`Curve`](ParamKind::Curve) by the shared LUT-filter scaffold.
     Levels {
-        name: &'static str,
         default: [f32; 5],
     },
     /// Enum displayed as a dropdown.  Stored as Int (index into `options`).
     Enum {
-        name: &'static str,
         options: &'static [&'static str],
         default: i32,
     },
     /// Float displayed as a plain text input instead of a scrub bar.
     /// Use for values where dragging is impractical (large ranges, precise entry).
     FloatInput {
-        name: &'static str,
         min: f32,
         max: f32,
         default: f32,
@@ -84,7 +119,6 @@ pub enum ParamDef {
     /// Icon picker displayed as a dropdown with FA icon previews.
     /// Stored as String (FA class name).  `options` lists the available icons.
     Icon {
-        name: &'static str,
         options: &'static [(&'static str, &'static str)],
         default: &'static str,
     },
@@ -94,14 +128,12 @@ pub enum ParamDef {
     /// texel values (like the Curves LUT), so they carry the sRGB triple raw.
     /// See `frontend/src/lib/color.ts`'s `hexToRgb01`/`rgb01ToHex`.
     Color {
-        name: &'static str,
         default: [f32; 3],
     },
     /// A 2D vector — direction + magnitude, edited via the draggable offset pad.
     /// `max` is the magnitude clamp (the pad's edge radius); values are stored
     /// with magnitude ≤ `max`.
     Vec2 {
-        name: &'static str,
         max: f32,
         default: [f32; 2],
     },
@@ -111,11 +143,105 @@ pub enum ParamDef {
     /// `default` supplies per-entry named overrides layered on top of `item`'s
     /// own defaults; entries not overridden fall back to the item schema.
     List {
-        name: &'static str,
         item: &'static [ParamDef],
         max_len: usize,
         default: &'static [&'static [(&'static str, ConstParamValue)]],
     },
+}
+
+impl ParamDef {
+    const fn of(name: &'static str, kind: ParamKind) -> Self {
+        ParamDef {
+            name,
+            label: None,
+            description: None,
+            unit: UnitType::Raw,
+            kind,
+        }
+    }
+
+    pub const fn float(name: &'static str, min: f32, max: f32, default: f32) -> Self {
+        Self::of(name, ParamKind::Float { min, max, default })
+    }
+
+    pub const fn int(name: &'static str, min: i32, max: i32, default: i32) -> Self {
+        Self::of(name, ParamKind::Int { min, max, default })
+    }
+
+    pub const fn boolean(name: &'static str, default: bool) -> Self {
+        Self::of(name, ParamKind::Bool { default })
+    }
+
+    pub const fn string(name: &'static str, default: &'static str) -> Self {
+        Self::of(name, ParamKind::String { default })
+    }
+
+    pub const fn curve(name: &'static str, default: &'static [[f32; 2]]) -> Self {
+        Self::of(name, ParamKind::Curve { default })
+    }
+
+    pub const fn levels(name: &'static str, default: [f32; 5]) -> Self {
+        Self::of(name, ParamKind::Levels { default })
+    }
+
+    pub const fn enumeration(
+        name: &'static str,
+        options: &'static [&'static str],
+        default: i32,
+    ) -> Self {
+        Self::of(name, ParamKind::Enum { options, default })
+    }
+
+    pub const fn float_input(name: &'static str, min: f32, max: f32, default: f32) -> Self {
+        Self::of(name, ParamKind::FloatInput { min, max, default })
+    }
+
+    pub const fn icon(
+        name: &'static str,
+        options: &'static [(&'static str, &'static str)],
+        default: &'static str,
+    ) -> Self {
+        Self::of(name, ParamKind::Icon { options, default })
+    }
+
+    pub const fn color(name: &'static str, default: [f32; 3]) -> Self {
+        Self::of(name, ParamKind::Color { default })
+    }
+
+    pub const fn vec2(name: &'static str, max: f32, default: [f32; 2]) -> Self {
+        Self::of(name, ParamKind::Vec2 { max, default })
+    }
+
+    pub const fn list(
+        name: &'static str,
+        item: &'static [ParamDef],
+        max_len: usize,
+        default: &'static [&'static [(&'static str, ConstParamValue)]],
+    ) -> Self {
+        Self::of(
+            name,
+            ParamKind::List {
+                item,
+                max_len,
+                default,
+            },
+        )
+    }
+
+    pub const fn with_label(mut self, label: &'static str) -> Self {
+        self.label = Some(label);
+        self
+    }
+
+    pub const fn with_description(mut self, description: &'static str) -> Self {
+        self.description = Some(description);
+        self
+    }
+
+    pub const fn with_unit(mut self, unit: UnitType) -> Self {
+        self.unit = unit;
+        self
+    }
 }
 
 /// A concrete runtime parameter value, read from an effect instance.
@@ -176,7 +302,7 @@ pub fn param_values_from_json(obj: &serde_json::Value, defs: &[ParamDef]) -> Vec
         None => return defs.iter().map(|d| d.default_value()).collect(),
     };
     defs.iter()
-        .map(|def| def.value_from_json(map.get(def.name())))
+        .map(|def| def.value_from_json(map.get(def.name)))
         .collect()
 }
 
@@ -192,7 +318,7 @@ fn clamp_magnitude(v: [f32; 2], max: f32) -> [f32; 2] {
     }
 }
 
-/// Expand a [`ParamDef::List`]'s schema defaults into concrete entries: each
+/// Expand a [`ParamKind::List`]'s schema defaults into concrete entries: each
 /// default entry starts from the `item` schema's own per-field defaults, then
 /// applies that entry's named overrides on top.
 fn list_default(
@@ -204,7 +330,7 @@ fn list_default(
         .map(|overrides| {
             item.iter()
                 .map(|d| {
-                    let key = d.name();
+                    let key = d.name;
                     let val = overrides
                         .iter()
                         .find(|(k, _)| *k == key)
@@ -219,19 +345,19 @@ fn list_default(
 
 impl ParamDef {
     pub fn default_value(&self) -> ParamValue {
-        match self {
-            ParamDef::Float { default, .. } => ParamValue::Float(*default),
-            ParamDef::Int { default, .. } => ParamValue::Int(*default),
-            ParamDef::Bool { default, .. } => ParamValue::Bool(*default),
-            ParamDef::String { default, .. } => ParamValue::String(default.to_string()),
-            ParamDef::Curve { default, .. } => ParamValue::Curve(default.to_vec()),
-            ParamDef::Levels { default, .. } => ParamValue::Levels(*default),
-            ParamDef::Enum { default, .. } => ParamValue::Int(*default),
-            ParamDef::FloatInput { default, .. } => ParamValue::Float(*default),
-            ParamDef::Icon { default, .. } => ParamValue::String(default.to_string()),
-            ParamDef::Color { default, .. } => ParamValue::Color(*default),
-            ParamDef::Vec2 { default, .. } => ParamValue::Vec2(*default),
-            ParamDef::List { item, default, .. } => ParamValue::List(list_default(item, default)),
+        match &self.kind {
+            ParamKind::Float { default, .. } => ParamValue::Float(*default),
+            ParamKind::Int { default, .. } => ParamValue::Int(*default),
+            ParamKind::Bool { default, .. } => ParamValue::Bool(*default),
+            ParamKind::String { default, .. } => ParamValue::String(default.to_string()),
+            ParamKind::Curve { default, .. } => ParamValue::Curve(default.to_vec()),
+            ParamKind::Levels { default, .. } => ParamValue::Levels(*default),
+            ParamKind::Enum { default, .. } => ParamValue::Int(*default),
+            ParamKind::FloatInput { default, .. } => ParamValue::Float(*default),
+            ParamKind::Icon { default, .. } => ParamValue::String(default.to_string()),
+            ParamKind::Color { default, .. } => ParamValue::Color(*default),
+            ParamKind::Vec2 { default, .. } => ParamValue::Vec2(*default),
+            ParamKind::List { item, default, .. } => ParamValue::List(list_default(item, default)),
         }
     }
 
@@ -239,53 +365,53 @@ impl ParamDef {
     /// coercing to this def's concrete [`ParamValue`] variant. The `List` arm
     /// recurses over its `item` defs per entry, so no arm is duplicated.
     pub fn value_from_json(&self, raw: Option<&serde_json::Value>) -> ParamValue {
-        match self {
-            ParamDef::Float { default, .. } => {
+        match &self.kind {
+            ParamKind::Float { default, .. } => {
                 ParamValue::Float(raw.and_then(|v| v.as_f64()).unwrap_or(*default as f64) as f32)
             }
-            ParamDef::Int { default, .. } => {
+            ParamKind::Int { default, .. } => {
                 ParamValue::Int(raw.and_then(|v| v.as_f64()).unwrap_or(*default as f64) as i32)
             }
-            ParamDef::Bool { default, .. } => {
+            ParamKind::Bool { default, .. } => {
                 ParamValue::Bool(raw.and_then(|v| v.as_bool()).unwrap_or(*default))
             }
-            ParamDef::String { default, .. } => {
+            ParamKind::String { default, .. } => {
                 ParamValue::String(raw.and_then(|v| v.as_str()).unwrap_or(default).to_string())
             }
-            ParamDef::Curve { default, .. } => {
+            ParamKind::Curve { default, .. } => {
                 let points = raw
                     .and_then(|v| serde_json::from_value::<Vec<[f32; 2]>>(v.clone()).ok())
                     .unwrap_or_else(|| default.to_vec());
                 ParamValue::Curve(points)
             }
-            ParamDef::Levels { default, .. } => {
+            ParamKind::Levels { default, .. } => {
                 let arr = raw
                     .and_then(|v| serde_json::from_value::<[f32; 5]>(v.clone()).ok())
                     .unwrap_or(*default);
                 ParamValue::Levels(arr)
             }
-            ParamDef::Enum { default, .. } => {
+            ParamKind::Enum { default, .. } => {
                 ParamValue::Int(raw.and_then(|v| v.as_f64()).unwrap_or(*default as f64) as i32)
             }
-            ParamDef::FloatInput { default, .. } => {
+            ParamKind::FloatInput { default, .. } => {
                 ParamValue::Float(raw.and_then(|v| v.as_f64()).unwrap_or(*default as f64) as f32)
             }
-            ParamDef::Icon { default, .. } => {
+            ParamKind::Icon { default, .. } => {
                 ParamValue::String(raw.and_then(|v| v.as_str()).unwrap_or(default).to_string())
             }
-            ParamDef::Color { default, .. } => {
+            ParamKind::Color { default, .. } => {
                 let c = raw
                     .and_then(|v| serde_json::from_value::<[f32; 3]>(v.clone()).ok())
                     .unwrap_or(*default);
                 ParamValue::Color(c)
             }
-            ParamDef::Vec2 { default, max, .. } => {
+            ParamKind::Vec2 { default, max, .. } => {
                 let v = raw
                     .and_then(|v| serde_json::from_value::<[f32; 2]>(v.clone()).ok())
                     .unwrap_or(*default);
                 ParamValue::Vec2(clamp_magnitude(v, *max))
             }
-            ParamDef::List {
+            ParamKind::List {
                 item,
                 max_len,
                 default,
@@ -299,7 +425,7 @@ impl ParamDef {
                             let obj = entry.as_object();
                             item.iter()
                                 .map(|d| {
-                                    let key = d.name();
+                                    let key = d.name;
                                     let child = obj.and_then(|o| o.get(key));
                                     (key.to_string(), d.value_from_json(child))
                                 })
@@ -313,23 +439,6 @@ impl ParamDef {
         }
     }
 
-    pub fn name(&self) -> &'static str {
-        match self {
-            ParamDef::Float { name, .. }
-            | ParamDef::FloatInput { name, .. }
-            | ParamDef::Int { name, .. }
-            | ParamDef::Bool { name, .. }
-            | ParamDef::String { name, .. }
-            | ParamDef::Curve { name, .. }
-            | ParamDef::Levels { name, .. }
-            | ParamDef::Enum { name, .. }
-            | ParamDef::Icon { name, .. }
-            | ParamDef::Color { name, .. }
-            | ParamDef::Vec2 { name, .. }
-            | ParamDef::List { name, .. } => name,
-        }
-    }
-
     /// Coerce an externally-typed scalar (e.g. a value parsed from YAML)
     /// into the concrete `ParamValue` variant this def expects. Floats
     /// also accept bare integers, since YAML's `1` and `1.0` are
@@ -337,48 +446,48 @@ impl ParamDef {
     pub fn coerce_portable(&self, v: PortableValue) -> Result<ParamValue, ParamTypeMismatch> {
         let actual = v.kind_label();
         let mismatch = |expected: &'static str| Err(ParamTypeMismatch { expected, actual });
-        match self {
-            ParamDef::Bool { .. } => match v {
+        match &self.kind {
+            ParamKind::Bool { .. } => match v {
                 PortableValue::Bool(b) => Ok(ParamValue::Bool(b)),
                 _ => mismatch("bool"),
             },
-            ParamDef::Int { .. } | ParamDef::Enum { .. } => match v {
+            ParamKind::Int { .. } | ParamKind::Enum { .. } => match v {
                 PortableValue::Int(i) => Ok(ParamValue::Int(i as i32)),
                 _ => mismatch("integer"),
             },
-            ParamDef::Float { .. } | ParamDef::FloatInput { .. } => match v {
+            ParamKind::Float { .. } | ParamKind::FloatInput { .. } => match v {
                 PortableValue::Float(f) => Ok(ParamValue::Float(f as f32)),
                 PortableValue::Int(i) => Ok(ParamValue::Float(i as f32)),
                 _ => mismatch("number"),
             },
-            ParamDef::String { .. } | ParamDef::Icon { .. } => match v {
+            ParamKind::String { .. } | ParamKind::Icon { .. } => match v {
                 PortableValue::String(s) => Ok(ParamValue::String(s)),
                 _ => mismatch("string"),
             },
-            ParamDef::Curve { .. } => match v {
+            ParamKind::Curve { .. } => match v {
                 PortableValue::Curve(c) => Ok(ParamValue::Curve(c)),
                 _ => mismatch("curve (list of [x, y] pairs)"),
             },
-            ParamDef::Levels { .. } => match v {
+            ParamKind::Levels { .. } => match v {
                 PortableValue::Levels(a) => Ok(ParamValue::Levels(a)),
                 _ => mismatch("levels (5 numbers)"),
             },
-            ParamDef::Color { .. } => match v {
+            ParamKind::Color { .. } => match v {
                 PortableValue::Color(c) => Ok(ParamValue::Color(c)),
                 _ => mismatch("color (3 numbers)"),
             },
-            ParamDef::Vec2 { max, .. } => match v {
+            ParamKind::Vec2 { max, .. } => match v {
                 PortableValue::Vec2(a) => Ok(ParamValue::Vec2(clamp_magnitude(a, *max))),
                 _ => mismatch("vec2 (2 numbers)"),
             },
-            ParamDef::List { item, .. } => match v {
+            ParamKind::List { item, .. } => match v {
                 PortableValue::List(entries) => {
                     let out = entries
                         .into_iter()
                         .map(|entry| {
                             item.iter()
                                 .map(|d| {
-                                    let key = d.name();
+                                    let key = d.name;
                                     let val = match entry.get(key) {
                                         Some(pv) => d.coerce_portable(pv.clone())?,
                                         None => d.default_value(),
@@ -471,38 +580,68 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
+    /// Every parameter a user can see carries a label and a description, so no
+    /// documentation table ships with a blank cell and no properties panel
+    /// falls back to a raw snake_case field name. Walks the catalogs rather
+    /// than the registries directly, which is exactly the set that reaches
+    /// both the UI and the export — including the item schema inside a `List`,
+    /// where a blank cell is easiest to miss.
+    #[test]
+    fn every_param_has_a_label_and_description() {
+        fn check(owner: &str, defs: &[ParamDef]) {
+            for d in defs {
+                assert!(
+                    d.label.is_some_and(|l| !l.is_empty()),
+                    "`{owner}.{}` has no label",
+                    d.name
+                );
+                assert!(
+                    d.description.is_some_and(|s| !s.is_empty()),
+                    "`{owner}.{}` has no description",
+                    d.name
+                );
+                if let ParamKind::List { item, .. } = &d.kind {
+                    check(&format!("{owner}.{}", d.name), item);
+                }
+            }
+        }
+
+        let mut checked = 0usize;
+        for reg in crate::gpu::filter::FilterPipelineRegistry::new().types() {
+            check(reg.type_id, reg.params);
+            checked += reg.params.len();
+        }
+        for reg in crate::gpu::veil::VeilRegistry::new().types() {
+            check(reg.type_id, reg.params);
+            checked += reg.params.len();
+        }
+        for reg in crate::gpu::void::VoidRegistry::new().types() {
+            check(reg.type_id, reg.params);
+            checked += reg.params.len();
+        }
+        assert!(checked > 0, "no parameters found — the scan found nothing");
+    }
+
     // A small list schema used across the List/Vec2/Color tests: one entry is a
     // named group of `{ offset: Vec2, scale: Float, color: Color }`, with two
     // default entries exercising per-entry overrides on top of item defaults.
     const ITEM: &[ParamDef] = &[
-        ParamDef::Vec2 {
-            name: "offset",
-            max: 64.0,
-            default: [0.0, 0.0],
-        },
-        ParamDef::Float {
-            name: "scale",
-            min: 0.9,
-            max: 1.1,
-            default: 1.0,
-        },
-        ParamDef::Color {
-            name: "color",
-            default: [1.0, 1.0, 1.0],
-        },
+        ParamDef::vec2("offset", 64.0, [0.0, 0.0]),
+        ParamDef::float("scale", 0.9, 1.1, 1.0),
+        ParamDef::color("color", [1.0, 1.0, 1.0]),
     ];
-    const LIST: ParamDef = ParamDef::List {
-        name: "aberrations",
-        item: ITEM,
-        max_len: 4,
-        default: &[
+    const LIST: ParamDef = ParamDef::list(
+        "aberrations",
+        ITEM,
+        4,
+        &[
             &[("scale", ConstParamValue::Float(1.004))],
             &[
                 ("offset", ConstParamValue::Vec2([2.0, 0.0])),
                 ("color", ConstParamValue::Color([0.0, 1.0, 0.0])),
             ],
         ],
-    };
+    );
 
     /// Regression: `ParamValue::Int(n)` must round-trip through JSON without
     /// degrading to `ParamValue::Float`. The bug: Rough Watercolor's shape
@@ -632,10 +771,7 @@ mod tests {
     /// including a nested List.
     #[test]
     fn portable_coercion_round_trips_new_kinds() {
-        let color_def = ParamDef::Color {
-            name: "c",
-            default: [0.0; 3],
-        };
+        let color_def = ParamDef::color("c", [0.0; 3]);
         let color = ParamValue::Color([0.5, 0.25, 0.75]);
         let back = color_def
             .coerce_portable(PortableValue::from_param(&color))

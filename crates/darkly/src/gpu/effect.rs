@@ -44,6 +44,57 @@ impl EffectCache {
             aux_pipelines: Vec::new(),
         }
     }
+
+    /// Rewrite the uniform buffer at `index` from freshly-packed bytes, or do
+    /// nothing when this cache holds no such buffer.
+    ///
+    /// An effect's parameter state reaches the GPU through exactly two callers
+    /// — the effect's own `create_cache` and whatever rewrites it afterwards —
+    /// and the two must agree on a layout `bytemuck` will not check for them.
+    /// Routing both through one method is what keeps the packing in one place.
+    pub fn write_uniform(&self, queue: &wgpu::Queue, index: usize, bytes: &[u8]) {
+        if let Some(buf) = self.uniform_bufs.get(index) {
+            queue.write_buffer(buf, 0, bytes);
+        }
+    }
+}
+
+/// A fragment-visible bind-group entry kind. Fullscreen post-process pipelines
+/// (every veil, plus the blit/downscale filters) are built from a short ordered
+/// list of these; the builder assigns each its list position as its binding
+/// index, matching the `@group(0) @binding(i)` numbering the shaders use.
+#[derive(Clone, Copy)]
+pub enum Binding {
+    /// Filterable 2D float texture (hardware-sampled). Input and aux textures.
+    Texture,
+    /// Filtering sampler.
+    Sampler,
+    /// Uniform buffer, no dynamic offset.
+    Uniform,
+}
+
+impl Binding {
+    fn layout_entry(self, binding: u32) -> wgpu::BindGroupLayoutEntry {
+        let ty = match self {
+            Binding::Texture => wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            Binding::Sampler => wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            Binding::Uniform => wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+        };
+        wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty,
+            count: None,
+        }
+    }
 }
 
 /// Build a render pipeline from a passthrough blit shader.
@@ -53,10 +104,11 @@ pub fn create_blit_pipeline(
     format: wgpu::TextureFormat,
     label: &str,
 ) -> EffectPipeline {
-    create_filter_pipeline(
+    create_effect_pipeline(
         device,
         format,
         label,
+        &[Binding::Texture, Binding::Sampler],
         include_str!("../../shaders/blit.wgsl"),
         "fs_blit",
     )
@@ -72,44 +124,36 @@ pub fn create_downscale_pipeline(
     format: wgpu::TextureFormat,
     label: &str,
 ) -> EffectPipeline {
-    create_filter_pipeline(
+    create_effect_pipeline(
         device,
         format,
         label,
+        &[Binding::Texture, Binding::Sampler],
         include_str!("../../shaders/downscale.wgsl"),
         "fs_downscale",
     )
 }
 
-/// Shared pipeline builder for texture+sampler shaders that share the
-/// blit bind-group layout (binding 0 = texture, binding 1 = sampler).
-fn create_filter_pipeline(
+/// Build a fullscreen-triangle post-process pipeline: `vs_main` +
+/// `fragment_entry`, one color target of `format`, no blend/depth/stencil. The
+/// bind-group layout is `bindings` in order, numbered 0..n. The single home for
+/// every veil's pipeline construction and the blit/downscale filters.
+pub fn create_effect_pipeline(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
     label: &str,
+    bindings: &[Binding],
     shader_source: &str,
     fragment_entry: &str,
 ) -> EffectPipeline {
+    let entries: Vec<_> = bindings
+        .iter()
+        .enumerate()
+        .map(|(i, b)| b.layout_entry(i as u32))
+        .collect();
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some(&format!("{label}-bgl")),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
+        entries: &entries,
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

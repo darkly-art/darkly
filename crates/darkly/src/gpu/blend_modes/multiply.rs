@@ -4,6 +4,8 @@ pub fn register() -> BlendModeRegistration {
     BlendModeRegistration {
         type_id: "multiply",
         display_name: "Multiply",
+        description:
+            "Multiplies the two colors, darkening everywhere and keeping white transparent.",
         category: "Darken",
         gpu_value: 2,
         wgsl_math: "Cs = fg.rgb * bg.rgb;",

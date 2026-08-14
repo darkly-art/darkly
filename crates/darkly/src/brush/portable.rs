@@ -93,6 +93,18 @@ pub struct PortableNode {
     /// a compact diff.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub inputs: BTreeMap<String, PortableValue>,
+    /// Per-input slider-bound overrides, keyed by input name, as
+    /// `[min, max]`. Diffed against the registration exactly like `inputs`,
+    /// so only genuinely re-ranged ports serialize.
+    ///
+    /// Where `inputs` authors *where the knob sits*, this authors *how far it
+    /// travels* — the escape hatch for a port whose registration range is a
+    /// poor fit for one brush. A math node declaring `0..1` can be given a
+    /// bipolar `[-1.0, 1.0]` control, or a port whose useful band is a sliver
+    /// of its declared range can be narrowed onto it, without a helper node
+    /// in the graph doing the arithmetic.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ranges: BTreeMap<String, [f32; 2]>,
 }
 
 /// A wire serialized as `"<from_id>.<from_port> -> <to_id>.<to_port>"`.
@@ -208,12 +220,28 @@ impl PortableBrush {
                 }
             }
 
+            // Slider bounds: the same diff-against-registration treatment,
+            // so a brush that never re-ranges anything emits no `ranges` key.
+            let mut ranges = BTreeMap::new();
+            for port in &node.ports {
+                if port.dir != PortDir::Input {
+                    continue;
+                }
+                let Some(reg_port) = reg.ports.iter().find(|p| p.name == port.name) else {
+                    continue;
+                };
+                if reg_port.min != port.min || reg_port.max != port.max {
+                    ranges.insert(port.name.clone(), [port.min, port.max]);
+                }
+            }
+
             nodes.insert(
                 id.0.clone(),
                 PortableNode {
                     type_id: node.type_id.clone(),
                     comment: node.comment.clone(),
                     inputs,
+                    ranges,
                 },
             );
         }
@@ -315,6 +343,14 @@ impl PortableBrush {
                 graph
                     .set_node_comment(&new_id, pn.comment.clone())
                     .expect("node just added by add_node must exist");
+            }
+            // Applied through the graph setter rather than onto the cloned
+            // ports above so the ascending-and-finite invariant is enforced
+            // in one place for every author — yaml, editor, and paste alike.
+            for (name, [min, max]) in &pn.ranges {
+                graph
+                    .set_port_range(&new_id, name, *min, *max)
+                    .map_err(|e| format!("range '{name}' on '{}': {e}", pn.type_id))?;
             }
             id_map.insert(yaml_id.clone(), new_id);
         }
@@ -469,6 +505,69 @@ mod tests {
         assert_eq!(meta.label, "Softness");
         assert_eq!(meta.description, "Edge falloff");
         assert_eq!(meta.icon, "fa6-solid:circle-half-stroke");
+    }
+
+    /// A re-ranged port survives the yaml round trip, and a graph that
+    /// re-ranges nothing emits no `ranges` key at all — the diff stays a
+    /// diff, so untouched brushes' yaml doesn't churn.
+    #[test]
+    fn port_ranges_survive_and_stay_a_diff() {
+        let registry = registry();
+        let mut graph = crate::brush::default_graph();
+        let circle = graph
+            .nodes()
+            .iter()
+            .find(|(_, n)| n.type_id == "circle")
+            .map(|(id, _)| id.clone())
+            .expect("default has a circle node");
+
+        // Untouched graph: no node carries a `ranges` entry.
+        let clean = PortableBrush::from_graph_only(&graph, registry).unwrap();
+        assert!(
+            clean.nodes.values().all(|n| n.ranges.is_empty()),
+            "unmodified graph must not serialize any ranges"
+        );
+        assert!(!serde_yaml_ng::to_string(&clean).unwrap().contains("ranges"));
+
+        graph
+            .set_port_range(&circle, "softness", -1.0, 2.5)
+            .unwrap();
+
+        let portable = PortableBrush::from_graph_only(&graph, registry).unwrap();
+        let yaml = serde_yaml_ng::to_string(&portable).unwrap();
+        let restored = serde_yaml_ng::from_str::<PortableBrush>(&yaml)
+            .unwrap()
+            .into_graph(registry)
+            .unwrap();
+        let port = restored
+            .nodes()
+            .values()
+            .find(|n| n.type_id == "circle")
+            .expect("restored graph has a circle node")
+            .ports
+            .iter()
+            .find(|p| p.name == "softness")
+            .unwrap();
+        assert_eq!((port.min, port.max), (-1.0, 2.5));
+    }
+
+    /// A hand-edited yaml carrying a degenerate or inverted range is
+    /// rejected at import rather than producing a control whose normalize
+    /// and clamp arithmetic silently misbehaves.
+    #[test]
+    fn inverted_yaml_range_is_rejected_at_import() {
+        let registry = registry();
+        let graph = crate::brush::default_graph();
+        let mut portable = PortableBrush::from_graph_only(&graph, registry).unwrap();
+        let circle = portable
+            .nodes
+            .values_mut()
+            .find(|n| n.type_id == "circle")
+            .expect("default has a circle node");
+        circle.ranges.insert("softness".into(), [1.0, 0.0]);
+
+        let err = portable.into_graph(registry).unwrap_err();
+        assert!(err.contains("softness"), "unexpected error: {err}");
     }
 
     /// The unified model's headline guarantee: a non-wirable input (here

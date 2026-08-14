@@ -1,7 +1,7 @@
 <script lang="ts">
     import { watchDismiss } from '../../lib/dismiss';
     import Icon from '../../icons/Icon.svelte';
-    import { actions, type ActionRegistration } from '../../actions/registry';
+    import { actions, type Action } from '../../actions/registry';
     import { registryEpoch } from '../../actions/registryEpoch.svelte';
     import { NEW_LAYER_ACTION_IDS } from '../../actions/index';
 
@@ -16,7 +16,7 @@
         registryEpoch();
         return NEW_LAYER_ACTION_IDS
             .map(id => actions.get(id))
-            .filter((a): a is ActionRegistration => a !== undefined);
+            .filter((a): a is Action => a !== undefined);
     });
 
     function onKeyDown(e: KeyboardEvent) {

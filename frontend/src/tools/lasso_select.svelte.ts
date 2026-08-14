@@ -81,9 +81,7 @@ class LassoSelectTool extends ToolBase {
 
 export const lassoSelectTool: ToolDescriptor = {
     id: 'lasso_select',
-    icon: 'tabler:lasso',
     group: 'select',
     cluster: 'select',
-    hotkeyAction: 'lassoSelectTool',
     create: (inst: DarklyInstance) => new LassoSelectTool(inst),
 };

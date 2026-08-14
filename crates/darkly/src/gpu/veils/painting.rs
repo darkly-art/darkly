@@ -1,29 +1,23 @@
 // User-facing "Painting" veil. The underlying algorithm is the
 // generalized Kuwahara filter — see shader header for prior-art credit.
 
-use crate::gpu::effect::{EffectCache, EffectPipeline};
+use crate::gpu::effect::{create_effect_pipeline, Binding, EffectCache, EffectPipeline};
+use crate::gpu::preview::{swing, PreviewAnim};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
+use crate::units::UnitType;
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Int {
-        name: "kernel_size",
-        min: 1,
-        max: 7,
-        default: 6,
-    },
-    ParamDef::Float {
-        name: "sharpness",
-        min: 1.0,
-        max: 18.0,
-        default: 8.0,
-    },
-    ParamDef::Float {
-        name: "hardness",
-        min: 1.0,
-        max: 200.0,
-        default: 100.0,
-    },
+    ParamDef::int("kernel_size", 1, 7, 6)
+        .with_label("Brush Size")
+        .with_description("Width of the region each output pixel is averaged from — larger reads as broader strokes.")
+        .with_unit(UnitType::Pixels),
+    ParamDef::float("sharpness", 1.0, 18.0, 8.0)
+        .with_label("Sharpness")
+        .with_description("How crisply one painted region ends and the next begins."),
+    ParamDef::float("hardness", 1.0, 200.0, 100.0)
+        .with_label("Hardness")
+        .with_description("How strongly the strongest-oriented region wins, flattening detail into flat patches."),
 ];
 
 pub fn register() -> VeilRegistration {
@@ -32,6 +26,7 @@ pub fn register() -> VeilRegistration {
         display_name: "Painting",
         description: "Smooth the view into painterly, brush-like daubs.",
         params: PARAMS,
+        preview: Some(PreviewAnim::LOOPING),
         create_pipeline: create_painting_pipeline,
         from_params: |params, shared| {
             let kernel_size = match params.first() {
@@ -69,6 +64,9 @@ pub struct Painting {
     pub kernel_size: i32,
     pub sharpness: f32,
     pub hardness: f32,
+    /// Render resolution, kept from `create_cache` so
+    /// [`uniforms`](Self::uniforms) rebuilds the whole struct from state.
+    resolution: (f32, f32),
     shared: Arc<EffectPipeline>,
 }
 
@@ -83,7 +81,19 @@ impl Painting {
             kernel_size: kernel_size.max(1),
             sharpness,
             hardness,
+            resolution: (0.0, 0.0),
             shared,
+        }
+    }
+
+    fn uniforms(&self) -> PaintingUniforms {
+        PaintingUniforms {
+            kernel_size: self.kernel_size,
+            sharpness: self.sharpness,
+            hardness: self.hardness,
+            _pad: 0.0,
+            resolution_x: self.resolution.0,
+            resolution_y: self.resolution.1,
         }
     }
 }
@@ -112,8 +122,19 @@ impl Veil for Painting {
         ]
     }
 
+    /// The brush widens from a single texel to the full Kuwahara window and
+    /// back, so each quantised step of the control is plainly visible.
+    /// `kernel_size` sets the sampling radius inside one pass — `O(kernel²)`
+    /// samples — so the ramp averages a radius of 4 against the shipped default
+    /// of 6 and is *cheaper* per frame than a default-parameter render.
+    fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
+        self.kernel_size = (1.0 + 6.0 * swing(t)).round() as i32;
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
+        true
+    }
+
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ping_pong_views: &[wgpu::TextureView; 2],
@@ -121,21 +142,14 @@ impl Veil for Painting {
         render_width: u32,
         render_height: u32,
     ) -> EffectCache {
-        let uniforms = PaintingUniforms {
-            kernel_size: self.kernel_size,
-            sharpness: self.sharpness,
-            hardness: self.hardness,
-            _pad: 0.0,
-            resolution_x: render_width as f32,
-            resolution_y: render_height as f32,
-        };
+        self.resolution = (render_width as f32, render_height as f32);
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("painting-uniforms"),
             size: std::mem::size_of::<PaintingUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&self.uniforms()));
 
         let layout = &self.shared.bind_group_layout;
         let bind_groups: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
@@ -194,83 +208,13 @@ impl Veil for Painting {
     }
 }
 
-fn create_painting_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> EffectPipeline {
-    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("painting-bgl"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-        ],
-    });
-
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("painting-pipeline-layout"),
-        bind_group_layouts: &[Some(&bind_group_layout)],
-        immediate_size: 0,
-    });
-
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("painting-shader"),
-        source: wgpu::ShaderSource::Wgsl(
-            include_str!("../../../shaders/veils/painting.wgsl").into(),
-        ),
-    });
-
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("painting-pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: &[],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_painting"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            ..Default::default()
-        },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    });
-
-    EffectPipeline {
-        pipeline,
-        bind_group_layout,
-    }
+fn create_painting_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> EffectPipeline {
+    create_effect_pipeline(
+        device,
+        format,
+        "painting",
+        &[Binding::Texture, Binding::Sampler, Binding::Uniform],
+        include_str!("../../../shaders/veils/painting.wgsl"),
+        "fs_painting",
+    )
 }

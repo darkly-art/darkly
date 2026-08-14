@@ -82,10 +82,9 @@ describe('serializeTriggers', () => {
     });
 
     it('drops triggers whose chord is empty even if site prefix is present', () => {
-        // When the action requires a site (no Anywhere option), addTrigger
-        // seeds the new row with `<site>:` and a blank chord. If the user
-        // navigates away without capturing, the half-baked binding must
-        // not be persisted.
+        // A site prefix with no chord can't dispatch. It isn't reachable
+        // through the editor, but a hand-edited override can carry one, and it
+        // must not survive a round-trip through storage.
         expect(serializeTriggers([
             { kind: 'mouse', binding: 'canvas:' },
             { kind: 'mouse', binding: 'canvas:alt+click' },

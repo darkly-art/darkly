@@ -16,6 +16,8 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use super::preview::PreviewAnim;
+
 /// Static metadata for one blend mode. Every layer/group holds a
 /// `&'static BlendModeRegistration` directly; the GPU value is read straight
 /// from `gpu_value`, no enum cast, no extra lookup.
@@ -26,6 +28,9 @@ use std::sync::OnceLock;
 pub struct BlendModeRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
+    /// One-sentence summary of what this mode does to the colours beneath it —
+    /// the dropdown's tooltip and the reference manual's row for it.
+    pub description: &'static str,
     /// Visual grouping label for the UI dropdown ("Darken", "Lighten", etc.).
     pub category: &'static str,
     /// Integer the composite shader switches on. The shader's blend dispatch
@@ -38,6 +43,53 @@ pub struct BlendModeRegistration {
     /// statements (use `\n`-separated WGSL); helpers declared above the
     /// `blend()` function in `shaders/composite.wgsl` are in scope.
     pub wgsl_math: &'static str,
+}
+
+/// Id of the catalog this registry projects into.
+pub const CATALOG_ID: &str = "blendModes";
+
+/// How a blend mode's preview plays back: the blended layer rising over an
+/// unchanged backdrop and receding. Modes take no parameters and the motion is
+/// the same for every one of them, so it belongs to the catalog rather than to
+/// any single registration — a seventeenth mode is still one file of five
+/// fields and inherits this for free. It returns to zero, so the loop closes.
+///
+/// A mode is not an effect over an image but a relation between two, so there
+/// is no `src → out` mechanism to write and no `preview_at` to override: the
+/// documentation renderer drives the *host layer's* opacity, which is the one
+/// thing only a consumer holding a document can do. A mode that ever wants
+/// different motion is a `preview` field on [`BlendModeRegistration`] and a
+/// fallback to this in [`BlendModeRegistry::preview`] — a change local to this
+/// file and the one mode that wants the override.
+pub static PREVIEW: PreviewAnim = PreviewAnim::LOOPING;
+
+impl BlendModeRegistration {
+    pub fn catalog_entry(&self) -> crate::catalog::CatalogEntry {
+        // Blend modes have no icons anywhere — the dropdown is text, grouped by
+        // `category`.
+        crate::catalog::CatalogEntry::new(self.type_id, self.display_name)
+            .with_description(self.description)
+            .with_category(self.category)
+            // Modes carry no `preview` field of their own — the recipe lives on
+            // the catalog — so previewability is the same question put to the
+            // same authority, resolved through the registry rather than a field.
+            .with_supports_preview(registry().preview(self.type_id).is_some())
+    }
+}
+
+/// The blend-mode catalog, in GPU-value order — the conventional
+/// Photoshop / Krita ordering the dropdown lists, not alphabetic.
+pub fn catalog() -> crate::catalog::Catalog {
+    crate::catalog::Catalog::new(
+        CATALOG_ID,
+        "Blend Modes",
+        registry()
+            .all()
+            .into_iter()
+            .map(BlendModeRegistration::catalog_entry)
+            .collect(),
+    )
+    .with_description("How a layer's color combines with the composite beneath it.")
 }
 
 pub struct BlendModeRegistry {
@@ -94,6 +146,12 @@ impl BlendModeRegistry {
     /// `blend_mode_types()` query to populate the UI dropdown.
     pub fn all(&'static self) -> Vec<&'static BlendModeRegistration> {
         self.ordered.iter().map(|&i| &self.entries[i]).collect()
+    }
+
+    /// How long a mode's preview runs. Every registered mode inherits
+    /// [`PREVIEW`]; an unknown `type_id` gets `None`.
+    pub fn preview(&'static self, type_id: &str) -> Option<PreviewAnim> {
+        self.get(type_id).map(|_| PREVIEW)
     }
 }
 

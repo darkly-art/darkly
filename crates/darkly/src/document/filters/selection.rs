@@ -91,6 +91,8 @@ pub fn register() -> FilterEntityRegistration {
     FilterEntityRegistration {
         type_id: TYPE_ID,
         display_name: "Selection",
+        icon: "fa6-solid:vector-square",
+        description: "The active marching-ants region that confines edits to part of the canvas.",
         serialize,
         deserialize,
         remap_ids,

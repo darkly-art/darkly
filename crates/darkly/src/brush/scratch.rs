@@ -88,6 +88,11 @@ pub struct Scratch {
     /// Sampler for the write-side bind group.  Nearest filter — no sub-
     /// pixel reads in the consumers (commit blit is integer-aligned).
     write_sampler: wgpu::Sampler,
+    /// Texel format of both sides.  Color terminals use `Rgba8Unorm`;
+    /// warp terminals store a two-channel displacement field instead of
+    /// pixels (see [`crate::brush::warp_field`]) and declare their own
+    /// format on [`crate::brush::node::BrushNodeRegistration`].
+    format: wgpu::TextureFormat,
 
     /// Per-pixel quantities a terminal accumulates alongside the write
     /// side (see [`StrokeChannels`]).  `None` until a terminal asks via
@@ -101,7 +106,7 @@ pub struct Scratch {
 /// The write side carries coverage and nothing else — premultiplied
 /// source-over saturating at 1.  A terminal that needs to *remember*
 /// something per pixel across the stroke declares a channel: it becomes
-/// another colour attachment on the terminal's existing draw, so the
+/// another color attachment on the terminal's existing draw, so the
 /// blend unit accumulates it under `blend` for free, with no extra pass.
 ///
 /// The framework has no opinion on what a channel means.  `name` is the
@@ -126,7 +131,7 @@ pub struct StrokeChannel {
 /// canvas-anchored offset.  There is no API by which a caller can resize
 /// one without the other.
 ///
-/// A channel is written as a colour attachment and read from a pass that
+/// A channel is written as a color attachment and read from a pass that
 /// does *not* target it — watercolor's per-dab probe reads the deposit
 /// while rendering to its atlas. That is an ordinary pass-to-pass
 /// dependency, not the read/write alias WebGPU forbids, so a channel needs
@@ -150,12 +155,19 @@ impl Scratch {
     ///
     /// `canvas_copy_sampler` is shared across the canvas-copy BGL bind
     /// groups.  Linear filter (liquify needs sub-pixel sampling).
+    ///
+    /// `format` is the terminal's declared scratch format.  For anything
+    /// other than `Rgba8Unorm` the caller must pass the matching
+    /// non-filtering BGL and sampler from
+    /// [`BrushPipelines::canvas_copy_layout_for`](crate::brush::pipeline::BrushPipelines::canvas_copy_layout_for)
+    /// — float32 formats are not filterable in core WebGPU.
     pub fn new(
         device: &wgpu::Device,
         layer_w: u32,
         layer_h: u32,
         canvas_copy_bgl: &wgpu::BindGroupLayout,
         canvas_copy_sampler: &wgpu::Sampler,
+        format: wgpu::TextureFormat,
     ) -> Self {
         let write_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("scratch-write-sampler"),
@@ -165,12 +177,16 @@ impl Scratch {
         });
         let read_mirror_sampler = canvas_copy_sampler.clone();
 
-        let (write_texture, write_view) = create_write_texture(device, layer_w, layer_h);
+        let (write_texture, write_view) = create_write_texture(device, layer_w, layer_h, format);
         let write_bind_group =
             build_write_bind_group(device, canvas_copy_bgl, &write_view, &write_sampler);
 
-        let (read_mirror_texture, read_mirror_view) =
-            create_read_mirror_texture(device, READ_MIRROR_INITIAL_DIM, READ_MIRROR_INITIAL_DIM);
+        let (read_mirror_texture, read_mirror_view) = create_read_mirror_texture(
+            device,
+            READ_MIRROR_INITIAL_DIM,
+            READ_MIRROR_INITIAL_DIM,
+            format,
+        );
         let read_mirror_bind_group = build_read_mirror_bind_group(
             device,
             canvas_copy_bgl,
@@ -193,6 +209,7 @@ impl Scratch {
             canvas_copy_bgl: canvas_copy_bgl.clone(),
             read_mirror_sampler,
             write_sampler,
+            format,
             channels: None,
         }
     }
@@ -257,6 +274,11 @@ impl Scratch {
 
     pub fn write_texture(&self) -> &wgpu::Texture {
         &self.write_texture
+    }
+
+    /// Texel format of both sides.
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.format
     }
 
     /// Stroke-prologue helper: clear the write side to fully transparent
@@ -439,7 +461,7 @@ impl Scratch {
         let target_w = new_w.max(self.write_w);
         let target_h = new_h.max(self.write_h);
 
-        let (new_texture, new_view) = create_write_texture(device, target_w, target_h);
+        let (new_texture, new_view) = create_write_texture(device, target_w, target_h, self.format);
 
         // Copy existing scratch contents into the new texture at the
         // canvas-anchored offset.  Old regions outside the source rect
@@ -513,7 +535,7 @@ impl Scratch {
     /// bind group that references it.  Contents are not preserved; the
     /// next `sync_read_mirror` call re-populates from the write side.
     fn grow_read_mirror(&mut self, device: &wgpu::Device, new_w: u32, new_h: u32) {
-        let (new_texture, new_view) = create_read_mirror_texture(device, new_w, new_h);
+        let (new_texture, new_view) = create_read_mirror_texture(device, new_w, new_h, self.format);
 
         let new_read_bg = build_read_mirror_bind_group(
             device,
@@ -643,6 +665,7 @@ fn create_write_texture(
     device: &wgpu::Device,
     width: u32,
     height: u32,
+    format: wgpu::TextureFormat,
 ) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("scratch-write"),
@@ -654,7 +677,7 @@ fn create_write_texture(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
+        format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::COPY_DST
@@ -669,6 +692,7 @@ fn create_read_mirror_texture(
     device: &wgpu::Device,
     width: u32,
     height: u32,
+    format: wgpu::TextureFormat,
 ) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("scratch-read-mirror"),
@@ -680,7 +704,7 @@ fn create_read_mirror_texture(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
+        format,
         usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });

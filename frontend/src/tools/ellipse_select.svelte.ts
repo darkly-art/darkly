@@ -101,9 +101,7 @@ class EllipseSelectTool extends ToolBase {
 
 export const ellipseSelectTool: ToolDescriptor = {
     id: 'ellipse_select',
-    icon: 'lucide:circle-dashed',
     group: 'select',
     cluster: 'select',
-    hotkeyAction: 'ellipseSelectTool',
     create: (inst: DarklyInstance) => new EllipseSelectTool(inst),
 };

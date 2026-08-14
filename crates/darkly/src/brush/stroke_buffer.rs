@@ -66,13 +66,26 @@ impl StrokeBuffer {
     ///
     /// `pipelines` provides the canvas-copy BGL/sampler that the embedded
     /// `Scratch` needs for both its read-mirror and write bind groups.
-    pub fn new(device: &wgpu::Device, width: u32, height: u32, pipelines: &BrushPipelines) -> Self {
+    /// `scratch_format` comes from the stroke's terminal
+    /// ([`BrushNodeRegistration::scratch_format`](crate::brush::node::BrushNodeRegistration::scratch_format)).
+    /// The pre-stroke snapshot stays `Rgba8Unorm` regardless — it holds the
+    /// layer's pixels, which a warp terminal resolves *through* its field.
+    pub fn new(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        pipelines: &BrushPipelines,
+        scratch_format: wgpu::TextureFormat,
+    ) -> Self {
+        let (canvas_copy_bgl, canvas_copy_sampler) =
+            pipelines.canvas_copy_layout_for(scratch_format);
         let scratch = Scratch::new(
             device,
             width,
             height,
-            pipelines.canvas_copy_bind_group_layout(),
-            pipelines.canvas_copy_sampler(),
+            canvas_copy_bgl,
+            canvas_copy_sampler,
+            scratch_format,
         );
 
         let pre_stroke_texture = device.create_texture(&wgpu::TextureDescriptor {

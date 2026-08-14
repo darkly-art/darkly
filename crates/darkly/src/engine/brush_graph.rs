@@ -9,6 +9,7 @@ use super::{DarklyEngine, ReadbackContext};
 use crate::brush::input_value::InputValue;
 use crate::brush::state::BrushState;
 use crate::brush::wire::BrushWireType;
+use crate::gpu::preview::PreviewBackdrop;
 use crate::nodegraph::Graph;
 use crate::nodegraph::{NodeId, PortDir, PortRef, UnitType};
 
@@ -40,7 +41,7 @@ enum ChangeKind {
     /// - `PortDef::preview_value` — caller-side
     ///   `Graph::apply_preview_overrides` replaces the scrubbed value
     ///   with a preview-mode constant before rendering (used by
-    ///   `paint.size`, `watercolor.size`, …).
+    ///   `brush_settings.size`, `blur.strength`).
     /// - `PortDef::preview_irrelevant_scrub` — the preview pipeline
     ///   structurally ignores the port (used by `pen_input.stabilize`,
     ///   which the synthetic-stroke preview's hard-wired `PassThrough`
@@ -61,7 +62,11 @@ impl DarklyEngine {
     #[handler]
     pub fn brush_node_types(&self) -> Vec<crate::nodegraph::NodeRegistration<BrushWireType>> {
         let registry = crate::brush::registry();
-        registry.types().map(|r| r.node.clone()).collect()
+        registry
+            .types()
+            .into_iter()
+            .map(|r| r.node.clone())
+            .collect()
     }
 
     /// Capabilities the active brush graph derives from its nodes'
@@ -514,13 +519,15 @@ impl DarklyEngine {
             return cached.unwrap_or_default();
         }
 
-        self.request_stroke_preview_readback(self.active_brush_graph(), |width, height| {
-            ReadbackContext::BrushStrokePreview {
+        self.request_stroke_preview_readback(
+            self.active_brush_graph(),
+            |width, height, backdrop| ReadbackContext::BrushStrokePreview {
                 width,
                 height,
+                backdrop,
                 graph_version: current_graph_version,
-            }
-        });
+            },
+        );
         self.last_rendered_stroke_preview_version = current_graph_version;
 
         cached.unwrap_or_default()
@@ -669,6 +676,7 @@ impl DarklyEngine {
         height: u32,
         fg: [f32; 4],
         bg: [f32; 4],
+        backdrop: PreviewBackdrop,
         base_size_override: Option<f32>,
         context: ReadbackContext,
     ) {
@@ -680,6 +688,7 @@ impl DarklyEngine {
             path,
             fg,
             bg,
+            backdrop,
             width,
             height,
             base_size_override,
@@ -722,10 +731,14 @@ impl DarklyEngine {
     /// show brush *identity*, not the momentary scrub value the user happened
     /// to have. Per-node knowledge of what to neutralize lives on the port
     /// registrations — this pipeline never introspects node types.
+    /// The backdrop travels with the request rather than being read off the
+    /// engine when the readback lands: two brushes can have bakes in flight at
+    /// once, and the framer must measure each against the field its own stroke
+    /// was drawn over.
     pub(crate) fn request_stroke_preview_readback(
         &mut self,
         mut graph: Graph<BrushWireType>,
-        make_context: impl FnOnce(u32, u32) -> ReadbackContext,
+        make_context: impl FnOnce(u32, u32, PreviewBackdrop) -> ReadbackContext,
     ) {
         graph.apply_preview_overrides();
         let (rw, rh) = super::brush_library::BRUSH_STROKE_RENDER_SIZE;
@@ -734,6 +747,7 @@ impl DarklyEngine {
             crate::brush::preview_renderer::synthesize_stroke_path(rw as f32, rh as f32, 30, inset);
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
+        let backdrop = crate::brush::graph_capabilities(&graph).preview_backdrop;
         self.render_preview_and_request_readback(
             &graph,
             &path,
@@ -741,8 +755,9 @@ impl DarklyEngine {
             rh,
             fg,
             bg,
+            backdrop,
             None,
-            make_context(rw, rh),
+            make_context(rw, rh, backdrop),
         );
     }
 
@@ -754,6 +769,11 @@ impl DarklyEngine {
     /// differ only in the graph and the [`ReadbackContext`] variant. The dab
     /// thumbnail represents brush identity (shape, texture, dynamics), so
     /// user-facing scrubs that vary across instances shouldn't bias it.
+    ///
+    /// Always [`PreviewBackdrop::Flat`]: a stationary full-pressure sample has
+    /// no motion for a displacement to reveal, so a field under it would show
+    /// the field with a barely perturbed centre. The four brushes that would
+    /// want one show their declared glyph in this slot instead.
     pub(crate) fn request_dab_preview_readback(
         &mut self,
         mut graph: Graph<BrushWireType>,
@@ -771,6 +791,7 @@ impl DarklyEngine {
             rh,
             fg,
             bg,
+            PreviewBackdrop::Flat,
             Some(super::brush_library::DAB_PREVIEW_BASE_SIZE),
             make_context(rw, rh),
         );
@@ -1166,6 +1187,67 @@ impl DarklyEngine {
             .set_node_comment(&NodeId(node_id.to_string()), comment)
             .map_err(|e| format!("{e}"))?;
         Ok(self.active_graph_json())
+    }
+
+    /// Override an input port's slider bounds on one node instance.
+    ///
+    /// `display_min`/`display_max` arrive in **display space**, the same
+    /// contract [`Self::brush_set_exposed_port`] uses for its value — so the
+    /// caller hands back the numbers it was shown in
+    /// [`ExposedValue::Scalar`]'s `min`/`max` and needs no unit logic of its
+    /// own. Storage is raw port space, matching the brush yaml.
+    ///
+    /// Bounds are UI-only, so nothing recompiles and the stored port value is
+    /// untouched — but the override is authored brush state that survives
+    /// save/load, so this bumps the topology version like the other
+    /// graph-authoring handlers. Both the brush bar and the node editor read
+    /// the instance `PortDef::min`/`max`, so one call re-ranges the control in
+    /// every view.
+    #[handler(returns = graph)]
+    pub fn brush_graph_set_port_range(
+        &mut self,
+        node_id: &str,
+        port_name: &str,
+        display_min: f32,
+        display_max: f32,
+    ) -> Result<String, String> {
+        let nid = NodeId(node_id.to_string());
+        let unit_type = self.exposed_port_unit_type(&nid, port_name);
+        self.tool_session
+            .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE)
+            .graph
+            .set_port_range(
+                &nid,
+                port_name,
+                unit_type.from_display(display_min),
+                unit_type.from_display(display_max),
+            )
+            .map_err(|e| format!("{e}"))?;
+        self.bump_brush_topology_version();
+        Ok(self.active_graph_json())
+    }
+
+    /// The display unit an input port's numbers are expressed in on the
+    /// wire, preferring the registration's declaration over the instance
+    /// copy — the same precedence [`Self::brush_exposed_ports`] applies when
+    /// it converts values out.
+    fn exposed_port_unit_type(&self, node_id: &NodeId, port_name: &str) -> UnitType {
+        let tool = self.tool_session.read();
+        let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
+        let Some(node) = brush.graph.nodes().get(node_id) else {
+            return UnitType::default();
+        };
+        crate::brush::registry()
+            .get(&node.type_id)
+            .and_then(|r| {
+                r.ports
+                    .iter()
+                    .find(|p| p.name == port_name && p.dir == PortDir::Input)
+            })
+            .map(|p| p.unit_type)
+            .unwrap_or_default()
     }
 
     /// Remove a brush-bar entry. Idempotent (missing entries aren't an

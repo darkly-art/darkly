@@ -68,20 +68,50 @@ fn main() {
 
     generate_handler_registry(&src.join("engine"));
 
-    generate_registry(&src.join("gpu/veils"), "crate::gpu::veil::VeilRegistration");
+    // Registries whose variants are browsable metadata. `catalog_sources` is
+    // what `crate::catalog` is generated from — see `generate_catalog_registry`.
+    let mut catalog_sources: Vec<(String, String)> = Vec::new();
 
-    generate_registry(&src.join("gpu/voids"), "crate::gpu::void::VoidRegistration");
-
-    generate_registry(
-        &src.join("gpu/filters"),
-        "crate::gpu::filter::FilterPipelineRegistration",
+    generate_catalog_registry(
+        &src.join("actions"),
+        "crate::action::ActionCategory",
+        &src,
+        &mut catalog_sources,
     );
 
-    generate_registry(&src.join("tools"), "crate::tool::ToolRegistration");
+    generate_catalog_registry(
+        &src.join("gpu/veils"),
+        "crate::gpu::veil::VeilRegistration",
+        &src,
+        &mut catalog_sources,
+    );
 
-    generate_registry(
+    generate_catalog_registry(
+        &src.join("gpu/voids"),
+        "crate::gpu::void::VoidRegistration",
+        &src,
+        &mut catalog_sources,
+    );
+
+    generate_catalog_registry(
+        &src.join("gpu/filters"),
+        "crate::gpu::filter::FilterPipelineRegistration",
+        &src,
+        &mut catalog_sources,
+    );
+
+    generate_catalog_registry(
+        &src.join("tools"),
+        "crate::tool::ToolRegistration",
+        &src,
+        &mut catalog_sources,
+    );
+
+    generate_catalog_registry(
         &src.join("brush/nodes"),
         "crate::brush::BrushNodeRegistration",
+        &src,
+        &mut catalog_sources,
     );
 
     generate_registry(
@@ -94,30 +124,179 @@ fn main() {
         "crate::config::schema::SchemaSection",
     );
 
-    generate_registry(
+    generate_catalog_registry(
         &src.join("document/filters"),
         "crate::document::filter::FilterEntityRegistration",
+        &src,
+        &mut catalog_sources,
     );
 
-    generate_registry(
+    generate_catalog_registry(
         &src.join("document/layer_kinds"),
         "crate::document::layer_kind::LayerKindRegistration",
+        &src,
+        &mut catalog_sources,
     );
 
-    generate_registry(
+    generate_catalog_registry(
         &src.join("gpu/blend_modes"),
         "crate::gpu::blend_mode::BlendModeRegistration",
+        &src,
+        &mut catalog_sources,
     );
 
-    generate_yaml_presets(&PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("presets"));
-
+    // Brushes are a directory of YAML data rather than of `register()` modules,
+    // so they record their catalog source from inside their own scan. Must run
+    // before `generate_catalog_sources`, which consumes the vector.
     generate_builtin_brushes(
         &PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("brushes"),
+        &mut catalog_sources,
     );
+
+    generate_catalog_sources(catalog_sources, &src);
+
+    generate_yaml_presets(&PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("presets"));
 
     generate_texture_registry(
         &PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("resources/textures"),
     );
+}
+
+/// [`generate_registry`], additionally recording the directory as a source of
+/// browsable catalog metadata.
+///
+/// Which function a registry directory is scanned by *is* the decision about
+/// whether its variants are documentation. Both `catalogs()` and
+/// `catalog_sources()` are generated from what this records, so a registry
+/// cannot be projected in one and forgotten in the other — and a directory
+/// scanned by plain [`generate_registry`] (brush nodes, stabilizers, request
+/// handler groups) contributes to neither.
+///
+/// The registry module — the parent module of the registration type — must
+/// export `CATALOG_ID` and `catalog()`, and may export `preview_mechanism()`.
+fn generate_catalog_registry(
+    dir: &Path,
+    registration_type: &str,
+    src: &Path,
+    sources: &mut Vec<(String, String)>,
+) {
+    generate_registry(dir, registration_type);
+    let rel = dir
+        .strip_prefix(src)
+        .unwrap_or(dir)
+        .to_str()
+        .unwrap()
+        .replace('\\', "/");
+    record_catalog_source(
+        &rel,
+        registration_type.rsplit_once("::").unwrap().0,
+        sources,
+    );
+}
+
+/// Record a scanned directory as a source of browsable catalog metadata.
+///
+/// Split out from [`generate_catalog_registry`] for the scans whose directory
+/// holds data rather than `register()` modules — `brushes/` is a directory of
+/// YAML, but its catalog is documentation on the same footing as a registry's.
+/// `module` must export `CATALOG_ID` and `catalog()`, and may export a preview
+/// mechanism.
+fn record_catalog_source(dir: &str, module: &str, sources: &mut Vec<(String, String)>) {
+    sources.push((dir.to_string(), module.to_string()));
+}
+
+/// Resolve a module path (`crate::a::b`) to the file that holds it, trying
+/// `src/a/b.rs` then `src/a/b/mod.rs`. `None` when neither exists.
+fn module_source(module: &str, src: &Path) -> Option<PathBuf> {
+    let rel = module.trim_start_matches("crate::").replace("::", "/");
+    let flat = src.join(format!("{rel}.rs"));
+    if flat.exists() {
+        return Some(flat);
+    }
+    let dir = src.join(&rel).join("mod.rs");
+    dir.exists().then_some(dir)
+}
+
+/// Emit `OUT_DIR/catalog_sources_gen.rs`: the list of scanned catalog-producing
+/// registry directories, the `catalogs()` projection over them, and the
+/// `preview_mechanisms()` projection over the subset that has one. Generated
+/// rather than hand-written so the export and the test that checks the export
+/// is complete both read from what the build actually found on disk.
+fn generate_catalog_sources(mut sources: Vec<(String, String)>, src: &Path) {
+    sources.sort();
+
+    let mut code = String::new();
+    code.push_str("// @generated by build.rs — do not edit manually.\n");
+    code.push_str(
+        "// One entry per registry directory scanned by `generate_catalog_registry`.\n\n",
+    );
+
+    code.push_str("/// A registry directory the build scan found to produce a catalog.\n");
+    code.push_str("pub struct CatalogSource {\n");
+    code.push_str("    /// The directory the build scan walked, as that scan named it:\n");
+    code.push_str("    /// `gpu/veils` and friends relative to `crates/darkly/src`,\n");
+    code.push_str("    /// `brushes` beside it.\n");
+    code.push_str("    pub dir: &'static str,\n");
+    code.push_str("    /// Id of the catalog the registry in that directory produces.\n");
+    code.push_str("    pub id: &'static str,\n");
+    code.push_str("}\n\n");
+
+    code.push_str("/// Every module directory the build scan found that produces a catalog.\n");
+    code.push_str("#[rustfmt::skip]\n");
+    code.push_str("pub fn catalog_sources() -> Vec<CatalogSource> {\n");
+    code.push_str("    vec![\n");
+    for (dir, module) in &sources {
+        code.push_str(&format!(
+            "        CatalogSource {{ dir: \"{dir}\", id: {module}::CATALOG_ID }},\n"
+        ));
+    }
+    code.push_str("    ]\n");
+    code.push_str("}\n\n");
+
+    code.push_str("/// Every registry, projected. Requires no GPU device.\n");
+    code.push_str("#[rustfmt::skip]\n");
+    code.push_str("pub fn catalogs() -> Vec<Catalog> {\n");
+    code.push_str("    vec![\n");
+    for (_, module) in &sources {
+        code.push_str(&format!("        {module}::catalog(),\n"));
+    }
+    code.push_str("    ]\n");
+    code.push_str("}\n\n");
+
+    // One row per catalog whose registry module exports a preview mechanism.
+    // A catalog that has none writes nothing — which is what keeps the
+    // document-layer registries free of a `wgpu`-taking trait rather than
+    // making each of them hand-write a negative.
+    code.push_str(
+        "/// Every catalog that can render a preview, keyed by catalog id. A catalog\n\
+         /// whose registry module exports no `preview_mechanism` is absent, which is\n\
+         /// how a non-previewable catalog answers without writing anything.\n",
+    );
+    code.push_str("#[rustfmt::skip]\n");
+    code.push_str(
+        "pub fn preview_mechanisms() -> Vec<(&'static str, &'static dyn crate::gpu::preview::PreviewMechanism)> {\n",
+    );
+    code.push_str("    vec![\n");
+    for (_, module) in &sources {
+        let Some(path) = module_source(module, src) else {
+            continue;
+        };
+        println!("cargo:rerun-if-changed={}", path.display());
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        if text.contains("pub fn preview_mechanism") {
+            code.push_str(&format!(
+                "        ({module}::CATALOG_ID, {module}::preview_mechanism()),\n"
+            ));
+        }
+    }
+    code.push_str("    ]\n");
+    code.push_str("}\n");
+
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
+    let out_path = PathBuf::from(out_dir).join("catalog_sources_gen.rs");
+    fs::write(&out_path, code).unwrap();
 }
 
 /// Scan a directory for .rs module files (excluding mod.rs) and generate
@@ -448,7 +627,20 @@ fn titlecase(s: &str) -> String {
 /// brushes are loaded by `crate::brush::builtin_brushes::all()` at
 /// engine startup — adding a new one is "drop a `.yaml` file in the
 /// directory" with no other code touched.
-fn generate_builtin_brushes(dir: &Path) {
+///
+/// Also records the directory as a catalog source, from the scan itself
+/// rather than from a second hand-written name — the same "derived from
+/// what is on disk" property [`generate_catalog_registry`] gives the
+/// module directories, and what `every_catalog_source_is_exported` rests on.
+fn generate_builtin_brushes(dir: &Path, catalog_sources: &mut Vec<(String, String)>) {
+    record_catalog_source(
+        dir.file_name()
+            .and_then(|s| s.to_str())
+            .expect("brush directory has a name"),
+        "crate::brush::builtin_brushes",
+        catalog_sources,
+    );
+
     let mut brushes: Vec<(String, PathBuf)> = Vec::new();
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {

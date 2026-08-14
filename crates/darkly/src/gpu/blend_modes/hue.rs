@@ -4,6 +4,8 @@ pub fn register() -> BlendModeRegistration {
     BlendModeRegistration {
         type_id: "hue",
         display_name: "Hue",
+        description:
+            "Takes the hue of this layer and the saturation and brightness of what is beneath.",
         category: "Component",
         gpu_value: 12,
         // PDF 11.3.5.3 / W3C Compositing-1, Krita's HSY model.

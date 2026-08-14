@@ -25,8 +25,11 @@ fn noise_defaults(engine: &DarklyEngine) -> Vec<ParamValue> {
 
 #[test]
 fn noise_void_is_registered() {
-    let engine = test_engine(64, 64);
-    let types: Vec<_> = engine.void_types().into_iter().map(|t| t.type_id).collect();
+    let types: Vec<_> = darkly::gpu::void::catalog()
+        .entries
+        .into_iter()
+        .map(|e| e.type_id)
+        .collect();
     assert!(
         types.contains(&"noise"),
         "noise void must be auto-registered by build.rs; got {types:?}",
@@ -353,8 +356,8 @@ fn set_int_param(params: &mut [ParamValue], name: &str, value: i32) {
     let defs = engine.void_param_defs("noise");
     let idx = defs
         .iter()
-        .position(|d| match d {
-            darkly::gpu::params::ParamDef::Int { name: n, .. } => *n == name,
+        .position(|d| match d.kind {
+            darkly::gpu::params::ParamKind::Int { .. } => d.name == name,
             _ => false,
         })
         .unwrap_or_else(|| panic!("noise void has no int param '{name}'"));
@@ -369,8 +372,8 @@ fn set_float_param(params: &mut [ParamValue], name: &str, value: f32) {
     let defs = engine.void_param_defs("noise");
     let idx = defs
         .iter()
-        .position(|d| match d {
-            darkly::gpu::params::ParamDef::Float { name: n, .. } => *n == name,
+        .position(|d| match d.kind {
+            darkly::gpu::params::ParamKind::Float { .. } => d.name == name,
             _ => false,
         })
         .unwrap_or_else(|| panic!("noise void has no float param '{name}'"));

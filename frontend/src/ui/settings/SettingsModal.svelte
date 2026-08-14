@@ -1,12 +1,13 @@
 <script lang="ts">
     import { config } from '../../config/store.svelte';
     import { settings } from '../../state/settings.svelte';
-    import { actions, type ActionRegistration } from '../../actions/registry';
+    import { actions, type Action } from '../../actions/registry';
     import { exportRootAsZip, downloadBlob } from '../../storage';
     import Modal from '../Modal.svelte';
     import PrefRow from './PrefRow.svelte';
     import ActionTriggerRow from './ActionTriggerRow.svelte';
-    import type { PrefInfo } from '../../config/schema';
+    import type { ParamInfo } from '../../engine/protocol_gen';
+    import { sectionPrefs } from '../../config/store.svelte';
     import Icon from '../../icons/Icon.svelte';
 
     let search = $state('');
@@ -18,9 +19,9 @@
 
     /** Settings tab: every visible (non-Hidden) schema-defined pref. */
     const visiblePrefs = $derived.by(() => {
-        const all: PrefInfo[] = [];
+        const all: ParamInfo[] = [];
         for (const section of config.schema) {
-            for (const pref of section.prefs) {
+            for (const pref of sectionPrefs(section)) {
                 if (pref.widget === 'hidden') continue;
                 all.push(pref);
             }
@@ -28,8 +29,8 @@
         const q = search.trim().toLowerCase();
         if (!q) return all;
         return all.filter(p =>
-            p.displayName.toLowerCase().includes(q)
-            || p.key.toLowerCase().includes(q)
+            (p.label ?? p.name).toLowerCase().includes(q)
+            || p.name.toLowerCase().includes(q)
             || (p.description ?? '').toLowerCase().includes(q)
         );
     });
@@ -42,7 +43,7 @@
         const all = actions.all();
         const q = search.trim().toLowerCase();
         if (!q) return all;
-        return all.filter((a: ActionRegistration) =>
+        return all.filter((a: Action) =>
             a.displayName.toLowerCase().includes(q)
             || a.id.toLowerCase().includes(q)
             || (a.description ?? '').toLowerCase().includes(q)
@@ -131,7 +132,7 @@
                     {#if visiblePrefs.length === 0}
                         <div class="empty">No matching settings.</div>
                     {:else}
-                        {#each visiblePrefs as pref (pref.key)}
+                        {#each visiblePrefs as pref (pref.name)}
                             <PrefRow {pref} />
                         {/each}
                     {/if}

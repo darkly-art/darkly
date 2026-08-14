@@ -31,6 +31,11 @@ struct CheckpointSlot {
     /// Dimensions of the allocated texture (may be larger than bbox).
     tex_w: u32,
     tex_h: u32,
+    /// Format the slot was allocated in. The ring snapshots the stroke
+    /// scratch, whose format is the terminal's business — color for most
+    /// brushes, a float displacement field for warp terminals — and
+    /// `copy_texture_to_texture` requires the two to match.
+    tex_format: wgpu::TextureFormat,
     /// Snapshots of the stroke's channels, parallel to
     /// `Scratch::channel_textures`. Empty for terminals that declare none.
     ///
@@ -59,6 +64,7 @@ impl CheckpointSlot {
             texture: None,
             tex_w: 0,
             tex_h: 0,
+            tex_format: crate::brush::node::COLOR_SCRATCH_FORMAT,
             canvas_bbox: CanvasRect::from_xywh(0, 0, 0, 0),
             save_point_index: 0,
             vector_index: 0,
@@ -75,15 +81,18 @@ impl CheckpointSlot {
         }
     }
 
-    /// Ensure the textures are at least `w × h`, one per entry in
-    /// `extra_formats` beyond the stroke buffer's own. Reallocate if
-    /// needed. The whole set is reallocated together so a slot's
-    /// snapshots always share dimensions.
+    /// Ensure the stroke-buffer snapshot is at least `w × h` and in
+    /// `format`, plus one channel snapshot per entry in `extra_formats`.
+    /// Reallocate if needed — including on a format change, since a slot
+    /// cached from a color stroke cannot receive a warp field. The whole
+    /// set is reallocated together so a slot's snapshots always share
+    /// dimensions.
     fn ensure_texture(
         &mut self,
         device: &wgpu::Device,
         w: u32,
         h: u32,
+        format: wgpu::TextureFormat,
         extra_formats: &[wgpu::TextureFormat],
     ) {
         // Slots outlive strokes — `clear()` only flips `valid` — so a slot
@@ -97,7 +106,12 @@ impl CheckpointSlot {
                 .iter()
                 .zip(extra_formats)
                 .all(|(t, f)| t.format() == *f);
-        if self.tex_w >= w && self.tex_h >= h && self.texture.is_some() && formats_match {
+        if self.tex_w >= w
+            && self.tex_h >= h
+            && self.tex_format == format
+            && self.texture.is_some()
+            && formats_match
+        {
             return;
         }
         // Allocate with some headroom to reduce reallocation frequency.
@@ -119,10 +133,11 @@ impl CheckpointSlot {
                 view_formats: &[],
             })
         };
-        self.texture = Some(make(wgpu::TextureFormat::Rgba8Unorm));
+        self.texture = Some(make(format));
         self.extra = extra_formats.iter().copied().map(make).collect();
         self.tex_w = alloc_w;
         self.tex_h = alloc_h;
+        self.tex_format = format;
     }
 }
 
@@ -296,7 +311,13 @@ impl CheckpointRing {
         let extra_formats: Vec<wgpu::TextureFormat> = extra.iter().map(|t| t.format()).collect();
         let slot_idx = self.pick_slot(tip_vi, max_div_window, vector_index);
         let slot = &mut self.slots[slot_idx];
-        slot.ensure_texture(device, layer_rect.width, layer_rect.height, &extra_formats);
+        slot.ensure_texture(
+            device,
+            layer_rect.width,
+            layer_rect.height,
+            stroke.texture.format(),
+            &extra_formats,
+        );
         slot.canvas_bbox = clipped_canvas;
         slot.save_point_index = save_point_index;
         slot.vector_index = vector_index;

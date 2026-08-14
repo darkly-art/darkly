@@ -50,12 +50,10 @@ beforeEach(() => {
 withApi(engine);
 
 describe('clipboard action registration', () => {
-    it('registers copy, cut, paste, and pasteInPlace under the edit category', () => {
+    it('registers copy, cut, paste, and pasteInPlace', () => {
         registerClipboardActions();
         for (const id of ['copy', 'cut', 'paste', 'pasteInPlace']) {
-            const action = actions.get(id);
-            expect(action, id).toBeDefined();
-            expect(action!.category).toBe('edit');
+            expect(actions.get(id), id).toBeDefined();
         }
     });
 });

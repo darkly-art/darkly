@@ -228,7 +228,7 @@ export class BrushGraphState {
      *  active graph contains a content-dependent node (clone, blur,
      *  smudge, liquify) — its bake against the flat preview background
      *  renders blank. Declared per node type via the registration's
-     *  `preview_fallback_icon`; refreshed alongside `supportsErase`. */
+     *  `preview_staging`; refreshed alongside `supportsErase`. */
     previewIcon = $state<string | null>(null);
 
     /**
@@ -467,6 +467,21 @@ export class BrushGraphState {
         if (!app.engine) return;
         await this.applyResult(
             await app.engine.api.brushGraphSetExposedPortMeta({ key, label, description, icon }),
+        );
+    }
+
+    /** Override an input port's slider bounds on one node instance.
+     *  `min`/`max` are display-space — hand back the numbers the control
+     *  was rendered with. Rejected by the engine unless ascending. */
+    async setPortRange(nodeId: string, portName: string, min: number, max: number) {
+        if (!app.engine) return;
+        await this.applyResult(
+            await app.engine.api.brushGraphSetPortRange({
+                node_id: nodeId,
+                port_name: portName,
+                display_min: min,
+                display_max: max,
+            }),
         );
     }
 

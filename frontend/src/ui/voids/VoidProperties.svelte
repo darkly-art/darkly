@@ -49,7 +49,7 @@
         pushParams();
     }
 
-    const voidLabel = $derived(app.voidDisplayName(node.voidType));
+    const voidLabel = $derived(app.displayName('voids', node.voidType));
 
     // Capture kind (camera / screenshare / Blender stream) for this void, or
     // undefined for procedural voids — the single signal that gates every

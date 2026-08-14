@@ -260,7 +260,7 @@ mod tests {
                 is_gpu: false,
                 is_terminal: false,
                 supports_erase: true,
-                preview_fallback_icon: None,
+                preview_staging: None,
             },
         );
         map.insert(
@@ -277,7 +277,7 @@ mod tests {
                 is_gpu: false,
                 is_terminal: false,
                 supports_erase: true,
-                preview_fallback_icon: None,
+                preview_staging: None,
             },
         );
         map.insert(
@@ -291,7 +291,7 @@ mod tests {
                 is_gpu: false,
                 is_terminal: false,
                 supports_erase: true,
-                preview_fallback_icon: None,
+                preview_staging: None,
             },
         );
         map
@@ -564,7 +564,7 @@ mod tests {
                 is_gpu: false,
                 is_terminal: false,
                 supports_erase: true,
-                preview_fallback_icon: None,
+                preview_staging: None,
             },
         );
         reg.insert(
@@ -581,7 +581,7 @@ mod tests {
                 is_gpu: false,
                 is_terminal: false,
                 supports_erase: true,
-                preview_fallback_icon: None,
+                preview_staging: None,
             },
         );
 

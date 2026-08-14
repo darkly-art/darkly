@@ -87,6 +87,8 @@ pub fn register() -> FilterEntityRegistration {
     FilterEntityRegistration {
         type_id: TYPE_ID,
         display_name: "Mask",
+        icon: "fa6-solid:mask",
+        description: "A greyscale channel that hides or reveals its host layer per pixel.",
         serialize,
         deserialize,
         remap_ids,

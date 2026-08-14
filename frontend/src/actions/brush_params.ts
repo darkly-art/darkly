@@ -83,25 +83,16 @@ let sizeDrag: SizeDragState | null = null;
 export function registerBrushParamActions() {
     actions.register({
         id: 'brushSizeUp',
-        displayName: 'Increase Brush Size',
-        category: 'brush',
-        icon: 'fa6-solid:plus',
         handler: () => adjustBrushParam('size', +1),
     });
 
     actions.register({
         id: 'brushSizeDown',
-        displayName: 'Decrease Brush Size',
-        category: 'brush',
-        icon: 'fa6-solid:minus',
         handler: () => adjustBrushParam('size', -1),
     });
 
     actions.register({
         id: 'brushSizeAdjust',
-        displayName: 'Adjust Brush Size (drag)',
-        category: 'brush',
-        icon: 'fa6-solid:up-right-and-down-left-from-center',
         type: 'hold',
         handler: (ctx) => {
             const found = findScalarPort('size');

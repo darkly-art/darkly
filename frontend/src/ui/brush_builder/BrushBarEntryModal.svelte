@@ -18,6 +18,20 @@
     // offline via <Icon>.
     let iconInput = $state('');
 
+    // Slider bounds, in the same display space the control renders in.
+    // Only scalars have them — a toggle or a dropdown has no travel to
+    // re-range — so the whole section is hidden for other kinds.
+    let minInput = $state(0);
+    let maxInput = $state(1);
+    let advancedOpen = $state(false);
+
+    const scalar = $derived(entry?.data.kind === 'scalar' ? entry.data : null);
+    // Mirrors the engine's rule, so an unsavable range is caught before the
+    // round trip rather than coming back as an error string.
+    const rangeValid = $derived(
+        Number.isFinite(minInput) && Number.isFinite(maxInput) && minInput < maxInput,
+    );
+
     /** Re-seed the inputs whenever the modal opens for a fresh entry —
      *  the engine emits the current effective values (registration
      *  fallbacks applied) so the placeholders/values match what the
@@ -27,17 +41,28 @@
             labelInput = entry.label;
             descriptionInput = entry.description;
             iconInput = entry.icon;
+            if (entry.data.kind === 'scalar') {
+                minInput = entry.data.min;
+                maxInput = entry.data.max;
+            }
+            advancedOpen = false;
         }
     });
 
-    function onSave() {
-        if (!entry) return;
-        brushGraph.setExposedPortMeta(
+    async function onSave() {
+        if (!entry || !rangeValid) return;
+        await brushGraph.setExposedPortMeta(
             entry.key,
             labelInput,
             descriptionInput,
             iconInput,
         );
+        // Only when actually changed: the range is a per-instance override,
+        // and re-sending the current bounds would pin a port to values it
+        // was merely inheriting from its registration.
+        if (scalar && (minInput !== scalar.min || maxInput !== scalar.max)) {
+            await brushGraph.setPortRange(entry.nodeId, entry.portName, minInput, maxInput);
+        }
         open = false;
     }
 
@@ -90,9 +115,44 @@
                     {/each}
                 </div>
             </div>
+            {#if scalar}
+                <div class="field">
+                    <button
+                        type="button"
+                        class="disclosure"
+                        onclick={() => (advancedOpen = !advancedOpen)}
+                        aria-expanded={advancedOpen}
+                    >
+                        <Icon name={advancedOpen ? 'fa6-solid:chevron-down' : 'fa6-solid:chevron-right'} />
+                        <span class="field-label">Advanced</span>
+                    </button>
+                    {#if advancedOpen}
+                        <div class="advanced">
+                            <p class="hint">
+                                Slider range for this brush. Narrow it onto the values that
+                                actually do something, or re-center it — a range of −1 to 1
+                                gives a control that works in both directions.
+                            </p>
+                            <div class="range-row">
+                                <label class="field range-field">
+                                    <span class="field-label">Min</span>
+                                    <input type="number" class="text-input" step="any" bind:value={minInput} />
+                                </label>
+                                <label class="field range-field">
+                                    <span class="field-label">Max</span>
+                                    <input type="number" class="text-input" step="any" bind:value={maxInput} />
+                                </label>
+                            </div>
+                            {#if !rangeValid}
+                                <p class="hint error">Min must be less than max.</p>
+                            {/if}
+                        </div>
+                    {/if}
+                </div>
+            {/if}
             <footer class="actions">
                 <button type="button" class="btn" onclick={onCancel}>Cancel</button>
-                <button type="submit" class="btn primary">Save</button>
+                <button type="submit" class="btn primary" disabled={!rangeValid}>Save</button>
             </footer>
         </form>
     {/if}
@@ -171,11 +231,52 @@
         font-size: 10px;
         color: var(--text-muted);
     }
+    .disclosure {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0;
+        background: transparent;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-family: inherit;
+        font-size: 11px;
+    }
+    .disclosure:hover {
+        color: var(--text);
+    }
+    .advanced {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 8px;
+    }
+    .range-row {
+        display: flex;
+        gap: 8px;
+    }
+    .range-field {
+        flex: 1;
+    }
+    .hint {
+        margin: 0;
+        font-size: 11px;
+        line-height: 1.45;
+        color: var(--text-muted);
+    }
+    .hint.error {
+        color: var(--danger, #e0645a);
+    }
     .actions {
         display: flex;
         gap: 8px;
         justify-content: flex-end;
         margin-top: 4px;
+    }
+    .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
     }
     .btn {
         padding: 7px 14px;

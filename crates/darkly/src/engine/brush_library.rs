@@ -8,7 +8,7 @@ use crate::brush::library::BrushInfo;
 
 /// Dimensions used for baked brush thumbnails. Matches the live editor
 /// preview so brushes look identical in the picker grid.
-pub(crate) const BRUSH_THUMBNAIL_SIZE: (u32, u32) = (320, 120);
+pub const BRUSH_THUMBNAIL_SIZE: (u32, u32) = (320, 120);
 
 /// Render canvas for stroke previews. Generously oversized — not derived
 /// from any per-brush geometry. `apply_preview_overrides` neutralizes the
@@ -98,13 +98,15 @@ impl DarklyEngine {
         // size-invariant — the picker grid should show brush identity, not a
         // snapshot of whatever scrub value the user happened to have when
         // saving.
-        self.request_stroke_preview_readback(self.active_brush_graph(), |width, height| {
-            ReadbackContext::BrushThumbnailForSave {
+        self.request_stroke_preview_readback(
+            self.active_brush_graph(),
+            |width, height, backdrop| ReadbackContext::BrushThumbnailForSave {
                 name: name.to_string(),
                 width,
                 height,
-            }
-        });
+                backdrop,
+            },
+        );
         Ok(())
     }
 
@@ -133,13 +135,15 @@ impl DarklyEngine {
         let Some(brush) = self.brush_library.get(name).cloned() else {
             return Vec::new();
         };
-        self.request_stroke_preview_readback(brush.metadata.graph.clone(), |width, height| {
-            ReadbackContext::BrushThumbnailForSave {
+        self.request_stroke_preview_readback(
+            brush.metadata.graph.clone(),
+            |width, height, backdrop| ReadbackContext::BrushThumbnailForSave {
                 name: name.to_string(),
                 width,
                 height,
-            }
-        });
+                backdrop,
+            },
+        );
         Vec::new()
     }
 

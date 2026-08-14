@@ -22,10 +22,9 @@ const PARAMS: &[ParamDef] = &[
     // so the GPU holds the last frame, and the JS-side `MediaStreamSource`
     // suppresses uploads — but keeps the stream open so toggling back off
     // resumes the live feed instantly (no re-prompt).
-    ParamDef::Bool {
-        name: "freeze",
-        default: false,
-    },
+    ParamDef::boolean("freeze", false)
+        .with_label("Freeze")
+        .with_description("Holds the last captured frame instead of following the live feed."),
     // How many rAF frames to skip between webcam → GPU uploads. 1 = upload
     // every frame (live 60fps), 4 = upload every 4th frame (~15fps at 60Hz
     // rAF, the default). Higher values trade smoothness for GPU/CPU savings —
@@ -35,12 +34,9 @@ const PARAMS: &[ParamDef] = &[
     // The JS-side `MediaStreamSource.tick()` reads this value from the layer
     // params and gates its own upload accordingly; nothing here reads the field
     // at render time.
-    ParamDef::Int {
-        name: "frame_divisor",
-        min: 1,
-        max: 60,
-        default: 4,
-    },
+    ParamDef::int("frame_divisor", 1, 60, 4)
+        .with_label("Frame Skip")
+        .with_description("Capture one frame in this many, to lighten the load."),
 ];
 
 /// Horizontal flip about the canvas center — the selfie view every video-call
@@ -56,6 +52,7 @@ fn selfie_flip(canvas_w: u32, _canvas_h: u32) -> crate::transform::Transform {
 static CONFIG: VideoStreamConfig = VideoStreamConfig {
     type_id: TYPE_ID,
     display_name: "Camera",
+    description: "Live frames from a connected webcam, mirrored like a selfie.",
     icon: "tabler:camera",
     params: PARAMS,
     capture_kind: CaptureKind::Camera,
@@ -81,7 +78,7 @@ mod tests {
 
     #[test]
     fn params_are_freeze_and_divisor() {
-        let names: Vec<_> = PARAMS.iter().map(|p| p.name()).collect();
+        let names: Vec<_> = PARAMS.iter().map(|p| p.name).collect();
         assert_eq!(names, vec!["freeze", "frame_divisor"]);
     }
 

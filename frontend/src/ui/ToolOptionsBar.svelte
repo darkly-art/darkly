@@ -16,7 +16,7 @@
         {#if Options}
             <Options />
         {:else}
-            <span class="tool-name">{tool ? app.toolDisplayName(tool.id) : ''}</span>
+            <span class="tool-name">{tool ? app.displayName('tools', tool.id) : ''}</span>
             <div class="spacer"></div>
         {/if}
     </div>

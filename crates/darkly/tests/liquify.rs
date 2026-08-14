@@ -15,13 +15,19 @@ use std::sync::{Arc, OnceLock};
 use darkly::brush::compile_graph;
 use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, StrokeResources};
-use darkly::brush::nodes::liquify::LIQUIFY_SPACING_PX;
+use darkly::brush::nodes::liquify::LIQUIFY_SPACING_RATIO;
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::brush::stroke_buffer::StrokeBuffer;
 use darkly::gpu::test_utils::{create_test_texture, readback_texture, test_device};
 
 const CANVAS: u32 = 128;
+
+/// Dab step these tests hand-place at, in canvas pixels. Independent of
+/// the brush's configured spacing: the harness places dabs at explicit
+/// positions and synthesises the matching `pen.motion`, so this is the
+/// tests' own geometry, not a copy of the brush's.
+const TEST_DAB_STEP_PX: f32 = 4.0;
 
 fn shared_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
     static HANDLES: OnceLock<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> = OnceLock::new();
@@ -50,6 +56,23 @@ fn two_tone_canvas(red_x_threshold: u32) -> Vec<u8> {
     out
 }
 
+/// 4 px-period vertical stripes: maximum frequency along the drag axis,
+/// and exactly two tones — so any intermediate red value in the output is
+/// resampling loss, not content.
+fn stripe_canvas() -> Vec<u8> {
+    let mut out = vec![0u8; (CANVAS * CANVAS * 4) as usize];
+    for y in 0..CANVAS {
+        for x in 0..CANVAS {
+            let idx = ((y * CANVAS + x) * 4) as usize;
+            if (x / 2) % 2 == 1 {
+                out[idx] = 255;
+            }
+            out[idx + 3] = 255;
+        }
+    }
+    out
+}
+
 fn pixel(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
     let idx = ((y * CANVAS + x) * 4) as usize;
     [rgba[idx], rgba[idx + 1], rgba[idx + 2], rgba[idx + 3]]
@@ -58,6 +81,14 @@ fn pixel(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
 /// One `(pos, direction_rad, distance)` per dab. `distance > 0.5` so
 /// the per-dab first-dab gate doesn't fire.
 fn render_liquify_dabs(size_override: f32, dabs: &[([f32; 2], f32, f32)]) -> Vec<u8> {
+    render_liquify_dabs_on(&two_tone_canvas(36), size_override, dabs)
+}
+
+fn render_liquify_dabs_on(
+    canvas: &[u8],
+    size_override: f32,
+    dabs: &[([f32; 2], f32, f32)],
+) -> Vec<u8> {
     let brush = darkly::brush::builtin_brushes::all()
         .into_iter()
         .find(|b| b.metadata.name == "Liquify")
@@ -76,14 +107,17 @@ fn render_liquify_dabs(size_override: f32, dabs: &[([f32; 2], f32, f32)]) -> Vec
     graph.set_port_default(&term_id, "strength", 1.0).unwrap();
 
     let (device, queue) = shared_device();
-    let (layer_texture, layer_view) =
-        create_test_texture(&device, &queue, CANVAS, CANVAS, &two_tone_canvas(36));
+    let (layer_texture, layer_view) = create_test_texture(&device, &queue, CANVAS, CANVAS, canvas);
     let pipelines = BrushPipelines::new(
         &device,
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
-    let mut stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
+    // Compile before allocating: the terminal decides the scratch format,
+    // and liquify's is a warp field rather than colour.
+    let mut runner: BrushGraphRunner = compile_graph(&graph).expect("brush compiles");
+    let mut stroke_buffer =
+        StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines, runner.scratch_format());
 
     let pre_stroke = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
         &layer_texture,
@@ -97,7 +131,6 @@ fn render_liquify_dabs(size_override: f32, dabs: &[([f32; 2], f32, f32)]) -> Vec
     stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke);
     queue.submit([enc.finish()]);
 
-    let mut runner: BrushGraphRunner = compile_graph(&graph).expect("brush compiles");
     macro_rules! make_ctx {
         ($label:expr) => {{
             let (scratch, pre_stroke_tex, pre_stroke_bg, source_override) =
@@ -143,14 +176,10 @@ fn render_liquify_dabs(size_override: f32, dabs: &[([f32; 2], f32, f32)]) -> Vec
         let mut ctx = make_ctx!("liquify-test-flush");
         for (i, (pos, dir, dist)) in dabs.iter().enumerate() {
             // Simulate a real stroke's per-dab motion: in a live
-            // stroke the engine places dabs `LIQUIFY_SPACING_PX`
-            // apart along the cursor's path, so `pen.motion` per
-            // dab has magnitude ≈ `LIQUIFY_SPACING_PX` along the
-            // drawing angle.
-            let motion = [
-                LIQUIFY_SPACING_PX * dir.cos(),
-                LIQUIFY_SPACING_PX * dir.sin(),
-            ];
+            // stroke the engine places dabs a spacing apart along
+            // the cursor's path, so `pen.motion` per dab has that
+            // magnitude along the drawing angle.
+            let motion = [TEST_DAB_STEP_PX * dir.cos(), TEST_DAB_STEP_PX * dir.sin()];
             let info = PaintInformation {
                 pos: *pos,
                 drawing_angle: *dir,
@@ -178,9 +207,108 @@ fn render_liquify_dabs(size_override: f32, dabs: &[([f32; 2], f32, f32)]) -> Vec
     )
 }
 
+/// **Regression test for the ghosting bug.** Liquify used to resample the
+/// *image* once per dab: each dab snapshotted the scratch, sampled it at a
+/// displaced UV and wrote the colour straight back. With 4 px dab spacing
+/// and a 30.7 px radius a material point passed through ~15 bilinear
+/// filters per swipe, and their composition is not a bilinear filter — it
+/// is a low-pass cascade. Detail decayed monotonically with dab count,
+/// which is what "liquify ghosts everything" meant.
+///
+/// Accumulating a displacement field and resampling the pre-stroke image
+/// exactly once holds detail constant no matter how many dabs pass over a
+/// pixel.
+///
+/// Two assertions, and the pairing is the point — neither alone is
+/// sufficient:
+///
+/// * **A (sharpness)** is what fails under the bug, but is satisfied
+///   perfectly by a liquify that displaces nothing (pristine stripes).
+/// * **B (displacement)** proves content actually moved, and passes both
+///   before and after the fix.
+///
+/// Only an implementation that moves content *and* keeps it sharp passes
+/// both.
+#[test]
+fn liquify_scrubbing_preserves_high_frequency_detail() {
+    // 4 back-and-forth passes between x=40 and x=90 at y=64, 4 px apart.
+    let mut dabs: Vec<([f32; 2], f32, f32)> = Vec::new();
+    let mut distance = 4.0_f32;
+    let mut x = 40.0_f32;
+    for pass in 0..4 {
+        let dir = if pass % 2 == 0 {
+            0.0
+        } else {
+            std::f32::consts::PI
+        };
+        let step = if pass % 2 == 0 {
+            TEST_DAB_STEP_PX
+        } else {
+            -TEST_DAB_STEP_PX
+        };
+        for _ in 0..12 {
+            x += step;
+            distance += TEST_DAB_STEP_PX;
+            dabs.push(([x, 64.0], dir, distance));
+        }
+    }
+
+    let source = stripe_canvas();
+    // size 0.12 → radius = 0.12 * DAB_REFERENCE_SIZE * 0.5 = 30.72 px.
+    let rgba = render_liquify_dabs_on(&source, 0.12, &dabs);
+
+    // A — sharpness. Every row crossing the stroke must still contain both
+    // tones. Source scores 255; the pre-fix implementation scored 0–42.
+    let mut worst = (255u8, 0u32);
+    for y in 44..86 {
+        let (mut lo, mut hi) = (255u8, 0u8);
+        for x in 45..90 {
+            let r = pixel(&rgba, x, y)[0];
+            lo = lo.min(r);
+            hi = hi.max(r);
+        }
+        let ptp = hi - lo;
+        if ptp < worst.0 {
+            worst = (ptp, y);
+        }
+    }
+    assert!(
+        worst.0 >= 150,
+        "liquify must not low-pass the image it warps: row {} has red \
+         peak-to-peak {} (need >= 150). The source is a two-tone stripe \
+         pattern, so anything in between is resampling loss — this is the \
+         ghosting bug, and it means liquify is resampling the picture per \
+         dab instead of accumulating a displacement field.",
+        worst.1,
+        worst.0,
+    );
+
+    // B — displacement. A liquify that does nothing would sail through A.
+    let mut moved = 0u32;
+    let mut total = 0u32;
+    for y in 44..86 {
+        for x in 45..90 {
+            let before = pixel(&source, x, y)[0] as i32;
+            let after = pixel(&rgba, x, y)[0] as i32;
+            total += 1;
+            if (after - before).abs() >= 100 {
+                moved += 1;
+            }
+        }
+    }
+    let fraction = moved as f32 / total as f32;
+    assert!(
+        fraction >= 0.25,
+        "liquify must actually displace content: only {:.1}% of the \
+         stroked region changed by >= 100 (need >= 25%). A no-op liquify \
+         scores 0% here while still passing the sharpness assertion.",
+        fraction * 100.0,
+    );
+}
+
 /// Confidence test: a single liquify dab at (38, 64) pulling
 /// rightward (direction = 0, strength = 1) lifts red into the dab
-/// centre. With `|motion| = LIQUIFY_SPACING_PX = 4`, displacement at
+/// centre. With `|motion| = TEST_DAB_STEP_PX = 4`, displacement at
 /// strength=1 is 4 px, so the centre fragment sources from (34, 64)
 /// — inside the red bar at `x < 36`. (Size is irrelevant to the
 /// per-dab displacement now — kept at 0.3 only so the disc actually
@@ -208,7 +336,7 @@ fn single_liquify_dab_warps_red_into_center() {
 /// pre-stroke at x = 38 is past the red bar at x < 36).
 #[test]
 fn liquify_dab2_reads_dab1_deposit_not_pre_stroke() {
-    // `|motion| = LIQUIFY_SPACING_PX = 4` → displacement at strength=1
+    // `|motion| = TEST_DAB_STEP_PX = 4` → displacement at strength=1
     // is 4 px, independent of brush size.
     let rgba = render_liquify_dabs(
         0.3,
@@ -243,7 +371,7 @@ fn liquify_dab2_reads_dab1_deposit_not_pre_stroke() {
 /// *intensity*.
 ///
 /// Both runs: one eastward dab at (38, 64) with strength=1 and
-/// `|motion| = LIQUIFY_SPACING_PX = 4`. The pre-stroke red bar lives
+/// `|motion| = TEST_DAB_STEP_PX = 4`. The pre-stroke red bar lives
 /// at `x < 36`. With the (now-fixed) formula `displacement = strength
 /// × |motion| = 4 px`, a fragment at (42, 64) samples from (38, 64)
 /// — background. The brush centre at (38, 64) samples from (34, 64)
@@ -292,5 +420,138 @@ fn warp_magnitude_is_size_invariant() {
          if this is red the radius-coupled formula has come back and \
          the strength slider once again grows with brush size. Got \
          {large_at_42:?}"
+    );
+}
+
+// ============================================================================
+// End-to-end: the whole engine, including the checkpoint ring
+// ============================================================================
+
+/// **Guards the format-aware checkpoint ring.** Liquify's scratch holds a
+/// float displacement field, and `CheckpointRing::save` snapshots the
+/// scratch with `copy_texture_to_texture`, which rejects a format
+/// mismatch. Before `CheckpointSlot` took its format from the source
+/// texture, any liquify stroke long enough to check-point died on a wgpu
+/// validation error.
+///
+/// It also closes the loop on the ghosting bug at the level the user
+/// actually meets it: a real stroke through `DarklyEngine`, with
+/// stabilization, dab scheduling, checkpointing and mid-stroke commits
+/// all live — not the hand-driven dab harness the tests above use.
+#[test]
+fn liquify_stroke_through_engine_preserves_detail() {
+    use darkly::engine::types::StrokeOp;
+    use darkly::engine::DarklyEngine;
+    use darkly::gpu::context::GpuContext;
+
+    const SIZE: u32 = 128;
+    let (device, queue) = darkly::gpu::test_utils::test_device();
+    let mut engine = DarklyEngine::new(GpuContext::new_headless(device, queue), SIZE, SIZE);
+    // Paste the stripes in as a layer, so the input is exactly two tones
+    // rather than something painted (and therefore anti-aliased).
+    let layer_id = engine.paste_image(SIZE, SIZE, &stripe_canvas(), 0, 0, None);
+
+    let liquify_yaml = darkly::brush::builtin_brushes::BUILTIN_BRUSHES_YAML
+        .iter()
+        .find(|(name, _)| *name == "liquify.yaml")
+        .expect("liquify brush is shipped")
+        .1;
+    engine
+        .set_brush_graph_yaml(liquify_yaml)
+        .expect("liquify brush loads");
+
+    // A long drag: enough events to cross several checkpoint intervals.
+    engine.begin_stroke(layer_id);
+    for step in 0..=60 {
+        let t = step as f32 / 60.0;
+        engine.stroke_to(StrokeOp::BrushStroke {
+            x: 30.0 + t * 70.0,
+            y: 64.0,
+            pressure: 1.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
+            time_ms: step as f64 * 16.0,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
+        });
+    }
+    engine.end_stroke();
+    engine.render(0.0);
+
+    let pixels = engine.test_readback_layer(layer_id);
+    let source = stripe_canvas();
+
+    // The stroke must have moved something...
+    let moved = (0..SIZE)
+        .flat_map(|y| (0..SIZE).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            let a = pixel(&pixels, x, y)[0] as i32;
+            let b = pixel(&source, x, y)[0] as i32;
+            (a - b).abs() >= 100
+        })
+        .count();
+    assert!(
+        moved > 200,
+        "liquify stroke should have displaced content; only {moved} pixels changed",
+    );
+
+    // ...without dissolving the stripes into mush anywhere it touched.
+    for y in 40..90 {
+        let (mut lo, mut hi) = (255u8, 0u8);
+        for x in 35..100 {
+            let r = pixel(&pixels, x, y)[0];
+            lo = lo.min(r);
+            hi = hi.max(r);
+        }
+        assert!(
+            hi - lo >= 150,
+            "row {y}: red peak-to-peak {} after a full engine-driven \
+             liquify stroke (need >= 150) — detail was destroyed",
+            hi - lo,
+        );
+    }
+}
+
+/// The brush's configured spacing and [`LIQUIFY_SPACING_RATIO`] are the
+/// same decision written in two files — the YAML the engine actually
+/// reads, and the Rust constant whose doc comment carries the reasoning
+/// (why 0.05, and what banding measurement bounds it). Pin them together
+/// so neither can drift silently.
+///
+/// Spacing is not cosmetic here: pinning it flat in pixels, as this brush
+/// used to, makes per-travel cost `O(radius²)` because the dab count stops
+/// falling as the disc grows.
+#[test]
+fn shipped_liquify_spacing_matches_the_declared_ratio() {
+    let graph = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Liquify")
+        .expect("Liquify is shipped")
+        .metadata
+        .graph;
+    let spacing = darkly::brush::nodes::brush_settings::spacing_config(&graph);
+
+    assert!(
+        (spacing.ratio - LIQUIFY_SPACING_RATIO).abs() < 1e-6,
+        "brushes/liquify.yaml sets spacing {} but LIQUIFY_SPACING_RATIO is {}",
+        spacing.ratio,
+        LIQUIFY_SPACING_RATIO,
+    );
+    assert!(
+        spacing.ratio > 0.0,
+        "liquify spacing must stay proportional to dab size; a zero ratio \
+         falls back to the pixel floor and restores O(radius²) cost",
+    );
+
+    // A large brush must actually get large steps — the whole point.
+    let big_diameter = 1000.0;
+    assert!(
+        spacing.distance(big_diameter) >= 40.0,
+        "a {big_diameter}px-diameter liquify brush should step >= 40px, got {}",
+        spacing.distance(big_diameter),
     );
 }

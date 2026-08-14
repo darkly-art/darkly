@@ -13,6 +13,7 @@
 //! Mode 6 is a custom weighted mix, and an optional hue tint colors the gray.
 
 use crate::gpu::params::{ParamDef, ParamValue};
+use crate::gpu::preview::{swing, PreviewAnim};
 
 pub const TYPE_ID: &str = "black_and_white";
 pub const DISPLAY_NAME: &str = "Black and White";
@@ -24,9 +25,9 @@ formulas or custom channel weights, with an optional color tint.";
 /// the tint applies in every mode. A `static` rather than a `const` so both
 /// registrations hold the same address — pinned by the identity test below.
 pub static PARAMS: &[ParamDef] = &[
-    ParamDef::Enum {
-        name: "mode",
-        options: &[
+    ParamDef::enumeration(
+        "mode",
+        &[
             "Lightness",
             "Luminosity (BT.709)",
             "Luminosity (BT.601)",
@@ -35,39 +36,62 @@ pub static PARAMS: &[ParamDef] = &[
             "Max",
             "Custom Weights",
         ],
-        default: 0,
-    },
-    ParamDef::Float {
-        name: "red_weight",
-        min: 0.0,
-        max: 1.0,
-        default: 0.299,
-    },
-    ParamDef::Float {
-        name: "green_weight",
-        min: 0.0,
-        max: 1.0,
-        default: 0.587,
-    },
-    ParamDef::Float {
-        name: "blue_weight",
-        min: 0.0,
-        max: 1.0,
-        default: 0.114,
-    },
-    ParamDef::Float {
-        name: "tint_hue",
-        min: 0.0,
-        max: 360.0,
-        default: 0.0,
-    },
-    ParamDef::Float {
-        name: "tint_strength",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-    },
+        0,
+    )
+    .with_label("Mode")
+    .with_description("How color is weighed when collapsing it to grey."),
+    ParamDef::float("red_weight", 0.0, 1.0, 0.299)
+        .with_label("Red Weight")
+        .with_description("How much the red channel contributes, in Custom Weights mode."),
+    ParamDef::float("green_weight", 0.0, 1.0, 0.587)
+        .with_label("Green Weight")
+        .with_description("How much the green channel contributes, in Custom Weights mode."),
+    ParamDef::float("blue_weight", 0.0, 1.0, 0.114)
+        .with_label("Blue Weight")
+        .with_description("How much the blue channel contributes, in Custom Weights mode."),
+    ParamDef::float("tint_hue", 0.0, 360.0, 0.0)
+        .with_label("Tint Hue")
+        .with_description("Which color the finished grey is toned toward."),
+    ParamDef::float("tint_strength", 0.0, 1.0, 0.0)
+        .with_label("Tint Strength")
+        .with_description("How strongly the tint color shows through the grey."),
 ];
+
+/// One preview for both surfaces, beside the schema they share. A `static` for
+/// the same reason `PARAMS` is one — both registrations hold the same address,
+/// which is what makes the sharing structural rather than two copies that
+/// happen to agree today.
+///
+/// The still is taken at rest rather than at the sweep's peak, which is the
+/// opposite of what most entries want and is the whole reason `still_at` is
+/// per-entry. Everywhere else the sweep animates *the* control the effect is
+/// named for, so the peak is the effect at its most legible. Here the effect is
+/// already fully applied at rest — the grey is the point — and the sweep
+/// animates the *tint*, a secondary control. A still taken at the peak would
+/// show a saturated colour wash, which is the one thing a black-and-white
+/// preview must not look like.
+pub static PREVIEW: PreviewAnim = PreviewAnim::LOOPING.with_still_at(0.0);
+
+/// What that preview shows at `t`: the grey toned through the full colour wheel
+/// while the tint strengthens and fades, so a single pass shows both the
+/// desaturation and what the tint controls do to it.
+///
+/// The hue runs *monotonically* through the wheel rather than swinging out and
+/// back, because the wheel is circular: a swinging hue would spend its peak
+/// strength at 360°, which is 0°, which is red — so the one frame that stands
+/// for the whole effect would be a full-strength red wash. Running the hue
+/// forward puts the peak at 180° instead, and 360° ≡ 0° means the sequence still
+/// closes on the colour it opened with.
+///
+/// The filter reads this off its registration and the veil calls it from
+/// [`Veil::preview_at`](crate::gpu::veil::Veil::preview_at) — the two surfaces
+/// share the motion the same way they share the schema.
+pub fn preview_params(t: f32) -> Vec<ParamValue> {
+    let mut params: Vec<ParamValue> = PARAMS.iter().map(ParamDef::default_value).collect();
+    params[4] = ParamValue::Float(360.0 * t);
+    params[5] = ParamValue::Float(swing(t));
+    params
+}
 
 /// The shared WGSL transform (`BwParams` / `bw_gray` / `bw_transform`),
 /// prepended to each surface's wrapper shader at pipeline build time.

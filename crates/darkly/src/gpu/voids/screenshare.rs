@@ -17,22 +17,19 @@ const PARAMS: &[ParamDef] = &[
     // Freeze on the last received frame; suppresses uploads (GPU holds the
     // last frame) while keeping the share open — stopping a getDisplayMedia
     // track would end the share permanently, so freeze must not close it.
-    ParamDef::Bool {
-        name: "freeze",
-        default: false,
-    },
+    ParamDef::boolean("freeze", false)
+        .with_label("Freeze")
+        .with_description("Holds the last captured frame instead of following the live feed."),
     // rAF frames to skip between capture → GPU uploads (see camera void).
-    ParamDef::Int {
-        name: "frame_divisor",
-        min: 1,
-        max: 60,
-        default: 4,
-    },
+    ParamDef::int("frame_divisor", 1, 60, 4)
+        .with_label("Frame Skip")
+        .with_description("Capture one frame in this many, to lighten the load."),
 ];
 
 static CONFIG: VideoStreamConfig = VideoStreamConfig {
     type_id: TYPE_ID,
     display_name: "Screen Share",
+    description: "Live frames from a shared screen, window or browser tab.",
     icon: "tabler:screen-share",
     params: PARAMS,
     capture_kind: CaptureKind::Display,

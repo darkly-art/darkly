@@ -396,6 +396,14 @@ impl<'a> StrokeResources<'a> {
     pub fn source_texture(&self) -> &'a wgpu::Texture {
         self.source_override.unwrap_or(self.pre_stroke_texture)
     }
+
+    /// A view over [`Self::source_texture`], for consumers that bind the
+    /// source without a pre-built bind group — the warp-field resolve
+    /// builds its own two-texture group per commit.
+    pub fn source_view(&self) -> wgpu::TextureView {
+        self.source_texture()
+            .create_view(&wgpu::TextureViewDescriptor::default())
+    }
 }
 
 /// Everything a GPU brush node needs to record render passes.

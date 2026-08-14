@@ -15,7 +15,9 @@
 //     plugin's buildStart).
 //
 // A prefix is treated as an icon set when @iconify/json ships a collection for
-// it, plus the synthetic `local` set sourced from src/icons/svg/*.svg. The
+// it. There is no bespoke-SVG escape hatch: every icon Darkly names comes from a
+// published set, which is what lets any consumer of Darkly's metadata resolve an
+// icon name without this repo's help. The
 // generator THROWS if a referenced name is absent from its collection — the
 // hard typo safety net that replaces Font Awesome's silent fallback. (A typo'd
 // *prefix* isn't a known set, so it's skipped here and caught instead by the
@@ -29,7 +31,6 @@ import { Resvg } from '@resvg/resvg-js';
 
 const FRONTEND = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = path.join(FRONTEND, 'src');
-const SVG_DIR = path.join(SRC, 'icons', 'svg');
 const JSON_DIR = path.join(FRONTEND, 'node_modules', '@iconify', 'json', 'json');
 const OUT = path.join(SRC, 'icons', 'bundle.generated.ts');
 // The Rust crate also names icons (settings-section tabs, brush-node icon
@@ -54,28 +55,6 @@ function walk(dir, acc = []) {
         }
     }
     return acc;
-}
-
-function buildLocal(names) {
-    const icons = {};
-    for (const name of names) {
-        const f = path.join(SVG_DIR, `${name}.svg`);
-        if (!fs.existsSync(f)) {
-            throw new Error(`[gen-icons] local:${name} referenced but ${path.relative(FRONTEND, f)} is missing`);
-        }
-        const svg = fs.readFileSync(f, 'utf8');
-        const vb = svg.match(/viewBox\s*=\s*"\s*([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s*"/);
-        const width = vb ? Number(vb[3]) : 16;
-        const height = vb ? Number(vb[4]) : 16;
-        // Inner body kept verbatim (defs / gradients / ids preserved) — Iconify
-        // stores it as-is (no SVGO), and uniquifies ids at render time.
-        const body = svg
-            .replace(/^[\s\S]*?<svg[^>]*>/, '')
-            .replace(/<\/svg>\s*$/, '')
-            .trim();
-        icons[name] = { body, width, height };
-    }
-    return { prefix: 'local', icons };
 }
 
 // Icons ship as inline SVGs forced to a 1em square (see Icon.svelte +
@@ -174,7 +153,7 @@ function renderBundle() {
         const text = fs.readFileSync(file, 'utf8');
         for (const m of text.matchAll(NAME_RE)) {
             const [, prefix, name] = m;
-            if (prefix !== 'local' && !collectionExists(prefix)) continue; // not an icon set
+            if (!collectionExists(prefix)) continue; // not an icon set
             if (!byPrefix.has(prefix)) byPrefix.set(prefix, new Set());
             byPrefix.get(prefix).add(name);
         }
@@ -185,10 +164,6 @@ function renderBundle() {
     for (const [prefix, set] of [...byPrefix].sort(([a], [b]) => a.localeCompare(b))) {
         const names = [...set].sort();
         total += names.length;
-        if (prefix === 'local') {
-            collections.push(tightenCollection(buildLocal(names)));
-            continue;
-        }
         const full = JSON.parse(fs.readFileSync(path.join(JSON_DIR, `${prefix}.json`), 'utf8'));
         const subset = getIcons(full, names);
         if (!subset) throw new Error(`[gen-icons] failed to read collection "${prefix}"`);

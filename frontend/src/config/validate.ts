@@ -1,4 +1,5 @@
-import type { PrefInfo, SectionInfo } from './schema';
+import type { Catalog, ParamInfo } from '../engine/protocol_gen';
+import { sectionPrefs } from './store.svelte';
 
 /**
  * Per-action keys are accepted by prefix even though no schema entry
@@ -16,12 +17,12 @@ const PER_ACTION_PREFIXES = ['hotkeys.', 'mouseclicks.'];
  * persisting the cleaned set back if anything changed.
  */
 export function validateOverrides(
-    sections: SectionInfo[],
+    sections: Catalog[],
     overrides: Record<string, unknown>,
 ): { cleaned: Record<string, unknown>; changed: boolean } {
-    const byKey = new Map<string, PrefInfo>();
+    const byKey = new Map<string, ParamInfo>();
     for (const section of sections) {
-        for (const pref of section.prefs) byKey.set(pref.key, pref);
+        for (const pref of sectionPrefs(section)) byKey.set(pref.name, pref);
     }
 
     const cleaned: Record<string, unknown> = {};
@@ -65,7 +66,7 @@ export function validateOverrides(
 
 const DROP = Symbol('drop');
 
-function coerce(pref: PrefInfo, value: unknown): unknown | typeof DROP {
+function coerce(pref: ParamInfo, value: unknown): unknown | typeof DROP {
     switch (pref.kind) {
         case 'bool':
             return typeof value === 'boolean' ? value : DROP;
@@ -73,7 +74,8 @@ function coerce(pref: PrefInfo, value: unknown): unknown | typeof DROP {
             return typeof value === 'string' ? value : DROP;
         case 'enum': {
             if (typeof value !== 'string') return DROP;
-            const ok = pref.options?.some(([k]) => k === value) ?? false;
+            const opts = (pref.options ?? []) as [string, string][];
+            const ok = opts.some(([k]) => k === value);
             return ok ? value : DROP;
         }
         case 'int':
@@ -81,8 +83,8 @@ function coerce(pref: PrefInfo, value: unknown): unknown | typeof DROP {
             if (typeof value !== 'number' || !Number.isFinite(value)) return DROP;
             let v = value;
             if (pref.kind === 'int') v = Math.trunc(v);
-            if (pref.min !== undefined && v < pref.min) v = pref.min;
-            if (pref.max !== undefined && v > pref.max) v = pref.max;
+            if (pref.min != null && v < pref.min) v = pref.min;
+            if (pref.max != null && v > pref.max) v = pref.max;
             return v;
         }
     }

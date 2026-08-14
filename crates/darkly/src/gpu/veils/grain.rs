@@ -1,26 +1,19 @@
-use crate::gpu::effect::{EffectCache, EffectPipeline};
+use crate::gpu::effect::{create_effect_pipeline, Binding, EffectCache, EffectPipeline};
+use crate::gpu::hash::pcg_hash;
+use crate::gpu::preview::{PreviewAnim, ANIMATED_FRAMES};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Float {
-        name: "speed",
-        min: 0.0,
-        max: 1.0,
-        default: 0.05,
-    },
-    ParamDef::Float {
-        name: "color",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-    },
-    ParamDef::Float {
-        name: "opacity",
-        min: 0.0,
-        max: 1.0,
-        default: 1.0,
-    },
+    ParamDef::float("speed", 0.0, 1.0, 0.05)
+        .with_label("Speed")
+        .with_description("How fast the grain reshuffles; zero holds a single still pattern."),
+    ParamDef::float("color", 0.0, 1.0, 0.0)
+        .with_label("Color")
+        .with_description("Blends the grain from monochrome speckle toward colored noise."),
+    ParamDef::float("opacity", 0.0, 1.0, 1.0)
+        .with_label("Opacity")
+        .with_description("How strongly the grain shows over the image."),
 ];
 
 pub fn register() -> VeilRegistration {
@@ -29,6 +22,7 @@ pub fn register() -> VeilRegistration {
         display_name: "Grain",
         description: "Film grain noise over the view, optionally animated.",
         params: PARAMS,
+        preview: Some(PreviewAnim::ONE_WAY),
         create_pipeline: create_evolve_pipeline,
         from_params: |params, shared| {
             let speed = match params.first() {
@@ -84,6 +78,15 @@ impl Grain {
             shared,
         }
     }
+
+    fn uniforms(&self) -> GrainUniforms {
+        GrainUniforms {
+            seed: self.frame_count,
+            color: self.color,
+            rate: self.speed,
+            opacity: self.opacity,
+        }
+    }
 }
 
 impl Veil for Grain {
@@ -107,22 +110,31 @@ impl Veil for Grain {
         self.speed > 0.0
     }
 
+    /// Two seconds of grain reshuffling, one fresh pattern per frame.
+    ///
+    /// The evolve pass replaces a `speed` fraction of pixels and keeps the
+    /// rest, so at any lower rate what a frame shows depends on the frames
+    /// before it. Pinning the rate to its maximum makes every pixel fresh, so
+    /// the pattern is a function of `seed` alone — which is both what makes
+    /// this absolute and the most legible thing a grain preview can show.
+    fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
+        self.speed = 1.0;
+        self.frame_count = (t * ANIMATED_FRAMES as f32).round();
+        // A full reshuffle leaves nothing of the previous state to preserve, so
+        // the ping-pong has nothing to alternate for and the slot is fixed.
+        self.noise_idx = 0;
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
+        true
+    }
+
     fn update_time(&mut self, queue: &wgpu::Queue, cache: &EffectCache, _dt: f32) {
         self.frame_count += 1.0;
         self.noise_idx = 1 - self.noise_idx;
-        let uniforms = GrainUniforms {
-            seed: self.frame_count,
-            color: self.color,
-            rate: self.speed,
-            opacity: self.opacity,
-        };
-        if let Some(buf) = cache.uniform_bufs.first() {
-            queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));
-        }
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
     }
 
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ping_pong_views: &[wgpu::TextureView; 2],
@@ -130,19 +142,13 @@ impl Veil for Grain {
         render_width: u32,
         render_height: u32,
     ) -> EffectCache {
-        let uniforms = GrainUniforms {
-            seed: 0.0,
-            color: self.color,
-            rate: self.speed,
-            opacity: self.opacity,
-        };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grain-uniforms"),
             size: std::mem::size_of::<GrainUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&self.uniforms()));
 
         // Two noise state textures for ping-pong evolution.
         let noise_textures: Vec<wgpu::Texture> = (0..2)
@@ -231,98 +237,27 @@ impl Veil for Grain {
             })
         });
 
-        // --- Apply pipeline (4-binding layout: input + noise + sampler + uniform) ---
-        let apply_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("grain-apply-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+        // Apply pipeline: input + sampler + uniform + per-frame noise texture.
+        let apply = create_effect_pipeline(
+            device,
+            wgpu::TextureFormat::Rgba8Unorm,
+            "grain-apply",
+            &[
+                Binding::Texture,
+                Binding::Sampler,
+                Binding::Uniform,
+                Binding::Texture,
             ],
-        });
-
-        let apply_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("grain-apply-pipeline-layout"),
-                bind_group_layouts: &[Some(&apply_bgl)],
-                immediate_size: 0,
-            });
-
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("grain-apply-shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../shaders/veils/grain.wgsl").into(),
-            ),
-        });
-
-        let apply_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("grain-apply-pipeline"),
-            layout: Some(&apply_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_apply"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+            include_str!("../../../shaders/veils/grain.wgsl"),
+            "fs_apply",
+        );
 
         // --- Apply bind groups: [noise_idx][input_ping_pong_idx] ---
         // Stored as bind_groups[1 + noise_idx][input_idx].
         let apply_bgs_noise0: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(&format!("grain-apply-bg-n0-i{i}")),
-                layout: &apply_bgl,
+                layout: &apply.bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
@@ -347,7 +282,7 @@ impl Veil for Grain {
         let apply_bgs_noise1: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(&format!("grain-apply-bg-n1-i{i}")),
-                layout: &apply_bgl,
+                layout: &apply.bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
@@ -374,7 +309,7 @@ impl Veil for Grain {
             bind_groups: vec![evolve_bgs, apply_bgs_noise0, apply_bgs_noise1],
             aux_textures: noise_textures,
             aux_views: noise_views,
-            aux_pipelines: vec![apply_pipeline],
+            aux_pipelines: vec![apply.pipeline],
         }
     }
 
@@ -437,88 +372,13 @@ impl Veil for Grain {
     }
 }
 
-/// CPU-side PCG hash matching the GPU version.
-fn pcg_hash(n: u32) -> u32 {
-    let mut h = n.wrapping_mul(747796405).wrapping_add(2891336453);
-    h = ((h >> ((h >> 28) + 4)) ^ h).wrapping_mul(277803737);
-    (h >> 22) ^ h
-}
-
-fn create_evolve_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> EffectPipeline {
-    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("grain-evolve-bgl"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-        ],
-    });
-
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("grain-evolve-pipeline-layout"),
-        bind_group_layouts: &[Some(&bind_group_layout)],
-        immediate_size: 0,
-    });
-
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("grain-shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/veils/grain.wgsl").into()),
-    });
-
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("grain-evolve-pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: &[],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_evolve"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            ..Default::default()
-        },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    });
-
-    EffectPipeline {
-        pipeline,
-        bind_group_layout,
-    }
+fn create_evolve_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> EffectPipeline {
+    create_effect_pipeline(
+        device,
+        format,
+        "grain-evolve",
+        &[Binding::Texture, Binding::Sampler, Binding::Uniform],
+        include_str!("../../../shaders/veils/grain.wgsl"),
+        "fs_evolve",
+    )
 }

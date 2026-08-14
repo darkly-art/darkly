@@ -1,10 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
     pollPreview,
+    showsPreview,
     toPreviewData,
-    voidShowsPreview,
     type RawPreview,
-    type PreviewKind,
 } from '../preview_frames';
 import type { Engine } from '../../engine/protocol';
 import { withApi } from '../../engine/testApi';
@@ -37,7 +36,7 @@ function rawPreview(frameCount: number, w = 2, h = 2): RawPreview {
 }
 
 /** Fake engine whose `send('poll_preview', …)` returns the scripted payload.
- *  Captures the payload so tests can assert the `{ kind, type }` wire shape. */
+ *  Captures the payload so tests can assert the `{ catalog, type }` wire shape. */
 function fakeEngine(payload: RawPreview | null) {
     const send = vi.fn(async (_kind: string, _payload: unknown) => payload);
     const engine = withApi({ send, post: vi.fn() }) as unknown as Engine;
@@ -60,7 +59,7 @@ describe('toPreviewData', () => {
 describe('pollPreview', () => {
     it('returns null while the engine is still generating', async () => {
         const { engine } = fakeEngine(null);
-        expect(await pollPreview(engine, 'veil', 'grain')).toBeNull();
+        expect(await pollPreview(engine, 'veils', 'grain', 'still')).toBeNull();
     });
 
     it('returns null for an empty frame set', async () => {
@@ -71,45 +70,72 @@ describe('pollPreview', () => {
             frameCount: 0,
             bytes: new Uint8Array(0),
         });
-        expect(await pollPreview(engine, 'veil', 'grain')).toBeNull();
+        expect(await pollPreview(engine, 'veils', 'grain', 'still')).toBeNull();
     });
 
     it('converts the frames once the generation completes', async () => {
         const { engine } = fakeEngine(rawPreview(4, 8, 4));
-        const data = await pollPreview(engine, 'veil', 'vhs');
+        const data = await pollPreview(engine, 'veils', 'vhs', 'animated');
         expect(data?.frames).toHaveLength(4);
         expect(data?.width).toBe(8);
         expect(data?.height).toBe(4);
     });
 
-    it('sends the generic poll_preview with { kind, type } for both kinds', async () => {
+    it('sends { catalog, type, variant } for every catalog', async () => {
         const { engine, send } = fakeEngine(rawPreview(1));
-        const kinds: PreviewKind[] = ['veil', 'void'];
-        for (const kind of kinds) {
-            await pollPreview(engine, kind, 'noise');
+        // Catalog ids, not a second vocabulary — the same strings the pickers
+        // already hold and `catalogs()` publishes.
+        for (const catalog of ['veils', 'voids', 'filters']) {
+            await pollPreview(engine, catalog, 'noise', 'still');
         }
-        expect(send).toHaveBeenNthCalledWith(1, 'poll_preview', { kind: 'veil', type: 'noise' });
-        expect(send).toHaveBeenNthCalledWith(2, 'poll_preview', { kind: 'void', type: 'noise' });
+        for (const [i, catalog] of ['veils', 'voids', 'filters'].entries()) {
+            expect(send).toHaveBeenNthCalledWith(i + 1, 'poll_preview', {
+                catalog,
+                type: 'noise',
+                variant: 'still',
+            });
+        }
+    });
+
+    it('polls the two variants independently', async () => {
+        const { engine, send } = fakeEngine(rawPreview(1));
+        // A card polls for its still and, once hovered, for its animation. They
+        // are separate generations engine-side, so they are separate requests.
+        await pollPreview(engine, 'veils', 'frozen', 'still');
+        await pollPreview(engine, 'veils', 'frozen', 'animated');
+        expect(send).toHaveBeenNthCalledWith(1, 'poll_preview', {
+            catalog: 'veils',
+            type: 'frozen',
+            variant: 'still',
+        });
+        expect(send).toHaveBeenNthCalledWith(2, 'poll_preview', {
+            catalog: 'veils',
+            type: 'frozen',
+            variant: 'animated',
+        });
     });
 
     it('re-polls the engine each call (no caching)', async () => {
         const { engine, send } = fakeEngine(rawPreview(2));
-        await pollPreview(engine, 'void', 'noise');
-        await pollPreview(engine, 'void', 'noise');
+        await pollPreview(engine, 'voids', 'noise', 'animated');
+        await pollPreview(engine, 'voids', 'noise', 'animated');
         // Unlike a cached path, every call hits the engine — the preview tracks
         // the live document, so results are never memoised.
         expect(send).toHaveBeenCalledTimes(2);
     });
 });
 
-describe('voidShowsPreview', () => {
-    // The "Add Void" picker renders a live thumbnail when the void opts into a
-    // rendered preview, and falls back to its iconify icon otherwise. This is
-    // the predicate that drives that template branch (see VoidPickerModal).
-    it('is true only when the void declares supportsPreview', () => {
-        expect(voidShowsPreview({ supportsPreview: true })).toBe(true);
-        expect(voidShowsPreview({ supportsPreview: false })).toBe(false);
-        // Missing flag is treated as no preview (icon fallback).
-        expect(voidShowsPreview({})).toBe(false);
+describe('showsPreview', () => {
+    // Every picker renders a live thumbnail when the entry opts into a rendered
+    // preview, and falls back otherwise. This is the predicate that drives the
+    // first arm of `EffectPreview`'s chain, whatever the catalog.
+    it('is true only when the entry declares supportsPreview', () => {
+        // A filter, a veil and a void entry are the same shape to this
+        // predicate — that is the point of generalising it.
+        expect(showsPreview({ supportsPreview: true })).toBe(true);
+        expect(showsPreview({ supportsPreview: false })).toBe(false);
+        // Missing flag is treated as no preview, which is what sends the card
+        // down the icon → named-placeholder half of the chain.
+        expect(showsPreview({})).toBe(false);
     });
 });

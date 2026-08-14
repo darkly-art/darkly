@@ -10,6 +10,7 @@ use darkly::brush::{
     pipeline::BrushPipelines,
     preview_renderer::{synthesize_stroke_path, BrushStrokePreviewRenderer},
 };
+use darkly::gpu::preview::PreviewBackdrop;
 use darkly::gpu::test_utils::{readback_texture, test_device};
 
 #[test]
@@ -32,7 +33,17 @@ fn renders_s_curve_over_black_background() {
 
     let texture = renderer
         .render_stroke(
-            &device, &queue, &pipelines, &graph, &path, fg, bg, width, height, None,
+            &device,
+            &queue,
+            &pipelines,
+            &graph,
+            &path,
+            fg,
+            bg,
+            PreviewBackdrop::Flat,
+            width,
+            height,
+            None,
         )
         .expect("render_stroke should return a texture for the default graph");
 
@@ -114,6 +125,7 @@ fn renderer_reuses_target_across_renders_of_same_size() {
         &path,
         [1.0, 1.0, 1.0, 1.0],
         [0.0, 0.0, 0.0, 1.0],
+        PreviewBackdrop::Flat,
         320,
         120,
         None,
@@ -129,6 +141,7 @@ fn renderer_reuses_target_across_renders_of_same_size() {
         &path,
         [1.0, 0.0, 0.0, 1.0],
         [1.0, 1.0, 1.0, 1.0],
+        PreviewBackdrop::Flat,
         320,
         120,
         None,
@@ -368,7 +381,7 @@ fn airbrush_endpoint_dabs_not_clipped_against_cache_border() {
 /// 100 ms while the user drags the slider (~1 GB/s of GPU work for no
 /// visible effect).
 ///
-/// The fix declares stabilize via `with_preview_value(0.0)` and routes
+/// The fix declares stabilize via `preview_irrelevant_scrub()` and routes
 /// scrubs on any preview-irrelevant port through
 /// `ChangeKind::PreviewIrrelevantScrub`, which skips the version bump.
 /// Asserted against the public `brush_graph_version()` getter, with a
@@ -440,8 +453,8 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
     );
 }
 
-/// Regression: scrubbing `paint.size` (or any port flagged with
-/// `preview_value`) must not invalidate the editor-preview cache.
+/// Regression: scrubbing `brush_settings.size` — or any port flagged with
+/// `preview_value` — must not invalidate the editor-preview cache.
 ///
 /// The previous "continued charcoal debugging" attempt deleted the
 /// caller-side `graph.apply_preview_overrides()` on the stroke-preview
@@ -453,13 +466,22 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
 /// stroke preview now mutated visibly on every size scrub.
 ///
 /// Both previews share the same intent: brush identity, not momentary
-/// scrub state. This test pins the restored behavior: a size scrub
-/// on the active brush must not bump `brush_graph_version` (which
+/// scrub state. This test pins the restored behavior: a scrub of a pinned
+/// port on the active brush must not bump `brush_graph_version` (which
 /// is what gates the editor preview cache) — because the renderer
 /// neutralizes `preview_value` ports before rendering, so the output
 /// is identical anyway.
+///
+/// `blur.strength` is covered alongside `brush_settings.size` because the
+/// two pins cost different things and only one of them is free. A size
+/// scrub was never legible in a preview rendered at a canonical size, so
+/// nothing was lost; a strength scrub *was* visible before the port was
+/// pinned, and freezing it is a deliberate trade — a stroke preview says
+/// what kind of brush this is, not what one parameter is currently set to.
+/// Asserting it here is what records that as intended rather than
+/// accidental.
 #[test]
-fn size_scrub_does_not_bump_editor_preview_version() {
+fn pinned_ports_are_pinned_in_previews() {
     use darkly::engine::DarklyEngine;
     use darkly::gpu::context::GpuContext;
 
@@ -467,32 +489,35 @@ fn size_scrub_does_not_bump_editor_preview_version() {
     let gpu = GpuContext::new_headless(device, queue);
     let mut engine = DarklyEngine::new(gpu, 1024, 768);
 
-    engine.brush_load("Ink Pen").expect("Ink Pen built-in");
-    let _ = engine.brush_stroke_preview();
-    engine.test_flush_readbacks();
-    let v_before = engine.brush_graph_version();
+    for (brush, port, scrub_to) in [("Ink Pen", "size", 90.0), ("Blur", "strength", 90.0)] {
+        engine
+            .brush_load(brush)
+            .unwrap_or_else(|e| panic!("'{brush}' is a built-in brush: {e}"));
+        let _ = engine.brush_stroke_preview();
+        engine.test_flush_readbacks();
+        let v_before = engine.brush_graph_version();
 
-    let size = engine
-        .brush_exposed_ports()
-        .into_iter()
-        .find(|p| p.port_name == "size")
-        .expect("Ink Pen exposes a `size` port");
-    engine
-        .brush_set_exposed_port(&size.node_id, "size", 90.0)
-        .expect("scrub set");
+        let exposed = engine
+            .brush_exposed_ports()
+            .into_iter()
+            .find(|p| p.port_name == port)
+            .unwrap_or_else(|| panic!("'{brush}' exposes a `{port}` port"));
+        engine
+            .brush_set_exposed_port(&exposed.node_id, port, scrub_to)
+            .expect("scrub set");
 
-    assert_eq!(
-        engine.brush_graph_version(),
-        v_before,
-        "scrubbing `size` must not bump brush_graph_version. \
-         `paint.size` is flagged `preview_value` (= 0.1), and the \
-         stroke-preview render path applies `apply_preview_overrides` \
-         to neutralize it before rendering — so the editor preview's \
-         output cannot change in response to the scrub, and \
-         invalidating its cache would just trigger a wasted \
-         full-stroke re-render and a visible blink as the new size \
-         briefly shows."
-    );
+        assert_eq!(
+            engine.brush_graph_version(),
+            v_before,
+            "scrubbing '{brush}' `{port}` must not bump brush_graph_version. \
+             The port is flagged `preview_value`, and the stroke-preview render \
+             path applies `apply_preview_overrides` to neutralize it before \
+             rendering — so the editor preview's output cannot change in \
+             response to the scrub, and invalidating its cache would just \
+             trigger a wasted full-stroke re-render and a visible blink as the \
+             new value briefly shows."
+        );
+    }
 }
 
 /// Assert no pixel on the outermost border row/column carries ink — i.e. the
@@ -621,6 +646,7 @@ fn empty_path_returns_none() {
         &[],
         [1.0, 1.0, 1.0, 1.0],
         [0.0, 0.0, 0.0, 1.0],
+        PreviewBackdrop::Flat,
         320,
         120,
         None,

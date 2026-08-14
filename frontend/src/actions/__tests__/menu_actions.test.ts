@@ -1,15 +1,18 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { registerActions, NEW_LAYER_ACTION_IDS } from '../index';
-import { actions, actionEnablement, parseMenuSegment, type ActionRegistration } from '../registry';
+import { actions, actionEnablement, parseMenuSegment, type Action } from '../registry';
 import { buildTopMenus } from '../../ui/menu/menuModel';
 import { filterPalette } from '../../ui/menu/paletteFilter';
 import { app } from '../../state/app.svelte';
+import { rustActionDocs } from './rust_action_docs';
 
 // Populate the real registry once. `registerActions` is idempotent enough for
 // our purposes (re-registering overwrites by id), and tool actions are absent
 // here because `tools/index` isn't imported — that's fine, we only assert on
-// the menu/palette actions this feature owns.
+// the menu/palette actions this feature owns. Documentation comes from the Rust
+// tables, standing in for the `actions` catalog the editor is handed at init.
 beforeAll(() => {
+    actions.setDocs(rustActionDocs());
     registerActions();
 });
 
@@ -177,7 +180,7 @@ describe('menu action registrations', () => {
             { id: 'noOrder1', displayName: 'N1', category: 'file', icon: 'fa6-solid:circle', menuPath: ['X'], handler() {} },
             { id: 'a', displayName: 'A', category: 'file', icon: 'fa6-solid:circle', menuPath: ['X:10'], handler() {} },
             { id: 'noOrder2', displayName: 'N2', category: 'file', icon: 'fa6-solid:circle', menuPath: ['X'], handler() {} },
-        ] as ActionRegistration[];
+        ] as Action[];
         const x = buildTopMenus(regs).find(m => m.title === 'X');
         const ids = x!.entries.map(e => (e as { actionId: string }).actionId);
         expect(ids).toEqual(['a', 'b', 'noOrder1', 'noOrder2']);

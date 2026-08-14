@@ -1,15 +1,21 @@
-//! Payload conversion for picker previews (veils + voids).
+//! Payload conversion for picker previews.
 //!
 //! Split out from `EffectPreview.svelte` so the polling/conversion logic is
 //! unit-testable without mounting a Svelte component (and driving rAF/canvas).
-//! Previews are rendered by the engine — veils over the *current canvas*, voids
-//! from scratch — and are **not** cached: each time the picker opens, frames are
-//! regenerated, so the preview always reflects the live document.
+//! Previews are rendered by the engine — effects that read a source over the
+//! *current canvas*, the rest from scratch — and are **not** cached: each time
+//! the picker opens, frames are regenerated, so the preview always reflects the
+//! live document.
+//!
+//! Every entry has two: a `still` the card shows at rest, and an `animated`
+//! sequence it asks for when the pointer arrives. They are separate generations
+//! and are polled separately, so a card never waits on a sequence to show
+//! something.
 
 import type { Engine } from '../engine/protocol';
+import type { PreviewVariant } from '../engine/protocol_gen';
 
-/** Which effect kind a preview is for — keys the engine's generic preview map. */
-export type PreviewKind = 'veil' | 'void';
+export type { PreviewVariant };
 
 /** Engine `poll_preview` response: all frames concatenated into a single
  *  `bytes` buffer (stride = width*height*4), sliced into `frameCount` frames. */
@@ -42,23 +48,25 @@ export function toPreviewData(raw: RawPreview): PreviewData {
     return { width: raw.width, height: raw.height, fps: raw.fps, frames };
 }
 
-/** Whether the "Add Void" picker should render a live thumbnail for this void
- *  type, versus falling back to its iconify icon. Type-owned: the void declares
- *  `supportsPreview` on its registration, and the picker asks here rather than
- *  branching on the void kind. */
-export function voidShowsPreview(vt: { supportsPreview?: boolean }): boolean {
-    return vt.supportsPreview === true;
+/** Whether a picker should render a live thumbnail for this entry, versus
+ *  falling back to its icon. Type-owned: the entry declares a `PreviewAnim` on
+ *  its registration and `supportsPreview` reports whether it did, so a picker
+ *  asks here rather than branching on the catalog or the kind. */
+export function showsPreview(entry: { supportsPreview?: boolean }): boolean {
+    return entry.supportsPreview === true;
 }
 
-/** Poll the engine for a preview of `kind`/`type`. Returns converted frames
- *  once the generation completes, or `null` while it's still rendering. No
- *  caching — the caller polls until frames arrive, then stops on its own. */
+/** Poll the engine for one variant of `catalog`/`type`'s preview. Returns
+ *  converted frames once that generation completes, or `null` while it's still
+ *  rendering. No caching — the caller polls until frames arrive, then stops on
+ *  its own. */
 export async function pollPreview(
     engine: Engine,
-    kind: PreviewKind,
+    catalog: string,
     type: string,
+    variant: PreviewVariant,
 ): Promise<PreviewData | null> {
-    const raw = (await engine.api.pollPreview({ kind, type })) as
+    const raw = (await engine.api.pollPreview({ catalog, type, variant })) as
         | RawPreview
         | null
         | undefined;

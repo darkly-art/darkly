@@ -1,6 +1,6 @@
 <script lang="ts">
     import { commandPalette } from '../../state/commandPalette.svelte';
-    import { actions, actionEnablement, type ActionRegistration } from '../../actions/registry';
+    import { actions, actionEnablement, type Action } from '../../actions/registry';
     import { registryEpoch } from '../../actions/registryEpoch.svelte';
     import { hotkeyLabel } from '../../config/store.svelte';
     import { filterPalette } from './paletteFilter';
@@ -45,7 +45,7 @@
         return r ? actionEnablement(r).enabled : true;
     }
 
-    function run(reg: ActionRegistration) {
+    function run(reg: Action) {
         if (!enabledOf(reg.id)) return;
         actions.dispatch(reg.id, {});
         close();
@@ -74,7 +74,7 @@
 
     // An active status() icon (e.g. the toggle check) takes precedence over the
     // action's base icon, mirroring the menu gutter's precedence.
-    function rowIcon(reg: ActionRegistration): string {
+    function rowIcon(reg: Action): string {
         return reg.status?.() ?? reg.icon;
     }
 </script>

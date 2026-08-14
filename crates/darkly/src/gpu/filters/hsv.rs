@@ -21,37 +21,28 @@ use crate::gpu::effect::EffectCache;
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
 use crate::gpu::param_filter::{ParamFilter, SrcSampling};
 use crate::gpu::params::{ParamDef, ParamValue};
+use crate::gpu::preview::{swing, swing_signed, PreviewAnim};
 
 /// Parameter schema. `model` is an enum dropdown; the three scalars are plain
 /// rows; `colorize` is a checkbox that (in the shader) overrides the model.
 pub const PARAMS: &[ParamDef] = &[
-    ParamDef::Enum {
-        name: "model",
-        options: &["HSV", "HSL", "HSY"],
-        default: 0,
-    },
-    ParamDef::Float {
-        name: "hue",
-        min: -180.0,
-        max: 180.0,
-        default: 0.0,
-    },
-    ParamDef::Float {
-        name: "saturation",
-        min: -100.0,
-        max: 100.0,
-        default: 0.0,
-    },
-    ParamDef::Float {
-        name: "value",
-        min: -100.0,
-        max: 100.0,
-        default: 0.0,
-    },
-    ParamDef::Bool {
-        name: "colorize",
-        default: false,
-    },
+    ParamDef::enumeration("model", &["HSV", "HSL", "HSY"], 0)
+        .with_label("Color Model")
+        .with_description("Which cylindrical model the adjustment works in."),
+    ParamDef::float("hue", -180.0, 180.0, 0.0)
+        .with_label("Hue")
+        .with_description("Rotation applied to every pixel's hue."),
+    ParamDef::float("saturation", -100.0, 100.0, 0.0)
+        .with_label("Saturation")
+        .with_description("Pushes colors toward grey or toward full intensity."),
+    ParamDef::float("value", -100.0, 100.0, 0.0)
+        .with_label("Value")
+        .with_description("Lightens or darkens without changing hue."),
+    ParamDef::boolean("colorize", false)
+        .with_label("Colorize")
+        .with_description(
+            "Replaces every hue with the chosen one, tinting the layer a single color.",
+        ),
 ];
 
 /// The HSV fragment shader: the shared colour-space lib prepended to `hsv.wgsl`
@@ -133,13 +124,32 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
     ))
 }
 
+/// The image lightens, darkens and returns while the hue rotates out and back,
+/// the two sweeps running concurrently. `model` and `colorize` stay at their
+/// defaults, so what moves is exactly the pair of knobs the filter is named
+/// for. A full 360° spin is expressible as `hue: -180 → 180` — the parameter's
+/// own endpoints are the same colour — but it would not end where it began, so
+/// the ping-pong closes instead.
+fn preview_params(t: f32) -> Vec<ParamValue> {
+    let mut params: Vec<ParamValue> = PARAMS.iter().map(ParamDef::default_value).collect();
+    params[1] = ParamValue::Float(180.0 * swing(t)); // hue
+    params[3] = ParamValue::Float(60.0 * swing_signed(t)); // value
+    params
+}
+
 pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "hsv",
         display_name: "Hue/Saturation",
         icon: "fa6-solid:palette",
         description: "Rotate hue and scale saturation and value, with optional colorize.",
+        hotkey_action: "filterHsv",
         params: PARAMS,
+        // A signed sweep rests in the middle, so the default still would be the
+        // frame that looks like no effect at all. The quarter point is its
+        // positive extreme.
+        preview: Some(PreviewAnim::LOOPING.with_still_at(0.25)),
+        preview_at: Some(preview_params),
         create_pipeline,
     }
 }

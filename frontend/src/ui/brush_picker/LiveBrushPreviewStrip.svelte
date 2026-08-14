@@ -28,16 +28,16 @@
 </script>
 
 <div class="thumbs" style="width: {width}px; height: {stripHeight}px">
-    {#if brushGraph.previewIcon}
-        <BrushPreviewFallback icon={brushGraph.previewIcon} />
-    {:else}
-        <div class="dab">
+    <div class="dab" style="width: {dabSize}px; height: {dabSize}px">
+        {#if brushGraph.previewIcon}
+            <BrushPreviewFallback icon={brushGraph.previewIcon} />
+        {:else}
             <BrushDabView width={dabSize} height={dabSize} />
-        </div>
-        <div class="stroke">
-            <BrushStrokePreview width={strokeWidth} height={stripHeight} />
-        </div>
-    {/if}
+        {/if}
+    </div>
+    <div class="stroke">
+        <BrushStrokePreview width={strokeWidth} height={stripHeight} />
+    </div>
 </div>
 
 <style>

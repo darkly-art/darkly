@@ -10,7 +10,7 @@
         partitionFilterParams,
         channelLabel,
         colorizeActive,
-        type FilterParam,
+        type ParamInfo,
         type FilterParamValue,
         type CurvePoints,
         type LevelsValues,
@@ -28,7 +28,7 @@
         oninput,
         onchange,
     }: {
-        params: FilterParam[];
+        params: ParamInfo[];
         // Full 8×256 u32 input histogram (Levels backdrop); the selected
         // channel's slice is derived here. Null when unavailable.
         histogramBins?: Uint32Array | null;

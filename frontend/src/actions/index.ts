@@ -8,11 +8,11 @@ import { imageRescale } from '../state/imageRescale.svelte';
 import { selectionModify } from '../state/selectionModify.svelte';
 import { filterModal } from '../state/filterModal.svelte';
 import { layerPicker } from '../state/layerPicker.svelte';
-import type { FilterParam } from '../ui/filters/filterParams';
+import type { ParamInfo } from '../ui/filters/filterParams';
 import { exportTimelapse } from '../state/exportTimelapse.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
 import { toast } from '../state/toast.svelte';
-import { toolRegistry, type ToolDescriptor } from '../tools/registry';
+import { toolRegistry } from '../tools/registry';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { brushSession } from '../tools/brush.svelte';
 import { registerBrushParamActions } from './brush_params';
@@ -63,13 +63,6 @@ function findNodeInTree(nodes: any[], id: number): any | null {
 function tabNameFromFile(fileName: string): string {
     const stripped = fileName.replace(/\.[^./]+$/, '');
     return stripped || 'Untitled';
-}
-
-/** The Iconify icon name for a tool-switch action — the tool's own `icon`,
- *  falling back to a generic glyph for the (now hypothetical) tool that ships
- *  none. Every tool currently declares one. */
-function glyphFromTool(tool: ToolDescriptor): string {
-    return tool.icon ?? 'fa6-solid:wrench';
 }
 
 /** Unified Open. Pick any supported file, sniff its kind, and route to
@@ -263,10 +256,6 @@ export function registerActions() {
     // -- Edit --
     actions.register({
         id: 'undo',
-        displayName: 'Undo',
-        category: 'edit',
-        description: 'Undo the last action.',
-        icon: 'fa6-solid:rotate-left',
         menuPath: ['Edit:10'],
         // The layer-tree refresh goes first: it diffs the tree against the
         // pre-undo shape to find what the operation restored, and any await in
@@ -279,10 +268,6 @@ export function registerActions() {
     });
     actions.register({
         id: 'redo',
-        displayName: 'Redo',
-        category: 'edit',
-        description: 'Redo the last undone action.',
-        icon: 'fa6-solid:rotate-right',
         menuPath: ['Edit:20'],
         handler: async () => {
             app.engine?.api.redo();
@@ -294,19 +279,11 @@ export function registerActions() {
     // -- Colors --
     actions.register({
         id: 'resetColors',
-        displayName: 'Reset Colors',
-        category: 'colors',
-        description: 'Reset the foreground/background to black and white.',
-        icon: 'fa6-solid:circle-half-stroke',
         menuPath: ['Colors:20'],
         handler: () => app.resetColors(),
     });
     actions.register({
         id: 'swapColors',
-        displayName: 'Swap Colors',
-        category: 'colors',
-        description: 'Swap the foreground and background colors.',
-        icon: 'fa6-solid:right-left',
         menuPath: ['Colors:10'],
         handler: () => app.swapColors(),
     });
@@ -314,28 +291,16 @@ export function registerActions() {
     // -- Selection --
     actions.register({
         id: 'selectAll',
-        displayName: 'Select All',
-        category: 'selection',
-        description: 'Select the entire canvas.',
-        icon: 'fa6-solid:vector-square',
         menuPath: ['Select:10'],
         handler: () => app.engine?.api.selectAll(),
     });
     actions.register({
         id: 'clearSelection',
-        displayName: 'Deselect',
-        category: 'selection',
-        description: 'Clear the active selection.',
-        icon: 'fa6-solid:ban',
         menuPath: ['Select:20'],
         handler: () => app.engine?.api.clearSelection(),
     });
     actions.register({
         id: 'clearSelectionContents',
-        displayName: 'Clear Selection Contents',
-        category: 'selection',
-        description: 'Erase the pixels inside the selection.',
-        icon: 'fa6-solid:eraser',
         menuPath: ['Select:40'],
         handler: () => {
             if (app.activeLayerId != null) {
@@ -345,25 +310,16 @@ export function registerActions() {
     });
     actions.register({
         id: 'invertSelection',
-        displayName: 'Invert Selection',
-        category: 'selection',
-        description: 'Invert the current selection.',
-        icon: 'tabler:flip-horizontal',
         menuPath: ['Select:30'],
         handler: () => app.engine?.api.invertSelection(),
     });
     actions.register({
         id: 'maskToSelection',
-        displayName: 'Mask to Selection',
-        category: 'selection',
-        description: "Load the active layer's mask as the selection.",
-        icon: 'radix-icons:mask-off',
         menuPath: ['Select:35'],
         // The engine op takes the mask filter's id, not the host's. Both
         // call sites (the mask context menu and the maskThumb $mod+click
         // gesture) pass it under `maskId`; the enabled-guard fallback
         // resolves it from the active node when dispatched keyboard-only.
-        accepts: ['maskId'],
         enabled: () => app.activeMaskId != null || 'No mask on the active layer',
         handler: (ctx) => {
             const engine = app.engine;
@@ -375,60 +331,36 @@ export function registerActions() {
     });
     actions.register({
         id: 'growSelection',
-        displayName: 'Grow Selection',
-        category: 'selection',
-        description: 'Expand the selection edge outward by a number of pixels.',
-        icon: 'fa6-solid:up-right-and-down-left-from-center',
         menuPath: ['Select:50'],
         enabled: () => app.engineState?.hasSelection || 'No active selection',
         handler: () => selectionModify.show('grow'),
     });
     actions.register({
         id: 'shrinkSelection',
-        displayName: 'Shrink Selection',
-        category: 'selection',
-        description: 'Contract the selection edge inward by a number of pixels.',
-        icon: 'fa6-solid:down-left-and-up-right-to-center',
         menuPath: ['Select:60'],
         enabled: () => app.engineState?.hasSelection || 'No active selection',
         handler: () => selectionModify.show('shrink'),
     });
     actions.register({
         id: 'borderSelection',
-        displayName: 'Border Selection',
-        category: 'selection',
-        description: 'Replace the selection with a band straddling its edge.',
-        icon: 'fa6-solid:border-all',
         menuPath: ['Select:70'],
         enabled: () => app.engineState?.hasSelection || 'No active selection',
         handler: () => selectionModify.show('border'),
     });
     actions.register({
         id: 'smoothSelection',
-        displayName: 'Smooth Selection',
-        category: 'selection',
-        description: 'Round off jagged edges and remove small specks.',
-        icon: 'fa6-solid:wand-magic-sparkles',
         menuPath: ['Select:80'],
         enabled: () => app.engineState?.hasSelection || 'No active selection',
         handler: () => app.engine?.api.smoothSelection({ radius: 2 }),
     });
     actions.register({
         id: 'featherSelection',
-        displayName: 'Feather Selection',
-        category: 'selection',
-        description: 'Soften the selection edge with a Gaussian blur.',
-        icon: 'fa6-solid:feather',
         menuPath: ['Select:90'],
         enabled: () => app.engineState?.hasSelection || 'No active selection',
         handler: () => selectionModify.show('feather'),
     });
     actions.register({
         id: 'antialiasSelection',
-        displayName: 'Antialias Selection',
-        category: 'selection',
-        description: 'Soften the staircase of a hard-edged selection.',
-        icon: 'fa6-solid:wand-magic',
         menuPath: ['Select:100'],
         enabled: () => app.engineState?.hasSelection || 'No active selection',
         handler: () => app.engine?.api.antialiasSelection(),
@@ -437,10 +369,6 @@ export function registerActions() {
     // -- Image (canvas) --
     actions.register({
         id: 'resizeCanvas',
-        displayName: 'Resize Canvas',
-        category: 'edit',
-        description: 'Resize the canvas with a 9-point anchor.',
-        icon: 'fa6-solid:up-right-and-down-left-from-center',
         menuPath: ['Image:10'],
         handler: () => {
             if (!app.engine) return;
@@ -449,10 +377,6 @@ export function registerActions() {
     });
     actions.register({
         id: 'rescaleImage',
-        displayName: 'Scale Image to New Size',
-        category: 'edit',
-        description: 'Resize all layers to new document dimensions.',
-        icon: 'fa6-solid:expand',
         menuPath: ['Image:11'],
         handler: () => {
             if (!app.engine) return;
@@ -461,10 +385,6 @@ export function registerActions() {
     });
     actions.register({
         id: 'cropToSelection',
-        displayName: 'Crop to Selection',
-        category: 'edit',
-        description: 'Crop the canvas to the current selection bounds.',
-        icon: 'fa6-solid:crop-simple',
         menuPath: ['Image:20'],
         // `enabled` is synchronous and `has_selection` is async, so we gate on
         // the `engineState` mirror (refreshed from render's snapshot) rather
@@ -478,10 +398,6 @@ export function registerActions() {
     });
     actions.register({
         id: 'flipCanvasH',
-        displayName: 'Flip Canvas Horizontally',
-        category: 'edit',
-        description: 'Mirror the whole canvas left-to-right.',
-        icon: 'fa6-solid:arrows-left-right',
         menuPath: ['Image:30'],
         handler: async () => {
             app.engine?.api.flipCanvas({ axis: 'h' });
@@ -491,10 +407,6 @@ export function registerActions() {
     });
     actions.register({
         id: 'flipCanvasV',
-        displayName: 'Flip Canvas Vertically',
-        category: 'edit',
-        description: 'Mirror the whole canvas top-to-bottom.',
-        icon: 'fa6-solid:arrows-up-down',
         menuPath: ['Image:31'],
         handler: async () => {
             app.engine?.api.flipCanvas({ axis: 'v' });
@@ -504,10 +416,6 @@ export function registerActions() {
     });
     actions.register({
         id: 'rotateCanvasCW',
-        displayName: 'Rotate Canvas 90° CW',
-        category: 'edit',
-        description: 'Rotate the whole canvas a quarter turn clockwise.',
-        icon: 'fa6-solid:rotate-right',
         menuPath: ['Image:40'],
         handler: async () => {
             app.engine?.api.rotateCanvas({ dir: 'cw' });
@@ -517,10 +425,6 @@ export function registerActions() {
     });
     actions.register({
         id: 'rotateCanvasCCW',
-        displayName: 'Rotate Canvas 90° CCW',
-        category: 'edit',
-        description: 'Rotate the whole canvas a quarter turn counter-clockwise.',
-        icon: 'fa6-solid:rotate-left',
         menuPath: ['Image:41'],
         handler: async () => {
             app.engine?.api.rotateCanvas({ dir: 'ccw' });
@@ -530,10 +434,6 @@ export function registerActions() {
     });
     actions.register({
         id: 'rotateCanvas180',
-        displayName: 'Rotate Canvas 180°',
-        category: 'edit',
-        description: 'Rotate the whole canvas a half turn.',
-        icon: 'fa6-solid:rotate',
         menuPath: ['Image:42'],
         handler: async () => {
             app.engine?.api.rotateCanvas({ dir: '180' });
@@ -548,13 +448,6 @@ export function registerActions() {
     // -- File I/O --
     actions.register({
         id: 'saveDocument',
-        displayName: 'Save',
-        category: 'file',
-        description:
-            'Save the current document. Re-saves to the same `.darkly` file after ' +
-            'the first Save As; otherwise opens the Save picker (`.darkly`, or ' +
-            'PNG / JPEG / WebP to export the canvas).',
-        icon: 'fa6-solid:floppy-disk',
         menuPath: ['File:30'],
         handler: () => {
             if (!app.engine) return;
@@ -563,12 +456,6 @@ export function registerActions() {
     });
     actions.register({
         id: 'saveDocumentAs',
-        displayName: 'Save As',
-        category: 'file',
-        description:
-            'Save the current document to a new file — `.darkly`, or PNG / JPEG / ' +
-            'WebP to export the canvas.',
-        icon: 'fa6-solid:file-export',
         menuPath: ['File:40'],
         handler: () => {
             if (!app.engine) return;
@@ -577,11 +464,6 @@ export function registerActions() {
     });
     actions.register({
         id: 'newDocument',
-        displayName: 'New',
-        category: 'file',
-        description:
-            'Open a fresh document in a new tab. Prompts for canvas size and background color.',
-        icon: 'fa6-solid:file',
         menuPath: ['File:10'],
         // No default hotkey — `$mod+KeyN` is reserved by every major browser
         // for "new window" and cannot be intercepted by the page. Users can
@@ -592,11 +474,6 @@ export function registerActions() {
     });
     actions.register({
         id: 'open',
-        displayName: 'Open',
-        category: 'file',
-        description:
-            'Open a `.darkly` document or image (PNG / JPEG / WebP) in a new tab.',
-        icon: 'fa6-solid:folder-open',
         menuPath: ['File:20'],
         handler: () => {
             void openFlow();
@@ -604,10 +481,6 @@ export function registerActions() {
     });
     actions.register({
         id: 'exportTimelapse',
-        displayName: 'Export Timelapse…',
-        category: 'file',
-        description: 'Export the process recording as an MP4 or GIF timelapse.',
-        icon: 'fa6-solid:video',
         menuPath: ['File:51'],
         handler: () => {
             if (!app.engine) return;
@@ -617,9 +490,6 @@ export function registerActions() {
     // -- Floating content / transform --
     actions.register({
         id: 'commitFloating',
-        displayName: 'Commit Floating',
-        category: 'transform',
-        icon: 'fa6-solid:check',
         handler: () => {
             if (!app.engine) return;
             app.engine.api.commitFloating();
@@ -628,9 +498,6 @@ export function registerActions() {
     });
     actions.register({
         id: 'cancelFloating',
-        displayName: 'Cancel Floating',
-        category: 'transform',
-        icon: 'fa6-solid:xmark',
         handler: () => {
             if (!app.engine) return;
             app.engine.api.cancelFloating();
@@ -640,20 +507,28 @@ export function registerActions() {
 
     // -- Tools (generated from registry) --
     // Tool key bindings come from the YAML preset layers (defaults.yaml +
-    // overlay) via `hotkeys.<toolHotkeyAction>` — actions register without
-    // any built-in default; the binding is purely configuration.
-    // Tool display names live in Rust (`ToolRegistration`). Resolve through
-    // `app.toolDisplayName(id)` which reads the registry map populated by
-    // `app.loadRegistries(handle)` during editor init — the frontend never
-    // hardcodes a label.
+    // overlay) via `hotkeys.<hotkeyAction>` — actions register without any
+    // built-in default; the binding is purely configuration.
+    //
+    // A tool-selecting action's documentation is the tool's own: the id, label,
+    // glyph and summary all live on its `ToolRegistration` and reach here
+    // through the `tools` catalog, so it passes an explicit `doc` rather than
+    // resolving through the `actions` catalog. Only the "Switch to …" phrasing
+    // and the erase-mode glyph override are this side's.
     for (const tool of toolRegistry.all()) {
-        const name = app.toolDisplayName(tool.id);
+        // A descriptor the core has no registration for would select a tool that
+        // does not exist, so it gets no action.
+        const entry = app.entry('tools', tool.id);
+        if (!entry?.hotkeyAction) continue;
+        const name = entry.displayName;
         actions.register({
-            id: tool.hotkeyAction,
-            displayName: name,
-            category: 'tools',
-            description: `Switch to ${name} tool`,
-            icon: glyphFromTool(tool),
+            id: entry.hotkeyAction,
+            doc: {
+                displayName: name,
+                category: 'tools',
+                description: `Switch to ${name} tool`,
+                icon: app.toolGlyph(tool.id),
+            },
             handler: () => { app.activeToolId = tool.id; },
         });
     }
@@ -663,10 +538,6 @@ export function registerActions() {
     // erase on (matches Krita's "E from anywhere paints with the eraser").
     actions.register({
         id: 'toggleEraseMode',
-        displayName: 'Toggle Erase Mode',
-        category: 'tools',
-        description: 'Toggle erase mode on the brush tool. Switches to the brush tool first if another tool is active.',
-        icon: 'fa6-solid:eraser',
         status: () => (brushSession.eraseMode ? 'fa6-solid:check' : undefined),
         handler: () => {
             if (app.activeToolId !== 'brush') {
@@ -687,10 +558,6 @@ export function registerActions() {
     // -- Layers --
     actions.register({
         id: 'newLayer',
-        displayName: 'New Layer',
-        category: 'layers',
-        description: 'Add a new layer above the active one.',
-        icon: 'fa6-solid:square-plus',
         menuPath: ['Layer:10'],
         handler: async () => {
             const engine = app.engine;
@@ -703,40 +570,24 @@ export function registerActions() {
 
     actions.register({
         id: 'newFilterLayer',
-        displayName: 'New Filter Layer',
-        category: 'layers',
-        description: 'Add a non-destructive filter layer (curves, levels, invert, …) above the active one.',
-        icon: 'fa6-solid:circle-half-stroke',
         menuPath: ['Layer:12'],
         handler: () => { layerPicker.kind = 'filter'; },
     });
 
     actions.register({
         id: 'newVeil',
-        displayName: 'New Veil',
-        category: 'layers',
-        description: 'Add a veil — a post-process effect (rainy glass, VHS, grain, …) over the whole canvas.',
-        icon: 'material-symbols:curtains-rounded',
         menuPath: ['Layer:14'],
         handler: () => { layerPicker.kind = 'veil'; },
     });
 
     actions.register({
         id: 'newVoid',
-        displayName: 'New Void',
-        category: 'layers',
-        description: 'Add a void — a layer filled from a procedural or live source (noise, camera, screen share, …).',
-        icon: 'tabler:galaxy',
         menuPath: ['Layer:16'],
         handler: () => { layerPicker.kind = 'void'; },
     });
 
     actions.register({
         id: 'newGroup',
-        displayName: 'New Group',
-        category: 'layers',
-        description: 'Group the selected layers together, or add an empty group if nothing is selected.',
-        icon: 'fa6-solid:folder-plus',
         menuPath: ['Layer:20'],
         handler: async () => {
             const engine = app.engine;
@@ -760,12 +611,7 @@ export function registerActions() {
 
     actions.register({
         id: 'toggleVisibility',
-        displayName: 'Toggle Layer Visibility',
-        category: 'layers',
-        description: 'Show or hide the active layer.',
-        icon: 'fa6-solid:eye',
         menuPath: ['Layer:70'],
-        accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
             if (layerId == null || !app.engine) return;
@@ -778,12 +624,7 @@ export function registerActions() {
 
     actions.register({
         id: 'toggleLock',
-        displayName: 'Toggle Layer Lock',
-        category: 'layers',
-        description: 'Lock or unlock the active layer.',
-        icon: 'fa6-solid:lock',
         menuPath: ['Layer:80'],
-        accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
             if (layerId == null || !app.engine) return;
@@ -796,12 +637,7 @@ export function registerActions() {
 
     actions.register({
         id: 'isolateLayer',
-        displayName: 'Isolate Layer',
-        category: 'layers',
-        description: 'Solo a layer so only it shows in the canvas. Press again to bring everything else back.',
-        icon: 'fa6-solid:circle-dot',
         menuPath: ['Layer:90'],
-        accepts: ['layerId'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
             if (layerId == null || !app.engine) return;
@@ -811,10 +647,6 @@ export function registerActions() {
 
     actions.register({
         id: 'deleteLayer',
-        displayName: 'Delete Layer',
-        category: 'layers',
-        description: 'Delete the selected layers.',
-        icon: 'fa6-solid:trash',
         menuPath: ['Layer:60'],
         handler: async () => {
             const engine = app.engine;
@@ -860,10 +692,6 @@ export function registerActions() {
 
     actions.register({
         id: 'duplicateLayer',
-        displayName: 'Duplicate Layer',
-        category: 'layers',
-        description: 'Make a copy of each selected layer.',
-        icon: 'fa6-solid:clone',
         menuPath: ['Layer:30'],
         handler: async () => {
             const engine = app.engine;
@@ -886,10 +714,6 @@ export function registerActions() {
 
     actions.register({
         id: 'flipLayerH',
-        displayName: 'Flip Horizontally',
-        category: 'layers',
-        description: 'Mirror the active layer (or selection) left-to-right.',
-        icon: 'fa6-solid:arrows-left-right',
         menuPath: ['Layer:40'],
         enabled: () => app.activeLayerId !== null || 'No active layer',
         handler: async () => {
@@ -901,10 +725,6 @@ export function registerActions() {
     });
     actions.register({
         id: 'flipLayerV',
-        displayName: 'Flip Vertically',
-        category: 'layers',
-        description: 'Mirror the active layer (or selection) top-to-bottom.',
-        icon: 'fa6-solid:arrows-up-down',
         menuPath: ['Layer:50'],
         enabled: () => app.activeLayerId !== null || 'No active layer',
         handler: async () => {
@@ -915,27 +735,34 @@ export function registerActions() {
         },
     });
     // Destructive color filters (invert, …) are registered dynamically
-    // from the Rust filter-pipeline registry (fetched into `app.filterTypes`
+    // from the Rust filter-pipeline registry (the `filters` catalog fetched
     // during `loadRegistries`), so a new filter in the core surfaces a
     // Colors-menu entry with no frontend edit. The target is the active *node*
     // (`activeLayerId` is the mask filter id when a mask is selected), which
     // is what makes "invert the mask" reachable from the same entry.
-    for (const flt of app.filterTypes ?? []) {
+    for (const flt of app.entries?.('filters') ?? []) {
         const filterType = flt.type;
+        if (!flt.hotkeyAction) continue;
         // A parametric filter (curves/levels/hsv) can't apply in one click — its
         // params must be authored first, so it opens the modal (the same
         // `FilterParamsEditor` the layer panel uses). Param-free filters (invert)
         // apply immediately.
         const parametric = (flt.params?.length ?? 0) > 0;
         actions.register({
-            id: `filter${filterType.charAt(0).toUpperCase()}${filterType.slice(1)}`,
-            displayName: parametric ? `${flt.displayName}…` : flt.displayName,
-            category: 'layers',
-            // Lead with the registry's own summary — the command palette's
-            // substring search indexes descriptions, so its keywords (e.g.
-            // "desaturate" for Black and White) keep the filter findable.
-            description: `${flt.description} Applies to the active layer or mask (respecting any selection).`,
-            icon: flt.icon,
+            id: flt.hotkeyAction,
+            // Like tool selection, the documentation is the filter's own and
+            // arrives through the `filters` catalog. What this side composes is
+            // the phrasing: the `…` that marks a filter as opening a dialog,
+            // and the note about what the filter lands on.
+            doc: {
+                displayName: parametric ? `${flt.displayName}…` : flt.displayName,
+                category: 'layers',
+                // Lead with the registry's own summary — the command palette's
+                // substring search indexes descriptions, so its keywords (e.g.
+                // "desaturate" for Black and White) keep the filter findable.
+                description: `${flt.description ?? ''} Applies to the active layer or mask (respecting any selection).`.trim(),
+                icon: flt.icon ?? '',
+            },
             menuPath: ['Colors:10'],
             enabled: () => app.activeLayerId !== null || 'No active layer',
             handler: async () => {
@@ -946,7 +773,7 @@ export function registerActions() {
                         app.activeLayerId,
                         filterType,
                         flt.displayName,
-                        (flt.params ?? []) as unknown as FilterParam[]
+                        (flt.params ?? []) as unknown as ParamInfo[]
                     );
                     return;
                 }
@@ -962,10 +789,6 @@ export function registerActions() {
 
     actions.register({
         id: 'mergeDown',
-        displayName: 'Merge Down',
-        category: 'layers',
-        description: 'Merge the active layer into the one below it, or combine multiple selected layers into a single layer.',
-        icon: 'fa6-solid:arrows-down-to-line',
         menuPath: ['Layer:110'],
         handler: async () => {
             const engine = app.engine;
@@ -996,13 +819,7 @@ export function registerActions() {
 
     actions.register({
         id: 'flatten',
-        displayName: 'Flatten',
-        category: 'layers',
-        description:
-            'Bake modifiers into the layer (apply mask), or flatten a group into a single raster that inherits the group’s blend props.',
-        icon: 'fa6-solid:layer-group',
         menuPath: ['Layer:120'],
-        accepts: ['layerId'],
         handler: async (ctx) => {
             const engine = app.engine;
             if (!engine) return;
@@ -1020,12 +837,7 @@ export function registerActions() {
 
     actions.register({
         id: 'addMask',
-        displayName: 'Add Mask',
-        category: 'layers',
-        description: 'Add a mask modifier to the active layer or group and activate it for painting.',
-        icon: 'radix-icons:mask-on',
         menuPath: ['Layer:100'],
-        accepts: ['layerId'],
         handler: async (ctx) => {
             const engine = app.engine;
             if (!engine) return;
@@ -1046,10 +858,6 @@ export function registerActions() {
     // -- View --
     actions.register({
         id: 'openSettings',
-        displayName: 'Settings',
-        category: 'view',
-        description: 'Show the preferences modal.',
-        icon: 'fa6-solid:gear',
         // No `menuPath`: surfaced as the gear button on the menu bar and a
         // root courtesy item in the hamburger, not as a View submenu row.
         handler: () => { settings.open = true; },
@@ -1057,10 +865,6 @@ export function registerActions() {
 
     actions.register({
         id: 'mirrorViewH',
-        displayName: 'Mirror View',
-        category: 'view',
-        description: 'Flip the canvas horizontally for fresh-eyes review. View-only — the document is unchanged.',
-        icon: 'fa6-solid:left-right',
         menuPath: ['View:10'],
         status: () => (app.mirrorH ? 'fa6-solid:check' : undefined),
         handler: () => {
@@ -1071,40 +875,24 @@ export function registerActions() {
 
     actions.register({
         id: 'resetView',
-        displayName: 'Reset View',
-        category: 'view',
-        description: 'Reset rotation, mirror, pan, and zoom-to-fit. View-only — the document is unchanged.',
-        icon: 'fa6-solid:expand',
         menuPath: ['View:11'],
         handler: () => { app.resetView(); },
     });
 
     actions.register({
         id: 'fitToScreen',
-        displayName: 'Fit to Screen',
-        category: 'view',
-        description: 'Zoom and recenter so the whole canvas fills the viewport, keeping the current rotation and mirror. View-only — the document is unchanged.',
-        icon: 'fa6-solid:maximize',
         menuPath: ['View:12'],
         handler: () => { app.fitToScreen(); },
     });
 
     actions.register({
         id: 'centerView',
-        displayName: 'Center View',
-        category: 'view',
-        description: 'Recenter the canvas in the viewport without changing zoom, rotation, or mirror. View-only — the document is unchanged.',
-        icon: 'fa6-solid:crosshairs',
         menuPath: ['View:13'],
         handler: () => { app.centerView(); },
     });
 
     actions.register({
         id: 'commandPalette',
-        displayName: 'Command Palette',
-        category: 'view',
-        description: 'Search and run any command.',
-        icon: 'fa6-solid:magnifying-glass',
         // No `menuPath`: surfaced as the prominent "Find" item at the top of
         // the hamburger / on the menu bar, not as a buried submenu row.
         handler: () => { commandPalette.open = true; },
@@ -1112,50 +900,30 @@ export function registerActions() {
 
     actions.register({
         id: 'openCheatsheet',
-        displayName: 'Hotkey Cheat Sheet',
-        category: 'view',
-        description: 'Open a searchable, printable list of every keyboard shortcut.',
-        icon: 'fa6-solid:keyboard',
         menuPath: ['Help:10'],
         handler: () => openCheatsheet(),
     });
 
     actions.register({
         id: 'openDocs',
-        displayName: 'Documentation',
-        category: 'view',
-        description: 'Open the Darkly documentation in a new tab.',
-        icon: 'fa6-solid:book',
         menuPath: ['Help:20'],
         handler: () => openExternal(links.docs),
     });
 
     actions.register({
         id: 'openWebsite',
-        displayName: 'Website',
-        category: 'view',
-        description: 'Open the Darkly website in a new tab.',
-        icon: 'fa6-solid:globe',
         menuPath: ['Help:30'],
         handler: () => openExternal(links.website),
     });
 
     actions.register({
         id: 'openGithub',
-        displayName: 'GitHub Repository',
-        category: 'view',
-        description: 'Open the Darkly source repository on GitHub.',
-        icon: 'fa6-brands:github',
         menuPath: ['Help:40'],
         handler: () => openExternal(links.github),
     });
 
     actions.register({
         id: 'aboutDarkly',
-        displayName: 'About Darkly',
-        category: 'view',
-        description: 'Show version and credits.',
-        icon: 'fa6-solid:circle-info',
         menuPath: ['Help:50'],
         handler: () => { about.open = true; },
     });
@@ -1172,10 +940,6 @@ export function registerActions() {
     // -- Brush builder --
     actions.register({
         id: 'addBrushNode',
-        displayName: 'Add Brush Node',
-        category: 'brush',
-        description: 'Open the add-node menu at the cursor (brush builder).',
-        icon: 'fa6-solid:diagram-project',
         handler: () => {
             // No-op if the brush builder isn't visible. The actual placement
             // — at the cursor in canvas coords — happens in NodeCanvas, which

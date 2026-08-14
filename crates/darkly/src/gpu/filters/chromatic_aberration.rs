@@ -19,6 +19,7 @@
 //! Unlike the other parametric filters this one reads its source with
 //! [`SrcSampling::Bilinear`] — the ghost/blur taps land on fractional offsets.
 
+use crate::units::UnitType;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -28,6 +29,7 @@ use crate::gpu::effect::EffectCache;
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
 use crate::gpu::param_filter::{ParamFilter, SrcSampling};
 use crate::gpu::params::{ConstParamValue, ParamDef, ParamValue};
+use crate::gpu::preview::{swing, PreviewAnim};
 
 /// Uniform-array size (and the schema's entry cap). The UI disables "Add" at the
 /// limit; [`pack_uniform`] still clamps defensively.
@@ -35,28 +37,22 @@ pub const MAX_ABERRATIONS: usize = 16;
 
 /// Schema for a single aberration entry.
 const ABERRATION_ITEM: &[ParamDef] = &[
-    ParamDef::Vec2 {
-        name: "offset",
-        max: 64.0,
-        default: [0.0, 0.0],
-    },
-    ParamDef::Float {
-        name: "scale",
-        min: 0.9,
-        max: 1.1,
-        default: 1.0,
-    },
-    ParamDef::Color {
-        name: "color",
-        default: [1.0, 1.0, 1.0],
-    },
-    ParamDef::Float {
-        name: "blur",
-        min: 0.0,
-        // Max blur kept modest so a bounded tap count can't band.
-        max: 6.0,
-        default: 0.0,
-    },
+    ParamDef::vec2("offset", 64.0, [0.0, 0.0])
+        .with_label("Offset")
+        .with_description(
+            "How far this fringe is displaced from the original, and in which direction.",
+        )
+        .with_unit(UnitType::Pixels),
+    ParamDef::float("scale", 0.9, 1.1, 1.0)
+        .with_label("Scale")
+        .with_description("Magnification of this fringe — values below 1 pull it inward."),
+    ParamDef::color("color", [1.0, 1.0, 1.0])
+        .with_label("Color")
+        .with_description("Which color this fringe contributes."),
+    ParamDef::float("blur", 0.0, 6.0, 0.0)
+        .with_label("Blur")
+        .with_description("Softens this fringe so it reads as defocus rather than a hard copy.")
+        .with_unit(UnitType::Pixels),
 ];
 
 /// One `aberrations` list param with the photographic 3-entry default: red
@@ -64,11 +60,11 @@ const ABERRATION_ITEM: &[ParamDef] = &[
 /// (1.00 / 0.99 / 0.98), a 1% step per channel — the wavelength-dependent focus
 /// of a real lens fringing the shorter wavelengths inward. Each is softened a
 /// touch.
-pub const PARAMS: &[ParamDef] = &[ParamDef::List {
-    name: "aberrations",
-    item: ABERRATION_ITEM,
-    max_len: MAX_ABERRATIONS,
-    default: &[
+pub const PARAMS: &[ParamDef] = &[ParamDef::list(
+    "aberrations",
+    ABERRATION_ITEM,
+    MAX_ABERRATIONS,
+    &[
         &[
             ("scale", ConstParamValue::Float(1.0)),
             ("color", ConstParamValue::Color([1.0, 0.0, 0.0])),
@@ -85,7 +81,44 @@ pub const PARAMS: &[ParamDef] = &[ParamDef::List {
             ("blur", ConstParamValue::Float(0.6)),
         ],
     ],
-}];
+)
+.with_label("Fringes")
+.with_description("The colored copies the lens splits the image into.")];
+
+/// One preview for both surfaces, beside the schema they share. A `static` so
+/// both registrations hold the same address, which is what makes the sharing
+/// structural rather than two copies that happen to agree today.
+pub static PREVIEW: PreviewAnim = PreviewAnim::LOOPING;
+
+/// What that preview shows at `t`: the three fringes spread outward from their
+/// photographic resting positions and close again, softening as they go — so it
+/// shows the fringe *forming* rather than a still that could be mistaken for a
+/// blurry image.
+///
+/// The filter reads this off its registration and the veil calls it from
+/// [`Veil::preview_at`](crate::gpu::veil::Veil::preview_at) — the two surfaces
+/// share the motion the same way they share the schema.
+pub fn preview_params(t: f32) -> Vec<ParamValue> {
+    let swing = swing(t);
+    // Red holds at unit magnification; the shorter wavelengths step inward,
+    // 1% each at rest and 3% at the far end of the sweep.
+    let fringe = |index: f32, color: [f32; 3]| {
+        BTreeMap::from([
+            ("offset".to_string(), ParamValue::Vec2([0.0, 0.0])),
+            (
+                "scale".to_string(),
+                ParamValue::Float(1.0 - index * (0.01 + 0.02 * swing)),
+            ),
+            ("color".to_string(), ParamValue::Color(color)),
+            ("blur".to_string(), ParamValue::Float(0.6 + 1.2 * swing)),
+        ])
+    };
+    vec![ParamValue::List(vec![
+        fringe(0.0, [1.0, 0.0, 0.0]),
+        fringe(1.0, [0.0, 1.0, 0.0]),
+        fringe(2.0, [0.0, 0.0, 1.0]),
+    ])]
+}
 
 /// One aberration in the shader's uniform (48 B). Field offsets match
 /// `struct Aberration` in `lib/aberration.wgsl` (vec3 `axis` at offset 16). The
@@ -268,7 +301,10 @@ pub fn register() -> FilterPipelineRegistration {
         display_name: "Chromatic Aberration",
         icon: "lucide-lab:venn",
         description: DESCRIPTION,
+        hotkey_action: "filterChromatic_aberration",
         params: PARAMS,
+        preview: Some(PREVIEW),
+        preview_at: Some(preview_params),
         create_pipeline,
     }
 }

@@ -20,6 +20,8 @@ Darkly is a Photoshop alternative where painters are first-class citizens. It ha
 
 **Try the demo [here](https://demo.darkly.art).**
 
+Documentation [here](https://darkly.art/docs/).
+
 ### Darkly pledges to:
 
 - 🛐 Honor human imagination
@@ -35,24 +37,7 @@ https://github.com/user-attachments/assets/1fc0632d-5846-4c64-bac8-e39b0794b8b5
 
 ![brush-engine-screenshot](https://github.com/user-attachments/assets/67f8826e-a5b5-4cbe-83e1-3e29246c293c)
 
-Darkly features a unified node-based brush system. Every brush type -- clone, liquify, watercolor, etc. -- all live in a single engine. This enables infinite customizability, mixing and matching of brush features, and on-the-fly creation of custom brushes.
-
-### Familiar Hotkeys
-
-<img src="https://github.com/user-attachments/assets/63544586-f006-4616-b378-97dd54e321d3" width="400"/>
-
-On first launch, Darkly will ask you which editor preset you want.  Currently we support GIMP, Krita, and Photoshop. I come from Krita, so that one's gotten the most TLC. But we want everyone to feel at home no matter which editor they come from. If you find any gaps, please let us know!
-
-### Hotkey Cheatsheet
-
-Full documentation is on the way; however, Darkly is mostly self-documenting, meaning if you can't find something, you can quickly search with `CTRL+F` and immediately see its hotkey, description, etc. - without leaving the app.
-
-<img src="https://github.com/user-attachments/assets/370043b6-24a7-4a73-8816-ed58ce9108c4" width="500"/>
-
-If you like using hotkeys, we also have a cheat sheet just for you. You can print it or put it on a second screen.
-
-<img src="https://github.com/user-attachments/assets/2bb1737b-169b-4ca2-9687-2c54fbc07a6b" width="500"/>
-
+Darkly's unique brushes live inside a node-based system. This enables infinite customizability, mixing and matching of brush features, and on-the-fly creation of custom brushes.
 
 ## Dark Arts
 
@@ -246,7 +231,7 @@ See the [crate README](crates/darkly/README.md) for a runnable example, and the 
 
 ## Contribution
 
-We love hackers as much as artists. Contributions are welcome! Please see [AGENTS.md](./AGENTS.md) for details.
+We love hackers as much as we love artists. Contributions are welcome! Please see [AGENTS.md](./AGENTS.md) for details on how to contribute and rules of thumb for the repo.
 
 ### Use of AI
 

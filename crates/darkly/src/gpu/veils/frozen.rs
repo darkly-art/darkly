@@ -1,4 +1,5 @@
-use crate::gpu::effect::{EffectCache, EffectPipeline};
+use crate::gpu::effect::{create_effect_pipeline, Binding, EffectCache, EffectPipeline};
+use crate::gpu::preview::{swing, PreviewAnim};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
@@ -7,24 +8,15 @@ use std::sync::Arc;
 const FROZEN_NORMAL_BYTES: &[u8] = include_bytes!("../../../resources/veils/frozen.jpg");
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Float {
-        name: "strength",
-        min: 0.0,
-        max: 0.2,
-        default: 0.04,
-    },
-    ParamDef::Float {
-        name: "scale",
-        min: 0.1,
-        max: 5.0,
-        default: 1.0,
-    },
-    ParamDef::Float {
-        name: "chromatic",
-        min: 0.0,
-        max: 1.0,
-        default: 0.1,
-    },
+    ParamDef::float("strength", 0.0, 0.2, 0.02)
+        .with_label("Strength")
+        .with_description("How far the frosted surface displaces what is behind it."),
+    ParamDef::float("scale", 0.1, 5.0, 1.0)
+        .with_label("Scale")
+        .with_description("Size of the ice crystals."),
+    ParamDef::float("chromatic", 0.0, 1.0, 0.1)
+        .with_label("Chromatic")
+        .with_description("Color separation through the ice, like light through a prism."),
 ];
 
 pub fn register() -> VeilRegistration {
@@ -33,11 +25,12 @@ pub fn register() -> VeilRegistration {
         display_name: "Frozen",
         description: "Frost the view behind a pane of refracting ice.",
         params: PARAMS,
+        preview: Some(PreviewAnim::LOOPING),
         create_pipeline: create_frozen_pipeline,
         from_params: |params, shared| {
             let strength = match params.first() {
                 Some(ParamValue::Float(v)) => *v,
-                _ => 0.04,
+                _ => 0.02,
             };
             let scale = match params.get(1) {
                 Some(ParamValue::Float(v)) => *v,
@@ -70,11 +63,19 @@ struct FrozenUniforms {
 pub struct Frozen {
     /// UV displacement magnitude. 0 = no refraction, 0.2 = heavy distortion.
     pub strength: f32,
-    /// Tile density for the ice pattern. 1.0 = one tile across the shorter
-    /// screen dimension; higher = more, finer crystals.
+    /// Size of the ice crystals. 1.0 = one tile of the normal map across
+    /// `sqrt(area)`; higher = **fewer, larger** crystals, because the shader
+    /// divides the sampling extent by this. Note the refraction magnitude does
+    /// *not* ride along — `strength` is absolute UV displacement, so raising
+    /// `scale` alone makes the frost read as milder.
     pub scale: f32,
     /// Chromatic aberration: 0 = clean refraction, 1 = pronounced prism edge.
     pub chromatic: f32,
+    /// Render resolution and the decoded normal map's aspect, kept from
+    /// `create_cache` so [`uniforms`](Self::uniforms) rebuilds the whole struct
+    /// from state.
+    resolution: (f32, f32),
+    normal_aspect: f32,
     shared: Arc<EffectPipeline>,
 }
 
@@ -84,7 +85,22 @@ impl Frozen {
             strength,
             scale,
             chromatic,
+            resolution: (0.0, 0.0),
+            normal_aspect: 1.0,
             shared,
+        }
+    }
+
+    fn uniforms(&self) -> FrozenUniforms {
+        FrozenUniforms {
+            resolution_x: self.resolution.0,
+            resolution_y: self.resolution.1,
+            normal_aspect: self.normal_aspect,
+            strength: self.strength,
+            scale: self.scale,
+            chromatic: self.chromatic,
+            _pad0: 0.0,
+            _pad1: 0.0,
         }
     }
 }
@@ -106,8 +122,26 @@ impl Veil for Frozen {
         ]
     }
 
+    /// The ice crystals coarsen and tighten again — `scale` sweeps across a
+    /// wide band so the frost pattern visibly grows and shrinks.
+    ///
+    /// `strength` rides with it rather than holding at its schema default.
+    /// Displacement is absolute UV (`disp = n.xy * strength * …` in the
+    /// shader, with no `scale` term), so a fixed `strength` against a zooming
+    /// pattern halves the warp *per crystal* as the crystals double — which
+    /// the eye reads as the refraction weakening, not as the crystals growing.
+    /// Sweeping the two together holds warp-per-crystal constant, and that is
+    /// what makes the motion read as size. `chromatic` holds, so no colour
+    /// fringing rides along.
+    fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
+        self.scale = 0.6 + 1.8 * swing(t);
+        self.strength = 0.02 * self.scale;
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
+        true
+    }
+
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ping_pong_views: &[wgpu::TextureView; 2],
@@ -120,7 +154,8 @@ impl Veil for Frozen {
             .expect("failed to decode frozen normal map")
             .to_rgba8();
         let (nw, nh) = decoded.dimensions();
-        let normal_aspect = nw as f32 / nh as f32;
+        self.normal_aspect = nw as f32 / nh as f32;
+        self.resolution = (render_width as f32, render_height as f32);
 
         let normal_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("frozen-normal"),
@@ -170,23 +205,13 @@ impl Veil for Frozen {
             ..Default::default()
         });
 
-        let uniforms = FrozenUniforms {
-            resolution_x: render_width as f32,
-            resolution_y: render_height as f32,
-            normal_aspect,
-            strength: self.strength,
-            scale: self.scale,
-            chromatic: self.chromatic,
-            _pad0: 0.0,
-            _pad1: 0.0,
-        };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frozen-uniforms"),
             size: std::mem::size_of::<FrozenUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&self.uniforms()));
 
         let layout = &self.shared.bind_group_layout;
         let bind_groups: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
@@ -253,97 +278,19 @@ impl Veil for Frozen {
     }
 }
 
-fn create_frozen_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> EffectPipeline {
-    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("frozen-bgl"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 3,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 4,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
+fn create_frozen_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> EffectPipeline {
+    create_effect_pipeline(
+        device,
+        format,
+        "frozen",
+        &[
+            Binding::Texture,
+            Binding::Sampler,
+            Binding::Uniform,
+            Binding::Texture,
+            Binding::Sampler,
         ],
-    });
-
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("frozen-pipeline-layout"),
-        bind_group_layouts: &[Some(&bind_group_layout)],
-        immediate_size: 0,
-    });
-
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("frozen-shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/veils/frozen.wgsl").into()),
-    });
-
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("frozen-pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: &[],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_frozen"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            ..Default::default()
-        },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    });
-
-    EffectPipeline {
-        pipeline,
-        bind_group_layout,
-    }
+        include_str!("../../../shaders/veils/frozen.wgsl"),
+        "fs_frozen",
+    )
 }

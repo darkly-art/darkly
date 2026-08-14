@@ -1,7 +1,7 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
     import Modal from '../Modal.svelte';
-    import Icon from '../../icons/Icon.svelte';
+    import EffectPreview from '../EffectPreview.svelte';
 
     let { onclose }: { onclose: () => void } = $props();
 
@@ -12,9 +12,10 @@
         if (!open) onclose();
     });
 
-    // The filter pipeline registry is fetched once at startup into
-    // `app.filterTypes` (same list that drives the destructive Colors menu),
-    // so a new filter in the Rust core surfaces here with no frontend edit.
+    // The filter pipeline registry arrives once at startup as the `filters`
+    // catalog (the same list that drives the destructive Colors menu), so a
+    // new filter in the Rust core surfaces here with no frontend edit.
+    let filterTypes = $derived(app.entries?.('filters') ?? []);
     async function pick(ft: { type: string; displayName: string }) {
         if (!app.engine) return;
         const id = await app.engine.api.addFilter({
@@ -30,15 +31,13 @@
 
 <Modal bind:open title="Add Filter Layer" size="md">
     <div class="grid">
-        {#each app.filterTypes ?? [] as ft (ft.type)}
-            <button class="card" title={ft.description} onclick={() => pick(ft)}>
-                <div class="preview preview-icon">
-                    <Icon name={ft.icon} />
-                </div>
+        {#each filterTypes as ft (ft.type)}
+            <button class="card" title={ft.description ?? undefined} onclick={() => pick(ft)}>
+                <EffectPreview catalog="filters" entry={ft} />
                 <span class="card-name">{ft.displayName}</span>
             </button>
         {/each}
-        {#if (app.filterTypes ?? []).length === 0}
+        {#if filterTypes.length === 0}
             <div class="empty">No filter types available</div>
         {/if}
     </div>
@@ -67,17 +66,6 @@
     .card:hover {
         background: var(--bg-active);
         border-color: var(--accent);
-    }
-
-    .preview-icon {
-        aspect-ratio: 16 / 9;
-        background: var(--bg);
-        border-radius: var(--radius-sm);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 32px;
-        color: var(--text-dim);
     }
 
     .card-name {

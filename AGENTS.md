@@ -41,8 +41,8 @@ flowchart LR
 ```
 crates/darkly/src/
   document/             Authoritative model (layer tree, canvas, ...)
-    layer_kinds/  ★     group, raster, void
-    modifiers/    ★     mask, selection
+    layer_kinds/  ★     group, raster, vector, void, filter
+    filters/      ★     mask, selection
   engine/               DarklyEngine — session + per-domain dispatch
                           (painting, rendering, load/save, export,
                            floating, flatten, merge, undo_dispatch, …)
@@ -71,8 +71,6 @@ crates/darkly/src/
   nodegraph/            Generic node-graph (graph, compiler, layout)
 frontend/wasm/          WASM bridge (wasm-bindgen) — single API surface
 frontend/src/           Svelte UI
-shared/styles/          @darkly/styles — tokens + themes (UI + website)
-website/                Astro + Starlight site (splash, docs, /demo/)
 ```
 
 ### Coordinate Systems

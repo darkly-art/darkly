@@ -16,12 +16,11 @@ use crate::brush::stabilizer::{
 };
 use crate::gpu::params::{ParamDef, ParamValue};
 
-const PARAMS: &[ParamDef] = &[ParamDef::Float {
-    name: "strength",
-    min: 0.0,
-    max: 1.0,
-    default: 0.5,
-}];
+const PARAMS: &[ParamDef] = &[ParamDef::float("strength", 0.0, 1.0, 0.5)
+    .with_label("Strength")
+    .with_description(
+        "How firmly the stroke is smoothed as you draw; higher lags further behind the cursor.",
+    )];
 
 pub fn register() -> StabilizerRegistration {
     StabilizerRegistration {

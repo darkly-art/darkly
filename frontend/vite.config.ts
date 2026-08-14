@@ -9,6 +9,8 @@ import basicSsl from '@vitejs/plugin-basic-ssl';
 import { VitePWA } from 'vite-plugin-pwa';
 // @ts-ignore — plain .mjs build tooling, outside the tsc src scope.
 import { iconBundlePlugin } from './scripts/gen-icon-bundle.mjs';
+// @ts-ignore — plain .mjs build tooling, outside the tsc src scope.
+import { wasmWatchPlugin } from './scripts/wasm-watch.mjs';
 
 // Darkly's version is the latest git tag plus the commit height since it — the
 // same v* tags the deploy pipeline (darkly-deploy/) builds releases from.
@@ -48,6 +50,9 @@ export default defineConfig(({ mode }) => ({
         // Regenerates src/icons/bundle.generated.ts from the icon names found in
         // source — on buildStart (dev + prod) and live on file change in dev.
         iconBundlePlugin(),
+        // Rebuilds the WASM bridge and reloads when anything under `crates/`
+        // changes, so a Rust edit needs no second terminal. Dev only.
+        wasmWatchPlugin(),
         svelte(),
         basicSsl(),
         VitePWA({
@@ -102,6 +107,7 @@ export default defineConfig(({ mode }) => ({
         }),
     ],
     server: {
+        hmr: false, // TEMP: testing Firefox dev freeze — isolate HMR/module-runner transport
         fs: {
             allow: ['..'],
         },

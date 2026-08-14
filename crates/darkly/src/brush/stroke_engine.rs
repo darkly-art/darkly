@@ -94,7 +94,10 @@ impl StrokeEngine {
     ///
     /// `runner` is a pre-compiled brush graph.  `color` is the foreground
     /// color (raw sRGB RGBA, as picked).  `spacing` controls dab placement.
-    /// `stabilizer` is the stroke stabilization algorithm.
+    /// `stabilizer` is the stroke stabilization algorithm.  `stroke_seed`
+    /// drives every `random`/`noise` node in the graph — a real stroke passes
+    /// [`Self::random_seed`], a render that has to be reproducible passes a
+    /// constant.
     pub fn new(
         mut runner: BrushGraphRunner,
         color: [f32; 4],
@@ -102,6 +105,7 @@ impl StrokeEngine {
         base_size: f32,
         stabilizer: Box<dyn StabilizerAlgorithm>,
         clone_source_anchor: Option<[f32; 2]>,
+        stroke_seed: u32,
     ) -> Self {
         // Base brush size is stroke-constant, read out-of-band from
         // `pen_input.size` at stroke start. Injected as ambient state so every
@@ -118,11 +122,6 @@ impl StrokeEngine {
         let diameter = base_size * DAB_REFERENCE_SIZE as f32;
         let step = spacing.distance(diameter);
         runner.set_dabs_per_pass((diameter / step).max(1.0));
-
-        let stroke_seed = web_time::SystemTime::now()
-            .duration_since(web_time::SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u32)
-            .unwrap_or(42);
 
         let d = Self::default_diameter();
         Self {
@@ -142,6 +141,26 @@ impl StrokeEngine {
             clone_dest_anchor: None,
             clone_source_frame: None,
         }
+    }
+
+    /// A seed drawn from the wall clock, so two strokes of the same brush
+    /// scatter differently. What a stroke the painter is making wants — and
+    /// what a stroke rendered into a cached thumbnail or a documentation asset
+    /// must not have, which is why it is the caller's to choose.
+    /// Texel format the stroke scratch must be allocated in for this
+    /// stroke's brush — see
+    /// [`BrushGraphRunner::scratch_format`](crate::brush::eval::BrushGraphRunner::scratch_format).
+    /// The engine builds its `StrokeEngine` before its `StrokeBuffer`, so
+    /// this is available at allocation time.
+    pub fn scratch_format(&self) -> wgpu::TextureFormat {
+        self.runner.scratch_format()
+    }
+
+    pub fn random_seed() -> u32 {
+        web_time::SystemTime::now()
+            .duration_since(web_time::SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u32)
+            .unwrap_or(42)
     }
 
     /// Set the clone source snapshot's plane-space frame for the current

@@ -1,38 +1,26 @@
-use crate::gpu::effect::{EffectCache, EffectPipeline};
+use crate::gpu::effect::{create_effect_pipeline, Binding, EffectCache, EffectPipeline};
+use crate::gpu::preview::{PreviewAnim, PREVIEW_SECONDS};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Float {
-        name: "speed",
-        min: 0.0,
-        max: 3.0,
-        default: 0.5,
-    },
-    ParamDef::Float {
-        name: "wobble",
-        min: 0.0,
-        max: 2.0,
-        default: 1.0,
-    },
-    ParamDef::Float {
-        name: "switching",
-        min: 0.0,
-        max: 2.0,
-        default: 1.0,
-    },
-    ParamDef::Float {
-        name: "bloom",
-        min: 0.0,
-        max: 2.0,
-        default: 1.0,
-    },
-    ParamDef::Float {
-        name: "ac_beat",
-        min: 0.0,
-        max: 2.0,
-        default: 1.0,
-    },
+    ParamDef::float("speed", 0.0, 3.0, 0.5)
+        .with_label("Speed")
+        .with_description("How fast the tape artefacts drift and flicker."),
+    ParamDef::float("wobble", 0.0, 2.0, 1.0)
+        .with_label("Wobble")
+        .with_description("Horizontal waver of each scanline, as if the tape were stretched."),
+    ParamDef::float("switching", 0.0, 2.0, 1.0)
+        .with_label("Switching Noise")
+        .with_description(
+            "Torn band of static at the bottom of the frame where the head switches.",
+        ),
+    ParamDef::float("bloom", 0.0, 2.0, 1.0)
+        .with_label("Bloom")
+        .with_description("How far bright areas smear and glow into their surroundings."),
+    ParamDef::float("ac_beat", 0.0, 2.0, 1.0)
+        .with_label("Hum Bar")
+        .with_description("Slow bright bar rolling up the frame from mains interference."),
 ];
 
 pub fn register() -> VeilRegistration {
@@ -41,6 +29,7 @@ pub fn register() -> VeilRegistration {
         display_name: "VHS",
         description: "Analog VHS tape artifacts — scanlines, noise, and color bleed.",
         params: PARAMS,
+        preview: Some(PreviewAnim::ONE_WAY),
         create_pipeline: create_vhs_pipeline,
         from_params: |params, shared| {
             let speed = match params.first() {
@@ -150,15 +139,25 @@ impl Veil for Vhs {
         self.speed > 0.0
     }
 
+    /// Two seconds of the veil's own tape clock. The artefacts this veil is
+    /// made of are temporal — the wobble, the switching noise, the AC beat — so
+    /// its preview runs time rather than any parameter. The clock runs forward
+    /// and does not return to where it started, so the sequence does not loop;
+    /// making it do so would mean a periodic time basis in the shader, which is
+    /// a change to the effect rather than to its preview.
+    fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
+        self.time = PREVIEW_SECONDS * t * self.speed;
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
+        true
+    }
+
     fn update_time(&mut self, queue: &wgpu::Queue, cache: &EffectCache, dt: f32) {
         self.time += dt * self.speed;
-        if let Some(buf) = cache.uniform_bufs.first() {
-            queue.write_buffer(buf, 0, bytemuck::bytes_of(&self.uniforms()));
-        }
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
     }
 
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ping_pong_views: &[wgpu::TextureView; 2],
@@ -231,81 +230,13 @@ impl Veil for Vhs {
     }
 }
 
-fn create_vhs_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> EffectPipeline {
-    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("vhs-bgl"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-        ],
-    });
-
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("vhs-pipeline-layout"),
-        bind_group_layouts: &[Some(&bind_group_layout)],
-        immediate_size: 0,
-    });
-
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("vhs-shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/veils/vhs.wgsl").into()),
-    });
-
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("vhs-pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: &[],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_vhs"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            ..Default::default()
-        },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    });
-
-    EffectPipeline {
-        pipeline,
-        bind_group_layout,
-    }
+fn create_vhs_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> EffectPipeline {
+    create_effect_pipeline(
+        device,
+        format,
+        "vhs",
+        &[Binding::Texture, Binding::Sampler, Binding::Uniform],
+        include_str!("../../../shaders/veils/vhs.wgsl"),
+        "fs_vhs",
+    )
 }
