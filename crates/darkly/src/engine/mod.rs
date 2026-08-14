@@ -336,6 +336,10 @@ pub(crate) struct PreviewJob {
     pub height: u32,
     pub fps: u32,
     pub frames: Vec<Option<Vec<u8>>>,
+    /// Carried so the completed sequence can be closed on the way out —
+    /// `poll_preview` is where the frames first exist all at once, and only the
+    /// declaration knows whether they hand back to their first.
+    pub anim: crate::gpu::preview::PreviewAnim,
 }
 
 /// Cached thumbnail RGBA bytes per node id. Keyed uniformly across layers,

@@ -412,9 +412,14 @@ fn every_frame_is_the_size_its_entry_declares() {
     assert_eq!(checked, 48);
 }
 
-/// For every asset the PNG count equals the declared frame count, and the
-/// index's `frames` / `fps` / `loop` are the entry's own — which is what makes
-/// `loop` in the artifact something a consumer can rely on rather than a claim.
+/// For every asset the PNG count equals the frame count the declaration says
+/// will be *emitted*, and the index's `frames` / `fps` / `loop` are the entry's
+/// own — which is what makes `loop` in the artifact something a consumer can
+/// rely on rather than a claim.
+///
+/// Emitted, not declared: `close_loop` spends `LOOP_CLOSE_FRAMES` of a one-way
+/// sequence on its own hand-back, so what a consumer holds is shorter than what
+/// was rendered, and `loop` is then true because the frames really do close.
 #[test]
 fn manifest_frames_fps_and_loop_match_the_declaration() {
     let (dir, manifest) = assets();
@@ -422,9 +427,21 @@ fn manifest_frames_fps_and_loop_match_the_declaration() {
 
     for p in previewable() {
         let asset = &manifest.assets[p.catalog][p.type_id];
-        assert_eq!(asset.frames, p.anim.frames, "{}/{}", p.catalog, p.type_id);
+        assert_eq!(
+            asset.frames,
+            p.anim.emitted_frames(),
+            "{}/{}",
+            p.catalog,
+            p.type_id
+        );
         assert_eq!(asset.fps, p.anim.fps, "{}/{}", p.catalog, p.type_id);
-        assert_eq!(asset.loops, p.anim.loops, "{}/{}", p.catalog, p.type_id);
+        assert_eq!(
+            asset.loops,
+            p.anim.emits_a_loop(),
+            "{}/{}",
+            p.catalog,
+            p.type_id
+        );
         assert_eq!(
             asset.still,
             p.anim.still_frame(),
@@ -449,17 +466,21 @@ fn manifest_frames_fps_and_loop_match_the_declaration() {
 
         let written = std::fs::read_dir(dir.join(&asset.dir)).unwrap().count();
         assert_eq!(
-            written as u32, p.anim.frames,
+            written as u32,
+            p.anim.emitted_frames(),
             "`{}/{}` wrote {written} frames",
-            p.catalog, p.type_id
+            p.catalog,
+            p.type_id
         );
-        if !asset.loops {
+        if !p.anim.loops {
             non_looping.insert(format!("{}/{}", p.catalog, p.type_id));
         }
     }
 
-    // The three time-driven veils integrate their clocks forward and are
-    // recorded honestly rather than being made to loop by a shader change.
+    // The three time-driven veils integrate their clocks forward and declare so
+    // rather than being made periodic by a shader change. They still ship as
+    // loops: `close_loop` closes the sequence in the one place both the picker
+    // and this binary go through, so nothing downstream carries a special case.
     assert_eq!(
         non_looping,
         BTreeSet::from([
@@ -468,6 +489,13 @@ fn manifest_frames_fps_and_loop_match_the_declaration() {
             "veils/vhs".to_string(),
         ])
     );
+    for id in &non_looping {
+        let (catalog, type_id) = id.split_once('/').unwrap();
+        assert!(
+            manifest.assets[catalog][type_id].loops,
+            "`{id}` declares one-way motion but was not closed into a loop"
+        );
+    }
 
     // Alphabetically the last of the six tests that read the fixture, and under
     // the mandatory single test thread that makes it the last to run — so the

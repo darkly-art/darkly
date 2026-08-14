@@ -16,8 +16,8 @@ use darkly::engine::preview::PREVIEW_FRAMES_PER_TICK;
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::preview::{
-    drive, fit_preview_dims, PreviewRegistries, PreviewSequence, PreviewTarget, PreviewVariant,
-    PREVIEW_FORMAT,
+    close_loop, drive, fit_preview_dims, PreviewRegistries, PreviewSequence, PreviewTarget,
+    PreviewVariant, PREVIEW_FORMAT,
 };
 use darkly::gpu::test_utils::{readback_texture, test_device};
 
@@ -141,9 +141,23 @@ impl Offscreen {
         }
     }
 
-    /// Every frame of one entry's animation, driven through the blocking sink.
+    /// Every frame one entry's animation *generates*, driven through the
+    /// blocking sink. Raw: what `preview_at` produced, before anything decides
+    /// how it should be played.
     fn render(&mut self, catalog: &str, type_id: &str) -> Vec<Vec<u8>> {
         self.render_range(catalog, type_id, PreviewVariant::Animated, 0)
+    }
+
+    /// The frames a consumer actually holds — [`render`](Self::render) closed
+    /// the way both of them close it.
+    ///
+    /// The distinction is the whole reason `close_loop` exists in one place: a
+    /// test about generation (is `preview_at` absolute? does resuming match?)
+    /// wants the raw sequence, and a test about playback (is the still the frame
+    /// the animation starts from?) wants this one.
+    fn played(&mut self, catalog: &str, type_id: &str) -> Vec<Vec<u8>> {
+        let frames = self.render(catalog, type_id);
+        close_loop(still_point(catalog, type_id), frames)
     }
 
     /// The one frame an entry's still variant produces.
@@ -309,7 +323,7 @@ fn a_still_is_the_animations_frame_at_its_still_point() {
     let mut off = Offscreen::new();
     for (catalog, type_id) in offscreen_entries() {
         let anim = still_point(catalog, type_id);
-        let whole = off.render(catalog, type_id);
+        let whole = off.played(catalog, type_id);
         let still = off.render_still(catalog, type_id);
 
         assert_eq!(

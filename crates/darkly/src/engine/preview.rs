@@ -21,7 +21,9 @@ use super::PreviewJob;
 use super::ReadbackContext;
 use crate::catalog::preview_mechanisms;
 use crate::coord::LayerRect;
-use crate::gpu::preview::{PreviewMechanism, PreviewSequence, PreviewVariant, PREVIEW_FORMAT};
+use crate::gpu::preview::{
+    close_loop, PreviewMechanism, PreviewSequence, PreviewVariant, PREVIEW_FORMAT,
+};
 
 /// What keys a preview job: which catalog, which entry, and which of the entry's
 /// two previews. A card's still and its animation are separate generations of
@@ -234,6 +236,7 @@ impl DarklyEngine {
                 height: ph,
                 fps: entry.anim.fps,
                 frames: vec![None; frames as usize],
+                anim: entry.anim,
             },
         );
         self.preview_active = Some(ActivePreview { key, cursor: 0 });
@@ -306,6 +309,10 @@ impl DarklyEngine {
             .into_iter()
             .map(|f| f.expect("all filled"))
             .collect();
-        Some((job.width, job.height, job.fps, frames))
+        // The picker wraps its cursor modulo the frame count, so a one-way
+        // sequence jumped on every repeat. Closed here rather than there — and
+        // by the same function the documentation render goes through — because
+        // this is where the whole sequence first exists at once.
+        Some((job.width, job.height, job.fps, close_loop(job.anim, frames)))
     }
 }

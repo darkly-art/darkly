@@ -31,6 +31,10 @@ pub const PREVIEW_FPS: u32 = 24;
 /// Seconds of an effect's own clock one preview sequence covers. A veil whose
 /// motion is temporal rather than parametric maps `t` onto this span.
 pub const PREVIEW_SECONDS: f32 = 2.0;
+/// Frames [`close_loop`] spends dissolving a one-way sequence back onto its own
+/// opening frame. A third of a second at [`PREVIEW_FPS`]: long enough not to
+/// read as a cut, short enough that most of the two seconds is the motion.
+pub const LOOP_CLOSE_FRAMES: u32 = 8;
 
 /// Pixel format every preview is rendered and read back in. Matches the
 /// compositor's accumulator and the layer-texture atlas, so a preview frame
@@ -130,10 +134,49 @@ impl PreviewAnim {
         Self { still_at, ..self }
     }
 
-    /// The frame index the still is taken at, clamped into the sequence.
+    /// Whether [`close_loop`] has anything to do here: the motion was declared
+    /// one-way, and the sequence is long enough that spending
+    /// [`LOOP_CLOSE_FRAMES`] on the hand-back still leaves an animation.
+    pub fn needs_closing(&self) -> bool {
+        !self.loops && self.frames > LOOP_CLOSE_FRAMES * 2
+    }
+
+    /// Frames a consumer ends up holding, which is not always the frames that
+    /// were rendered — closing a one-way loop spends the head of the sequence on
+    /// its tail rather than appending to it.
+    pub fn emitted_frames(&self) -> u32 {
+        let frames = self.frames.max(1);
+        if self.needs_closing() {
+            frames - LOOP_CLOSE_FRAMES
+        } else {
+            frames
+        }
+    }
+
+    /// Whether the frames a consumer receives hand back to their first without a
+    /// visible jump — which is [`loops`](Self::loops) *or* closing having made
+    /// it so, and is what a consumer should play on repeat.
+    ///
+    /// Distinct from `loops`, which stays a statement about the motion: only the
+    /// body that wrote it knows whether it returns to where it started.
+    pub fn emits_a_loop(&self) -> bool {
+        self.loops || self.needs_closing()
+    }
+
+    /// The frame index the still is taken at, clamped into the emitted sequence.
+    ///
+    /// Emitted, not rendered: closing drops the first [`LOOP_CLOSE_FRAMES`], so
+    /// an index into what was rendered would point one third of a second early
+    /// at whatever a consumer actually holds.
     pub fn still_frame(&self) -> u32 {
         let frames = self.frames.max(1);
-        ((self.still_at * frames as f32) as u32).min(frames - 1)
+        let rendered = ((self.still_at * frames as f32) as u32).min(frames - 1);
+        let shifted = if self.needs_closing() {
+            rendered.saturating_sub(LOOP_CLOSE_FRAMES)
+        } else {
+            rendered
+        };
+        shifted.min(self.emitted_frames() - 1)
     }
 }
 
@@ -777,6 +820,47 @@ impl<'a> PreviewSequence<'a> {
     }
 }
 
+/// Make a one-way sequence hand back to its own first frame.
+///
+/// Three veils — grain, rainy glass, VHS — declare [`PreviewAnim::ONE_WAY`]:
+/// their motion is a clock integrated forward, so the last frame does not lead
+/// back to the first, and the bodies that wrote them are right not to fake that
+/// by making the effect itself periodic. But **both** consumers play a sequence
+/// on repeat — the picker wraps its cursor modulo the frame count, a
+/// documentation page loops the video — so both of them showed the same jump,
+/// and neither is the place to fix it. This is.
+///
+/// The frames the head occupied are what pays for it: the sequence is cut to
+/// `[X, N)` and the frames `[0, X)` are dissolved in over its last `X`, so the
+/// last frame *is* the frame before the one it now opens on and the wrap is an
+/// ordinary step. Nothing is reversed — rain has a direction, which is what
+/// rules out ping-ponging it — and nothing is appended, which would cost bytes
+/// in the artifact and generation time in the picker.
+///
+/// A sequence that already loops, or is too short to spend `X` frames on the
+/// hand-back, is returned untouched — including every still, whose one frame is
+/// the case that must never be dissolved with itself.
+pub fn close_loop(anim: PreviewAnim, mut frames: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+    let close = LOOP_CLOSE_FRAMES as usize;
+    if !anim.needs_closing() || frames.len() <= close * 2 {
+        return frames;
+    }
+
+    let head: Vec<Vec<u8>> = frames.drain(..close).collect();
+    let tail_start = frames.len() - close;
+    for (k, from_head) in head.into_iter().enumerate() {
+        // 0 at the first blended frame, 1 at the last — so the tail arrives at
+        // the head exactly, rather than one step short of it.
+        let a = k as f32 / (close - 1) as f32;
+        let onto = &mut frames[tail_start + k];
+        debug_assert_eq!(onto.len(), from_head.len(), "frames differ in size");
+        for (o, h) in onto.iter_mut().zip(from_head) {
+            *o = (f32::from(*o) * (1.0 - a) + f32::from(h) * a).round() as u8;
+        }
+    }
+    frames
+}
+
 /// Run a sequence to completion. The blocking consumer's whole loop.
 pub fn drive(
     seq: &mut PreviewSequence,
@@ -791,6 +875,62 @@ pub fn drive(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A closed sequence ends on the frame *before* the one it opens on, so
+    /// wrapping is an ordinary step rather than a jump.
+    ///
+    /// The whole point, and the part that is easy to get subtly wrong: dissolving
+    /// the head over the tail without also dropping it leaves the same
+    /// discontinuity, `LOOP_CLOSE_FRAMES` smaller. Written against a ramp where
+    /// frame `i` is the constant `i`, so "the frame before" is checkable.
+    #[test]
+    fn closing_a_one_way_sequence_lands_on_the_frame_before_its_first() {
+        let anim = PreviewAnim::ONE_WAY;
+        let ramp: Vec<Vec<u8>> = (0..anim.frames).map(|i| vec![i as u8; 4]).collect();
+        let closed = close_loop(anim, ramp);
+
+        assert_eq!(closed.len() as u32, anim.emitted_frames());
+        // Opens on the frame after the head that was spent.
+        assert_eq!(closed[0], vec![LOOP_CLOSE_FRAMES as u8; 4]);
+        // And ends on the one before it — the last blend is the head outright.
+        assert_eq!(
+            *closed.last().unwrap(),
+            vec![LOOP_CLOSE_FRAMES as u8 - 1; 4]
+        );
+    }
+
+    /// Everything else is left exactly alone: a sequence that already loops, and
+    /// a still, whose single frame must never be dissolved with itself.
+    #[test]
+    fn closing_leaves_looping_and_still_sequences_untouched() {
+        for anim in [PreviewAnim::LOOPING, PreviewAnim::STILL] {
+            let frames: Vec<Vec<u8>> = (0..anim.frames).map(|i| vec![i as u8; 4]).collect();
+            assert_eq!(close_loop(anim, frames.clone()), frames);
+            assert_eq!(anim.emitted_frames(), anim.frames);
+            assert!(anim.emits_a_loop());
+        }
+    }
+
+    /// The still is an index into what a consumer holds, and it never lands in
+    /// the dissolved tail — where the picture is a blend of two moments and so
+    /// is not the frame a `Still` render at `still_at` would produce.
+    #[test]
+    fn the_still_indexes_the_emitted_sequence_outside_the_dissolve() {
+        for anim in [
+            PreviewAnim::LOOPING,
+            PreviewAnim::ONE_WAY,
+            PreviewAnim::STILL,
+        ] {
+            let still = anim.still_frame();
+            assert!(still < anim.emitted_frames(), "{anim:?}");
+            if anim.needs_closing() {
+                assert!(
+                    still < anim.emitted_frames() - LOOP_CLOSE_FRAMES,
+                    "{anim:?}: the poster is inside the dissolve",
+                );
+            }
+        }
+    }
 
     /// Both sweeps rest at their ends and reach their extremes where the
     /// bodies that call them expect — the property every `preview_at` written

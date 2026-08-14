@@ -41,8 +41,8 @@ use crate::engine::DarklyEngine;
 use crate::gpu::context::{GpuContext, GpuDevice};
 use crate::gpu::filter::FilterPipelineRegistry;
 use crate::gpu::preview::{
-    drive, frame_t, swing, PreviewAnim, PreviewMechanism, PreviewRegistries, PreviewSequence,
-    PreviewTarget, PreviewVariant, PREVIEW_FORMAT,
+    close_loop, drive, frame_t, swing, PreviewAnim, PreviewMechanism, PreviewRegistries,
+    PreviewSequence, PreviewTarget, PreviewVariant, PREVIEW_FORMAT,
 };
 use crate::gpu::test_utils::{readback_texture, test_device};
 use crate::gpu::veil::VeilRegistry;
@@ -370,11 +370,11 @@ impl Gpu {
             );
         }
         Ok(Rendered {
-            frames,
+            frames: close_loop(anim, frames),
             width: w,
             height: h,
             fps: anim.fps,
-            loops: anim.loops,
+            loops: anim.emits_a_loop(),
             still: anim.still_frame(),
         })
     }
@@ -403,11 +403,11 @@ impl Gpu {
         // would leak into the next entry's first frame.
         doc.engine.set_opacity(doc.top, 1.0);
         Ok(Rendered {
-            frames,
+            frames: close_loop(anim, frames),
             width: DOCS_SUBJECT_DIM,
             height: DOCS_SUBJECT_DIM,
             fps: anim.fps,
-            loops: anim.loops,
+            loops: anim.emits_a_loop(),
             still: anim.still_frame(),
         })
     }
@@ -490,11 +490,14 @@ impl Gpu {
             DOCS_STROKE_BG,
         );
         Ok(Rendered {
-            frames: vec![framed],
+            // A brush stroke is one frame, so closing is a no-op — routed
+            // through it anyway so no arm of this module is the one that
+            // decides for itself what a declaration means.
+            frames: close_loop(anim, vec![framed]),
             width: tw,
             height: th,
             fps: anim.fps,
-            loops: anim.loops,
+            loops: anim.emits_a_loop(),
             still: anim.still_frame(),
         })
     }

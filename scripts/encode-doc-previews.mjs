@@ -110,55 +110,6 @@ function ffmpeg(args) {
 }
 
 /**
- * How much of a one-way sequence is spent dissolving back to its first frame.
- *
- * A third of a second at 24 fps. Long enough that the hand-back is not read as a
- * cut, short enough that most of the two seconds is the motion itself.
- */
-const CROSSFADE_FRAMES = 8;
-
-/**
- * Make a one-way sequence loopable by dissolving its head over its tail.
- *
- * Three veils — grain, rainy glass and VHS — declare `PreviewAnim::ONE_WAY`:
- * their motion is a clock integrated forward, so the last frame does not hand
- * back to the first. Darkly is right not to fake that at the source (VHS says so
- * where it declares it: a periodic time basis would be a change to the effect,
- * not to its preview), and a page that honours it plays the video once and
- * freezes on the last frame while the pointer is still on it — which reads as
- * broken rather than as honest.
- *
- * So the fix is here, where the deliverable is made rather than the motion: the
- * clip is cut to frames `[X, N)`, and frames `[0, X)` are dissolved in over its
- * last `X`. The final frame is then the frame *before* the one the clip now
- * opens on, so the wrap is an ordinary step between consecutive frames and there
- * is nothing to see. Nothing is reversed — rain keeps falling downward, which is
- * what rules out the other obvious trick.
- *
- * Trimming the body is the part that is easy to leave out and hard to notice:
- * without it the clip ends on frame `X - 1` and restarts on frame `0`, which is
- * the same discontinuity as before, `X` frames smaller.
- *
- * The declaration keeps its meaning: `loops` in `render-docs`' index says
- * whether the *frames* hand back. The index written here describes the *encoded
- * asset*, and after this every video loops.
- */
-function loopFilter(frames, fps) {
-    const total = frames / fps;
-    const fade = CROSSFADE_FRAMES / fps;
-    return [
-        '[0]split[body][head]',
-        // The head keeps its own timestamps until it is slid to the end, so the
-        // body keeps the timestamps it was trimmed at rather than being reset to
-        // zero — that is what lines the two up.
-        `[head]trim=duration=${fade},format=yuva420p,fade=t=in:d=${fade}:alpha=1,` +
-            `setpts=PTS+${total - fade}/TB[fade]`,
-        `[body]trim=start=${fade}[main]`,
-        '[main][fade]overlay=format=auto',
-    ].join(';');
-}
-
-/**
  * One entry's loop.
  *
  * `yuv420p` because it is the only pixel format that plays everywhere, and it
@@ -168,8 +119,6 @@ function loopFilter(frames, fps) {
  * stopping.
  */
 function encode(dir, asset, dest) {
-    const seamless = !asset.loop && asset.frames > CROSSFADE_FRAMES * 2;
-    const frames = seamless ? asset.frames - CROSSFADE_FRAMES : asset.frames;
     ffmpeg([
         '-nostdin',
         '-y',
@@ -180,7 +129,6 @@ function encode(dir, asset, dest) {
         '-flags', '+bitexact',
         '-framerate', String(asset.fps),
         '-i', path.join(dir, '%03d.png'),
-        ...(seamless ? ['-filter_complex', loopFilter(asset.frames, asset.fps)] : []),
         '-c:v', 'libx264',
         '-preset', PRESET,
         '-crf', CRF,
@@ -191,9 +139,6 @@ function encode(dir, asset, dest) {
         '-movflags', '+faststart',
         dest,
     ]);
-    // What the file actually holds, which is what the index has to say: closing
-    // a loop spends the head of the sequence on the tail rather than appending.
-    return frames;
 }
 
 function main() {
@@ -217,7 +162,6 @@ function main() {
     const assets = {};
     let videos = 0;
     let stills = 0;
-    let seamed = 0;
 
     for (const [catalog, entries] of Object.entries(manifest.assets)) {
         fs.mkdirSync(path.join(media, catalog), { recursive: true });
@@ -247,19 +191,15 @@ function main() {
                 poster,
                 width: asset.width,
                 height: asset.height,
-                // Of the encoded asset, not of the frames: `encode` dissolves a
-                // one-way sequence back onto its own first frame, so everything
-                // with a video is loopable by the time a consumer sees it.
-                loop: true,
+                loop: asset.loop,
             };
 
             // One frame is a still by declaration, not a one-frame film.
             if (asset.frames > 1) {
                 const video = path.join('previews', catalog, `${id}.mp4`);
-                const written = encode(dir, asset, path.join(out, video));
-                if (written !== asset.frames) seamed += 1;
+                encode(dir, asset, path.join(out, video));
                 entry.video = video;
-                entry.frames = written;
+                entry.frames = asset.frames;
                 entry.fps = asset.fps;
                 videos += 1;
             } else {
@@ -283,8 +223,8 @@ function main() {
             .reduce((sum, e) => sum + fs.statSync(path.join(e.parentPath, e.name)).size, 0);
 
     log(
-        `${manifest.version} — ${videos} loop(s) (${seamed} closed by crossfade), ` +
-            `${stills} still(s), ${(bytes(media) / 1024 / 1024).toFixed(1)} MB`,
+        `${manifest.version} — ${videos} loop(s), ${stills} still(s), ` +
+            `${(bytes(media) / 1024 / 1024).toFixed(1)} MB`,
     );
 }
 
