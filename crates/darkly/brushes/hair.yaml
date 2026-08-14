@@ -7,8 +7,8 @@ nodes:
   brush_settings:
     type: brush_settings
     inputs:
-      size: 0.9002734422683716
-      spacing: 0.009999999776482582
+      size: 0.2
+      spacing: 0.01
       stabilize: 1.0
   circle:
     type: circle
