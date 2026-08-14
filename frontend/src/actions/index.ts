@@ -7,6 +7,7 @@ import { resizeCanvas } from '../state/resizeCanvas.svelte';
 import { imageRescale } from '../state/imageRescale.svelte';
 import { selectionModify } from '../state/selectionModify.svelte';
 import { filterModal } from '../state/filterModal.svelte';
+import { layerPicker } from '../state/layerPicker.svelte';
 import type { FilterParam } from '../ui/filters/filterParams';
 import { exportTimelapse } from '../state/exportTimelapse.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
@@ -28,6 +29,18 @@ import { about } from '../state/about.svelte';
 import { commandPalette } from '../state/commandPalette.svelte';
 import { openCheatsheet } from '../ui/cheatsheet';
 import { links, openExternal } from '../links';
+
+/** The commands that add something to the layer stack, in the order the
+ *  layer panel's new-layer dropdown lists them. The dropdown renders straight
+ *  from these registrations, so a new layer kind needs an action and nothing
+ *  else — its label, icon and behaviour come along for free. */
+export const NEW_LAYER_ACTION_IDS = [
+    'newLayer',
+    'newFilterLayer',
+    'newVeil',
+    'newVoid',
+    'newGroup',
+];
 
 /** Walk the layer tree to find a node by id. The layer tree is the
  *  JSON shape produced by `app.refreshLayerTree`, with `children` on
@@ -686,6 +699,36 @@ export function registerActions() {
             app.selectLayer(id);
             await app.refreshLayerTree();
         },
+    });
+
+    actions.register({
+        id: 'newFilterLayer',
+        displayName: 'New Filter Layer',
+        category: 'layers',
+        description: 'Add a non-destructive filter layer (curves, levels, invert, …) above the active one.',
+        icon: 'fa6-solid:circle-half-stroke',
+        menuPath: ['Layer:12'],
+        handler: () => { layerPicker.kind = 'filter'; },
+    });
+
+    actions.register({
+        id: 'newVeil',
+        displayName: 'New Veil',
+        category: 'layers',
+        description: 'Add a veil — a post-process effect (rainy glass, VHS, grain, …) over the whole canvas.',
+        icon: 'material-symbols:curtains-rounded',
+        menuPath: ['Layer:14'],
+        handler: () => { layerPicker.kind = 'veil'; },
+    });
+
+    actions.register({
+        id: 'newVoid',
+        displayName: 'New Void',
+        category: 'layers',
+        description: 'Add a void — a layer filled from a procedural or live source (noise, camera, screen share, …).',
+        icon: 'tabler:galaxy',
+        menuPath: ['Layer:16'],
+        handler: () => { layerPicker.kind = 'void'; },
     });
 
     actions.register({

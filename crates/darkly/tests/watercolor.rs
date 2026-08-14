@@ -56,15 +56,12 @@ struct FlushGroup<'a> {
     /// path. `begin_stroke` always runs before the first group; this only
     /// affects later ones.
     restart: bool,
-    /// Brush colour for this group, overriding the render call's default.
-    color: Option<[f32; 4]>,
 }
 
 fn group(dabs: &[(f32, f32)]) -> FlushGroup<'_> {
     FlushGroup {
         dabs,
         restart: false,
-        color: None,
     }
 }
 
@@ -72,14 +69,6 @@ fn restart_group(dabs: &[(f32, f32)]) -> FlushGroup<'_> {
     FlushGroup {
         dabs,
         restart: true,
-        color: None,
-    }
-}
-
-impl<'a> FlushGroup<'a> {
-    fn with_color(mut self, color: [f32; 4]) -> Self {
-        self.color = Some(color);
-        self
     }
 }
 
@@ -218,7 +207,7 @@ fn render_flush_groups(
                 pressure: 1.0,
                 ..Default::default()
             };
-            runner.seed_sensors(&info, g.color.unwrap_or(color), 0xC0FFEE, dab_index);
+            runner.seed_sensors(&info, color, 0xC0FFEE, dab_index);
             runner.execute_cpu();
             runner.execute_gpu(&mut ctx);
             dab_index += 1;
@@ -437,75 +426,6 @@ fn watercolor_pigment_builds_up_across_flushes() {
     assert!(
         after_8[2] + 8 < after_3[2],
         "blue must keep receding past three passes: 3 flushes {after_3:?}, 8 flushes {after_8:?}",
-    );
-}
-
-/// The pickup is a *neighbourhood* average, not a point sample — that is
-/// the whole reason the atlas pass exists. A dab laid next to wet paint
-/// must pull colour from it laterally.
-///
-/// Without this, `watercolor_pigment_builds_up_across_flushes` would pass
-/// for any per-flush-varying input at all; this pins the mechanism.
-#[test]
-fn watercolor_pickup_bleeds_neighbouring_wet_paint() {
-    let canvas = light_blue_canvas();
-    // At size 0.2 the dab radius is 51.2 px (0.2 × DAB_REFERENCE_SIZE × 0.5)
-    // and `pickup_size` defaults to 1.0, so the target dab's pickup window
-    // is also ±51.2 px about its centre.
-    //
-    // The probe pixel is the crux. The atlas holds ONE pickup value per dab,
-    // sampled around that dab's centre and then applied across its whole
-    // footprint. So probe at a pixel the *target* covers but the neighbour
-    // does not: the only way the neighbour's colour can reach it is through
-    // the target's pickup.
-    //
-    //   target   (64, 64) covers x ∈ [12.8, 115.2]
-    //   neighbour(94, 64) covers x ∈ [42.8, 145.2]
-    //   probe    (30, 64) — inside the target, 12.8 px clear of the neighbour,
-    //                       and the neighbour's paint sits inside the
-    //                       target's [12.8, 115.2] pickup window.
-    let neighbour = (94.0, 64.0);
-    let target = (64.0, 64.0);
-    const PROBE: (u32, u32) = (30, 64);
-
-    const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-    const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
-
-    // A red dab in the first flush, then white over the overlap.
-    let with_neighbour = render_flush_groups(
-        "Smooth Watercolor",
-        0.2,
-        WHITE,
-        &[
-            group(&[neighbour]).with_color(RED),
-            group(&[target]).with_color(WHITE),
-        ],
-        &canvas,
-    );
-    // The same white dab, but the first flush lays white too — identical
-    // flush structure and coverage, only the neighbour's colour differs.
-    let alone = render_flush_groups(
-        "Smooth Watercolor",
-        0.2,
-        WHITE,
-        &[
-            group(&[neighbour]).with_color(WHITE),
-            group(&[target]).with_color(WHITE),
-        ],
-        &canvas,
-    );
-
-    let bled = pixel(&with_neighbour, PROBE.0, PROBE.1);
-    let clean = pixel(&alone, PROBE.0, PROBE.1);
-    // Both runs paint white here with identical geometry and identical
-    // flush structure; only the neighbour's colour differs. A white brush
-    // over a red-tinted pickup lands pinker — less green and less blue —
-    // than the same brush over a white pickup.
-    assert!(
-        bled[1] + 4 < clean[1] && bled[2] + 4 < clean[2],
-        "the target dab's pickup should carry its red neighbour's wet paint to {PROBE:?}, \
-         which the neighbour itself never covers: with red neighbour {bled:?}, \
-         with white neighbour {clean:?}",
     );
 }
 

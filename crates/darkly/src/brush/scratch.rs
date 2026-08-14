@@ -126,20 +126,17 @@ pub struct StrokeChannel {
 /// canvas-anchored offset.  There is no API by which a caller can resize
 /// one without the other.
 ///
-/// Each channel carries a mirror as well as its accumulation texture,
-/// because a fragment cannot sample the attachment it is blending into.
-/// The mirror is layer-sized so a dab reads it at plain layer-local
-/// coordinates with no origin translation; only the flush's bbox is
-/// copied into it, so the per-flush cost stays proportional to what the
-/// flush actually touched.
+/// A channel is written as a colour attachment and read from a pass that
+/// does *not* target it — watercolor's per-dab probe reads the deposit
+/// while rendering to its atlas. That is an ordinary pass-to-pass
+/// dependency, not the read/write alias WebGPU forbids, so a channel needs
+/// no mirror.
 struct StrokeChannels {
     declared: Vec<StrokeChannel>,
     textures: Vec<wgpu::Texture>,
     /// Attachment views, in declaration order — what the terminal hangs
     /// off its render pass after [`Scratch::write_view`].
     views: Vec<wgpu::TextureView>,
-    mirrors: Vec<wgpu::Texture>,
-    mirror_views: Vec<wgpu::TextureView>,
 }
 
 impl Scratch {
@@ -242,13 +239,6 @@ impl Scratch {
         self.channels.as_ref().map_or(&[], |c| &c.views)
     }
 
-    /// Mirror views, in declaration order — what a terminal binds to
-    /// *read* a channel while writing its attachment.  Layer-sized, so a
-    /// dab samples at layer-local coordinates directly.
-    pub fn channel_mirror_views(&self) -> &[wgpu::TextureView] {
-        self.channels.as_ref().map_or(&[], |c| &c.mirror_views)
-    }
-
     /// The channel textures, in declaration order.
     ///
     /// The checkpoint ring snapshots these alongside the write side: a
@@ -263,36 +253,6 @@ impl Scratch {
         self.channels
             .as_ref()
             .map_or_else(Vec::new, |c| c.declared.iter().map(|d| d.format).collect())
-    }
-
-    /// Refresh each channel's mirror over `(origin_x, origin_y, w, h)` in
-    /// layer-local pixels — the union bbox of the flush about to draw.
-    ///
-    /// Deliberately **not** origin-cached, unlike [`Scratch::sync_read_mirror`].
-    /// That cache is sound only because the stroke engine resets it before
-    /// every dab; a channel is written between flushes by the terminal's
-    /// draw *and*, out of band, by a checkpoint restore that copies into it
-    /// from outside `Scratch` entirely.  A repeated bbox origin — what a
-    /// dwelling stroke produces — would then be served a stale mirror.
-    pub fn sync_channel_mirrors(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        origin_x: u32,
-        origin_y: u32,
-        w: u32,
-        h: u32,
-    ) {
-        let Some(channels) = self.channels.as_ref() else {
-            return;
-        };
-        let w = w.min(self.write_w.saturating_sub(origin_x));
-        let h = h.min(self.write_h.saturating_sub(origin_y));
-        if w == 0 || h == 0 {
-            return;
-        }
-        for (texture, mirror) in channels.textures.iter().zip(&channels.mirrors) {
-            copy_region(encoder, texture, mirror, origin_x, origin_y, w, h);
-        }
     }
 
     pub fn write_texture(&self) -> &wgpu::Texture {
@@ -584,8 +544,6 @@ fn build_channels(
 ) -> StrokeChannels {
     let mut textures = Vec::with_capacity(declared.len());
     let mut views = Vec::with_capacity(declared.len());
-    let mut mirrors = Vec::with_capacity(declared.len());
-    let mut mirror_views = Vec::with_capacity(declared.len());
 
     for channel in declared {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -605,32 +563,14 @@ fn build_channels(
                 | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        let mirror = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(&format!("scratch-channel-{}-mirror", channel.name)),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: channel.format,
-            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
         views.push(texture.create_view(&wgpu::TextureViewDescriptor::default()));
-        mirror_views.push(mirror.create_view(&wgpu::TextureViewDescriptor::default()));
         textures.push(texture);
-        mirrors.push(mirror);
     }
 
     StrokeChannels {
         declared: declared.to_vec(),
         textures,
         views,
-        mirrors,
-        mirror_views,
     }
 }
 
@@ -658,42 +598,6 @@ fn clear_channel_views(encoder: &mut wgpu::CommandEncoder, views: &[wgpu::Textur
         color_attachments: &attachments,
         ..Default::default()
     });
-}
-
-/// Copy `(origin, w, h)` from `src` to the same coordinates in `dst`.
-fn copy_region(
-    encoder: &mut wgpu::CommandEncoder,
-    src: &wgpu::Texture,
-    dst: &wgpu::Texture,
-    origin_x: u32,
-    origin_y: u32,
-    w: u32,
-    h: u32,
-) {
-    let origin = wgpu::Origin3d {
-        x: origin_x,
-        y: origin_y,
-        z: 0,
-    };
-    encoder.copy_texture_to_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: src,
-            mip_level: 0,
-            origin,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyTextureInfo {
-            texture: dst,
-            mip_level: 0,
-            origin,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::Extent3d {
-            width: w,
-            height: h,
-            depth_or_array_layers: 1,
-        },
-    );
 }
 
 /// Copy all of `src` into `dst` at a canvas-anchored destination offset —
