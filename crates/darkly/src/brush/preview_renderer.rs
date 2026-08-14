@@ -22,19 +22,40 @@ use super::stabilizer::PassThrough;
 use super::stroke_buffer::StrokeBuffer;
 use super::stroke_engine::StrokeEngine;
 use super::wire::BrushWireType;
+use crate::gpu::preview::PreviewBackdrop;
 use crate::nodegraph::Graph;
+
+/// Stroke seed every preview render uses.
+///
+/// A preview is a picture of a brush, not of one stroke of it: five shipped
+/// brushes contain `random`/`noise` nodes, and seeding those from the clock
+/// would make a cached thumbnail differ from its own re-bake and a
+/// documentation asset differ from its own rebuild. The value is arbitrary; that
+/// it never changes is the point.
+const PREVIEW_STROKE_SEED: u32 = 0x5EED_B00C;
 
 /// Reusable GPU scratch + layer textures for preview rendering.
 struct PreviewTarget {
     width: u32,
     height: u32,
+    /// Scratch format the cached `stroke_buffer` was built for. Part of
+    /// the cache key: this renderer is reused across brushes, and a warp
+    /// terminal's scratch holds a float field rather than colour, so a
+    /// buffer cached for one is unbindable by the other.
+    scratch_format: wgpu::TextureFormat,
     layer_texture: wgpu::Texture,
     layer_view: wgpu::TextureView,
     stroke_buffer: StrokeBuffer,
 }
 
 impl PreviewTarget {
-    fn new(device: &wgpu::Device, width: u32, height: u32, pipelines: &BrushPipelines) -> Self {
+    fn new(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        pipelines: &BrushPipelines,
+        scratch_format: wgpu::TextureFormat,
+    ) -> Self {
         let layer_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("brush-preview-layer"),
             size: wgpu::Extent3d {
@@ -53,10 +74,11 @@ impl PreviewTarget {
             view_formats: &[],
         });
         let layer_view = layer_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let stroke_buffer = StrokeBuffer::new(device, width, height, pipelines);
+        let stroke_buffer = StrokeBuffer::new(device, width, height, pipelines, scratch_format);
         Self {
             width,
             height,
+            scratch_format,
             layer_texture,
             layer_view,
             stroke_buffer,
@@ -90,6 +112,7 @@ impl BrushStrokePreviewRenderer {
         path: &[PaintInformation],
         fg_color: [f32; 4],
         bg_color: [f32; 4],
+        backdrop: PreviewBackdrop,
         width: u32,
         height: u32,
         base_size_override: Option<f32>,
@@ -100,43 +123,46 @@ impl BrushStrokePreviewRenderer {
         // Fresh compile so callers can edit the graph between renders.
         let runner = super::compile_graph(graph).ok()?;
 
-        // Ensure scratch + layer textures match the requested size.
+        // Ensure scratch + layer textures match the requested size *and*
+        // the brush's scratch format — the cached target is shared across
+        // brushes, so previewing a warp terminal after a colour one must
+        // reallocate rather than bind a colour scratch to a field pipeline.
+        let scratch_format = runner.scratch_format();
         let target_changed = match &self.target {
-            Some(t) => t.width != width || t.height != height,
+            Some(t) => t.width != width || t.height != height || t.scratch_format != scratch_format,
             None => true,
         };
         if target_changed {
-            self.target = Some(PreviewTarget::new(device, width, height, pipelines));
+            self.target = Some(PreviewTarget::new(
+                device,
+                width,
+                height,
+                pipelines,
+                scratch_format,
+            ));
         }
         let target = self.target.as_mut().unwrap();
 
-        // Pre-fill the layer with the background color, then snapshot it as
-        // the pre-stroke. `color_output::commit` composites the stroke
-        // scratch onto this snapshot and writes the result back to the
-        // layer — so seeding `bg` here is how the background gets shown.
+        // Pre-fill the layer with the backdrop, then snapshot it as the
+        // pre-stroke. `color_output::commit` composites the stroke scratch onto
+        // this snapshot and writes the result back to the layer — so painting
+        // the backdrop here is how it gets shown. It is also the only way one
+        // reaches a terminal that *transports* the destination: those sample
+        // `source_override.unwrap_or(pre_stroke_texture)` (`gpu_context.rs`),
+        // and the preview captures no source snapshot, so the pre-stroke is
+        // what they smear, warp, blur or clone.
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("brush-preview-pre-fill"),
         });
-        {
-            let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("brush-preview-bg-clear"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target.layer_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: bg_color[0] as f64,
-                            g: bg_color[1] as f64,
-                            b: bg_color[2] as f64,
-                            a: bg_color[3] as f64,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-        }
+        backdrop.fill(
+            queue,
+            &mut encoder,
+            &target.layer_view,
+            &target.layer_texture,
+            (width, height),
+            fg_color,
+            bg_color,
+        );
         let paint_target = crate::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
             &target.layer_texture,
             &target.layer_view,
@@ -164,16 +190,34 @@ impl BrushStrokePreviewRenderer {
         // to survive the crop-and-downscale to the thumbnail. The stroke
         // preview passes `None` and keeps the graph-driven size.
         let base_size = base_size_override.unwrap_or_else(|| brush_settings::base_size(graph));
-        // No clone source in the editor preview — a clone brush renders
-        // its synthetic preview stroke without a set-source anchor.
+
+        // A brush that transports pixels from elsewhere has nowhere to
+        // transport them from unless the preview says where. The offset comes
+        // from the backdrop — the only thing that knows what displacement
+        // escapes its own field — and the compiled graph says whether anything
+        // will use it, so no node authors a coordinate and any future
+        // source-sampling node gets a working preview for free.
+        let clone_source_anchor = runner.samples_source().then(|| {
+            let [du, dv] = backdrop.source_offset();
+            [
+                path[0].pos[0] + du * width as f32,
+                path[0].pos[1] + dv * height as f32,
+            ]
+        });
         let mut engine = StrokeEngine::new(
             runner,
             fg_color,
             spacing,
             base_size,
             Box::new(PassThrough::new()),
-            None,
+            clone_source_anchor,
+            PREVIEW_STROKE_SEED,
         );
+        if clone_source_anchor.is_some() {
+            // The snapshot being sampled is the pre-stroke, which covers the
+            // whole preview target.
+            engine.set_clone_source_frame(crate::coord::CanvasRect::from_xywh(0, 0, width, height));
+        }
 
         // Pre-cooked points: pass them through a pass-through stabilizer so
         // `render_from_stabilized_range_to` walks them verbatim. No
@@ -189,9 +233,9 @@ impl BrushStrokePreviewRenderer {
         macro_rules! make_gpu_ctx {
             ($label:expr) => {{
                 // The preview stroke buffer never captures a source
-                // snapshot — a source-sampling brush previews off its own
-                // (blank) pre-stroke snapshot, so the thumbnail stays
-                // neutral.
+                // snapshot, so a source-sampling brush previews off the
+                // pre-stroke snapshot — which is the backdrop, and is what
+                // gives it something to transport.
                 let (scratch, pre_stroke_texture, pre_stroke_bind_group, source_override) =
                     target.stroke_buffer.parts_for_brush_ctx();
                 BrushGpuContext {

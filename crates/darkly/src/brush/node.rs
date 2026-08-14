@@ -62,7 +62,25 @@ pub struct BrushNodeRegistration {
     pub evaluator: fn() -> Box<dyn BrushNodeEvaluator>,
     /// Framework-managed stroke prologue. See [`Lifecycle`].
     pub lifecycle: Lifecycle,
+    /// Texel format of the stroke scratch this terminal renders into.
+    ///
+    /// Color terminals leave this at [`COLOR_SCRATCH_FORMAT`]. Warp
+    /// terminals accumulate a displacement field rather than pixels and
+    /// declare a two-channel float format instead — the scratch *is* the
+    /// field, so everything that already tracks the scratch (grow, rebase,
+    /// read mirror, checkpoint ring) tracks the field for free. See
+    /// [`crate::brush::warp_field`].
+    ///
+    /// The stroke buffer pairs the format with the matching canvas-copy
+    /// bind group layout via
+    /// [`BrushPipelines::canvas_copy_layout_for`](crate::brush::pipeline::BrushPipelines::canvas_copy_layout_for),
+    /// so a terminal never has to think about filterability.
+    pub scratch_format: wgpu::TextureFormat,
 }
+
+/// Scratch format for terminals that accumulate colour — the default, and
+/// what every terminal but `liquify` uses.
+pub const COLOR_SCRATCH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 impl BrushNodeRegistration {
     /// Construct a compute-only node (no GPU pipelines, no lifecycle).
@@ -75,6 +93,7 @@ impl BrushNodeRegistration {
             pipelines: Vec::new(),
             evaluator,
             lifecycle: Lifecycle::None,
+            scratch_format: COLOR_SCRATCH_FORMAT,
         }
     }
 

@@ -1,5 +1,6 @@
 name: Smudge
 category: Effects
+description: Drags existing pigment along the stroke, the way a finger pulls through wet paint.
 nodes:
   pen_input:
     type: pen_input

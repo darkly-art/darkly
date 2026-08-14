@@ -1,5 +1,6 @@
 name: Hair
 category: Dry Media
+description: A bundle of fine strands that breaks each dab into separate hairs, for fur, grass and dry-bristle texture.
 nodes:
   add:
     type: add
@@ -18,10 +19,10 @@ nodes:
       curve:
       - - 0.0
         - 1.0
-      - - 0.682973
-        - 0.5305826
+      - - 0.48145637
+        - 0.795719
       - - 1.0
-        - 0.0
+        - 0.6756355
   divide:
     type: divide
   levels:
@@ -34,10 +35,18 @@ nodes:
     type: multiply
     inputs:
       a: 0.5
+    ranges:
+      a:
+      - -1.0
+      - 1.0
   multiply_3:
     type: multiply
     inputs:
-      b: 0.085
+      b: 0.1217829
+    ranges:
+      b:
+      - 0.03296951
+      - 0.21059628
   noise:
     type: noise
     inputs:
@@ -54,7 +63,7 @@ nodes:
   subtract:
     type: subtract
     inputs:
-      a: 0.12
+      a: 0.11999999731779099
 connections:
 - add.result -> levels.input
 - brush_settings.size -> divide.b

@@ -323,7 +323,6 @@ export const brushTool: ToolDescriptor = {
             : 'fa6-solid:paintbrush';
     },
     group: 'paint',
-    hotkeyAction: 'brushTool',
     optionsComponent: BrushOptions,
     panelComponent: BrushBuilderPanel,
     create: (inst: DarklyInstance) => new BrushTool(inst),

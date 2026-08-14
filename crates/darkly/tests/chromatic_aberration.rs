@@ -189,7 +189,7 @@ fn veil_produces_non_identity_output() {
 
     let mut registry = VeilRegistry::new();
     let params = ca_params(vec![entry([4.0, 0.0], 1.0, [1.0, 1.0, 1.0], 0.0)]);
-    let veil = registry.create_veil("chromatic_aberration", &params, &device, format);
+    let mut veil = registry.create_veil("chromatic_aberration", &params, &device, format);
     let cache = veil.create_cache(&device, &queue, &[view0, view1], &sampler, w, h);
 
     let (dst, dst_view) = create_test_texture(&device, &queue, w, h, &[]);

@@ -1,5 +1,6 @@
 name: Airbrush
 category: Basic
+description: A fully soft disc that builds color up gradually; hold it in one place and the tone deepens.
 nodes:
   pen_input:
     type: pen_input

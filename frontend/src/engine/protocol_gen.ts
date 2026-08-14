@@ -62,8 +62,6 @@ export type BeginStrokeReq = { id: number, };
 
 export type BeginTransformReq = { id: number, };
 
-export type BlendModeTypeInfo = { type: string, displayName: string, category: string, };
-
 export type BorderSelectionReq = { radius: number, };
 
 export type BrushGraphCapabilities = { 
@@ -74,12 +72,20 @@ export type BrushGraphCapabilities = {
  */
 supports_erase: boolean, 
 /**
- * Iconify icon to show in place of baked dab/stroke thumbnails,
- * contributed by the first node whose registration sets
- * `preview_fallback_icon` — content-dependent nodes (clone, blur,
- * smudge, liquify) whose preview bake renders blank.
+ * Iconify icon to show in the dab slot in place of a baked thumbnail,
+ * contributed by the first node whose registration declares
+ * `preview_staging` — content-dependent nodes (clone, blur, smudge,
+ * liquify) whose still-dab bake renders blank.
  */
-preview_fallback_icon: string | null, };
+preview_fallback_icon: string | null, 
+/**
+ * Field the stroke preview is rendered over, from the same declaration
+ * the icon comes from. [`PreviewBackdrop::Flat`] for a brush that deposits
+ * pigment and so needs nothing staged under it.
+ */
+preview_backdrop: PreviewBackdrop, };
+
+export type PreviewBackdrop = "Flat" | "Stripes";
 
 export type BrushDabThumbnailReq = { name: string, };
 
@@ -155,6 +161,8 @@ export type BrushGraphSetInputReq = { node_id: string, input_name: string, kind:
 
 export type BrushGraphSetNodeCommentReq = { node_id: string, comment: string, };
 
+export type BrushGraphSetPortRangeReq = { node_id: string, port_name: string, display_min: number, display_max: number, };
+
 export type BrushGraphUnexposePortReq = { node_id: string, port_name: string, };
 
 export type BrushInfo = { name: string, category: string, author: string, description: string, tags: Array<string>, 
@@ -169,6 +177,18 @@ icon: string | null, };
 export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
+
+export type PreviewStaging = { 
+/**
+ * Iconify glyph shown in the dab slot, where a single stationary sample
+ * has no motion to make the effect visible at all.
+ */
+icon: string, 
+/**
+ * Field painted under the stroke preview, giving the node something to
+ * transport.
+ */
+backdrop: PreviewBackdrop, };
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -263,8 +283,8 @@ exposed: boolean,
  * neutralizer (`reset_exposed_scrubs`) that targets every
  * exposed scrub regardless of `preview_value`.
  *
- * Canonical example: `paint.size` (0.1, so a huge brush's
- * preview still fits the small cursor mask and the editor
+ * Canonical example: `brush_settings.size` (0.1, so a huge
+ * brush's preview still fits the small cursor mask and the editor
  * preview doesn't redraw on every size scrub).
  */
 preview_value: number | null, 
@@ -313,7 +333,7 @@ visible_when: [string, Array<number>] | null,
  * stays "UI hint only, not enforced", and `with_natural_range` is the
  * separate, explicit opt-in for wire-boundary range mapping. Most
  * ports declare both with the same numbers; the two diverge for
- * over-drag sliders like `paint.size`, where the slider range is
+ * over-drag sliders like `brush_settings.size`, where the range is
  * a hint but the wire-side semantics are passthrough.
  */
 natural_range: [number, number] | null, 
@@ -362,9 +382,9 @@ preview_image: boolean,
  */
 source: boolean, };
 
-export type PortDir = "Input" | "Output";
-
 export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+
+export type PortDir = "Input" | "Output";
 
 export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
 
@@ -376,7 +396,8 @@ type_id: string,
 /**
  * UI category for the add-node palette — describes what the node *does*,
  * not how it executes. Current values: "input", "math", "modulate",
- * "color", "shape", "texture", "output", and "internal" (filtered out).
+ * "color", "shape", "texture", "output". Nothing filters on it; every
+ * registered node appears in the palette and in the catalog.
  */
 category: string, 
 /**
@@ -418,12 +439,13 @@ is_terminal: boolean,
  */
 supports_erase: boolean, 
 /**
- * Iconify icon shown in place of baked dab/stroke thumbnails for any
- * brush whose graph contains this node. Set by nodes whose output
- * depends on existing canvas content — stroking the flat preview
- * background renders blank, so the picker shows this icon instead.
+ * How a preview of any brush containing this node must be staged. Set by
+ * nodes whose output depends on existing canvas content — over a flat
+ * preview background they render blank, so the stroke gets a field to
+ * transport and the dab slot gets a glyph. `None` for a node that makes
+ * its own marks, which is every node that does not sample the canvas.
  */
-preview_fallback_icon: string | null, };
+preview_staging: PreviewStaging | null, };
 
 export type BrushSaveReq = { name: string, category: string, };
 
@@ -440,6 +462,74 @@ export type CanMergeDownReq = { source_id: number, };
 export type CanvasDimensionsResp = { width: number, height: number, };
 
 export type CanvasRectResp = { origin_x: number, origin_y: number, width: number, height: number, };
+
+export type CatalogEntry = { type: string, displayName: string, 
+/**
+ * Iconify name, or `None` when the variant deliberately declares no icon
+ * (veils render a live preview; raster layers always show a thumbnail).
+ */
+icon: string | null, description: string | null, 
+/**
+ * Grouping label within the catalog, for variants that group.
+ */
+category: string | null, 
+/**
+ * Action id this variant is bound to, for variants a hotkey can select.
+ */
+hotkeyAction: string | null, params: Array<ParamInfo>, 
+/**
+ * Whether this variant declares a
+ * [`PreviewAnim`](crate::gpu::preview::PreviewAnim) — the one fact behind
+ * "a rendered preview of it exists". False for the registries whose entries
+ * are affordances rather than images.
+ *
+ * It does **not** promise a *picker* preview. A blend mode declares one and
+ * has a documentation asset, but is a relation between two images rather
+ * than an effect over one, so its catalog exports no preview mechanism and
+ * `start_preview` no-ops for it exactly as it does for an unknown type.
+ * Whether a catalog can be driven live is
+ * [`preview_mechanisms`](crate::catalog::preview_mechanisms)' answer, not
+ * this field's.
+ */
+supportsPreview: boolean, 
+/**
+ * How the browser captures this variant's external frames; voids only.
+ */
+captureKind: CaptureKind | null, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
+export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
+/**
+ * The unit suffix alone, for a column header. Empty for unitless values.
+ */
+unit: string, };
+
+export type ParamInfo = { kind: string, name: string, 
+/**
+ * Display label. `None` → the UI title-cases `name`.
+ */
+label: string | null, description: string | null, 
+/**
+ * How to render this parameter's editor. One closed set, which both
+ * `ParamKind` and the settings schema's `WidgetHint` map into:
+ * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
+ */
+widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
+/**
+ * Enum: `["Label1", "Label2", ...]`.
+ * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
+ */
+options: JsonValue | null, display: ParamDisplay, };
+
+export type CaptureKind = "camera" | "display" | "stream";
+
+export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
+/**
+ * Presentation order, for catalogs that declare one. Registry catalogs do
+ * not; settings sections do.
+ */
+order: number | null, entries: Array<CatalogEntry>, };
 
 export type ClearSelectionContentsReq = { id: number, };
 
@@ -462,29 +552,6 @@ export type FeatherSelectionReq = { radius: number, };
 export type FillBackgroundReq = { id: number, };
 
 export type FillBackgroundColorReq = { id: number, rgba: [number, number, number, number], };
-
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
-export type ParamInfo = { kind: string, name: string, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
-/**
- * Enum: `["Label1", "Label2", ...]`.
- * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
- */
-options: JsonValue | null, };
-
-export type VeilTypeInfo = { type: string, displayName: string, 
-/**
- * Iconify name shown for this type. Filters carry a per-variant icon so
- * each reads distinctly in the Colors menu and the Add Filter Layer picker;
- * veils leave it empty (their UI renders a live preview, not an icon).
- */
-icon: string, 
-/**
- * One-sentence summary from the registration — picker tooltips, and (for
- * filters) folded into the Colors-menu action description where the
- * command palette's search indexes it.
- */
-description: string, params: Array<ParamInfo>, };
 
 export type FlattenNodeReq = { node_id: number, };
 
@@ -509,8 +576,6 @@ export type GrowSelectionReq = { radius: number, };
 export type HistogramReq = { id: number, };
 
 export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
-
-export type LayerKindTypeInfo = { type: string, displayName: string, };
 
 export type LayerTransformCapabilityReq = { id: number, };
 
@@ -583,8 +648,6 @@ export type MergeDownReq = { source_id: number, };
 
 export type MergeLayersReq = { ids: Array<number>, };
 
-export type ModifierTypeInfo = { type: string, displayName: string, };
-
 export type MoveLayerReq = { id: number, target: MoveTarget, };
 
 export type MoveTarget = { "target_type": "before", "target_id": number } | { "target_type": "after", "target_id": number } | { "target_type": "into_top", "target_id": number } | { "target_type": "into_bottom", "target_id": number };
@@ -609,7 +672,9 @@ export type PasteLayerRichReq = { json: string, active_layer_id: number, };
 
 export type PickColorReq = { x: number, y: number, id: number, };
 
-export type PreviewReq = { kind: string, type: string, };
+export type PreviewReq = { catalog: string, type: string, variant: PreviewVariant, };
+
+export type PreviewVariant = "still" | "animated";
 
 export type PreviewFilterReq = { node_id: number, filter_type: string, params: JsonValue, };
 
@@ -731,8 +796,6 @@ export type TransformCapabilityError = { endpoint: number, operation: PixelTrans
 
 export type LayerIdReq = { id: number, };
 
-export type ToolTypeInfo = { type: string, displayName: string, params: Array<ParamInfo>, };
-
 export type UpdateFloatingMatrixReq = { transform: Transform, };
 
 export type Transform = { "mode": "Basic", "data": [number, number, number, number, number, number] } | { "mode": "Perspective", "data": [number, number, number, number, number, number, number, number, number] };
@@ -751,17 +814,6 @@ export type VoidTransformInfoReq = { id: number, };
 
 export type VoidTransformInfoResp = { ox: number, oy: number, w: number, h: number, mode: number, matrix: Array<number>, };
 
-export type CaptureKind = "camera" | "display" | "stream";
-
-export type VoidTypeInfo = { type: string, displayName: string, params: Array<ParamInfo>, icon: string, supportsPreview: boolean, 
-/**
- * How the browser captures this void's external frames (`"camera"` /
- * `"display"`), or absent for procedural voids. The frontend builds a
- * `voidType → CaptureKind` map from this to pick `getUserMedia` vs
- * `getDisplayMedia` and to drive the generic MediaStream lifecycle.
- */
-captureKind: CaptureKind | null, };
-
 export type RequestKind =
     | 'active_brush_needs_source'
     | 'add_filter'
@@ -777,7 +829,6 @@ export type RequestKind =
     | 'apply_mask'
     | 'begin_stroke'
     | 'begin_transform'
-    | 'blend_mode_types'
     | 'border_selection'
     | 'brush_active_capabilities'
     | 'brush_active_dab_preview'
@@ -800,6 +851,7 @@ export type RequestKind =
     | 'brush_graph_set_exposed_port_meta'
     | 'brush_graph_set_input'
     | 'brush_graph_set_node_comment'
+    | 'brush_graph_set_port_range'
     | 'brush_graph_unexpose_port'
     | 'brush_graph_validate'
     | 'brush_import'
@@ -820,6 +872,7 @@ export type RequestKind =
     | 'cancel_floating'
     | 'canvas_dimensions'
     | 'canvas_rect'
+    | 'catalogs'
     | 'clear_brush_cursor_preview_pose'
     | 'clear_clone_overlay'
     | 'clear_overlay'
@@ -841,7 +894,6 @@ export type RequestKind =
     | 'feather_selection'
     | 'fill_background'
     | 'fill_background_color'
-    | 'filter_types'
     | 'flatten_image'
     | 'flatten_node'
     | 'flip_canvas'
@@ -860,7 +912,6 @@ export type RequestKind =
     | 'invert_selection'
     | 'is_dirty'
     | 'last_picked_color'
-    | 'layer_kind_types'
     | 'layer_transform_capability'
     | 'layer_tree'
     | 'list_fonts'
@@ -868,7 +919,6 @@ export type RequestKind =
     | 'mask_to_selection'
     | 'merge_down'
     | 'merge_layers'
-    | 'modifier_types'
     | 'move_layer'
     | 'move_layers'
     | 'move_veil'
@@ -942,7 +992,6 @@ export type RequestKind =
     | 'stroke_to'
     | 'take_transform_setup_error'
     | 'text_objects'
-    | 'tool_types'
     | 'undo'
     | 'update_floating_matrix'
     | 'update_vector_object_transform'
@@ -950,9 +999,7 @@ export type RequestKind =
     | 'update_void_transform'
     | 'vector_object_info'
     | 'veil_list'
-    | 'veil_types'
     | 'void_transform_info'
-    | 'void_types'
     | 'warm_vector_renderer'
     ;
 
@@ -971,7 +1018,6 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'apply_mask',
     'begin_stroke',
     'begin_transform',
-    'blend_mode_types',
     'border_selection',
     'brush_active_capabilities',
     'brush_active_dab_preview',
@@ -994,6 +1040,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'brush_graph_set_exposed_port_meta',
     'brush_graph_set_input',
     'brush_graph_set_node_comment',
+    'brush_graph_set_port_range',
     'brush_graph_unexpose_port',
     'brush_graph_validate',
     'brush_import',
@@ -1014,6 +1061,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'cancel_floating',
     'canvas_dimensions',
     'canvas_rect',
+    'catalogs',
     'clear_brush_cursor_preview_pose',
     'clear_clone_overlay',
     'clear_overlay',
@@ -1035,7 +1083,6 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'feather_selection',
     'fill_background',
     'fill_background_color',
-    'filter_types',
     'flatten_image',
     'flatten_node',
     'flip_canvas',
@@ -1054,7 +1101,6 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'invert_selection',
     'is_dirty',
     'last_picked_color',
-    'layer_kind_types',
     'layer_transform_capability',
     'layer_tree',
     'list_fonts',
@@ -1062,7 +1108,6 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'mask_to_selection',
     'merge_down',
     'merge_layers',
-    'modifier_types',
     'move_layer',
     'move_layers',
     'move_veil',
@@ -1136,7 +1181,6 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'stroke_to',
     'take_transform_setup_error',
     'text_objects',
-    'tool_types',
     'undo',
     'update_floating_matrix',
     'update_vector_object_transform',
@@ -1144,9 +1188,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'update_void_transform',
     'vector_object_info',
     'veil_list',
-    'veil_types',
     'void_transform_info',
-    'void_types',
     'warm_vector_renderer',
 ] as const;
 
@@ -1173,7 +1215,6 @@ export interface EngineApi {
     applyMask(req: ApplyMaskReq): void;
     beginStroke(req: BeginStrokeReq): void;
     beginTransform(req: BeginTransformReq): Promise<boolean>;
-    blendModeTypes(): Promise<Array<BlendModeTypeInfo>>;
     borderSelection(req: BorderSelectionReq): void;
     brushActiveCapabilities(): Promise<BrushGraphCapabilities>;
     brushActiveDabPreview(): Promise<{ bytes: Uint8Array }>;
@@ -1196,6 +1237,7 @@ export interface EngineApi {
     brushGraphSetExposedPortMeta(req: BrushGraphSetExposedPortMetaReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphSetInput(req: BrushGraphSetInputReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphSetNodeComment(req: BrushGraphSetNodeCommentReq): Promise<{ graph: JsonValue } | { error: string }>;
+    brushGraphSetPortRange(req: BrushGraphSetPortRangeReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphUnexposePort(req: BrushGraphUnexposePortReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphValidate(req: BrushGraphJsonReq): Promise<null | { error: string }>;
     brushImport(bytes: Uint8Array): Promise<string>;
@@ -1216,6 +1258,7 @@ export interface EngineApi {
     cancelFloating(): void;
     canvasDimensions(): Promise<CanvasDimensionsResp>;
     canvasRect(): Promise<CanvasRectResp>;
+    catalogs(): Promise<Array<Catalog>>;
     clearBrushCursorPreviewPose(): void;
     clearCloneOverlay(): void;
     clearOverlay(): void;
@@ -1237,7 +1280,6 @@ export interface EngineApi {
     featherSelection(req: FeatherSelectionReq): void;
     fillBackground(req: FillBackgroundReq): void;
     fillBackgroundColor(req: FillBackgroundColorReq): void;
-    filterTypes(): Promise<Array<VeilTypeInfo>>;
     flattenImage(): Promise<number>;
     flattenNode(req: FlattenNodeReq): Promise<number>;
     flipCanvas(req: FlipCanvasReq): void;
@@ -1256,7 +1298,6 @@ export interface EngineApi {
     invertSelection(): void;
     isDirty(): Promise<boolean>;
     lastPickedColor(): Promise<{ bytes: Uint8Array }>;
-    layerKindTypes(): Promise<Array<LayerKindTypeInfo>>;
     layerTransformCapability(req: LayerTransformCapabilityReq): Promise<string>;
     layerTree(): Promise<Array<LayerInfo>>;
     listFonts(): Promise<{ fonts: string[] }>;
@@ -1264,7 +1305,6 @@ export interface EngineApi {
     maskToSelection(req: MaskToSelectionReq): void;
     mergeDown(req: MergeDownReq): Promise<number>;
     mergeLayers(req: MergeLayersReq): Promise<number>;
-    modifierTypes(): Promise<Array<ModifierTypeInfo>>;
     moveLayer(req: MoveLayerReq): void;
     moveLayers(req: MoveLayersReq): Promise<number>;
     moveVeil(req: MoveVeilReq): void;
@@ -1338,7 +1378,6 @@ export interface EngineApi {
     strokeTo(req: StrokeToReq): void;
     takeTransformSetupError(): Promise<TransformCapabilityError | null>;
     textObjects(req: LayerIdReq): Promise<{ objects: Array<{ object: number, content: string, font_family: string, size: number, variations: Record<string, number>, features: Record<string, number>, letter_spacing: number, word_spacing: number, line_height: number, italic: boolean, align: string, color: [number, number, number, number], box: [number, number] | null }> }>;
-    toolTypes(): Promise<Array<ToolTypeInfo>>;
     undo(): void;
     updateFloatingMatrix(req: UpdateFloatingMatrixReq): void;
     updateVectorObjectTransform(req: UpdateVectorObjectTransformReq): void;
@@ -1346,9 +1385,7 @@ export interface EngineApi {
     updateVoidTransform(req: UpdateVoidTransformReq): void;
     vectorObjectInfo(req: ObjectRefReq): Promise<{ ox: number, oy: number, w: number, h: number, mode: number, matrix: number[] } | null>;
     veilList(): Promise<Array<VeilInfo>>;
-    veilTypes(): Promise<Array<VeilTypeInfo>>;
     voidTransformInfo(req: VoidTransformInfoReq): Promise<VoidTransformInfoResp | null>;
-    voidTypes(): Promise<Array<VoidTypeInfo>>;
     warmVectorRenderer(): void;
 }
 
@@ -1369,7 +1406,6 @@ export function makeApi(t: Transport): EngineApi {
         applyMask: (req) => t.postFF('apply_mask', req),
         beginStroke: (req) => t.postFF('begin_stroke', req),
         beginTransform: (req) => t.request('begin_transform', req),
-        blendModeTypes: () => t.request('blend_mode_types'),
         borderSelection: (req) => t.postFF('border_selection', req),
         brushActiveCapabilities: () => t.request('brush_active_capabilities'),
         brushActiveDabPreview: () => t.request('brush_active_dab_preview'),
@@ -1392,6 +1428,7 @@ export function makeApi(t: Transport): EngineApi {
         brushGraphSetExposedPortMeta: (req) => t.request('brush_graph_set_exposed_port_meta', req),
         brushGraphSetInput: (req) => t.request('brush_graph_set_input', req),
         brushGraphSetNodeComment: (req) => t.request('brush_graph_set_node_comment', req),
+        brushGraphSetPortRange: (req) => t.request('brush_graph_set_port_range', req),
         brushGraphUnexposePort: (req) => t.request('brush_graph_unexpose_port', req),
         brushGraphValidate: (req) => t.request('brush_graph_validate', req),
         brushImport: (bytes) => t.request('brush_import', {}, bytes),
@@ -1412,6 +1449,7 @@ export function makeApi(t: Transport): EngineApi {
         cancelFloating: () => t.postFF('cancel_floating'),
         canvasDimensions: () => t.request('canvas_dimensions'),
         canvasRect: () => t.request('canvas_rect'),
+        catalogs: () => t.request('catalogs'),
         clearBrushCursorPreviewPose: () => t.postFF('clear_brush_cursor_preview_pose'),
         clearCloneOverlay: () => t.postFF('clear_clone_overlay'),
         clearOverlay: () => t.postFF('clear_overlay'),
@@ -1433,7 +1471,6 @@ export function makeApi(t: Transport): EngineApi {
         featherSelection: (req) => t.postFF('feather_selection', req),
         fillBackground: (req) => t.postFF('fill_background', req),
         fillBackgroundColor: (req) => t.postFF('fill_background_color', req),
-        filterTypes: () => t.request('filter_types'),
         flattenImage: () => t.request('flatten_image'),
         flattenNode: (req) => t.request('flatten_node', req),
         flipCanvas: (req) => t.postFF('flip_canvas', req),
@@ -1452,7 +1489,6 @@ export function makeApi(t: Transport): EngineApi {
         invertSelection: () => t.postFF('invert_selection'),
         isDirty: () => t.request('is_dirty'),
         lastPickedColor: () => t.request('last_picked_color'),
-        layerKindTypes: () => t.request('layer_kind_types'),
         layerTransformCapability: (req) => t.request('layer_transform_capability', req),
         layerTree: () => t.request('layer_tree'),
         listFonts: () => t.request('list_fonts'),
@@ -1460,7 +1496,6 @@ export function makeApi(t: Transport): EngineApi {
         maskToSelection: (req) => t.postFF('mask_to_selection', req),
         mergeDown: (req) => t.request('merge_down', req),
         mergeLayers: (req) => t.request('merge_layers', req),
-        modifierTypes: () => t.request('modifier_types'),
         moveLayer: (req) => t.postFF('move_layer', req),
         moveLayers: (req) => t.request('move_layers', req),
         moveVeil: (req) => t.postFF('move_veil', req),
@@ -1534,7 +1569,6 @@ export function makeApi(t: Transport): EngineApi {
         strokeTo: (req) => t.postFF('stroke_to', req),
         takeTransformSetupError: () => t.request('take_transform_setup_error'),
         textObjects: (req) => t.request('text_objects', req),
-        toolTypes: () => t.request('tool_types'),
         undo: () => t.postFF('undo'),
         updateFloatingMatrix: (req) => t.postFF('update_floating_matrix', req),
         updateVectorObjectTransform: (req) => t.postFF('update_vector_object_transform', req),
@@ -1542,9 +1576,7 @@ export function makeApi(t: Transport): EngineApi {
         updateVoidTransform: (req) => t.postFF('update_void_transform', req),
         vectorObjectInfo: (req) => t.request('vector_object_info', req),
         veilList: () => t.request('veil_list'),
-        veilTypes: () => t.request('veil_types'),
         voidTransformInfo: (req) => t.request('void_transform_info', req),
-        voidTypes: () => t.request('void_types'),
         warmVectorRenderer: () => t.postFF('warm_vector_renderer'),
     };
 }

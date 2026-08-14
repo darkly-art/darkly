@@ -3,7 +3,7 @@
     import { brushGraph } from '../state/brush_graph.svelte';
     import type { BrushInfo, ExposedPortInfo } from '../state/brush_graph.svelte';
     import { unitFor } from '../lib/units';
-    import { brushSession } from '../tools/brush.svelte';
+    import { brushSession, focusedBrushTool } from '../tools/brush.svelte';
     import BrushPicker from './brush_picker/BrushPicker.svelte';
     import LiveBrushPreviewStrip from './brush_picker/LiveBrushPreviewStrip.svelte';
     import Scrub from './Scrub.svelte';
@@ -33,9 +33,21 @@
         brushPickerOpen = false;
     }
 
-    function handleExposedPort(nodeId: string, portName: string, displayValue: number) {
+    /** Transient feedback while a scrub is being dragged. Local only — the
+     *  engine recompiles the graph and re-derives its previews on every
+     *  exposed-port write, which is work the values a drag passes through
+     *  don't warrant. */
+    function previewExposedPort(nodeId: string, portName: string, displayValue: number) {
         brushGraph.setExposedPortValueLocal(nodeId, portName, displayValue);
-        brushGraph.setExposedPortValue(nodeId, portName, displayValue);
+    }
+
+    /** The value the user settled on. Refreshes the on-canvas hover overlay
+     *  afterward so the brush outline reflects the new value without waiting
+     *  for a pointer move — same courtesy the `[` / `]` hotkeys extend. */
+    async function commitExposedPort(nodeId: string, portName: string, displayValue: number) {
+        brushGraph.setExposedPortValueLocal(nodeId, portName, displayValue);
+        await brushGraph.setExposedPortValue(nodeId, portName, displayValue);
+        focusedBrushTool()?.refreshHoverOverlay();
     }
 
     /** Flip a Bool exposed port — toggles the input value between 0 and 1 via
@@ -124,7 +136,8 @@
                     max={d.max}
                     default={d.default}
                     formatValue={(v) => unitFor(d.unitType).format(v)}
-                    onChange={(v) => handleExposedPort(port.nodeId, port.portName, v)}
+                    onChange={(v) => previewExposedPort(port.nodeId, port.portName, v)}
+                    onCommit={(v) => void commitExposedPort(port.nodeId, port.portName, v)}
                     title={port.description || undefined}
                 />
             {:else if port.data.kind === 'bool'}

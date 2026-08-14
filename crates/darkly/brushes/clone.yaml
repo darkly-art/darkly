@@ -1,5 +1,6 @@
 name: Clone
 category: Misc
+description: Paints with pixels sampled from elsewhere on the canvas rather than with the current color.
 nodes:
   pen_input:
     type: pen_input

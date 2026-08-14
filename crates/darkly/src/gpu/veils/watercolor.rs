@@ -1,20 +1,15 @@
-use crate::gpu::effect::{EffectCache, EffectPipeline};
+use crate::gpu::effect::{create_effect_pipeline, Binding, EffectCache, EffectPipeline};
+use crate::gpu::preview::{swing, PreviewAnim};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Int {
-        name: "iterations",
-        min: 1,
-        max: 50,
-        default: 5,
-    },
-    ParamDef::Float {
-        name: "wetness",
-        min: 0.0,
-        max: 2.0,
-        default: 0.5,
-    },
+    ParamDef::int("iterations", 1, 50, 5)
+        .with_label("Iterations")
+        .with_description("How many times the pigment is allowed to bleed; more softens further."),
+    ParamDef::float("wetness", 0.0, 2.0, 0.5)
+        .with_label("Wetness")
+        .with_description("How freely pigment runs — dry holds its edge, wet pools outward."),
 ];
 
 /// Size of the generated RGBA noise texture used as a flow map.
@@ -26,6 +21,10 @@ pub fn register() -> VeilRegistration {
         display_name: "Watercolor",
         description: "Bleed the view outward into soft watercolor washes.",
         params: PARAMS,
+        // Half-way rather than at the peak: `swing(0.25)` is exactly 0.5, so the
+        // still lands mid-band — a visible bleed rather than the fully-dissolved
+        // wash the sweep's far end reaches.
+        preview: Some(PreviewAnim::LOOPING.with_still_at(0.25)),
         create_pipeline: create_watercolor_pipeline,
         from_params: |params, shared| {
             let iterations = match params.first() {
@@ -56,6 +55,9 @@ struct WatercolorUniforms {
 pub struct Watercolor {
     pub iterations: i32,
     pub wetness: f32,
+    /// Render resolution, kept from `create_cache` so
+    /// [`uniforms`](Self::uniforms) rebuilds the whole struct from state.
+    resolution: (f32, f32),
     shared: Arc<EffectPipeline>,
 }
 
@@ -64,7 +66,19 @@ impl Watercolor {
         Watercolor {
             iterations: iterations.max(1),
             wetness,
+            resolution: (0.0, 0.0),
             shared,
+        }
+    }
+
+    /// The three passes share a layout and differ only in `pass_type`, so one
+    /// packing serves all three buffers.
+    fn uniforms(&self, pass_type: i32) -> WatercolorUniforms {
+        WatercolorUniforms {
+            pass_type,
+            wetness: self.wetness,
+            resolution_x: self.resolution.0,
+            resolution_y: self.resolution.1,
         }
     }
 
@@ -73,23 +87,15 @@ impl Watercolor {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         pass_type: i32,
-        width: u32,
-        height: u32,
         label: &str,
     ) -> wgpu::Buffer {
-        let uniforms = WatercolorUniforms {
-            pass_type,
-            wetness: self.wetness,
-            resolution_x: width as f32,
-            resolution_y: height as f32,
-        };
         let buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size: std::mem::size_of::<WatercolorUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&buf, 0, bytemuck::bytes_of(&self.uniforms(pass_type)));
         buf
     }
 }
@@ -168,8 +174,32 @@ impl Veil for Watercolor {
         ]
     }
 
+    /// The wash bleeds outward and dries back. `iterations` is a *pass count* —
+    /// each one is a fullscreen blur — so its sweep is bounded well below the
+    /// slider's maximum: `1 → 10 → 1` averages 5.5 passes per frame, comparable
+    /// to the shipped default of 5, where the full `1 → 50` band would average
+    /// 25. The visible bleed still ramps from barely-there to twice the
+    /// default, and `wetness` costs nothing and carries the rest of the motion.
+    ///
+    /// The pass count lives in `encode`'s loop rather than in the cache's
+    /// shape, so nothing here needs rebuilding; only `wetness` reaches the
+    /// shader, through all three passes' uniforms.
+    fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
+        let swing = swing(t);
+        self.iterations = (1.0 + 9.0 * swing).round() as i32;
+        self.wetness = 0.1 + 1.9 * swing;
+        for pass_type in 0..3 {
+            cache.write_uniform(
+                queue,
+                pass_type as usize,
+                bytemuck::bytes_of(&self.uniforms(pass_type)),
+            );
+        }
+        true
+    }
+
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ping_pong_views: &[wgpu::TextureView; 2],
@@ -177,33 +207,13 @@ impl Veil for Watercolor {
         render_width: u32,
         render_height: u32,
     ) -> EffectCache {
+        self.resolution = (render_width as f32, render_height as f32);
         let layout = &self.shared.bind_group_layout;
 
         // --- Uniform buffers for each pass type ---
-        let init_ub = self.make_uniform_buf(
-            device,
-            queue,
-            0,
-            render_width,
-            render_height,
-            "watercolor-ub-init",
-        );
-        let blur_ub = self.make_uniform_buf(
-            device,
-            queue,
-            1,
-            render_width,
-            render_height,
-            "watercolor-ub-blur",
-        );
-        let final_ub = self.make_uniform_buf(
-            device,
-            queue,
-            2,
-            render_width,
-            render_height,
-            "watercolor-ub-final",
-        );
+        let init_ub = self.make_uniform_buf(device, queue, 0, "watercolor-ub-init");
+        let blur_ub = self.make_uniform_buf(device, queue, 1, "watercolor-ub-blur");
+        let final_ub = self.make_uniform_buf(device, queue, 2, "watercolor-ub-final");
 
         // --- Noise texture + repeat sampler for flow-map bias ---
         let (noise_tex, noise_view) = create_noise_texture(device, queue);
@@ -380,100 +390,20 @@ impl Veil for Watercolor {
 
 fn create_watercolor_pipeline(
     device: &wgpu::Device,
-    _format: wgpu::TextureFormat,
+    format: wgpu::TextureFormat,
 ) -> EffectPipeline {
-    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("watercolor-bgl"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 3,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 4,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
+    create_effect_pipeline(
+        device,
+        format,
+        "watercolor",
+        &[
+            Binding::Texture,
+            Binding::Sampler,
+            Binding::Uniform,
+            Binding::Texture,
+            Binding::Sampler,
         ],
-    });
-
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("watercolor-pipeline-layout"),
-        bind_group_layouts: &[Some(&bind_group_layout)],
-        immediate_size: 0,
-    });
-
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("watercolor-shader"),
-        source: wgpu::ShaderSource::Wgsl(
-            include_str!("../../../shaders/veils/watercolor.wgsl").into(),
-        ),
-    });
-
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("watercolor-pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: &[],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_watercolor"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            ..Default::default()
-        },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    });
-
-    EffectPipeline {
-        pipeline,
-        bind_group_layout,
-    }
+        include_str!("../../../shaders/veils/watercolor.wgsl"),
+        "fs_watercolor",
+    )
 }

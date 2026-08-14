@@ -26,10 +26,6 @@ function enterTransformTool() {
 export function registerClipboardActions(): void {
     actions.register({
         id: 'copy',
-        displayName: 'Copy',
-        category: 'edit',
-        description: 'Copy the active layer to the clipboard.',
-        icon: 'fa6-solid:copy',
         menuPath: ['Edit:40'],
         handler: () => {
             const engine = app.engine;
@@ -50,10 +46,6 @@ export function registerClipboardActions(): void {
     });
     actions.register({
         id: 'cut',
-        displayName: 'Cut',
-        category: 'edit',
-        description: 'Cut the active layer to the clipboard.',
-        icon: 'fa6-solid:scissors',
         menuPath: ['Edit:30'],
         handler: async () => {
             const engine = app.engine;
@@ -73,10 +65,6 @@ export function registerClipboardActions(): void {
     });
     actions.register({
         id: 'paste',
-        displayName: 'Paste',
-        category: 'edit',
-        description: 'Paste an image or layer from the clipboard.',
-        icon: 'fa6-solid:paste',
         menuPath: ['Edit:50'],
         handler: async () => {
             const engine = app.engine;
@@ -158,10 +146,6 @@ export function registerClipboardActions(): void {
     });
     actions.register({
         id: 'pasteInPlace',
-        displayName: 'Paste into Active Layer',
-        category: 'edit',
-        description: 'Paste the clipboard into the active layer or mask at its original position.',
-        icon: 'fa6-solid:clipboard',
         menuPath: ['Edit:60'],
         handler: async () => {
             const engine = app.engine;

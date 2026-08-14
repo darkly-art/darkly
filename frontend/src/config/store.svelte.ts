@@ -1,9 +1,16 @@
 import {
     config_get, config_set, config_reset, config_reset_all,
     config_base_names, config_base_value, config_schema, config_version,
+    format_chord,
 } from '../../wasm/pkg/darkly_wasm';
 import { storage, readJson, writeJson } from '../storage';
-import type { SectionInfo } from './schema';
+import type { Catalog, ParamInfo } from '../engine/protocol_gen';
+
+/** The prefs a settings catalog holds — each section is one catalog with a
+ *  single entry whose `params` are that section's prefs. */
+export function sectionPrefs(section: Catalog): ParamInfo[] {
+    return section.entries[0]?.params ?? [];
+}
 import { validateOverrides } from './validate';
 
 /**
@@ -59,13 +66,13 @@ class ConfigStore {
     baseNames = $state<string[]>([]);
 
     /** Flat preferences schema, loaded once on init. */
-    schema = $state<SectionInfo[]>([]);
+    schema = $state<Catalog[]>([]);
 
     /** Initialize the store. Must be called after WASM init().
      *  Reads the schema, the overlay list, and the user-settings file. */
     async init() {
         try {
-            this.schema = JSON.parse(config_schema()) as SectionInfo[];
+            this.schema = JSON.parse(config_schema()) as Catalog[];
         } catch (e) {
             console.error('[config] failed to parse schema JSON', e);
             this.schema = [];
@@ -170,10 +177,10 @@ class ConfigStore {
         const section = this.schema.find(s => s.id === sectionId);
         if (!section) return;
         const next = { ...this.#values };
-        for (const pref of section.prefs) {
-            if (pref.key in next) {
-                config_reset(pref.key);
-                delete next[pref.key];
+        for (const pref of sectionPrefs(section)) {
+            if (pref.name in next) {
+                config_reset(pref.name);
+                delete next[pref.name];
             }
         }
         this.#values = next;
@@ -273,46 +280,15 @@ export function effectiveHotkey(actionId: string): string {
  * (`"layerPanel:Delete"`, `"@paint:KeyB"`, `"canvas@paint:$mod+drag"`) and
  * strips it before formatting — only the chord is user-facing.
  *
- * Handles both the keyboard chord vocabulary (`Shift`/`Alt` capitalized, key
- * codes like `KeyA`/`Comma`) and the mouse chord vocabulary
- * (`shift`/`alt`/`ctrl`/`meta` lowercase, verbs like `click`/`drag`).
- *
- * Takes exactly ONE binding. Raw `hotkeys.<id>` values may hold several joined
- * with `|` — go through `hotkeyLabel` for those.
+ * The chord vocabulary lives in Rust (`config::chord`), because the metadata
+ * export ships chords already rendered and a second copy of that table here
+ * would be a byte-for-byte duplicate. All this adds is the one thing Rust
+ * cannot know: which platform the browser is running on.
  */
 export function formatHotkey(binding: string | undefined): string | undefined {
     if (!binding) return undefined;
-    const colonIdx = binding.indexOf(':');
-    const chord = colonIdx < 0 ? binding : binding.slice(colonIdx + 1);
-    if (!chord) return undefined;
     const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent);
-    return chord.split('+').map(part => {
-        if (part === '$mod') return isMac ? '⌘' : 'Ctrl';
-        if (part === 'Shift' || part === 'shift') return isMac ? '⇧' : 'Shift';
-        if (part === 'Alt' || part === 'alt') return isMac ? '⌥' : 'Alt';
-        if (part === 'ctrl') return isMac ? '⌃' : 'Ctrl';
-        if (part === 'meta') return isMac ? '⌘' : 'Win';
-        if (part === 'click') return 'click';
-        if (part === 'doubleClick') return 'double-click';
-        if (part === 'middleClick') return 'middle-click';
-        if (part === 'drag') return 'drag';
-        if (part === 'middleDrag') return 'middle-drag';
-        if (part === 'rightDrag') return 'right-drag';
-        if (part.startsWith('Key')) return part.slice(3);
-        if (part === 'Delete') return 'Del';
-        if (part === 'Comma') return ',';
-        if (part === 'Period') return '.';
-        if (part === 'Semicolon') return ';';
-        if (part === 'Quote') return "'";
-        if (part === 'BracketLeft') return '[';
-        if (part === 'BracketRight') return ']';
-        if (part === 'Backslash') return '\\';
-        if (part === 'Minus') return '-';
-        if (part === 'Equal') return '=';
-        if (part === 'Slash') return '/';
-        if (part === 'Backquote') return '`';
-        return part;
-    }).join('+');
+    return format_chord(binding, isMac) || undefined;
 }
 
 /**

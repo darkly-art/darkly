@@ -20,6 +20,7 @@ use std::sync::Arc;
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
 use crate::gpu::lut_filter::{bake_lut, lut_param_filter, lut_shader_source, Baked};
 use crate::gpu::params::{ParamDef, ParamValue};
+use crate::gpu::preview::{swing_signed, PreviewAnim};
 
 /// Identity levels — `[inBlack, inWhite, gamma, outBlack, outWhite]`. Maps the
 /// full `[0,1]` input range linearly onto `[0,1]` output: a no-op transfer.
@@ -29,38 +30,32 @@ const IDENTITY: [f32; 5] = [0.0, 1.0, 1.0, 0.0, 1.0];
 /// [Curves](super::curves::PARAMS). Load-bearing: [`build_lut`] indexes these
 /// positionally (matching [`Channel`](crate::gpu::lut_filter::Channel)).
 pub const PARAMS: &[ParamDef] = &[
-    ParamDef::Levels {
-        name: "rgb",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "red",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "green",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "blue",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "alpha",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "hue",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "saturation",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "lightness",
-        default: IDENTITY,
-    },
+    ParamDef::levels("rgb", IDENTITY)
+        .with_label("RGB")
+        .with_description(
+            "Black point, white point and gamma for all three color channels together.",
+        ),
+    ParamDef::levels("red", IDENTITY)
+        .with_label("Red")
+        .with_description("Black point, white point and gamma for the red channel alone."),
+    ParamDef::levels("green", IDENTITY)
+        .with_label("Green")
+        .with_description("Black point, white point and gamma for the green channel alone."),
+    ParamDef::levels("blue", IDENTITY)
+        .with_label("Blue")
+        .with_description("Black point, white point and gamma for the blue channel alone."),
+    ParamDef::levels("alpha", IDENTITY)
+        .with_label("Alpha")
+        .with_description("Black point, white point and gamma for opacity."),
+    ParamDef::levels("hue", IDENTITY)
+        .with_label("Hue")
+        .with_description("Black point, white point and gamma applied to hue."),
+    ParamDef::levels("saturation", IDENTITY)
+        .with_label("Saturation")
+        .with_description("Black point, white point and gamma applied to saturation."),
+    ParamDef::levels("lightness", IDENTITY)
+        .with_label("Lightness")
+        .with_description("Black point, white point and gamma applied to lightness."),
 ];
 
 /// Read a levels param by index, falling back to identity when missing/malformed.
@@ -108,13 +103,42 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
     Arc::new(lut_param_filter(device, &lut_shader_source(), build_lut))
 }
 
+/// The input range pinches inward against a brightening gamma, then opens back
+/// out against a darkening one, and returns — the two halves of what the
+/// control does, in one pass.
+///
+/// `gamma` is a raw exponent rather than a perceptual scale, so it sweeps as a
+/// ratio around 1.0 rather than an even numeric spread: the two extremes are
+/// reciprocals and read as equal and opposite. Only the composite `rgb` channel
+/// moves; the other seven stay at their identity defaults.
+fn preview_params(t: f32) -> Vec<ParamValue> {
+    let s = swing_signed(t);
+    let pinch = 0.15 * s.max(0.0);
+    let mut params: Vec<ParamValue> = PARAMS.iter().map(ParamDef::default_value).collect();
+    params[0] = ParamValue::Levels([
+        // rgb
+        pinch,
+        1.0 - pinch,
+        2.2f32.powf(-s),
+        0.0,
+        1.0,
+    ]);
+    params
+}
+
 pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "levels",
         display_name: "Levels",
         icon: "fa6-solid:sliders",
         description: "Tone mapping with black point, white point, gamma, and output range.",
+        hotkey_action: "filterLevels",
         params: PARAMS,
+        // A signed sweep rests in the middle, so the default still would be the
+        // frame that looks like no effect at all. The quarter point is its
+        // positive extreme.
+        preview: Some(PreviewAnim::LOOPING.with_still_at(0.25)),
+        preview_at: Some(preview_params),
         create_pipeline,
     }
 }

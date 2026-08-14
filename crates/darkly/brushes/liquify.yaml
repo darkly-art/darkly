@@ -1,13 +1,14 @@
 name: Liquify
 category: Effects
+description: Pushes the pixels under the cursor along the stroke, warping the image without repainting it.
 nodes:
   pen_input:
     type: pen_input
   brush_settings:
     type: brush_settings
     inputs:
-      spacing: 0.0
-      spacing_min_px: 4.0
+      spacing: 0.05
+      spacing_min_px: 0.0
       size: 0.3
   liquify:
     type: liquify

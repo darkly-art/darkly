@@ -18,20 +18,15 @@ use crate::gpu::effect::EffectCache;
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
 use crate::gpu::param_filter::{ParamFilter, SrcSampling};
 use crate::gpu::params::{ParamDef, ParamValue};
+use crate::gpu::preview::{swing_signed, PreviewAnim};
 
 pub const PARAMS: &[ParamDef] = &[
-    ParamDef::Float {
-        name: "brightness",
-        min: -100.0,
-        max: 100.0,
-        default: 0.0,
-    },
-    ParamDef::Float {
-        name: "contrast",
-        min: -100.0,
-        max: 100.0,
-        default: 0.0,
-    },
+    ParamDef::float("brightness", -100.0, 100.0, 0.0)
+        .with_label("Brightness")
+        .with_description("Lifts or lowers every tone by the same amount."),
+    ParamDef::float("contrast", -100.0, 100.0, 0.0)
+        .with_label("Contrast")
+        .with_description("Spreads tones away from mid grey, or gathers them toward it."),
 ];
 
 fn float_param(params: &[ParamValue], idx: usize) -> f32 {
@@ -99,13 +94,32 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
     ))
 }
 
+/// Both sliders swing up, down and back, concurrently — so the preview shows
+/// the two controls interacting rather than one at a time. Contrast leads with
+/// a wider positive swing because it reads more slowly than brightness at the
+/// same magnitude, and a narrower negative one because flattening reads faster
+/// than steepening.
+fn preview_params(t: f32) -> Vec<ParamValue> {
+    let s = swing_signed(t);
+    let mut params: Vec<ParamValue> = PARAMS.iter().map(ParamDef::default_value).collect();
+    params[0] = ParamValue::Float(40.0 * s); // brightness
+    params[1] = ParamValue::Float(60.0 * s.max(0.0) + 40.0 * s.min(0.0)); // contrast
+    params
+}
+
 pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "brightness_contrast",
         display_name: "Brightness/Contrast",
         icon: "fa6-solid:sun",
         description: "The classic two-slider brightness and contrast adjustment.",
+        hotkey_action: "filterBrightness_contrast",
         params: PARAMS,
+        // A signed sweep rests in the middle, so the default still would be the
+        // frame that looks like no effect at all. The quarter point is its
+        // positive extreme.
+        preview: Some(PreviewAnim::LOOPING.with_still_at(0.25)),
+        preview_at: Some(preview_params),
         create_pipeline,
     }
 }

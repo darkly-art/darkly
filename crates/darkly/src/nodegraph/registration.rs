@@ -2,6 +2,8 @@ use serde::Serialize;
 
 use super::graph::PortDef;
 use super::WireKind;
+use crate::catalog::CatalogEntry;
+use crate::gpu::preview::PreviewStaging;
 
 /// Static metadata describing a node type in a particular domain.
 ///
@@ -19,7 +21,8 @@ pub struct NodeRegistration<W: WireKind> {
     pub type_id: &'static str,
     /// UI category for the add-node palette — describes what the node *does*,
     /// not how it executes. Current values: "input", "math", "modulate",
-    /// "color", "shape", "texture", "output", and "internal" (filtered out).
+    /// "color", "shape", "texture", "output". Nothing filters on it; every
+    /// registered node appears in the palette and in the catalog.
     pub category: &'static str,
     /// Human-readable name (e.g. "Pen Input", "Multiply").
     pub display_name: &'static str,
@@ -47,9 +50,34 @@ pub struct NodeRegistration<W: WireKind> {
     /// pixels (smudge, watercolor, liquify) override to `false` so the
     /// brush-tool options bar hides the erase toggle.
     pub supports_erase: bool,
-    /// Iconify icon shown in place of baked dab/stroke thumbnails for any
-    /// brush whose graph contains this node. Set by nodes whose output
-    /// depends on existing canvas content — stroking the flat preview
-    /// background renders blank, so the picker shows this icon instead.
-    pub preview_fallback_icon: Option<&'static str>,
+    /// How a preview of any brush containing this node must be staged. Set by
+    /// nodes whose output depends on existing canvas content — over a flat
+    /// preview background they render blank, so the stroke gets a field to
+    /// transport and the dab slot gets a glyph. `None` for a node that makes
+    /// its own marks, which is every node that does not sample the canvas.
+    pub preview_staging: Option<PreviewStaging>,
+}
+
+impl<W: WireKind> NodeRegistration<W> {
+    /// This node type as one browsable catalog entry.
+    ///
+    /// Lives here rather than on a per-domain wrapper so a second node domain
+    /// gets its catalog for free — the domain contributes only the catalog's
+    /// identity.
+    ///
+    /// Ports are deliberately not projected into `params`: a port carries a
+    /// direction and a wire type, and
+    /// [`ParamInfo`](crate::engine::types::ParamInfo) has room for neither, so
+    /// the projection would present a node's outputs as settable parameters.
+    /// Documenting ports wants the registration serialized whole, which it
+    /// already can be, not flattened into the wrong shape.
+    ///
+    /// No icon: `preview_staging`'s glyph is a substitute for a brush preview
+    /// that cannot be baked, not a palette glyph, and only four node types
+    /// declare one.
+    pub fn catalog_entry(&self) -> CatalogEntry {
+        CatalogEntry::new(self.type_id, self.display_name)
+            .with_description(self.description)
+            .with_category(self.category)
+    }
 }

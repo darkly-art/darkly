@@ -1,7 +1,6 @@
 <script lang="ts">
     import { app } from '../state/app.svelte';
     import { toolRegistry, type ToolDescriptor, type ToolCluster } from '../tools/registry';
-    import { tooltipForAction } from '../config/store.svelte';
     import Icon from '../icons/Icon.svelte';
 
     interface Props { cluster: ToolCluster; }
@@ -65,12 +64,8 @@
         return () => window.removeEventListener('pointerdown', onPointerDown, true);
     });
 
-    function toolTitle(t: ToolDescriptor): string {
-        return tooltipForAction(app.toolDisplayName(t.id), t.hotkeyAction);
-    }
-
     const clusterTitle = $derived(
-        activeMember ? toolTitle(activeMember) : cluster.displayName
+        activeMember ? app.toolTooltip(activeMember.id) : cluster.displayName
     );
 </script>
 
@@ -87,8 +82,8 @@
         onmouseenter={onClusterEnter}
         title={clusterTitle}
     >
-        {#if iconSource?.icon}
-            <Icon name={iconSource.icon} />
+        {#if iconSource}
+            <Icon name={app.toolGlyph(iconSource.id)} />
         {/if}
     </button>
 
@@ -101,11 +96,9 @@
                 class="tool"
                 class:active={app.activeToolId === tool.id}
                 onclick={() => pickTool(tool.id)}
-                title={toolTitle(tool)}
+                title={app.toolTooltip(tool.id)}
             >
-                {#if tool.icon}
-                    <Icon name={tool.icon} />
-                {/if}
+                <Icon name={app.toolGlyph(tool.id)} />
             </button>
         {/each}
     </div>

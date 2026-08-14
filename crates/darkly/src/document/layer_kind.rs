@@ -55,6 +55,10 @@ pub struct LayerKindRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
 
+    /// One-sentence summary of what this kind holds — the layer panel's
+    /// tooltip and the reference manual's row for it.
+    pub description: &'static str,
+
     /// May this kind host a mask modifier? Consumed by the layer panel to
     /// gate "Add mask" without branching on `type_id` — a new kind opts in
     /// (or out) here, in its own file, and the UI follows automatically.
@@ -97,6 +101,33 @@ pub struct LayerKindRegistration {
     /// can't silently break the load by storing ids in a private field
     /// is enforced by this signature.
     pub remap_ids: fn(&mut LayerNode, &IdMap),
+}
+
+/// Id of the catalog this registry projects into.
+pub const CATALOG_ID: &str = "layerKinds";
+
+impl LayerKindRegistration {
+    pub fn catalog_entry(&self) -> crate::catalog::CatalogEntry {
+        // `icon` is empty for kinds that always render a live thumbnail
+        // instead; `with_icon` turns that into a declared absence.
+        crate::catalog::CatalogEntry::new(self.type_id, self.display_name)
+            .with_icon(self.icon)
+            .with_description(self.description)
+    }
+}
+
+/// The layer-kind catalog — every registered kind, sorted by `type_id`.
+pub fn catalog() -> crate::catalog::Catalog {
+    crate::catalog::Catalog::new(
+        CATALOG_ID,
+        "Layer Kinds",
+        registry()
+            .all()
+            .into_iter()
+            .map(LayerKindRegistration::catalog_entry)
+            .collect(),
+    )
+    .with_description("What a node in the layer tree is made of.")
 }
 
 pub struct LayerKindRegistry {

@@ -1,13 +1,13 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
     import FilterParamsEditor from './FilterParamsEditor.svelte';
-    import { filterParamMap, type FilterParam } from './filterParams';
+    import { filterParamMap, type ParamInfo } from './filterParams';
 
     let { node }: {
-        node: { id: number; pipeline: string; params: FilterParam[] };
+        node: { id: number; pipeline: string; params: ParamInfo[] };
     } = $props();
 
-    const filterLabel = $derived(app.filterDisplayName(node.pipeline));
+    const filterLabel = $derived(app.displayName('filters', node.pipeline));
 
     // --- Input histogram (Levels only) ---------------------------------------
     const HIST_BINS = 256;

@@ -3,7 +3,7 @@
     import FilterParamsEditor from './FilterParamsEditor.svelte';
     import { app } from '../../state/app.svelte';
     import { filterModal } from '../../state/filterModal.svelte';
-    import { seedScratchParams, filterParamMap, type FilterParam } from './filterParams';
+    import { seedScratchParams, filterParamMap, type ParamInfo } from './filterParams';
 
     // The destructive-apply dialog. Reuses `Modal` (so Escape / × / backdrop /
     // Cancel all close through one tested path) in its non-dimming + draggable
@@ -13,7 +13,7 @@
 
     // Scratch params edited in the dialog — seeded from the schema defaults each
     // time it opens, never touching the shared schema array.
-    let scratch = $state<FilterParam[]>([]);
+    let scratch = $state<ParamInfo[]>([]);
 
     const HIST_BINS = 256;
     const showsLevels = $derived(scratch.some((p) => p.kind === 'levels'));

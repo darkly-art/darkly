@@ -7,7 +7,8 @@
     import {
         cloneParamValue,
         paramIsResettable,
-        type FilterParam,
+        channelLabel,
+        type ParamInfo,
         type FilterParamValue,
         type ColorValue,
         type Vec2Value,
@@ -18,7 +19,7 @@
     // in place and reports via `oninput` (mid-drag) / `onchange` (commit) — the
     // same contract the channel editors use.
     type Props = {
-        param: FilterParam;
+        param: ParamInfo;
         disabled?: boolean;
         oninput?: () => void;
         onchange?: () => void;
@@ -43,7 +44,9 @@
 </script>
 
 <div class="row">
-    <span class="label">{param.name}</span>
+    <span class="label" title={param.description ?? undefined}
+        >{param.label ?? channelLabel(param.name)}</span
+    >
     {#if param.kind === 'float' || param.kind === 'int'}
         <Slider
             value={(param.value ?? param.default) as number}

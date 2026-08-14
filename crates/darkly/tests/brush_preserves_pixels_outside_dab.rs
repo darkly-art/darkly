@@ -65,7 +65,13 @@ fn render_one_dab(brush_name: &str, color: [f32; 4], canvas: &[u8]) -> Vec<u8> {
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
-    let mut stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
+    // Compile before allocating — the terminal owns the scratch format,
+    // and a warp terminal's scratch holds a displacement field, not
+    // colour. Hardcoding a colour format here silently gives liquify the
+    // wrong surface and wipes the layer.
+    let mut runner: BrushGraphRunner = compile_graph(&graph).expect("brush compiles");
+    let mut stroke_buffer =
+        StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines, runner.scratch_format());
 
     let pre_stroke = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
         &layer_texture,
@@ -79,7 +85,6 @@ fn render_one_dab(brush_name: &str, color: [f32; 4], canvas: &[u8]) -> Vec<u8> {
     stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke);
     queue.submit([enc.finish()]);
 
-    let mut runner: BrushGraphRunner = compile_graph(&graph).expect("brush compiles");
     macro_rules! make_ctx {
         ($label:expr) => {{
             let (scratch, pre_stroke_tex, pre_stroke_bg, source_override) =

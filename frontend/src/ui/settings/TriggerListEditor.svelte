@@ -1,10 +1,6 @@
 <script lang="ts">
     import { config } from '../../config/store.svelte';
-    import {
-        sites,
-        contextSatisfied,
-        type ActionRegistration,
-    } from '../../actions/registry';
+    import { sites, type Action } from '../../actions/registry';
     import {
         readTriggers,
         writeTriggers,
@@ -21,7 +17,7 @@
     import Icon from '../../icons/Icon.svelte';
 
     type Props = {
-        action: ActionRegistration;
+        action: Action;
         /** When true, each row shows an editable scope <select>. When
          *  false, non-global scope is still surfaced via a small read-only
          *  chip so the user knows the binding isn't unconditional. */
@@ -29,22 +25,9 @@
     };
     let { action, showScope }: Props = $props();
 
-    /** Compatible binding sites for this action — i.e. sites whose
-     *  `provides` is a superset of `action.requires`. `keyboard` is
-     *  excluded because it's the implicit global fallback (selected via
-     *  "Anywhere"). The "Anywhere" option itself is offered iff the
-     *  `keyboard` site satisfies the action's requirements. */
-    const compatibleSites = $derived.by(() =>
-        sites.all().filter(s =>
-            s.name !== 'keyboard'
-            && contextSatisfied(action, s.provides),
-        ),
-    );
-
-    const allowsAnywhere = $derived.by(() => {
-        const kbd = sites.get('keyboard');
-        return kbd ? contextSatisfied(action, kbd.provides) : false;
-    });
+    /** Binding sites a trigger can be scoped to. `keyboard` is excluded
+     *  because it's the implicit global fallback, offered as "Anywhere". */
+    const pickableSites = $derived(sites.all().filter(s => s.name !== 'keyboard'));
 
     /** Persistent rows — read from config and re-evaluated on every
      *  store mutation via the `void config.get('')` reactivity tap. */
@@ -93,8 +76,8 @@
         if (!chord) return '';
         if (kind === 'mouse' && !site) {
             // A mouse chord without a site can't dispatch (dispatchClick
-            // demands a site). Auto-pick the first compatible site.
-            site = compatibleSites[0]?.name ?? null;
+            // demands a site). Auto-pick the first one.
+            site = pickableSites[0]?.name ?? null;
         }
         return site ? `${site}:${chord}` : chord;
     }
@@ -137,11 +120,8 @@
     }
 
     function addTrigger() {
-        // Default new trigger: keyboard, global if allowed, else first
-        // compatible site (chord empty until captured).
-        const initialSite = allowsAnywhere ? null : (compatibleSites[0]?.name ?? null);
-        const binding = initialSite ? `${initialSite}:` : '';
-        pending = [...pending, { kind: 'kbd', binding } satisfies Trigger];
+        // Default new trigger: a global keyboard chord, empty until captured.
+        pending = [...pending, { kind: 'kbd', binding: '' } satisfies Trigger];
         // Autostart index = position in the combined list.
         pendingAutostart = stored.length + pending.length - 1;
     }
@@ -187,7 +167,7 @@
     {#each triggers as t, i (`${t.kind}:${t.binding}:${i}`)}
         {@const site = siteOf(t.binding)}
         {@const chord = chordOf(t.binding)}
-        {@const allowAnywhereHere = allowsAnywhere && t.kind === 'kbd'}
+        {@const allowAnywhereHere = t.kind === 'kbd'}
         <div class="row">
             {#if showScope}
                 <select
@@ -199,7 +179,7 @@
                     {#if allowAnywhereHere}
                         <option value="">Anywhere</option>
                     {/if}
-                    {#each compatibleSites as s (s.name)}
+                    {#each pickableSites as s (s.name)}
                         <option value={s.name}>On {s.displayName ?? s.name}</option>
                     {/each}
                 </select>

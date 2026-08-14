@@ -28,6 +28,10 @@ use crate::layer::{LayerId, NodeCommon, PixelBuffer};
 pub struct FilterEntityRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
+    /// Iconify name shown on the filter's row under its host layer.
+    pub icon: &'static str,
+    /// One-sentence summary of what attaching this filter does.
+    pub description: &'static str,
     /// Produce the manifest body + any pixel-blob refs. Infallible by
     /// construction; see the analogous note on
     /// [`crate::document::layer_kind::LayerKindRegistration::serialize`].
@@ -40,6 +44,33 @@ pub struct FilterEntityRegistration {
     /// rationale as
     /// [`crate::document::layer_kind::LayerKindRegistration::remap_ids`].
     pub remap_ids: fn(&mut Filter, &IdMap),
+}
+
+/// Id of the catalog this registry projects into. Distinct from the `filters`
+/// catalog of `crate::gpu::filter`, which registers colour adjustments rather
+/// than the mask and selection modifiers attached to a host layer.
+pub const CATALOG_ID: &str = "layerFilters";
+
+impl FilterEntityRegistration {
+    pub fn catalog_entry(&self) -> crate::catalog::CatalogEntry {
+        crate::catalog::CatalogEntry::new(self.type_id, self.display_name)
+            .with_icon(self.icon)
+            .with_description(self.description)
+    }
+}
+
+/// The layer-filter catalog — every registered kind, sorted by `type_id`.
+pub fn catalog() -> crate::catalog::Catalog {
+    crate::catalog::Catalog::new(
+        CATALOG_ID,
+        "Layer Filters",
+        registry()
+            .all()
+            .into_iter()
+            .map(FilterEntityRegistration::catalog_entry)
+            .collect(),
+    )
+    .with_description("Typed effects attached to a single host layer or group.")
 }
 
 /// Auto-discovered filter registry — owns the per-kind registration records

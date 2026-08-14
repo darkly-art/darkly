@@ -4,12 +4,14 @@ import '../icons/bundle.generated';
 import { generateIcon } from '@iconify/svelte/dist/offline-functions.js';
 import { registerActions } from '../actions/index';
 import { actions } from '../actions/registry';
+import { rustActionDocs } from '../actions/__tests__/rust_action_docs';
 import { toolRegistry } from '../tools/registry';
 
 // Register the menu/palette actions. Tools are imported lazily inside the tool
 // test instead — registering tool-switch actions needs app methods that aren't
 // stood up in the node test env, exactly as in menu_actions.test.ts.
 beforeAll(() => {
+    actions.setDocs(rustActionDocs());
     registerActions();
 });
 
@@ -55,6 +57,9 @@ function markupIconNames(): { file: string; name: string }[] {
 }
 
 describe('icon bundle completeness (offline)', () => {
+    // Action glyphs live in `crates/darkly/src/actions/`, which the generator
+    // scans along with the rest of the crate — this is what proves that scan
+    // reaches them.
     it('bundles every registered action icon', () => {
         const missing = actions
             .all()
@@ -63,11 +68,16 @@ describe('icon bundle completeness (offline)', () => {
         expect(missing).toEqual([]);
     });
 
-    it('bundles every registered tool icon', async () => {
+    it('bundles every session-dependent tool icon override', async () => {
         await import('../tools/index'); // side effect: populates toolRegistry
         const tools = toolRegistry.all();
         expect(tools.length).toBeGreaterThan(0);
+        // A tool's own glyph lives on its Rust registration, and
+        // `gen-icon-bundle.mjs` scans `crates/darkly/src` for those. What is
+        // still declared here is the session-dependent override (the brush's
+        // erase-mode getter), so that is what this asserts.
         const missing = tools
+            .map(t => ({ id: t.id, icon: typeof t.icon === 'function' ? t.icon() : t.icon }))
             .filter(t => t.icon && !resolves(t.icon))
             .map(t => `${t.id} -> ${t.icon}`);
         expect(missing).toEqual([]);
@@ -80,8 +90,8 @@ describe('icon bundle completeness (offline)', () => {
         expect(resolves('fa6-solid:eraser')).toBe(true);
     });
 
-    it('bundles the custom local:gradient icon', () => {
-        expect(resolves('local:gradient')).toBe(true);
+    it('bundles the gradient tool icon', () => {
+        expect(resolves('boxicons:gradient')).toBe(true);
     });
 
     it('bundles Rust-originated icons (crate scan works)', () => {

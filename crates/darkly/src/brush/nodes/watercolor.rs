@@ -580,6 +580,7 @@ pub fn register() -> BrushNodeRegistration {
         pipelines: vec![watercolor_pipeline_reg()],
         evaluator: || Box::new(WatercolorEvaluator),
         lifecycle: crate::brush::node::Lifecycle::ClearScratchToTransparent,
+        scratch_format: crate::brush::node::COLOR_SCRATCH_FORMAT,
         node: NodeRegistration {
             type_id: TYPE_ID,
             category: "output",
@@ -652,7 +653,7 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: true,
             is_terminal: true,
             supports_erase: false,
-            preview_fallback_icon: None,
+            preview_staging: None,
         },
     }
 }

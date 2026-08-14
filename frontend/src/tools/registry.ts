@@ -71,10 +71,15 @@ export interface Tool {
  */
 export interface ToolDescriptor {
     readonly id: string;
-    /** Iconify icon name (e.g. 'fa6-solid:paintbrush', 'local:gradient').
-     *  Rendered via the shared `<Icon>` component. May be a getter (the brush's
-     *  icon tracks the global erase-mode flag). */
-    readonly icon?: string;
+    /** Session-dependent override of the tool's registry icon.
+     *
+     *  The tool's own glyph lives on its Rust `ToolRegistration` and reaches
+     *  the UI through the `tools` catalog. This field exists only for a glyph
+     *  that depends on live session state, which a static registration cannot
+     *  express: the brush swaps to the eraser icon while erase mode is on.
+     *  Resolve through `app.toolGlyph(id)` rather than reading it directly —
+     *  that is where override-beats-registry is decided. */
+    readonly icon?: string | (() => string);
     /** Tool group for toolbar visual separation (e.g. 'paint', 'select'). */
     readonly group: string;
 
@@ -82,10 +87,6 @@ export interface ToolDescriptor {
      *  hidden behind a single flyout button in the toolbar. The cluster
      *  metadata (icon, default sub-tool, order) lives in {@link ToolCluster}. */
     readonly cluster?: string;
-
-    /** Key name in HotkeyMap that activates this tool (e.g. 'brushTool').
-     *  Used by hotkey registration to wire up tool switching automatically. */
-    readonly hotkeyAction: string;
 
     /** Optional Svelte component rendered inside the always-visible bottom
      *  options strip. Owns the per-tool widgets (sliders, toggles, pickers).

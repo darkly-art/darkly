@@ -31,6 +31,11 @@ struct CheckpointSlot {
     /// Dimensions of the allocated texture (may be larger than bbox).
     tex_w: u32,
     tex_h: u32,
+    /// Format the slot was allocated in. The ring snapshots the stroke
+    /// scratch, whose format is the terminal's business — colour for most
+    /// brushes, a float displacement field for warp terminals — and
+    /// `copy_texture_to_texture` requires the two to match.
+    tex_format: wgpu::TextureFormat,
     /// The bbox region this checkpoint covers, in canvas pixel coords.
     /// Stable across mid-stroke layer growth.
     canvas_bbox: CanvasRect,
@@ -50,6 +55,7 @@ impl CheckpointSlot {
             texture: None,
             tex_w: 0,
             tex_h: 0,
+            tex_format: crate::brush::node::COLOR_SCRATCH_FORMAT,
             canvas_bbox: CanvasRect::from_xywh(0, 0, 0, 0),
             save_point_index: 0,
             vector_index: 0,
@@ -65,9 +71,18 @@ impl CheckpointSlot {
         }
     }
 
-    /// Ensure the texture is at least `w × h`. Reallocate if needed.
-    fn ensure_texture(&mut self, device: &wgpu::Device, w: u32, h: u32) {
-        if self.tex_w >= w && self.tex_h >= h && self.texture.is_some() {
+    /// Ensure the texture is at least `w × h` and in `format`.
+    /// Reallocate if needed — including on a format change, since a
+    /// slot cached from a colour stroke cannot receive a warp field.
+    fn ensure_texture(
+        &mut self,
+        device: &wgpu::Device,
+        w: u32,
+        h: u32,
+        format: wgpu::TextureFormat,
+    ) {
+        if self.tex_w >= w && self.tex_h >= h && self.tex_format == format && self.texture.is_some()
+        {
             return;
         }
         // Allocate with some headroom to reduce reallocation frequency.
@@ -83,12 +98,13 @@ impl CheckpointSlot {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format,
             usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         }));
         self.tex_w = alloc_w;
         self.tex_h = alloc_h;
+        self.tex_format = format;
     }
 }
 
@@ -260,7 +276,12 @@ impl CheckpointRing {
 
         let slot_idx = self.pick_slot(tip_vi, max_div_window, vector_index);
         let slot = &mut self.slots[slot_idx];
-        slot.ensure_texture(device, layer_rect.width, layer_rect.height);
+        slot.ensure_texture(
+            device,
+            layer_rect.width,
+            layer_rect.height,
+            stroke.texture.format(),
+        );
         slot.canvas_bbox = clipped_canvas;
         slot.save_point_index = save_point_index;
         slot.vector_index = vector_index;

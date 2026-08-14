@@ -389,8 +389,8 @@ fn set_node_comment_does_not_advance_topology_version() {
 /// The active-brush capabilities drive two frontend behaviours: the
 /// erase toggle in the brush-tool options bar (`supports_erase`) and
 /// the live preview strips' iconify fallback (`preview_fallback_icon`,
-/// shown instead of the baked thumbnails for content-dependent
-/// brushes). One engine across all three loads to avoid extra wgpu
+/// shown in the dab slot instead of a baked thumbnail for
+/// content-dependent brushes). One engine across all three loads to avoid extra wgpu
 /// devices in parallel — see
 /// `size_scrub_does_not_change_active_dab_pixels`.
 #[test]
@@ -403,6 +403,11 @@ fn brush_active_capabilities_reflect_loaded_brush() {
     let caps = engine.brush_active_capabilities();
     assert!(caps.supports_erase, "Clone's paint terminal honours erase");
     assert_eq!(caps.preview_fallback_icon, Some("fa6-solid:clone"));
+    assert_eq!(
+        caps.preview_backdrop,
+        darkly::gpu::preview::PreviewBackdrop::Stripes,
+        "Clone's stroke preview is staged over a field it can transport"
+    );
 
     engine
         .brush_load("Smudge")
@@ -422,6 +427,11 @@ fn brush_active_capabilities_reflect_loaded_brush() {
     assert_eq!(
         caps.preview_fallback_icon, None,
         "content-free brushes keep the baked previews"
+    );
+    assert_eq!(
+        caps.preview_backdrop,
+        darkly::gpu::preview::PreviewBackdrop::Flat,
+        "a brush that deposits pigment needs nothing staged under it"
     );
 }
 

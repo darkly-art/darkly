@@ -63,6 +63,7 @@ use crate::brush::wgsl::{
     sample_graph_texture, CompileWgslCtx, InputBinding, NodeWgsl, UniformField, WgslType,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
+use crate::gpu::preview::{PreviewBackdrop, PreviewStaging};
 use crate::nodegraph::{NodeRegistration, PortDef};
 
 pub const TYPE_ID: &str = "clone_source";
@@ -73,7 +74,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "texture",
             display_name: "Clone Source",
-            description: "Samples pixels from a set source point onto the canvas under your cursor. Set the source with the clone set-source gesture, then paint. Feed into a Stamp Tip's colour input.",
+            description: "Samples pixels from a set source point onto the canvas under your cursor. Set the source with the clone set-source gesture, then paint. Feed into a Stamp Tip's color input.",
             ports: vec![
                 PortDef::input("center", BrushWireType::Vec2)
                     .with_description("Per-dab pen position in canvas pixels (wire Pen Input → Position)."),
@@ -109,7 +110,10 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: false,
             is_terminal: false,
             supports_erase: true,
-            preview_fallback_icon: Some("fa6-solid:clone"),
+            preview_staging: Some(PreviewStaging {
+                icon: "fa6-solid:clone",
+                backdrop: PreviewBackdrop::Stripes,
+            }),
         },
         || Box::new(CloneSourceEvaluator),
     )

@@ -30,30 +30,26 @@ const PARAMS: &[ParamDef] = &[
     // Freeze on the last received frame; suppresses uploads (GPU holds the last
     // frame) while the frontend keeps the HTTP stream open, so unfreezing
     // resumes instantly (see camera void).
-    ParamDef::Bool {
-        name: "freeze",
-        default: false,
-    },
+    ParamDef::boolean("freeze", false)
+        .with_label("Freeze")
+        .with_description("Holds the last received frame instead of following the live stream."),
     // rAF frames to skip between decoded-frame → GPU uploads (see camera void).
-    ParamDef::Int {
-        name: "frame_divisor",
-        min: 1,
-        max: 60,
-        default: 4,
-    },
+    ParamDef::int("frame_divisor", 1, 60, 4)
+        .with_label("Frame Skip")
+        .with_description("Take one frame in this many, to lighten the load."),
     // Where the frontend `fetch`es the frame stream. Not read by the Rust void —
     // `VideoStreamVoid` resolves params by name and ignores this one; it's
     // document-persisted purely so the frontend knows where to connect and so
     // the endpoint round-trips through save/load.
-    ParamDef::String {
-        name: "url",
-        default: DEFAULT_URL,
-    },
+    ParamDef::string("url", DEFAULT_URL)
+        .with_label("Stream URL")
+        .with_description("Address the Blender frame stream is served from."),
 ];
 
 static CONFIG: VideoStreamConfig = VideoStreamConfig {
     type_id: TYPE_ID,
     display_name: "Blender",
+    description: "Live viewport frames streamed from a running Blender session.",
     icon: "file-icons:blender",
     params: PARAMS,
     capture_kind: CaptureKind::Stream,
@@ -92,7 +88,7 @@ mod tests {
         // String param carrying the localhost default so a freshly-created void
         // connects without the user typing anything.
         let reg = register();
-        let names: Vec<_> = reg.params.iter().map(|p| p.name()).collect();
+        let names: Vec<_> = reg.params.iter().map(|p| p.name).collect();
         assert_eq!(names, vec!["freeze", "frame_divisor", "url"]);
 
         let defaults: Vec<ParamValue> = reg.params.iter().map(|d| d.default_value()).collect();

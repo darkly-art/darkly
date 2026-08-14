@@ -77,7 +77,7 @@ impl ScalarBinaryNode {
                 is_gpu: false,
                 is_terminal: false,
                 supports_erase: true,
-                preview_fallback_icon: None,
+                preview_staging: None,
             },
             self.evaluator,
         )

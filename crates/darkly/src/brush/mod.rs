@@ -30,12 +30,14 @@ pub mod state;
 pub mod stroke_buffer;
 pub mod stroke_engine;
 pub mod texture_source;
+pub mod warp_field;
 pub mod wgsl;
 pub mod wire;
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use crate::gpu::preview::PreviewBackdrop;
 use crate::nodegraph::NodeRegistration;
 use wire::BrushWireType;
 
@@ -104,9 +106,14 @@ impl BrushNodeRegistry {
         self.map.get(type_id)
     }
 
-    /// All registered node types.
-    pub fn types(&self) -> impl Iterator<Item = &BrushNodeRegistration> {
-        self.map.values()
+    /// All registered node types, sorted by `type_id` for deterministic
+    /// output. Sorting here rather than at each consumer is what makes both
+    /// the exported catalog and the frontend's node palette reproducible —
+    /// `map` is a `HashMap`, so its iteration order differs between processes.
+    pub fn types(&self) -> Vec<&BrushNodeRegistration> {
+        let mut v: Vec<&BrushNodeRegistration> = self.map.values().collect();
+        v.sort_by_key(|reg| reg.node.type_id);
+        v
     }
 
     /// The bare `NodeRegistration<W>` map for the nodegraph compiler
@@ -140,6 +147,30 @@ pub fn registry() -> &'static BrushNodeRegistry {
     REGISTRY.get_or_init(BrushNodeRegistry::build)
 }
 
+/// Id of the catalog this registry projects into.
+pub const CATALOG_ID: &str = "brushNodes";
+
+/// The brush-node catalog — every registered node type, sorted by `type_id`.
+///
+/// Entries carry no `params`: see
+/// [`NodeRegistration::catalog_entry`](crate::nodegraph::NodeRegistration::catalog_entry)
+/// for why a port is not a parameter.
+pub fn catalog() -> crate::catalog::Catalog {
+    crate::catalog::Catalog::new(
+        CATALOG_ID,
+        "Brush Nodes",
+        registry()
+            .types()
+            .into_iter()
+            .map(|reg| reg.node.catalog_entry())
+            .collect(),
+    )
+    .with_description(
+        "The signal blocks a brush graph is built from — inputs, math, shapes, \
+         and the terminals that put pigment down.",
+    )
+}
+
 /// Convenience over [`crate::nodegraph::Graph::find_terminal`] for
 /// brush graphs: builds a fresh [`BrushNodeRegistry`] and delegates.
 /// Use this from any graph-only call site (benches, tests, the WASM
@@ -161,20 +192,24 @@ pub struct BrushGraphCapabilities {
     /// terminal registers `supports_erase = false`. The brush-tool
     /// options bar hides the erase toggle when false.
     pub supports_erase: bool,
-    /// Iconify icon to show in place of baked dab/stroke thumbnails,
-    /// contributed by the first node whose registration sets
-    /// `preview_fallback_icon` — content-dependent nodes (clone, blur,
-    /// smudge, liquify) whose preview bake renders blank.
+    /// Iconify icon to show in the dab slot in place of a baked thumbnail,
+    /// contributed by the first node whose registration declares
+    /// `preview_staging` — content-dependent nodes (clone, blur, smudge,
+    /// liquify) whose still-dab bake renders blank.
     pub preview_fallback_icon: Option<&'static str>,
+    /// Field the stroke preview is rendered over, from the same declaration
+    /// the icon comes from. [`PreviewBackdrop::Flat`] for a brush that deposits
+    /// pigment and so needs nothing staged under it.
+    pub preview_backdrop: PreviewBackdrop,
 }
 
 /// Derive [`BrushGraphCapabilities`] from a graph in one registry walk.
 ///
 /// Type-owned dispatch — each node's `register()` declares its own
-/// `supports_erase` / `preview_fallback_icon`; nothing here knows which
+/// `supports_erase` / `preview_staging`; nothing here knows which
 /// node types exist. Nodes are visited terminals-first, then ascending
 /// id ([`Graph::nodes`] is a HashMap, so raw iteration order would make
-/// the "first icon wins" rule nondeterministic on multi-icon graphs).
+/// the "first staging wins" rule nondeterministic on multi-staging graphs).
 pub fn graph_capabilities(
     graph: &crate::nodegraph::Graph<BrushWireType>,
 ) -> BrushGraphCapabilities {
@@ -195,13 +230,17 @@ pub fn graph_capabilities(
     let mut caps = BrushGraphCapabilities {
         supports_erase: true,
         preview_fallback_icon: None,
+        preview_backdrop: PreviewBackdrop::Flat,
     };
+    let mut staged = false;
     for (_, reg) in nodes {
         if reg.is_terminal && !reg.supports_erase {
             caps.supports_erase = false;
         }
-        if caps.preview_fallback_icon.is_none() {
-            caps.preview_fallback_icon = reg.preview_fallback_icon;
+        if let (false, Some(staging)) = (staged, reg.preview_staging) {
+            caps.preview_fallback_icon = Some(staging.icon);
+            caps.preview_backdrop = staging.backdrop;
+            staged = true;
         }
     }
     caps
@@ -618,6 +657,29 @@ mod tests {
             runner.is_ok(),
             "default_runner() failed: {:?}",
             runner.err()
+        );
+    }
+
+    /// The documentation projection covers the registry exactly, in the
+    /// registry's own order. Catches a node type that stops being projected,
+    /// and the `HashMap` iteration order that would otherwise make
+    /// `metadata.json` differ between the exporter process and any other.
+    #[test]
+    fn the_node_catalog_covers_every_registered_node() {
+        let catalog = super::catalog();
+        let registered: Vec<&str> = super::registry()
+            .types()
+            .into_iter()
+            .map(|reg| reg.node.type_id)
+            .collect();
+        let projected: Vec<&str> = catalog.entries.iter().map(|e| e.type_id).collect();
+        assert_eq!(projected, registered, "brushNodes is not the registry");
+
+        let mut sorted = projected.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            projected, sorted,
+            "brushNodes entries are not sorted by type id"
         );
     }
 }

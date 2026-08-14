@@ -2,6 +2,7 @@
     import { getContext, untrack } from 'svelte';
     import { brushGraph, WIRE_COLORS, EXTENDED_RANGE_MAX, type PortDef } from '../../state/brush_graph.svelte';
     import { unitFor } from '../../lib/units';
+    import { beginScrubDrag, type ScrubDrag } from '../../lib/scrubDrag';
     import { app } from '../../state/app.svelte';
     import type { NodeCanvasContext } from './NodeCanvas.svelte';
     import Icon from '../../icons/Icon.svelte';
@@ -219,12 +220,12 @@
     // --- Inline slider for disconnected Scalar/Int/Bool inputs ---
 
     let sliderEl = $state<HTMLDivElement>();
-    let sliding = false;
+    let sliderDrag: ScrubDrag | null = null;
 
-    /** Normalized position (0–1) from a pointer event relative to the slider bar. */
-    function sliderFraction(e: PointerEvent): number {
+    /** Normalized position (0–1) of a client point relative to the slider bar. */
+    function sliderFraction(clientX: number, clientY: number): number {
         if (!sliderEl) return 0;
-        const local = coords.clientToElementLocal(sliderEl, e.clientX, e.clientY);
+        const local = coords.clientToElementLocal(sliderEl, clientX, clientY);
         return Math.max(0, Math.min(1, local.x / sliderEl.clientWidth));
     }
 
@@ -255,29 +256,32 @@
         // Stop propagation so the node doesn't start dragging.
         e.stopPropagation();
         e.preventDefault();
-        sliding = true;
         sliderEl.setPointerCapture(e.pointerId);
         app.beginInteraction();
-        const value = valueFromFraction(sliderFraction(e));
-        brushGraph.setInputLocal(nodeId, port.name, value);
+        sliderDrag = beginScrubDrag({
+            toValue: (clientX, clientY) => valueFromFraction(sliderFraction(clientX, clientY)),
+            onPreview: (v) => brushGraph.setInputLocal(nodeId, port.name, v),
+            onCommit: commitSlider,
+            onFinish: () => {
+                sliderDrag = null;
+                app.endInteraction();
+            },
+        });
+        // Seed from the pointerdown position — clicking the track jumps the
+        // value there, so a click that never moves still commits.
+        sliderDrag.move(e.clientX, e.clientY);
     }
 
     function onSliderMove(e: PointerEvent) {
-        if (!sliding) return;
-        const value = valueFromFraction(sliderFraction(e));
-        brushGraph.setInputLocal(nodeId, port.name, value);
+        sliderDrag?.move(e.clientX, e.clientY);
     }
 
-    function onSliderUp(e: PointerEvent) {
-        if (!sliding || !sliderEl) return;
-        sliding = false;
-        sliderEl.releasePointerCapture(e.pointerId);
-        commitSlider(numValue);
-    }
-
-    function onSliderLostCapture() {
-        sliding = false;
-        app.endInteraction();
+    /** Wired to both `pointerup` and `lostpointercapture`; `end` is idempotent.
+     *  A lost capture commits rather than discarding — the previewed value is
+     *  already on screen, so dropping it would leave the widget showing a value
+     *  the engine never received. */
+    function onSliderEnd() {
+        sliderDrag?.end();
     }
 
     // --- Enum dropdown ---
@@ -407,8 +411,8 @@
                 bind:this={sliderEl}
                 onpointerdown={onSliderDown}
                 onpointermove={onSliderMove}
-                onpointerup={onSliderUp}
-                onlostpointercapture={onSliderLostCapture}
+                onpointerup={onSliderEnd}
+                onlostpointercapture={onSliderEnd}
                 ondblclick={onSliderDblClick}
             >
                 <div

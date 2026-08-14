@@ -8,6 +8,9 @@ pub fn register() -> ToolRegistration {
     ToolRegistration {
         type_id: "transform_perspective",
         display_name: "Perspective Transform",
+        icon: "tabler:perspective",
+        description: "Reshape the active layer by dragging its four corners independently.",
+        hotkey_action: "transformPerspectiveTool",
         params: &[],
     }
 }

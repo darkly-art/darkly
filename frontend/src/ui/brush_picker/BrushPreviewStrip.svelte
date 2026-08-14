@@ -8,10 +8,13 @@
     interface Props {
         /** Library brush name to look up in the engine's baked PNG cache. */
         brushName: string;
-        /** Iconify icon rendered in place of the baked thumbnails — set
-         *  for content-dependent brushes whose bake renders blank (see
-         *  `BrushInfo.icon`). When present, the thumbnail fetches never
-         *  fire, so no bake is triggered for the brush. */
+        /** Iconify icon rendered in the dab slot in place of a baked dab
+         *  thumbnail — set for content-dependent brushes, whose still-dab
+         *  bake renders blank because one stationary sample has no motion
+         *  for a displacement to reveal (see `BrushInfo.icon`). When
+         *  present the dab fetch never fires, so no dab bake is triggered.
+         *  The stroke slot always fetches: those brushes' stroke previews
+         *  are staged over a field they can transport. */
         icon?: string | null;
     }
     let { brushName, icon = null }: Props = $props();
@@ -60,6 +63,7 @@
             strokeUrl = stroke.url;
             lastStrokeLen = stroke.len;
         }
+        if (icon) return;
         const dab = loadPng(
             (await engine.api.brushDabThumbnail({ name: brushName })).bytes,
             dabUrl,
@@ -92,14 +96,14 @@
     }
 
     // Reactive trigger: WASM handle becoming available, theme swaps,
-    // and the brush name changing all require fresh thumbnails. The
-    // icon fallback replaces the whole strip, so with an icon there is
-    // nothing to fetch — and skipping the fetch skips the lazy bake.
+    // and the brush name changing all require fresh thumbnails. The icon
+    // only replaces the dab half, so the stroke is always worth fetching;
+    // `refresh` is what skips the dab bake when an icon occupies its slot.
     $effect(() => {
         void app.engine;
         void theme.current;
         void brushName;
-        if (icon) return;
+        void icon;
         untrack(() => compressor.request());
     });
 
@@ -116,20 +120,18 @@
      parent — square dab plus 320:120 stroke at equal height gives
      `(stroke_h + stroke_w) / stroke_h = 1 + 320/120 = 11/3`. -->
 <div class="thumbs">
-    {#if icon}
-        <BrushPreviewFallback {icon} />
-    {:else}
-        <div class="dab">
-            {#if dabUrl}
-                <img src={dabUrl} alt="" />
-            {/if}
-        </div>
-        <div class="stroke">
-            {#if strokeUrl}
-                <img src={strokeUrl} alt="" />
-            {/if}
-        </div>
-    {/if}
+    <div class="dab">
+        {#if icon}
+            <BrushPreviewFallback {icon} />
+        {:else if dabUrl}
+            <img src={dabUrl} alt="" />
+        {/if}
+    </div>
+    <div class="stroke">
+        {#if strokeUrl}
+            <img src={strokeUrl} alt="" />
+        {/if}
+    </div>
 </div>
 
 <style>

@@ -1,6 +1,6 @@
 mod bake_common;
 mod brush_graph;
-mod brush_library;
+pub(crate) mod brush_library;
 mod canvas_resize;
 mod canvas_transform;
 mod clipboard;
@@ -17,6 +17,7 @@ mod layers;
 mod load;
 mod merge;
 mod painting;
+pub mod preview;
 pub mod process_recording;
 pub mod protocol;
 pub mod rendering;
@@ -28,14 +29,14 @@ mod veils;
 mod voids;
 
 pub use brush_graph::{ExposedPortInfo, ExposedValue};
+pub use brush_library::BRUSH_THUMBNAIL_SIZE;
 pub use export::ExportImageResult;
 pub use load::LoadDocument;
 pub use process_recording::{ProcessRecorder, RecordedFrame};
 pub use rendering::{PickSource, DEFAULT_THUMB_SIZE};
 pub use save::{SaveError, SaveJob, SavePurpose, SaveReadbackKind};
 pub use types::{
-    BlendModeTypeInfo, ClipboardExport, EngineState, LayerInfo, LayerKindTypeInfo, ModifierInfo,
-    ModifierTypeInfo, ParamInfo, StrokeOp, ToolTypeInfo, VeilInfo, VeilTypeInfo, VoidTypeInfo,
+    ClipboardExport, EngineState, LayerInfo, ModifierInfo, ParamInfo, StrokeOp, VeilInfo,
 };
 
 pub use perf::{BrushPerfDelta, FrameRenderPhases};
@@ -58,13 +59,12 @@ use crate::gpu::context::GpuContext;
 use crate::gpu::diff_rect::DiffRectPass;
 use crate::gpu::overlay::OverlayPrimitive;
 use crate::gpu::paint_target::PaintPipelines;
+use crate::gpu::preview::{PreviewBackdrop, PreviewTarget};
 use crate::gpu::readback::ReadbackScheduler;
 use crate::gpu::region_store::{EntryPixels, RegionScratch};
 use crate::gpu::selection::SelectionPipelines;
 use crate::gpu::transform::FloatingContent;
-use crate::gpu::veil_preview::VeilPreviewRenderer;
 use crate::gpu::view::{ViewParams, ViewTransform};
-use crate::gpu::void_preview::VoidPreviewRenderer;
 use crate::layer::LayerId;
 use crate::undo::UndoStack;
 use std::collections::HashMap;
@@ -222,6 +222,11 @@ pub(crate) enum ReadbackContext {
     BrushStrokePreview {
         width: u32,
         height: u32,
+        /// The field the stroke was rendered over. The framer finds the stroke
+        /// by looking for pixels the backdrop did not put there, so it has to
+        /// travel with the request — the engine's theme may have moved on, and
+        /// another brush's bake may be in flight alongside this one.
+        backdrop: PreviewBackdrop,
         /// Graph version at the time the render was issued — used to skip
         /// caching stale results if another render has superseded this one.
         graph_version: u64,
@@ -234,6 +239,8 @@ pub(crate) enum ReadbackContext {
         name: String,
         width: u32,
         height: u32,
+        /// See [`ReadbackContext::BrushStrokePreview::backdrop`].
+        backdrop: PreviewBackdrop,
     },
     /// Async readback of a single-dab preview rendered from a library
     /// brush's graph. Completion PNG-encodes the pixels and installs the
@@ -295,15 +302,15 @@ pub(crate) enum ReadbackContext {
     UndoRegionReady {
         cell: std::rc::Rc<std::cell::RefCell<EntryPixels>>,
     },
-    /// Async readback of one picker preview frame, rendered offscreen
-    /// (`gpu::veil_preview` for veils over the current canvas, `gpu::void_preview`
-    /// for voids from scratch). Completion drops the raw RGBA bytes into
-    /// `previews[(kind, type_id)].frames[frame_idx]`; the frontend drains all
+    /// Async readback of one picker preview frame, rendered offscreen through
+    /// [`crate::gpu::preview`]. Completion drops the raw RGBA bytes into
+    /// `previews[(catalog, type_id)].frames[frame_idx]`; the frontend drains all
     /// `total` frames once they land and plays them as a loop. Each frame is the
     /// job's aspect-fit `width × height` RGBA.
     PreviewFrame {
-        kind: PreviewKind,
+        catalog: &'static str,
         type_id: &'static str,
+        variant: crate::gpu::preview::PreviewVariant,
         frame_idx: u32,
         total: u32,
     },
@@ -318,22 +325,16 @@ pub(crate) enum ReadbackContext {
     },
 }
 
-/// Which kind of effect a picker preview is generating. Keys the shared
-/// `previews` map alongside the effect's `'static` type id, so a veil and a void
-/// that happen to share a type-id string never collide.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub enum PreviewKind {
-    Veil,
-    Void,
-}
-
-/// One picker preview generation: the chosen preview dimensions plus the
-/// per-frame RGBA slots, each filled when its async readback lands. `width` /
-/// `height` are carried so `poll_preview` and the WASM bridge report the real
-/// (aspect-fit) thumbnail size, which varies with the document's shape.
+/// One picker preview generation: the chosen preview dimensions, the entry's
+/// own playback rate, and the per-frame RGBA slots, each filled when its async
+/// readback lands. `width` / `height` are carried so `poll_preview` and the WASM
+/// bridge report the real (aspect-fit) thumbnail size, which varies with the
+/// document's shape; `fps` because the entry's `PreviewAnim` owns that fact and
+/// the wire response must not answer with a second one.
 pub(crate) struct PreviewJob {
     pub width: u32,
     pub height: u32,
+    pub fps: u32,
     pub frames: Vec<Option<Vec<u8>>>,
 }
 
@@ -526,21 +527,29 @@ pub struct DarklyEngine {
     pub(crate) preview_theme_fg: [f32; 4],
     pub(crate) preview_theme_bg: [f32; 4],
 
-    // --- Picker previews (veil + void) ---
-    /// Offscreen renderer for the veil picker's looping thumbnail previews.
-    /// Reused across veils; holds its own preview-sized scratch textures and
-    /// is fully independent of the live veil chain and document.
-    pub(crate) veil_preview_renderer: VeilPreviewRenderer,
-    /// Offscreen renderer for the void picker's looping thumbnail previews.
-    /// Reused across voids; holds its own preview-sized output texture and is
-    /// fully independent of the live layer stack and document.
-    pub(crate) void_preview_renderer: VoidPreviewRenderer,
-    /// In-flight + completed preview jobs, keyed by `(kind, &'static str type
+    // --- Picker previews ---
+    /// Scratch textures every picker preview is rendered through, whatever the
+    /// catalog. Reused across entries and fully independent of the live veil
+    /// chain, layer stack and document.
+    pub(crate) preview_target: PreviewTarget,
+    /// Previews requested but not yet started, in arrival order.
+    pub(crate) preview_queue: std::collections::VecDeque<preview::PreviewKey>,
+    /// Whether the target's loaded subject predates the current burst of
+    /// requests. Set when a request arrives with nothing in flight, so one
+    /// `render_offscreen` serves a whole picker's worth of cards.
+    pub(crate) preview_source_dirty: bool,
+    /// Whether that subject is the live composite rather than a cleared texture
+    /// — what the last mechanism to open asked for.
+    pub(crate) preview_source_is_composite: bool,
+    /// The one preview being generated right now — see
+    /// [`preview::PREVIEW_FRAMES_PER_TICK`] for why generation is serialized.
+    pub(crate) preview_active: Option<preview::ActivePreview>,
+    /// In-flight + completed preview jobs, keyed by `(catalog, &'static str type
     /// id)`. Frame slots fill in asynchronously as `ReadbackContext::PreviewFrame`
     /// readbacks land; `poll_preview` hands back the frames once every slot is
-    /// `Some`. Overwritten on each `start_*_preview` so the picker always
-    /// reflects the current document (no cross-open caching).
-    pub(crate) previews: HashMap<(PreviewKind, &'static str), PreviewJob>,
+    /// `Some` and removes the job, so the next open regenerates against the
+    /// canvas as it then stands.
+    pub(crate) previews: HashMap<preview::PreviewKey, PreviewJob>,
 
     // --- Brush Library ---
     pub(crate) brush_library: BrushLibrary,
@@ -742,8 +751,11 @@ impl DarklyEngine {
             // `set_preview_theme()` as soon as the UI loads.
             preview_theme_fg: [1.0, 1.0, 1.0, 1.0],
             preview_theme_bg: [0.0, 0.0, 0.0, 1.0],
-            veil_preview_renderer: VeilPreviewRenderer::new(),
-            void_preview_renderer: VoidPreviewRenderer::new(),
+            preview_target: PreviewTarget::new(),
+            preview_queue: std::collections::VecDeque::new(),
+            preview_source_dirty: true,
+            preview_source_is_composite: false,
+            preview_active: None,
             previews: HashMap::new(),
             brush_library: {
                 let mut lib = BrushLibrary::new();
@@ -809,69 +821,6 @@ impl DarklyEngine {
         );
 
         engine
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Shared picker-preview plumbing
-// ---------------------------------------------------------------------------
-
-impl DarklyEngine {
-    /// Encode one preview frame and submit its async readback. The effect-
-    /// specific render — a veil's ping-pong pass or a void's generate pass —
-    /// lives in the `encode` closure; everything else (the command encode, the
-    /// readback request keyed by `(kind, type_id, frame_idx, total)`, and the
-    /// scheduler submission) is shared between the veil and void preview paths.
-    ///
-    /// An associated function rather than a `&mut self` method so the caller can
-    /// hand it disjoint borrows: `gpu` / `readbacks` here, while `encode` and
-    /// `output` borrow the per-effect preview renderer.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn encode_preview_frame(
-        gpu: &GpuContext,
-        readbacks: &mut ReadbackScheduler<ReadbackContext>,
-        kind: PreviewKind,
-        type_id: &'static str,
-        frame_idx: u32,
-        total: u32,
-        output: &wgpu::Texture,
-        format: wgpu::TextureFormat,
-        rect: crate::coord::LayerRect,
-        encode: impl FnOnce(&mut wgpu::CommandEncoder),
-    ) {
-        gpu.encode("preview-frame", |encoder| {
-            encode(encoder);
-            let request =
-                crate::gpu::readback::request_readback(&gpu.device, encoder, output, format, rect);
-            readbacks.submit(
-                request,
-                ReadbackContext::PreviewFrame {
-                    kind,
-                    type_id,
-                    frame_idx,
-                    total,
-                },
-            );
-        });
-    }
-
-    /// Return the completed preview for `(kind, type_id)` as
-    /// `(width, height, frames)` once every frame has landed, else `None`. Each
-    /// frame is `width × height` tightly-packed RGBA8. Shared by both pickers.
-    pub fn poll_preview(
-        &self,
-        kind: PreviewKind,
-        type_id: &str,
-    ) -> Option<(u32, u32, Vec<Vec<u8>>)> {
-        let (_, job) = self
-            .previews
-            .iter()
-            .find(|((k, t), _)| *k == kind && *t == type_id)?;
-        if job.frames.is_empty() || job.frames.iter().any(Option::is_none) {
-            return None;
-        }
-        let frames = job.frames.iter().map(|f| f.clone().unwrap()).collect();
-        Some((job.width, job.height, frames))
     }
 }
 
@@ -1240,7 +1189,8 @@ impl DarklyEngine {
         let inset = rw.min(rh) as f32 * brush_library::BRUSH_STROKE_PATH_INSET_FRACTION;
         let path =
             crate::brush::preview_renderer::synthesize_stroke_path(rw as f32, rh as f32, 30, inset);
-        self.test_render_preview_canvas(&graph, &path, rw, rh, None)
+        let backdrop = crate::brush::graph_capabilities(&graph).preview_backdrop;
+        self.test_render_preview_canvas(&graph, &path, backdrop, rw, rh, None)
     }
 
     /// Blocking readback of the raw dab-preview **render canvas** for the
@@ -1256,6 +1206,7 @@ impl DarklyEngine {
         self.test_render_preview_canvas(
             &graph,
             &path,
+            crate::gpu::preview::PreviewBackdrop::Flat,
             rw,
             rh,
             Some(brush_library::DAB_PREVIEW_BASE_SIZE),
@@ -1270,6 +1221,7 @@ impl DarklyEngine {
         &mut self,
         graph: &crate::nodegraph::Graph<BrushWireType>,
         path: &[crate::brush::paint_info::PaintInformation],
+        backdrop: crate::gpu::preview::PreviewBackdrop,
         rw: u32,
         rh: u32,
         base_size_override: Option<f32>,
@@ -1286,6 +1238,7 @@ impl DarklyEngine {
                 path,
                 fg,
                 bg,
+                backdrop,
                 rw,
                 rh,
                 base_size_override,
@@ -1367,6 +1320,12 @@ impl DarklyEngine {
     /// Uses `device.poll(Wait)` to ensure mapping callbacks fire, then
     /// dispatches every completed readback through the shared handler —
     /// same semantics as a real frame's `poll_pending`.
+    ///
+    /// Gated with the rest of the blocking-readback surface: `device.poll(Wait)`
+    /// deadlocks on WebGPU, where the browser event loop is the only thing that
+    /// resolves buffer mappings, so production and WASM builds must not be able
+    /// to name this at all.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_flush_readbacks(&mut self) {
         let _ = self.gpu.device.poll(wgpu::PollType::Wait {
             submission_index: None,
@@ -1403,12 +1362,7 @@ mod tests {
 
     #[test]
     fn param_info_serializes_flat() {
-        let def = ParamDef::Float {
-            name: "speed",
-            min: 0.0,
-            max: 10.0,
-            default: 1.0,
-        };
+        let def = ParamDef::float("speed", 0.0, 10.0, 1.0);
         let info = ParamInfo::from_def(&def, Some(&ParamValue::Float(2.5)));
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["kind"], "float");
@@ -1421,10 +1375,7 @@ mod tests {
 
     #[test]
     fn param_info_bool_omits_min_max() {
-        let def = ParamDef::Bool {
-            name: "soft",
-            default: true,
-        };
+        let def = ParamDef::boolean("soft", true);
         let info = ParamInfo::from_def(&def, None);
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["kind"], "bool");
@@ -1442,20 +1393,9 @@ mod tests {
             visible: true,
             index: 0,
             params: vec![
+                ParamInfo::from_def(&ParamDef::int("scale", 1, 32, 2), Some(&ParamValue::Int(4))),
                 ParamInfo::from_def(
-                    &ParamDef::Int {
-                        name: "scale",
-                        min: 1,
-                        max: 32,
-                        default: 2,
-                    },
-                    Some(&ParamValue::Int(4)),
-                ),
-                ParamInfo::from_def(
-                    &ParamDef::Bool {
-                        name: "soft",
-                        default: true,
-                    },
+                    &ParamDef::boolean("soft", true),
                     Some(&ParamValue::Bool(false)),
                 ),
             ],

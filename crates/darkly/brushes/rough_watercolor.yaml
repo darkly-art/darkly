@@ -1,5 +1,6 @@
 name: Rough Watercolor
 category: Wet Media
+description: The same bleeding pigment over a rougher paper — granulated, with a broken edge.
 nodes:
   pen_input:
     type: pen_input

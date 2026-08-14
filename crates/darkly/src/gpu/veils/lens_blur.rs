@@ -1,4 +1,5 @@
-use crate::gpu::effect::{EffectCache, EffectPipeline};
+use crate::gpu::effect::{create_effect_pipeline, Binding, EffectCache, EffectPipeline};
+use crate::gpu::preview::{swing, PreviewAnim};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
@@ -7,18 +8,12 @@ const PARAMS: &[ParamDef] = &[
     // blur radius as a fraction of sqrt(canvas area), so user 1.0 = 3% of
     // sqrt(area) (≈ 30 px on a 1024² canvas) and the default user 1/3
     // ≈ 0.01 of sqrt(area) (≈ 10 px on 1024²).
-    ParamDef::Float {
-        name: "radius",
-        min: 0.0,
-        max: 1.0,
-        default: 1.0 / 3.0,
-    },
-    ParamDef::Float {
-        name: "threshold",
-        min: 0.01,
-        max: 1.0,
-        default: 0.1,
-    },
+    ParamDef::float("radius", 0.0, 1.0, 1.0 / 3.0)
+        .with_label("Radius")
+        .with_description("Size of the defocus circle — how far out of focus the image sits."),
+    ParamDef::float("threshold", 0.01, 1.0, 0.1)
+        .with_label("Threshold")
+        .with_description("How bright a pixel must be before it blooms into a bokeh highlight."),
 ];
 
 pub fn register() -> VeilRegistration {
@@ -27,6 +22,7 @@ pub fn register() -> VeilRegistration {
         display_name: "Lens Blur",
         description: "Defocus the view with a soft camera-lens blur.",
         params: PARAMS,
+        preview: Some(PreviewAnim::LOOPING),
         create_pipeline: create_lens_blur_pipeline,
         from_params: |params, shared| {
             let radius = match params.first() {
@@ -55,6 +51,9 @@ struct LensBlurUniforms {
 pub struct LensBlur {
     pub radius: f32,
     pub threshold: f32,
+    /// Render resolution, kept from `create_cache` so
+    /// [`uniforms`](Self::uniforms) rebuilds the whole struct from state.
+    resolution: (f32, f32),
     shared: Arc<EffectPipeline>,
 }
 
@@ -63,7 +62,17 @@ impl LensBlur {
         LensBlur {
             radius: radius.max(0.0),
             threshold: threshold.max(0.01),
+            resolution: (0.0, 0.0),
             shared,
+        }
+    }
+
+    fn uniforms(&self) -> LensBlurUniforms {
+        LensBlurUniforms {
+            radius: self.radius,
+            threshold: self.threshold,
+            resolution_x: self.resolution.0,
+            resolution_y: self.resolution.1,
         }
     }
 }
@@ -84,8 +93,17 @@ impl Veil for LensBlur {
         ]
     }
 
+    /// Focus pulls all the way out and back in. `radius` is a sample-footprint
+    /// parameter within a single pass rather than a pass count, so sweeping its
+    /// full band averages *below* the shipped default in cost.
+    fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
+        self.radius = swing(t);
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
+        true
+    }
+
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ping_pong_views: &[wgpu::TextureView; 2],
@@ -93,19 +111,14 @@ impl Veil for LensBlur {
         render_width: u32,
         render_height: u32,
     ) -> EffectCache {
-        let uniforms = LensBlurUniforms {
-            radius: self.radius,
-            threshold: self.threshold,
-            resolution_x: render_width as f32,
-            resolution_y: render_height as f32,
-        };
+        self.resolution = (render_width as f32, render_height as f32);
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("lens-blur-uniforms"),
             size: std::mem::size_of::<LensBlurUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&self.uniforms()));
 
         let layout = &self.shared.bind_group_layout;
         let bind_groups: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
@@ -164,86 +177,13 @@ impl Veil for LensBlur {
     }
 }
 
-fn create_lens_blur_pipeline(
-    device: &wgpu::Device,
-    _format: wgpu::TextureFormat,
-) -> EffectPipeline {
-    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("lens-blur-bgl"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-        ],
-    });
-
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("lens-blur-pipeline-layout"),
-        bind_group_layouts: &[Some(&bind_group_layout)],
-        immediate_size: 0,
-    });
-
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("lens-blur-shader"),
-        source: wgpu::ShaderSource::Wgsl(
-            include_str!("../../../shaders/veils/lens_blur.wgsl").into(),
-        ),
-    });
-
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("lens-blur-pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: &[],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_lens_blur"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            ..Default::default()
-        },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    });
-
-    EffectPipeline {
-        pipeline,
-        bind_group_layout,
-    }
+fn create_lens_blur_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> EffectPipeline {
+    create_effect_pipeline(
+        device,
+        format,
+        "lens-blur",
+        &[Binding::Texture, Binding::Sampler, Binding::Uniform],
+        include_str!("../../../shaders/veils/lens_blur.wgsl"),
+        "fs_lens_blur",
+    )
 }

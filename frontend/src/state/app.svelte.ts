@@ -1,8 +1,9 @@
 import { reportEngineError, type Engine, type EngineState } from '../engine/protocol';
-import type { JsonValue } from '../engine/protocol_gen';
+import type { Catalog, CatalogEntry, JsonValue } from '../engine/protocol_gen';
 import type { SaveBundle } from '../storage/saveDocument';
 import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry, type Tool } from '../tools/registry';
+import { tooltipForAction } from '../config/store.svelte';
 import { pollPick } from '../tools/color_pick_sync';
 import { SessionEngine, runHook } from '../tools/tool_session';
 import { tickColorPickerCursor } from '../tools/colorpicker_cursor';
@@ -210,99 +211,76 @@ export class DarklyInstance {
      *  activeToolId. */
     lastToolByCluster = $state<Record<string, string>>({});
 
-    // Registry-backed display-name lookups. Each map is populated once at
-    // startup from the matching `*_types()` WASM query (see `loadRegistries`).
-    // Per-instance payloads (LayerInfo, VeilInfo, ModifierInfo, etc.) carry
-    // only the stable `type_id`; UI code resolves the human-readable label
-    // through these maps — there is no second copy of the display string.
-    toolDisplayNames = $state<Record<string, string>>({});
-    veilDisplayNames = $state<Record<string, string>>({});
-    voidDisplayNames = $state<Record<string, string>>({});
+    /** Every registry the Rust core declares, keyed by catalog id ("filters",
+     *  "veils", "tools", …). Fetched once at startup (see `loadRegistries`).
+     *  Per-instance payloads (LayerInfo, VeilInfo, …) carry only the stable
+     *  `type_id`; UI code resolves the human-readable label and the icon
+     *  through here, so there is no second copy of either. */
+    catalogs = $state<Record<string, Catalog>>({});
+
     /** `voidType → CaptureKind` for voids backed by a browser MediaStream
-     *  (camera / screenshare). Built from `void_types` in `loadRegistries`;
-     *  procedural voids are absent. Drives which `MediaDevices` API to call and
-     *  is the single source of truth for "is this a stream-backed void?" across
-     *  the reconciler, picker, and properties panel. */
+     *  (camera / screenshare). Built from the `voids` catalog in
+     *  `loadRegistries`; procedural voids are absent. Drives which
+     *  `MediaDevices` API to call and is the single source of truth for "is
+     *  this a stream-backed void?" across the reconciler, picker, and
+     *  properties panel. */
     voidCaptureKind = $state<Map<string, CaptureKind>>(new Map());
-    blendModeDisplayNames = $state<Record<string, string>>({});
-    modifierDisplayNames = $state<Record<string, string>>({});
-    layerKindDisplayNames = $state<Record<string, string>>({});
 
-    /** Registered destructive color-filter types (invert, …), fetched once
-     *  at startup. Drives the dynamic, auto-discovered Colors-menu actions in
-     *  `registerActions` — a new filter in the Rust core surfaces a menu
-     *  entry with zero frontend edits. */
-    filterTypes = $state<
-        Array<{
-            type: string;
-            displayName: string;
-            icon: string;
-            description: string;
-            params?: unknown[];
-        }>
-    >([]);
-
-    toolDisplayName(id: string): string {
-        return this.toolDisplayNames[id] ?? id;
-    }
-    veilDisplayName(id: string): string {
-        return this.veilDisplayNames[id] ?? id;
-    }
-    voidDisplayName(id: string): string {
-        return this.voidDisplayNames[id] ?? id;
-    }
-    blendModeDisplayName(id: string): string {
-        return this.blendModeDisplayNames[id] ?? id;
-    }
-    modifierDisplayName(id: string): string {
-        return this.modifierDisplayNames[id] ?? id;
-    }
-    layerKindDisplayName(id: string): string {
-        return this.layerKindDisplayNames[id] ?? id;
-    }
-    /** Display label for a filter `type_id` (e.g. `"curves"` → `"Curves"`),
-     *  resolved from the `filterTypes` registry list. */
-    filterDisplayName(id: string): string {
-        return this.filterTypes.find((f) => f.type === id)?.displayName ?? id;
+    /** Entries of one catalog, or an empty array when it is unknown. */
+    entries(catalogId: string): CatalogEntry[] {
+        return this.catalogs[catalogId]?.entries ?? [];
     }
 
-    /** Populate every registry-backed display-name map from the Rust core in
-     *  one pass. Called once during editor init, before action registration
-     *  and before `this.handle` is set, so the maps are ready by the time any
-     *  UI mounts. */
+    /** One entry by catalog and `type_id`, or `undefined`. */
+    entry(catalogId: string, typeId: string): CatalogEntry | undefined {
+        return this.entries(catalogId).find((e) => e.type === typeId);
+    }
+
+    /** Display label for a `type_id` within a catalog (e.g. `"curves"` →
+     *  `"Curves"`), falling back to the id itself when unknown. */
+    displayName(catalogId: string, typeId: string): string {
+        return this.entry(catalogId, typeId)?.displayName ?? typeId;
+    }
+
+    /** The Iconify glyph to render for a tool.
+     *
+     *  A tool's glyph is registry metadata and lives on its Rust registration.
+     *  A descriptor may override it when the glyph depends on live session
+     *  state a static registration cannot express — the brush shows the eraser
+     *  icon while erase mode is on. This is the single place that precedence
+     *  is decided, so no caller branches on a tool id. */
+    toolGlyph(typeId: string): string {
+        const override = toolRegistry.get(typeId)?.icon;
+        const resolved = typeof override === 'function' ? override() : override;
+        return resolved ?? this.entry('tools', typeId)?.icon ?? 'fa6-solid:wrench';
+    }
+
+    /** A tool button's `title` — its label plus the chord currently bound to
+     *  the action that selects it. Both the label and that action id are the
+     *  tool's own registry metadata, so resolving them together here keeps the
+     *  toolbar and the cluster flyout from each doing the lookup. */
+    toolTooltip(typeId: string): string {
+        const entry = this.entry('tools', typeId);
+        return tooltipForAction(entry?.displayName ?? typeId, entry?.hotkeyAction ?? '');
+    }
+
+    /** Populate every registry projection from the Rust core in one pass.
+     *  Called once during editor init, before action registration and before
+     *  `this.handle` is set, so the catalogs are ready by the time any UI
+     *  mounts. */
     async loadRegistries(engine: Engine) {
-        const buildMap = (
-            arr: Array<{ type: string; displayName: string }>,
-        ): Record<string, string> => {
-            const m: Record<string, string> = {};
-            for (const e of arr ?? []) m[e.type] = e.displayName;
-            return m;
-        };
-        const [tools, veils, voids, blends, modifiers, layerKinds, filters] = await Promise.all([
-            engine.api.toolTypes(),
-            engine.api.veilTypes(),
-            engine.api.voidTypes(),
-            engine.api.blendModeTypes(),
-            engine.api.modifierTypes(),
-            engine.api.layerKindTypes(),
-            engine.api.filterTypes(),
-        ]);
-        this.toolDisplayNames = buildMap(tools);
-        this.veilDisplayNames = buildMap(veils);
-        this.voidDisplayNames = buildMap(voids);
+        const byId: Record<string, Catalog> = {};
+        for (const c of (await engine.api.catalogs()) ?? []) byId[c.id] = c;
+        this.catalogs = byId;
         // Map each void type to its browser capture API, if any. Voids with a
         // `captureKind` (camera / screenshare) drive the generic MediaStream
-        // lifecycle; procedural voids (noise) omit the field and never appear
-        // here. Built once from the same `void_types` query.
+        // lifecycle; procedural voids (noise) leave it null and never appear
+        // here.
         const capKinds = new Map<string, CaptureKind>();
-        for (const v of (voids ?? []) as Array<{ type: string; captureKind?: CaptureKind }>) {
+        for (const v of this.entries('voids')) {
             if (v.captureKind) capKinds.set(v.type, v.captureKind);
         }
         this.voidCaptureKind = capKinds;
-        this.blendModeDisplayNames = buildMap(blends);
-        this.modifierDisplayNames = buildMap(modifiers);
-        this.layerKindDisplayNames = buildMap(layerKinds);
-        this.filterTypes = filters ?? [];
     }
 
     /** Add a veil with a partial overrides record. Param names match the

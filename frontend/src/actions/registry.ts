@@ -1,24 +1,34 @@
+import type { CatalogEntry } from '../engine/protocol_gen';
 import { bumpRegistryEpoch } from './registryEpoch.svelte';
 
 export type ActionContext = Record<string, any>;
 export type ActionType = 'instant' | 'hold';
 
-export type ActionCategory =
-    | 'edit' | 'tools' | 'selection' | 'brush'
-    | 'layers' | 'view' | 'colors' | 'transform' | 'file';
-
-export interface ActionRegistration {
-    id: string;
+/** An action's documentation — the half authored in Rust (`crates/darkly/src/
+ *  actions/`) and shipped in the `actions` catalog. */
+export interface ActionDoc {
     displayName: string;
-    category: ActionCategory;
+    /** Grouping id, e.g. 'edit'. The cheat sheet renders one section per
+     *  category and the hotkeys tab groups by it. */
+    category: string;
     description?: string;
     /** Base Iconify icon name for this action (e.g. 'fa6-solid:rotate-left'),
      *  rendered in the menu gutter and command-palette row via `<Icon>`. The
      *  dynamic `status()` icon, when active, takes precedence over this base
      *  icon in the gutter. */
     icon: string;
-    requires?: string[];
-    accepts?: string[];
+}
+
+/** What a call site hands to `actions.register` — the behavioural half, which
+ *  closes over Svelte runes and so cannot leave the browser. */
+export interface ActionRegistration {
+    id: string;
+    /** Documentation for an action whose metadata another catalog owns:
+     *  tool selection reads `tools`, filter application reads `filters`, and
+     *  each composes a phrasing this side owns ("Switch to Brush tool", the
+     *  parametric `…` suffix). Absent for every other action, which resolves
+     *  through the `actions` catalog. */
+    doc?: ActionDoc;
     type?: ActionType;
     /** Top-level menu this action appears under, e.g. ['Select']. Absent →
      *  not in the click-through menu (still available via hotkey + palette).
@@ -52,6 +62,9 @@ export interface ActionRegistration {
     deactivate?: (ctx: ActionContext) => void;
 }
 
+/** A registration joined with its documentation — what every consumer reads. */
+export type Action = Omit<ActionRegistration, 'doc'> & ActionDoc;
+
 export interface BindingSiteRegistration {
     name: string;
     provides: string[];
@@ -76,7 +89,7 @@ export function parseMenuSegment(segment: string): { title: string; order?: numb
  *  tooltip reason. `enabled` absent or returning `true` → enabled; a string →
  *  disabled with that string as the reason; `false` → disabled, no reason. */
 export function actionEnablement(
-    action: ActionRegistration,
+    action: Action,
 ): { enabled: boolean; reason?: string } {
     const e = action.enabled?.();
     if (e === undefined || e === true) return { enabled: true };
@@ -84,54 +97,59 @@ export function actionEnablement(
     return { enabled: false };
 }
 
-/** Check if an action's hard requirements are satisfied by a set of provided keys. */
-export function contextSatisfied(
-    action: ActionRegistration,
-    provides: string[],
-): boolean {
-    const req = action.requires;
-    if (!req || req.length === 0) return true;
-    return req.every(k => provides.includes(k));
-}
-
-/** Return the missing required keys, or [] if satisfied. */
-export function missingContext(
-    action: ActionRegistration,
-    provides: string[],
-): string[] {
-    const req = action.requires;
-    if (!req || req.length === 0) return [];
-    return req.filter(k => !provides.includes(k));
+/** Index an `actions` catalog's entries by id, ready for `actions.setDocs`. */
+export function actionDocs(entries: CatalogEntry[]): Record<string, ActionDoc> {
+    const out: Record<string, ActionDoc> = {};
+    for (const e of entries) {
+        out[e.type] = {
+            displayName: e.displayName,
+            category: e.category ?? 'other',
+            description: e.description ?? undefined,
+            icon: e.icon ?? '',
+        };
+    }
+    return out;
 }
 
 class ActionRegistry {
     private actions = new Map<string, ActionRegistration>();
+
+    /** Rust-owned documentation by action id, installed once during editor init
+     *  from the `actions` catalog. Fixed for the process — a catalog is
+     *  `&'static` data on the other side of the bridge — so the join needs no
+     *  reactive tracking. */
+    private docs: Record<string, ActionDoc> = {};
+
+    setDocs(docs: Record<string, ActionDoc>) {
+        this.docs = docs;
+        bumpRegistryEpoch();
+    }
+
+    /** Join a registration to its documentation. An id with neither an
+     *  `actions` entry nor its own `doc` falls back to showing the id, the same
+     *  way `app.displayName` does for an unknown `type_id` — the TypeScript
+     *  join test is what fails loudly on it. */
+    private resolve(reg: ActionRegistration): Action {
+        const { doc, ...behaviour } = reg;
+        const resolved = doc ??
+            this.docs[reg.id] ?? { displayName: reg.id, category: 'other', icon: '' };
+        return { ...behaviour, ...resolved };
+    }
 
     register(reg: ActionRegistration) {
         this.actions.set(reg.id, reg);
         bumpRegistryEpoch();
     }
 
-    get(id: string): ActionRegistration | undefined {
-        return this.actions.get(id);
+    get(id: string): Action | undefined {
+        const reg = this.actions.get(id);
+        return reg && this.resolve(reg);
     }
 
-    /** Dispatch an action with runtime context validation.
-     *  Checks that all required keys are present and non-nullish in ctx. */
+    /** Run an action's handler. Unknown ids are a no-op — a preset can name
+     *  one, and the Rust preset test is what catches it. */
     dispatch(id: string, ctx: ActionContext = {}) {
-        const action = this.actions.get(id);
-        if (!action) return;
-        const req = action.requires;
-        if (req && req.length > 0) {
-            const missing = req.filter(k => ctx[k] == null);
-            if (missing.length > 0) {
-                console.warn(
-                    `Action "${id}" requires [${req.join(', ')}] but context is missing [${missing.join(', ')}]. Skipping.`
-                );
-                return;
-            }
-        }
-        action.handler(ctx);
+        this.actions.get(id)?.handler(ctx);
     }
 
     /** For 'hold' actions — called on trigger release. */
@@ -146,24 +164,19 @@ class ActionRegistry {
     }
 
     /** All registrations (for shortcuts editor UI). */
-    all(): ActionRegistration[] {
-        return [...this.actions.values()];
+    all(): Action[] {
+        return [...this.actions.values()].map(reg => this.resolve(reg));
     }
 
     /** Actions grouped by category (for shortcuts editor UI). */
-    byCategory(): Map<ActionCategory, ActionRegistration[]> {
-        const map = new Map<ActionCategory, ActionRegistration[]>();
-        for (const reg of this.actions.values()) {
-            let list = map.get(reg.category);
-            if (!list) { list = []; map.set(reg.category, list); }
-            list.push(reg);
+    byCategory(): Map<string, Action[]> {
+        const map = new Map<string, Action[]>();
+        for (const action of this.all()) {
+            let list = map.get(action.category);
+            if (!list) { list = []; map.set(action.category, list); }
+            list.push(action);
         }
         return map;
-    }
-
-    /** Actions compatible with a given binding site (for shortcuts editor UI). */
-    compatibleWith(site: BindingSiteRegistration): ActionRegistration[] {
-        return this.all().filter(a => contextSatisfied(a, site.provides));
     }
 }
 

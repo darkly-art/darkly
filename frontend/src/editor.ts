@@ -2,6 +2,7 @@ import init from '../wasm/pkg/darkly_wasm';
 import { config } from './config/store.svelte';
 import { registerHotkeys } from './config/hotkeys.svelte';
 import { registerActions } from './actions';
+import { actions, actionDocs } from './actions/registry';
 import { rebuildClickIndex } from './actions/triggers';
 import { theme } from './state/theme.svelte';
 import { pixelFilter } from './state/pixelFilter.svelte';
@@ -131,6 +132,12 @@ export async function createInstance(
 
     // Action/hotkey registration is process-wide but reads the active
     // instance via the `app` proxy. Calling it here is idempotent.
+    //
+    // Every action's documentation is Rust's (`crates/darkly/src/actions/`) and
+    // arrives in the `actions` catalog; the registry joins it to the handlers by
+    // id. Installed before registration so nothing observes a half-joined
+    // registry.
+    actions.setDocs(actionDocs(instance.entries('actions')));
     registerActions();
     registerHotkeys();
     rebuildClickIndex();

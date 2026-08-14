@@ -33,6 +33,7 @@ pub fn register() -> LayerKindRegistration {
     LayerKindRegistration {
         type_id: TYPE_ID,
         display_name: "Group",
+        description: "A folder of layers composited together and treated as one.",
         can_have_mask: true,
         can_rename: true,
         has_thumbnail: false,

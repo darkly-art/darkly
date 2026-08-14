@@ -11,9 +11,12 @@ mod layout;
 mod registration;
 
 pub use compiler::{ExecStep, ExecutionPlan, InputSlot};
+// `UnitType` is crate-level infrastructure (effect params declare one too);
+// re-exported here because the node graph is where most callers reach it.
+pub use crate::units::UnitType;
 pub use graph::{
     exposed_port_key, Connection, ExposedPortMeta, FindTerminalError, Graph, GraphError, NodeId,
-    NodeInstance, PortDef, PortDir, PortRef, UnitType,
+    NodeInstance, PortDef, PortDir, PortRef,
 };
 pub use layout::NodeLayout;
 pub use registration::NodeRegistration;
