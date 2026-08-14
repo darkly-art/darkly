@@ -33,7 +33,7 @@ pub const PARAMS: &[ParamDef] = &[
     ParamDef::levels("rgb", IDENTITY)
         .with_label("RGB")
         .with_description(
-            "Black point, white point and gamma for all three colour channels together.",
+            "Black point, white point and gamma for all three color channels together.",
         ),
     ParamDef::levels("red", IDENTITY)
         .with_label("Red")

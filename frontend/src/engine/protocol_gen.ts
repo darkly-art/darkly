@@ -161,6 +161,8 @@ export type BrushGraphSetInputReq = { node_id: string, input_name: string, kind:
 
 export type BrushGraphSetNodeCommentReq = { node_id: string, comment: string, };
 
+export type BrushGraphSetPortRangeReq = { node_id: string, port_name: string, display_min: number, display_max: number, };
+
 export type BrushGraphUnexposePortReq = { node_id: string, port_name: string, };
 
 export type BrushInfo = { name: string, category: string, author: string, description: string, tags: Array<string>, 
@@ -461,33 +463,6 @@ export type CanvasDimensionsResp = { width: number, height: number, };
 
 export type CanvasRectResp = { origin_x: number, origin_y: number, width: number, height: number, };
 
-export type ParamInfo = { kind: string, name: string, 
-/**
- * Display label. `None` → the UI title-cases `name`.
- */
-label: string | null, description: string | null, 
-/**
- * How to render this parameter's editor. One closed set, which both
- * `ParamKind` and the settings schema's `WidgetHint` map into:
- * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
- */
-widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
-/**
- * Enum: `["Label1", "Label2", ...]`.
- * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
- */
-options: JsonValue | null, display: ParamDisplay, };
-
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
-export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
-/**
- * The unit suffix alone, for a column header. Empty for unitless values.
- */
-unit: string, };
-
-export type CaptureKind = "camera" | "display" | "stream";
-
 export type CatalogEntry = { type: string, displayName: string, 
 /**
  * Iconify name, or `None` when the variant deliberately declares no icon
@@ -521,6 +496,33 @@ supportsPreview: boolean,
  * How the browser captures this variant's external frames; voids only.
  */
 captureKind: CaptureKind | null, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
+export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
+/**
+ * The unit suffix alone, for a column header. Empty for unitless values.
+ */
+unit: string, };
+
+export type ParamInfo = { kind: string, name: string, 
+/**
+ * Display label. `None` → the UI title-cases `name`.
+ */
+label: string | null, description: string | null, 
+/**
+ * How to render this parameter's editor. One closed set, which both
+ * `ParamKind` and the settings schema's `WidgetHint` map into:
+ * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
+ */
+widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
+/**
+ * Enum: `["Label1", "Label2", ...]`.
+ * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
+ */
+options: JsonValue | null, display: ParamDisplay, };
+
+export type CaptureKind = "camera" | "display" | "stream";
 
 export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
 /**
@@ -577,6 +579,17 @@ export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 
 export type LayerTransformCapabilityReq = { id: number, };
 
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * Whether this modifier participates in transforms with its host.
+ */
+linkedToHost: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
+
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
  * Effective editability — `false` when this node *or any ancestor*
@@ -628,17 +641,6 @@ pipeline: string,
  * uses.
  */
 params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
-
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
-/**
- * Whether this modifier participates in transforms with its host.
- */
-linkedToHost: boolean, 
-/**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -849,6 +851,7 @@ export type RequestKind =
     | 'brush_graph_set_exposed_port_meta'
     | 'brush_graph_set_input'
     | 'brush_graph_set_node_comment'
+    | 'brush_graph_set_port_range'
     | 'brush_graph_unexpose_port'
     | 'brush_graph_validate'
     | 'brush_import'
@@ -1037,6 +1040,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'brush_graph_set_exposed_port_meta',
     'brush_graph_set_input',
     'brush_graph_set_node_comment',
+    'brush_graph_set_port_range',
     'brush_graph_unexpose_port',
     'brush_graph_validate',
     'brush_import',
@@ -1233,6 +1237,7 @@ export interface EngineApi {
     brushGraphSetExposedPortMeta(req: BrushGraphSetExposedPortMetaReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphSetInput(req: BrushGraphSetInputReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphSetNodeComment(req: BrushGraphSetNodeCommentReq): Promise<{ graph: JsonValue } | { error: string }>;
+    brushGraphSetPortRange(req: BrushGraphSetPortRangeReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphUnexposePort(req: BrushGraphUnexposePortReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphValidate(req: BrushGraphJsonReq): Promise<null | { error: string }>;
     brushImport(bytes: Uint8Array): Promise<string>;
@@ -1423,6 +1428,7 @@ export function makeApi(t: Transport): EngineApi {
         brushGraphSetExposedPortMeta: (req) => t.request('brush_graph_set_exposed_port_meta', req),
         brushGraphSetInput: (req) => t.request('brush_graph_set_input', req),
         brushGraphSetNodeComment: (req) => t.request('brush_graph_set_node_comment', req),
+        brushGraphSetPortRange: (req) => t.request('brush_graph_set_port_range', req),
         brushGraphUnexposePort: (req) => t.request('brush_graph_unexpose_port', req),
         brushGraphValidate: (req) => t.request('brush_graph_validate', req),
         brushImport: (bytes) => t.request('brush_import', {}, bytes),

@@ -616,7 +616,7 @@ pub fn flush_dabs<T: ReadMirrorTerminal>(gpu: &mut BrushGpuContext) {
 /// Scratch → layer. `gpu.blend_mode` is ignored — erase semantics aren't
 /// meaningful for these read-back transforms.
 ///
-/// Colour terminals (smudge, blur) hold the finished image in the
+/// Color terminals (smudge, blur) hold the finished image in the
 /// scratch, so commit is a direct blit. A warp terminal's scratch holds a
 /// displacement field instead, so commit is the single resample that
 /// turns it into pixels — sampling the pre-stroke snapshot (or a

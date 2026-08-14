@@ -16,7 +16,7 @@ const PARAMS: &[ParamDef] = &[
         .with_description("Size of the ice crystals."),
     ParamDef::float("chromatic", 0.0, 1.0, 0.1)
         .with_label("Chromatic")
-        .with_description("Colour separation through the ice, like light through a prism."),
+        .with_description("Color separation through the ice, like light through a prism."),
 ];
 
 pub fn register() -> VeilRegistration {

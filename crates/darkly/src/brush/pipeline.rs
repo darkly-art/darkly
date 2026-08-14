@@ -764,7 +764,7 @@ impl BrushPipelines {
     }
 
     /// The canvas-copy BGL + sampler a `Scratch` of `format` must be built
-    /// against. Colour scratches get the filtering pair; float32 warp
+    /// against. Color scratches get the filtering pair; float32 warp
     /// fields get the non-filtering pair, because `Rg32Float` is not
     /// filterable without the optional `float32-filterable` feature.
     /// Callers pass the result straight to `Scratch::new` — this is the

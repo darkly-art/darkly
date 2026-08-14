@@ -35,7 +35,7 @@ const IDENTITY: &[[f32; 2]] = &[[0.0, 0.0], [1.0, 1.0]];
 pub const PARAMS: &[ParamDef] = &[
     ParamDef::curve("rgb", IDENTITY)
         .with_label("RGB")
-        .with_description("Tone curve applied to all three colour channels together."),
+        .with_description("Tone curve applied to all three color channels together."),
     ParamDef::curve("red", IDENTITY)
         .with_label("Red")
         .with_description("Tone curve applied to the red channel alone."),
@@ -50,7 +50,7 @@ pub const PARAMS: &[ParamDef] = &[
         .with_description("Tone curve applied to opacity."),
     ParamDef::curve("hue", IDENTITY)
         .with_label("Hue")
-        .with_description("Remaps hue against itself, shifting colours around the wheel."),
+        .with_description("Remaps hue against itself, shifting colors around the wheel."),
     ParamDef::curve("saturation", IDENTITY)
         .with_label("Saturation")
         .with_description("Remaps saturation, letting muted and vivid areas move apart."),

@@ -470,6 +470,21 @@ export class BrushGraphState {
         );
     }
 
+    /** Override an input port's slider bounds on one node instance.
+     *  `min`/`max` are display-space — hand back the numbers the control
+     *  was rendered with. Rejected by the engine unless ascending. */
+    async setPortRange(nodeId: string, portName: string, min: number, max: number) {
+        if (!app.engine) return;
+        await this.applyResult(
+            await app.engine.api.brushGraphSetPortRange({
+                node_id: nodeId,
+                port_name: portName,
+                display_min: min,
+                display_max: max,
+            }),
+        );
+    }
+
     /** Move a brush-bar entry to a target index in the display order. */
     async reorderExposedPort(key: string, newIndex: number) {
         if (!app.engine) return;

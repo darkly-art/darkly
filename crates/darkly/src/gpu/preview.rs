@@ -269,7 +269,7 @@ impl PreviewBackdrop {
     /// change it. Krita's ratio is twenty bands across a 320 px widget.
     const BANDS: f32 = 16.0;
 
-    /// Colour at normalized position `(u, v)` for a theme running from `bg` to
+    /// Color at normalized position `(u, v)` for a theme running from `bg` to
     /// `fg`. Both stripe tones are held between the poles so a brush that *does*
     /// deposit still contrasts against either band — Krita paints `80,80,80` and
     /// `140,140,140` under a stroke forced to white, and these are the same two

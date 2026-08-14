@@ -9,8 +9,8 @@ const PARAMS: &[ParamDef] = &[
         .with_label("Speed")
         .with_description("How fast the grain reshuffles; zero holds a single still pattern."),
     ParamDef::float("color", 0.0, 1.0, 0.0)
-        .with_label("Colour")
-        .with_description("Blends the grain from monochrome speckle toward coloured noise."),
+        .with_label("Color")
+        .with_description("Blends the grain from monochrome speckle toward colored noise."),
     ParamDef::float("opacity", 0.0, 1.0, 1.0)
         .with_label("Opacity")
         .with_description("How strongly the grain shows over the image."),

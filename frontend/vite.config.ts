@@ -107,6 +107,7 @@ export default defineConfig(({ mode }) => ({
         }),
     ],
     server: {
+        hmr: false, // TEMP: testing Firefox dev freeze — isolate HMR/module-runner transport
         fs: {
             allow: ['..'],
         },

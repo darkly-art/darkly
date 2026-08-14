@@ -39,7 +39,7 @@ pub static PARAMS: &[ParamDef] = &[
         0,
     )
     .with_label("Mode")
-    .with_description("How colour is weighed when collapsing it to grey."),
+    .with_description("How color is weighed when collapsing it to grey."),
     ParamDef::float("red_weight", 0.0, 1.0, 0.299)
         .with_label("Red Weight")
         .with_description("How much the red channel contributes, in Custom Weights mode."),
@@ -51,10 +51,10 @@ pub static PARAMS: &[ParamDef] = &[
         .with_description("How much the blue channel contributes, in Custom Weights mode."),
     ParamDef::float("tint_hue", 0.0, 360.0, 0.0)
         .with_label("Tint Hue")
-        .with_description("Which colour the finished grey is toned toward."),
+        .with_description("Which color the finished grey is toned toward."),
     ParamDef::float("tint_strength", 0.0, 1.0, 0.0)
         .with_label("Tint Strength")
-        .with_description("How strongly the tint colour shows through the grey."),
+        .with_description("How strongly the tint color shows through the grey."),
 ];
 
 /// One preview for both surfaces, beside the schema they share. A `static` for

@@ -64,7 +64,7 @@ pub struct BrushNodeRegistration {
     pub lifecycle: Lifecycle,
     /// Texel format of the stroke scratch this terminal renders into.
     ///
-    /// Colour terminals leave this at [`COLOR_SCRATCH_FORMAT`]. Warp
+    /// Color terminals leave this at [`COLOR_SCRATCH_FORMAT`]. Warp
     /// terminals accumulate a displacement field rather than pixels and
     /// declare a two-channel float format instead — the scratch *is* the
     /// field, so everything that already tracks the scratch (grow, rebase,

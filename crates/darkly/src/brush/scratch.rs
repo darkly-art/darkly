@@ -88,7 +88,7 @@ pub struct Scratch {
     /// Sampler for the write-side bind group.  Nearest filter — no sub-
     /// pixel reads in the consumers (commit blit is integer-aligned).
     write_sampler: wgpu::Sampler,
-    /// Texel format of both sides.  Colour terminals use `Rgba8Unorm`;
+    /// Texel format of both sides.  Color terminals use `Rgba8Unorm`;
     /// warp terminals store a two-channel displacement field instead of
     /// pixels (see [`crate::brush::warp_field`]) and declare their own
     /// format on [`crate::brush::node::BrushNodeRegistration`].

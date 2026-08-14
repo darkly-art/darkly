@@ -1189,6 +1189,67 @@ impl DarklyEngine {
         Ok(self.active_graph_json())
     }
 
+    /// Override an input port's slider bounds on one node instance.
+    ///
+    /// `display_min`/`display_max` arrive in **display space**, the same
+    /// contract [`Self::brush_set_exposed_port`] uses for its value — so the
+    /// caller hands back the numbers it was shown in
+    /// [`ExposedValue::Scalar`]'s `min`/`max` and needs no unit logic of its
+    /// own. Storage is raw port space, matching the brush yaml.
+    ///
+    /// Bounds are UI-only, so nothing recompiles and the stored port value is
+    /// untouched — but the override is authored brush state that survives
+    /// save/load, so this bumps the topology version like the other
+    /// graph-authoring handlers. Both the brush bar and the node editor read
+    /// the instance `PortDef::min`/`max`, so one call re-ranges the control in
+    /// every view.
+    #[handler(returns = graph)]
+    pub fn brush_graph_set_port_range(
+        &mut self,
+        node_id: &str,
+        port_name: &str,
+        display_min: f32,
+        display_max: f32,
+    ) -> Result<String, String> {
+        let nid = NodeId(node_id.to_string());
+        let unit_type = self.exposed_port_unit_type(&nid, port_name);
+        self.tool_session
+            .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE)
+            .graph
+            .set_port_range(
+                &nid,
+                port_name,
+                unit_type.from_display(display_min),
+                unit_type.from_display(display_max),
+            )
+            .map_err(|e| format!("{e}"))?;
+        self.bump_brush_topology_version();
+        Ok(self.active_graph_json())
+    }
+
+    /// The display unit an input port's numbers are expressed in on the
+    /// wire, preferring the registration's declaration over the instance
+    /// copy — the same precedence [`Self::brush_exposed_ports`] applies when
+    /// it converts values out.
+    fn exposed_port_unit_type(&self, node_id: &NodeId, port_name: &str) -> UnitType {
+        let tool = self.tool_session.read();
+        let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
+        let Some(node) = brush.graph.nodes().get(node_id) else {
+            return UnitType::default();
+        };
+        crate::brush::registry()
+            .get(&node.type_id)
+            .and_then(|r| {
+                r.ports
+                    .iter()
+                    .find(|p| p.name == port_name && p.dir == PortDir::Input)
+            })
+            .map(|p| p.unit_type)
+            .unwrap_or_default()
+    }
+
     /// Remove a brush-bar entry. Idempotent (missing entries aren't an
     /// error). Bumps the topology version so the frontend clears the
     /// active preset name.

@@ -526,6 +526,17 @@ pub enum GraphError {
     InvalidIcon {
         icon: String,
     },
+    /// A per-instance slider range was degenerate (`min == max`), inverted
+    /// (`min > max`), or non-finite. Every consumer of `PortDef::min`/`max`
+    /// normalizes with `(v - min) / (max - min)` and clamps with
+    /// `min(max, max(min, v))`, both of which break silently outside an
+    /// ascending finite range — so the invariant is enforced at the setter
+    /// rather than defended against at each reader. The offending values are
+    /// not carried: `GraphError` is `Eq`, and `f32` is not.
+    InvalidRange {
+        node: NodeId,
+        port: String,
+    },
 }
 
 /// Accept only the byte shape Iconify names use (`prefix:name`):
@@ -566,6 +577,13 @@ impl std::fmt::Display for GraphError {
                     f,
                     "icon '{}' contains characters outside [a-zA-Z0-9- ]",
                     icon
+                )
+            }
+            Self::InvalidRange { node, port } => {
+                write!(
+                    f,
+                    "slider range for '{}' on {:?} must be finite and ascending",
+                    port, node
                 )
             }
         }
@@ -979,6 +997,52 @@ impl<W: WireKind> Graph<W> {
         value: f32,
     ) -> Result<(), GraphError> {
         self.set_port_value(id, port_name, InputValue::Scalar(value))
+    }
+
+    /// Override an input port's slider bounds on this node instance,
+    /// narrowing (or widening, or re-centering) the range the registration
+    /// declared. The authored counterpart to [`Self::set_port_value`]: that
+    /// one sets *where the knob sits*, this one sets *how far it travels*.
+    ///
+    /// Both the brush bar and the node editor already read the instance
+    /// `PortDef::min`/`max`, so an override lands in every view at once —
+    /// which is why the range lives here rather than alongside the
+    /// brush-bar-only metadata in [`Graph::exposed_ports`]. A math node
+    /// whose registration declares `0..1` can therefore be given a bipolar
+    /// `-1..1` control by the brush author without a helper node in the
+    /// graph to recenter it.
+    ///
+    /// `min`/`max` are UI bounds only — nothing clamps the authored value to
+    /// them (see [`PortDef::min`]), so an existing out-of-range value
+    /// survives the override untouched until the user next scrubs.
+    pub fn set_port_range(
+        &mut self,
+        id: &NodeId,
+        port_name: &str,
+        min: f32,
+        max: f32,
+    ) -> Result<(), GraphError> {
+        if !min.is_finite() || !max.is_finite() || min >= max {
+            return Err(GraphError::InvalidRange {
+                node: id.clone(),
+                port: port_name.to_string(),
+            });
+        }
+        let node = self
+            .nodes
+            .get_mut(id)
+            .ok_or_else(|| GraphError::NodeNotFound(id.clone()))?;
+        let port = node
+            .ports
+            .iter_mut()
+            .find(|p| p.name == port_name && p.dir == PortDir::Input)
+            .ok_or_else(|| GraphError::PortNotFound {
+                node: id.clone(),
+                port: port_name.to_string(),
+            })?;
+        port.min = min;
+        port.max = max;
+        Ok(())
     }
 
     // Note: brush-bar exposure / label / description / icon overrides
@@ -1615,6 +1679,97 @@ mod tests {
         assert!(matches!(err, GraphError::InvalidIcon { .. }));
         assert_eq!(g.exposed_ports[&key].icon, "fa6-solid:sun");
         assert_eq!(g.exposed_ports[&key].label, "Label");
+    }
+
+    #[test]
+    fn set_port_range_overrides_instance_bounds() {
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node("node", vec![scalar_in("val")]);
+        // `PortDef::input` starts at the 0..1 default.
+        let port = |g: &Graph<TestWireKind>| {
+            g.nodes()[&id]
+                .ports
+                .iter()
+                .find(|p| p.name == "val")
+                .map(|p| (p.min, p.max))
+                .unwrap()
+        };
+        assert_eq!(port(&g), (0.0, 1.0));
+
+        g.set_port_range(&id, "val", -1.0, 1.0).unwrap();
+        assert_eq!(port(&g), (-1.0, 1.0));
+    }
+
+    #[test]
+    fn set_port_range_leaves_the_authored_value_alone() {
+        // Bounds are UI hints, not enforcement — narrowing the range around
+        // an out-of-band value must not silently rewrite it.
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node("node", vec![scalar_in("val")]);
+        g.set_port_default(&id, "val", 0.9).unwrap();
+        g.set_port_range(&id, "val", 0.0, 0.5).unwrap();
+        let port = g.nodes()[&id]
+            .ports
+            .iter()
+            .find(|p| p.name == "val")
+            .unwrap();
+        assert_eq!(port.value.as_f32(), 0.9);
+    }
+
+    #[test]
+    fn set_port_range_rejects_degenerate_and_inverted() {
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node("node", vec![scalar_in("val")]);
+
+        for (min, max) in [
+            (0.5, 0.5),
+            (1.0, 0.0),
+            (f32::NAN, 1.0),
+            (0.0, f32::INFINITY),
+        ] {
+            let err = g.set_port_range(&id, "val", min, max).unwrap_err();
+            assert!(
+                matches!(err, GraphError::InvalidRange { .. }),
+                "({min}, {max}) should be rejected, got {err:?}"
+            );
+        }
+        // Every rejection left the registration bounds intact.
+        let port = g.nodes()[&id]
+            .ports
+            .iter()
+            .find(|p| p.name == "val")
+            .unwrap();
+        assert_eq!((port.min, port.max), (0.0, 1.0));
+    }
+
+    #[test]
+    fn set_port_range_rejects_outputs_and_unknown_ports() {
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node("node", vec![scalar_in("val"), scalar_out("result")]);
+        assert!(matches!(
+            g.set_port_range(&id, "result", 0.0, 2.0).unwrap_err(),
+            GraphError::PortNotFound { .. }
+        ));
+        assert!(matches!(
+            g.set_port_range(&id, "nope", 0.0, 2.0).unwrap_err(),
+            GraphError::PortNotFound { .. }
+        ));
+    }
+
+    #[test]
+    fn port_range_survives_graph_json_round_trip() {
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node("node", vec![scalar_in("val")]);
+        g.set_port_range(&id, "val", -1.0, 1.0).unwrap();
+
+        let json = serde_json::to_string(&g).unwrap();
+        let back: Graph<TestWireKind> = serde_json::from_str(&json).unwrap();
+        let port = back.nodes()[&id]
+            .ports
+            .iter()
+            .find(|p| p.name == "val")
+            .unwrap();
+        assert_eq!((port.min, port.max), (-1.0, 1.0));
     }
 
     #[test]

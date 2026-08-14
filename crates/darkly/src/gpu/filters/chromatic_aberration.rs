@@ -47,8 +47,8 @@ const ABERRATION_ITEM: &[ParamDef] = &[
         .with_label("Scale")
         .with_description("Magnification of this fringe — values below 1 pull it inward."),
     ParamDef::color("color", [1.0, 1.0, 1.0])
-        .with_label("Colour")
-        .with_description("Which colour this fringe contributes."),
+        .with_label("Color")
+        .with_description("Which color this fringe contributes."),
     ParamDef::float("blur", 0.0, 6.0, 0.0)
         .with_label("Blur")
         .with_description("Softens this fringe so it reads as defocus rather than a hard copy.")
@@ -83,7 +83,7 @@ pub const PARAMS: &[ParamDef] = &[ParamDef::list(
     ],
 )
 .with_label("Fringes")
-.with_description("The coloured copies the lens splits the image into.")];
+.with_description("The colored copies the lens splits the image into.")];
 
 /// One preview for both surfaces, beside the schema they share. A `static` so
 /// both registrations hold the same address, which is what makes the sharing

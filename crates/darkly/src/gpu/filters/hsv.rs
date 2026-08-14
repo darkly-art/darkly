@@ -27,21 +27,21 @@ use crate::gpu::preview::{swing, swing_signed, PreviewAnim};
 /// rows; `colorize` is a checkbox that (in the shader) overrides the model.
 pub const PARAMS: &[ParamDef] = &[
     ParamDef::enumeration("model", &["HSV", "HSL", "HSY"], 0)
-        .with_label("Colour Model")
+        .with_label("Color Model")
         .with_description("Which cylindrical model the adjustment works in."),
     ParamDef::float("hue", -180.0, 180.0, 0.0)
         .with_label("Hue")
         .with_description("Rotation applied to every pixel's hue."),
     ParamDef::float("saturation", -100.0, 100.0, 0.0)
         .with_label("Saturation")
-        .with_description("Pushes colours toward grey or toward full intensity."),
+        .with_description("Pushes colors toward grey or toward full intensity."),
     ParamDef::float("value", -100.0, 100.0, 0.0)
         .with_label("Value")
         .with_description("Lightens or darkens without changing hue."),
     ParamDef::boolean("colorize", false)
         .with_label("Colorize")
         .with_description(
-            "Replaces every hue with the chosen one, tinting the layer a single colour.",
+            "Replaces every hue with the chosen one, tinting the layer a single color.",
         ),
 ];
 
