@@ -4,7 +4,7 @@ description: Forbidden Editor for Artists
 template: doc
 ---
 
-**I hate writing documentation, and you probably hate reading it too. So by design, everything is searchable inside the actual app.**
+**I hate writing documentation, and you probably hate reading it too. So by design, everything is searchable inside the app.**
 
 ## `CTRL+F` Global Search
 
@@ -22,12 +22,13 @@ Darkly is **desktop-first** which means it works best with a keyboard. Hotkeys a
 
 ![hotkey-labels](https://github.com/user-attachments/assets/a9ac790e-0457-4fed-9477-7e9161bcc678)
 
-
 ### Hotkey Presets
 
 Almost ***everything has a hotkey.*** The first time you start Darkly, you can choose which hotkey preset you want - Photoshop, GIMP, or Krita. You can change this anytime in settings.
 
 <video src="https://github.com/user-attachments/assets/21cca542-a803-40e0-ac8e-0a6fa09b6e4b" controls playsinline preload="metadata" style="width:100%;height:auto"></video>
+
+Every hotkey is customizable in settings. 
 
 ### Hotkey Cheat Sheet
 
