@@ -12,7 +12,7 @@ use crate::brush::spacing::SpacingConfig;
 use crate::brush::stroke_buffer::StrokeBuffer;
 use crate::brush::stroke_engine::StrokeEngine;
 use crate::coord::CanvasRect;
-use crate::gpu::flood_fill;
+use crate::gpu::layer_readback;
 use crate::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
 use crate::gpu::region_store::UndoRegionEntry;
 use crate::layer::LayerId;
@@ -1416,7 +1416,7 @@ impl DarklyEngine {
                 label: Some("flood-fill-readback"),
             });
         let (request, extent) =
-            flood_fill::request_layer_flood_fill_readback(&self.gpu.device, &mut encoder, &pt);
+            layer_readback::request_layer_readback(&self.gpu.device, &mut encoder, &pt);
         self.gpu.queue.submit([encoder.finish()]);
         self.readbacks.submit(
             request,
@@ -1440,7 +1440,7 @@ impl DarklyEngine {
         seed_canvas: crate::coord::CanvasPoint,
         color: [u8; 4],
         tolerance: u8,
-        extent: flood_fill::LayerFloodFillExtent,
+        extent: layer_readback::LayerReadbackExtent,
         pixels: Vec<u8>,
     ) {
         let fill_mask = extent.flood_fill_to_canvas_mask(&pixels, seed_canvas, tolerance);

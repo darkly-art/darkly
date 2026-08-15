@@ -330,6 +330,23 @@ export function registerActions() {
         },
     });
     actions.register({
+        id: 'alphaToSelection',
+        menuPath: ['Select:36'],
+        // Sibling of `maskToSelection`, for the host rather than its mask.
+        // The engine op is node-kind agnostic — it reads whatever texture the
+        // id resolves to — but only pixel-bearing nodes have one, so the
+        // guard follows the same fact the layer panel uses to decide whether
+        // to draw a thumbnail at all.
+        enabled: () => app.activeNode?.hasThumbnail === true || 'Active layer has no pixels',
+        handler: (ctx) => {
+            const engine = app.engine;
+            const layerId = ctx.layerId ?? app.activeLayerId;
+            if (!engine || layerId == null) return;
+            engine.api.alphaToSelection({ id: layerId });
+            app.requestFrame();
+        },
+    });
+    actions.register({
         id: 'growSelection',
         menuPath: ['Select:50'],
         enabled: () => app.engineState?.hasSelection || 'No active selection',

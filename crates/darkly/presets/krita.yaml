@@ -88,7 +88,13 @@ mouse_clicks:
   # Krita loads a mask/alpha as a selection with Ctrl+click on the thumbnail
   # (NodeDelegate.cpp → SelectOpaqueRole). $mod maps to Ctrl on Linux/Win,
   # Cmd on macOS. alt+click is taken by isolate above.
+  #
+  # Krita routes both thumbnails through the one Select Opaque path
+  # (kis_selection_manager.cc → selectOpaqueOnNode reads the node's
+  # projection opacity). Darkly splits them by which op is cheaper: a mask
+  # is an R8 clone, a layer needs its alpha read back.
   maskToSelection: maskThumb:$mod+click
+  alphaToSelection: layerThumb:$mod+click
 
 settings:
   tools.colorPickerSampleSource: merged

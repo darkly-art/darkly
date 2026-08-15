@@ -179,6 +179,11 @@
         ];
         if (!isMulti) {
             items.push({ label: 'Add mask', disabled: !canAddMask, onclick: menuAddMask });
+            items.push({
+                label: 'Alpha to Selection',
+                disabled: !layer.hasThumbnail,
+                onclick: menuAlphaToSelection,
+            });
         }
         items.push({
             label: mergeLabel,
@@ -265,6 +270,14 @@
     function menuMaskToSelection() {
         if (maskModifier === null) return;
         actions.dispatch('maskToSelection', { maskId: maskModifier.id });
+        onupdate();
+    }
+
+    // Same seam as the mask entry above: the menu row and the layerThumb
+    // $mod+click gesture both land on the action.
+    function menuAlphaToSelection() {
+        if (!layer.hasThumbnail) return;
+        actions.dispatch('alphaToSelection', { layerId: layer.id });
         onupdate();
     }
 

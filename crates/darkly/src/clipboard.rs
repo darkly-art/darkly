@@ -54,28 +54,83 @@ impl Clipboard {
     /// regardless of variant. A flat `ImageData` clip returns its buffer
     /// directly; a rich `Layer` clip decodes its base64 pixels. Used by the
     /// paste-in-place floating path so it works for the `Layer` clip a normal
-    /// copy produces, not just flat image clips. Returns `None` if a rich
-    /// clip's pixels are malformed.
+    /// copy produces, not just flat image clips.
+    ///
+    /// Trimmed to the pasted object — see [`trim_to_content`]. What was copied
+    /// is the region the user swept, but what is *pasted* is the thing inside
+    /// it, and the floating session draws its bounding box from these
+    /// dimensions: untrimmed, a select-all copy hands the transform gizmo a
+    /// canvas-sized box around a small stroke.
+    ///
+    /// Returns `None` if a rich clip's pixels are malformed, or if the clip is
+    /// entirely transparent and so has nothing to paste.
     pub fn paste_pixels(&self) -> Option<(Vec<u8>, u32, u32, i32, i32)> {
-        match self {
-            Clipboard::ImageData(c) => {
-                Some((c.data.clone(), c.width, c.height, c.offset_x, c.offset_y))
-            }
+        let (rgba, width, height, x, y) = match self {
+            Clipboard::ImageData(c) => (c.data.clone(), c.width, c.height, c.offset_x, c.offset_y),
             Clipboard::Layer(l) => {
                 let pixels = l.decode_pixels().ok()?;
                 if pixels.len() != (l.bounds.width * l.bounds.height * 4) as usize {
                     return None;
                 }
-                Some((
+                (
                     pixels,
                     l.bounds.width,
                     l.bounds.height,
                     l.bounds.x,
                     l.bounds.y,
-                ))
+                )
+            }
+        };
+        trim_to_content(&rgba, width, height, x, y)
+    }
+}
+
+/// Shrink a straight-alpha RGBA region to the bounding box of its
+/// non-transparent pixels, moving the origin so the content keeps its position.
+/// `None` when every pixel is transparent.
+pub fn trim_to_content(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    offset_x: i32,
+    offset_y: i32,
+) -> Option<(Vec<u8>, u32, u32, i32, i32)> {
+    let (w, h) = (width as usize, height as usize);
+    if rgba.len() < w * h * 4 {
+        return None;
+    }
+    let (mut min_x, mut min_y) = (w, h);
+    let (mut max_x, mut max_y) = (0usize, 0usize);
+    for y in 0..h {
+        for x in 0..w {
+            if rgba[(y * w + x) * 4 + 3] != 0 {
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
             }
         }
     }
+    if min_x > max_x || min_y > max_y {
+        return None;
+    }
+    if (min_x, min_y, max_x, max_y) == (0, 0, w - 1, h - 1) {
+        return Some((rgba.to_vec(), width, height, offset_x, offset_y));
+    }
+
+    let (tw, th) = (max_x - min_x + 1, max_y - min_y + 1);
+    let mut out = Vec::with_capacity(tw * th * 4);
+    for y in min_y..=max_y {
+        let row = (y * w + min_x) * 4;
+        out.extend_from_slice(&rgba[row..row + tw * 4]);
+    }
+    Some((
+        out,
+        tw as u32,
+        th as u32,
+        offset_x + min_x as i32,
+        offset_y + min_y as i32,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +270,39 @@ impl LayerClipboard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a paste puts down is the object, not the region the user swept to
+    /// copy it — a select-all copy of one small dab must not paste a
+    /// canvas-sized rect, because the floating session takes its bounding box
+    /// from these dimensions.
+    #[test]
+    fn trim_to_content_shrinks_to_opaque_pixels_and_shifts_the_origin() {
+        // 4×4, transparent but for one opaque texel at (2, 1).
+        let mut rgba = vec![0u8; 4 * 4 * 4];
+        let i = (1 * 4 + 2) * 4;
+        rgba[i..i + 4].copy_from_slice(&[10, 20, 30, 255]);
+
+        let (out, w, h, x, y) = trim_to_content(&rgba, 4, 4, 100, 200).expect("has content");
+        assert_eq!((w, h), (1, 1));
+        // Origin moves by the trimmed margin so the pixel keeps its position.
+        assert_eq!((x, y), (102, 201));
+        assert_eq!(out, vec![10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn trim_to_content_keeps_a_full_bleed_clip_intact() {
+        let rgba = vec![255u8; 3 * 2 * 4];
+        let (out, w, h, x, y) = trim_to_content(&rgba, 3, 2, -5, 7).expect("has content");
+        assert_eq!((w, h, x, y), (3, 2, -5, 7));
+        assert_eq!(out.len(), rgba.len());
+    }
+
+    /// Nothing opaque means nothing to paste — the caller treats `None` as "no
+    /// paste happened" rather than floating an empty rect.
+    #[test]
+    fn trim_to_content_rejects_a_fully_transparent_clip() {
+        assert!(trim_to_content(&vec![0u8; 2 * 2 * 4], 2, 2, 0, 0).is_none());
+    }
 
     #[test]
     fn round_trip_rgba() {

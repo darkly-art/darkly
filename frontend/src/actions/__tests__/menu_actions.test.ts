@@ -44,7 +44,7 @@ describe('menu action registrations', () => {
     });
 
     it('puts the selection commands under Select', () => {
-        for (const id of ['selectAll', 'clearSelection', 'invertSelection', 'clearSelectionContents', 'maskToSelection']) {
+        for (const id of ['selectAll', 'clearSelection', 'invertSelection', 'clearSelectionContents', 'maskToSelection', 'alphaToSelection']) {
             const seg = actions.get(id)?.menuPath?.[0];
             expect(parseMenuSegment(seg ?? '').title, id).toBe('Select');
         }
@@ -53,6 +53,20 @@ describe('menu action registrations', () => {
     it('slots maskToSelection into Select right after Invert', () => {
         expect(actions.get('maskToSelection')?.menuPath).toEqual(['Select:35']);
         expect(actions.get('maskToSelection')?.category).toBe('selection');
+    });
+
+    it('slots alphaToSelection into Select right after maskToSelection', () => {
+        expect(actions.get('alphaToSelection')?.menuPath).toEqual(['Select:36']);
+        expect(actions.get('alphaToSelection')?.category).toBe('selection');
+    });
+
+    it('disables alphaToSelection with a reason when the active node has no pixels', () => {
+        // No layer tree in this environment → activeNode is null, so the
+        // action can't know of any pixels to load.
+        const a2s = actions.get('alphaToSelection')!;
+        expect(a2s.enabled?.()).not.toBe(true);
+        expect(actionEnablement(a2s)).toMatchObject({ enabled: false });
+        expect(actionEnablement(a2s).reason).toBe('Active layer has no pixels');
     });
 
     it('disables maskToSelection with a reason when the active layer has no mask', () => {
