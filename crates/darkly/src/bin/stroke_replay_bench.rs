@@ -18,7 +18,7 @@
 //! CLI flags:
 //!
 //! - `--input <path>` (required) — recording file produced by the frontend recorder.
-//! - `--brush <name>` (default `round`) — name from `builtin_brushes::all()`.
+//! - `--brush <name>` (default `ink pen`) — name from `builtin_brushes::all()`.
 //! - `--dab-size <px>` — override the `pen_input.size` base knob for the replay.
 //! - `--canvas <WxH>` — override the engine canvas dims; recorded `(x, y)`
 //!   are scaled by `target / recording.canvas_*` so the stroke fills the
@@ -55,7 +55,7 @@ struct Args {
 fn parse_args() -> Args {
     let mut args = Args {
         input: PathBuf::new(),
-        brush: "round".to_string(),
+        brush: "ink pen".to_string(),
         dab_size_px: None,
         canvas: None,
         output: None,

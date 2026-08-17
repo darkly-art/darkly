@@ -231,7 +231,7 @@ mod tests {
             ("Blur", Some("mdi:blur")),
             ("Smudge", Some("mdi:gesture-swipe")),
             ("Liquify", Some("tabler:ripple")),
-            ("Round", None),
+            ("Ink Pen", None),
             ("Airbrush", None),
             ("Rough Watercolor", None),
         ];

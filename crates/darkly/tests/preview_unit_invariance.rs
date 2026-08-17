@@ -61,17 +61,17 @@ struct Out {
     half_extent_canvas_px: [f32; 2],
 }
 
-/// Render `Round` at a brush size whose canvas-px bbox exceeds the
+/// Render `Ink Pen` at a brush size whose canvas-px bbox exceeds the
 /// 128² test mask's inscribed half-side (64). The exact size value
-/// is pinned so future default-tuning of `Round` doesn't drift the
+/// is pinned so future default-tuning of `Ink Pen` doesn't drift the
 /// assertions.
-fn render_big_round() -> Out {
+fn render_big_disc() -> Out {
     let brush = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Round")
-        .expect("Round brush is registered");
+        .find(|b| b.metadata.name == "Ink Pen")
+        .expect("Ink Pen brush is registered");
     let mut graph = brush.metadata.graph.clone();
-    let _term_id = darkly::brush::find_terminal(&graph).expect("Round has a terminal");
+    let _term_id = darkly::brush::find_terminal(&graph).expect("Ink Pen has a terminal");
     // size 2.0 → effective_radius = 2.0 * 512 * 0.5 = 512 canvas px
     // (extent factor ≥ 1, so bbox_canvas_px is at least 512, far above
     // texture_half = 64).
@@ -161,7 +161,7 @@ fn px(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
 
 #[test]
 fn large_brush_does_not_fill_preview_mask_with_square() {
-    let out = render_big_round();
+    let out = render_big_disc();
 
     // The overlay consumer-facing bbox stays in canvas px. With size
     // 2.0 → radius 512 and extent factor ≥ 1, the published bbox
@@ -200,7 +200,7 @@ fn large_brush_does_not_fill_preview_mask_with_square() {
         "centre must be inside the dab and have non-zero alpha; got {centre:?}",
     );
 
-    // ── Radial symmetry. Round has no angular dependence; four
+    // ── Radial symmetry. The circle tip has no angular dependence; four
     // symmetric points well inside the bbox should agree closely.
     // Pick offset 32 from centre (half the bbox half-extent) — deep
     // in the falloff, so any rotational asymmetry would read clearly
@@ -218,7 +218,7 @@ fn large_brush_does_not_fill_preview_mask_with_square() {
         .unwrap();
     assert!(
         max_dev <= 3,
-        "axial samples at radius {r} should be ~equal (Round is rotationally invariant); \
+        "axial samples at radius {r} should be ~equal (the circle tip is rotationally invariant); \
          N={north:?} S={south:?} E={east:?} W={west:?}",
     );
 }

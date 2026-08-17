@@ -34,7 +34,7 @@ fn expected_base(name: &str) -> f32 {
 #[test]
 fn builtins_own_base_size_on_brush_settings_and_preserve_its_value() {
     let brushes = builtin_brushes::all();
-    assert_eq!(brushes.len(), 14, "expected all 14 builtins");
+    assert_eq!(brushes.len(), 13, "expected all 13 builtins");
 
     for brush in brushes {
         let name = brush.metadata.name.clone();

@@ -11,7 +11,7 @@ Originating plan: `~/.claude/plans/paint-compute-perf-fix.md`.
 
 ## Problem
 
-`paint_compute` drives every Basic brush (Round, Airbrush, Ink Pen).
+`paint_compute` drives every Basic brush (Airbrush, Ink Pen).
 Stabilization spreads ~30+ dabs across each pen event. Each dab is
 small individually but they accumulate fast — the engine has to land
 all of them in the scratch before the next event's commit, on every

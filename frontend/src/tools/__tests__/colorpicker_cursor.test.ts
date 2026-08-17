@@ -73,7 +73,7 @@ describe('clone set-source vs. color picker on the same modifier', () => {
     });
 
     it('under a normal brush, ctrl resolves to sampleColor — the picker engages', () => {
-        fakeBrushGraph.activeBrush = 'round';
+        fakeBrushGraph.activeBrush = 'Ink Pen';
         const resolved = dragModifierActions('canvas', 'ctrl');
         expect(resolved.has('sampleColor')).toBe(true);
         expect(resolved.has('setCloneSource')).toBe(false);
@@ -81,7 +81,7 @@ describe('clone set-source vs. color picker on the same modifier', () => {
     });
 
     it('a bare hover (no modifier) arms neither cursor', () => {
-        fakeBrushGraph.activeBrush = 'round';
+        fakeBrushGraph.activeBrush = 'Ink Pen';
         const resolved = dragModifierActions('canvas', '');
         expect(resolved.size).toBe(0);
         expect(pickerEngages(resolved, true, false)).toBe(false);

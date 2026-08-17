@@ -420,10 +420,10 @@ fn brush_active_capabilities_reflect_loaded_brush() {
     assert_eq!(caps.preview_fallback_icon, Some("mdi:gesture-swipe"));
 
     engine
-        .brush_load("Round")
-        .expect("Round is a built-in brush");
+        .brush_load("Ink Pen")
+        .expect("Ink Pen is a built-in brush");
     let caps = engine.brush_active_capabilities();
-    assert!(caps.supports_erase, "Round honours erase");
+    assert!(caps.supports_erase, "Ink Pen honours erase");
     assert_eq!(
         caps.preview_fallback_icon, None,
         "content-free brushes keep the baked previews"

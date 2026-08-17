@@ -214,7 +214,7 @@ fn paint_terminal_clears_scratch_to_transparent() {
     // lifecycle for `Lifecycle::ClearScratchToTransparent` must wipe it
     // back to (0, 0, 0, 0).
     let rgba = run_begin_stroke(
-        &builtin_graph("Round"),
+        &builtin_graph("Ink Pen"),
         Setup::ScratchPrefilled(wgpu::Color {
             r: 1.0,
             g: 0.0,

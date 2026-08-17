@@ -316,11 +316,11 @@ fn every_previewable_entry_has_a_renderer() {
     assert!(!manifest.assets.is_empty());
 }
 
-/// Seven filters, ten veils, one void, sixteen blend modes and fourteen brushes
-/// — counted **per catalog**. A bare total of forty-eight would not notice a
+/// Seven filters, ten veils, one void, sixteen blend modes and thirteen brushes
+/// — counted **per catalog**. A bare total of forty-seven would not notice a
 /// whole catalog dropping out and another gaining entries.
 #[test]
-fn all_forty_eight_assets_land() {
+fn all_forty_seven_assets_land() {
     let (_, manifest) = assets();
     let counts: BTreeMap<&str, usize> = manifest
         .assets
@@ -334,10 +334,10 @@ fn all_forty_eight_assets_land() {
             ("veils", 10),
             ("voids", 1),
             ("blendModes", 16),
-            ("brushes", 14),
+            ("brushes", 13),
         ])
     );
-    assert_eq!(counts.values().sum::<usize>(), 48);
+    assert_eq!(counts.values().sum::<usize>(), 47);
 }
 
 /// The set of directories **found by walking the output** equals the previewable
@@ -409,7 +409,7 @@ fn every_frame_is_the_size_its_entry_declares() {
             checked += 1;
         }
     }
-    assert_eq!(checked, 48);
+    assert_eq!(checked, 47);
 }
 
 /// For every asset the PNG count equals the frame count the declaration says
@@ -539,9 +539,9 @@ fn every_asset_has_real_motion() {
 
 /// Rendering an entry twice through the same `Gpu` produces the same pixels.
 ///
-/// Determinism across a reused device is what lets forty-eight assets share one
+/// Determinism across a reused device is what lets forty-seven assets share one
 /// `Gpu`, and it is where a renderer that left state behind shows up. One entry
-/// per catalog rather than all forty-eight, because the cost is two full
+/// per catalog rather than all forty-seven, because the cost is two full
 /// sequences each and the failure mode is per-renderer, not per-entry — except
 /// for brushes, which get
 /// [`every_brush_renders_the_same_bytes_twice`] over the whole catalog.
@@ -553,7 +553,7 @@ fn rendering_an_entry_twice_is_deterministic() {
         ("veils", "frozen"),
         ("voids", "noise"),
         ("blendModes", "multiply"),
-        ("brushes", "round"),
+        ("brushes", "ink_pen"),
     ] {
         let first = render_one(&mut gpu, catalog, type_id);
         let again = render_one(&mut gpu, catalog, type_id);
@@ -722,12 +722,12 @@ fn parse_args_rejects_a_missing_out() {
     assert!(docs_render::parse_args(["--wat".to_string()].into_iter()).is_err());
 }
 
-/// **Every** brush renders the same bytes twice — all fourteen, not a sample.
+/// **Every** brush renders the same bytes twice — all thirteen, not a sample.
 ///
 /// Unlike the other catalogs the failure mode here *is* per-entry: `rough_ink`,
 /// `rough_watercolor` and `smooth_watercolor` contain `random`/`noise` nodes and
 /// are the only entries in the artifact that can fail this, so a test naming one
-/// of the other eleven would go green while the property was false for three.
+/// of the other ten would go green while the property was false for three.
 /// A documentation artifact that rewrites bytes with no change of meaning churns
 /// on every rebuild, which is what the preview stroke seed being a constant
 /// rather than a clock read prevents.
@@ -746,7 +746,7 @@ fn every_brush_renders_the_same_bytes_twice() {
         );
         checked += 1;
     }
-    assert_eq!(checked, 14, "the shipped brush set");
+    assert_eq!(checked, 13, "the shipped brush set");
 }
 
 /// Every brush asset is one frame, and that frame shows a stroke.
@@ -758,7 +758,7 @@ fn every_brush_renders_the_same_bytes_twice() {
 fn every_brush_asset_shows_a_stroke() {
     let (dir, manifest) = assets();
     let entries = &manifest.assets[darkly::brush::builtin_brushes::CATALOG_ID];
-    assert_eq!(entries.len(), 14);
+    assert_eq!(entries.len(), 13);
 
     for (type_id, asset) in entries {
         assert_eq!(asset.frames, 1, "`{type_id}` is a still");

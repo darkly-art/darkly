@@ -1,4 +1,4 @@
-//! Smoke tests for the Round / Airbrush / Ink Pen builtins. Each
+//! Smoke tests for the Airbrush / Ink Pen builtins. Each
 //! test loads the actual builtin graph (no test-only rewiring),
 //! renders one dab, and asserts the deposit lands inside its
 //! declared bbox.
@@ -177,23 +177,8 @@ fn count_deposited(rgba: &[u8]) -> usize {
 }
 
 #[test]
-fn round_deposits_at_center() {
-    let rgba = render_single_dab("Round", 0.15, [1.0, 0.0, 0.0, 1.0]);
-    let center = center_rgba(&rgba);
-    assert!(
-        center[0] > 150 && center[1] < 60 && center[2] < 60,
-        "Round center should be ~red, got {center:?}"
-    );
-    assert!(
-        count_deposited(&rgba) > 500,
-        "Round should deposit a substantial disc, got {} pixels",
-        count_deposited(&rgba),
-    );
-}
-
-#[test]
-fn airbrush_deposits_softer_than_round() {
-    // Airbrush has softness=1.0; Round has 0.5. Centre coverage should
+fn airbrush_deposits_softer_than_ink_pen() {
+    // Airbrush has softness=1.0; Ink Pen has 0.1. Centre coverage should
     // still be solid (pressure→opacity is 1.0), but the alpha falloff
     // at the rim is gentler. Smoke-test centre only here — the softer
     // edge is hard to assert quantitatively without a per-pixel
@@ -241,15 +226,18 @@ fn airbrush_opacity_tracks_pressure() {
 }
 
 #[test]
-fn ink_pen_deposits_with_pressure_curve() {
-    // Ink Pen uses a front-loaded curve so pressure=1.0 reaches full
-    // size — same end deposit as Round at full pressure. Curve only
-    // shapes the response at lower pressures (not exercised here).
+fn ink_pen_deposits_at_center() {
+    // Pressure drives `paint.size` directly, so pressure=1.0 renders the
+    // full-size crisp disc at the canvas centre.
     let rgba = render_single_dab("Ink Pen", 0.15, [0.0, 0.0, 1.0, 1.0]);
     let center = center_rgba(&rgba);
     assert!(
         center[2] > 150 && center[0] < 60 && center[1] < 60,
         "Ink Pen center should be ~blue, got {center:?}"
     );
-    assert!(count_deposited(&rgba) > 500);
+    assert!(
+        count_deposited(&rgba) > 500,
+        "Ink Pen should deposit a substantial disc, got {} pixels",
+        count_deposited(&rgba),
+    );
 }
