@@ -133,6 +133,45 @@ pub fn register() -> BrushNodeRegistration {
     }
 }
 
+/// Support of the rounded, squeezed silhouette, in units of the dab radius —
+/// the largest distance from the dab centre at which [`compile_wgsl`] can
+/// produce non-zero coverage.
+///
+/// `a` is the squeeze semi-axis (`1 − 0.9·squeeze`), `rounding` the corner
+/// radius `ρ`, `n` the side count, and `beta` the squeeze angle — or `None`
+/// when the axis is not known at compile time, which yields the
+/// orientation-agnostic worst case of a vertex on the stretched axis.
+///
+/// Shared by [`PolygonEvaluator::extent`] and the feature test that asserts
+/// nothing lies outside the bound, so the budgeted extent and the silhouette
+/// it bounds cannot drift apart.
+///
+/// [`compile_wgsl`]: PolygonEvaluator::compile_wgsl
+pub fn silhouette_support(a: f32, rounding: f32, n: f32, beta: Option<f32>) -> f32 {
+    let a = a.max(0.01);
+    let rounding = rounding.clamp(0.0, 1.0);
+    // The body builds the polygon at circumradius `1 − ρ` and then dilates the
+    // distance field by `ρ`, so those two are the whole reach.
+    let cr = 1.0 - rounding;
+    let radial = match beta {
+        None => 1.0 / a,
+        Some(beta) => {
+            let n = n.round().max(3.0);
+            let (sb, cb) = beta.sin_cos();
+            (0..n as u32).fold(0.0_f32, |acc, i| {
+                // Vertex i's base direction, matching the emitted body's
+                // `vec2(sin(ak), cos(ak))`, carried into the squeeze frame by
+                // `R(−β)` and scaled by `diag(a, 1/a)`.
+                let (s, c) = (std::f32::consts::TAU * i as f32 / n).sin_cos();
+                let wx = s * cb + c * sb;
+                let wy = c * cb - s * sb;
+                acc.max(((a * wx).powi(2) + (wy / a).powi(2)).sqrt())
+            })
+        }
+    };
+    cr * radial + rounding
+}
+
 pub struct PolygonEvaluator;
 
 impl BrushNodeEvaluator for PolygonEvaluator {
@@ -256,15 +295,43 @@ impl BrushNodeEvaluator for PolygonEvaluator {
         Ok(wgsl)
     }
 
-    /// The polygon's circumradius is a constant `1.0` (vertices on the unit
-    /// circle; rounding stays within that circumradius), stretched by the
-    /// worst-case anisotropy the `squeeze` knob can deliver — the tip grows by
-    /// `1/a` along the stretched axis, where `a = 1 − 0.9·squeeze` is the
-    /// semi-axis (matching the emitted body).
+    /// Support of the silhouette the emitted body actually paints, in units of
+    /// the dab radius.
+    ///
+    /// `compile_wgsl` builds the polygon at circumradius `cr = 1 − ρ`, maps its
+    /// vertices through `T⁻¹` (semi-axes `a` and `1/a`), and then dilates the
+    /// result by the rounding radius `ρ` — `sd − ρ` is an *isotropic* offset
+    /// applied after the anisotropic map. So the reach is
+    ///
+    /// ```text
+    /// cr · maxᵢ ‖ diag(a, 1/a) · R(−β) · v̂ᵢ ‖ + ρ
+    /// ```
+    ///
+    /// Bounding that with the ellipse's semi-major `1/a` is correct but loose:
+    /// it assumes `ρ = 0` *and* that some vertex lands on the stretched axis.
+    /// Looseness is not free here — the fragment stage's only early-out is a
+    /// circular discard at this radius, so every pixel inside the bound is
+    /// fully shaded (SDF loop included) before its coverage is evaluated.
+    ///
+    /// Only each mapped vertex's *magnitude* matters, and `T⁻¹`'s outer
+    /// `R(β − φ)` is a rotation, which preserves magnitude. Per-dab spin —
+    /// `rotation_input` (Sponge wires pen direction into it) and
+    /// `view_rotation` — therefore cannot affect this bound, which is what
+    /// makes evaluating it once at compile time sound.
     fn extent(&self, ctx: &ExtentCtx) -> ExtentContribution {
         let squeeze_max = ctx.port_max_value("squeeze").clamp(0.0, 1.0);
-        let a_min = (1.0 - 0.9 * squeeze_max).max(0.01);
-        let aniso_max = (1.0 / a_min).max(1.0);
-        ExtentContribution::Multiply(aniso_max)
+        let a = 1.0 - 0.9 * squeeze_max;
+        // `β` and `n` decide which vertices sit where relative to the stretched
+        // axis. A wired input's value is unknown here, so drop to the
+        // orientation-agnostic worst case rather than guessing an axis.
+        let axis_known =
+            !ctx.wired_inputs.contains("squeeze_angle") && !ctx.wired_inputs.contains("points");
+        let beta = axis_known.then(|| ctx.port_max_value("squeeze_angle"));
+        ExtentContribution::Multiply(silhouette_support(
+            a,
+            ctx.port_max_value("rounding"),
+            ctx.port_max_value("points"),
+            beta,
+        ))
     }
 }

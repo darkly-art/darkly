@@ -1193,16 +1193,23 @@ fn polygon_rounded_rectangle_stays_convex() {
 }
 
 /// Feature invariant: for every squeeze / angle / rounding, nothing beyond the
-/// tip's screen-space footprint bound (`1/a`, matching `extent()`) is inside —
-/// the rounding never grows the tip past its budgeted extent.
+/// tip's screen-space footprint bound is inside — the rounding never grows the
+/// tip past its budgeted extent.
+///
+/// The bound comes from `silhouette_support`, the same function `extent()`
+/// budgets with, so this asserts the real invariant rather than a copy of the
+/// formula that can go stale. (It previously hardcoded `1/a` while claiming to
+/// match `extent()`; that stopped being the budgeted value once the bound
+/// accounted for the rounding inset and vertex placement.)
 #[test]
 fn polygon_within_extent_bound() {
+    use darkly::brush::nodes::polygon::silhouette_support;
     for &n in &[3.0_f32, 4.0, 5.0, 6.0] {
         for &a in &[0.2_f32, 0.5, 1.0] {
             for &round in &[0.0_f32, 0.5, 1.0] {
                 for &phi in &[0.0_f32, 0.7] {
                     for &beta in &[0.0_f32, 0.9] {
-                        let bound = 1.0 / a;
+                        let bound = silhouette_support(a, round, n, Some(beta));
                         for i in 0..96 {
                             let ang = (i as f32) * std::f32::consts::TAU / 96.0;
                             // Just outside the footprint bound (+2%).
@@ -1632,4 +1639,95 @@ fn image_dab_tip_needs_no_shape_node() {
     }
     naga_validate(&compiled.stroke_wgsl, "image dab-tip stroke");
     naga_validate(&compiled.cursor_preview_wgsl, "image dab-tip preview");
+}
+
+/// `polygon`'s dab bound must be the support of the silhouette it actually
+/// paints, not the enclosing circle of the squeeze ellipse.
+///
+/// The emitted body builds the n-gon at circumradius `cr = 1 − ρ`, maps its
+/// vertices through `T⁻¹` (semi-axes `a` and `1/a`), then dilates by `ρ` —
+/// an *isotropic* offset applied after the anisotropic map. So the reach is
+/// `cr · maxᵢ‖diag(a, 1/a)·R(−β)·v̂ᵢ‖ + ρ`.
+///
+/// Regression: the bound was a flat `1/a`, which ignores both the rounding
+/// inset and where the vertices sit relative to the squeeze axis. At the
+/// settings below (Sponge's shipped tip) that reads 1.818 instead of 1.175 —
+/// over-covering by 1.55× in radius, 2.4× in area. The fragment stage's only
+/// early-out is a circular discard at this radius, so every pixel of the
+/// excess is fully shaded before being thrown away.
+#[test]
+fn polygon_extent_is_the_rounded_silhouette_support() {
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let paint_color = graph.add_node("paint_color", reg.get("paint_color").unwrap().ports.clone());
+    let poly = graph.add_node("polygon", reg.get("polygon").unwrap().ports.clone());
+    let stamp = graph.add_node("stamp", reg.get("stamp").unwrap().ports.clone());
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
+    // Sponge's shipped tip settings, as literals so the compile-time branch
+    // (rather than the wired worst-case fallback) is the one under test.
+    graph
+        .set_port_value(&poly, "points", InputValue::Int(4))
+        .unwrap();
+    graph.set_port_default(&poly, "rounding", 0.5).unwrap();
+    graph.set_port_default(&poly, "squeeze", 0.5).unwrap();
+    graph
+        .set_port_default(&poly, "squeeze_angle", -0.78)
+        .unwrap();
+    wire(
+        &mut graph,
+        &[
+            (poly.clone(), "mask", stamp.clone(), "tip"),
+            (paint_color.clone(), "color", stamp.clone(), "color"),
+            (stamp.clone(), "dab", term.clone(), "rgba"),
+            (pen.clone(), "position", term.clone(), "position"),
+        ],
+    );
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
+    // a = 1 − 0.9·0.5 = 0.55, cr = ρ = 0.5. The vertex at base angle 0 maps to
+    // magnitude 1.3492, so the support is 0.5·1.3492 + 0.5.
+    assert!(
+        (compiled.brush_extent_factor - 1.1746).abs() < 1e-3,
+        "expected the rounded-silhouette support 1.1746, got {}",
+        compiled.brush_extent_factor,
+    );
+}
+
+/// When the squeeze *axis* is wired its value is unknown at compile time, so
+/// the bound must fall back to the orientation-agnostic worst case — a vertex
+/// landing on the stretched axis — rather than guessing an axis.
+#[test]
+fn polygon_extent_falls_back_when_squeeze_axis_is_wired() {
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let paint_color = graph.add_node("paint_color", reg.get("paint_color").unwrap().ports.clone());
+    let rand_angle = graph.add_node("random", reg.get("random").unwrap().ports.clone());
+    let poly = graph.add_node("polygon", reg.get("polygon").unwrap().ports.clone());
+    let stamp = graph.add_node("stamp", reg.get("stamp").unwrap().ports.clone());
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
+    graph
+        .set_port_value(&poly, "points", InputValue::Int(4))
+        .unwrap();
+    graph.set_port_default(&poly, "rounding", 0.5).unwrap();
+    graph.set_port_default(&poly, "squeeze", 0.5).unwrap();
+    wire(
+        &mut graph,
+        &[
+            (rand_angle.clone(), "value", poly.clone(), "squeeze_angle"),
+            (poly.clone(), "mask", stamp.clone(), "tip"),
+            (paint_color.clone(), "color", stamp.clone(), "color"),
+            (stamp.clone(), "dab", term.clone(), "rgba"),
+            (pen.clone(), "position", term.clone(), "position"),
+        ],
+    );
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
+    // cr/a + ρ = 0.5/0.55 + 0.5.
+    assert!(
+        (compiled.brush_extent_factor - 1.4091).abs() < 1e-3,
+        "wired squeeze_angle must fall back to cr/a + ρ = 1.4091, got {}",
+        compiled.brush_extent_factor,
+    );
 }
