@@ -13,9 +13,12 @@
 use crate::catalog::catalogs;
 use crate::docs_md::{FragmentCtx, FragmentError, FragmentRegistration, STILLS_DIR};
 
-/// Rendered width of a still in the table, in CSS pixels. The assets are 256 px
-/// squares; 120 keeps ten rows readable without turning the page into a gallery.
-const STILL_WIDTH: u32 = 120;
+/// Rendered width of a still in the table, in CSS pixels.
+///
+/// The assets are [`PREVIEW_MAX_DIM`](crate::gpu::preview::PREVIEW_MAX_DIM)
+/// squares — 256 — which is the ceiling worth asking for: past it a browser is
+/// upscaling what the renderer wrote.
+const STILL_WIDTH: u32 = 200;
 
 pub fn register() -> FragmentRegistration {
     FragmentRegistration {
