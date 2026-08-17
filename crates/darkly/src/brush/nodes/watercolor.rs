@@ -136,11 +136,10 @@ struct PickupUniforms {
     /// (half-extent in canvas-pixel terms is
     /// `pickup_size / dab.inv_radius_target_px`, valid in stroke mode
     /// where target px ≡ canvas px). Stroke-constant — see the
-    /// `pickup_size` port on `watercolor`. Sampling the full
-    /// bbox produced visibly too-large pickup neighborhoods — the bbox is
-    /// shape-extent-inflated, ~1.4× the visible disc for Rough Watercolor
-    /// — so the default sits at half the nominal radius, which keeps the
-    /// colour a dab picks up local to where the brush actually is.
+    /// `pickup_size` port on `watercolor`. It is measured against the
+    /// nominal radius rather than the shape bbox because the bbox is
+    /// extent-inflated (~1.4× the visible disc for Rough Watercolor),
+    /// which sampled visibly wider than where the brush is marking.
     pickup_size: f32,
     _pad: f32,
 }
@@ -648,7 +647,7 @@ fn fs_main(in: VertexOutput) -> PickupOut {
     // (not the bbox-inflated extent). The visible "smudge influence"
     // should track where the brush is actually marking, not the
     // worst-case shape-bbox footprint. `pickup_size` is the brush
-    // property scrub — default ≈ 0.33, exposed on the terminal.
+    // property scrub, exposed on the terminal.
     //
     // STROKE-ONLY: this shader is dispatched only from the stroke
     // pipeline (it samples `t_pre_stroke`, which is unbound at preview
@@ -794,6 +793,16 @@ pub fn register() -> BrushNodeRegistration {
                     .with_unit(UnitType::Percent)
                     .with_icon("fa6-solid:circle")
                     .exposed()
+                    // A preview is one pass, and one pass is all `deposit`
+                    // promises — the mark it leaves peaks at `deposit *
+                    // wetness`, which at the shipped values is 17% of the
+                    // pigment and reads as an empty tile. Watercolor's
+                    // identity is what dwelling builds, and a still frame
+                    // cannot dwell; pinning the rate is how a single pass
+                    // states in one stroke what the brush arrives at over
+                    // several. Measured: the stroke peaks at 123/255 here,
+                    // against 36 at the shipped default.
+                    .with_preview_value(0.8)
                     .with_description(
                         "Fraction of the remaining distance to the brush color that one pass of \
                          the brush closes. At 25%, one pass over white paper leaves a quarter of \
@@ -812,7 +821,7 @@ pub fn register() -> BrushNodeRegistration {
                          passes to read as solid.",
                     ),
                 PortDef::input("pickup_size", BrushWireType::Scalar)
-                    .with_range(0.0, 2.0, 0.5)
+                    .with_range(0.0, 2.0, 0.8)
                     .with_natural_range(0.0, 2.0)
                     .with_label("Pickup Size")
                     .with_unit(UnitType::Percent)
