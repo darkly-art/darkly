@@ -800,7 +800,7 @@ pub fn register() -> BrushNodeRegistration {
                     // identity is what dwelling builds, and a still frame
                     // cannot dwell; pinning the rate is how a single pass
                     // states in one stroke what the brush arrives at over
-                    // several. Measured: the stroke peaks at 123/255 here,
+                    // several. Measured: the stroke peaks at 142/255 here,
                     // against 36 at the shipped default.
                     .with_preview_value(0.8)
                     .with_description(
