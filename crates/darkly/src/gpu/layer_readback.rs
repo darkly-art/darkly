@@ -275,7 +275,7 @@ mod tests {
         ext.offset_x = 40;
         ext.offset_y = 40;
 
-        let mask = ext.opacity_to_canvas_mask(&vec![255u8; 2 * 2 * 4]);
+        let mask = ext.opacity_to_canvas_mask(&[255u8; 2 * 2 * 4]);
         assert!(mask.iter().all(|&m| m == 0));
         assert_eq!(mask.len(), 6 * 6);
     }

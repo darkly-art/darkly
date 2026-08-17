@@ -279,7 +279,8 @@ mod tests {
     fn trim_to_content_shrinks_to_opaque_pixels_and_shifts_the_origin() {
         // 4×4, transparent but for one opaque texel at (2, 1).
         let mut rgba = vec![0u8; 4 * 4 * 4];
-        let i = (1 * 4 + 2) * 4;
+        let texel = |x: usize, y: usize| (y * 4 + x) * 4;
+        let i = texel(2, 1);
         rgba[i..i + 4].copy_from_slice(&[10, 20, 30, 255]);
 
         let (out, w, h, x, y) = trim_to_content(&rgba, 4, 4, 100, 200).expect("has content");
@@ -301,7 +302,7 @@ mod tests {
     /// paste happened" rather than floating an empty rect.
     #[test]
     fn trim_to_content_rejects_a_fully_transparent_clip() {
-        assert!(trim_to_content(&vec![0u8; 2 * 2 * 4], 2, 2, 0, 0).is_none());
+        assert!(trim_to_content(&[0u8; 2 * 2 * 4], 2, 2, 0, 0).is_none());
     }
 
     #[test]
