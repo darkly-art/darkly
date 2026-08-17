@@ -3425,6 +3425,105 @@ fn layer_node_tree_admits_only_layer_and_group_variants() {
 // `clone_filter_pixels(src, dst)` which is kind-uniform.
 // ============================================================================
 
+/// REGRESSION: `$mod`+clicking a layer thumbnail loads the layer's opacity as
+/// the selection. The gesture did nothing at all — the binding was unbound and
+/// no engine op read a layer's alpha into the selection (`mask_to_selection`
+/// only clones one R8 filter into another, which an RGBA raster layer is not).
+///
+/// The layer here sits at a canvas offset, so this also pins the frame
+/// translation: the selection must land where the opaque pixels *project* onto
+/// the canvas, not at the texture's own coordinates.
+#[test]
+fn engine_alpha_to_selection_selects_opaque_pixels() {
+    let (cw, ch) = (64u32, 64u32);
+    let mut engine = test_engine(cw, ch);
+
+    // A 96×96 image pasted at canvas (-32, -32) — transparent except for an
+    // opaque red 32×32 block at texture (48..80, 48..80), which projects onto
+    // canvas (16..48, 16..48).
+    let (pw, ph) = (96u32, 96u32);
+    let mut rgba = vec![0u8; (pw * ph * 4) as usize];
+    for ty in 48..80u32 {
+        for tx in 48..80u32 {
+            let i = ((ty * pw + tx) * 4) as usize;
+            rgba[i] = 255;
+            rgba[i + 3] = 255;
+        }
+    }
+    let pasted = engine.paste_image(pw, ph, &rgba, -32, -32, None);
+
+    assert!(
+        !engine.has_selection(),
+        "test setup: nothing selected before the gesture"
+    );
+
+    engine.alpha_to_selection(pasted);
+    engine.test_flush_readbacks();
+
+    assert!(
+        engine.has_selection(),
+        "alpha_to_selection must activate the selection"
+    );
+    let cache = engine
+        .test_selection_cpu_cache()
+        .expect("alpha_to_selection must populate the selection cpu cache");
+
+    let at = |x: u32, y: u32| cache[(y * cw + x) as usize];
+    assert_eq!(at(32, 32), 255, "centre of the opaque block is selected");
+    assert_eq!(at(16, 16), 255, "top-left corner of the block is selected");
+    assert_eq!(
+        at(47, 47),
+        255,
+        "bottom-right corner of the block is selected"
+    );
+    assert_eq!(at(15, 15), 0, "transparent pixel outside the block is not");
+    assert_eq!(at(48, 48), 0, "one past the block's far edge is not");
+    assert_eq!(at(0, 0), 0, "the canvas corner is not");
+}
+
+/// Alpha-to-selection is node-kind agnostic: pointed at a mask filter it loads
+/// the mask's coverage, matching `mask_to_selection`'s result. Krita drives
+/// both from one gesture (`NodeDelegate.cpp` → `SelectOpaqueRole` on any node),
+/// and so must we.
+#[test]
+fn engine_alpha_to_selection_on_a_mask_matches_mask_to_selection() {
+    use darkly::document::SelectionMode;
+
+    let (cw, ch) = (64u32, 64u32);
+    let mut engine = test_engine(cw, ch);
+    let layer_id = engine.add_raster_layer(None);
+
+    // Seed a mask from a rectangular selection, then clear the selection.
+    engine.select_rect(4.0, 4.0, 20.0, 16.0, SelectionMode::Replace, false, 0.0);
+    engine.add_mask(layer_id);
+    let mask_id = engine.host_mask_id(layer_id).expect("mask attached");
+    engine.clear_selection();
+    engine.test_flush_readbacks();
+
+    engine.mask_to_selection(mask_id);
+    engine.test_flush_readbacks();
+    let via_mask_op = engine
+        .test_selection_cpu_cache()
+        .expect("mask_to_selection populates the cache")
+        .to_vec();
+
+    engine.clear_selection();
+    engine.test_flush_readbacks();
+
+    engine.alpha_to_selection(mask_id);
+    engine.test_flush_readbacks();
+    let via_alpha_op = engine
+        .test_selection_cpu_cache()
+        .expect("alpha_to_selection populates the cache")
+        .to_vec();
+
+    assert_eq!(
+        via_alpha_op, via_mask_op,
+        "an R8 node's coverage IS its opacity — both ops must land the same \
+         selection bytes"
+    );
+}
+
 /// `selection_to_mask` then `mask_to_selection` must round-trip the selection
 /// pixels byte-identically. This exercises the §4a unification: both sides
 /// of the bridge go through the single `clone_filter_pixels` helper, so a

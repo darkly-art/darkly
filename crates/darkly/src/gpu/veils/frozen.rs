@@ -8,7 +8,7 @@ use std::sync::Arc;
 const FROZEN_NORMAL_BYTES: &[u8] = include_bytes!("../../../resources/veils/frozen.jpg");
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::float("strength", 0.0, 0.2, 0.04)
+    ParamDef::float("strength", 0.0, 0.2, 0.02)
         .with_label("Strength")
         .with_description("How far the frosted surface displaces what is behind it."),
     ParamDef::float("scale", 0.1, 5.0, 1.0)
@@ -32,7 +32,7 @@ pub fn register() -> VeilRegistration {
         from_params: |params, shared| {
             let strength = match params.first() {
                 Some(ParamValue::Float(v)) => *v,
-                _ => 0.04,
+                _ => 0.02,
             };
             let scale = match params.get(1) {
                 Some(ParamValue::Float(v)) => *v,
@@ -137,7 +137,7 @@ impl Veil for Frozen {
     /// fringing rides along.
     fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
         self.scale = 0.6 + 1.8 * swing(t);
-        self.strength = 0.04 * self.scale;
+        self.strength = 0.02 * self.scale;
         cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
         true
     }

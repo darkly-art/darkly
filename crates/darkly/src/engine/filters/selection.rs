@@ -20,7 +20,7 @@ use super::super::rendering::commit_undo_region;
 use super::super::{DarklyEngine, OverlayChannel, ReadbackContext};
 use crate::coord::{CanvasRect, WindowRect};
 use crate::document::SelectionMode;
-use crate::gpu::flood_fill::{self, LayerFloodFillExtent};
+use crate::gpu::layer_readback::{self, LayerReadbackExtent};
 use crate::gpu::overlay::{OverlayPrimitive, FLAG_CANVAS_SPACE, KIND_DASHED_LINE};
 use crate::gpu::readback;
 use crate::gpu::selection::{CombineMode, MorphOp};
@@ -328,7 +328,7 @@ impl DarklyEngine {
                 label: Some("magic-wand-readback"),
             });
         let (request, extent) =
-            flood_fill::request_layer_flood_fill_readback(&self.gpu.device, &mut encoder, &pt);
+            layer_readback::request_layer_readback(&self.gpu.device, &mut encoder, &pt);
         self.gpu.queue.submit([encoder.finish()]);
         self.readbacks.submit(
             request,
@@ -350,11 +350,59 @@ impl DarklyEngine {
         seed_canvas: crate::coord::CanvasPoint,
         tolerance: u8,
         mode: SelectionMode,
-        extent: LayerFloodFillExtent,
+        extent: LayerReadbackExtent,
         pixels: Vec<u8>,
     ) {
         let fill_mask = extent.flood_fill_to_canvas_mask(&pixels, seed_canvas, tolerance);
         self.apply_selection_full(fill_mask, mode, was_active);
+    }
+
+    /// Load a node's per-pixel opacity as the selection — Krita's "select
+    /// opaque", GIMP's "alpha to selection", the `$mod`+click-the-thumbnail
+    /// gesture. Node-kind agnostic: an RGBA layer contributes its alpha
+    /// channel, an R8 mask filter its coverage (see
+    /// [`LayerReadbackExtent::opacity_to_canvas_mask`]). A node with no
+    /// texture is a no-op.
+    ///
+    /// The pixels come back through the async readback pipeline, so the
+    /// selection lands on a later frame — same shape as magic wand, and for
+    /// the same reason (`CLAUDE.md`: no blocking GPU readbacks).
+    #[handler]
+    pub fn alpha_to_selection(&mut self, id: LayerId) {
+        if self.paint_target(id).is_none() {
+            return;
+        }
+
+        let was_active = self.has_selection();
+        // Whole-layer coverage lands anywhere in the window — reserve a
+        // full-canvas undo rect.
+        let rect = self.selection_full_canvas_rect();
+        self.save_selection_for_undo(rect);
+
+        let pt = self.paint_target(id).unwrap();
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("alpha-to-selection-readback"),
+            });
+        let (request, extent) =
+            layer_readback::request_layer_readback(&self.gpu.device, &mut encoder, &pt);
+        self.gpu.queue.submit([encoder.finish()]);
+        self.readbacks.submit(
+            request,
+            ReadbackContext::AlphaToSelection { was_active, extent },
+        );
+    }
+
+    pub(crate) fn complete_alpha_to_selection(
+        &mut self,
+        was_active: bool,
+        extent: LayerReadbackExtent,
+        pixels: Vec<u8>,
+    ) {
+        let mask = extent.opacity_to_canvas_mask(&pixels);
+        self.apply_selection_full(mask, SelectionMode::Replace, was_active);
     }
 
     #[handler]

@@ -1,9 +1,13 @@
 //! Regression tests for the copy/paste ↔ mask interaction.
 //!
 //! Model: plain paste always makes its own layer; pasting INTO the active
-//! target (a layer or a mask) is the "paste in place" verb, which floats the
-//! clip onto the active node and commits through the shared `commit_floating`
-//! path (RGBA layers and R8 masks alike). The three defects covered:
+//! target (a layer or a mask) is the "paste in place" verb, which writes RGBA
+//! layers and R8 masks alike. Target kind never changes the routing — with
+//! transform-after-paste on, every target floats so the clip can be positioned
+//! before it overwrites anything, and the transform tool is what commits it.
+//! An RGBA clip converts to mask values on the way in (luminance, transparency
+//! resolving to white); see `gpu::transform::rgba_to_mask_values`.
+//! The defects covered:
 //!   1. Paste-in-place must write into the active mask (not silently no-op,
 //!      and not create a new layer), and be undoable.
 //!   2. Copying a *region* (selection active) of a masked layer must produce a
@@ -91,9 +95,10 @@ fn raster_props(engine: &DarklyEngine, id: LayerId) -> (String, f32, String, usi
     panic!("layer {id_f} not found in tree");
 }
 
-/// Bug 1 (floating verb): paste-in-place floats the clipboard onto the active
-/// MASK and commits into it — no new layer, and undoable. This is the path the
-/// UI takes when "activate transform after paste" is on.
+/// Bug 1 (floating verb): floating the clipboard onto a MASK and committing it
+/// writes into the mask — no new layer, and undoable. This is the path the UI
+/// takes when "activate transform after paste" is on; the commit below stands
+/// in for the gizmo gesture that ends the session.
 #[test]
 fn paste_in_place_floating_writes_into_active_mask() {
     let (w, h) = (64u32, 64u32);
@@ -178,6 +183,151 @@ fn paste_in_place_committed_writes_into_active_mask() {
     assert!(
         after.iter().any(|&v| v != v0),
         "committed paste-in-place must write pixels into the mask"
+    );
+}
+
+/// REPRO: paste a pure-GREEN clip into a mask. A mask is a grayscale value, so
+/// the clip must convert by luminance (green ≈ 0.7152 → ~182). Reading the
+/// source's red channel instead yields 0 — the mask goes black and the host
+/// vanishes, "it pastes full black regardless of what is in the clipboard".
+#[test]
+fn repro_rgba_paste_into_mask_converts_by_luminance_not_red() {
+    let (w, h) = (64u32, 64u32);
+    let mut e = test_engine(w, h);
+
+    let src = e.add_raster_layer(None);
+    paint_dot(&mut e, src, 32.0, 32.0, (0.0, 1.0, 0.0));
+    let host = e.add_raster_layer(None);
+    e.add_mask(host);
+    let mask = e.test_mask_id(host).expect("host has a mask filter");
+    settle(&mut e);
+
+    copy_into_clipboard(&mut e, src);
+
+    assert!(
+        e.paste_in_place_floating(mask),
+        "paste must float onto the mask"
+    );
+    e.commit_floating();
+    settle(&mut e);
+
+    let after = e.test_readback_mask(host);
+    let ext = e.test_node_extent(mask);
+    let stride = ext.width as usize;
+    let at = |x: i32, y: i32| after[(y - ext.y0()) as usize * stride + (x - ext.x0()) as usize];
+
+    // Under the dab, pure green converts by luminance: 0.7152 → ~182. Reading
+    // the source's red channel instead gives 0 and blacks the mask out.
+    let expected = (0.7152f32 * 255.0).round() as u8;
+    let under_dab = at(32, 32);
+    assert!(
+        under_dab.abs_diff(expected) <= 6,
+        "pure green must convert to its luminance (~{expected}); the mask reads \
+         {under_dab} under the dab"
+    );
+    // Away from the dab the clip is transparent, and transparent writes nothing.
+    assert_eq!(
+        at(2, 2),
+        255,
+        "a transparent part of the clip must leave the mask as it was"
+    );
+}
+
+/// The floating session's box is the pasted *object*, not the region the copy
+/// swept. A select-all copy of a layer holding one small dab used to hand the
+/// transform gizmo a canvas-sized box around it.
+#[test]
+fn floating_paste_box_is_the_content_not_the_copied_region() {
+    let (w, h) = (64u32, 64u32);
+    let mut e = test_engine(w, h);
+
+    let src = e.add_raster_layer(None);
+    paint_dot(&mut e, src, 32.0, 32.0, (0.0, 1.0, 0.0));
+    let host = e.add_raster_layer(None);
+    e.add_mask(host);
+    let mask = e.test_mask_id(host).expect("host has a mask filter");
+    settle(&mut e);
+
+    // Select-all, so the copied region is the entire canvas.
+    e.select_all();
+    settle(&mut e);
+    e.copy_layer_rich(src);
+    settle(&mut e);
+
+    assert!(
+        e.paste_in_place_floating(mask),
+        "paste must float onto the mask"
+    );
+    let (x, y, fw, fh, _) = e.floating_info().expect("a floating session is active");
+
+    assert!(
+        fw < w as f32 && fh < h as f32,
+        "the floating box must be the dab's bounds, not the {w}×{h} region that \
+         was copied; got {fw}×{fh}"
+    );
+    // The dab is centred at (32, 32), so its box must contain that point.
+    assert!(
+        x <= 32.0 && y <= 32.0 && x + fw > 32.0 && y + fh > 32.0,
+        "the floating box ({x}, {y}, {fw}, {fh}) must contain the dab at (32, 32)"
+    );
+}
+
+/// A mask paste is a real floating session: it can be repositioned before it
+/// lands. Pasting into a mask used to commit the moment the key was pressed,
+/// which both skipped the transform gizmo and clobbered the mask outright.
+/// Translating the floating must move where the clip comes down.
+#[test]
+fn floating_paste_into_mask_lands_where_it_was_moved_to() {
+    let (w, h) = (64u32, 64u32);
+    let mut e = test_engine(w, h);
+
+    // A dab up at (16, 16); the clipboard clip is trimmed to it.
+    let src = e.add_raster_layer(None);
+    paint_dot(&mut e, src, 16.0, 16.0, (0.0, 1.0, 0.0));
+    let host = e.add_raster_layer(None);
+    e.add_mask(host);
+    let mask = e.test_mask_id(host).expect("host has a mask filter");
+    settle(&mut e);
+
+    copy_into_clipboard(&mut e, src);
+
+    assert!(
+        e.paste_in_place_floating(mask),
+        "paste must open a floating session on the mask"
+    );
+    // The transform tool gates its gizmo on this; "none" would leave a mask
+    // paste floating with no handles to position or commit it by.
+    assert_eq!(
+        e.layer_transform_capability(mask),
+        "destructive",
+        "a mask must be transformable, or the paste gets no gizmo"
+    );
+    // Drag it down-right by (32, 32) before committing, as the gizmo would.
+    e.update_floating_matrix(darkly::transform::Transform::from_affine(
+        darkly::gpu::transform::affine_translate(32.0, 32.0),
+    ));
+    e.commit_floating();
+    settle(&mut e);
+
+    // Readback rows are texture-local, so canvas coords go through the mask
+    // texture's own extent rather than the canvas dimensions.
+    let after = e.test_readback_mask(host);
+    let ext = e.test_node_extent(mask);
+    let stride = ext.width as usize;
+    let at = |x: i32, y: i32| after[(y - ext.y0()) as usize * stride + (x - ext.x0()) as usize];
+
+    // The clip's transparent surround resolves to white, so the dab is the only
+    // thing that darkens the mask. Green converts by luminance (~182).
+    let moved_to = at(48, 48);
+    assert!(
+        moved_to.abs_diff((0.7152f32 * 255.0).round() as u8) <= 6,
+        "the dab must land at the moved-to position (48, 48); the mask reads \
+         {moved_to} there"
+    );
+    assert_eq!(
+        at(16, 16),
+        255,
+        "the dab must not also be at its pre-move position (16, 16)"
     );
 }
 

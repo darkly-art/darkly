@@ -226,6 +226,33 @@ pub struct TransformState {
     pub preview_blend_uniform_buf: wgpu::Buffer,
 }
 
+/// Split a straight-alpha RGBA clip into the two channels a mask target needs:
+/// `(values, coverage)`.
+///
+/// A mask texel is a single grayscale value with no alpha of its own, so the
+/// clip's own alpha cannot ride along in the pixel — it becomes coverage, which
+/// is what the commit shader weights the write by. That is what makes the
+/// transparent parts of a clip leave the mask's existing pixels untouched
+/// instead of stamping a rectangle over them. GIMP draws the same line,
+/// converting a floating paste to the pasted-to drawable's own format *with
+/// alpha* (`gimp_edit_paste_get_layers`, app/core/gimp-edit.c).
+///
+/// Values are emitted as opaque RGBA so they ride the same staging upload and
+/// premultiply pass the RGBA path uses — premultiplying by an alpha of 1 is the
+/// identity, and the shader reads the red channel for an R8 target. Luminance
+/// uses the BT.709 weights shared with `lib/black_and_white.wgsl`.
+fn rgba_to_mask_values(rgba: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let mut values = Vec::with_capacity(rgba.len());
+    let mut coverage = Vec::with_capacity(rgba.len() / 4);
+    for px in rgba.chunks_exact(4) {
+        let luma = (0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32) / 255.0;
+        let v = (luma.clamp(0.0, 1.0) * 255.0).round() as u8;
+        values.extend_from_slice(&[v, v, v, 255]);
+        coverage.push(px[3]);
+    }
+    (values, coverage)
+}
+
 /// GPU pipelines for the floating-content commit pass + optional active state.
 pub struct TransformPass {
     /// Commit pipelines: render transform directly into a target texture.
@@ -517,6 +544,14 @@ impl TransformPass {
             view_formats: &[],
         });
 
+        // An RGBA clip has to be converted into the target's terms before the
+        // commit shader can sample it: for an R8 target that shader reads the
+        // red channel, which is a real mask value only once the conversion has
+        // happened, and weights the write by coverage, which is where the clip's
+        // alpha has to go.
+        let mask_conversion =
+            (target_format == wgpu::TextureFormat::R8Unorm).then(|| rgba_to_mask_values(rgba_data));
+
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &temp_texture,
@@ -524,7 +559,9 @@ impl TransformPass {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            rgba_data,
+            mask_conversion
+                .as_ref()
+                .map_or(rgba_data, |(values, _)| values.as_slice()),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(source_width * 4),
@@ -582,6 +619,24 @@ impl TransformPass {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+
+        // A mask target's coverage is the clip's own alpha, narrowed by whatever
+        // coverage the caller already imposed (a selection). An RGBA target's
+        // source keeps its alpha channel and the shader's source-over consumes
+        // it directly, so there only the caller's coverage applies.
+        let mask_coverage = mask_conversion.as_ref().map(|(_, alpha)| {
+            source_coverage.map_or_else(
+                || alpha.clone(),
+                |caller| {
+                    alpha
+                        .iter()
+                        .zip(caller)
+                        .map(|(&a, &c)| ((a as u16 * c as u16) / 255) as u8)
+                        .collect()
+                },
+            )
+        });
+        let source_coverage = mask_coverage.as_deref().or(source_coverage);
 
         let source_coverage = source_coverage.map(|coverage| {
             Self::create_source_coverage(
@@ -1008,6 +1063,39 @@ impl TransformPass {
 mod tests {
     use super::*;
     use crate::transform::homography_from_corners;
+
+    /// A mask stores a value and no alpha, so an RGBA clip splits into a
+    /// luminance value plus a coverage channel carrying the clip's alpha.
+    /// Reading the source's red channel instead — which is what the commit
+    /// shader does for an R8 target before this conversion — turns any
+    /// non-red clip into a black rectangle over the mask.
+    #[test]
+    fn rgba_to_mask_values_splits_luminance_from_alpha() {
+        // Opaque green, opaque white, fully transparent, half-transparent black.
+        let src = [
+            0, 255, 0, 255, //
+            255, 255, 255, 255, //
+            0, 255, 0, 0, //
+            0, 0, 0, 128,
+        ];
+        let (values, coverage) = rgba_to_mask_values(&src);
+
+        // BT.709 luminance, independent of alpha — alpha rides `coverage`.
+        assert_eq!(values[0], (0.7152f32 * 255.0).round() as u8);
+        assert_eq!(values[4], 255);
+        assert_eq!(values[8], (0.7152f32 * 255.0).round() as u8);
+        assert_eq!(values[12], 0);
+
+        // Values are opaque so the shared premultiply pass is the identity.
+        assert!(values.chunks_exact(4).all(|px| px[3] == 255));
+        // Gray, so the shader's red-channel read is the value whatever it picks.
+        assert!(values
+            .chunks_exact(4)
+            .all(|px| px[0] == px[1] && px[1] == px[2]));
+
+        // Coverage is the clip's alpha: transparent texels write nothing.
+        assert_eq!(coverage, vec![255, 255, 0, 128]);
+    }
 
     /// A near-degenerate matrix (a corner driving the homogeneous `w → 0`,
     /// folding behind the camera) has no usable inverse; `pack_inv_rows` must

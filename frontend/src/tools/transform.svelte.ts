@@ -76,6 +76,12 @@ class TransformTool extends ToolBase {
         this.gizmo?.setMode(tag);
     }
 
+    /** Mirror the content being transformed within its bounding quad (menu
+     *  action). No-op when no gizmo is up. */
+    flip(axis: 'h' | 'v'): void {
+        this.gizmo?.flip(axis);
+    }
+
     /** Apply this variant's entry mode after a fresh attach. Mode 0 is the
      *  adopted default, so only a non-zero entry mode is seeded. */
     private applyEntryMode(): void {
@@ -148,8 +154,8 @@ class TransformTool extends ToolBase {
 
     async onPointerDown(e: PointerEvent, cx: number, cy: number): Promise<void> {
         if (!this.gizmo) return;
-        // Right-click inside the active object opens the mode-switch menu
-        // (Free transform / Perspective / …). Always swallow button 2 so it
+        // Right-click inside the active object opens the transform menu (mode
+        // switch + flips). Always swallow button 2 so it
         // never starts a drag (the browser context menu is suppressed
         // app-wide in CanvasView).
         if (e.button === 2) {

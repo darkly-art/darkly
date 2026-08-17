@@ -151,9 +151,11 @@ export function registerClipboardActions(): void {
             const engine = app.engine;
             if (!engine || app.activeLayerId == null) return;
             // Paste into the active target — a raster layer or, when a mask is
-            // the active edit target, the mask. Both flow through the same
-            // floating→commit path (`pasteInPlaceFloating` / `pasteInPlace`),
-            // which writes RGBA layers and R8 masks alike.
+            // the active edit target, the mask. Both write through the engine's
+            // shared paste path, which handles RGBA layers and R8 masks alike,
+            // and both float first so the clip can be positioned before it
+            // overwrites anything: a mask is a paintable surface like any other,
+            // and committing on arrival would clobber whatever it already held.
             const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
             if (activateTransform) {
                 // Float onto the target so it can be repositioned before commit.

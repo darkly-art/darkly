@@ -13,8 +13,8 @@
 //!
 //! ## Source binding
 //!
-//! Compilation calls [`CompileWgslCtx::request_source_texture`], which
-//! sets [`crate::brush::wgsl::CompiledBrush::samples_source`] and reserves
+//! Compilation calls [`CompileWgslCtx::request_live_texture`], which
+//! reserves
 //! the `@group(3)` source slot. `paint`'s `flush_dabs` binds the stroke's
 //! source snapshot there: the pre-stroke snapshot of the painted layer
 //! (same-layer clone), or a separate snapshot frozen at stroke start when
@@ -173,7 +173,8 @@ impl BrushNodeEvaluator for CloneSourceEvaluator {
             return Ok(wgsl);
         }
 
-        let slot = cctx.request_source_texture();
+        let slot =
+            cctx.request_live_texture(crate::brush::texture_source::LiveSource::StrokeSnapshot);
 
         // Stroke-constant uniforms, seeded per pen event by the runner
         // from `CloneState` (keyed `n{id}_source_anchor` etc.): the two

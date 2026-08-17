@@ -217,24 +217,40 @@ impl TextureRegistry {
         queue: &wgpu::Queue,
         baked: &BakedSourceCache,
         sources: &[ResolvedSource],
+        live: &[Option<&wgpu::TextureView>],
     ) -> (Arc<wgpu::BindGroupLayout>, wgpu::BindGroup) {
         let fallback = self
             .textures
             .get(FALLBACK_TEXTURE)
             .expect("TextureRegistry must register _fallback at init")
             .clone();
-        let textures: Vec<Arc<GpuTexture>> = sources
+        // Two shapes of view reach the bind group: registry / bake-cache
+        // textures own theirs, live slots borrow one published this flush.
+        // An unpublished live slot takes `_fallback` — the cursor preview
+        // path, where no stroke exists to publish anything.
+        enum SlotView<'v> {
+            Owned(Arc<GpuTexture>),
+            Published(&'v wgpu::TextureView),
+        }
+        let views: Vec<SlotView<'_>> = sources
             .iter()
-            .map(|s| match s {
+            .enumerate()
+            .map(|(i, s)| match s {
                 ResolvedSource::Named(name) => {
-                    self.textures.get(name).cloned().unwrap_or_else(|| {
+                    SlotView::Owned(self.textures.get(name).cloned().unwrap_or_else(|| {
                         log::warn!(
                             "TextureRegistry: no texture `{name}`, substituting `_fallback`",
                         );
                         fallback.clone()
-                    })
+                    }))
                 }
-                ResolvedSource::Baked(spec) => baked.get_or_bake(device, queue, spec),
+                ResolvedSource::Baked(spec) => {
+                    SlotView::Owned(baked.get_or_bake(device, queue, spec))
+                }
+                ResolvedSource::Live(_) => match live.get(i).copied().flatten() {
+                    Some(view) => SlotView::Published(view),
+                    None => SlotView::Owned(fallback.clone()),
+                },
             })
             .collect();
         let layout = self.layout_for_count(device, sources.len());
@@ -243,10 +259,14 @@ impl TextureRegistry {
             binding: 0,
             resource: wgpu::BindingResource::Sampler(&self.sampler),
         });
-        for (i, t) in textures.iter().enumerate() {
+        for (i, v) in views.iter().enumerate() {
+            let view = match v {
+                SlotView::Owned(t) => &t.view,
+                SlotView::Published(view) => *view,
+            };
             entries.push(wgpu::BindGroupEntry {
                 binding: 1 + i as u32,
-                resource: wgpu::BindingResource::TextureView(&t.view),
+                resource: wgpu::BindingResource::TextureView(view),
             });
         }
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {

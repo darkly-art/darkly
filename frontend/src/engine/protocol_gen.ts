@@ -54,6 +54,8 @@ export type AddVeilReq = { veil_type: string, params: JsonValue, };
 
 export type AddVoidReq = { void_type: string, params: JsonValue, anchor: number | null, };
 
+export type AlphaToSelectionReq = { id: number, };
+
 export type ApplyFilterReq = { node_id: number, filter_type: string, params: JsonValue, };
 
 export type ApplyMaskReq = { id: number, };
@@ -178,17 +180,11 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
 
-export type PreviewStaging = { 
-/**
- * Iconify glyph shown in the dab slot, where a single stationary sample
- * has no motion to make the effect visible at all.
- */
-icon: string, 
-/**
- * Field painted under the stroke preview, giving the node something to
- * transport.
- */
-backdrop: PreviewBackdrop, };
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+
+export type PortDir = "Input" | "Output";
+
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -382,11 +378,17 @@ preview_image: boolean,
  */
 source: boolean, };
 
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
-
-export type PortDir = "Input" | "Output";
-
-export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+export type PreviewStaging = { 
+/**
+ * Iconify glyph shown in the dab slot, where a single stationary sample
+ * has no motion to make the effect visible at all.
+ */
+icon: string, 
+/**
+ * Field painted under the stroke preview, giving the node something to
+ * transport.
+ */
+backdrop: PreviewBackdrop, };
 
 export type NodeRegistration = { 
 /**
@@ -497,6 +499,8 @@ supportsPreview: boolean,
  */
 captureKind: CaptureKind | null, };
 
+export type CaptureKind = "camera" | "display" | "stream";
+
 export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
 export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
@@ -521,8 +525,6 @@ widget: string, unit: UnitType, min: number | null, max: number | null, default:
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
 options: JsonValue | null, display: ParamDisplay, };
-
-export type CaptureKind = "camera" | "display" | "stream";
 
 export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
 /**
@@ -579,17 +581,6 @@ export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 
 export type LayerTransformCapabilityReq = { id: number, };
 
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
-/**
- * Whether this modifier participates in transforms with its host.
- */
-linkedToHost: boolean, 
-/**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
-
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
  * Effective editability — `false` when this node *or any ancestor*
@@ -641,6 +632,17 @@ pipeline: string,
  * uses.
  */
 params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
+
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * Whether this modifier participates in transforms with its host.
+ */
+linkedToHost: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -824,6 +826,7 @@ export type RequestKind =
     | 'add_text_object'
     | 'add_veil'
     | 'add_void'
+    | 'alpha_to_selection'
     | 'antialias_selection'
     | 'apply_filter'
     | 'apply_mask'
@@ -1013,6 +1016,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'add_text_object',
     'add_veil',
     'add_void',
+    'alpha_to_selection',
     'antialias_selection',
     'apply_filter',
     'apply_mask',
@@ -1210,6 +1214,7 @@ export interface EngineApi {
     addTextObject(req: AddTextObjectReq): Promise<{ object: number }>;
     addVeil(req: AddVeilReq): void;
     addVoid(req: AddVoidReq): Promise<number | null>;
+    alphaToSelection(req: AlphaToSelectionReq): void;
     antialiasSelection(): void;
     applyFilter(req: ApplyFilterReq): Promise<boolean>;
     applyMask(req: ApplyMaskReq): void;
@@ -1401,6 +1406,7 @@ export function makeApi(t: Transport): EngineApi {
         addTextObject: (req) => t.request('add_text_object', req),
         addVeil: (req) => t.postFF('add_veil', req),
         addVoid: (req) => t.request('add_void', req),
+        alphaToSelection: (req) => t.postFF('alpha_to_selection', req),
         antialiasSelection: () => t.postFF('antialias_selection'),
         applyFilter: (req) => t.request('apply_filter', req),
         applyMask: (req) => t.postFF('apply_mask', req),

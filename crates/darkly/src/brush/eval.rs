@@ -51,6 +51,13 @@ pub struct EvalContext<'a> {
     /// Stroke-constant. Terminals multiply their per-touch modulation onto it
     /// via [`Self::base_size`].
     pub base_size: f32,
+    /// How many dabs land on a given texel as the brush passes over it
+    /// once (`diameter / spacing`). Stroke-constant, set out-of-band at
+    /// stroke start by [`super::stroke_engine::StrokeEngine`]. A terminal
+    /// accumulating a per-dab quantity divides by this to express its rate
+    /// per *pass* rather than per dab — see
+    /// [`super::wgsl::IntrinsicUniforms::dabs_per_pass`].
+    pub dabs_per_pass: f32,
     /// This node instance's ID (used to salt PRNG for independence).
     pub node_id: &'a NodeId,
 }
@@ -83,6 +90,12 @@ impl EvalContext<'_> {
     /// Stroke base size — the ambient `pen_input.size` knob (see the field).
     pub fn base_size(&self) -> f32 {
         self.base_size
+    }
+
+    /// Dabs landing on one texel per pass of the brush (see the field).
+    /// Never below 1.0, so dividing a rate by it is always well-defined.
+    pub fn dabs_per_pass(&self) -> f32 {
+        self.dabs_per_pass.max(1.0)
     }
 
     /// O(1) curve lookup using the precomputed LUT.
@@ -510,6 +523,10 @@ pub struct BrushGraphRunner {
     /// `brush_settings.size` graph signal is published on its slot by the
     /// runner's generic settable-source seeding, not here.
     base_size: f32,
+    /// Dabs landing on one texel per pass of the brush, set once per stroke
+    /// by [`Self::set_dabs_per_pass`]. Threaded into every `EvalContext`;
+    /// terminals read it via [`EvalContext::dabs_per_pass`].
+    dabs_per_pass: f32,
     /// Compiled WGSL for this brush, populated by `compile_graph` when
     /// the graph terminates in `paint`. `None` for per-dab
     /// dispatch brushes. The runner copies this into the
@@ -532,6 +549,7 @@ fn build_eval_ctx<'a>(
     stroke_seed: u32,
     dab_index: u32,
     base_size: f32,
+    dabs_per_pass: f32,
 ) -> EvalContext<'a> {
     let node = node_data.get(&step.node_id);
     EvalContext {
@@ -542,6 +560,7 @@ fn build_eval_ctx<'a>(
         stroke_seed,
         dab_index,
         base_size,
+        dabs_per_pass,
         node_id: &step.node_id,
     }
 }
@@ -674,6 +693,7 @@ impl BrushGraphRunner {
             // base size without a separate call. Live painting refreshes it
             // per stroke via `set_base_size`.
             base_size: brush_settings::base_size(graph),
+            dabs_per_pass: 1.0,
             compiled: None,
         })
     }
@@ -684,6 +704,15 @@ impl BrushGraphRunner {
     /// `pen_input`'s `size` source slot in `seed_sensors`.
     pub fn set_base_size(&mut self, base_size: f32) {
         self.base_size = base_size;
+    }
+
+    /// Publish how many dabs land on one texel per pass of the brush. Call
+    /// once before the first dab; the stroke engine derives it from the
+    /// spacing it is about to place dabs with, so a terminal's per-dab
+    /// rates can be stated per pass. See
+    /// [`EvalContext::dabs_per_pass`].
+    pub fn set_dabs_per_pass(&mut self, dabs_per_pass: f32) {
+        self.dabs_per_pass = dabs_per_pass;
     }
 
     /// Attach a pre-built [`CompiledBrush`] to this runner. Called by
@@ -712,7 +741,12 @@ impl BrushGraphRunner {
     /// (has a `clone_source` node requesting the `@group(3)` snapshot).
     /// Drives the engine's no-op gate and the frontend's gesture arming.
     pub fn samples_source(&self) -> bool {
-        self.compiled.as_ref().is_some_and(|c| c.samples_source)
+        use crate::brush::texture_source::{LiveSource, ResolvedSource};
+        self.compiled.as_ref().is_some_and(|c| {
+            c.graph_sources
+                .iter()
+                .any(|s| matches!(s, ResolvedSource::Live(LiveSource::StrokeSnapshot)))
+        })
     }
 
     /// Returns `true` if the graph terminates in a compiled-WGSL
@@ -889,6 +923,7 @@ impl BrushGraphRunner {
                 self.stroke_seed,
                 self.dab_index,
                 self.base_size,
+                self.dabs_per_pass,
             );
 
             let outputs = evaluator.evaluate_cpu(&ctx);
@@ -1002,6 +1037,7 @@ impl BrushGraphRunner {
                 self.stroke_seed,
                 self.dab_index,
                 self.base_size,
+                self.dabs_per_pass,
             );
 
             // Pure-math nodes promoted to the GPU phase (because an input
@@ -1072,6 +1108,10 @@ impl BrushGraphRunner {
     /// dispatch before the phase's `submit_final`. Fragment-path
     /// terminals no-op.
     pub fn flush_dabs(&mut self, gpu: &mut BrushGpuContext) {
+        // Live `@group(3)` slots are republished by their owning nodes
+        // during this dispatch; clearing first keeps a stale view from a
+        // previous flush from being bound if its producer drops out.
+        gpu.dab_batch.live_textures.clear();
         self.dispatch_lifecycle(gpu, false, |_id, ev, ctx, gpu| ev.flush_dabs(ctx, gpu));
     }
 
@@ -1126,6 +1166,7 @@ impl BrushGraphRunner {
                 self.stroke_seed,
                 self.dab_index,
                 self.base_size,
+                self.dabs_per_pass,
             );
             f(&step.type_id, evaluator.as_ref(), &ctx, gpu);
         }

@@ -5,28 +5,13 @@
 //!
 //! Flow: readback layer → CPU scanline fill → upload mask → GPU stamp.
 //!
-//! ## Layer-aware orchestration ([`LayerFloodFillExtent`])
-//!
-//! Magic wand and the paint-bucket fill tool both flood-fill a layer from a
-//! canvas-space seed and consume the result as a canvas-aligned mask. The
-//! GPU layer texture, however, is **not** in general canvas-aligned: it can
-//! sit at a non-zero canvas offset and be larger or smaller than the canvas
-//! (paste-extent layers, leftward-grown layers from `ensure_layer_covers_dab`,
-//! masks parented to off-canvas raster layers).
-//!
-//! [`request_layer_flood_fill_readback`] + [`LayerFloodFillExtent`] are the
-//! single place that owns the canvas↔texture translation:
-//! the readback samples the texture's full extent, the canvas-space seed is
-//! translated to texture-local coords for the scanline fill, and the
-//! resulting layer-local mask is projected back into a canvas-aligned R8
-//! buffer. Both call sites consume the same `extent.flood_fill_to_canvas_mask`
-//! helper so the math lives once. **Do not** call `request_readback` with a
-//! canvas-rect from a flood-fill call site — go through this helper.
+//! The fills here are layer-local: they consume and produce buffers in the
+//! texture's own frame. Translating a canvas-space seed into that frame, and
+//! the resulting mask back into window-local coordinates, belongs to
+//! [`crate::gpu::layer_readback`] — which is what magic wand and the
+//! paint-bucket tool actually call.
 
 use std::collections::VecDeque;
-
-use crate::gpu::paint_target::GpuPaintTarget;
-use crate::gpu::readback::{self, ReadbackRequest};
 
 /// Scanline flood fill on flat RGBA pixel data.
 ///
@@ -269,187 +254,9 @@ fn fill_span(mask: &mut [u8], width: u32, start: i32, end: i32, y: i32) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Layer-aware flood-fill orchestration
-// ---------------------------------------------------------------------------
-
-/// Snapshot of a paint target's coordinate frame, captured at flood-fill
-/// request time and carried through the async readback round-trip.
-///
-/// Owns no GPU resources — pure metadata. Pairs with the readback request
-/// returned by [`request_layer_flood_fill_readback`]: the request reads the
-/// texture's full extent (`width × height` pixels starting at texture-local
-/// (0,0)), and this struct provides the canvas↔texture translation on the
-/// other side so callers receive a canvas-aligned R8 mask without re-deriving
-/// the layer offset.
-#[derive(Copy, Clone)]
-pub struct LayerFloodFillExtent {
-    /// Plane-space offset of the texture's (0, 0) pixel.
-    pub offset_x: i32,
-    pub offset_y: i32,
-    /// Texture pixel dimensions — the size of the readback buffer.
-    pub width: u32,
-    pub height: u32,
-    /// Document canvas (window) dimensions — the size of the produced mask.
-    pub canvas_width: u32,
-    pub canvas_height: u32,
-    /// Plane-space origin of the canvas window. The produced mask is
-    /// **window-local** (it uploads into the window-sized selection texture),
-    /// so the projection subtracts this. `(0, 0)` for an un-cropped doc.
-    pub canvas_origin_x: i32,
-    pub canvas_origin_y: i32,
-    pub format: wgpu::TextureFormat,
-}
-
-impl LayerFloodFillExtent {
-    pub fn from_target(target: &GpuPaintTarget<'_>) -> Self {
-        let canvas_extent = target.canvas_extent();
-        let layer_extent = target.layer_extent();
-        let (canvas_w, canvas_h) = target.canvas_size();
-        let (cox, coy) = target.canvas_origin();
-        Self {
-            offset_x: canvas_extent.x0(),
-            offset_y: canvas_extent.y0(),
-            width: layer_extent.width,
-            height: layer_extent.height,
-            canvas_width: canvas_w,
-            canvas_height: canvas_h,
-            canvas_origin_x: cox,
-            canvas_origin_y: coy,
-            format: target.format(),
-        }
-    }
-
-    /// Run the CPU scanline fill on the texture-extent buffer and project the
-    /// resulting layer-local mask into a **window-local** R8 mask sized
-    /// `canvas_width × canvas_height` (the frame the selection texture is
-    /// indexed in — see `crate::coord`).
-    ///
-    /// `seed_canvas` is the click point in plane coordinates. The seed is
-    /// translated to texture-local coords before the scanline fill runs; the
-    /// result is projected to window-local (`plane − canvas_origin`). Pixels
-    /// outside the layer's canvas-window footprint stay 0 in the output.
-    ///
-    /// Format dispatch matches the texture's own format — RGBA reads four
-    /// bytes per pixel, R8 reads one.
-    pub fn flood_fill_to_canvas_mask(
-        &self,
-        pixels: &[u8],
-        seed_canvas: crate::coord::CanvasPoint,
-        tolerance: u8,
-    ) -> Vec<u8> {
-        let layer_seed_x = seed_canvas.x - self.offset_x;
-        let layer_seed_y = seed_canvas.y - self.offset_y;
-
-        let layer_mask = match self.format {
-            wgpu::TextureFormat::R8Unorm => flood_fill_r8(
-                pixels,
-                self.width,
-                self.height,
-                layer_seed_x,
-                layer_seed_y,
-                tolerance,
-            ),
-            _ => flood_fill_rgba(
-                pixels,
-                self.width,
-                self.height,
-                layer_seed_x,
-                layer_seed_y,
-                tolerance,
-            ),
-        };
-
-        let cw = self.canvas_width as usize;
-        let ch = self.canvas_height as usize;
-        let mut canvas_mask = vec![0u8; cw * ch];
-
-        let (cox, coy) = (self.canvas_origin_x, self.canvas_origin_y);
-        // Plane-space bounds of the layer footprint clipped to the canvas
-        // WINDOW `[canvas_origin, canvas_origin + canvas_size]`; the output is
-        // written at the window-local texel `plane − canvas_origin`.
-        let x0 = self.offset_x.max(cox);
-        let y0 = self.offset_y.max(coy);
-        let x1 = (self.offset_x + self.width as i32).min(cox + self.canvas_width as i32);
-        let y1 = (self.offset_y + self.height as i32).min(coy + self.canvas_height as i32);
-        if x0 >= x1 || y0 >= y1 {
-            return canvas_mask;
-        }
-
-        let stride = self.width as usize;
-        for py in y0..y1 {
-            let ty = (py - self.offset_y) as usize; // layer-local row
-            let src_row = ty * stride;
-            let dst_row = (py - coy) as usize * cw; // window-local row
-            for px in x0..x1 {
-                let tx = (px - self.offset_x) as usize; // layer-local col
-                let wx = (px - cox) as usize; // window-local col
-                canvas_mask[dst_row + wx] = layer_mask[src_row + tx];
-            }
-        }
-
-        canvas_mask
-    }
-}
-
-/// Encode a readback of a layer's full texture extent and return the request
-/// paired with the extent snapshot the completion handler needs.
-///
-/// Single source of truth for the readback rect used by magic wand and the
-/// paint-bucket flood fill. The rect is the texture's own dimensions, NOT
-/// the canvas — see the module docs for why.
-pub fn request_layer_flood_fill_readback(
-    device: &wgpu::Device,
-    encoder: &mut wgpu::CommandEncoder,
-    target: &GpuPaintTarget<'_>,
-) -> (ReadbackRequest, LayerFloodFillExtent) {
-    let extent = LayerFloodFillExtent::from_target(target);
-    // Texture-local rect spanning the entire layer — the canvas↔texture
-    // translation happens later, in `flood_fill_to_canvas_mask`.
-    let request = readback::request_readback(
-        device,
-        encoder,
-        target.texture(),
-        target.format(),
-        target.layer_extent(),
-    );
-    (request, extent)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// REGRESSION: the produced mask is **window-local** — the magic-wand fill
-    /// must land where the window-sized selection texture expects it after a
-    /// crop, i.e. at `plane − canvas_origin`, not at the raw plane coordinate.
-    #[test]
-    fn flood_fill_mask_is_window_local_after_crop() {
-        // A small 2×2 R8 layer, fully opaque, sitting at plane (3, 2).
-        let pixels = vec![255u8; 2 * 2];
-        let ext = LayerFloodFillExtent {
-            offset_x: 3,
-            offset_y: 2,
-            width: 2,
-            height: 2,
-            canvas_width: 6,
-            canvas_height: 6,
-            canvas_origin_x: 2, // cropped window starts at plane (2, 1)
-            canvas_origin_y: 1,
-            format: wgpu::TextureFormat::R8Unorm,
-        };
-
-        // Seed inside the layer (plane (3, 2)); uniform color floods all of it.
-        let mask = ext.flood_fill_to_canvas_mask(&pixels, crate::coord::CanvasPoint::new(3, 2), 0);
-        let at = |x: usize, y: usize| mask[y * 6 + x];
-
-        // Layer plane footprint [3,5)×[2,4) → window-local [1,3)×[1,3).
-        assert_eq!(at(1, 1), 255, "window-local origin of the fill");
-        assert_eq!(at(2, 2), 255, "window-local far corner of the fill");
-        // The pre-fix plane-anchored projection would have written here instead.
-        assert_eq!(at(3, 2), 0, "must NOT land at the raw plane coordinate");
-        assert_eq!(at(0, 0), 0, "outside the fill stays empty");
-    }
 
     #[test]
     fn flood_fill_rgba_basic() {

@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { registerActions } from '../index';
+import { registerActions, NEW_LAYER_ACTION_IDS } from '../index';
 import { actions, actionEnablement, parseMenuSegment, type Action } from '../registry';
 import { buildTopMenus } from '../../ui/menu/menuModel';
+import { filterPalette } from '../../ui/menu/paletteFilter';
 import { app } from '../../state/app.svelte';
 import { rustActionDocs } from './rust_action_docs';
 
@@ -43,7 +44,7 @@ describe('menu action registrations', () => {
     });
 
     it('puts the selection commands under Select', () => {
-        for (const id of ['selectAll', 'clearSelection', 'invertSelection', 'clearSelectionContents', 'maskToSelection']) {
+        for (const id of ['selectAll', 'clearSelection', 'invertSelection', 'clearSelectionContents', 'maskToSelection', 'alphaToSelection']) {
             const seg = actions.get(id)?.menuPath?.[0];
             expect(parseMenuSegment(seg ?? '').title, id).toBe('Select');
         }
@@ -52,6 +53,20 @@ describe('menu action registrations', () => {
     it('slots maskToSelection into Select right after Invert', () => {
         expect(actions.get('maskToSelection')?.menuPath).toEqual(['Select:35']);
         expect(actions.get('maskToSelection')?.category).toBe('selection');
+    });
+
+    it('slots alphaToSelection into Select right after maskToSelection', () => {
+        expect(actions.get('alphaToSelection')?.menuPath).toEqual(['Select:36']);
+        expect(actions.get('alphaToSelection')?.category).toBe('selection');
+    });
+
+    it('disables alphaToSelection with a reason when the active node has no pixels', () => {
+        // No layer tree in this environment → activeNode is null, so the
+        // action can't know of any pixels to load.
+        const a2s = actions.get('alphaToSelection')!;
+        expect(a2s.enabled?.()).not.toBe(true);
+        expect(actionEnablement(a2s)).toMatchObject({ enabled: false });
+        expect(actionEnablement(a2s).reason).toBe('Active layer has no pixels');
     });
 
     it('disables maskToSelection with a reason when the active layer has no mask', () => {
@@ -106,6 +121,9 @@ describe('menu action registrations', () => {
             .map(e => (e as { actionId: string }).actionId);
         expect(ids).toEqual([
             'newLayer',
+            'newFilterLayer',
+            'newVeil',
+            'newVoid',
             'newGroup',
             'duplicateLayer',
             'flipLayerH',
@@ -118,6 +136,23 @@ describe('menu action registrations', () => {
             'mergeDown',
             'flatten',
         ]);
+    });
+
+    it('makes every layer kind the new-layer menu can add reachable from the palette', () => {
+        // Searching the palette for a layer kind used to come up empty for
+        // veils, voids and filter layers — those existed only as local state
+        // inside the layer panel's dropdown.
+        const hit = (query: string) => filterPalette(actions.all(), query).map(r => r.id);
+        expect(hit('veil')).toContain('newVeil');
+        expect(hit('void')).toContain('newVoid');
+        expect(hit('filter layer')).toContain('newFilterLayer');
+        expect(hit('group')).toContain('newGroup');
+    });
+
+    it('backs every new-layer dropdown entry with a registered action', () => {
+        // The dropdown renders label + icon straight from these registrations.
+        const missing = NEW_LAYER_ACTION_IDS.filter(id => !actions.get(id));
+        expect(missing).toEqual([]);
     });
 
     it('disables cropToSelection with a reason when no selection is active', () => {

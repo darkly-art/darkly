@@ -51,6 +51,7 @@ vi.mock('../../canvas/gpu_overlay', () => ({
 
 import { transformTool } from '../transform.svelte';
 import { SessionEngine } from '../tool_session';
+import { mat3Apply, type Mat3 } from '../transform_projective';
 
 withApi(fakeApp.engine);
 
@@ -63,6 +64,7 @@ type TransformToolLike = {
     availableModes(): { tag: number; label: string }[];
     activeModeTag(): number | null;
     setMode(tag: number): void;
+    flip(axis: 'h' | 'v'): void;
 };
 const tool = transformTool.create(fakeApp as never) as unknown as TransformToolLike;
 
@@ -127,5 +129,55 @@ describe('transform right-click mode menu', () => {
         expect(persp).toBeTruthy();
         // Perspective sends the full 9-float homography.
         expect(persp![1].transform.data.length).toBe(9);
+    });
+});
+
+/** The matrix payload of the most recent transform push through the binding. */
+function lastPushedMatrix(): { mode: string; data: number[] } {
+    const calls = fakeApp.engine.post.mock.calls.filter((c) => c[0] === 'update_void_transform');
+    expect(calls.length).toBeGreaterThan(0);
+    return calls[calls.length - 1][1].transform;
+}
+
+describe('transform menu flips', () => {
+    beforeEach(async () => {
+        fakeApp.engine.post.mockClear();
+        (fakeApp.session as SessionEngine | null)?.kill();
+        fakeApp.session = new SessionEngine(fakeApp.engine as never);
+        await activeTool();
+        fakeApp.engine.post.mockClear();
+    });
+
+    // The fake void is a 100×80 rect at the origin under the identity matrix,
+    // so a mirror about its centre is exactly `x → 100 - x` / `y → 80 - y`.
+    it('flips horizontally about the source centre', () => {
+        tool.flip('h');
+        expect(lastPushedMatrix()).toEqual({ mode: 'Basic', data: [-1, 0, 100, 0, 1, 0] });
+    });
+
+    it('flips vertically about the source centre', () => {
+        tool.flip('v');
+        expect(lastPushedMatrix()).toEqual({ mode: 'Basic', data: [1, 0, 0, 0, -1, 80] });
+    });
+
+    it('flipping both axes is a 180° turn, and flipping twice restores the original', () => {
+        tool.flip('h');
+        tool.flip('v');
+        expect(lastPushedMatrix().data).toEqual([-1, 0, 100, 0, -1, 80]);
+        tool.flip('h');
+        tool.flip('v');
+        expect(lastPushedMatrix().data).toEqual([1, 0, 0, 0, 1, 0]);
+    });
+
+    it('mirrors a perspective quad in place, swapping its left and right edges', () => {
+        tool.setMode(1);
+        const before = lastPushedMatrix().data as Mat3;
+        tool.flip('h');
+        const after = lastPushedMatrix();
+        expect(after.mode).toBe('Perspective');
+        // Source TL now lands where TR did, and vice versa — same quad, mirrored
+        // content.
+        expect(mat3Apply(after.data as Mat3, 0, 0)).toEqual(mat3Apply(before, 100, 0));
+        expect(mat3Apply(after.data as Mat3, 100, 80)).toEqual(mat3Apply(before, 0, 80));
     });
 });

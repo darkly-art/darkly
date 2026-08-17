@@ -160,9 +160,9 @@ pub(crate) enum ReadbackContext {
         /// the texture offset/size + canvas size + format the completion
         /// handler needs to translate `seed_canvas` from canvas coords to
         /// texture coords and project the resulting mask back into a
-        /// canvas-aligned R8 buffer. See
-        /// `crate::gpu::flood_fill::LayerFloodFillExtent`.
-        extent: crate::gpu::flood_fill::LayerFloodFillExtent,
+        /// window-local R8 buffer. See
+        /// `crate::gpu::layer_readback::LayerReadbackExtent`.
+        extent: crate::gpu::layer_readback::LayerReadbackExtent,
     },
     ColorPick,
     Copy {
@@ -177,7 +177,14 @@ pub(crate) enum ReadbackContext {
         tolerance: u8,
         mode: crate::document::SelectionMode,
         /// See `FloodFill::extent` — same coordinate-frame snapshot.
-        extent: crate::gpu::flood_fill::LayerFloodFillExtent,
+        extent: crate::gpu::layer_readback::LayerReadbackExtent,
+    },
+    /// Readback of a node's pixels for "alpha to selection": the completion
+    /// handler projects their opacity into the selection.
+    AlphaToSelection {
+        was_active: bool,
+        /// See `FloodFill::extent` — same coordinate-frame snapshot.
+        extent: crate::gpu::layer_readback::LayerReadbackExtent,
     },
     /// Async readback of the selection GPU texture for CPU cache update.
     SelectionReadback,
@@ -1010,6 +1017,22 @@ impl DarklyEngine {
             ext.width,
             ext.height,
         )
+    }
+
+    /// Canvas-space rect a node's texture occupies — the frame the buffers from
+    /// [`Self::test_readback_layer`] / [`Self::test_readback_mask`] are laid out
+    /// in. For test assertions only.
+    ///
+    /// Those readbacks are texture-local and a texture is not canvas-sized (a
+    /// mask on a 64×64 canvas is backed by a 256×256 allocation), so a test
+    /// that wants the value at a canvas coordinate has to come through here for
+    /// the stride and origin rather than assuming the canvas's own dimensions.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_node_extent(&self, node_id: LayerId) -> crate::coord::CanvasRect {
+        self.compositor
+            .node_texture(node_id)
+            .expect("node texture not found")
+            .canvas_extent()
     }
 
     /// Plant a persistent void frame (camera void's last webcam frame) into

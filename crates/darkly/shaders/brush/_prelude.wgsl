@@ -50,7 +50,13 @@ struct IntrinsicUniforms {
     // uniforms that follow `intrinsic` in the generated `Uniforms` struct keep
     // their 16-byte alignment. Adding `canvas_origin` above pushed the size to
     // 56; without this pad the node params would misalign and read garbage.
-    _pad0:           u32,
+    // How many dabs land on a given texel as the brush passes over it
+    // once: `diameter / spacing`. Stroke-constant, published by the stroke
+    // engine, which owns the spacing that produced it. A terminal
+    // accumulating a per-dab quantity divides by this to express its rate
+    // per *pass* rather than per dab — otherwise the knob's meaning moves
+    // with the spacing setting and with pressure. 1.0 when unset.
+    dabs_per_pass:   f32,
     _pad1:           u32,
     _pad2:           u32,
 };

@@ -1,9 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
     import NewLayerMenu from './NewLayerMenu.svelte';
-    import VeilPickerModal from '../veils/VeilPickerModal.svelte';
-    import VoidPickerModal from '../voids/VoidPickerModal.svelte';
-    import FilterPickerModal from '../filters/FilterPickerModal.svelte';
     import { actions } from '../../actions/registry';
     import { tooltipForAction } from '../../config/store.svelte';
     import Icon from '../../icons/Icon.svelte';
@@ -11,9 +8,6 @@
     let { onupdate }: { onupdate: () => void } = $props();
 
     let menuOpen = $state(false);
-    let pickerOpen = $state(false);
-    let voidPickerOpen = $state(false);
-    let filterPickerOpen = $state(false);
 
     function findNode(nodes: any[], id: number): any | null {
         for (const n of nodes) {
@@ -27,27 +21,14 @@
     }
 
 
-    // The new-layer / new-group footer buttons route through the action
-    // registry so their tooltips can surface the bound hotkey (resolved
-    // via `tooltipForAction`). The selection-aware "wrap or empty group"
-    // logic lives on the action handler in actions/index.ts.
-    function addNormalLayer() {
-        actions.dispatch('newLayer');
-        onupdate();
-    }
-
-    function addGroup() {
-        actions.dispatch('newGroup');
-        onupdate();
-    }
-
-    function pick(kind: 'layer' | 'group' | 'veil' | 'void' | 'filter') {
+    // The footer buttons route through the action registry so their tooltips
+    // can surface the bound hotkey (resolved via `tooltipForAction`) and so
+    // the behaviour — selection-aware "wrap or empty group", picker modals for
+    // the typed kinds — has one home in actions/index.ts.
+    function pick(actionId: string) {
         menuOpen = false;
-        if (kind === 'layer') addNormalLayer();
-        else if (kind === 'group') addGroup();
-        else if (kind === 'veil') pickerOpen = true;
-        else if (kind === 'filter') filterPickerOpen = true;
-        else voidPickerOpen = true;
+        actions.dispatch(actionId);
+        onupdate();
     }
 
     function hostHasMask(layer: any): boolean {
@@ -123,8 +104,8 @@
     <div class="split-btn">
         <button
             class="footer-btn split-main"
-            onclick={addNormalLayer}
-            title="New layer"
+            onclick={() => pick('newLayer')}
+            title={tooltipForAction('New layer', 'newLayer')}
         >
             <Icon name="fa6-solid:plus" />
         </button>
@@ -168,18 +149,6 @@
         <Icon name="fa6-solid:trash" />
     </button>
 </div>
-
-{#if pickerOpen}
-    <VeilPickerModal onclose={() => { pickerOpen = false; onupdate(); }} />
-{/if}
-
-{#if voidPickerOpen}
-    <VoidPickerModal onclose={() => { voidPickerOpen = false; onupdate(); }} />
-{/if}
-
-{#if filterPickerOpen}
-    <FilterPickerModal onclose={() => { filterPickerOpen = false; onupdate(); }} />
-{/if}
 
 <style>
     .footer {
