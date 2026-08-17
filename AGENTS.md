@@ -69,6 +69,8 @@ crates/darkly/src/
                         selection, gpu_region, compound)
   format/               Save/load — zip container, manifest, registry I/O
   nodegraph/            Generic node-graph (graph, compiler, layout)
+  docs_md/              Generated regions in this repo's markdown
+    fragments/    ★     what a region can be filled with (catalog_table, …)
 frontend/wasm/          WASM bridge (wasm-bindgen) — single API surface
 frontend/src/           Svelte UI
 ```
@@ -250,6 +252,43 @@ Every PR body has **two parts**: a human-written preamble explaining *why* the w
 ````
 
 The AI portion must cover the *entire* feature branch (everything since it diverged from `dev`), not just the latest change — the user pastes the whole block as the PR body. On follow-up work, re-emit the complete, updated block as a single description that wholly replaces the previous one; never emit a delta or a partial revision.
+
+## Generated Markdown
+
+Parts of this repository's markdown are generated from the registries. A file
+opts a span of itself in by bracketing it with HTML comments, which render as
+nothing:
+
+```markdown
+<!-- darkly:catalog-table catalog=veils -->
+…generated…
+<!-- /darkly:catalog-table -->
+```
+
+**Never edit inside a region** — the next sync overwrites it. Every name and
+description in one is a `&'static str` on the registration that owns it, so a
+typo in the README's veil table is fixed in `crates/darkly/src/gpu/veils/`.
+
+```bash
+scripts/install-hooks.sh                    # once — pre-commit refills regions
+cargo run -p darkly --bin sync-docs         # by hand
+cargo run -p darkly --bin sync-docs -- --check
+```
+
+`tests/docs_md.rs` fails if a committed region is stale, so CI is the gate; the
+hook only saves you a round trip. A new kind of region is a new file in
+[`crates/darkly/src/docs_md/fragments/`](crates/darkly/src/docs_md/fragments/)
+exporting `pub fn register()` — nothing else is touched.
+
+Preview stills are the one part that is **not** automatic: they need a GPU and
+land in the repository as binaries, so they are rendered deliberately when a
+catalog gains or loses an entry. `tests/docs_md.rs` fails on a region linking to
+an image that is not in the checkout, which is how you find out.
+
+```bash
+cargo run --release -p darkly --features testing --bin render_docs -- \
+  --stills --catalog veils
+```
 
 ## Lint / CI Checks
 

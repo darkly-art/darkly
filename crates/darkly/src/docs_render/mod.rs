@@ -85,6 +85,8 @@ pub enum DocsRenderError {
         catalog: String,
         type_id: String,
     },
+    /// A caller named a catalog no registry produces.
+    UnknownCatalog(String),
     Usage(String),
     Io(std::io::Error),
     Encode(image::ImageError),
@@ -100,6 +102,7 @@ impl std::fmt::Display for DocsRenderError {
             Self::NoRecipe { catalog, type_id } => {
                 write!(f, "`{catalog}/{type_id}` declares no preview recipe")
             }
+            Self::UnknownCatalog(id) => write!(f, "no catalog named `{id}`"),
             Self::Usage(m) => write!(f, "{m}"),
             Self::Io(e) => write!(f, "{e}"),
             Self::Encode(e) => write!(f, "{e}"),
@@ -171,6 +174,36 @@ pub struct Rendered {
     pub fps: u32,
     pub loops: bool,
     pub still: u32,
+}
+
+impl Rendered {
+    /// Turn what a renderer produced into what a consumer receives.
+    ///
+    /// The three renderers differ in how they get their pixels and in nothing
+    /// else, so the two facts that depend on *how the frames were asked for* —
+    /// whether a one-way sequence needs its hand-back dissolved in, and where
+    /// the poster sits — are settled once, here.
+    fn assemble(
+        variant: PreviewVariant,
+        anim: PreviewAnim,
+        frames: Frames,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        // A still is its own poster, and one frame has no hand-back to close.
+        let (frames, still) = match variant {
+            PreviewVariant::Still => (frames, 0),
+            PreviewVariant::Animated => (close_loop(anim, frames), anim.still_frame()),
+        };
+        Rendered {
+            frames,
+            width,
+            height,
+            fps: anim.fps,
+            loops: anim.emits_a_loop(),
+            still,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +353,7 @@ impl Gpu {
         mech: &'static dyn PreviewMechanism,
         catalog: &str,
         type_id: &str,
+        variant: PreviewVariant,
     ) -> Result<Rendered, DocsRenderError> {
         let no_recipe = || DocsRenderError::NoRecipe {
             catalog: catalog.to_string(),
@@ -347,10 +381,11 @@ impl Gpu {
                 voids,
                 filters,
             };
-            // The whole sequence: a documentation asset is every frame, and the
-            // poster is recorded as an index into it rather than written twice.
-            let mut seq = PreviewSequence::open(mech, regs, type_id, PreviewVariant::Animated)
-                .ok_or_else(no_recipe)?;
+            // An animated asset is every frame, with the poster recorded as an
+            // index into it rather than written twice; a still asks the same
+            // sequence for the one frame the entry nominates.
+            let mut seq =
+                PreviewSequence::open(mech, regs, type_id, variant).ok_or_else(no_recipe)?;
             drive(
                 &mut seq,
                 &device.device,
@@ -369,20 +404,17 @@ impl Gpu {
                 },
             );
         }
-        Ok(Rendered {
-            frames: close_loop(anim, frames),
-            width: w,
-            height: h,
-            fps: anim.fps,
-            loops: anim.emits_a_loop(),
-            still: anim.still_frame(),
-        })
+        Ok(Rendered::assemble(variant, anim, frames, w, h))
     }
 
     /// Render one blend mode through a real document, driving the top layer's
     /// opacity — the one thing a consumer without a document cannot do, which is
     /// why this catalog has no offscreen mechanism.
-    fn render_blend_mode(&mut self, type_id: &str) -> Result<Rendered, DocsRenderError> {
+    fn render_blend_mode(
+        &mut self,
+        type_id: &str,
+        variant: PreviewVariant,
+    ) -> Result<Rendered, DocsRenderError> {
         let anim: PreviewAnim = crate::gpu::blend_mode::registry()
             .preview(type_id)
             .ok_or_else(|| DocsRenderError::NoRecipe {
@@ -392,24 +424,28 @@ impl Gpu {
         let doc = self.blend_doc();
         doc.engine.set_blend_mode(doc.top, type_id);
 
-        let mut frames = Vec::with_capacity(anim.frames as usize);
-        for i in 0..anim.frames {
-            let opacity = blend_opacity_at(frame_t(i, anim.frames));
-            doc.engine.set_opacity(doc.top, opacity);
+        // The timeline this catalog is driven over — the whole of it, or the one
+        // moment the entry nominates as standing for it.
+        let timeline: Vec<f32> = match variant {
+            PreviewVariant::Still => vec![anim.still_at],
+            PreviewVariant::Animated => (0..anim.frames).map(|i| frame_t(i, anim.frames)).collect(),
+        };
+        let mut frames = Vec::with_capacity(timeline.len());
+        for t in timeline {
+            doc.engine.set_opacity(doc.top, blend_opacity_at(t));
             frames.push(doc.engine.test_readback_canvas());
         }
         // The document is reused across every mode, and a mode only ever writes
         // the frames it renders — so leaving the last frame's opacity behind
         // would leak into the next entry's first frame.
         doc.engine.set_opacity(doc.top, 1.0);
-        Ok(Rendered {
-            frames: close_loop(anim, frames),
-            width: DOCS_SUBJECT_DIM,
-            height: DOCS_SUBJECT_DIM,
-            fps: anim.fps,
-            loops: anim.emits_a_loop(),
-            still: anim.still_frame(),
-        })
+        Ok(Rendered::assemble(
+            variant,
+            anim,
+            frames,
+            DOCS_SUBJECT_DIM,
+            DOCS_SUBJECT_DIM,
+        ))
     }
 
     /// Render one brush's preview stroke — the same synthetic S-curve, through
@@ -421,7 +457,11 @@ impl Gpu {
     /// over one image, so like a blend mode it has no `src → out` mechanism to
     /// open — it is a second caller of the same `PreviewAnim`, not a second
     /// preview system.
-    fn render_brush_stroke(&mut self, type_id: &str) -> Result<Rendered, DocsRenderError> {
+    fn render_brush_stroke(
+        &mut self,
+        type_id: &str,
+        variant: PreviewVariant,
+    ) -> Result<Rendered, DocsRenderError> {
         let no_recipe = || DocsRenderError::NoRecipe {
             catalog: crate::brush::builtin_brushes::CATALOG_ID.to_string(),
             type_id: type_id.to_string(),
@@ -489,17 +529,11 @@ impl Gpu {
             DOCS_STROKE_FG,
             DOCS_STROKE_BG,
         );
-        Ok(Rendered {
-            // A brush stroke is one frame, so closing is a no-op — routed
-            // through it anyway so no arm of this module is the one that
-            // decides for itself what a declaration means.
-            frames: close_loop(anim, vec![framed]),
-            width: tw,
-            height: th,
-            fps: anim.fps,
-            loops: anim.emits_a_loop(),
-            still: anim.still_frame(),
-        })
+        // A brush stroke is one frame either way, so both variants and the
+        // closing pass are no-ops here — routed through the shared assembly
+        // anyway so no arm of this module is the one that decides for itself
+        // what a declaration means.
+        Ok(Rendered::assemble(variant, anim, vec![framed], tw, th))
     }
 }
 
@@ -516,18 +550,19 @@ pub fn render_entry(
     gpu: &mut Gpu,
     catalog: &str,
     type_id: &str,
+    variant: PreviewVariant,
 ) -> Result<Rendered, DocsRenderError> {
     if let Some((_, mech)) = preview_mechanisms()
         .into_iter()
         .find(|(id, _)| *id == catalog)
     {
-        return gpu.render_offscreen(mech, catalog, type_id);
+        return gpu.render_offscreen(mech, catalog, type_id, variant);
     }
     if catalog == crate::gpu::blend_mode::CATALOG_ID {
-        return gpu.render_blend_mode(type_id);
+        return gpu.render_blend_mode(type_id, variant);
     }
     if catalog == crate::brush::builtin_brushes::CATALOG_ID {
-        return gpu.render_brush_stroke(type_id);
+        return gpu.render_brush_stroke(type_id, variant);
     }
     Err(DocsRenderError::NoRenderer {
         catalog: catalog.to_string(),
@@ -573,6 +608,70 @@ fn write_frames(dir: &Path, frames: &[Vec<u8>], w: u32, h: u32) -> Result<(), Do
     Ok(())
 }
 
+/// Write one frame as JPEG, dropping the alpha channel.
+///
+/// The stills are photographs of the documentation subject with an effect on
+/// them, embedded in markdown at a fraction of their rendered size and committed
+/// to this repository — which is the case JPEG is for. As PNG the same images
+/// are several hundred kilobytes each, and a repository pays that on every
+/// re-render forever. The frames themselves stay lossless; this is the last step
+/// before a reader sees them.
+///
+/// Quality 90 rather than the encoder's default: these are 256 px squares read
+/// at 120, where the ringing a lower setting leaves around a pixelate veil's
+/// hard block edges is visible.
+fn write_jpeg(path: &Path, pixels: &[u8], w: u32, h: u32) -> Result<(), DocsRenderError> {
+    let rgb: Vec<u8> = pixels
+        .chunks_exact(4)
+        .flat_map(|p| [p[0], p[1], p[2]])
+        .collect();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::Cursor::new(&mut out), 90).encode(
+        &rgb,
+        w,
+        h,
+        image::ExtendedColorType::Rgb8,
+    )?;
+    std::fs::write(path, out)?;
+    Ok(())
+}
+
+/// Write one catalog's poster frames as JPEG — what markdown in this repository
+/// embeds, since a table cannot play a video.
+///
+/// One frame per entry, not a sequence: [`PreviewVariant::Still`] renders at the
+/// moment the entry itself nominates, so this is the same picture the editor's
+/// picker shows at rest and the same one the release artifact's poster carries.
+///
+/// The pixels come from whichever adapter runs this, so re-rendering an
+/// unchanged catalog on a different GPU than the last committed run can produce
+/// a diff with no visible change. That is why this is a deliberate command
+/// rather than a build step: it is run when a catalog gains or loses an entry.
+pub fn render_stills(out: &Path, catalog_id: &str) -> Result<Vec<PathBuf>, DocsRenderError> {
+    let catalog = crate::catalog::catalogs()
+        .into_iter()
+        .find(|c| c.id == catalog_id)
+        .ok_or_else(|| DocsRenderError::UnknownCatalog(catalog_id.to_string()))?;
+
+    let mut gpu = Gpu::new();
+    let mut written = Vec::new();
+    for entry in catalog.entries.iter().filter(|e| e.supports_preview) {
+        let rendered = render_entry(&mut gpu, catalog.id, entry.type_id, PreviewVariant::Still)?;
+        let path = out.join(catalog.id).join(format!("{}.jpg", entry.type_id));
+        write_jpeg(
+            &path,
+            &rendered.frames[rendered.still as usize],
+            rendered.width,
+            rendered.height,
+        )?;
+        written.push(path);
+    }
+    Ok(written)
+}
+
 /// Render every previewable catalog entry into `out` and write the index
 /// beside them.
 ///
@@ -585,7 +684,12 @@ pub fn render_all(out: &Path) -> Result<Manifest, DocsRenderError> {
 
     for catalog in crate::catalog::catalogs() {
         for entry in catalog.entries.iter().filter(|e| e.supports_preview) {
-            let rendered = render_entry(&mut gpu, catalog.id, entry.type_id)?;
+            let rendered = render_entry(
+                &mut gpu,
+                catalog.id,
+                entry.type_id,
+                PreviewVariant::Animated,
+            )?;
             let rel = PathBuf::from(catalog.id).join(entry.type_id);
             write_frames(
                 &out.join(&rel),
@@ -625,35 +729,52 @@ pub fn render_all(out: &Path) -> Result<Manifest, DocsRenderError> {
 // ---------------------------------------------------------------------------
 
 pub const USAGE: &str = "\
-render_docs — render an animated preview for every previewable registry entry
+render_docs — render previews for the registry entries that declare one
 
 USAGE:
     render_docs --out <dir>
+    render_docs --stills --catalog <id> [--out <dir>]
 
 OPTIONS:
-    --out <dir>    Directory to write frame sequences and assets.json into
-    --help         Print this message
+    --out <dir>      Where to write. Frame sequences and assets.json by
+                     default; with --stills, defaults to this repository's own
+                     preview directory.
+    --stills         Write one JPEG poster per entry instead of a sequence —
+                     what markdown in this repository embeds.
+    --catalog <id>   Which catalog to render stills for. Required by --stills.
+    --help           Print this message
 ";
 
-pub struct Args {
-    /// `None` when `--help` was asked for and there is no work to do.
-    pub out: Option<PathBuf>,
+/// What a command line asked for.
+pub enum Command {
+    /// `--help` was asked for; there is no work to do.
+    Help,
+    /// Every previewable entry, as PNG frame sequences plus an index — the
+    /// release artifact.
+    Frames { out: PathBuf },
+    /// One catalog's poster frames, as JPEG — what this repository's markdown
+    /// embeds.
+    Stills { out: PathBuf, catalog: String },
 }
 
 /// Parse the command line. This lives here rather than in the binary because
 /// coverage tooling runs test targets and never executes a `[[bin]]` — anything
 /// left inside `fn main` is untestable by construction.
-pub fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args, DocsRenderError> {
-    let mut out = None;
+pub fn parse_args(argv: impl Iterator<Item = String>) -> Result<Command, DocsRenderError> {
+    let mut out: Option<PathBuf> = None;
+    let mut catalog: Option<String> = None;
+    let mut stills = false;
     let mut argv = argv.peekable();
     while let Some(arg) = argv.next() {
+        let mut value = |what: &str| {
+            argv.next()
+                .ok_or_else(|| DocsRenderError::Usage(format!("{what} needs a value")))
+        };
         match arg.as_str() {
-            "--help" | "-h" => return Ok(Args { out: None }),
-            "--out" => {
-                out = Some(PathBuf::from(argv.next().ok_or_else(|| {
-                    DocsRenderError::Usage("--out needs a directory".into())
-                })?))
-            }
+            "--help" | "-h" => return Ok(Command::Help),
+            "--stills" => stills = true,
+            "--out" => out = Some(PathBuf::from(value("--out")?)),
+            "--catalog" => catalog = Some(value("--catalog")?),
             other => {
                 return Err(DocsRenderError::Usage(format!(
                     "unrecognized argument `{other}`"
@@ -661,7 +782,22 @@ pub fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args, DocsRender
             }
         }
     }
-    Ok(Args {
-        out: Some(out.ok_or_else(|| DocsRenderError::Usage("--out is required".into()))?),
+
+    if !stills {
+        if catalog.is_some() {
+            return Err(DocsRenderError::Usage(
+                "--catalog only applies to --stills".into(),
+            ));
+        }
+        return Ok(Command::Frames {
+            out: out.ok_or_else(|| DocsRenderError::Usage("--out is required".into()))?,
+        });
+    }
+    Ok(Command::Stills {
+        // The default destination is the one the markdown fragments link to, so
+        // the writer and the readers cannot disagree about where stills live.
+        out: out.unwrap_or_else(|| crate::docs_md::repo_root().join(crate::docs_md::STILLS_DIR)),
+        catalog: catalog
+            .ok_or_else(|| DocsRenderError::Usage("--stills needs --catalog <id>".into()))?,
     })
 }

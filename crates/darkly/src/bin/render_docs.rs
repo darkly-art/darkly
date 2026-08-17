@@ -5,6 +5,11 @@
 //! cargo run -p darkly --bin render_docs --features testing -- --out <dir>
 //! ```
 //!
+//! `--stills --catalog <id>` writes one JPEG poster per entry instead, into this
+//! repository's own preview directory — the images the generated markdown tables
+//! embed. That mode is run by hand when a catalog gains or loses an entry; the
+//! sequence mode above is what the release workflow runs.
+//!
 //! Kept separate from `export-docs` because that one is GPU-free by
 //! construction: folding both into one binary would drag the metadata export
 //! behind a GPU device and the `testing` feature it does not need.
@@ -15,19 +20,37 @@
 
 use std::process::ExitCode;
 
-use darkly::docs_render::{self, Args};
+use darkly::docs_render::{self, Command};
 
 fn main() -> ExitCode {
-    let args = match docs_render::parse_args(std::env::args().skip(1)) {
-        Ok(a) => a,
+    let command = match docs_render::parse_args(std::env::args().skip(1)) {
+        Ok(c) => c,
         Err(e) => {
             eprintln!("render_docs: {e}\n\n{}", docs_render::USAGE);
             return ExitCode::FAILURE;
         }
     };
-    let Args { out: Some(out) } = args else {
-        print!("{}", docs_render::USAGE);
-        return ExitCode::SUCCESS;
+    let out = match command {
+        Command::Help => {
+            print!("{}", docs_render::USAGE);
+            return ExitCode::SUCCESS;
+        }
+        Command::Stills { out, catalog } => {
+            return match docs_render::render_stills(&out, &catalog) {
+                Ok(written) => {
+                    for path in &written {
+                        println!("{}", path.display());
+                    }
+                    println!("{catalog}: {} stills", written.len());
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("render_docs: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Frames { out } => out,
     };
 
     match docs_render::render_all(&out) {

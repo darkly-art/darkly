@@ -61,11 +61,15 @@ pollster = "1.0"
 naga = { version = "29.0", features = ["wgsl-in"] }
 syn = { version = "3", features = ["visit", "full"] }
 
-# The hyphenated name does not match the file stem, so cargo cannot infer the
-# path from it. No `required-features`: the exporter needs no GPU.
+# The hyphenated names do not match the file stems, so cargo cannot infer the
+# paths from them. No `required-features`: neither needs a GPU.
 [[bin]]
 name = "export-docs"
 path = "src/bin/export_docs.rs"
+
+[[bin]]
+name = "sync-docs"
+path = "src/bin/sync_docs.rs"
 
 [[bin]]
 name = "render_docs"

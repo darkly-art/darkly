@@ -5,6 +5,11 @@ pub mod catalog;
 pub mod clipboard;
 pub mod config;
 pub mod coord;
+/// Fills the marked regions of the repository's own markdown from the
+/// registries. Repository tooling that walks a source tree, so it is native-only
+/// — a browser has no checkout to sync.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod docs_md;
 /// Renders the documentation preview assets. Performs blocking GPU readbacks,
 /// so it lives behind the same gate as `gpu::test_utils` — engine, compositor
 /// and WASM-bridge code cannot name it in a production build.

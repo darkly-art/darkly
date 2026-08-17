@@ -74,6 +74,17 @@
         // Escape handling still runs (it doesn't depend on bubbling).
         e.stopPropagation();
     }
+
+    function onWheel(e: WheelEvent) {
+        // `showModal()` promotes the dialog to the top layer visually, but it
+        // stays a DOM descendant of whatever mounted it — so a wheel event
+        // inside the modal still bubbles to ancestor handlers. The brush
+        // builder's node canvas is the case that bites: its wheel handler
+        // preventDefaults and pans, so the modal body never scrolls. Nothing
+        // beneath a modal should see its wheel events; the body's own
+        // `overflow: auto` scrolling is unaffected (no preventDefault here).
+        e.stopPropagation();
+    }
 </script>
 
 <dialog
@@ -81,6 +92,7 @@
     onclose={onClose}
     use:backdropDismiss={onClose}
     onkeydown={onKeydown}
+    onwheel={onWheel}
     class="modal size-{size}"
     class:bare
     class:undimmed={!dimmed}

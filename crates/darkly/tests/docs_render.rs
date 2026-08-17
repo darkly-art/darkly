@@ -21,9 +21,9 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use darkly::catalog::{catalogs, preview_mechanisms};
-use darkly::docs_render::{self, Gpu, Manifest, Rendered};
+use darkly::docs_render::{self, Command, Gpu, Manifest, Rendered};
 use darkly::gpu::params::ParamValue;
-use darkly::gpu::preview::{frame_t, PreviewAnim};
+use darkly::gpu::preview::{frame_t, PreviewAnim, PreviewVariant};
 
 // ---------------------------------------------------------------------------
 // Shared enumeration — one source for every test below
@@ -283,7 +283,8 @@ fn assets() -> &'static (PathBuf, Manifest) {
 /// what lets the tests that care about cross-asset leakage drive several entries
 /// through the same documents.
 fn render_one(gpu: &mut Gpu, catalog: &str, type_id: &str) -> Rendered {
-    docs_render::render_entry(gpu, catalog, type_id).expect("render_entry")
+    docs_render::render_entry(gpu, catalog, type_id, PreviewVariant::Animated)
+        .expect("render_entry")
 }
 
 /// Every `(catalog, entry)` directory actually present under `root`.
@@ -708,11 +709,14 @@ fn blend_mode_frames_at_full_opacity_are_pairwise_distinct() {
 fn parse_args_reads_out() {
     let args = docs_render::parse_args(["--out".to_string(), "/tmp/x".to_string()].into_iter())
         .expect("--out <dir> parses");
-    assert_eq!(args.out, Some(PathBuf::from("/tmp/x")));
+    assert!(
+        matches!(args, Command::Frames { out } if out == Path::new("/tmp/x")),
+        "--out alone names the frame sequences"
+    );
 
     // `--help` is not an error, and it names no work to do.
     let args = docs_render::parse_args(["--help".to_string()].into_iter()).unwrap();
-    assert_eq!(args.out, None);
+    assert!(matches!(args, Command::Help));
 }
 
 #[test]
@@ -720,6 +724,48 @@ fn parse_args_rejects_a_missing_out() {
     assert!(docs_render::parse_args(std::iter::empty()).is_err());
     assert!(docs_render::parse_args(["--out".to_string()].into_iter()).is_err());
     assert!(docs_render::parse_args(["--wat".to_string()].into_iter()).is_err());
+}
+
+/// The stills mode names a catalog and defaults its destination to the one the
+/// generated tables link to — so nobody has to remember the path, and a typo in
+/// it cannot put the images somewhere the markdown does not look.
+#[test]
+fn parse_args_reads_the_stills_mode() {
+    let args = docs_render::parse_args(
+        ["--stills", "--catalog", "veils"]
+            .map(String::from)
+            .into_iter(),
+    )
+    .expect("--stills --catalog <id> parses");
+    let Command::Stills { out, catalog } = args else {
+        panic!("--stills names the stills mode");
+    };
+    assert_eq!(catalog, "veils");
+    assert_eq!(
+        out,
+        darkly::docs_md::repo_root().join(darkly::docs_md::STILLS_DIR)
+    );
+
+    let args = docs_render::parse_args(
+        ["--stills", "--catalog", "veils", "--out", "/tmp/x"]
+            .map(String::from)
+            .into_iter(),
+    )
+    .expect("--out overrides the destination");
+    assert!(matches!(args, Command::Stills { out, .. } if out == Path::new("/tmp/x")));
+}
+
+#[test]
+fn parse_args_rejects_a_catalog_without_stills() {
+    // Naming a catalog for the sequence mode is a misunderstanding, not a
+    // no-op: that mode renders every catalog there is.
+    assert!(docs_render::parse_args(
+        ["--out", "/tmp/x", "--catalog", "veils"]
+            .map(String::from)
+            .into_iter()
+    )
+    .is_err());
+    assert!(docs_render::parse_args(["--stills".to_string()].into_iter()).is_err());
 }
 
 /// **Every** brush renders the same bytes twice — all thirteen, not a sample.

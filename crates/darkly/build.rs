@@ -124,6 +124,11 @@ fn main() {
         "crate::config::schema::SchemaSection",
     );
 
+    generate_registry(
+        &src.join("docs_md/fragments"),
+        "crate::docs_md::FragmentRegistration",
+    );
+
     generate_catalog_registry(
         &src.join("document/filters"),
         "crate::document::filter::FilterEntityRegistration",

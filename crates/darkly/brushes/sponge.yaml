@@ -15,9 +15,9 @@ nodes:
     inputs:
       curve:
       - - 0.0
-        - 0.70523924
-      - - 0.59307975
-        - 0.36470732
+        - 0.7
+      - - 0.6
+        - 0.36
       - - 1.0
         - 0.0
   curve_2:
@@ -26,12 +26,23 @@ nodes:
       curve:
       - - 0.0
         - 0.0
-      - - 0.6392242
-        - 0.36304563
+      - - 0.64
+        - 0.36
       - - 1.0
         - 1.0
+  curve_3:
+    type: curve
+    inputs:
+      curve:
+      - - 0.0
+        - 0.0
+      - - 1.0
+        - 0.5
+      input: 0.10
   levels:
     type: levels
+  multiply:
+    type: multiply
   noise:
     type: noise
     inputs:
@@ -47,10 +58,10 @@ nodes:
     type: polygon
     inputs:
       points: 4
-      rounding: 0.30
-      softness: 0.30
-      squeeze: 0.35
-      squeeze_angle: -0.7853981852531433
+      rounding: 0.5
+      softness: 0.3
+      squeeze: 0.5
+      squeeze_angle: -0.78
   random:
     type: random
   random_2:
@@ -63,9 +74,12 @@ nodes:
       a: 0.11924592405557632
 connections:
 - add.result -> levels.input
+- brush_settings.size -> multiply.a
 - curve.output -> levels.in_low
 - curve_2.output -> paint.flow
+- curve_3.output -> multiply.b
 - levels.output -> stamp.tip
+- multiply.result -> noise.scale
 - noise.value -> subtract.b
 - paint_color.color -> stamp.color
 - pen_input.drawing_angle -> polygon.rotation_input
@@ -84,3 +98,7 @@ exposed_ports:
   paint.opacity: {}
   polygon.softness: {}
   polygon.rounding: {}
+  curve_3.input:
+    label: Texture Size
+    description: Fineness of the brush texture
+    icon: mdi:blur
