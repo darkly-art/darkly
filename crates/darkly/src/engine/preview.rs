@@ -12,8 +12,9 @@
 //! bounds the memory — opening a picker with seventeen animated cards would
 //! otherwise put the whole sequence's staging buffers in flight at once.
 //!
-//! Capture is asynchronous throughout (`AGENTS.md` §No Blocking GPU Readbacks):
-//! each frame's readback is appended to the *same* submission that encoded it,
+//! Capture is asynchronous throughout (`CONTRIBUTING.md` §No Blocking GPU
+//! Readbacks): each frame's readback is appended to the *same* submission that
+//! encoded it,
 //! so it captures that frame before the next overwrites the output texture.
 
 use super::DarklyEngine;

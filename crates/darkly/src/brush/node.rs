@@ -10,7 +10,7 @@
 //! Bundling the evaluator constructor here is the load-bearing design choice
 //! that lets [`crate::brush::BrushNodeRegistry`] be the single source of
 //! truth for "what nodes exist?" — there is no parallel hand-written
-//! evaluator map to keep in sync. See AGENTS.md "Modularity Principle".
+//! evaluator map to keep in sync. See CONTRIBUTING.md "Modularity Principle".
 //!
 //! The nodegraph compiler only knows about [`NodeRegistration<W>`]; the
 //! brush layer unwraps `.node` when feeding it into the compiler.  The

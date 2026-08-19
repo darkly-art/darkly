@@ -16,8 +16,8 @@ use std::collections::{BTreeMap, HashMap};
 /// to the schema or YAML layers cannot be auto-cleaned by
 /// [`super::schema`]-driven validation — e.g. a pref key is renamed, a
 /// pref's kind changes shape (str→int, scalar→list), or the file's
-/// envelope itself changes. Pre-release we just discard mismatched files
-/// (per CLAUDE.md "No Migrations"); post-release this is the discriminator
+/// envelope itself changes. Pre-release we just discard mismatched files (per
+/// CONTRIBUTING.md "No Migrations"); post-release this is the discriminator
 /// migrations key off.
 ///
 /// Forward-compatible changes don't need a bump: new prefs get default

@@ -9,7 +9,7 @@ nodes:
     inputs:
       size: 0.2
       spacing: 0.01
-      stabilize: 1.0
+      stabilize: 0.5
   circle:
     type: circle
   curve:

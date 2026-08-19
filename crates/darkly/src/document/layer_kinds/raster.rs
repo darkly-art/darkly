@@ -1,6 +1,6 @@
 //! Raster layer kind — pixel-storing leaf in the layer tree.
 //!
-//! Per the Modularity Principle in [AGENTS.md], the entire raster kind
+//! Per the Modularity Principle in [CONTRIBUTING.md], the entire raster kind
 //! lives in this file: data lives on [`crate::layer::RasterLayer`], and
 //! the wire format (`RasterBody`) plus serializer / deserializer /
 //! id-remap functions all live here. Adding a new layer kind copies

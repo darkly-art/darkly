@@ -1,6 +1,6 @@
 //! Group layer kind — a tree container for nested layers / groups.
 //!
-//! Per the Modularity Principle in [AGENTS.md], the entire group kind
+//! Per the Modularity Principle in [CONTRIBUTING.md], the entire group kind
 //! lives in this file: data lives on [`crate::layer::LayerGroup`], wire
 //! format (`GroupBody`) and serializer / deserializer / id-remap
 //! functions live here.

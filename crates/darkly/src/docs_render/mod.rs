@@ -573,8 +573,8 @@ pub fn render_entry(
 /// The source the offscreen path handed the effect, read back.
 ///
 /// Test-only, and gated for the same reason `PreviewTarget::source_texture` is:
-/// nothing in a run reads the source back, and `AGENTS.md` §No Blocking GPU
-/// Readbacks keeps readback surface behind the gate. A value-pinned assertion
+/// nothing in a run reads the source back, and `CONTRIBUTING.md` §No Blocking
+/// GPU Readbacks keeps readback surface behind the gate. A value-pinned assertion
 /// about what a filter *did* has to compare against what it was *given* — the
 /// 2:1 area average of the subject, not the subject itself.
 #[cfg(any(test, feature = "testing"))]

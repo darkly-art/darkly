@@ -11,7 +11,7 @@ use crate::coord::{CanvasPoint, CanvasRect, LayerPoint, LayerRect};
 /// accessors ([`canvas_extent`], [`layer_extent`], [`canvas_to_layer*`],
 /// [`layer_to_canvas*`]) so the canvas/layer-local distinction lives in the
 /// type system rather than in convention. See module docs of
-/// [`crate::coord`] and the project's CLAUDE.md for the rule: every
+/// [`crate::coord`] and the project's CONTRIBUTING.md for the rule: every
 /// coordinate at every interface names its space; only the texture itself
 /// translates between them.
 ///

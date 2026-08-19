@@ -14,7 +14,7 @@
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
-Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), the home of happy accidents and beautiful catastrophies. Madness isn't a bug, it's a feature.
+Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), the home of happy accidents and beautiful catastrophies. Finally craft your chaotic masterpiece. Madness isn't a bug, it's a feature.
 
 Darkly is a Photoshop alternative where painters are first-class citizens. It has a powerful brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
 
@@ -248,7 +248,7 @@ See the [crate README](crates/darkly/README.md) for a runnable example, and the 
 
 ## Contribution
 
-We love hackers as much as we love artists. Contributions are welcome! Please see [AGENTS.md](./AGENTS.md) for details on how to contribute and rules of thumb for the repo.
+We love hackers as much as we love artists. Contributions are welcome! Please see [CONTRIBUTING.md](./CONTRIBUTING.md) for details on how to contribute and rules of thumb for the repo.
 
 ### Use of AI
 
@@ -256,7 +256,7 @@ It's acceptable to use AI for this codebase, but careless vibe coding is **stric
 
 I (TheTechromancer) learned to code before AI, and have spent much of my career maintaining [large codebases](https://github.com/blacklanternsecurity/bbot). The [danger](https://www.reddit.com/r/vibecoding/comments/1su03dk/vibe_coded_for_6_months_my_codebase_is_a_disaster/) of feature creep and architectural bloat is real, which is why whenever a feature is implemented in Darkly, a human must first understand the changes and their long-term implications for the codebase.
 
-Great care is being taken to keep Darkly lean and clean. This means enforcing modularity, guarding vigilantly against duplicate/dead code, and writing a *shit ton* of unit tests, including at least one regression test for every bug. See [AGENTS.md](AGENTS.md) for how we avoid AI slop.
+Great care is being taken to keep Darkly lean and clean. This means enforcing modularity, guarding vigilantly against duplicate/dead code, and writing a *shit ton* of unit tests, including at least one regression test for every bug. See [CONTRIBUTING.md](CONTRIBUTING.md) for how we avoid AI slop.
 
 Note that while we allow AI for coding, we are **unlikely to accept any PR implementing generative AI in Darkly itself**. AI features are not off the table; however they must run fully offline and without any reliance on third party APIs. Additionally, any feature that speeds up generation while sacrificing creative input or control from the artist, will likely be rejected.
 

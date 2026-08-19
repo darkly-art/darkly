@@ -13,7 +13,7 @@ categories = ["graphics", "rendering", "wasm"]
 [features]
 profile = []
 # Enables blocking GPU readbacks, `gpu::test_utils`, and `*::test_readback_*`
-# accessors. WebGPU/WASM deadlocks on these (see CLAUDE.md "No Blocking GPU
+# accessors. WebGPU/WASM deadlocks on these (see CONTRIBUTING.md "No Blocking GPU
 # Readbacks"); the feature exists so `cargo test` and the bench bins can opt
 # in while production / WASM builds cannot reach the API at all.
 testing = []

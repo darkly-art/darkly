@@ -1,7 +1,7 @@
 //! Mask filter — multiplies a host's alpha by an R8 alpha texture.
 //!
-//! Per the Modularity Principle in [AGENTS.md], the entire mask kind lives in
-//! this file: data struct, construction, wire format, and the `register()`
+//! Per the Modularity Principle in [CONTRIBUTING.md], the entire mask kind
+//! lives in this file: data struct, construction, wire format, and the `register()`
 //! discovery hook.
 
 use serde::{Deserialize, Serialize};

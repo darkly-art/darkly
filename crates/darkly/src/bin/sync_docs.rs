@@ -1,14 +1,14 @@
 //! Re-render every generated region in the repository's markdown.
 //!
 //! ```text
-//! cargo run -p darkly --bin sync-docs             # rewrite
-//! cargo run -p darkly --bin sync-docs -- --check  # report only
+//! cargo sync-docs              # rewrite
+//! cargo sync-docs -- --check   # report only
 //! ```
 //!
 //! `--check` is what `tests/docs_md.rs` asserts and what CI therefore enforces;
-//! the writing mode is what `.githooks/pre-commit` runs so a working tree fixes
-//! itself. Needs no GPU — every fragment builds from `&'static` registration
-//! data, the same property that lets the check live in the ordinary test suite.
+//! the writing mode is what you run by hand to make a stale checkout correct.
+//! Needs no GPU — every fragment builds from `&'static` registration data, the
+//! same property that lets the check live in the ordinary test suite.
 
 use std::path::PathBuf;
 use std::process::ExitCode;

@@ -11,7 +11,7 @@
 This is a living document. It explains the **why**, not the **what** — for the
 current API surface see [getting-started-typescript.md](getting-started-typescript.md)
 and [getting-started-rust.md](getting-started-rust.md); for the architecture in
-the abstract see [`CLAUDE.md`](../CLAUDE.md).
+the abstract see [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ---
 
@@ -26,7 +26,7 @@ TypeScript:
 1. **One authoritative core, many frontends.** The document model (layer tree,
    modifiers, undo, serialization) must be reasoned about, tested, and evolved
    *without a GPU and without a browser*. That's the [Document Authority
-   Principle](../CLAUDE.md): the document is authoritative and serializable; the
+   Principle](../CONTRIBUTING.md): the document is authoritative and serializable; the
    compositor is a derived realization. A Rust core compiles three ways — the
    WASM bridge for the browser, a future Tauri/native backend, and a **headless
    `cargo test`** harness that drives the real engine on Vulkan/Metal. A
@@ -132,7 +132,7 @@ re-entrancy** — accepted as "a bug to fix structurally, not paper over"), and 
 taxonomy**. Every new engine operation forced an author to pick a bucket, add a
 `Command` variant, and wire a drain arm — a central `enum Command` and a central
 `match` that grew without bound (the exact thing the [Modularity
-Principle](../CLAUDE.md) forbids). The ~15 "direct mutation" methods were a
+Principle](../CONTRIBUTING.md) forbids). The ~15 "direct mutation" methods were a
 standing latent panic. And there was still no uniform way to *return a value from
 an operation that needs an async GPU readback* (copy, export, save) — those were
 special-cased. The command queue solved the stroke race; it did not give the
@@ -279,7 +279,7 @@ Future refactorers should know these are **deliberate**, not oversights:
   internally; the boundary just isn't a future bridge.
 - **Synchronous return values from GPU-reading ops.** Impossible by physics on
   WASM (no blocking readback) — these are deferred and resolve a promise. See
-  [No Blocking GPU Readbacks](../CLAUDE.md).
+  [No Blocking GPU Readbacks](../CONTRIBUTING.md).
 - **Typed, per-method TS ergonomics, *for now*.** `await engine.send('copy', {…})`
   is stringly-typed. The typed client (`await engine.copy(id)`) is a planned thin
   wrapper *over* the transport (plan "Phase C") — it recovers the ergonomics
@@ -289,7 +289,7 @@ Future refactorers should know these are **deliberate**, not oversights:
   keep the core platform-agnostic and the waker model trivial.
 - **A single `RefCell<DarklyEngine>` as one actor cell.** State is *not* scattered
   into per-subsystem cells to please the borrow checker — see the [Ownership
-  Principle](../CLAUDE.md). Splitting the engine into `RenderHandle`/`PaintHandle`
+  Principle](../CONTRIBUTING.md). Splitting the engine into `RenderHandle`/`PaintHandle`
   (Era-2 option 3) was considered and rejected for the same reason.
 
 ---

@@ -1,6 +1,6 @@
 # Brush Preview & On-Canvas Overlays
 
-The pointer-to-pixel diagram in [`AGENTS.md`](../AGENTS.md) is the *paint* path.
+The pointer-to-pixel diagram in [`CONTRIBUTING.md`](../CONTRIBUTING.md) is the *paint* path.
 Most on-canvas feedback comes from two derived paths, and a lot of tool/UX bugs
 live here — invisible unless you know the model below.
 

@@ -184,7 +184,7 @@ engine's `test_readback_*` accessors that integration tests rely on.
 
 ## Where to go next
 
-- Architecture and state boundaries: [`CLAUDE.md`](../CLAUDE.md).
+- Architecture and state boundaries: [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 - Anything involving x/y coordinates: [`docs/coordinate-systems.md`](coordinate-systems.md).
 - GPU readback rules: [`docs/lessons-learned/gpu-lessons-learned.md`](lessons-learned/gpu-lessons-learned.md).
 - Driving the engine from the browser: [`docs/getting-started-typescript.md`](getting-started-typescript.md).

@@ -7,8 +7,8 @@
 //! `FilterKind::apply` for each visible filter. The outer compositor never
 //! branches on whether a host has a mask.
 //!
-//! Per the Modularity Principle in [AGENTS.md], each kind lives in a single
-//! file under `document/filters/<kind>.rs` and exports a `register()` that
+//! Per the Modularity Principle in [CONTRIBUTING.md], each kind lives in a
+//! single file under `document/filters/<kind>.rs` and exports a `register()` that
 //! returns a [`FilterEntityRegistration`]. `build.rs` auto-discovers the directory
 //! and emits `document/filters/mod.rs`.
 

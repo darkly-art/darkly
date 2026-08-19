@@ -34,8 +34,8 @@ use crate::gpu::readback::{self, ReadbackRequest};
 /// The algorithm is the same scanline approach used by the tile-based fill, but
 /// operates on contiguous pixel data from a GPU readback.
 ///
-/// Algorithm notes (per CLAUDE.md "Performance Principle"): the implementation
-/// is Smith/Heckbert scanline fill — `VecDeque<(y, start, end)>` holds whole
+/// Algorithm notes (per CONTRIBUTING.md "Performance Principle"): the
+/// implementation is Smith/Heckbert scanline fill — `VecDeque<(y, start, end)>` holds whole
 /// horizontal segments, not per-pixel work. Queue depth is bounded by the
 /// number of distinct segments in the fill region (O(perimeter)), not the
 /// pixel count. The `mask` is a flat `Vec<u8>` indexed directly; no HashMap.

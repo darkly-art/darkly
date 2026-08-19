@@ -951,7 +951,7 @@ impl SelectionState {
     /// Borrow the current selection texture as a `CanvasFrame`. The selection
     /// texture is window-sized; its `canvas_extent` is window-local `(0, 0,
     /// w, h)` (the plane anchoring is realized by [`Self::resize`], not by a
-    /// non-zero extent origin — see CLAUDE.md selection notes).
+    /// non-zero extent origin — see CONTRIBUTING.md selection notes).
     pub fn canvas_frame(&self) -> crate::gpu::atlas::CanvasFrame<'_> {
         crate::gpu::atlas::CanvasFrame {
             texture: self.texture(),

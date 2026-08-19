@@ -34,7 +34,7 @@ fn generated_regions_are_up_to_date() {
     );
     assert!(
         report.changed.is_empty(),
-        "out of date: {}\nrun `cargo run -p darkly --bin sync-docs`",
+        "out of date: {}\nrun `cargo sync-docs`",
         report
             .changed
             .iter()

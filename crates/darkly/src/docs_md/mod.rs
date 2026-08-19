@@ -16,9 +16,9 @@
 //! ```
 //!
 //! [`sync`] walks the tree, re-renders every region it finds and either writes
-//! the result back or reports the drift. `cargo run -p darkly --bin sync-docs`
-//! is the writer, `tests/docs_md.rs` is the checker, and `.githooks/pre-commit`
-//! runs the writer so a working tree fixes itself.
+//! the result back or reports the drift. `cargo sync-docs` is the writer and
+//! `tests/docs_md.rs` is the checker, so a stale region fails the ordinary test
+//! suite and one command fixes it.
 //!
 //! Fragments are a modular registry: a new one is a new file in `fragments/`
 //! exporting `pub fn register()`, and nothing here is edited to admit it.
@@ -38,8 +38,8 @@ use std::path::{Path, PathBuf};
 pub const STILLS_DIR: &str = "docs/images/previews";
 
 /// Directories the walk never descends into. `target` and `node_modules` are
-/// build output; the rest are the prior-art checkouts `AGENTS.md` asks for, tens
-/// of thousands of markdown files that are not ours to rewrite.
+/// build output; the rest are the prior-art checkouts `CONTRIBUTING.md` asks
+/// for, tens of thousands of markdown files that are not ours to rewrite.
 const SKIP_DIRS: &[&str] = &[
     "target",
     "node_modules",
@@ -220,8 +220,8 @@ fn open_marker(line: &str) -> Option<(&str, &str)> {
 ///
 /// A marker in a code block is an example, not a region. Documentation about
 /// this system has to be able to show the syntax it is documenting —
-/// `AGENTS.md` does, and without this it would rewrite its own explanation into
-/// a table of veils.
+/// `CONTRIBUTING.md` does, and without this it would rewrite its own
+/// explanation into a table of veils.
 #[derive(Default)]
 struct Fence(Option<(char, usize)>);
 
@@ -401,15 +401,16 @@ fn walk(root: &Path, rel: &Path, found: &mut Vec<PathBuf>) -> Result<(), std::io
         let name = entry.file_name();
         let name = name.to_string_lossy();
         let path = rel.join(name.as_ref());
-        // Symlinks are never followed. `CLAUDE.md` is a link to `AGENTS.md`, and
-        // rewriting a file twice under two names is at best noise in the report;
-        // a link pointing out of the tree would be worse. A link's target is
-        // walked on its own if it is in the tree, which is where it belongs.
+        // Symlinks are never followed. `AGENTS.md` and `CLAUDE.md` are links to
+        // `CONTRIBUTING.md`, and rewriting one file three times under three
+        // names is at best noise in the report; a link pointing out of the tree
+        // would be worse. A link's target is walked on its own if it is in the
+        // tree, which is where it belongs.
         if entry.file_type()?.is_symlink() {
             continue;
         }
         if entry.file_type()?.is_dir() {
-            // Hidden directories are tooling (`.git`, `.github`, `.githooks`);
+            // Hidden directories are tooling (`.git`, `.github`, `.cargo`);
             // nothing in them is documentation a reader browses.
             if name.starts_with('.') || SKIP_DIRS.contains(&name.as_ref()) {
                 continue;
@@ -543,8 +544,9 @@ mod tests {
     }
 
     /// A marker in a code block is documentation *about* the syntax, and
-    /// `AGENTS.md` is full of it. Rewriting an explanation into a veil table was
-    /// this tool's first act on the repository, before fences were understood.
+    /// `CONTRIBUTING.md` is full of it. Rewriting an explanation into a veil
+    /// table was this tool's first act on the repository, before fences were
+    /// understood.
     #[test]
     fn markers_inside_a_code_fence_are_examples() {
         let text = format!("Like so:\n\n```markdown\n{OPEN}\n…\n{CLOSE}\n```\n\nSee?\n");
@@ -670,16 +672,18 @@ mod tests {
         }
     }
 
-    /// `CLAUDE.md` is a symlink to `AGENTS.md`. One file, one entry — otherwise
-    /// a report names the same content twice and a link out of the tree would be
-    /// followed out of it.
+    /// `AGENTS.md` and `CLAUDE.md` are symlinks to `CONTRIBUTING.md`. One file,
+    /// one entry — otherwise a report names the same content three times and a
+    /// link out of the tree would be followed out of it.
     #[test]
     fn the_walk_reaches_a_linked_file_once_under_its_real_name() {
         let files = markdown_files(&repo_root()).unwrap();
-        assert!(files.iter().any(|p| p == Path::new("AGENTS.md")));
-        assert!(
-            !files.iter().any(|p| p == Path::new("CLAUDE.md")),
-            "the link was walked as well as its target"
-        );
+        assert!(files.iter().any(|p| p == Path::new("CONTRIBUTING.md")));
+        for link in ["AGENTS.md", "CLAUDE.md"] {
+            assert!(
+                !files.iter().any(|p| p == Path::new(link)),
+                "`{link}` was walked as well as its target"
+            );
+        }
     }
 }

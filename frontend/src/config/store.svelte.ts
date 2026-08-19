@@ -28,7 +28,7 @@ import { validateOverrides } from './validate';
  * layer, so switching editors is just `config.set('app.baseSettings', ...)`.
  *
  * On-disk envelope: `{ "version": <CONFIG_VERSION>, "values": {...} }`.
- * Pre-release we discard mismatched-version files outright (per CLAUDE.md
+ * Pre-release we discard mismatched-version files outright (per CONTRIBUTING.md
  * "No Migrations"); the field exists so post-release migrations have a
  * discriminator to key off.
  */

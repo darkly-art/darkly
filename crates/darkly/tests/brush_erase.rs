@@ -12,7 +12,7 @@
 //! Run with: `cargo test -p darkly --test brush_erase -- --test-threads=1`
 //! (GPU integration tests share a process-wide wgpu device.)
 //!
-//! Per CLAUDE.md's Testing Principle: confirm this test FAILS against the
+//! Per CONTRIBUTING.md's Testing Principle: confirm this test FAILS against the
 //! unfixed `paint.rs` (per-dab `erase_pipeline` branch leaves the scratch
 //! at zero, so `destination_out` is a no-op), then passes after removing
 //! that branch.

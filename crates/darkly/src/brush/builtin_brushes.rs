@@ -4,7 +4,7 @@
 //! describes its node graph in the [`PortableBrush`] format. The
 //! build script (`crates/darkly/build.rs`) embeds every `.yaml` in
 //! that directory at compile time — adding a new brush is "drop a
-//! file, no code changes." See the modularity rules in CLAUDE.md.
+//! file, no code changes." See the modularity rules in CONTRIBUTING.md.
 
 use std::sync::OnceLock;
 

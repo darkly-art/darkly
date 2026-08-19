@@ -65,9 +65,9 @@ impl DarklyEngine {
         if !self.has_selection() {
             return;
         }
-        // Selection pixel bounds are *window-local* (see CLAUDE.md selection
-        // notes); fall back to recomputing them from the CPU cache when the
-        // async readback hasn't landed yet.
+        // Selection pixel bounds are *window-local* (see CONTRIBUTING.md
+        // selection notes); fall back to recomputing them from the CPU cache
+        // when the async readback hasn't landed yet.
         let local = match self.selection_pixel_bounds().filter(|b| !b.is_empty()) {
             Some(b) => b,
             None => match self.selection_cpu_cache().and_then(|data| {
