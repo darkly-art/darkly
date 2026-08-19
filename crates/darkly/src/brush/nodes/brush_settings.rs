@@ -38,6 +38,16 @@ pub const TYPE_ID: &str = "brush_settings";
 /// back to this.
 pub const DEFAULT_BASE_SIZE: f32 = 0.1;
 
+/// Top of the `stamp_angle_rate` range, meaning *unlimited*: the stamp may turn
+/// as far as it likes per dab and only the undirected-axis fold applies. Also
+/// the registration default, so a brush that never touches the knob paints
+/// exactly as it did before the rate limit existed.
+///
+/// It is a sentinel rather than a large magnitude because no finite rate is
+/// "unlimited" at every spacing — the per-dab bound is `rate × spacing_ratio`,
+/// and brushes ship ratios from 1% to 10%.
+pub const STAMP_ANGLE_RATE_UNLIMITED: f32 = 8.0 * std::f32::consts::PI;
+
 /// Node id of the (first) `brush_settings` node in `graph`, if any. The
 /// out-of-band knobs all live on this node, so engine, CLI, and tests resolve
 /// it here rather than re-scanning by type.
@@ -88,6 +98,17 @@ pub fn spacing_config(graph: &Graph<BrushWireType>) -> SpacingConfig {
         default.min_px
     };
     SpacingConfig { ratio, min_px }
+}
+
+/// How far the stamp may turn to follow the stroke, in radians per brush
+/// diameter of travel, read out-of-band from the `brush_settings` node's
+/// `stamp_angle_rate` input-port default. Falls back to
+/// [`STAMP_ANGLE_RATE_UNLIMITED`] for graphs that predate the port, so they keep
+/// their current behaviour.
+///
+/// Stroke-constant: read once at stroke start and handed to the stroke engine.
+pub fn stamp_angle_rate(graph: &Graph<BrushWireType>) -> f32 {
+    read_scalar_input(graph, "stamp_angle_rate").unwrap_or(STAMP_ANGLE_RATE_UNLIMITED)
 }
 
 pub fn register() -> BrushNodeRegistration {
@@ -158,6 +179,28 @@ pub fn register() -> BrushNodeRegistration {
                         "Absolute-pixel floor for dab spacing. 0 = use the \
                          ratio above; non-zero pins spacing to at least \
                          this many canvas pixels regardless of brush size.",
+                    ),
+                // How fast the stamp may pivot to follow the stroke, per brush
+                // diameter of travel — so the limit is the same whether the
+                // brush is 10px or 400px, and tightening spacing doesn't loosen
+                // it. Read at stroke start. Expressed per *travel* rather than
+                // per dab because that is what the tearing depends on: a stamp
+                // of diameter D turning Δθ sweeps its extremity through
+                // (D/2)·Δθ, which must not outrun the overlap over the travel s.
+                // No `preview_irrelevant_scrub`: the editor preview runs a real
+                // StrokeEngine, so scrubbing this does change it.
+                PortDef::input("stamp_angle_rate", BrushWireType::Scalar)
+                    .with_range(0.0, STAMP_ANGLE_RATE_UNLIMITED, STAMP_ANGLE_RATE_UNLIMITED)
+                    .with_natural_range(0.0, 4.0 * std::f32::consts::PI)
+                    .with_unit(UnitType::Degrees)
+                    .with_icon("fa6-solid:arrows-spin")
+                    .with_label("Turn rate")
+                    .with_description(
+                        "How far the stamp may turn to follow the stroke, per brush-width of \
+                         travel. At maximum the stamp turns freely. Lower values keep \
+                         sharp-cornered stamps from spinning between dabs and tearing at \
+                         corners \u{2014} 360\u{b0} completes a full turn in one brush width; \
+                         0 locks the stamp to the angle it started at.",
                     ),
             ],
             is_gpu: false,
@@ -235,6 +278,24 @@ mod tests {
     fn base_size_falls_back_without_settings_node() {
         let graph = Graph::<BrushWireType>::new();
         assert!((base_size(&graph) - DEFAULT_BASE_SIZE).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stamp_angle_rate_reads_scrubbed_value() {
+        let graph = graph_with_settings(&[("stamp_angle_rate", 1.25)]);
+        assert!((stamp_angle_rate(&graph) - 1.25).abs() < 1e-6);
+    }
+
+    /// A graph that predates the port — and the shipped default — must leave
+    /// the stamp turning freely, so adding the rate limit changes no existing
+    /// brush's output.
+    #[test]
+    fn stamp_angle_rate_falls_back_to_unlimited() {
+        let empty = Graph::<BrushWireType>::new();
+        assert!((stamp_angle_rate(&empty) - STAMP_ANGLE_RATE_UNLIMITED).abs() < 1e-6);
+
+        let untouched = graph_with_settings(&[]);
+        assert!((stamp_angle_rate(&untouched) - STAMP_ANGLE_RATE_UNLIMITED).abs() < 1e-6);
     }
 
     #[test]

@@ -63,6 +63,18 @@ impl DarklyEngine {
         crate::brush::nodes::brush_settings::base_size(&brush.graph)
     }
 
+    /// Read the active brush's stamp turn rate from its
+    /// `brush_settings.stamp_angle_rate` knob — radians per brush diameter of
+    /// travel, read out-of-band at stroke start like spacing and base size.
+    fn active_stamp_angle_rate(&self) -> f32 {
+        use crate::brush::state::BrushState;
+        let tool = self.tool_session.read();
+        let brush = tool
+            .get::<BrushState>()
+            .expect("BrushState registered at session init");
+        crate::brush::nodes::brush_settings::stamp_angle_rate(&brush.graph)
+    }
+
     /// Flush any pending diff-based undo commit. Called before overwriting the
     /// scratch texture (e.g. at the start of a new stroke). Uses Poll (not Wait)
     /// — if the diff hasn't completed yet, falls back to a full-canvas rect.
@@ -947,6 +959,7 @@ impl DarklyEngine {
                 stabilizer,
                 clone_source_anchor,
                 StrokeEngine::random_seed(),
+                self.active_stamp_angle_rate(),
             ));
 
             // Merged clone freezes the root composite, so make sure it's

@@ -14,7 +14,6 @@ nodes:
     type: liquify
 connections:
 - 'pen_input.distance -> liquify.distance'
-- 'pen_input.drawing_angle -> liquify.direction'
 - 'pen_input.motion -> liquify.motion'
 - 'pen_input.position -> liquify.position'
 exposed_ports:

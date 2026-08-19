@@ -1,7 +1,7 @@
 <a href="https://github.com/darkly-art/darkly"><img src="https://github.com/user-attachments/assets/62115b89-ab63-453c-93ce-a513e500fad7" alt="darkly" width="675"></a>
 
 [![Discord](https://img.shields.io/discord/1495886270780539021?label=Discord&logo=discord&logoColor=white&style=for-the-badge&color=9500ff)](https://discord.gg/kFz2FGhbpu)
-[![Patreon](https://img.shields.io/badge/Patreon-Strange_Relics-orange?logo=patreon&style=for-the-badge&color=6914ff)](https://www.patreon.com/c/DarklyArt)
+[![Patreon](https://img.shields.io/badge/Patreon-Hidden_Relics-orange?logo=patreon&style=for-the-badge&color=6914ff)](https://www.patreon.com/c/DarklyArt)
 [![Blog](https://img.shields.io/badge/Blog-Deranged_Texts-orange?logo=substack&logoColor=white&style=for-the-badge&color=4400ff)](https://darkly.art/blog)
 
 ![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=9500ff)
@@ -14,7 +14,7 @@
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
-Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), the home of happy accidents and beautiful catastrophies. Finally craft your chaotic masterpiece. Madness isn't a bug, it's a feature.
+Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), the home of happy accidents and beautiful catastrophies. Embrace the chaos, and release your hidden masterpiece. Madness isn't a bug, it's a feature.
 
 Darkly is a Photoshop alternative where painters are first-class citizens. It has a powerful brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
 
@@ -43,7 +43,7 @@ Darkly's unique brushes live inside a node-based system. This enables infinite c
 
 ### Veils
 
-https://github.com/user-attachments/assets/ee281ac2-37a8-4e52-91b3-78d564420e9d
+![veil-demo](https://github.com/user-attachments/assets/95d0ca79-a56e-4998-9459-d0fe73fa08eb)
 
 Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special layer that sits above the viewport, visible only to the artist. By shrouding your canvas behind a mysterious pane, they invite you to see something that maybe wasn't there before.
 

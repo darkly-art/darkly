@@ -78,8 +78,8 @@ fn pixel(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
     [rgba[idx], rgba[idx + 1], rgba[idx + 2], rgba[idx + 3]]
 }
 
-/// One `(pos, direction_rad, distance)` per dab. `distance > 0.5` so
-/// the per-dab first-dab gate doesn't fire.
+/// One `(pos, direction_rad, distance)` per dab — the direction sets the
+/// per-dab motion vector. `distance > 0.5` so the first-dab gate doesn't fire.
 fn render_liquify_dabs(size_override: f32, dabs: &[([f32; 2], f32, f32)]) -> Vec<u8> {
     render_liquify_dabs_on(&two_tone_canvas(36), size_override, dabs)
 }
@@ -178,11 +178,11 @@ fn render_liquify_dabs_on(
             // Simulate a real stroke's per-dab motion: in a live
             // stroke the engine places dabs a spacing apart along
             // the cursor's path, so `pen.motion` per dab has that
-            // magnitude along the drawing angle.
+            // magnitude along the drawing angle. `motion` is the only
+            // direction signal liquify consumes.
             let motion = [TEST_DAB_STEP_PX * dir.cos(), TEST_DAB_STEP_PX * dir.sin()];
             let info = PaintInformation {
                 pos: *pos,
-                drawing_angle: *dir,
                 distance: *dist,
                 motion,
                 pressure: 1.0,

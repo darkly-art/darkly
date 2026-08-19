@@ -119,9 +119,9 @@ const STRENGTH_EPSILON: f32 = 1.0e-4;
 /// nothing visible.
 const MIN_RADIUS_PX: f32 = 1.0;
 
-/// Cumulative stroke distance below which liquify silently skips the
-/// first dab. Without this, a stationary click would warp rightward
-/// (default `drawing_angle = 0`).
+/// Cumulative stroke distance below which liquify silently skips the dab.
+/// The stroke's opening dabs have zero or sub-pixel per-dab motion, so their
+/// displacement is nil and rendering them is wasted work.
 const MIN_DISTANCE_PX: f32 = 0.5;
 
 pub const TYPE_ID: &str = "liquify";
@@ -144,12 +144,6 @@ pub fn register() -> BrushNodeRegistration {
             ports: vec![
                 PortDef::input("position", BrushWireType::Vec2)
                     .with_description("Where to apply the warp"),
-                // No `natural_range`: radians are a unit, not a normalized
-                // signal. `pen.drawing_angle → direction` (canonical wire)
-                // is a unit-preserving identity.
-                PortDef::input("direction", BrushWireType::Scalar)
-                    .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
-                    .with_description("Direction to push pixels"),
                 PortDef::input("distance", BrushWireType::Scalar)
                     .with_description("How far the pen has traveled along the stroke"),
                 // Per-dab cursor motion in canvas pixels. Wire from
@@ -231,7 +225,7 @@ impl ReadMirrorTerminal for LiquifyEvaluator {
 
         // Symmetric read region — disc inflated by `displacement` per axis
         // so the warped sample at
-        // `target_pos - direction × displacement × falloff(d)` always lies
+        // `target_pos - motion × strength × falloff(d)` always lies
         // inside the mirror snapshot (the bilinear sampler reaches into
         // the inflation margin too). `displacement = strength × |motion|`,
         // recomputed identically by the shader from motion + strength.
@@ -256,7 +250,6 @@ impl ReadMirrorTerminal for LiquifyEvaluator {
         };
         let strength_expr = cctx.input("strength").as_f32();
         let softness_expr = cctx.input("softness").as_f32();
-        let direction_expr = cctx.input("direction").as_f32();
         let motion_expr = cctx.input("motion").as_vec2();
 
         // Per-node falloff fn — suffixed by node id so two liquify
@@ -301,17 +294,17 @@ impl ReadMirrorTerminal for LiquifyEvaluator {
         // one sample of the source, and a masked-out fragment simply
         // contributes a zero offset (leaving the accumulated field
         // untouched).
-        let offset_expr = "-dir * (length(motion_vec) * strength) * f * sel * warp_mask";
+        // Pixels are pushed straight along the per-dab motion vector — the
+        // signed direction *and* magnitude of where the cursor actually went.
+        let offset_expr = "-motion_vec * strength * f * sel * warp_mask";
         wgsl.body = format!(
             "    if (local_dist >= 1.0) {{ discard; }}\n\
              \x20   let warp_mask = clamp({mask_expr}, 0.0, 1.0);\n\
              \x20   let strength = clamp({strength_expr}, 0.0, 1.0);\n\
              \x20   let softness = clamp({softness_expr}, 0.0, 1.0);\n\
              \x20   let falloff_param = 1.0 - softness;\n\
-             \x20   let direction_angle = {direction_expr};\n\
              \x20   let motion_vec = {motion_expr};\n\
              \x20   let f = {falloff_fn}(local_dist, falloff_param);\n\
-             \x20   let dir = vec2<f32>(cos(direction_angle), sin(direction_angle));\n\
              {}",
             crate::brush::warp_field::advect_wgsl(offset_expr, copy_origin_field),
         );

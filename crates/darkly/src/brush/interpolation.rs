@@ -45,17 +45,26 @@ fn lerp2(a: [f32; 2], b: [f32; 2], t: f32) -> [f32; 2] {
     [lerp(a[0], b[0], t), lerp(a[1], b[1], t)]
 }
 
+/// Shortest signed difference `b - a`, wrapped to (−π, π].
+///
+/// The one wrap implementation: angle lerping, Catmull-Rom angle unwrapping,
+/// and the stroke engine's stamp-orientation tracker all route through it.
+#[inline]
+pub fn shortest_angle_diff(a: f32, b: f32) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    let mut diff = (b - a) % TAU;
+    if diff > PI {
+        diff -= TAU;
+    } else if diff < -PI {
+        diff += TAU;
+    }
+    diff
+}
+
 /// Lerp angles via shortest arc (handles wrapping around 2π).
 #[inline]
 fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
-    use std::f32::consts::TAU;
-    let mut diff = (b - a) % TAU;
-    if diff > std::f32::consts::PI {
-        diff -= TAU;
-    } else if diff < -std::f32::consts::PI {
-        diff += TAU;
-    }
-    a + diff * t
+    a + shortest_angle_diff(a, b) * t
 }
 
 // ── Catmull-Rom spline interpolation ──────────────────────────────────
@@ -89,17 +98,8 @@ fn catmull_rom2(p0: [f32; 2], p1: [f32; 2], p2: [f32; 2], p3: [f32; 2], t: f32) 
 /// discontinuities at the ±π boundary.
 #[inline]
 fn catmull_rom_angle(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
-    use std::f32::consts::{PI, TAU};
     // Unwrap all angles relative to p1.
-    let unwrap = |a: f32, ref_: f32| -> f32 {
-        let mut d = (a - ref_) % TAU;
-        if d > PI {
-            d -= TAU;
-        } else if d < -PI {
-            d += TAU;
-        }
-        ref_ + d
-    };
+    let unwrap = |a: f32, ref_: f32| -> f32 { ref_ + shortest_angle_diff(ref_, a) };
     let u0 = unwrap(p0, p1);
     let u2 = unwrap(p2, p1);
     let u3 = unwrap(p3, p1);
@@ -334,6 +334,31 @@ mod tests {
         let result = lerp_angle(PI * 1.9, PI * 0.1, 0.5);
         // Midpoint should be near 0/2π, not near π.
         assert!(result.abs() < 0.5 || (result - std::f32::consts::TAU).abs() < 0.5);
+    }
+
+    /// The one wrap implementation behind `lerp_angle`, `catmull_rom_angle`'s
+    /// unwrap, and the stroke engine's orientation tracker: always the
+    /// shortest signed arc, always within (−π, π].
+    #[test]
+    fn shortest_angle_diff_wraps_at_pi() {
+        use std::f32::consts::{PI, TAU};
+
+        assert!((shortest_angle_diff(0.0, 0.5) - 0.5).abs() < 1e-6);
+        assert!((shortest_angle_diff(0.5, 0.0) + 0.5).abs() < 1e-6);
+
+        // Across the wrap: 0.1 rad short of a full turn is −0.1, not +6.18.
+        assert!((shortest_angle_diff(0.0, TAU - 0.1) + 0.1).abs() < 1e-5);
+        assert!((shortest_angle_diff(TAU - 0.1, 0.0) - 0.1).abs() < 1e-5);
+
+        // Multiple turns of winding collapse to the same short arc.
+        assert!((shortest_angle_diff(0.0, TAU * 3.0 + 0.25) - 0.25).abs() < 1e-4);
+
+        // Never leaves (−π, π], including at the antipode.
+        for i in 0..64 {
+            let b = -TAU * 2.0 + i as f32 * (TAU * 4.0 / 64.0);
+            let d = shortest_angle_diff(0.7, b);
+            assert!(d > -PI - 1e-5 && d <= PI + 1e-5, "diff {d} out of range");
+        }
     }
 
     // ── Catmull-Rom tests ────────────────────────────────────────────

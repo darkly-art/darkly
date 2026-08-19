@@ -405,31 +405,15 @@ pub fn evaluate_gpu<T: ReadMirrorTerminal>(
     // clamp).
     let layer_x0 = canvas_ext.x0() as f32;
     let layer_y0 = canvas_ext.y0() as f32;
-    // Clamp the dab footprint to the layer extent; a dab entirely
-    // off-extent has no pixels to draw and is skipped.
-    let canvas_bbox = match canvas_ext.clamp_f32(
-        position[0] - bbox_radius,
-        position[1] - bbox_radius,
-        position[0] + bbox_radius,
-        position[1] + bbox_radius,
-    ) {
-        Some(r) => r,
-        None => return dab_size(),
-    };
-    let local = paint_target
-        .canvas_frame()
-        .canvas_to_layer_rect(canvas_bbox)
-        .expect("canvas_bbox came from canvas_ext.clamp_f32, so it overlaps the extent");
-    gpu.dab_batch.push_write_bbox(canvas_bbox);
-    gpu.dab_batch.bbox = Some(match gpu.dab_batch.bbox {
-        Some([x0, y0, x1, y1]) => [
-            x0.min(local.x0()),
-            y0.min(local.y0()),
-            x1.max(local.x1()),
-            y1.max(local.y1()),
-        ],
-        None => [local.x0(), local.y0(), local.x1(), local.y1()],
-    });
+    // Publish the footprint; `None` means the dab is entirely off-extent
+    // and has no pixels to draw.
+    if gpu
+        .dab_batch
+        .record_dab_footprint(paint_target, position, bbox_radius)
+        .is_none()
+    {
+        return dab_size();
+    }
 
     // The write region is the dab footprint; the read region is the
     // mirror snapshot. Clamp the read half up to at least the write half
@@ -486,9 +470,7 @@ pub fn flush_dabs<T: ReadMirrorTerminal>(gpu: &mut BrushGpuContext) {
         return;
     };
 
-    let bbox = gpu.dab_batch.bbox.unwrap_or([0, 0, 0, 0]);
-    let union_w = bbox[2].saturating_sub(bbox[0]);
-    let union_h = bbox[3].saturating_sub(bbox[1]);
+    let (union_w, union_h) = gpu.dab_batch.batch_extent();
     let (dab_bytes, total_dabs) = gpu.dab_batch.take();
     let meta_bytes = gpu.dab_batch.take_meta();
     if total_dabs == 0 {

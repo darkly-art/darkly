@@ -212,6 +212,7 @@ impl BrushStrokePreviewRenderer {
             Box::new(PassThrough::new()),
             clone_source_anchor,
             PREVIEW_STROKE_SEED,
+            brush_settings::stamp_angle_rate(graph),
         );
         if clone_source_anchor.is_some() {
             // The snapshot being sampled is the pre-stroke, which covers the

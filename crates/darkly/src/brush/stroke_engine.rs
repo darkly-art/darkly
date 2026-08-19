@@ -29,6 +29,7 @@ pub struct RenderCheckpoint {
     pub last_dab_size: [f32; 2],
     pub last_dab_pos: Option<[f32; 2]>,
     pub dab_count: u32,
+    pub stamp_angle: Option<f32>,
 }
 
 /// Reference fade distance in pixels.  The fade sensor goes from 0 to 1
@@ -67,6 +68,16 @@ pub struct StrokeEngine {
     /// Running dab index within the stroke.
     dab_count: u32,
 
+    /// Held stamp orientation (canvas-frame radians) — the stroke axis the
+    /// dab is currently facing, as opposed to the instantaneous travel
+    /// direction. `None` until the first dab that has actually travelled.
+    /// Reset at stroke start and on full re-render; carried across a partial
+    /// re-render on [`RenderCheckpoint`] so the seam is continuous.
+    stamp_angle: Option<f32>,
+    /// How far `stamp_angle` may turn per brush diameter of travel (radians).
+    /// Stroke-constant, read from `brush_settings` at stroke start.
+    stamp_angle_rate: f32,
+
     /// Stroke seed for deterministic per-dab randomness.  Passed to
     /// the runner so random nodes can generate independent sequences.
     stroke_seed: u32,
@@ -94,10 +105,11 @@ impl StrokeEngine {
     ///
     /// `runner` is a pre-compiled brush graph.  `color` is the foreground
     /// color (raw sRGB RGBA, as picked).  `spacing` controls dab placement.
-    /// `stabilizer` is the stroke stabilization algorithm.  `stroke_seed`
-    /// drives every `random`/`noise` node in the graph — a real stroke passes
-    /// [`Self::random_seed`], a render that has to be reproducible passes a
-    /// constant.
+    /// `stabilizer` is the stroke stabilization algorithm.  `stamp_angle_rate`
+    /// caps how fast the stamp pivots to follow the stroke, in radians per
+    /// brush diameter of travel.  `stroke_seed` drives every `random`/`noise`
+    /// node in the graph — a real stroke passes [`Self::random_seed`], a render
+    /// that has to be reproducible passes a constant.
     pub fn new(
         mut runner: BrushGraphRunner,
         color: [f32; 4],
@@ -106,6 +118,7 @@ impl StrokeEngine {
         stabilizer: Box<dyn StabilizerAlgorithm>,
         clone_source_anchor: Option<[f32; 2]>,
         stroke_seed: u32,
+        stamp_angle_rate: f32,
     ) -> Self {
         // Base brush size is stroke-constant, read out-of-band from
         // `pen_input.size` at stroke start. Injected as ambient state so every
@@ -126,6 +139,8 @@ impl StrokeEngine {
             last_dab_size: [d, d],
             last_dab_pos: None,
             dab_count: 0,
+            stamp_angle: None,
+            stamp_angle_rate,
             stroke_seed,
             clone_source_anchor,
             clone_dest_anchor: None,
@@ -198,6 +213,7 @@ impl StrokeEngine {
             last_dab_size: self.last_dab_size,
             last_dab_pos: self.last_dab_pos,
             dab_count: self.dab_count,
+            stamp_angle: self.stamp_angle,
         }
     }
 
@@ -209,6 +225,7 @@ impl StrokeEngine {
         self.last_dab_size = checkpoint.last_dab_size;
         self.last_dab_pos = checkpoint.last_dab_pos;
         self.dab_count = checkpoint.dab_count;
+        self.stamp_angle = checkpoint.stamp_angle;
     }
 
     /// Reset rendering state for a full re-render from scratch.
@@ -223,6 +240,9 @@ impl StrokeEngine {
         self.last_dab_size = [d, d];
         self.last_dab_pos = None;
         self.dab_count = 0;
+        // Re-seeded from the first travelling dab of the re-render. The rate
+        // itself is stroke-constant configuration and survives.
+        self.stamp_angle = None;
         // Recapture the destination anchor from the re-stabilized first
         // dab on the next `place_dab`.
         self.clone_dest_anchor = None;
@@ -236,6 +256,20 @@ impl StrokeEngine {
     /// stabilizer + GPU).
     fn next_dab_motion(&mut self, pos: [f32; 2]) -> [f32; 2] {
         advance_dab_motion(&mut self.last_dab_pos, pos)
+    }
+
+    /// Advance the held stamp orientation for a dab travelling `travel` canvas
+    /// pixels in direction `direction`, at brush diameter `diameter`. Thin
+    /// wrapper over the free function, mirroring [`Self::next_dab_motion`], so
+    /// the orientation contract is unit-testable without a GPU.
+    fn next_stamp_angle(&mut self, direction: f32, travel: f32, diameter: f32) -> f32 {
+        advance_stamp_angle(
+            &mut self.stamp_angle,
+            direction,
+            travel,
+            diameter,
+            self.stamp_angle_rate,
+        )
     }
 
     /// Render dabs along the stabilized polyline starting from `start_vector_index`.
@@ -403,6 +437,14 @@ impl StrokeEngine {
         // Interpolators leave it zero (they have no view of dab order); we
         // fill it here so smudge sees the correct smear-sample offset.
         dab_info.motion = self.next_dab_motion(dab_info.pos);
+        // Stamp orientation is likewise per-dab and order-dependent: the stamp
+        // pivots as the brush travels, toward the stroke's undirected axis and
+        // no faster than the brush's turn rate. Runs after interpolation (the
+        // caller interpolates before every `place_dab`), so it is the last
+        // transform on the angle before the graph sees it.
+        let travel = dab_info.motion[0].hypot(dab_info.motion[1]);
+        let diameter = self.effective_diameter();
+        dab_info.drawing_angle = self.next_stamp_angle(dab_info.drawing_angle, travel, diameter);
 
         // Clone uniforms: capture the destination at the first rendered
         // dab (post-stabilization), then seed the runner's CloneState so
@@ -450,6 +492,10 @@ impl StrokeEngine {
         // Reset the write-bbox accumulator so each terminal's passes can
         // publish their footprint fresh. Read back after execute_gpu below.
         gpu.dab_batch.write_canvas_bbox = None;
+        // Queue depth before the terminal runs — a dab that lands in the
+        // queue but publishes no footprint is a programming error, caught
+        // by the debug-assert below.
+        let queued_before = gpu.dab_batch.count;
         self.runner.execute_gpu(gpu);
 
         gpu.flush_if_needed();
@@ -463,25 +509,27 @@ impl StrokeEngine {
             self.last_dab_size = size;
         }
 
-        // Dab bounding box for save points, in canvas coords. Prefer the
-        // footprint the terminal actually wrote (post-scatter, post-anything
-        // else the graph did). Fall back to the `info.pos ± radius`
-        // envelope for graphs without a scratch-writing terminal, so they
-        // still get sensible checkpoint bounds.
-        let canvas_bbox = gpu.dab_batch.write_canvas_bbox.unwrap_or_else(|| {
-            let diameter = self.effective_diameter();
-            let half = diameter * 0.5;
-            let x = (info.pos[0] - half).floor() as i32;
-            let y = (info.pos[1] - half).floor() as i32;
-            let x2 = (info.pos[0] + half).ceil() as i32;
-            let y2 = (info.pos[1] + half).ceil() as i32;
-            crate::coord::CanvasRect::from_xywh(
-                x,
-                y,
-                (x2 - x).max(0) as u32,
-                (y2 - y).max(0) as u32,
-            )
-        });
+        // Dab bounding box for save points, in canvas coords: the footprint
+        // the terminal published for the pass it issued (post-scatter,
+        // post-anything else the graph did). A dab that wrote nothing — zero
+        // diameter, entirely off-extent, an identity-transform early-out —
+        // publishes nothing and records an empty rect, which unions away.
+        //
+        // There is deliberately no geometric fallback here. An envelope
+        // derived from `pos ± radius` omits the compiled brush's extent
+        // inflation, so it can bound the checkpoint more tightly than the
+        // shader writes — and a rewind then clears pixels it cannot restore.
+        // See `ExtentContribution`'s doc comment for the shipped instance of
+        // that bug.
+        let canvas_bbox = gpu
+            .dab_batch
+            .write_canvas_bbox
+            .unwrap_or(crate::coord::CanvasRect::from_xywh(0, 0, 0, 0));
+        debug_assert!(
+            gpu.dab_batch.count == queued_before || !canvas_bbox.is_empty(),
+            "terminal queued a dab without publishing its write footprint; \
+             the save-point bbox would miss pixels the shader writes",
+        );
         // Render state is captured at end-of-segment, not per-dab.
         // Push a placeholder; the loop in render_from_stabilized_range
         // overwrites the last save point's render_state after each segment.
@@ -495,6 +543,7 @@ impl StrokeEngine {
                 last_dab_size: [0.0, 0.0],
                 last_dab_pos: None,
                 dab_count: 0,
+                stamp_angle: None,
             },
         );
 
@@ -618,9 +667,72 @@ fn advance_dab_motion(tracker: &mut Option<[f32; 2]>, pos: [f32; 2]) -> [f32; 2]
     motion
 }
 
+/// Advance the held stamp orientation one dab and return what the dab should
+/// face.
+///
+/// `held` carries the orientation from the previous emitted dab. It is `None`
+/// at stroke start and after a full re-render; while it is `None` and `travel`
+/// is zero the direction passes through untouched and nothing is adopted,
+/// because a dab that has not travelled has no measured direction to adopt
+/// (`PaintInformation::derive_sensors` leaves a stroke's first `drawing_angle`
+/// at its default of zero). The first dab that has travelled seeds `held`.
+///
+/// `direction` is the dab's signed travel angle, `travel` the canvas-pixel
+/// distance from the previous dab, `diameter` the brush's effective canvas
+/// diameter, and `rate` the permitted turn in radians per diameter of travel —
+/// or [`STAMP_ANGLE_RATE_UNLIMITED`], at which the cap is skipped entirely and
+/// only the fold applies.
+///
+/// The axis fold — taking whichever of `direction` / `direction + π` is nearer
+/// to the held orientation — is unconditional. A symmetric stamp is identical
+/// at both, so reversing along a stroke must not spin it a half turn.
+///
+/// [`STAMP_ANGLE_RATE_UNLIMITED`]: crate::brush::nodes::brush_settings::STAMP_ANGLE_RATE_UNLIMITED
+fn advance_stamp_angle(
+    held: &mut Option<f32>,
+    direction: f32,
+    travel: f32,
+    diameter: f32,
+    rate: f32,
+) -> f32 {
+    use crate::brush::interpolation::shortest_angle_diff;
+    use crate::brush::nodes::brush_settings::STAMP_ANGLE_RATE_UNLIMITED;
+    use std::f32::consts::{FRAC_PI_2, PI};
+
+    let Some(phi) = *held else {
+        if travel <= 0.0 {
+            return direction;
+        }
+        *held = Some(direction);
+        return direction;
+    };
+
+    // Fold to the nearer of the two representatives of the same axis, so a
+    // direction reversal costs no rotation at all.
+    let mut d = shortest_angle_diff(phi, direction);
+    if d.abs() > FRAC_PI_2 {
+        d -= d.signum() * PI;
+    }
+
+    // A turn rate per unit of travel: zero travel permits zero rotation, so a
+    // stationary pen cannot spin the stamp. `max(diameter, 1.0)` keeps the
+    // division defined if a terminal ever publishes a degenerate dab size.
+    if rate < STAMP_ANGLE_RATE_UNLIMITED {
+        let allowed = rate * travel / diameter.max(1.0);
+        d = d.clamp(-allowed, allowed);
+    }
+
+    // Wrapped each dab so a long stroke can't drift the magnitude upward; the
+    // value only ever reaches `cos`/`sin` downstream, so this is invisible.
+    let next = shortest_angle_diff(0.0, phi + d);
+    *held = Some(next);
+    next
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::brush::interpolation::shortest_angle_diff;
 
     /// Regression: per-dab motion must be the previous-dab → this-dab delta,
     /// not the segment delta. The old bug carried `PaintInformation.motion`
@@ -662,5 +774,217 @@ mod tests {
         advance_dab_motion(&mut tracker, [10.0, 20.0]);
         let m = advance_dab_motion(&mut tracker, [13.0, 24.0]);
         assert!((m[0] - 3.0).abs() < 1e-6 && (m[1] - 4.0).abs() < 1e-6);
+    }
+
+    // ── Stamp orientation tracker ───────────────────────────────────────
+
+    /// Diameter and per-dab travel used by the orientation tests: a 40 px
+    /// brush stepping 4 px per dab, i.e. the default 10% spacing.
+    const D: f32 = 40.0;
+    const STEP: f32 = 4.0;
+
+    /// Rate that permits a quarter turn per dab at the constants above, so a
+    /// test that wants the cap out of the way can say so without reaching for
+    /// the sentinel.
+    const LOOSE_RATE: f32 = std::f32::consts::FRAC_PI_2 * D / STEP;
+
+    fn feed(held: &mut Option<f32>, direction: f32, rate: f32) -> f32 {
+        advance_stamp_angle(held, direction, STEP, D, rate)
+    }
+
+    /// The stroke axis is undirected: reversing direction must not spin a
+    /// symmetric stamp a half turn. This is the fold, and it holds at any rate.
+    #[test]
+    fn reversal_folds_to_axis_without_half_turn() {
+        use std::f32::consts::{FRAC_PI_2, PI};
+        let mut held = None;
+        for _ in 0..5 {
+            feed(&mut held, 0.0, LOOSE_RATE);
+        }
+        let before = held.unwrap();
+
+        let after = feed(&mut held, PI, LOOSE_RATE);
+        assert!(
+            shortest_angle_diff(before, after).abs() <= FRAC_PI_2 + 1e-5,
+            "a reversal must not rotate the stamp more than a quarter turn; \
+             went from {before} to {after}"
+        );
+        assert!(
+            after.abs() < 1e-4,
+            "after reversing, the stamp should still lie on the original axis \
+             (near 0), not near π; got {after}"
+        );
+    }
+
+    /// The load-bearing invariant: the cap is per unit of *travel*, so the
+    /// same geometric turn over the same total distance ends at the same
+    /// orientation no matter how finely it is subdivided. A per-dab cap fails
+    /// this by the ratio of the two spacings.
+    #[test]
+    fn rate_is_per_diameter_of_travel_not_per_dab() {
+        // A rate tight enough that the cap is the binding constraint in both
+        // runs: a quarter turn demanded immediately, far more than allowed.
+        let rate = 0.5;
+        let target = std::f32::consts::FRAC_PI_2;
+
+        let mut coarse = Some(0.0);
+        for _ in 0..10 {
+            advance_stamp_angle(&mut coarse, target, 0.1 * D, D, rate);
+        }
+
+        let mut fine = Some(0.0);
+        for _ in 0..20 {
+            advance_stamp_angle(&mut fine, target, 0.05 * D, D, rate);
+        }
+
+        // Both travelled 1.0 × D in total.
+        let (a, b) = (coarse.unwrap(), fine.unwrap());
+        assert!(
+            (a - b).abs() < 1e-4,
+            "equal total travel must give equal orientation regardless of dab \
+             subdivision; coarse={a}, fine={b} (a per-dab cap would differ by ~2x)"
+        );
+        assert!(
+            (a - rate).abs() < 1e-4,
+            "after 1.0 diameters of travel at {rate} rad/diameter the stamp \
+             should have turned {rate} rad; got {a}"
+        );
+    }
+
+    /// A cap is a cap, not a smoothing filter: turns comfortably inside the
+    /// budget are tracked exactly, with no lag. This is the deliberate
+    /// divergence from GIMP's unconditional EMA.
+    #[test]
+    fn gentle_curve_tracks_without_lag() {
+        let mut held = Some(0.0);
+        // 1° per dab, against a budget of 5.7° per dab at this rate.
+        let per_dab = 1.0_f32.to_radians();
+        for i in 1..=30 {
+            let target = per_dab * i as f32;
+            let got = advance_stamp_angle(&mut held, target, STEP, D, 1.0);
+            assert!(
+                (got - target).abs() < 1e-5,
+                "dab {i}: a turn inside the rate budget must track exactly; \
+                 wanted {target}, got {got}"
+            );
+        }
+    }
+
+    /// Zero travel permits zero rotation whenever the cap is engaged — a
+    /// stationary pen cannot make the stamp twitch. This is what lets the rate
+    /// cap subsume a separate idle-noise filter.
+    ///
+    /// It is a property of the cap, not of the tracker: at the unlimited
+    /// sentinel there is no cap to enforce it, and a stationary dab takes its
+    /// angle directly, exactly as it did before the rate limit existed.
+    #[test]
+    fn zero_travel_cannot_rotate() {
+        use crate::brush::nodes::brush_settings::STAMP_ANGLE_RATE_UNLIMITED;
+
+        for rate in [0.0, 0.5, STAMP_ANGLE_RATE_UNLIMITED - 1.0] {
+            let mut held = Some(0.0);
+            for target in [0.3, -0.7, 1.2, 0.05] {
+                let got = advance_stamp_angle(&mut held, target, 0.0, D, rate);
+                assert_eq!(
+                    got, 0.0,
+                    "rate {rate}: a dab that has not travelled must not rotate \
+                     the stamp"
+                );
+            }
+        }
+    }
+
+    /// The bottom of the range locks the stamp to the angle it started at.
+    #[test]
+    fn zero_rate_locks_orientation() {
+        let mut held = None;
+        let start = feed(&mut held, 0.4, 0.0);
+        assert!((start - 0.4).abs() < 1e-6);
+        for target in [1.0, -1.0, 2.5] {
+            let got = feed(&mut held, target, 0.0);
+            assert!(
+                (got - 0.4).abs() < 1e-6,
+                "rate 0 must freeze the orientation; got {got}"
+            );
+        }
+    }
+
+    /// The top of the range is a sentinel meaning *unlimited*, and it is the
+    /// shipped default — so this guards the promise that a brush which never
+    /// touches the knob is unaffected by the rate limit.
+    #[test]
+    fn unlimited_rate_skips_the_cap() {
+        use crate::brush::nodes::brush_settings::STAMP_ANGLE_RATE_UNLIMITED;
+        let mut held = None;
+        feed(&mut held, 0.0, STAMP_ANGLE_RATE_UNLIMITED);
+
+        // A near-quarter-turn demanded over a sliver of travel: any finite rate
+        // at this travel would clamp it hard.
+        let got = advance_stamp_angle(&mut held, 1.5, 0.001, D, STAMP_ANGLE_RATE_UNLIMITED);
+        assert!(
+            (got - 1.5).abs() < 1e-5,
+            "at the unlimited sentinel the stamp must reach the folded target \
+             in one dab; got {got}"
+        );
+    }
+
+    /// A stroke's first point has no segment behind it, so `derive_sensors`
+    /// leaves its `drawing_angle` at the default 0 — see
+    /// `tests/paint_info_derive_sensors.rs`. Adopting that would point every
+    /// stroke rightward at birth and then rate-limit the recovery.
+    #[test]
+    fn stroke_start_does_not_adopt_zero() {
+        use std::f32::consts::FRAC_PI_2;
+        let mut held = None;
+
+        // The stroke's first dab: no travel, and a meaningless angle.
+        let first = advance_stamp_angle(&mut held, 0.0, 0.0, D, 0.5);
+        assert_eq!(first, 0.0, "the first dab passes its angle through");
+        assert!(
+            held.is_none(),
+            "nothing should be adopted from a dab that has not travelled"
+        );
+
+        // The first travelling dab establishes the axis outright, with no
+        // rate-limited crawl up from 0.
+        let second = advance_stamp_angle(&mut held, FRAC_PI_2, STEP, D, 0.5);
+        assert!(
+            (second - FRAC_PI_2).abs() < 1e-6,
+            "the first travelling dab should adopt its direction, not ease \
+             toward it from a bogus 0; got {second}"
+        );
+    }
+
+    /// The cap and the fold compose: a *smooth* turn stays inside the budget,
+    /// so the fold never fires and the stamp follows all the way through 180°.
+    /// A turn too fast for the budget is allowed to settle on the other axis
+    /// representative instead — identical for a symmetric stamp, and the
+    /// documented limitation for an asymmetric one.
+    #[test]
+    fn gradual_u_turn_tracks_without_flipping() {
+        use std::f32::consts::PI;
+
+        // 180° over 90 dabs = 2° per dab, well inside a 5.7°/dab budget.
+        let mut held = Some(0.0);
+        let mut target = 0.0;
+        for _ in 0..90 {
+            target += 2.0_f32.to_radians();
+            advance_stamp_angle(&mut held, target, STEP, D, 1.0);
+        }
+        let tracked = held.unwrap();
+        assert!(
+            shortest_angle_diff(PI, tracked).abs() < 1e-3,
+            "a gradual U-turn should be followed the whole way to π; got {tracked}"
+        );
+
+        // The same 180°, demanded at once under a tight cap: the fold picks
+        // the near representative, so the stamp does not move.
+        let mut held = Some(0.0);
+        let got = advance_stamp_angle(&mut held, PI, STEP, D, 0.01);
+        assert!(
+            got.abs() < 1e-5,
+            "an instant reversal folds to a no-op rather than crawling half a \
+             turn; got {got}"
+        );
     }
 }

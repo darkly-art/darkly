@@ -861,6 +861,15 @@ impl DarklyEngine {
         self.compositor.tool_overlay().cursor_preview_mask_size()
     }
 
+    /// Cumulative canvas-space bbox of every dab the in-flight stroke has
+    /// recorded — the region the checkpoint ring saves and restores on a
+    /// mid-stroke rewind. `None` when no stroke is in flight or no dab has
+    /// been placed. Test-only.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_stroke_save_point_bbox(&self) -> Option<crate::coord::CanvasRect> {
+        self.brush_stroke_engine.as_ref()?.save_points.full_bbox()
+    }
+
     /// Whether the frame loop would schedule another frame right now — the
     /// `needs_more` value `render` returns to JS. Test-only.
     #[cfg(any(test, feature = "testing"))]

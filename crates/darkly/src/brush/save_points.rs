@@ -117,6 +117,7 @@ mod tests {
             last_dab_size: [10.0, 10.0],
             last_dab_pos: None,
             dab_count: 0,
+            stamp_angle: None,
         }
     }
 

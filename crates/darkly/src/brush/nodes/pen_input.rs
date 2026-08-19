@@ -69,7 +69,7 @@ pub fn register() -> BrushNodeRegistration {
             // stamp.rotation` is the canonical use case (brush faces the
             // stroke) and it must pass radians through unchanged.
             PortDef::output("drawing_angle", BrushWireType::Scalar)
-                .with_description("Direction of motion along the stroke in radians (0 = right, π/2 = down). Wire to `stamp.rotation` for brushes that face the stroke."),
+                .with_description("Orientation of the stroke in radians (0 = right, π/2 = down). Wire to `stamp.rotation` for brushes that face the stroke. This is the stroke's undirected axis — reversing along a stroke does not spin the stamp a half turn — and it turns no faster than Brush Settings → Turn rate. Use `motion` when you need the true signed direction of travel."),
             PortDef::output("time", BrushWireType::Scalar)
                 .with_description("Elapsed time since the stroke began (seconds)"),
             PortDef::output("position", BrushWireType::Vec2)

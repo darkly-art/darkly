@@ -225,11 +225,12 @@ pub struct DabBatch {
     /// sizeof(Record)`; the count is tracked explicitly so flush code
     /// doesn't need to know the record size.
     pub count: u32,
-    /// Layer-local bounding box covered by the queued dabs, as
-    /// `[x0, y0, x1, y1]`. The terminal's `flush_dabs` reads it as a
-    /// workload metric (recorded into `BrushPerfCounters` for the bench
-    /// harness). `None` when the queue is empty.
-    pub bbox: Option<[u32; 4]>,
+    /// Canvas-space bounding box covered by the queued dabs. The terminal's
+    /// `flush_dabs` reads it as a workload metric (recorded into
+    /// `BrushPerfCounters` for the bench harness). `None` when the queue is
+    /// empty. Unioned by [`Self::record_dab_footprint`] from the same rect it
+    /// publishes as the per-dab footprint, so the two cannot drift.
+    pub batch_canvas_bbox: Option<crate::coord::CanvasRect>,
     /// Terminal-private per-dab CPU meta, packed by `evaluate_gpu` in
     /// lockstep with [`Self::bytes`] and drained by the terminal's
     /// `flush_dabs` hook. Only used by per-dab-feedback terminals
@@ -310,7 +311,7 @@ impl DabBatch {
     pub fn take(&mut self) -> (Vec<u8>, u32) {
         let bytes = std::mem::take(&mut self.bytes);
         let count = std::mem::take(&mut self.count);
-        self.bbox = None;
+        self.batch_canvas_bbox = None;
         (bytes, count)
     }
 
@@ -328,8 +329,49 @@ impl DabBatch {
     pub fn clear(&mut self) {
         self.bytes.clear();
         self.count = 0;
-        self.bbox = None;
+        self.batch_canvas_bbox = None;
         self.meta_bytes.clear();
+    }
+
+    /// Clamp a dab's extent-derived footprint to `paint_target` and publish
+    /// it — as this dab's write footprint (which `stroke_engine` reads for
+    /// the save-point bbox) and into the batch-wide union the terminal's
+    /// `flush_dabs` reports as its workload. Returns the clamped rect, or
+    /// `None` when the dab lands entirely off-extent and so has no pixels to
+    /// draw; callers early-out on `None`.
+    ///
+    /// Every dab-batching terminal records its footprint here rather than
+    /// folding the two unions by hand, so the rect a dab publishes and the
+    /// rect its pass writes are the same value by construction — the
+    /// divergence [`crate::brush::wgsl::extent::ExtentContribution`]'s doc
+    /// comment records the cost of.
+    pub fn record_dab_footprint(
+        &mut self,
+        paint_target: &GpuPaintTarget<'_>,
+        position: [f32; 2],
+        bbox_radius: f32,
+    ) -> Option<crate::coord::CanvasRect> {
+        let canvas_bbox = paint_target.canvas_extent().clamp_f32(
+            position[0] - bbox_radius,
+            position[1] - bbox_radius,
+            position[0] + bbox_radius,
+            position[1] + bbox_radius,
+        )?;
+        self.push_write_bbox(canvas_bbox);
+        self.batch_canvas_bbox = Some(match self.batch_canvas_bbox {
+            Some(prev) => prev.union(canvas_bbox),
+            None => canvas_bbox,
+        });
+        Some(canvas_bbox)
+    }
+
+    /// Width and height of the queued dabs' union, in canvas pixels — the
+    /// workload metric `flush_dabs` records. Every footprint is clamped to
+    /// the paint target before it is unioned, so the layer-local projection
+    /// of this rect is a pure translation and has the same extent.
+    pub fn batch_extent(&self) -> (u32, u32) {
+        self.batch_canvas_bbox
+            .map_or((0, 0), |r| (r.width, r.height))
     }
 
     /// Union a write-pass footprint into [`Self::write_canvas_bbox`].

@@ -36,7 +36,12 @@ pub struct PaintInformation {
     /// Cumulative distance travelled in pixels (not normalised — used for
     /// spacing calculations, normalised on demand by sensor nodes).
     pub distance: f32,
-    /// Drawing angle in radians (direction of pen travel, 0 = right).
+    /// Drawing angle in radians (0 = right). `derive_sensors` computes the
+    /// directed angle of pen travel; for dabs emitted through
+    /// `StrokeEngine::place_dab` that value is then replaced by the stamp
+    /// orientation — the stroke's undirected axis, approached no faster than
+    /// the brush's turn rate. Paths with no stroke engine behind them (the
+    /// hover preview) keep the raw directed value.
     pub drawing_angle: f32,
     /// Per-dab motion vector in canvas pixels — the position delta from the
     /// previous *emitted dab* into this one. Populated by the stroke engine

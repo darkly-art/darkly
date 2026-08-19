@@ -66,6 +66,7 @@ impl CheckpointSlot {
                 last_dab_size: [0.0, 0.0],
                 last_dab_pos: None,
                 dab_count: 0,
+                stamp_angle: None,
             },
             valid: false,
         }
@@ -263,55 +264,65 @@ impl CheckpointRing {
         tip_vi: usize,
         max_div_window: usize,
     ) {
-        let layer_rect = match stroke.canvas_to_layer_rect(canvas_bbox) {
-            Some(r) if !r.is_empty() => r,
-            _ => return,
-        };
-        // Use the clipped canvas rect (post-intersection) so the stored
-        // bbox matches the texels actually copied.
-        let clipped_canvas = match stroke.canvas_extent.intersect(canvas_bbox) {
-            Some(r) => r,
-            None => return,
-        };
+        // The region to snapshot, as a texture-local rect paired with the
+        // clipped canvas rect (so the stored bbox matches the texels
+        // actually copied). `None` when the checkpoint covers no texels.
+        //
+        // An empty region is a *valid* checkpoint: it records "nothing had
+        // been painted at this index", and restoring it is fully served by
+        // the caller's reset to the terminal's baseline. Claiming the slot
+        // anyway is what keeps the `vi = 0` anchor present when a stroke's
+        // first dab is an identity write (a stationary smudge, say) —
+        // without it every early divergence falls back to a full re-render.
+        let region = stroke
+            .canvas_to_layer_rect(canvas_bbox)
+            .filter(|r| !r.is_empty())
+            .zip(stroke.canvas_extent.intersect(canvas_bbox));
 
         let slot_idx = self.pick_slot(tip_vi, max_div_window, vector_index);
         let slot = &mut self.slots[slot_idx];
-        slot.ensure_texture(
-            device,
-            layer_rect.width,
-            layer_rect.height,
-            stroke.texture.format(),
-        );
-        slot.canvas_bbox = clipped_canvas;
+        slot.canvas_bbox =
+            region.map_or_else(|| CanvasRect::from_xywh(0, 0, 0, 0), |(_, clipped)| clipped);
         slot.save_point_index = save_point_index;
         slot.vector_index = vector_index;
         slot.render_state = render_state;
         slot.valid = true;
 
         // Copy bbox region from stroke texture to slot texture.
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: stroke.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: layer_rect.x0(),
-                    y: layer_rect.y0(),
-                    z: 0,
+        if let Some((layer_rect, _)) = region {
+            slot.ensure_texture(
+                device,
+                layer_rect.width,
+                layer_rect.height,
+                stroke.texture.format(),
+            );
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: stroke.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: layer_rect.x0(),
+                        y: layer_rect.y0(),
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
                 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: slot.texture.as_ref().unwrap(),
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: layer_rect.width,
-                height: layer_rect.height,
-                depth_or_array_layers: 1,
-            },
-        );
+                wgpu::TexelCopyTextureInfo {
+                    texture: slot
+                        .texture
+                        .as_ref()
+                        .expect("ensure_texture just allocated the slot"),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: layer_rect.width,
+                    height: layer_rect.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
 
         // Coverage invariant: after every save, at least one valid slot
         // must sit at or below the divergence boundary. If this fires, the
@@ -401,37 +412,41 @@ impl CheckpointRing {
     ) -> Option<CheckpointRestore> {
         let slot_idx = self.best_slot_before(div_vector_index)?;
         let slot = &self.slots[slot_idx];
-        let layer_rect = stroke.canvas_to_layer_rect(slot.canvas_bbox)?;
-        if layer_rect.is_empty() {
-            return None;
-        }
 
         // Copy checkpoint bbox region back to stroke buffer. The caller has
         // already reset outside-bbox pixels to the terminal's starting
-        // state, so only the mutated region needs restoring here.
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: slot.texture.as_ref().unwrap(),
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: stroke.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: layer_rect.x0(),
-                    y: layer_rect.y0(),
-                    z: 0,
+        // state, so only the mutated region needs restoring here — and a
+        // checkpoint that snapshotted no texels (nothing had been painted
+        // yet) is fully restored by that reset alone.
+        if let Some((layer_rect, texture)) = stroke
+            .canvas_to_layer_rect(slot.canvas_bbox)
+            .filter(|r| !r.is_empty())
+            .zip(slot.texture.as_ref())
+        {
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
                 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: layer_rect.width,
-                height: layer_rect.height,
-                depth_or_array_layers: 1,
-            },
-        );
+                wgpu::TexelCopyTextureInfo {
+                    texture: stroke.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: layer_rect.x0(),
+                        y: layer_rect.y0(),
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: layer_rect.width,
+                    height: layer_rect.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
 
         Some(CheckpointRestore {
             save_point_index: slot.save_point_index,
