@@ -43,7 +43,7 @@ Darkly's unique brushes live inside a node-based system. This enables infinite c
 
 ### Veils
 
-![veil-demo](https://github.com/user-attachments/assets/95d0ca79-a56e-4998-9459-d0fe73fa08eb)
+![veil-demo](https://github.com/user-attachments/assets/df05c881-4572-46a1-9a31-366236fabbd3)
 
 Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special layer that sits above the viewport, visible only to the artist. By shrouding your canvas behind a mysterious pane, they invite you to see something that maybe wasn't there before.
 
