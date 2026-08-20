@@ -8,6 +8,24 @@ const ACTIONS: &[ActionDef] = &[
         icon: "fa6-solid:square-plus",
     },
     ActionDef {
+        id: "newFilterLayer",
+        display_name: "New Filter Layer",
+        description: "Add a non-destructive filter layer (curves, levels, invert, …) above the active one.",
+        icon: "fa6-solid:circle-half-stroke",
+    },
+    ActionDef {
+        id: "newVeil",
+        display_name: "New Veil",
+        description: "Add a veil — a post-process effect (rainy glass, VHS, grain, …) over the whole canvas.",
+        icon: "material-symbols:curtains-rounded",
+    },
+    ActionDef {
+        id: "newVoid",
+        display_name: "New Void",
+        description: "Add a void — a layer filled from a procedural or live source (noise, camera, screen share, …).",
+        icon: "tabler:galaxy",
+    },
+    ActionDef {
         id: "newGroup",
         display_name: "New Group",
         description: "Group the selected layers together, or add an empty group if nothing is selected.",

@@ -387,6 +387,9 @@ impl DarklyEngine {
                     pixels,
                 );
             }
+            ReadbackContext::AlphaToSelection { was_active, extent } => {
+                self.complete_alpha_to_selection(was_active, extent, pixels);
+            }
             ReadbackContext::ExportImage { width, height } => {
                 self.complete_export(width, height, pixels);
             }

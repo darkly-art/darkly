@@ -33,10 +33,22 @@ pub struct IntrinsicUniforms {
     /// rotation — on-screen orientation stays put as the user rotates the
     /// view. See `_prelude.wgsl` and `wgsl/mod.rs::assemble_shader`.
     pub view_rotation: f32,
+    /// How many dabs land on a given texel as the brush passes over it
+    /// once: `diameter / spacing`. Stroke-constant, published by
+    /// [`crate::brush::stroke_engine::StrokeEngine`], which owns the
+    /// spacing that produced it.
+    ///
+    /// A terminal accumulating a per-dab quantity divides by this to
+    /// express its rate per *pass* instead of per dab. Without it a
+    /// "30% deposit" knob compounds once per dab — ten times over at the
+    /// default 10% spacing — so it reads as 87%, and its meaning shifts
+    /// whenever spacing or pressure changes the overlap count. 1.0 when
+    /// unset, which makes the normalisation a no-op.
+    pub dabs_per_pass: f32,
     /// Pads `IntrinsicUniforms` to 64 bytes (a multiple of 16) so the
     /// node-contributed uniforms packed after `intrinsic` keep 16-byte
     /// alignment. See the matching note in `_prelude.wgsl`.
-    pub _pad: [u32; 3],
+    pub _pad: [u32; 2],
 }
 
 /// Size in bytes of the WGSL/Rust `IntrinsicUniforms` struct. Read by

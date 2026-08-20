@@ -525,6 +525,31 @@ mod tests {
         assert_eq!(get_str("hotkeys.addBrushNode"), "Shift+KeyA");
     }
 
+    /// REGRESSION: `$mod`+click on a thumbnail loads its coverage as the
+    /// selection — the mask half on `maskThumb`, the layer half on
+    /// `layerThumb`. The layer half was unbound, so the gesture fell through
+    /// to the plain-click fallback and silently did nothing. Krita and
+    /// Photoshop both ship the chord (see each overlay's comments); GIMP uses
+    /// alt+click, whose slot is `isolateLayer`, so it stays menu-only there.
+    #[test]
+    fn thumbnail_to_selection_gestures_are_bound_in_krita_and_photoshop() {
+        for editor in ["Krita", "Photoshop"] {
+            reset_state();
+            pick(editor);
+            assert_eq!(
+                get_str("mouseclicks.maskToSelection"),
+                "maskThumb:$mod+click",
+                "{editor}"
+            );
+            assert_eq!(
+                get_str("mouseclicks.alphaToSelection"),
+                "layerThumb:$mod+click",
+                "{editor}"
+            );
+        }
+        reset_state();
+    }
+
     #[test]
     fn user_wins_over_overlay_and_defaults() {
         reset_state();

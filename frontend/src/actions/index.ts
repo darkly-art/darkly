@@ -7,6 +7,7 @@ import { resizeCanvas } from '../state/resizeCanvas.svelte';
 import { imageRescale } from '../state/imageRescale.svelte';
 import { selectionModify } from '../state/selectionModify.svelte';
 import { filterModal } from '../state/filterModal.svelte';
+import { layerPicker } from '../state/layerPicker.svelte';
 import type { ParamInfo } from '../ui/filters/filterParams';
 import { exportTimelapse } from '../state/exportTimelapse.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
@@ -28,6 +29,18 @@ import { about } from '../state/about.svelte';
 import { commandPalette } from '../state/commandPalette.svelte';
 import { openCheatsheet } from '../ui/cheatsheet';
 import { links, openExternal } from '../links';
+
+/** The commands that add something to the layer stack, in the order the
+ *  layer panel's new-layer dropdown lists them. The dropdown renders straight
+ *  from these registrations, so a new layer kind needs an action and nothing
+ *  else — its label, icon and behaviour come along for free. */
+export const NEW_LAYER_ACTION_IDS = [
+    'newLayer',
+    'newFilterLayer',
+    'newVeil',
+    'newVoid',
+    'newGroup',
+];
 
 /** Walk the layer tree to find a node by id. The layer tree is the
  *  JSON shape produced by `app.refreshLayerTree`, with `children` on
@@ -317,6 +330,23 @@ export function registerActions() {
         },
     });
     actions.register({
+        id: 'alphaToSelection',
+        menuPath: ['Select:36'],
+        // Sibling of `maskToSelection`, for the host rather than its mask.
+        // The engine op is node-kind agnostic — it reads whatever texture the
+        // id resolves to — but only pixel-bearing nodes have one, so the
+        // guard follows the same fact the layer panel uses to decide whether
+        // to draw a thumbnail at all.
+        enabled: () => app.activeNode?.hasThumbnail === true || 'Active layer has no pixels',
+        handler: (ctx) => {
+            const engine = app.engine;
+            const layerId = ctx.layerId ?? app.activeLayerId;
+            if (!engine || layerId == null) return;
+            engine.api.alphaToSelection({ id: layerId });
+            app.requestFrame();
+        },
+    });
+    actions.register({
         id: 'growSelection',
         menuPath: ['Select:50'],
         enabled: () => app.engineState?.hasSelection || 'No active selection',
@@ -553,6 +583,24 @@ export function registerActions() {
             app.selectLayer(id);
             await app.refreshLayerTree();
         },
+    });
+
+    actions.register({
+        id: 'newFilterLayer',
+        menuPath: ['Layer:12'],
+        handler: () => { layerPicker.kind = 'filter'; },
+    });
+
+    actions.register({
+        id: 'newVeil',
+        menuPath: ['Layer:14'],
+        handler: () => { layerPicker.kind = 'veil'; },
+    });
+
+    actions.register({
+        id: 'newVoid',
+        menuPath: ['Layer:16'],
+        handler: () => { layerPicker.kind = 'void'; },
     });
 
     actions.register({

@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::brush::input_value::InputValue;
-use crate::brush::texture_source::ResolvedSource;
+use crate::brush::texture_source::{LiveSource, ResolvedSource};
 use crate::brush::wgsl::type_system::{DabField, UniformField};
 use crate::brush::wire::BrushWireType;
 use crate::nodegraph::{NodeId, PortDef, PortDir};
@@ -57,6 +57,19 @@ pub struct NodeWgsl {
     /// extension scoped to the one node that uses it instead of
     /// extending the `BrushNodeEvaluator` trait surface.
     pub terminal_bindings: String,
+    /// Extra fragment-shader outputs the terminal writes beyond
+    /// `@location(0)`, named in location order starting at 1. A
+    /// non-empty list switches `fs_main` from a bare
+    /// `-> @location(0) vec4<f32>` to a generated `FsOut` struct, and
+    /// the terminal's `body` must then return `FsOut(...)`.
+    ///
+    /// These are the per-texel accumulators a terminal writes alongside
+    /// the stroke scratch in one instanced draw — the blend unit
+    /// accumulates each under its own law, and the terminal's pipeline
+    /// declares a matching colour target per name. Stroke mode only:
+    /// the cursor-preview skeleton has no accumulators to write and
+    /// keeps the single-output signature.
+    pub terminal_outputs: Vec<String>,
 }
 
 // ── Input binding ───────────────────────────────────────────────────────
@@ -177,14 +190,6 @@ pub struct CompileWgslCtx<'a> {
     /// `RefCell` so `compile_wgsl(&self)` can append without forcing a
     /// `&mut CompileWgslCtx` rewrite across every existing node.
     pub graph_sources: &'a RefCell<Vec<ResolvedSource>>,
-    /// Set to `true` by [`Self::request_source_texture`] when a node
-    /// (currently `clone_source`) asks to sample the frozen pre-stroke
-    /// snapshot at `@group(3)`. The compiler copies the final value onto
-    /// [`crate::brush::wgsl::CompiledBrush::samples_source`]; the terminal
-    /// pipeline (`paint`) reads it to bind the snapshot per flush, and the
-    /// engine reads it for the no-op / gesture-arming gate. `RefCell` for
-    /// the same `&self`-append reason as `graph_sources`.
-    pub samples_source: &'a RefCell<bool>,
 }
 
 impl CompileWgslCtx<'_> {
@@ -257,21 +262,18 @@ impl CompileWgslCtx<'_> {
         self.request_source(ResolvedSource::Named(name.to_string()))
     }
 
-    /// Reserve the `@group(3)` slot holding the frozen pre-stroke source
-    /// snapshot (the `clone_source` node's read texture) and flag the
-    /// compiled brush as source-sampling. Returns the slot index to
-    /// reference in emitted WGSL as `graph_tex_{slot}` (shared sampler
-    /// `graph_smp`), positioned after any named graph textures.
+    /// Reserve (or look up) a slot for a texture the requesting node
+    /// republishes every flush — the [`ResolvedSource::Live`] shim over
+    /// [`Self::request_source`].
     ///
-    /// Unlike [`Self::request_texture`], the source is not resolved
-    /// against the [`crate::gpu::texture_registry::TextureRegistry`] —
-    /// the terminal binds the live per-stroke snapshot view instead (see
-    /// `paint`'s `flush_dabs`). The compiler rejects graphs that combine
-    /// a source-sampling node with named graph textures, so the returned
-    /// slot is always `0` today.
-    pub fn request_source_texture(&self) -> u32 {
-        *self.samples_source.borrow_mut() = true;
-        self.graph_sources.borrow().len() as u32
+    /// Unlike [`Self::request_texture`], the view is not resolved against
+    /// the [`crate::gpu::texture_registry::TextureRegistry`] at
+    /// pipeline-build time; the producing node publishes it during its own
+    /// `flush_dabs` and the terminal binds whatever is there. A slot with
+    /// nothing published falls back to `_fallback`, which is how the
+    /// cursor preview renders without a stroke.
+    pub fn request_live_texture(&self, live: LiveSource) -> u32 {
+        self.request_source(ResolvedSource::Live(live))
     }
 }
 

@@ -26,6 +26,12 @@ const ACTIONS: &[ActionDef] = &[
         icon: "radix-icons:mask-off",
     },
     ActionDef {
+        id: "alphaToSelection",
+        display_name: "Alpha to Selection",
+        description: "Load the layer's opacity as the selection.",
+        icon: "fa6-solid:clone",
+    },
+    ActionDef {
         id: "clearSelectionContents",
         display_name: "Clear Selection Contents",
         description: "Erase the pixels inside the selection.",

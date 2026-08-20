@@ -1,11 +1,23 @@
 <script lang="ts">
     import { watchDismiss } from '../../lib/dismiss';
     import Icon from '../../icons/Icon.svelte';
+    import { actions, type Action } from '../../actions/registry';
+    import { registryEpoch } from '../../actions/registryEpoch.svelte';
+    import { NEW_LAYER_ACTION_IDS } from '../../actions/index';
 
     let { onpick, onclose }: {
-        onpick: (kind: 'layer' | 'group' | 'veil' | 'void' | 'filter') => void;
+        onpick: (actionId: string) => void;
         onclose: () => void;
     } = $props();
+
+    // Labels and icons come from the action registrations, so the dropdown,
+    // the Layer menu and the command palette can't drift apart.
+    let entries = $derived.by(() => {
+        registryEpoch();
+        return NEW_LAYER_ACTION_IDS
+            .map(id => actions.get(id))
+            .filter((a): a is Action => a !== undefined);
+    });
 
     function onKeyDown(e: KeyboardEvent) {
         if (e.key === 'Escape') onclose();
@@ -20,26 +32,17 @@
 <svelte:window onkeydown={onKeyDown} />
 
 <div class="new-layer-menu" data-keep-open="new-layer" role="menu">
-    <button class="item" role="menuitem" onclick={() => onpick('layer')}>
-        <Icon name="fa6-solid:image" />
-        <span>Normal Layer</span>
-    </button>
-    <button class="item" role="menuitem" onclick={() => onpick('filter')}>
-        <Icon name="fa6-solid:circle-half-stroke" />
-        <span>Filter Layer</span>
-    </button>
-    <button class="item" role="menuitem" onclick={() => onpick('group')}>
-        <Icon name="fa6-solid:folder" />
-        <span>Layer Group</span>
-    </button>
-    <button class="item" role="menuitem" onclick={() => onpick('veil')}>
-        <Icon name="material-symbols:curtains-rounded" />
-        <span>Veil</span>
-    </button>
-    <button class="item" role="menuitem" onclick={() => onpick('void')}>
-        <Icon name="tabler:galaxy" />
-        <span>Void</span>
-    </button>
+    {#each entries as entry (entry.id)}
+        <button
+            class="item"
+            role="menuitem"
+            title={entry.description}
+            onclick={() => onpick(entry.id)}
+        >
+            <Icon name={entry.icon} />
+            <span>{entry.displayName}</span>
+        </button>
+    {/each}
 </div>
 
 <style>

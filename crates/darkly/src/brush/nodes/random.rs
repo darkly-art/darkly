@@ -128,6 +128,7 @@ mod tests {
                     stroke_seed: 0x1234_5678,
                     dab_index,
                     base_size: 1.0,
+                    dabs_per_pass: 1.0,
                     node_id,
                 };
                 match RandomEvaluator.evaluate_cpu(&ctx).into_iter().next() {

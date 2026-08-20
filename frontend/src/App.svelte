@@ -11,6 +11,7 @@
     import ImageRescaleModal from './ui/ImageRescaleModal.svelte';
     import SelectionModifyModal from './ui/SelectionModifyModal.svelte';
     import FilterModal from './ui/filters/FilterModal.svelte';
+    import LayerPickers from './ui/layers/LayerPickers.svelte';
     import ConfirmDiscardModal from './ui/ConfirmDiscardModal.svelte';
     import RecoveryModal from './ui/RecoveryModal.svelte';
     import AboutModal from './ui/AboutModal.svelte';
@@ -67,6 +68,7 @@
 <ImageRescaleModal />
 <SelectionModifyModal />
 <FilterModal />
+<LayerPickers />
 <ConfirmDiscardModal />
 <RecoveryModal />
 <AboutModal />

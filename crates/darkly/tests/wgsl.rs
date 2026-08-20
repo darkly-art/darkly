@@ -440,13 +440,14 @@ fn paint_only_graph_falls_through_to_disc() {
         .contains("vec4<f32>(1.0, 1.0, 1.0, 1.0)"));
 }
 
-/// The Clone builtin compiles to WGSL with `samples_source` set, the
-/// stroke shader declares the `@group(3)` source binding and calls the
-/// clone-sample helper, and the preview variant compiles too (it binds a
-/// fallback so it must still declare the source). Naga validation of the
-/// assembled shader happens when the pipeline builds — see `tests/clone.rs`.
+/// The Clone builtin reserves a live `@group(3)` slot for the stroke
+/// snapshot, the stroke shader declares that binding and calls the
+/// clone-sample helper, and the preview variant compiles too (it declares
+/// the same slot and binds `_fallback`, since hover publishes nothing).
+/// Naga validation of the assembled shader happens when the pipeline
+/// builds — see `tests/clone.rs`.
 #[test]
-fn clone_brush_compiles_with_samples_source() {
+fn clone_brush_reserves_a_live_source_slot() {
     let clone = darkly::brush::builtin_brushes::all()
         .into_iter()
         .find(|b| b.metadata.name == "Clone")
@@ -456,10 +457,13 @@ fn clone_brush_compiles_with_samples_source() {
     let compiled =
         compile_brush_to_wgsl(&clone.metadata.graph, &plan, &evals()).expect("clone compiles");
 
-    assert!(compiled.samples_source, "clone must set samples_source");
-    assert!(
-        compiled.graph_sources.is_empty(),
-        "clone source is not a named registry texture"
+    assert_eq!(
+        compiled.graph_sources,
+        vec![darkly::brush::texture_source::ResolvedSource::Live(
+            darkly::brush::texture_source::LiveSource::StrokeSnapshot
+        )],
+        "clone must reserve exactly one live stroke-snapshot slot, and no \
+         named registry texture",
     );
     // Stroke shader declares the @group(3) source texture and samples it.
     assert!(compiled

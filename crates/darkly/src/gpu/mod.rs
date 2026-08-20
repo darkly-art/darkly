@@ -112,6 +112,7 @@ pub mod floating_preview;
 pub mod flood_fill;
 pub mod hash;
 pub mod histogram;
+pub mod layer_readback;
 pub mod lut_filter;
 pub mod ortho_transform;
 pub mod overlay;

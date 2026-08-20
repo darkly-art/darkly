@@ -44,6 +44,10 @@ beforeEach(() => {
     engine.send.mockClear();
     fakeApp.onCopyResult.mockClear();
     fakeApp.activeLayerId = 42;
+    fakeConfig.get.mockReturnValue(false);
+    // `mockClear` keeps the implementation, so restore the default response
+    // rather than letting one test's stub leak into the next.
+    engine.send.mockResolvedValue(null);
 });
 
 // Give the fake engine a real typed `api` over its send/post spies.
@@ -80,5 +84,33 @@ describe('copy/cut send the layer id under the `id` field (not `layer_id`)', () 
         fakeApp.activeLayerId = null;
         actions.get('copy')!.handler({});
         expect(engine.post).not.toHaveBeenCalled();
+    });
+});
+
+// Regression: paste-in-place special-cased a mask target onto the committed
+// verb, so pasting into a mask entered no transform session and overwrote the
+// mask the instant the key was pressed — no preview, no reposition, no cancel.
+// The target's kind must not divert the routing: with transform-after-paste on,
+// every target floats, and the transform tool is what commits it.
+describe('paste-in-place routing', () => {
+    it('floats with transform-after-paste on, whatever the target kind', async () => {
+        registerClipboardActions();
+        fakeConfig.get.mockReturnValue(true);
+
+        await actions.get('pasteInPlace')!.handler({});
+
+        expect(engine.send).toHaveBeenCalledWith('paste_in_place_floating', { id: 42 });
+        expect(engine.send).not.toHaveBeenCalledWith('paste_in_place', expect.anything());
+    });
+
+    it('commits on arrival only when transform-after-paste is off', async () => {
+        registerClipboardActions();
+        fakeConfig.get.mockReturnValue(false);
+        // The committed verb answers with the id it wrote into.
+        engine.send.mockResolvedValue({ id: 42 });
+
+        await actions.get('pasteInPlace')!.handler({});
+
+        expect(engine.send).toHaveBeenCalledWith('paste_in_place', { active_layer_id: 42 });
     });
 });

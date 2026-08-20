@@ -93,6 +93,55 @@ pub struct Scratch {
     /// pixels (see [`crate::brush::warp_field`]) and declare their own
     /// format on [`crate::brush::node::BrushNodeRegistration`].
     format: wgpu::TextureFormat,
+
+    /// Per-pixel quantities a terminal accumulates alongside the write
+    /// side (see [`StrokeChannels`]).  `None` until a terminal asks via
+    /// [`Scratch::ensure_channels`]; terminals that declare none pay
+    /// nothing.
+    channels: Option<StrokeChannels>,
+}
+
+/// One extra per-pixel quantity a terminal accumulates over a stroke.
+///
+/// The write side carries coverage and nothing else — premultiplied
+/// source-over saturating at 1.  A terminal that needs to *remember*
+/// something per pixel across the stroke declares a channel: it becomes
+/// another color attachment on the terminal's existing draw, so the
+/// blend unit accumulates it under `blend` for free, with no extra pass.
+///
+/// The framework has no opinion on what a channel means.  `name` is the
+/// terminal's own vocabulary — watercolor's is `"deposit"` — and appears
+/// in the generated `FsOut` struct as the field the terminal's body
+/// writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StrokeChannel {
+    /// WGSL identifier for the `FsOut` field, and the debug label stem.
+    pub name: &'static str,
+    pub format: wgpu::TextureFormat,
+    /// How the blend unit folds each dab's contribution into the running
+    /// value.  Source-over gives `1 − Π(1−aᵢ)`, which is order-invariant
+    /// and therefore immune to how dabs are grouped into draws.
+    pub blend: wgpu::BlendState,
+}
+
+/// The allocated realization of a terminal's declared channels.
+///
+/// Managed atomically with the write side: allocated together, cleared
+/// together, grown together, at the same dimensions and the same
+/// canvas-anchored offset.  There is no API by which a caller can resize
+/// one without the other.
+///
+/// A channel is written as a color attachment and read from a pass that
+/// does *not* target it — watercolor's per-dab probe reads the deposit
+/// while rendering to its atlas. That is an ordinary pass-to-pass
+/// dependency, not the read/write alias WebGPU forbids, so a channel needs
+/// no mirror.
+struct StrokeChannels {
+    declared: Vec<StrokeChannel>,
+    textures: Vec<wgpu::Texture>,
+    /// Attachment views, in declaration order — what the terminal hangs
+    /// off its render pass after [`Scratch::write_view`].
+    views: Vec<wgpu::TextureView>,
 }
 
 impl Scratch {
@@ -161,7 +210,66 @@ impl Scratch {
             read_mirror_sampler,
             write_sampler,
             format,
+            channels: None,
         }
+    }
+
+    /// Allocate the terminal's declared channels if they aren't already,
+    /// clearing each to zero at the moment of allocation.
+    ///
+    /// Idempotent — safe to call every flush; only a first call, or one
+    /// whose declaration differs from what is allocated, does work.
+    ///
+    /// Clearing here rather than relying on the stroke prologue matters:
+    /// [`Lifecycle::ClearScratchToTransparent`] runs in `begin_stroke`,
+    /// before any flush, so on a stroke's first flush there is nothing
+    /// allocated for it to have cleared.  A rewind, by contrast, clears
+    /// channels that already exist.  Clearing at allocation makes the two
+    /// paths agree.
+    ///
+    /// [`Lifecycle::ClearScratchToTransparent`]: crate::brush::node::Lifecycle::ClearScratchToTransparent
+    pub fn ensure_channels(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        declared: &[StrokeChannel],
+    ) {
+        if declared.is_empty() {
+            return;
+        }
+        if self
+            .channels
+            .as_ref()
+            .is_some_and(|c| c.declared == declared)
+        {
+            return;
+        }
+        let channels = build_channels(device, self.write_w, self.write_h, declared);
+        clear_channel_views(encoder, &channels.views);
+        self.channels = Some(channels);
+    }
+
+    /// Attachment views for the declared channels, in declaration order —
+    /// what a terminal hangs off its render pass after
+    /// [`Scratch::write_view`].  Empty when none are declared.
+    pub fn channel_views(&self) -> &[wgpu::TextureView] {
+        self.channels.as_ref().map_or(&[], |c| &c.views)
+    }
+
+    /// The channel textures, in declaration order.
+    ///
+    /// The checkpoint ring snapshots these alongside the write side: a
+    /// rewind that restores the scratch but not the channels replays the
+    /// post-checkpoint dabs onto a channel that already counted them.
+    pub fn channel_textures(&self) -> &[wgpu::Texture] {
+        self.channels.as_ref().map_or(&[], |c| &c.textures)
+    }
+
+    /// Formats of [`Scratch::channel_textures`], in the same order.
+    pub fn channel_formats(&self) -> Vec<wgpu::TextureFormat> {
+        self.channels
+            .as_ref()
+            .map_or_else(Vec::new, |c| c.declared.iter().map(|d| d.format).collect())
     }
 
     pub fn write_texture(&self) -> &wgpu::Texture {
@@ -181,17 +289,25 @@ impl Scratch {
     /// on the terminal's declared lifecycle, so the four terminals no
     /// longer carry a copy-pasted prologue each.
     pub fn clear_to_transparent(&self, encoder: &mut wgpu::CommandEncoder) {
-        let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("scratch-clear-transparent"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.write_view,
+        // Channels clear alongside the write side. A channel surviving a
+        // stroke start or a rewind boundary would let dabs that no longer
+        // exist keep contributing to what the next dab reads.
+        let mut attachments: Vec<Option<wgpu::RenderPassColorAttachment>> =
+            Vec::with_capacity(1 + self.channel_views().len());
+        for view in std::iter::once(&self.write_view).chain(self.channel_views()) {
+            attachments.push(Some(wgpu::RenderPassColorAttachment {
+                view,
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                     store: wgpu::StoreOp::Store,
                 },
-            })],
+            }));
+        }
+        let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("scratch-clear-transparent"),
+            color_attachments: &attachments,
             ..Default::default()
         });
     }
@@ -384,6 +500,27 @@ impl Scratch {
             &self.write_sampler,
         );
 
+        // Channels rebase identically — same target size, same canvas-
+        // anchored offset — so they stay addressable at the write side's
+        // layer-local coordinates. An in-flight stroke's accumulated
+        // quantities are as unrecoverable as its pixels, so contents are
+        // preserved rather than recreated.
+        if let Some(old) = self.channels.take() {
+            let grown = build_channels(device, target_w, target_h, &old.declared);
+            for (src, dst) in old.textures.iter().zip(&grown.textures) {
+                copy_region_offset(
+                    encoder,
+                    src,
+                    dst,
+                    self.write_w,
+                    self.write_h,
+                    dst_offset_x,
+                    dst_offset_y,
+                );
+            }
+            self.channels = Some(grown);
+        }
+
         self.write_texture = new_texture;
         self.write_view = new_view;
         self.write_bind_group = new_bind_group;
@@ -414,6 +551,114 @@ impl Scratch {
         self.read_h = new_h;
         self.read_origin_cache = None;
     }
+}
+
+/// Allocate every declared channel plus its mirror at `(width, height)`.
+///
+/// Both sides are layer-sized: the accumulation texture because it must
+/// stay addressable at the write side's layer-local coordinates, the
+/// mirror so a dab can sample it without an origin translation.
+fn build_channels(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    declared: &[StrokeChannel],
+) -> StrokeChannels {
+    let mut textures = Vec::with_capacity(declared.len());
+    let mut views = Vec::with_capacity(declared.len());
+
+    for channel in declared {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(&format!("scratch-channel-{}", channel.name)),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: channel.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        views.push(texture.create_view(&wgpu::TextureViewDescriptor::default()));
+        textures.push(texture);
+    }
+
+    StrokeChannels {
+        declared: declared.to_vec(),
+        textures,
+        views,
+    }
+}
+
+/// Zero every channel attachment in one clear pass.
+fn clear_channel_views(encoder: &mut wgpu::CommandEncoder, views: &[wgpu::TextureView]) {
+    if views.is_empty() {
+        return;
+    }
+    let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = views
+        .iter()
+        .map(|view| {
+            Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })
+        })
+        .collect();
+    let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("scratch-channel-clear"),
+        color_attachments: &attachments,
+        ..Default::default()
+    });
+}
+
+/// Copy all of `src` into `dst` at a canvas-anchored destination offset —
+/// the growth rebase, matching [`Scratch::grow_write`]'s own blit.
+fn copy_region_offset(
+    encoder: &mut wgpu::CommandEncoder,
+    src: &wgpu::Texture,
+    dst: &wgpu::Texture,
+    w: u32,
+    h: u32,
+    dst_offset_x: u32,
+    dst_offset_y: u32,
+) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    encoder.copy_texture_to_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: src,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyTextureInfo {
+            texture: dst,
+            mip_level: 0,
+            origin: wgpu::Origin3d {
+                x: dst_offset_x,
+                y: dst_offset_y,
+                z: 0,
+            },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+    );
 }
 
 fn create_write_texture(
