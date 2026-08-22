@@ -31,6 +31,20 @@ const ACTIONS: &[ActionDef] = &[
         description: "Open the add-node menu at the cursor (brush builder).",
         icon: "fa6-solid:diagram-project",
     },
+    // Both say "pack": a `.darkly-brush` file names a container, not a count,
+    // the same way `.darkly` does for layers. One may hold twenty brushes.
+    ActionDef {
+        id: "importBrushPack",
+        display_name: "Import Brush Pack…",
+        description: "Import a `.darkly-brush` pack — one file may contain any number of brushes.",
+        icon: "fa6-solid:file-import",
+    },
+    ActionDef {
+        id: "exportBrushPack",
+        display_name: "Export Brush Pack…",
+        description: "Export one of your brush packs as a `.darkly-brush` file to share.",
+        icon: "fa6-solid:file-export",
+    },
 ];
 
 pub fn register() -> ActionCategory {

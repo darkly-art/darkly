@@ -150,11 +150,16 @@ fn main() {
         &mut catalog_sources,
     );
 
-    // Brushes are a directory of YAML data rather than of `register()` modules,
-    // so they record their catalog source from inside their own scan. Must run
-    // before `generate_catalog_sources`, which consumes the vector.
+    // Brushes and packs are directories of YAML data rather than of
+    // `register()` modules, so they record their catalog source from inside
+    // their own scan. Must run before `generate_catalog_sources`, which
+    // consumes the vector.
     generate_builtin_brushes(
         &PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("brushes"),
+        &mut catalog_sources,
+    );
+    generate_builtin_packs(
+        &PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("packs"),
         &mut catalog_sources,
     );
 
@@ -511,84 +516,135 @@ fn generate_grouped_registry(dir: &Path, registration_type: &str) {
     println!("cargo:rerun-if-changed={}", dir.display());
 }
 
-/// Scan `presets/*.yaml` and emit a generated Rust module to `OUT_DIR` with
-/// one `include_str!` per YAML file plus a `defaults()` constant and an
-/// `overlays()` function returning the editor-flavored overlays in
-/// alphabetical order. `defaults.yaml` is required; the build panics if
-/// it's missing. Every other `.yaml` becomes an equal-status overlay whose
-/// display name is the file stem (Title Case).
-fn generate_yaml_presets(dir: &Path) {
-    let mut defaults_path: Option<PathBuf> = None;
-    let mut overlays: Vec<(String, PathBuf)> = Vec::new();
+/// The Rust constant name holding one YAML file's source: the file stem,
+/// upper-cased, with `-` normalized to `_`.
+fn yaml_const_name(stem: &str) -> String {
+    format!("{}_YAML", stem.to_uppercase().replace('-', "_"))
+}
 
+/// Scan `dir` for `*.yaml`/`*.yml` and append one `pub const <STEM>_YAML: &str
+/// = include_str!(…)` per file to `code`. Returns the `(stem, filename)` pairs
+/// in emission order, sorted by stem so the generated file is deterministic
+/// across builds.
+///
+/// Paths are emitted relative to `CARGO_MANIFEST_DIR` so the generated file
+/// carries no absolute paths and is portable across checkouts — the form
+/// [`generate_texture_registry`] documents and which the YAML scans previously
+/// each got wrong in their own way.
+fn emit_yaml_consts(dir: &Path, code: &mut String) -> Vec<(String, String)> {
+    let dir_name = dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .expect("yaml directory has a name");
+
+    let mut files: Vec<(String, String)> = Vec::new();
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
                 continue;
             }
-            let stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-            if stem == "defaults" {
-                defaults_path = Some(path);
-            } else if !stem.is_empty() {
-                overlays.push((stem, path));
+            let (Some(stem), Some(file_name)) = (
+                path.file_stem().and_then(|s| s.to_str()),
+                path.file_name().and_then(|s| s.to_str()),
+            ) else {
+                continue;
+            };
+            if stem.is_empty() {
+                continue;
             }
+            files.push((stem.to_string(), file_name.to_string()));
         }
     }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let defaults_path =
-        defaults_path.unwrap_or_else(|| panic!("presets/defaults.yaml is required"));
-
-    // Display-name comes from the YAML's `name:` field; fall back to a
-    // titlecased file stem if the YAML doesn't set one. Order alphabetically
-    // (by stem) so no editor is privileged.
-    overlays.sort_by(|a, b| a.0.cmp(&b.0));
-
-    let mut display_names: Vec<(String, String)> = Vec::new();
-    for (stem, path) in &overlays {
-        let yaml = fs::read_to_string(path).unwrap_or_default();
-        let name = parse_yaml_display_name(&yaml).unwrap_or_else(|| titlecase(stem));
-        display_names.push((stem.clone(), name));
+    for (stem, file_name) in &files {
+        let rel = format!("/{dir_name}/{file_name}");
+        code.push_str(&format!(
+            "pub const {}: &str = include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), {rel:?}));\n",
+            yaml_const_name(stem),
+        ));
     }
+    code.push('\n');
 
+    files
+}
+
+/// Embed every `*.yaml` in `dir` as `<const_name>: &[(filename, source)]`,
+/// written to `OUT_DIR/<out_file>`.
+///
+/// The shape behind "drop a `.yaml` file in the directory and it is loaded" —
+/// used for built-in brushes and built-in packs alike, so neither owns a copy
+/// of the scan.
+fn generate_embedded_yaml_dir(dir: &Path, const_name: &str, out_file: &str, header: &str) {
+    let mut code = String::new();
+    code.push_str("// @generated by build.rs — do not edit manually.\n");
+    code.push_str(header);
+    code.push('\n');
+
+    let files = emit_yaml_consts(dir, &mut code);
+
+    code.push_str(&format!("pub const {const_name}: &[(&str, &str)] = &[\n"));
+    for (stem, file_name) in &files {
+        code.push_str(&format!(
+            "    ({:?}, {}),\n",
+            file_name,
+            yaml_const_name(stem)
+        ));
+    }
+    code.push_str("];\n");
+
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
+    let out_path = PathBuf::from(out_dir).join(out_file);
+    fs::write(&out_path, code).unwrap();
+
+    println!("cargo:rerun-if-changed={}", dir.display());
+}
+
+/// Scan `presets/*.yaml` and emit a generated Rust module to `OUT_DIR` with
+/// one `include_str!` per YAML file plus a `DEFAULTS_YAML` constant and an
+/// `OVERLAYS` list of the editor-flavored overlays in alphabetical order.
+/// `defaults.yaml` is required; the build panics if it's missing. Every other
+/// `.yaml` becomes an equal-status overlay whose display name is its `name:`
+/// field, falling back to a titlecased file stem.
+fn generate_yaml_presets(dir: &Path) {
     let mut code = String::new();
     code.push_str("// @generated by build.rs — do not edit manually.\n");
     code.push_str(
         "// To add a new editor overlay, drop `<name>.yaml` in `crates/darkly/presets/`.\n\n",
     );
 
-    code.push_str(&format!(
-        "pub const DEFAULTS_YAML: &str = include_str!({:?});\n\n",
-        defaults_path.display().to_string()
-    ));
+    // `defaults.yaml`'s stem yields `DEFAULTS_YAML`, which is the name the
+    // config layer already reads — it needs no special emission, only to be
+    // held out of the overlay list below.
+    let files = emit_yaml_consts(dir, &mut code);
+    assert!(
+        files.iter().any(|(stem, _)| stem == "defaults"),
+        "presets/defaults.yaml is required"
+    );
 
-    for (stem, path) in &overlays {
-        code.push_str(&format!(
-            "const {}_YAML: &str = include_str!({:?});\n",
-            stem.to_uppercase().replace('-', "_"),
-            path.display().to_string()
-        ));
-    }
-    code.push('\n');
+    // Display-name comes from the YAML's `name:` field; fall back to a
+    // titlecased file stem if the YAML doesn't set one.
+    let overlays: Vec<(String, String)> = files
+        .iter()
+        .filter(|(stem, _)| stem != "defaults")
+        .map(|(stem, file_name)| {
+            let yaml = fs::read_to_string(dir.join(file_name)).unwrap_or_default();
+            let name = parse_yaml_display_name(&yaml).unwrap_or_else(|| titlecase(stem));
+            (stem.clone(), name)
+        })
+        .collect();
 
     // Equal-status overlay list: (display_name, yaml_source).
     code.push_str("pub const OVERLAYS: &[(&str, &str)] = &[\n");
-    for (stem, name) in &display_names {
-        code.push_str(&format!(
-            "    ({:?}, {}_YAML),\n",
-            name,
-            stem.to_uppercase().replace('-', "_")
-        ));
+    for (stem, name) in &overlays {
+        code.push_str(&format!("    ({:?}, {}),\n", name, yaml_const_name(stem)));
     }
     code.push_str("];\n\n");
 
     // BASE_SETTINGS_OPTIONS feeds the `app.baseSettings` enum schema.
     code.push_str("pub const BASE_SETTINGS_OPTIONS: &[(&str, &str)] = &[\n");
-    for (_, name) in &display_names {
+    for (_, name) in &overlays {
         code.push_str(&format!("    ({:?}, {:?}),\n", name, name));
     }
     code.push_str("];\n");
@@ -646,56 +702,37 @@ fn generate_builtin_brushes(dir: &Path, catalog_sources: &mut Vec<(String, Strin
         catalog_sources,
     );
 
-    let mut brushes: Vec<(String, PathBuf)> = Vec::new();
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
-                continue;
-            }
-            let stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-            if stem.is_empty() {
-                continue;
-            }
-            brushes.push((stem, path));
-        }
-    }
-    brushes.sort_by(|a, b| a.0.cmp(&b.0));
+    generate_embedded_yaml_dir(
+        dir,
+        "BUILTIN_BRUSHES_YAML",
+        "builtin_brushes_gen.rs",
+        "// To add a new built-in brush, drop `<name>.yaml` in\n\
+         // `crates/darkly/brushes/`. It is loaded automatically.\n",
+    );
+}
 
-    let mut code = String::new();
-    code.push_str("// @generated by build.rs — do not edit manually.\n");
-    code.push_str("// To add a new built-in brush, drop `<name>.yaml` in\n");
-    code.push_str("// `crates/darkly/brushes/`. It is loaded automatically.\n\n");
+/// Scan `packs/*.yaml` and emit a generated module to `OUT_DIR` listing each
+/// `(filename, yaml_source)` pair, the same way [`generate_builtin_brushes`]
+/// does for brushes. A pack's id is its file stem.
+///
+/// Also records the directory as a catalog source, so a shipped pack is
+/// published in `metadata.json` alongside the brushes it groups.
+fn generate_builtin_packs(dir: &Path, catalog_sources: &mut Vec<(String, String)>) {
+    record_catalog_source(
+        dir.file_name()
+            .and_then(|s| s.to_str())
+            .expect("pack directory has a name"),
+        "crate::brush::packs",
+        catalog_sources,
+    );
 
-    for (stem, path) in &brushes {
-        code.push_str(&format!(
-            "const {}_YAML: &str = include_str!({:?});\n",
-            stem.to_uppercase().replace('-', "_"),
-            path.display().to_string()
-        ));
-    }
-    code.push('\n');
-
-    code.push_str("pub const BUILTIN_BRUSHES_YAML: &[(&str, &str)] = &[\n");
-    for (stem, _) in &brushes {
-        let filename = format!("{stem}.yaml");
-        code.push_str(&format!(
-            "    ({:?}, {}_YAML),\n",
-            filename,
-            stem.to_uppercase().replace('-', "_"),
-        ));
-    }
-    code.push_str("];\n");
-
-    let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
-    let out_path = PathBuf::from(out_dir).join("builtin_brushes_gen.rs");
-    fs::write(&out_path, code).unwrap();
-
-    println!("cargo:rerun-if-changed={}", dir.display());
+    generate_embedded_yaml_dir(
+        dir,
+        "BUILTIN_PACKS_YAML",
+        "builtin_packs_gen.rs",
+        "// To add a new built-in brush pack, drop `<name>.yaml` in\n\
+         // `crates/darkly/packs/`. Its file stem is its pack id.\n",
+    );
 }
 
 /// Scan `resources/textures/*.{jpg,jpeg,png,webp}` and emit a generated

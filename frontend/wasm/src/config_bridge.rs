@@ -78,7 +78,11 @@ pub fn config_kind_is_int(key: &str) -> bool {
 /// Get the full preferences schema as JSON: one `Catalog` per settings
 /// section, each holding a single entry whose `params` are that section's
 /// prefs as `ParamInfo` — the same shape the effect panels consume. Sorted by
-/// section order. Prefs marked `Hidden` are not settings and are omitted.
+/// section order.
+///
+/// Carries every declared pref, including those marked `Hidden`, which arrive
+/// with `widget: "hidden"` for the UI to skip. This is the schema stored prefs
+/// are validated against, so omitting one would erase it from disk on reload.
 #[wasm_bindgen]
 pub fn config_schema() -> String {
     serde_json::to_string(&darkly::catalog::settings_catalogs()).unwrap_or_else(|_| "[]".into())

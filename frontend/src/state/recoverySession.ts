@@ -22,6 +22,7 @@
  */
 import { listSnapshots, removeSnapshot, type RecoveryEntry } from '../storage/recovery';
 import { storage as defaultStorage, type DarklyStorage } from '../storage';
+import { newId } from '../lib/id';
 
 const REGISTRY_KEY = 'darkly.recovery.sessions';
 /** Heartbeat cadence — how often a live session refreshes its timestamp. */
@@ -37,10 +38,7 @@ export interface KeyValueStore {
 
 type Registry = Record<string, number>;
 
-function genId(): string {
-    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
-    return `session-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
-}
+const genId = () => newId('session');
 
 export function readRegistry(ls: KeyValueStore): Registry {
     const raw = ls.getItem(REGISTRY_KEY);

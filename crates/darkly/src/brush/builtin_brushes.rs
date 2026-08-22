@@ -8,8 +8,8 @@
 
 use std::sync::OnceLock;
 
-use crate::brush::bundle::Brush;
 use crate::brush::library::BrushInfo;
+use crate::brush::metadata::Brush;
 use crate::brush::portable::PortableBrush;
 use crate::catalog::{Catalog, CatalogEntry};
 use crate::gpu::preview::PreviewAnim;
@@ -34,7 +34,7 @@ fn parsed() -> Vec<(&'static str, Brush)> {
             let portable: PortableBrush = serde_yaml_ng::from_str(yaml)
                 .unwrap_or_else(|e| panic!("invalid built-in brush '{filename}': {e}"));
             let brush = portable
-                .into_brush(registry)
+                .into_brush(registry, stem)
                 .unwrap_or_else(|e| panic!("invalid built-in brush '{filename}': {e}"));
             (stem, brush)
         })
@@ -124,7 +124,15 @@ pub fn catalog() -> Catalog {
             .map(|(stem, info)| {
                 let entry = CatalogEntry::new(stem, info.name.as_str())
                     .with_description(info.description.as_str())
-                    .with_category(info.category.as_str())
+                    // Grouping is derived, not stored: membership lives on
+                    // the pack and a brush may be in several, so this is one
+                    // stored fact projected into the export rather than two to
+                    // keep in agreement.
+                    .with_category(
+                        crate::brush::packs::pack_of(stem)
+                            .map(|p| p.name.as_str())
+                            .unwrap_or(""),
+                    )
                     // Brushes carry no `preview` field of their own — the recipe
                     // lives on the catalog — so previewability is the same
                     // question put to the same authority.
@@ -186,12 +194,25 @@ mod tests {
     }
 
     #[test]
-    fn builtin_brushes_round_trip() {
+    fn builtin_brushes_round_trip_through_a_pack() {
+        // Every shipped brush must survive the archive it would be shared in
+        // — which is a pack, even when it holds one brush.
+        use crate::brush::pack::BrushPack;
+        use crate::brush::pack_file::PackFile;
+
         for brush in all() {
-            let name = brush.metadata.name.clone();
-            let bytes = brush.to_bytes().unwrap();
-            let loaded = Brush::from_bytes(&bytes).unwrap();
-            assert_eq!(loaded.metadata.name, name);
+            let (id, name) = (brush.id().to_string(), brush.name().to_string());
+            let mut pack = BrushPack::new("p", "Pack", "mdi:brush", "#000000", "#ffffff");
+            pack.members = vec![id.clone()];
+
+            let bytes = PackFile::new(&pack, vec![brush.metadata.clone()])
+                .to_bytes()
+                .unwrap();
+            let loaded = PackFile::from_bytes(&bytes).unwrap();
+
+            assert_eq!(loaded.brushes.len(), 1, "'{id}' round-trips as one brush");
+            assert_eq!(loaded.brushes[0].id, id);
+            assert_eq!(loaded.brushes[0].name, name);
         }
     }
 

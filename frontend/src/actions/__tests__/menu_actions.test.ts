@@ -185,6 +185,8 @@ describe('menu action registrations', () => {
             'saveDocument',
             'saveDocumentAs',
             'exportTimelapse',
+            'importBrushPack',
+            'exportBrushPack',
         ]);
     });
 

@@ -43,9 +43,9 @@ Darkly's unique brushes live inside a node-based system. This enables infinite c
 
 ### Veils
 
-![veil-demo](https://github.com/user-attachments/assets/df05c881-4572-46a1-9a31-366236fabbd3)
-
 Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special layer that sits above the viewport, visible only to the artist. By shrouding your canvas behind a mysterious pane, they invite you to see something that maybe wasn't there before.
+
+![veil-demo](https://github.com/user-attachments/assets/df05c881-4572-46a1-9a31-366236fabbd3)
 
 Veils are nondestructive. You can paint as usual, behind the veil, and when you disable it, you'll see the full-res result.
 
@@ -64,11 +64,11 @@ Veils are nondestructive. You can paint as usual, behind the veil, and when you 
 | <img src="docs/images/previews/veils/watercolor.jpg" width="200" alt="Watercolor"> | **Watercolor** | Bleed the view outward into soft watercolor washes. |
 <!-- /darkly:catalog-table -->
 
-Besides their nebulous effects on the imagination, veils are fun to play around with, and have practical uses too:
+Veils are a fun toy, but they have practical uses too:
 
 - By hiding fine details, they can prevent **premature fixation on detail**, freeing you to focus on composition.
 - During the sketching / ideation phase, they can help with **blank page syndrome** and **destructive self-criticism** by giving you permission to be messy, and explore freely.
-- They can also help remedy **art fatigue** (losing eyes for a piece by staring at it for too long) by helping you view it through a fresh lens.
+- They can also help remedy **art fatigue** (losing eyes for a piece by staring at it for too long) by helping you see it through a fresh lens.
 
 > [!NOTE]
 > You can add unlimited veils, and stack them in any order; but adding too many can drain your battery because of the heavy load on your GPU.

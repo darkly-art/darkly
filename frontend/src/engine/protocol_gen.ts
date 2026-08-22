@@ -91,7 +91,9 @@ export type PreviewBackdrop = "Flat" | "Stripes";
 
 export type BrushDabThumbnailReq = { name: string, };
 
-export type BrushExportReq = { name: string, };
+export type BrushDeleteReq = { id: string, };
+
+export type BrushExportYamlReq = { id: string, };
 
 export type ExposedValue = { "kind": "scalar", 
 /**
@@ -167,7 +169,15 @@ export type BrushGraphSetPortRangeReq = { node_id: string, port_name: string, di
 
 export type BrushGraphUnexposePortReq = { node_id: string, port_name: string, };
 
-export type BrushInfo = { name: string, category: string, author: string, description: string, tags: Array<string>, 
+export type BrushInfo = { 
+/**
+ * Opaque identity — what pack member lists and recents hold.
+ */
+id: string, 
+/**
+ * Display name, and the engine's public lookup key.
+ */
+name: string, author: string, description: string, tags: Array<string>, 
 /**
  * Iconify icon shown in place of the baked dab/stroke thumbnails —
  * present when the graph contains a content-dependent node whose
@@ -180,11 +190,11 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
 
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+
 export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
 
 export type PortDir = "Input" | "Output";
-
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -449,7 +459,9 @@ supports_erase: boolean,
  */
 preview_staging: PreviewStaging | null, };
 
-export type BrushSaveReq = { name: string, category: string, };
+export type BrushRenameReq = { id: string, name: string, };
+
+export type BrushSaveReq = { id: string, name: string, };
 
 export type BrushSetExposedPortReq = { node_id: string, port_name: string, display_value: number, };
 
@@ -501,14 +513,6 @@ captureKind: CaptureKind | null, };
 
 export type CaptureKind = "camera" | "display" | "stream";
 
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
-export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
-/**
- * The unit suffix alone, for a column header. Empty for unitless values.
- */
-unit: string, };
-
 export type ParamInfo = { kind: string, name: string, 
 /**
  * Display label. `None` → the UI title-cases `name`.
@@ -525,6 +529,14 @@ widget: string, unit: UnitType, min: number | null, max: number | null, default:
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
 options: JsonValue | null, display: ParamDisplay, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
+export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
+/**
+ * The unit suffix alone, for a column header. Empty for unitless values.
+ */
+unit: string, };
 
 export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
 /**
@@ -581,6 +593,17 @@ export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 
 export type LayerTransformCapabilityReq = { id: number, };
 
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * Whether this modifier participates in transforms with its host.
+ */
+linkedToHost: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
+
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
  * Effective editability — `false` when this node *or any ancestor*
@@ -633,16 +656,20 @@ pipeline: string,
  */
 params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
 
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+export type LibrarySnapshot = { brushes: Array<BrushInfo>, packs: Array<BrushPackInfo>, };
+
+export type BrushPackInfo = { id: string, name: string, description: string, icon: string, primary: string, secondary: string, 
 /**
- * Whether this modifier participates in transforms with its host.
+ * Member brush ids, in the pack's order. The authority on membership —
+ * nothing on [`BrushInfo`] repeats it.
  */
-linkedToHost: boolean, 
+members: Array<string>, 
 /**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
+ * What the painter may change, so the UI can grey out affordances it
+ * would otherwise offer. A hint, not the authority — the engine rejects a
+ * forbidden edit regardless of what the UI believed.
  */
-editable: boolean, };
+can_edit_members: boolean, can_edit_identity: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -661,6 +688,22 @@ export type MoveVeilReq = { from: number, to: number, };
 export type NodeThumbnailReq = { node_id: number, width: number, height: number, };
 
 export type OverlayHitTestReq = { screen_x: number, screen_y: number, };
+
+export type PackAddBrushReq = { pack: string, brush: string, };
+
+export type PackCreateReq = { id: string, name: string, description: string, icon: string, primary: string, secondary: string, };
+
+export type PackDeleteReq = { id: string, };
+
+export type PackEditReq = { id: string, name: string, description: string, icon: string, primary: string, secondary: string, };
+
+export type PackExportReq = { id: string, };
+
+export type PackImportReq = { id: string, };
+
+export type PackRemoveBrushReq = { pack: string, brush: string, };
+
+export type PackReorderBrushReq = { pack: string, brush: string, index: number, };
 
 export type PasteImageReq = { width: number, height: number, offset_x: number, offset_y: number, active_layer_id: number, };
 
@@ -836,7 +879,8 @@ export type RequestKind =
     | 'brush_active_capabilities'
     | 'brush_active_dab_preview'
     | 'brush_dab_thumbnail'
-    | 'brush_export'
+    | 'brush_delete'
+    | 'brush_export_yaml'
     | 'brush_exposed_ports'
     | 'brush_graph_active'
     | 'brush_graph_add_node'
@@ -857,11 +901,11 @@ export type RequestKind =
     | 'brush_graph_set_port_range'
     | 'brush_graph_unexpose_port'
     | 'brush_graph_validate'
-    | 'brush_import'
     | 'brush_list'
     | 'brush_load'
     | 'brush_node_preview'
     | 'brush_node_types'
+    | 'brush_rename'
     | 'brush_save'
     | 'brush_set_exposed_port'
     | 'brush_stroke_preview'
@@ -917,6 +961,7 @@ export type RequestKind =
     | 'last_picked_color'
     | 'layer_transform_capability'
     | 'layer_tree'
+    | 'library_list'
     | 'list_fonts'
     | 'mark_dirty'
     | 'mask_to_selection'
@@ -928,6 +973,14 @@ export type RequestKind =
     | 'node_thumbnail'
     | 'open_document'
     | 'overlay_hit_test'
+    | 'pack_add_brush'
+    | 'pack_create'
+    | 'pack_delete'
+    | 'pack_edit'
+    | 'pack_export'
+    | 'pack_import'
+    | 'pack_remove_brush'
+    | 'pack_reorder_brush'
     | 'paste_image'
     | 'paste_image_floating'
     | 'paste_in_place'
@@ -1026,7 +1079,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'brush_active_capabilities',
     'brush_active_dab_preview',
     'brush_dab_thumbnail',
-    'brush_export',
+    'brush_delete',
+    'brush_export_yaml',
     'brush_exposed_ports',
     'brush_graph_active',
     'brush_graph_add_node',
@@ -1047,11 +1101,11 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'brush_graph_set_port_range',
     'brush_graph_unexpose_port',
     'brush_graph_validate',
-    'brush_import',
     'brush_list',
     'brush_load',
     'brush_node_preview',
     'brush_node_types',
+    'brush_rename',
     'brush_save',
     'brush_set_exposed_port',
     'brush_stroke_preview',
@@ -1107,6 +1161,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'last_picked_color',
     'layer_transform_capability',
     'layer_tree',
+    'library_list',
     'list_fonts',
     'mark_dirty',
     'mask_to_selection',
@@ -1118,6 +1173,14 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'node_thumbnail',
     'open_document',
     'overlay_hit_test',
+    'pack_add_brush',
+    'pack_create',
+    'pack_delete',
+    'pack_edit',
+    'pack_export',
+    'pack_import',
+    'pack_remove_brush',
+    'pack_reorder_brush',
     'paste_image',
     'paste_image_floating',
     'paste_in_place',
@@ -1224,7 +1287,8 @@ export interface EngineApi {
     brushActiveCapabilities(): Promise<BrushGraphCapabilities>;
     brushActiveDabPreview(): Promise<{ bytes: Uint8Array }>;
     brushDabThumbnail(req: BrushDabThumbnailReq): Promise<{ bytes: Uint8Array }>;
-    brushExport(req: BrushExportReq): Promise<{ bytes: Uint8Array }>;
+    brushDelete(req: BrushDeleteReq): Promise<null>;
+    brushExportYaml(req: BrushExportYamlReq): Promise<string>;
     brushExposedPorts(): Promise<Array<ExposedPortInfo>>;
     brushGraphActive(): Promise<JsonValue>;
     brushGraphAddNode(req: BrushGraphAddNodeReq): Promise<{ graph: JsonValue, added_node_id: string } | { error: string }>;
@@ -1245,11 +1309,11 @@ export interface EngineApi {
     brushGraphSetPortRange(req: BrushGraphSetPortRangeReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphUnexposePort(req: BrushGraphUnexposePortReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphValidate(req: BrushGraphJsonReq): Promise<null | { error: string }>;
-    brushImport(bytes: Uint8Array): Promise<string>;
     brushList(): Promise<Array<BrushInfo>>;
     brushLoad(req: BrushLoadReq): Promise<null>;
     brushNodePreview(req: BrushNodePreviewReq): Promise<{ bytes: Uint8Array }>;
     brushNodeTypes(): Promise<Array<NodeRegistration>>;
+    brushRename(req: BrushRenameReq): Promise<null>;
     brushSave(req: BrushSaveReq): Promise<null>;
     brushSetExposedPort(req: BrushSetExposedPortReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushStrokePreview(): Promise<{ bytes: Uint8Array }>;
@@ -1305,6 +1369,7 @@ export interface EngineApi {
     lastPickedColor(): Promise<{ bytes: Uint8Array }>;
     layerTransformCapability(req: LayerTransformCapabilityReq): Promise<string>;
     layerTree(): Promise<Array<LayerInfo>>;
+    libraryList(): Promise<LibrarySnapshot>;
     listFonts(): Promise<{ fonts: string[] }>;
     markDirty(): void;
     maskToSelection(req: MaskToSelectionReq): void;
@@ -1316,6 +1381,14 @@ export interface EngineApi {
     nodeThumbnail(req: NodeThumbnailReq): Promise<{ bytes: Uint8Array }>;
     openDocument(bytes: Uint8Array): Promise<void>;
     overlayHitTest(req: OverlayHitTestReq): Promise<number | null>;
+    packAddBrush(req: PackAddBrushReq): Promise<null>;
+    packCreate(req: PackCreateReq): Promise<null>;
+    packDelete(req: PackDeleteReq): Promise<null>;
+    packEdit(req: PackEditReq): Promise<null>;
+    packExport(req: PackExportReq): Promise<{ bytes: Uint8Array }>;
+    packImport(req: PackImportReq, bytes: Uint8Array): Promise<string>;
+    packRemoveBrush(req: PackRemoveBrushReq): Promise<null>;
+    packReorderBrush(req: PackReorderBrushReq): Promise<null>;
     pasteImage(req: PasteImageReq, bytes: Uint8Array): Promise<PasteResultResp>;
     pasteImageFloating(req: PasteImageReq, bytes: Uint8Array): Promise<PasteResultResp>;
     pasteInPlace(req: PasteInPlaceReq): Promise<PasteResultResp>;
@@ -1416,7 +1489,8 @@ export function makeApi(t: Transport): EngineApi {
         brushActiveCapabilities: () => t.request('brush_active_capabilities'),
         brushActiveDabPreview: () => t.request('brush_active_dab_preview'),
         brushDabThumbnail: (req) => t.request('brush_dab_thumbnail', req),
-        brushExport: (req) => t.request('brush_export', req),
+        brushDelete: (req) => t.request('brush_delete', req),
+        brushExportYaml: (req) => t.request('brush_export_yaml', req),
         brushExposedPorts: () => t.request('brush_exposed_ports'),
         brushGraphActive: () => t.request('brush_graph_active'),
         brushGraphAddNode: (req) => t.request('brush_graph_add_node', req),
@@ -1437,11 +1511,11 @@ export function makeApi(t: Transport): EngineApi {
         brushGraphSetPortRange: (req) => t.request('brush_graph_set_port_range', req),
         brushGraphUnexposePort: (req) => t.request('brush_graph_unexpose_port', req),
         brushGraphValidate: (req) => t.request('brush_graph_validate', req),
-        brushImport: (bytes) => t.request('brush_import', {}, bytes),
         brushList: () => t.request('brush_list'),
         brushLoad: (req) => t.request('brush_load', req),
         brushNodePreview: (req) => t.request('brush_node_preview', req),
         brushNodeTypes: () => t.request('brush_node_types'),
+        brushRename: (req) => t.request('brush_rename', req),
         brushSave: (req) => t.request('brush_save', req),
         brushSetExposedPort: (req) => t.request('brush_set_exposed_port', req),
         brushStrokePreview: () => t.request('brush_stroke_preview'),
@@ -1497,6 +1571,7 @@ export function makeApi(t: Transport): EngineApi {
         lastPickedColor: () => t.request('last_picked_color'),
         layerTransformCapability: (req) => t.request('layer_transform_capability', req),
         layerTree: () => t.request('layer_tree'),
+        libraryList: () => t.request('library_list'),
         listFonts: () => t.request('list_fonts'),
         markDirty: () => t.postFF('mark_dirty'),
         maskToSelection: (req) => t.postFF('mask_to_selection', req),
@@ -1508,6 +1583,14 @@ export function makeApi(t: Transport): EngineApi {
         nodeThumbnail: (req) => t.request('node_thumbnail', req),
         openDocument: (bytes) => t.request('open_document', {}, bytes),
         overlayHitTest: (req) => t.request('overlay_hit_test', req),
+        packAddBrush: (req) => t.request('pack_add_brush', req),
+        packCreate: (req) => t.request('pack_create', req),
+        packDelete: (req) => t.request('pack_delete', req),
+        packEdit: (req) => t.request('pack_edit', req),
+        packExport: (req) => t.request('pack_export', req),
+        packImport: (req, bytes) => t.request('pack_import', req, bytes),
+        packRemoveBrush: (req) => t.request('pack_remove_brush', req),
+        packReorderBrush: (req) => t.request('pack_reorder_brush', req),
         pasteImage: (req, bytes) => t.request('paste_image', req, bytes),
         pasteImageFloating: (req, bytes) => t.request('paste_image_floating', req, bytes),
         pasteInPlace: (req) => t.request('paste_in_place', req),

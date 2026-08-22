@@ -394,7 +394,8 @@ fn instance_payload_shape_is_type_id_plus_params() {
 use crate::document::Document;
 use crate::engine::DarklyEngine;
 use crate::format::manifest::SaveBundle;
-use crate::format::zip_io::{assemble_zip, extract_zip};
+use crate::format::unzip::unzip_entries;
+use crate::format::zip_io::assemble_zip;
 use crate::layer::LayerId;
 
 /// Populate the engine with at least one of every closed-set variant
@@ -564,13 +565,13 @@ fn round_trip_kitchen_sink_document() {
 
     let bundle = drive_save_to_completion(&mut original);
     let zip_bytes = assemble_zip(&bundle);
-    let entries = extract_zip(&zip_bytes);
+    let entries = unzip_entries(&zip_bytes).expect("kitchen-sink zip must be readable");
     assert!(
-        entries.get("manifest.json").is_some(),
+        entries.contains_key("manifest.json"),
         "kitchen-sink zip must contain manifest.json"
     );
     assert!(
-        entries.get("composite.png").is_some(),
+        entries.contains_key("composite.png"),
         "kitchen-sink zip must contain composite.png"
     );
 

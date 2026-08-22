@@ -21,6 +21,9 @@ const { fakeApp } = vi.hoisted(() => ({
         activeLayerId: null as number | null,
         activeNode: null as { id: number; type: string } | null,
         foreground: { r: 0, g: 0, b: 0, a: 255 },
+        // Tools read the color through the accessor that also records it as
+        // recently used; the fake returns the same value without the recording.
+        consumeForeground() { return this.foreground; },
         toolCursor: null as string | null,
     },
 }));

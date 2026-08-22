@@ -6,6 +6,22 @@ import { registerActions } from '../actions/index';
 import { actions } from '../actions/registry';
 import { rustActionDocs } from '../actions/__tests__/rust_action_docs';
 import { toolRegistry } from '../tools/registry';
+import { PACK_ICON_FALLBACK } from '../lib/packIcon';
+
+/** The pack-icon names Rust declares, read out of the crate source so this
+ *  test and `PACK_ICONS` cannot drift. */
+const PACK_ICONS: string[] = (() => {
+    const source = Object.entries(
+        import.meta.glob('../../../crates/darkly/src/brush/pack_icons.rs', {
+            query: '?raw',
+            eager: true,
+            import: 'default',
+        }) as Record<string, string>,
+    )[0]?.[1];
+    if (!source) throw new Error('could not read pack_icons.rs');
+    const list = source.slice(source.indexOf('PACK_ICONS'), source.indexOf('];'));
+    return [...list.matchAll(/\("([a-z0-9-]+:[a-z0-9-]+)"/g)].map(m => m[1]);
+})();
 
 // Register the menu/palette actions. Tools are imported lazily inside the tool
 // test instead — registering tool-switch actions needs app methods that aren't
@@ -126,6 +142,28 @@ function viewBox(name: string): [number, number, number, number] {
 // on-screen size is how much of its viewBox the artwork fills. gen-icons
 // shrink-wraps each viewBox to the inked bounds at build time so all icons —
 // regardless of source set's built-in margins — render at a uniform optical
+// A brush pack's icon comes from the curated list in
+// `crates/darkly/src/brush/pack_icons.rs`. That file exists so the generator —
+// which scrapes Iconify name literals out of `.ts`/`.svelte`/`.rs` sources —
+// finds them: an icon named only in a pack's YAML would be absent from the
+// bundle and would draw nothing at all.
+describe('brush pack icons', () => {
+    it('every_pack_icon_resolves_in_the_offline_bundle', () => {
+        // Guard the extraction itself: an empty list would make the loop below
+        // pass without checking anything.
+        expect(PACK_ICONS.length).toBeGreaterThan(10);
+        for (const name of PACK_ICONS) {
+            expect(resolves(name), `pack icon ${name} is not bundled`).toBe(true);
+        }
+    });
+
+    it('the_fallback_resolves', () => {
+        // Drawn whenever an imported pack names an icon we do not have. If it
+        // were itself missing, the fallback would be a hole too.
+        expect(resolves(PACK_ICON_FALLBACK)).toBe(true);
+    });
+});
+
 // size. These guard that the tightening actually ran and didn't over-crop.
 describe('icon viewBox tightening (offline)', () => {
     it('crops the canonical padded icon to its inked bounds', () => {

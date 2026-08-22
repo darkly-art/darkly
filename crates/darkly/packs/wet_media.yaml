@@ -1,0 +1,6 @@
+name: Wet Media
+description: Pigment carried by water — it pools, blooms and blends.
+icon: mdi:water
+primary: "#6f9fd8"
+secondary: "#1d2b3d"
+members: [rough_watercolor, smooth_watercolor]

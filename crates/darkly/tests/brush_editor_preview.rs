@@ -276,7 +276,7 @@ fn set_preview_theme_invalidates_cache() {
 
 #[test]
 fn brush_save_bakes_thumbnail_asynchronously() {
-    use darkly::brush::bundle::Brush;
+    use darkly::brush::library;
     use darkly::engine::DarklyEngine;
     use darkly::gpu::context::GpuContext;
 
@@ -285,14 +285,12 @@ fn brush_save_bakes_thumbnail_asynchronously() {
     let mut engine = DarklyEngine::new(gpu, 1024, 768);
 
     // Save a brush — kicks off an async thumbnail readback against the
-    // engine's library copy.
-    engine.brush_save("TestBrush", "basic").unwrap();
+    // process-wide library.
+    engine.brush_save("test_brush", "TestBrush").unwrap();
 
     // Before the readback lands, the library entry has no thumbnail.
-    let exported_before = engine.brush_export("TestBrush").expect("brush exported");
-    let bundle_before = Brush::from_bytes(&exported_before).unwrap();
     assert!(
-        bundle_before.thumbnail_png.is_none(),
+        library::with(|lib| lib.thumbnail_png("test_brush").is_none()),
         "thumbnail should be absent before readback completes"
     );
 
@@ -300,11 +298,11 @@ fn brush_save_bakes_thumbnail_asynchronously() {
     // back onto the library entry.
     engine.test_flush_readbacks();
 
-    let exported_after = engine.brush_export("TestBrush").unwrap();
-    let bundle_after = Brush::from_bytes(&exported_after).unwrap();
-    let png = bundle_after
-        .thumbnail_png
-        .expect("thumbnail present after readback");
+    let png = library::with(|lib| {
+        lib.thumbnail_png("test_brush")
+            .expect("thumbnail present after readback")
+            .to_vec()
+    });
     // Valid PNG — starts with the PNG magic signature.
     assert_eq!(
         &png[..8],

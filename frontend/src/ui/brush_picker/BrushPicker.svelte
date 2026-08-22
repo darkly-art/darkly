@@ -2,8 +2,12 @@
     import { tick } from 'svelte';
     import { brushGraph } from '../../state/brush_graph.svelte';
     import type { BrushInfo } from '../../state/brush_graph.svelte';
+    import { brushLibrary } from '../../state/brush_library.svelte';
+    import Icon from '../../icons/Icon.svelte';
+    import { packIcon, PACK_ICON_FALLBACK } from '../../lib/packIcon';
     import BrushTile from './BrushTile.svelte';
     import { brushPickerPlacement } from './placement';
+    import { groupByPack, matchesQuery, packNamesByBrush } from './grouping';
 
     interface Props {
         onSelect: (brush: BrushInfo) => void;
@@ -52,46 +56,29 @@
     let searchInput: HTMLInputElement | undefined = $state();
     let highlightIndex = $state(0);
 
-    /** Whitespace-tokenized substring match — `"soft round"` matches
-     *  "Soft Round" but `"soft xxx"` does not. Searches across name,
-     *  category, and tags so users can find brushes by any facet. */
-    function matches(brush: BrushInfo, q: string): boolean {
-        if (!q) return true;
-        const haystack = (
-            brush.name +
-            ' ' +
-            brush.category +
-            ' ' +
-            (brush.tags || []).join(' ')
-        ).toLowerCase();
-        const tokens = q.toLowerCase().trim().split(/\s+/).filter(t => t.length > 0);
-        return tokens.every(t => haystack.includes(t));
-    }
+    /** Pack names per brush, for search. */
+    const packNames = $derived(packNamesByBrush(brushLibrary.packs));
 
     const filtered = $derived(
-        brushGraph.brushes.filter(b => matches(b, query))
+        brushLibrary.brushes.filter(b => matchesQuery(b, query, packNames))
     );
 
-    /** Group filtered brushes by category, preserving first-seen order
-     *  for both groups and members. Empty categories collapse into
-     *  "Uncategorised" so loose brushes always have a home. */
-    const groups = $derived.by(() => {
-        const map = new Map<string, BrushInfo[]>();
-        for (const brush of filtered) {
-            const key = brush.category || 'Uncategorised';
-            const existing = map.get(key);
-            if (existing) {
-                existing.push(brush);
-            } else {
-                map.set(key, [brush]);
-            }
-        }
-        return [...map.entries()].map(([category, brushes]) => ({ category, brushes }));
-    });
+    /** Brushes grouped under their packs, plus a trailing "in no pack"
+     *  section. See `grouping.ts`. */
+    const groups = $derived(
+        groupByPack(filtered, brushLibrary.packs, packIcon, PACK_ICON_FALLBACK)
+    );
+
+    /** The rendered cells, in render order.
+     *
+     *  Keyboard navigation indexes *this*, not `filtered`: a brush in two packs
+     *  renders in two cells, so a flat index into the filter would highlight
+     *  the wrong one. */
+    const cells = $derived(groups.flatMap(g => g.brushes));
 
     // Keep the keyboard highlight in range as the filter changes.
     $effect(() => {
-        const len = filtered.length;
+        const len = cells.length;
         if (highlightIndex >= len) highlightIndex = Math.max(0, len - 1);
     });
 
@@ -109,7 +96,7 @@
             return;
         }
         const cols = 2; // matches grid-template-columns: repeat(2, 1fr)
-        const len = filtered.length;
+        const len = cells.length;
         if (len === 0) return;
         switch (e.key) {
             case 'ArrowDown':
@@ -130,7 +117,7 @@
                 break;
             case 'Enter':
                 e.preventDefault();
-                if (filtered[highlightIndex]) onSelect(filtered[highlightIndex]);
+                if (cells[highlightIndex]) onSelect(cells[highlightIndex]);
                 break;
         }
     }
@@ -163,16 +150,22 @@
             <div class="empty">No brushes match “{query}”.</div>
         {:else}
             <div class="groups">
-                {#each groups as group, gi (group.category)}
+                {#each groups as group, gi (group.id)}
                     {@const offset = groups
                         .slice(0, gi)
                         .reduce((sum, g) => sum + g.brushes.length, 0)}
                     <section class="group">
                         <div class="group-header">
-                            <span class="group-label">{group.category}</span>
+                            <span
+                                class="pack-swatch"
+                                style:background={group.primary}
+                                style:border-color={group.secondary}
+                            ></span>
+                            <Icon name={group.icon} class="pack-icon" />
+                            <span class="group-label">{group.label}</span>
                         </div>
                         <div class="grid">
-                            {#each group.brushes as brush, bi (brush.name)}
+                            {#each group.brushes as brush, bi (brush.id)}
                                 <div
                                     class="grid-cell"
                                     class:highlight={offset + bi === highlightIndex}
@@ -265,6 +258,22 @@
     .group-header {
         display: flex;
         align-items: center;
+        gap: 6px;
+    }
+    /* A pack's two colors, as a filled dot ringed in its secondary — enough
+     * to tell packs apart at a glance without competing with the tiles. */
+    .pack-swatch {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        border: 1.5px solid transparent;
+        box-sizing: border-box;
+        flex: none;
+    }
+    .group-header :global(.pack-icon) {
+        font-size: 12px;
+        color: var(--text-muted);
+        flex: none;
     }
     .group-label {
         font-size: 11px;

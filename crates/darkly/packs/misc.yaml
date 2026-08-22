@@ -1,0 +1,6 @@
+name: Misc
+description: Everything that fits nowhere else.
+icon: mdi:dots-horizontal
+primary: "#9aa0a6"
+secondary: "#26292c"
+members: [clone]

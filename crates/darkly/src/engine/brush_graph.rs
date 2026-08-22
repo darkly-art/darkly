@@ -470,7 +470,7 @@ impl DarklyEngine {
         self.invalidate_brush_stroke_preview();
         // Drop baked PNG thumbnails so picker tiles re-bake on demand.
         // The frontend's rAF poll handles the empty→bake→present flow.
-        self.brush_library.clear_thumbnails();
+        crate::brush::library::with_mut(|lib| lib.clear_thumbnails());
     }
 
     /// Render a full-stroke brush editor preview and return the most recent

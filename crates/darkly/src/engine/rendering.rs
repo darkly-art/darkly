@@ -474,7 +474,7 @@ impl DarklyEngine {
                 }
             }
             ReadbackContext::BrushThumbnailForSave {
-                name,
+                id,
                 width,
                 height,
                 backdrop,
@@ -492,17 +492,13 @@ impl DarklyEngine {
                 );
                 let png_bytes = encode_rgba_as_png(&framed, tw, th);
                 if !png_bytes.is_empty() {
-                    self.brush_library.set_thumbnail(&name, png_bytes);
+                    crate::brush::library::with_mut(|lib| lib.set_thumbnail(&id, png_bytes));
                 }
             }
-            ReadbackContext::BrushDabThumbnail {
-                name,
-                width,
-                height,
-            } => {
+            ReadbackContext::BrushDabThumbnail { id, width, height } => {
                 let png_bytes = frame_dab_thumbnail(&pixels, width, height, self.preview_theme_bg);
                 if !png_bytes.is_empty() {
-                    self.brush_library.set_dab_thumbnail(&name, png_bytes);
+                    crate::brush::library::with_mut(|lib| lib.set_dab_thumbnail(&id, png_bytes));
                 }
             }
             ReadbackContext::BrushCursorPreviewScale {

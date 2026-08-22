@@ -1,5 +1,6 @@
 <script lang="ts">
-    import { app, type Color } from '../state/app.svelte';
+    import { app } from '../state/app.svelte';
+    import { colorToHexRgb, hexToColor } from '../lib/color';
 
     let { onclose }: { onclose: () => void } = $props();
 
@@ -25,7 +26,7 @@
         hue = h;
         sat = s;
         val = v;
-        hexInput = colorToHex(c);
+        hexInput = colorToHexRgb(c);
     });
 
     // Render SV plane when hue changes
@@ -70,7 +71,7 @@
     function updateColor() {
         const [r, g, b] = hsvToRgb(hue, sat, val);
         app.foreground = { r, g, b, a: app.foreground.a };
-        hexInput = colorToHex(app.foreground);
+        hexInput = colorToHexRgb(app.foreground);
     }
 
     function onSVPointer(e: PointerEvent) {
@@ -87,17 +88,13 @@
     }
 
     function onHexChange() {
-        const hex = hexInput.replace('#', '');
-        if (hex.length === 6) {
-            const r = parseInt(hex.substring(0, 2), 16);
-            const g = parseInt(hex.substring(2, 4), 16);
-            const b = parseInt(hex.substring(4, 6), 16);
-            if (!isNaN(r) && !isNaN(g) && !isNaN(b)) {
-                app.foreground = { r, g, b, a: app.foreground.a };
-                const [h, s, v] = rgbToHsv(r, g, b);
-                hue = h; sat = s; val = v;
-            }
-        }
+        // A malformed entry is ignored and the field snaps back on the next
+        // foreground change, rather than silently painting black.
+        const c = hexToColor(hexInput);
+        if (!c) return;
+        app.foreground = { r: c.r, g: c.g, b: c.b, a: app.foreground.a };
+        const [h, s, v] = rgbToHsv(c.r, c.g, c.b);
+        hue = h; sat = s; val = v;
     }
 
     function rgbToHsv(r: number, g: number, b: number): [number, number, number] {
@@ -133,9 +130,6 @@
         ];
     }
 
-    function colorToHex(c: Color): string {
-        return '#' + [c.r, c.g, c.b].map(v => v.toString(16).padStart(2, '0')).join('');
-    }
 </script>
 
 <div class="color-picker" onkeydown={(e: KeyboardEvent) => { if (e.key === 'Escape') onclose(); }} role="dialog" tabindex="-1">

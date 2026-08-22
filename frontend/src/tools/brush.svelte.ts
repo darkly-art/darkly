@@ -242,7 +242,7 @@ class BrushTool extends ToolBase {
         engine.api.clearBrushCursorPreviewPose();
         this.clearHover();
         this.inst.toolCursor = 'none';
-        const params = brushStrokeParams(e, cx, cy, this.inst.foreground);
+        const params = brushStrokeParams(e, cx, cy, this.inst.consumeForeground());
         engine.api.beginStroke({ id: layerId });
         engine.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
         // Capture the clone dest anchor so the source marker tracks the cursor
@@ -256,7 +256,7 @@ class BrushTool extends ToolBase {
         const engine = this.engine;
         if (!engine) return;
         if (e.buttons & 1) {
-            const params = brushStrokeParams(e, cx, cy, this.inst.foreground);
+            const params = brushStrokeParams(e, cx, cy, this.inst.consumeForeground());
             engine.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
             strokeRecorder.addEvent(params);
             onCloneStrokeMove(cx, cy);

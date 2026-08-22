@@ -19,6 +19,7 @@ import { setupHeldModsTracking } from './actions/held_mods';
 import { autosave } from './state/autosave.svelte';
 import { recovery } from './state/recovery.svelte';
 import { processRecording } from './recording/recorder.svelte';
+import { loadRecents } from './state/recents.svelte';
 
 let processInitialized = false;
 
@@ -33,6 +34,9 @@ export async function ensureProcessInit(): Promise<void> {
     if (processInitialized) return;
     await init();
     await config.init();
+    // Recents are painter-scoped and independent of any canvas, so they load
+    // once here rather than per tab.
+    await loadRecents();
     // Theme subscribes to config in its module; trigger an initial sync so
     // body class and WASM preview colors match `ui.theme` from startup.
     theme.syncFromConfig();

@@ -10,7 +10,6 @@ pub mod manifest;
 pub mod registry_io;
 pub mod stroke_recording;
 pub mod unzip;
-#[cfg(test)]
 pub mod zip_io;
 
 #[cfg(test)]

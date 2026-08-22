@@ -36,8 +36,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::brush::bundle::{Brush, BrushMetadata};
 use crate::brush::input_value::InputValue;
+use crate::brush::metadata::{Brush, BrushMetadata};
 use crate::brush::stabilizer::StabilizerConfig;
 use crate::brush::wire::BrushWireType;
 use crate::brush::BrushNodeRegistry;
@@ -53,8 +53,6 @@ use indexmap::IndexMap;
 pub struct PortableBrush {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub category: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -173,7 +171,6 @@ impl PortableBrush {
             .then(|| brush.metadata.stabilizer.clone());
         Ok(Self {
             name: brush.metadata.name.clone(),
-            category: brush.metadata.category.clone(),
             description: brush.metadata.description.clone(),
             author: brush.metadata.author.clone(),
             tags: brush.metadata.tags.clone(),
@@ -279,13 +276,18 @@ impl PortableBrush {
         })
     }
 
-    /// Materialize a full `Brush` from the portable form. Re-derives port
-    /// shapes from the registration and validates the graph compiles.
-    pub fn into_brush(self, registry: &BrushNodeRegistry) -> Result<Brush, String> {
+    /// Materialize a full `Brush` from the portable form under the identity
+    /// `id`. Re-derives port shapes from the registration and validates the
+    /// graph compiles.
+    ///
+    /// The id is the caller's to supply: the portable form is a graph plus
+    /// describing metadata, and which brush it *is* depends on where it came
+    /// from — a shipped brush's file stem, or a minted id for one the painter
+    /// saved.
+    pub fn into_brush(self, registry: &BrushNodeRegistry, id: &str) -> Result<Brush, String> {
         let graph = self.graph_from_nodes(registry)?;
         crate::brush::compile_graph(&graph)?;
-        let mut metadata = BrushMetadata::from_graph(self.name, graph);
-        metadata.category = self.category;
+        let mut metadata = BrushMetadata::from_graph(id, self.name, graph);
         metadata.description = self.description;
         metadata.author = self.author;
         metadata.tags = self.tags;
@@ -682,6 +684,7 @@ nodes: {}
     fn stabilizer_round_trip_and_elision() {
         let registry = registry();
         let mut brush = Brush::from_metadata(BrushMetadata::from_graph(
+            "test",
             "Test",
             crate::brush::default_graph(),
         ));
@@ -702,7 +705,7 @@ nodes: {}
         let portable = PortableBrush::from_brush(&brush, registry).unwrap();
         let yaml = serde_yaml_ng::to_string(&portable).unwrap();
         let parsed: PortableBrush = serde_yaml_ng::from_str(&yaml).unwrap();
-        let restored = parsed.into_brush(registry).unwrap();
+        let restored = parsed.into_brush(registry, "test").unwrap();
         assert_eq!(restored.metadata.stabilizer.algorithm, "laplacian");
         assert_eq!(restored.metadata.stabilizer.params.len(), 1);
     }

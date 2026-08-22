@@ -1,5 +1,4 @@
 name: Sponge
-category: Dry Media
 description: A textured brush useful for laying down big, smooth shapes
 nodes:
   add:

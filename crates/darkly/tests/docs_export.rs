@@ -276,7 +276,9 @@ fn export_is_a_faithful_projection() {
                     info.name.as_str(),
                     info.icon,
                     some(info.description.as_str()),
-                    some(info.category.as_str()),
+                    // Grouping is derived from shipped pack membership, the
+                    // same way the catalog derives it.
+                    darkly::brush::packs::pack_of(stem).map(|p| p.name.as_str()),
                     None,
                 )
             })
@@ -380,22 +382,20 @@ fn export_is_a_faithful_projection() {
         );
     }
 
-    // Settings ride on the same footing, against the section schema minus the
-    // prefs the UI does not treat as settings.
+    // Settings ride on the same footing, against the section schema. Every
+    // declared pref is exported, including those marked `Hidden` — the export
+    // is also the schema stored prefs are validated against, so a pref missing
+    // from it would be erased from the user's settings file on reload.
     for section in darkly::config::sections::registrations() {
         let cat = catalog(&json, &format!("settings.{}", section.id));
         assert_eq!(cat["title"].as_str(), Some(section.display_name));
         assert_eq!(cat["order"].as_i64(), Some(section.order as i64));
         let params = cat["entries"][0]["params"].as_array().unwrap();
-        let want: Vec<_> = section
-            .prefs
-            .iter()
-            .filter(|p| !matches!(p.widget, darkly::config::schema::WidgetHint::Hidden))
-            .collect();
+        let want: Vec<_> = section.prefs.iter().collect();
         assert_eq!(
             params.len(),
             want.len(),
-            "settings.{} exports {} prefs, the section declares {} visible",
+            "settings.{} exports {} prefs, the section declares {}",
             section.id,
             params.len(),
             want.len()
@@ -409,7 +409,17 @@ fn export_is_a_faithful_projection() {
             );
             assert_eq!(got["label"].as_str(), Some(pref.display_name));
             assert_eq!(got["description"].as_str(), pref.description);
-            assert_ne!(got["widget"].as_str(), Some("hidden"));
+            // A `Hidden` pref is exported carrying that fact, so consumers
+            // know not to render it. It is the renderer that hides.
+            if matches!(pref.widget, darkly::config::schema::WidgetHint::Hidden) {
+                assert_eq!(
+                    got["widget"].as_str(),
+                    Some("hidden"),
+                    "settings.{} pref `{}` must carry its hidden widget",
+                    section.id,
+                    pref.key
+                );
+            }
         }
     }
 }

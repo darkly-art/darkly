@@ -1,0 +1,6 @@
+name: Basic
+description: Everyday marks — the brushes to reach for first.
+icon: mdi:brush
+primary: "#d8d4cc"
+secondary: "#2a2723"
+members: [airbrush, calligraphy, ink_pen, rough_ink]

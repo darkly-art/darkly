@@ -45,7 +45,6 @@ mod perf;
 use crate::brush::gpu_context::BrushPerfCounters;
 
 use crate::brush::checkpoint_ring::CheckpointRing;
-use crate::brush::library::BrushLibrary;
 use crate::brush::pipeline::BrushPipelines;
 use crate::brush::preview_renderer::BrushStrokePreviewRenderer;
 use crate::brush::stabilizer::StabilizerRegistry;
@@ -238,12 +237,11 @@ pub(crate) enum ReadbackContext {
         /// caching stale results if another render has superseded this one.
         graph_version: u64,
     },
-    /// Async readback of the preview render used to bake a `.darkly-brush`
-    /// archive's embedded `preview.png`. Completion PNG-encodes the pixels
-    /// and installs the result on the library entry via
-    /// `BrushLibrary::set_thumbnail`.
+    /// Async readback of the preview render baked for a brush's picker tile.
+    /// Completion PNG-encodes the pixels and installs the result on the
+    /// library entry via `BrushLibrary::set_thumbnail`.
     BrushThumbnailForSave {
-        name: String,
+        id: String,
         width: u32,
         height: u32,
         /// See [`ReadbackContext::BrushStrokePreview::backdrop`].
@@ -255,7 +253,7 @@ pub(crate) enum ReadbackContext {
     /// `BrushLibrary::set_dab_thumbnail`. Used by the picker tiles to
     /// show a tip silhouette next to the stroke thumbnail.
     BrushDabThumbnail {
-        name: String,
+        id: String,
         width: u32,
         height: u32,
     },
@@ -562,9 +560,6 @@ pub struct DarklyEngine {
     /// canvas as it then stands.
     pub(crate) previews: HashMap<preview::PreviewKey, PreviewJob>,
 
-    // --- Brush Library ---
-    pub(crate) brush_library: BrushLibrary,
-
     /// Stroke buffer for stabilizer-driven rewind + re-render.
     pub(crate) stroke_buffer: Option<StrokeBuffer>,
 
@@ -768,13 +763,6 @@ impl DarklyEngine {
             preview_source_is_composite: false,
             preview_active: None,
             previews: HashMap::new(),
-            brush_library: {
-                let mut lib = BrushLibrary::new();
-                for brush in crate::brush::builtin_brushes::all() {
-                    lib.insert(brush);
-                }
-                lib
-            },
             stroke_buffer: None,
             checkpoint_ring: CheckpointRing::new(),
             stabilizer_registry: StabilizerRegistry::new(),

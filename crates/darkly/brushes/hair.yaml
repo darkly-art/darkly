@@ -1,5 +1,4 @@
 name: Hair
-category: Dry Media
 description: A lock of individual strands with optional twirling
 nodes:
   add:

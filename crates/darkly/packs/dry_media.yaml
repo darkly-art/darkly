@@ -1,0 +1,6 @@
+name: Dry Media
+description: Sticks and powders that catch on the paper's tooth.
+icon: mdi:pencil
+primary: "#c8b48a"
+secondary: "#3a2f22"
+members: [charcoal, hair, sponge]

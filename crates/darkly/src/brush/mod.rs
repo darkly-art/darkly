@@ -1,7 +1,6 @@
 //! Node-graph composable brush engine.
 
 pub mod builtin_brushes;
-pub mod bundle;
 pub mod checkpoint_ring;
 pub mod composite_pipeline;
 pub mod curve_math;
@@ -11,9 +10,14 @@ pub mod import;
 pub mod input_value;
 pub mod interpolation;
 pub mod library;
+pub mod metadata;
 pub mod node;
 pub mod node_preview_subgraph;
 pub mod nodes;
+pub mod pack;
+pub mod pack_file;
+pub mod pack_icons;
+pub mod packs;
 pub mod paint_info;
 pub mod paint_target_ext;
 pub mod pipeline;

@@ -13,6 +13,9 @@ import { HttpStreamSource } from '../lib/httpStreamSource';
 import type { FrameSource, CaptureKind } from '../lib/frameSource';
 import { processRecording } from '../recording/recorder.svelte';
 import { freshDocument } from './freshDocument';
+import { recentColors } from './recents.svelte';
+import { colorToHex } from '../lib/color';
+import { newId } from '../lib/id';
 import {
     appearedRoots,
     collapsedAncestorsOf,
@@ -73,10 +76,7 @@ function unpackSaveBundle(p: PackedSaveResult): SaveBundle {
  */
 export class DarklyInstance {
     /** Stable id, useful as a `{#each}` key in the multi-tab shell. */
-    readonly id: string =
-        typeof crypto !== 'undefined' && 'randomUUID' in crypto
-            ? crypto.randomUUID()
-            : `instance-${Math.random().toString(36).slice(2)}`;
+    readonly id: string = newId('instance');
 
     engine = $state<Engine | null>(null);
 
@@ -84,10 +84,7 @@ export class DarklyInstance {
      *  `id` so it reads clearly at the recovery-store boundary; repeated
      *  autosaves overwrite one snapshot file per tab. A tab restored from
      *  a snapshot gets a fresh `recoveryId` (it's a new live tab). */
-    readonly recoveryId: string =
-        typeof crypto !== 'undefined' && 'randomUUID' in crypto
-            ? crypto.randomUUID()
-            : `recovery-${Math.random().toString(36).slice(2)}`;
+    readonly recoveryId: string = newId('recovery');
 
     /** Initial document name to apply once the WASM handle finishes
      *  bootstrapping. The shell uses this to thread "Untitled N"
@@ -130,6 +127,23 @@ export class DarklyInstance {
     // Colors
     foreground = $state<Color>({ ...freshDocument.foreground });
     background = $state<Color>({ ...freshDocument.background });
+
+    /**
+     * The foreground color, recorded as recently used.
+     *
+     * Tools call this at the point they are about to paint with the color,
+     * which is what "recent" means here — as distinct from "scrubbed past in
+     * the picker", which the picker's per-`pointermove` writes to
+     * `foreground` would otherwise record dozens of times a drag.
+     *
+     * Reading the color and recording it are the same act, so there is no
+     * flag for a tool to forget to set: a new color-using tool records
+     * because it needs the color.
+     */
+    consumeForeground(): Color {
+        recentColors.use(colorToHex(this.foreground));
+        return this.foreground;
+    }
 
     // Active tool
     activeToolId = $state<string>('brush');

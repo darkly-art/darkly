@@ -9,6 +9,8 @@
  */
 import { app } from './app.svelte';
 import { freshDocument } from './freshDocument';
+import { recentBrushes } from './recents.svelte';
+import { brushLibrary } from './brush_library.svelte';
 import type { BrushInfo, JsonValue, ExposedValue, ExposedPortInfo } from '../engine/protocol_gen';
 
 export type { BrushInfo };
@@ -206,9 +208,6 @@ export class BrushGraphState {
     /** Cached image thumbnails for Image nodes, keyed by resource_name. */
     imageThumbnails = new Map<string, ImageBitmap>();
 
-    /** Available brushes. */
-    brushes = $state<BrushInfo[]>([]);
-
     /** Currently loaded brush name (null = custom/modified). */
     activeBrush = $state<string | null>(null);
 
@@ -345,14 +344,18 @@ export class BrushGraphState {
         this.initStarted = true;
         const types = await app.engine.api.brushNodeTypes();
         this.nodeTypes = (Array.isArray(types) ? types : []) as unknown as NodeTypeInfo[];
-        await this.refreshBrushes();
+        // The library — brushes and packs alike — has one home, and it is
+        // `brushLibrary`. Hydration replays the painter's stored records
+        // first, so the boot selection below can land on one of them.
+        await brushLibrary.hydrate();
 
         // Boot with a real library brush selected so the brush picker
         // trigger (and anywhere else that reads `activeBrush`) has a named
         // brush to render. The engine's procedural default graph would
         // leave `activeBrush` null and the trigger would fall back to "Custom".
+        const brushes = brushLibrary.brushes;
         const defaultBrush =
-            this.brushes.find(b => b.name === freshDocument.defaultBrushName) ?? this.brushes[0];
+            brushes.find(b => b.name === freshDocument.defaultBrushName) ?? brushes[0];
         if (defaultBrush) {
             await this.loadBrush(defaultBrush.name);
         } else {
@@ -406,13 +409,6 @@ export class BrushGraphState {
         this.activeBrush = null;
         await this.snapshotTopologyVersion();
         return null;
-    }
-
-    /** Refresh the brush list from WASM. */
-    async refreshBrushes() {
-        if (!app.engine) return;
-        const list = await app.engine.api.brushList();
-        this.brushes = Array.isArray(list) ? list : [];
     }
 
     /** Refresh exposed ports from the active brush graph. */
@@ -502,6 +498,10 @@ export class BrushGraphState {
             return;
         }
         this.activeBrush = name;
+        // The single funnel every brush selection passes through, and only
+        // reached on a successful load — a brush that failed to load was
+        // never used.
+        recentBrushes.use(name);
         // `fetchGraph` begins a new layout generation atomically with the
         // graph swap, so the canvas effect re-runs auto-layout for the
         // freshly-loaded graph.

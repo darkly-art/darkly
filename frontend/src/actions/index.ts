@@ -19,6 +19,7 @@ import { registerBrushParamActions } from './brush_params';
 import { registerSampleColorAction } from './sample_color';
 import { registerCloneSourceAction } from './clone_source_gesture';
 import { registerClipboardActions } from './clipboard';
+import { registerPackActions } from './pack_actions';
 import { pickOpenFile, type OpenedFile } from '../storage/fileHandle';
 import { detectKind, isImageKind, type FileKind } from '../storage/detectKind';
 import { saveDocument } from '../storage/saveDocument';
@@ -953,6 +954,9 @@ export function registerActions() {
 
     // -- Clone brush set-source gesture (brush-scoped modifier+drag) --
     registerCloneSourceAction();
+
+    // -- Brush pack import / export --
+    registerPackActions();
 
     // -- Brush builder --
     actions.register({

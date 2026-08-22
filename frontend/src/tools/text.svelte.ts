@@ -118,7 +118,7 @@ class TextTool extends ToolBase {
     }
 
     private foregroundTuple(): Rgba {
-        const c = this.inst.foreground;
+        const c = this.inst.consumeForeground();
         return [c.r, c.g, c.b, c.a];
     }
 

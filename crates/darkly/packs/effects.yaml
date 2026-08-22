@@ -1,0 +1,6 @@
+name: Effects
+description: Brushes that move and reshape the pixels already on the canvas.
+icon: mdi:blur
+primary: "#b48ad8"
+secondary: "#2b2236"
+members: [blur, liquify, smudge]
