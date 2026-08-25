@@ -27,7 +27,7 @@ fn alpha_at(pixels: &[u8], w: u32, x: u32, y: u32) -> u8 {
 
 /// Paint a horizontal brush stroke at plane-y `py`, sweeping plane-x `[x0, x1)`.
 fn paint_row(engine: &mut DarklyEngine, layer_id: LayerId, py: f32, x0: f32, x1: f32) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     let steps = 48;
     for i in 0..=steps {
         let x = x0 + (x1 - x0) * (i as f32 / steps as f32);
@@ -423,7 +423,9 @@ fn copy_selection_after_crop_extracts_plane_pixels_and_offset() {
     // from the right plane location, not from the empty (14, 16) region.
     let any_red = export
         .rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .any(|p| p[0] > 200 && p[1] < 60 && p[2] < 60 && p[3] > 200);
     assert!(
         any_red,
@@ -489,7 +491,7 @@ fn pick_color_merged_reads_plane_pixel_after_crop() {
 
     // Full-canvas layer: red everywhere, with a distinct green 4×4 at plane (40, 40).
     let mut rgba = vec![0u8; (w * h * 4) as usize];
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px.copy_from_slice(&[200, 0, 0, 255]);
     }
     for y in 40..44 {
@@ -585,7 +587,7 @@ fn crop_to_selection_matches_selection_bounds() {
 /// present yields equal arms, an anisotropic (squashed) present unequal arms.
 fn paint_cross(engine: &mut DarklyEngine, layer_id: LayerId, cx: f32, cy: f32, arm: f32) {
     for horizontal in [true, false] {
-        engine.begin_stroke(layer_id);
+        engine.begin_stroke(layer_id).unwrap();
         let steps = 48;
         for i in 0..=steps {
             let t = i as f32 / steps as f32;

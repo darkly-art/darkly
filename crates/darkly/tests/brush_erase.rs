@@ -30,7 +30,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 }
 
 fn fill_layer(engine: &mut DarklyEngine, layer_id: LayerId, r: u8, g: u8, b: u8) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: 1.0,
         y: 1.0,
@@ -45,7 +45,7 @@ fn fill_layer(engine: &mut DarklyEngine, layer_id: LayerId, r: u8, g: u8, b: u8)
 }
 
 fn paint_stroke_across(engine: &mut DarklyEngine, layer_id: LayerId, w: u32, h: u32) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     for x_step in 0..20 {
         let x = x_step as f32 * (w as f32 / 20.0);
         engine.stroke_to(StrokeOp::BrushStroke {

@@ -19,6 +19,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::coord::CanvasRect;
+
 pub use super::effect::{EffectCache, EffectPipeline};
 pub use super::params::{ParamDef, ParamValue};
 use super::preview::{
@@ -53,6 +55,60 @@ impl ExternalImageSource {
         }
         // Native: enum is uninhabited; method is unreachable.
         unreachable!("ExternalImageSource has no variants on this target")
+    }
+}
+
+/// A void's content rectangle, in fractional pixels.
+///
+/// Voids draw content that need not align to the integer canvas grid — a
+/// cover-fit webcam frame overhangs the canvas by a fractional amount, and a
+/// placed image sits wherever its transform puts it — so this cannot be a
+/// [`CanvasRect`], whose origin and size are integral.
+///
+/// **The rect is in plane space** (the absolute document frame that does not
+/// move when the canvas is cropped). [`Self::to_window`] is the single
+/// conversion into the window-local frame the shader indexes, so no caller
+/// hand-writes `± canvas_origin` — see `docs/coordinate-systems.md`.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct ContentRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl ContentRect {
+    pub const fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+        ContentRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// The whole canvas window, as a plane-space content rect. The answer for
+    /// any void whose field fills the canvas.
+    pub fn covering(canvas: CanvasRect) -> Self {
+        ContentRect::new(
+            canvas.origin.x as f32,
+            canvas.origin.y as f32,
+            canvas.width as f32,
+            canvas.height as f32,
+        )
+    }
+
+    /// Re-express this plane-space rect in the window-local frame whose origin
+    /// is `canvas.origin`. The shader works in window-local coordinates
+    /// (`FragCoord` is window-relative), so the uniform builder converts here
+    /// and nowhere else.
+    pub fn to_window(self, canvas: CanvasRect) -> Self {
+        ContentRect::new(
+            self.x - canvas.origin.x as f32,
+            self.y - canvas.origin.y as f32,
+            self.width,
+            self.height,
+        )
     }
 }
 
@@ -192,15 +248,28 @@ pub trait Void: std::fmt::Debug {
 
     /// The void's natural content rectangle at the identity transform, in
     /// WINDOW-LOCAL coords (relative to the canvas-window top-left), as
-    /// `(origin_x, origin_y, w, h)`. The transform gizmo draws its bbox around
-    /// this rect (the engine lifts it to plane space by adding `canvas_origin`).
+    /// The void's content rectangle **in plane space**. The transform gizmo
+    /// draws its bbox around this rect directly — no lifting at the boundary.
     ///
-    /// Default is canvas-filling `(0, 0, canvas_w, canvas_h)` — correct for
-    /// procedural voids like noise whose field fills the canvas. The camera
-    /// overrides it with the cover-fit webcam rect, which extends *beyond* the
-    /// canvas on the cropped axis, so the gizmo wraps the real image bounds.
-    fn content_extent(&self, canvas_w: u32, canvas_h: u32) -> (f32, f32, f32, f32) {
-        (0.0, 0.0, canvas_w as f32, canvas_h as f32)
+    /// Default is the canvas window itself — correct for procedural voids like
+    /// noise whose field fills the canvas, and it moves with the window on a
+    /// crop, which is what "fills the canvas" means. Voids anchored to the
+    /// document rather than the window (a placed image) override it with a rect
+    /// that does *not* move on crop; the camera overrides it with the cover-fit
+    /// webcam rect, which extends beyond the canvas on the cropped axis so the
+    /// gizmo wraps the real image bounds.
+    fn content_extent(&self, canvas: CanvasRect) -> ContentRect {
+        ContentRect::covering(canvas)
+    }
+
+    /// React to a canvas resize or crop. The compositor calls this on every
+    /// void whenever the canvas rect changes, so a void that caches canvas
+    /// geometry in its sampling uniform can rewrite it in place — the same
+    /// shape as [`Self::set_transform`].
+    ///
+    /// Default no-op: a void that derives everything from `content_extent` at
+    /// draw time has nothing cached to refresh.
+    fn set_canvas_rect(&mut self, _queue: &wgpu::Queue, _cache: &EffectCache, _canvas: CanvasRect) {
     }
 
     /// Whether this void consumes per-frame external image input (webcam,
@@ -248,12 +317,17 @@ pub trait Void: std::fmt::Debug {
         None
     }
 
-    /// Restore a saved frame at load time. Called once per camera void at
-    /// document open with the bytes read from the `.darkly` zip; the void
-    /// (re)allocates its aux texture at `(width, height)`, rebuilds the
-    /// bind group, and `queue.write_texture`s the pixels. Default no-op
-    /// for procedural voids that never declared persistent state.
-    fn restore_persistent_pixels(
+    /// Install `bytes` as this void's source image. The void (re)allocates its
+    /// aux texture at `(width, height)`, rebuilds the bind group, uploads, and
+    /// regenerates any mip chain. Default no-op for procedural voids that
+    /// never declared a source.
+    ///
+    /// Two callers: document load (restoring a saved frame from the `.darkly`
+    /// zip) and placement (installing a user-supplied image). `bytes` are
+    /// **premultiplied** RGBA8 in both cases — the convention every sampled
+    /// void source uses, so linear filtering doesn't bleed colour out of
+    /// transparent texels.
+    fn set_source_pixels(
         &mut self,
         _device: &wgpu::Device,
         _queue: &wgpu::Queue,
@@ -284,6 +358,48 @@ pub enum CaptureKind {
     Stream,
 }
 
+/// Where a void's pixels come from — the one fact that decides how the
+/// frontend offers the kind, whether the engine feeds it frames, and whether
+/// its source is one-shot or continuous.
+///
+/// Consumers match on this once instead of consulting several parallel flags:
+/// a picker that wants to know "does choosing this open a file dialog, request
+/// a camera, or just add a layer?" reads exactly this field, and a new ingress
+/// (video file, remote image, PDF page) is a new variant that every consumer's
+/// match must then handle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub enum VoidSource {
+    /// Generated from parameters alone — noise and friends. No external input,
+    /// no stored pixels.
+    Procedural,
+    /// A continuous stream of browser-supplied frames. The payload tells the
+    /// frontend which capture API to open.
+    Capture { capture: CaptureKind },
+    /// A single still image the user supplies once, held at its native
+    /// resolution and resampled through the layer's transform. The frontend
+    /// opens a file picker rather than adding an empty layer.
+    Image,
+}
+
+impl VoidSource {
+    /// Whether this source delivers frames continuously. Drives both the
+    /// external-input plumbing and the animation clock: a one-shot source must
+    /// not keep the render loop awake.
+    pub fn is_streaming(self) -> bool {
+        matches!(self, VoidSource::Capture { .. })
+    }
+
+    /// The capture API to open, for sources that stream from one.
+    pub fn capture_kind(self) -> Option<CaptureKind> {
+        match self {
+            VoidSource::Capture { capture } => Some(capture),
+            _ => None,
+        }
+    }
+}
+
 /// What each void module returns from its `register()` function.
 pub struct VoidRegistration {
     pub type_id: &'static str,
@@ -309,10 +425,11 @@ pub struct VoidRegistration {
     /// that opt in implement [`Void::set_transform`]; the rest leave it false
     /// and the engine never hands them a transform.
     pub supports_live_transform: bool,
-    /// How this void's external frames are captured in the browser, or `None`
-    /// for procedural voids that consume no external input. The frontend reads
-    /// this to pick `getUserMedia` vs `getDisplayMedia`.
-    pub capture_kind: Option<CaptureKind>,
+    /// Where this void's pixels come from. The frontend reads it to decide how
+    /// choosing the kind behaves (open a camera, open a file picker, or just
+    /// add the layer); the engine reads it to decide whether to feed frames and
+    /// whether the source is one-shot.
+    pub source: VoidSource,
     /// The void's initial gizmo transform, given the canvas dimensions at
     /// creation time. Lets a kind seed a non-identity affine — the camera seeds
     /// a horizontal flip about the canvas center (selfie view); everything else
@@ -333,7 +450,7 @@ impl VoidRegistration {
             .with_description(self.description)
             .with_params(self.params)
             .with_supports_preview(self.preview.is_some())
-            .with_capture_kind(self.capture_kind)
+            .with_source(self.source)
     }
 }
 

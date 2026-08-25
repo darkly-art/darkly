@@ -557,7 +557,7 @@ fn a_void_previews_from_scratch_at_the_canvas_aspect() {
     assert!(w > h, "a wide canvas yields a wide preview");
     // Real content, not a blank buffer — and not a flat colour either.
     let first: &[u8] = &frames[0][..4];
-    assert!(frames[0].chunks_exact(4).any(|px| px != first));
+    assert!(frames[0].as_chunks::<4>().0.iter().any(|px| px != first));
 }
 
 /// Generation is paced: `start_preview` produces nothing on its own, and no

@@ -490,7 +490,7 @@ pub fn rasterize_polygon_r8(
             intersections.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
 
             // Fill between pairs (even-odd rule).
-            for pair in intersections.chunks_exact(2) {
+            for pair in intersections.as_chunks::<2>().0 {
                 let xl = pair[0];
                 let xr = pair[1];
 

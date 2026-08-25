@@ -3,6 +3,7 @@ import { app } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { copyToSystemClipboard, readImageFromClipboard, readLayerFromClipboard } from '../clipboard';
+import { placeSmartObjectFromBlob } from './place_smart_object';
 
 /** Switch to the transform tool after a paste so the freshly-floated layer is
  *  immediately draggable. When transform is already active we ask the
@@ -61,6 +62,32 @@ export function registerClipboardActions(): void {
                 }
             });
             app.requestFrame();
+        },
+    });
+    actions.register({
+        id: 'pasteAsSmartObject',
+        menuPath: ['Edit:66'],
+        handler: () => {
+            void (async () => {
+                if (!app.engine) return;
+                const clip = await readImageFromClipboard();
+                if (!clip) return;
+                // Re-encode the decoded pixels rather than reaching for the
+                // original blob: `readImageFromClipboard` already normalised
+                // whatever the clipboard held into RGBA, and the placement
+                // path owns the downscale-and-premultiply policy.
+                const canvas = new OffscreenCanvas(clip.width, clip.height);
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return;
+                const img = new ImageData(
+                    new Uint8ClampedArray(clip.rgba),
+                    clip.width,
+                    clip.height,
+                );
+                ctx.putImageData(img, 0, 0);
+                const blob = await canvas.convertToBlob({ type: 'image/png' });
+                await placeSmartObjectFromBlob(blob, 'clipboard image');
+            })();
         },
     });
     actions.register({

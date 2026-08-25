@@ -182,7 +182,7 @@ impl Veil for Grain {
         let pixel_count = (render_width * render_height) as usize;
         let mut noise_data = vec![0u8; pixel_count * 4];
         let mut s = 42u32;
-        for pixel in noise_data.chunks_exact_mut(4) {
+        for pixel in noise_data.as_chunks_mut::<4>().0 {
             s = pcg_hash(s);
             let r = (s >> 24) as u8;
             s = pcg_hash(s);

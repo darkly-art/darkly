@@ -34,6 +34,12 @@ hotkeys:
   saveDocument: $mod+KeyS
   saveDocumentAs: $mod+Shift+KeyS
   open: $mod+KeyO
+  # Darkly-original: no reference editor has a paste-as-smart-object
+  # analogue, so there is no convention to inherit and this lives in
+  # defaults rather than per-overlay. Verified free of collisions in
+  # defaults and all three overlays (the only other KeyV bindings are
+  # `paste` here and `pasteInPlace` per-overlay).
+  pasteAsSmartObject: $mod+Alt+Shift+KeyV
   selectAll: $mod+KeyA
   # Floating-selection commit / cancel. Enter / Escape are the universal
   # commit/cancel keys across PS, Krita, and GIMP's floating-selection

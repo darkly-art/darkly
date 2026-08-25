@@ -88,7 +88,7 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         id: "flatten",
         display_name: "Flatten",
-        description: "Bake modifiers into the layer (apply mask), or flatten a group into a single raster that inherits the group’s blend props.",
+        description: "Bake a layer into plain pixels: apply its mask, rasterize a generated layer (smart object, camera, text) so it can be painted on, or flatten a group into a single raster that inherits the group’s blend props.",
         icon: "fa6-solid:layer-group",
     },
 ];

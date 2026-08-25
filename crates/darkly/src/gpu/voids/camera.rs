@@ -1,13 +1,14 @@
 //! Camera void — live webcam as a layer.
 //!
-//! A thin config over the shared [`crate::gpu::video_stream_void`] machinery.
+//! A thin config over the shared [`crate::gpu::textured_void`] machinery.
 //! Everything about the "live video stream → texture" pipeline lives there;
 //! this file only declares what makes the camera *the camera*: its id, display
 //! name, icon, capture kind ([`CaptureKind::Camera`] → `getUserMedia`), and a
 //! seeded horizontal-flip transform so it opens in selfie view.
 
-use crate::gpu::video_stream_void::{self, VideoStreamConfig};
-use crate::gpu::void::{CaptureKind, ParamDef, VoidRegistration};
+use crate::gpu::textured_void::ContentFit;
+use crate::gpu::textured_void::{self, TexturedVoidConfig};
+use crate::gpu::void::{CaptureKind, ParamDef, VoidRegistration, VoidSource};
 
 pub const TYPE_ID: &str = "camera";
 
@@ -49,19 +50,22 @@ fn selfie_flip(canvas_w: u32, _canvas_h: u32) -> crate::transform::Transform {
     crate::transform::Transform::from_affine([-1.0, 0.0, canvas_w as f32, 0.0, 1.0, 0.0])
 }
 
-static CONFIG: VideoStreamConfig = VideoStreamConfig {
+static CONFIG: TexturedVoidConfig = TexturedVoidConfig {
     type_id: TYPE_ID,
     display_name: "Camera",
     description: "Live frames from a connected webcam, mirrored like a selfie.",
     icon: "tabler:camera",
     params: PARAMS,
-    capture_kind: CaptureKind::Camera,
+    source: VoidSource::Capture {
+        capture: CaptureKind::Camera,
+    },
+    fit: ContentFit::Cover,
     default_transform: selfie_flip,
 };
 
 pub fn register() -> VoidRegistration {
-    video_stream_void::registration(&CONFIG, |params, shared| {
-        video_stream_void::build_void(&CONFIG, params, shared)
+    textured_void::registration(&CONFIG, |params, shared| {
+        textured_void::build_void(&CONFIG, params, shared)
     })
 }
 

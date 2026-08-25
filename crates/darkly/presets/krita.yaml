@@ -7,6 +7,11 @@ name: Krita
 description: Krita-style keybindings
 
 hotkeys:
+  # placeSmartObject: intentionally unbound. Krita states no default for
+  # placing an image as a non-destructive object, and inventing one would
+  # set an expectation its users don't have — leave it to the menu and to
+  # explicit user binding. GIMP does state one, so it binds this in
+  # gimp.yaml.
   # Edit / clipboard (non-unanimous slice). Krita matches PS on these but
   # GIMP differs (Redo: <primary>Y, Paste-In-Place: <primary><alt>V — see
   # gimp/app/actions/edit-actions.c), so each value is pinned per-overlay.

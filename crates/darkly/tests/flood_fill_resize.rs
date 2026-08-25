@@ -24,7 +24,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 }
 
 fn flood_fill(engine: &mut DarklyEngine, layer: LayerId, x: f32, y: f32, color: [u8; 4]) {
-    engine.begin_stroke(layer);
+    engine.begin_stroke(layer).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x,
         y,

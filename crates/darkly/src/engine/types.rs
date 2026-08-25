@@ -59,6 +59,11 @@ pub enum LayerInfo {
         /// inheritance rule lives in one place (the document predicate)
         /// rather than being recomputed by every Svelte component.
         editable: bool,
+        /// Whether paint ops have somewhere to land on this node — mirrors
+        /// `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+        /// generated (void, filter, vector) and for groups; the panel reads it
+        /// to offer "Rasterize" instead of branching on `type`.
+        paintable: bool,
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
@@ -83,6 +88,11 @@ pub enum LayerInfo {
         visible: bool,
         locked: bool,
         editable: bool,
+        /// Whether paint ops have somewhere to land on this node — mirrors
+        /// `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+        /// generated (void, filter, vector) and for groups; the panel reads it
+        /// to offer "Rasterize" instead of branching on `type`.
+        paintable: bool,
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
@@ -110,6 +120,11 @@ pub enum LayerInfo {
         visible: bool,
         locked: bool,
         editable: bool,
+        /// Whether paint ops have somewhere to land on this node — mirrors
+        /// `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+        /// generated (void, filter, vector) and for groups; the panel reads it
+        /// to offer "Rasterize" instead of branching on `type`.
+        paintable: bool,
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
@@ -136,6 +151,11 @@ pub enum LayerInfo {
         visible: bool,
         locked: bool,
         editable: bool,
+        /// Whether paint ops have somewhere to land on this node — mirrors
+        /// `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+        /// generated (void, filter, vector) and for groups; the panel reads it
+        /// to offer "Rasterize" instead of branching on `type`.
+        paintable: bool,
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
@@ -152,6 +172,11 @@ pub enum LayerInfo {
         visible: bool,
         locked: bool,
         editable: bool,
+        /// Whether paint ops have somewhere to land on this node — mirrors
+        /// `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+        /// generated (void, filter, vector) and for groups; the panel reads it
+        /// to offer "Rasterize" instead of branching on `type`.
+        paintable: bool,
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
@@ -484,6 +509,7 @@ pub(crate) fn node_to_layer_info(
     use crate::layer::{Layer, LayerNode};
     let node = doc.find_node(node_id)?;
     let editable = doc.is_node_editable(node_id);
+    let paintable = doc.pixel_buffer(node_id).is_some();
     let kind = node.kind();
     let info = match node {
         LayerNode::Layer(layer) => match layer {
@@ -493,6 +519,7 @@ pub(crate) fn node_to_layer_info(
                 visible: r.common.visible,
                 locked: r.common.locked,
                 editable,
+                paintable,
                 can_have_mask: kind.can_have_mask,
                 can_rename: kind.can_rename,
                 has_thumbnail: kind.has_thumbnail,
@@ -521,6 +548,7 @@ pub(crate) fn node_to_layer_info(
                     visible: v.common.visible,
                     locked: v.common.locked,
                     editable,
+                    paintable,
                     can_have_mask: kind.can_have_mask,
                     can_rename: kind.can_rename,
                     has_thumbnail: kind.has_thumbnail,
@@ -555,6 +583,7 @@ pub(crate) fn node_to_layer_info(
                     visible: f.common.visible,
                     locked: f.common.locked,
                     editable,
+                    paintable,
                     can_have_mask: kind.can_have_mask,
                     can_rename: kind.can_rename,
                     has_thumbnail: kind.has_thumbnail,
@@ -581,6 +610,7 @@ pub(crate) fn node_to_layer_info(
                 visible: v.common.visible,
                 locked: v.common.locked,
                 editable,
+                paintable,
                 can_have_mask: kind.can_have_mask,
                 can_rename: kind.can_rename,
                 has_thumbnail: kind.has_thumbnail,
@@ -601,6 +631,7 @@ pub(crate) fn node_to_layer_info(
             visible: g.common.visible,
             locked: g.common.locked,
             editable,
+            paintable,
             can_have_mask: kind.can_have_mask,
             can_rename: kind.can_rename,
             has_thumbnail: kind.has_thumbnail,
