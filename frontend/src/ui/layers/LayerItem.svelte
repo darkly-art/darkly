@@ -7,6 +7,7 @@
     import { toast } from '../../state/toast.svelte';
     import Icon from '../../icons/Icon.svelte';
     import ContextMenu, { type ContextMenuItem } from '../ContextMenu.svelte';
+    import { flattenOffer } from './flatten_offer';
     import MaskChainControl from './MaskChainControl.svelte';
 
     interface Modifier {
@@ -109,6 +110,9 @@
 
     let canAddMask = $derived(Boolean(layer.canHaveMask) && !hasMask && editable);
 
+    // Drives both the menu entry and its click handler — see `flattenOffer`.
+    let flattenLabel = $derived(flattenOffer({ paintable, hasMask }));
+
     // Chord dispatch is owned by `use:bindingSite` on each preview
     // element below — `bindingSite` intercepts modifier+click in capture
     // phase and dispatches against its named site. These onclick handlers
@@ -195,13 +199,9 @@
             disabled: !isMulti && (!canMergeDownForThis || !editable),
             onclick: menuMerge,
         });
-        // One action, two names: baking a mask into the pixels it already owns
-        // is "Flatten", while handing a generated layer its own pixels is
-        // "Rasterize" — the verb every editor uses for it, and the answer to
-        // "why can't I paint on this?".
-        if (!isMulti && (hasMask || !paintable)) {
+        if (!isMulti && flattenLabel) {
             items.push({
-                label: paintable ? 'Flatten' : 'Rasterize',
+                label: flattenLabel,
                 disabled: !editable,
                 onclick: menuFlatten,
             });
@@ -238,7 +238,7 @@
     }
 
     function menuFlatten() {
-        if (!hasMask) return;
+        if (!flattenLabel) return;
         actions.dispatch('flatten');
         onupdate();
     }
