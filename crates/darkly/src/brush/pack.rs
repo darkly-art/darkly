@@ -23,17 +23,15 @@ pub type PackId = String;
 /// How far a pack may be edited.
 ///
 /// Nothing outside this module matches on this. Consumers call the `ensure_*`
-/// methods, which is what keeps "Favorites is the built-in the painter may
-/// fill" a fact of one line of YAML rather than a condition at a call site.
+/// methods, which is what keeps "which packs are the painter's" a fact of the
+/// data rather than a condition at a call site.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackMutability {
-    /// Shipped and fixed: no brush may be added or removed, and the pack may
-    /// not be renamed, restyled or deleted.
+    /// Shipped curation: it is rebuilt from embedded YAML on every boot, so it
+    /// cannot hold an edit and none is accepted.
     #[default]
     Locked,
-    /// Shipped, but the painter chooses what is in it. Favorites.
-    Members,
     /// The painter's own. Everything about it is theirs.
     Full,
 }
@@ -85,7 +83,7 @@ impl BrushPack {
                 "brush pack '{}' is built in — its brushes cannot be changed",
                 self.name
             )),
-            PackMutability::Members | PackMutability::Full => Ok(()),
+            PackMutability::Full => Ok(()),
         }
     }
 
@@ -93,7 +91,7 @@ impl BrushPack {
     /// existence.
     pub fn ensure_identity_editable(&self) -> Result<(), String> {
         match self.mutability {
-            PackMutability::Locked | PackMutability::Members => Err(format!(
+            PackMutability::Locked => Err(format!(
                 "brush pack '{}' is built in and cannot be renamed, restyled or deleted",
                 self.name
             )),
@@ -245,7 +243,6 @@ mod tests {
         // place to declare itself rather than three tests to be forgotten in.
         let cases = [
             (PackMutability::Locked, false, false),
-            (PackMutability::Members, true, false),
             (PackMutability::Full, true, true),
         ];
         for (mutability, members, identity) in cases {
@@ -290,14 +287,6 @@ mod tests {
         assert!(p.ensure_identity_editable().is_err());
         // The rejected edits changed nothing.
         assert_eq!(p.members, vec!["a", "b"]);
-    }
-
-    #[test]
-    fn favorites_takes_members_but_not_a_rename() {
-        let mut p = pack(PackMutability::Members);
-        p.add("c".into()).unwrap();
-        assert_eq!(p.members, vec!["a", "b", "c"]);
-        assert!(p.ensure_identity_editable().is_err());
     }
 
     #[test]

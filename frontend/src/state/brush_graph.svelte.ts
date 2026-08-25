@@ -357,7 +357,9 @@ export class BrushGraphState {
         const defaultBrush =
             brushes.find(b => b.name === freshDocument.defaultBrushName) ?? brushes[0];
         if (defaultBrush) {
-            await this.loadBrush(defaultBrush.name);
+            // Deliberately not `loadBrush`: the painter did not reach for this
+            // one, so it must not take the top slot in their recents.
+            await this.#load(defaultBrush.name);
         } else {
             // No library brushes available — fall through to the engine's
             // default graph as a degenerate fallback.
@@ -487,21 +489,34 @@ export class BrushGraphState {
         await this.applyResult(await app.engine.api.brushGraphReorderExposedPort({ key, new_index: newIndex }));
     }
 
-    /** Load a brush by name. */
-    async loadBrush(name: string) {
-        if (!app.engine) return;
+    /**
+     * Load a brush the painter chose, and record it as recently used.
+     *
+     * `id` is the brush's identity and `name` is what the engine looks it up
+     * by — `brush_load` is the one name-keyed call in the library API. Recents
+     * stores the id, so a later rename does not drop the entry.
+     */
+    async loadBrush(name: string, id: string) {
+        // Only a successful load counts as use: a brush that never loaded was
+        // never used.
+        if (await this.#load(name)) recentBrushes.use(id);
+    }
+
+    /** Load a brush by name, without recording it. Returns whether it loaded.
+     *
+     *  `loadBrush` is the painter-facing entry point; this is the mechanism
+     *  under it, so a selection the painter did not make (the boot default)
+     *  can reach the engine without claiming the top of their recents. */
+    async #load(name: string): Promise<boolean> {
+        if (!app.engine) return false;
         // brush_load rejects on error (old Result throw path).
         try {
             await app.engine.api.brushLoad({ name });
         } catch (e) {
             this.error = String(e instanceof Error ? e.message : e);
-            return;
+            return false;
         }
         this.activeBrush = name;
-        // The single funnel every brush selection passes through, and only
-        // reached on a successful load — a brush that failed to load was
-        // never used.
-        recentBrushes.use(name);
         // `fetchGraph` begins a new layout generation atomically with the
         // graph swap, so the canvas effect re-runs auto-layout for the
         // freshly-loaded graph.
@@ -512,6 +527,7 @@ export class BrushGraphState {
         // brush_load is a Topology change — snapshot here so the next
         // exposed-port scrub doesn't see a delta and clear `activeBrush`.
         await this.snapshotTopologyVersion();
+        return true;
     }
 
     /** Begin a new layout generation: clear node positions and bump

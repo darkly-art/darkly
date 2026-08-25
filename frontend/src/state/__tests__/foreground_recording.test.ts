@@ -55,24 +55,26 @@ describe('recording what was actually used', () => {
         const state = new BrushGraphState();
         app.engine = fakeEngine(true);
 
-        await state.loadBrush('Ink Pen');
+        await state.loadBrush('Ink Pen', 'ink_pen');
 
+        // The name is what the engine loads by and what the UI shows; the id
+        // is what recents keeps, so a rename cannot drop the entry.
         expect(state.activeBrush).toBe('Ink Pen');
-        expect(recentBrushes.items[0]).toBe('Ink Pen');
+        expect(recentBrushes.items[0]).toBe('ink_pen');
     });
 
     it('a_failed_brush_load_records_nothing', async () => {
         const state = new BrushGraphState();
         app.engine = fakeEngine(true);
-        await state.loadBrush('Ink Pen');
+        await state.loadBrush('Ink Pen', 'ink_pen');
 
         app.engine = fakeEngine(false);
-        await state.loadBrush('Nonexistent');
+        await state.loadBrush('Nonexistent', 'nonexistent');
 
         // The failed load left the front alone — a brush that never loaded
         // was never used.
         expect(state.error).not.toBeNull();
-        expect(recentBrushes.items).not.toContain('Nonexistent');
-        expect(recentBrushes.items[0]).toBe('Ink Pen');
+        expect(recentBrushes.items).not.toContain('nonexistent');
+        expect(recentBrushes.items[0]).toBe('ink_pen');
     });
 });

@@ -125,11 +125,16 @@ afterEach(() => {
 });
 
 describe('brush library persistence', () => {
-    it('a_fresh_install_writes_nothing', async () => {
+    it('a_fresh_install_writes_only_the_seeded_favorites', async () => {
         // Shipped brushes and packs come back from YAML every boot; storing a
-        // copy would shadow them.
+        // copy would shadow them. Favorites is the exception because it is not
+        // shipped: it is the painter's, created here so they have somewhere to
+        // put a brush on the first day.
         await store.hydrate();
-        expect(s.paths('')).toEqual([]);
+        await store.flush();
+
+        const favorites = store.packs.find(p => p.name === 'Favorites')!;
+        expect(s.paths('')).toEqual([`packs/${favorites.id}.json`]);
     });
 
     it('hydrate_imports_every_stored_record', async () => {
@@ -245,17 +250,81 @@ describe('brush library persistence', () => {
         store.persistPack('id-two');
         await store.flush();
 
-        expect(s.paths('packs/')).toEqual(['packs/id-one.json', 'packs/id-two.json']);
+        // Both survive as separate files. The seeded Favorites is also on
+        // disk, so this asserts the two in question rather than the whole
+        // directory.
+        expect(s.paths('packs/')).toEqual(
+            expect.arrayContaining(['packs/id-one.json', 'packs/id-two.json']),
+        );
         expect(s.json('packs/id-one.json')?.name).toBe('A/B');
         expect(s.json('packs/id-two.json')?.name).toBe('A:B');
     });
 
     it('a_shipped_pack_is_never_written', async () => {
         await store.hydrate();
+        await store.flush();
+        const before = s.paths('packs/');
+
         store.persistPack('basic');
         await store.flush();
 
-        expect(s.paths('packs/')).toEqual([]);
+        expect(s.paths('packs/')).toEqual(before);
+        expect(s.json('packs/basic.json')).toBeNull();
+    });
+
+    // ---- Favorites ----
+
+    it('a_brush_added_to_favorites_survives_a_reload', async () => {
+        await store.hydrate();
+        const favorites = store.packs.find(p => p.name === 'Favorites');
+        expect(favorites, 'the painter has a Favorites pack').toBeDefined();
+
+        await fake.api.packAddBrush({ pack: favorites!.id, brush: 'ink_pen' });
+        await store.refresh();
+        store.persistPack(favorites!.id);
+        await store.flush();
+
+        // A second boot against the same files and a fresh engine, exactly as
+        // `hydrate_is_idempotent_across_reloads` does.
+        fake = fakeEngine();
+        app.engine = fake.engine;
+        const second = new BrushLibraryStore(s);
+        await second.hydrate();
+
+        const reloaded = second.packs.find(p => p.name === 'Favorites');
+        expect(reloaded?.members).toEqual(['ink_pen']);
+    });
+
+    it('favorites_is_seeded_once_and_not_recreated', async () => {
+        await store.hydrate();
+        const seeded = store.packs.filter(p => p.name === 'Favorites');
+        expect(seeded).toHaveLength(1);
+
+        fake = fakeEngine();
+        app.engine = fake.engine;
+        const second = new BrushLibraryStore(s);
+        await second.hydrate();
+
+        expect(second.packs.filter(p => p.name === 'Favorites')).toHaveLength(1);
+    });
+
+    it('a_painter_who_deleted_favorites_does_not_get_it_back', async () => {
+        await store.hydrate();
+        const favorites = store.packs.find(p => p.name === 'Favorites')!;
+        await store.deletePack(favorites.id);
+        await store.flush();
+
+        // Storage still holds a pack, so the seed does not fire again.
+        s.put('packs/keep.json', {
+            id: 'keep', name: 'Keep', description: '', icon: 'mdi:water',
+            primary: '#3355ff', secondary: '#ffffff', members: [],
+        });
+        fake = fakeEngine();
+        app.engine = fake.engine;
+        const second = new BrushLibraryStore(s);
+        await second.hydrate();
+
+        expect(second.packs.find(p => p.name === 'Favorites')).toBeUndefined();
     });
 
     it('deleting_a_brush_removes_its_file_and_rewrites_the_packs_that_held_it', async () => {

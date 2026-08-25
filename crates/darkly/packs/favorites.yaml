@@ -1,7 +1,0 @@
-name: Favorites
-description: The brushes you reach for most.
-icon: fa6-solid:star
-primary: "#f5c542"
-secondary: "#2b2213"
-mutability: members
-members: []

@@ -21,7 +21,7 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
-use super::metadata::{Brush, BrushMetadata};
+use super::metadata::Brush;
 use crate::brush::pack::{validate_pack, BrushId, BrushPack, PackId, PackMutability};
 use crate::brush::pack_file::PackFile;
 
@@ -41,10 +41,15 @@ pub struct BrushInfo {
     /// preview bake renders blank (clone, blur, smudge, liquify). See
     /// [`crate::brush::graph_capabilities`].
     pub icon: Option<&'static str>,
+    /// Whether the painter may rename or delete this brush, so the UI can grey
+    /// out affordances it would otherwise offer. A hint, not the authority —
+    /// same contract as [`BrushPackInfo::can_edit_members`].
+    pub can_edit: bool,
 }
 
-impl From<&BrushMetadata> for BrushInfo {
-    fn from(p: &BrushMetadata) -> Self {
+impl From<&Brush> for BrushInfo {
+    fn from(b: &Brush) -> Self {
+        let p = &b.metadata;
         BrushInfo {
             id: p.id.clone(),
             name: p.name.clone(),
@@ -52,6 +57,7 @@ impl From<&BrushMetadata> for BrushInfo {
             description: p.description.clone(),
             tags: p.tags.clone(),
             icon: crate::brush::graph_capabilities(&p.graph).preview_fallback_icon,
+            can_edit: b.can_edit(),
         }
     }
 }
@@ -155,11 +161,7 @@ impl BrushLibrary {
 
     /// Every brush, sorted by name.
     pub fn list(&self) -> Vec<BrushInfo> {
-        let mut infos: Vec<BrushInfo> = self
-            .brushes
-            .values()
-            .map(|b| BrushInfo::from(&b.metadata))
-            .collect();
+        let mut infos: Vec<BrushInfo> = self.brushes.values().map(BrushInfo::from).collect();
         infos.sort_by(|a, b| a.name.cmp(&b.name));
         infos
     }
@@ -191,21 +193,52 @@ impl BrushLibrary {
         self.brushes.insert(brush.metadata.id.clone(), brush);
     }
 
+    /// Reject a name already spoken for by a *different* brush.
+    ///
+    /// Names are the engine's public lookup key (`by_name`), so two brushes
+    /// sharing one makes `brush_load` ambiguous. `rename` has always enforced
+    /// this; saving enforces the same rule so the two cannot disagree.
+    pub fn ensure_name_free(&self, id: &str, name: &str) -> Result<(), String> {
+        if self
+            .brushes
+            .values()
+            .any(|b| b.id() != id && b.name() == name)
+        {
+            return Err(format!("a brush named '{name}' already exists"));
+        }
+        Ok(())
+    }
+
     /// Remove a brush and drop it from the member list of every pack that
     /// holds it, so no pack is left pointing at a ghost.
     ///
     /// Bypasses each pack's member gate deliberately: this is not an edit to
     /// those packs, it is the library declining to name something that no
-    /// longer exists. Returns whether the brush existed.
-    pub fn delete_brush(&mut self, id: &str) -> bool {
-        if self.brushes.shift_remove(id).is_none() {
-            return false;
-        }
+    /// longer exists.
+    pub fn delete_brush(&mut self, id: &str) -> Result<(), String> {
+        self.ensure_brush_editable(id)?;
+        self.brushes.shift_remove(id);
         self.dab_thumbnails.remove(id);
         for pack in self.packs.values_mut() {
             pack.members.retain(|m| m != id);
         }
-        true
+        Ok(())
+    }
+
+    /// Reject a rename or deletion of a brush that is not the painter's.
+    ///
+    /// A shipped brush comes back from embedded YAML on the next boot, so an
+    /// edit to one would appear to work and then silently undo itself. The
+    /// same reasoning locks a shipped pack.
+    fn ensure_brush_editable(&self, id: &str) -> Result<(), String> {
+        match self.brushes.get(id) {
+            None => Err(format!("brush '{id}' not found")),
+            Some(b) if !b.can_edit() => Err(format!(
+                "brush '{}' is built in and cannot be renamed or deleted",
+                b.name()
+            )),
+            Some(_) => Ok(()),
+        }
     }
 
     /// Rename a brush. No pack and no recents entry is touched, because both
@@ -215,16 +248,8 @@ impl BrushLibrary {
         if new_name.is_empty() {
             return Err("a brush needs a name".into());
         }
-        if !self.brushes.contains_key(id) {
-            return Err(format!("brush '{id}' not found"));
-        }
-        if self
-            .brushes
-            .values()
-            .any(|b| b.id() != id && b.name() == new_name)
-        {
-            return Err(format!("a brush named '{new_name}' already exists"));
-        }
+        self.ensure_brush_editable(id)?;
+        self.ensure_name_free(id, new_name)?;
         if let Some(brush) = self.brushes.get_mut(id) {
             brush.metadata.name = new_name.to_string();
         }
@@ -574,7 +599,7 @@ mod tests {
     #[test]
     fn copying_a_locked_packs_brush_into_a_user_pack_is_allowed() {
         // A shipped brush lives in a locked pack, and must still be copyable
-        // into Favorites or any pack the painter makes.
+        // into any pack the painter makes.
         let mut lib = BrushLibrary::builtin();
         let locked = lib
             .packs()
@@ -589,15 +614,6 @@ mod tests {
         assert!(lib.pack("mine").unwrap().contains(&member));
         // And it did not leave the pack it came from.
         assert!(lib.pack(&locked_id).unwrap().contains(&member));
-    }
-
-    #[test]
-    fn favorites_accepts_a_shipped_brush() {
-        let mut lib = BrushLibrary::builtin();
-        let member = lib.pack("basic").unwrap().members[0].clone();
-        lib.add_to_pack("favorites", &member).unwrap();
-        assert!(lib.pack("favorites").unwrap().contains(&member));
-        assert!(lib.pack("basic").unwrap().contains(&member));
     }
 
     #[test]
@@ -642,10 +658,6 @@ mod tests {
         let mut lib = BrushLibrary::builtin();
         assert!(lib.delete_pack("basic").is_err());
         assert!(lib.pack("basic").is_some());
-
-        // Favorites is shipped and its members are the painter's, but its
-        // identity — including its existence — is not.
-        assert!(lib.delete_pack("favorites").is_err());
     }
 
     #[test]
@@ -658,23 +670,30 @@ mod tests {
         lib.add_to_pack("p1", "a").unwrap();
         lib.add_to_pack("p2", "a").unwrap();
 
-        assert!(lib.delete_brush("a"));
+        lib.delete_brush("a").unwrap();
 
         assert!(lib.get("a").is_none());
         assert!(!lib.pack("p1").unwrap().contains("a"));
         assert!(!lib.pack("p2").unwrap().contains("a"));
-        assert!(!lib.delete_brush("a"), "deleting twice is not an error");
+        assert!(
+            lib.delete_brush("a").is_err(),
+            "a brush that is gone cannot be deleted again"
+        );
     }
 
     #[test]
-    fn deleting_a_brush_clears_it_from_a_locked_pack_too() {
-        // Not an edit to the pack — the library declining to name something
-        // that no longer exists.
+    fn a_shipped_brush_cannot_be_renamed_or_deleted() {
+        // It is rebuilt from embedded YAML on the next boot, so either edit
+        // would appear to work and then undo itself.
         let mut lib = BrushLibrary::builtin();
         let member = lib.pack("basic").unwrap().members[0].clone();
 
-        assert!(lib.delete_brush(&member));
-        assert!(!lib.pack("basic").unwrap().contains(&member));
+        assert!(!lib.get(&member).unwrap().can_edit());
+        assert!(lib.delete_brush(&member).is_err());
+        assert!(lib.rename(&member, "Mine Now").is_err());
+        // The rejected edits changed nothing.
+        assert!(lib.get(&member).is_some());
+        assert!(lib.pack("basic").unwrap().contains(&member));
     }
 
     #[test]
@@ -863,7 +882,7 @@ mod tests {
     fn deleting_a_brush_drops_its_dab_thumbnail() {
         let mut lib = lib_with_two();
         lib.set_dab_thumbnail("a", vec![1]);
-        lib.delete_brush("a");
+        lib.delete_brush("a").unwrap();
         assert!(lib.dab_thumbnail_png("a").is_none());
     }
 

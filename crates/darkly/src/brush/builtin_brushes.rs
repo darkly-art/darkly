@@ -35,7 +35,8 @@ fn parsed() -> Vec<(&'static str, Brush)> {
                 .unwrap_or_else(|e| panic!("invalid built-in brush '{filename}': {e}"));
             let brush = portable
                 .into_brush(registry, stem)
-                .unwrap_or_else(|e| panic!("invalid built-in brush '{filename}': {e}"));
+                .unwrap_or_else(|e| panic!("invalid built-in brush '{filename}': {e}"))
+                .into_shipped();
             (stem, brush)
         })
         .collect()
@@ -65,7 +66,7 @@ pub fn docs() -> &'static [(&'static str, BrushInfo)] {
     DOCS.get_or_init(|| {
         parsed()
             .into_iter()
-            .map(|(stem, brush)| (stem, BrushInfo::from(&brush.metadata)))
+            .map(|(stem, brush)| (stem, BrushInfo::from(&brush)))
             .collect()
     })
     .as_slice()
@@ -263,7 +264,7 @@ mod tests {
                 .find(|b| b.metadata.name == name)
                 .unwrap_or_else(|| panic!("built-in brush '{name}' must exist"));
             assert_eq!(
-                BrushInfo::from(&brush.metadata).icon,
+                BrushInfo::from(brush).icon,
                 icon,
                 "brush '{name}' preview fallback icon"
             );

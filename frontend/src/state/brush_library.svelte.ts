@@ -4,8 +4,9 @@
  * The engine is the authority on what the library *is*; this module is the
  * frontend's view of it plus the persistence the engine cannot do for itself.
  * Shipped brushes and packs are rebuilt from embedded YAML on every boot and
- * are **never written** — only what the painter creates or imports is stored,
- * so a fresh install writes nothing at all.
+ * are **never written** — only what the painter creates or imports is stored.
+ * The one thing a fresh install writes is the Favorites pack it seeds, which is
+ * the painter's from the moment it exists (see `#seedFavorites`).
  *
  * One file per record, no index. The filename is the id and the id never
  * changes, so a rename rewrites one file in place, a delete removes one file,
@@ -17,6 +18,7 @@ import { jsonDir } from '../storage/jsonStore';
 import type { DarklyStorage } from '../storage/types';
 import type { BrushInfo, BrushPackInfo } from '../engine/protocol_gen';
 import { recentBrushes } from './recents.svelte';
+import { newId } from '../lib/id';
 
 /** A painter-created brush, as stored. The graph lives in the engine; what we
  *  persist is enough to put it back. */
@@ -176,6 +178,40 @@ export class BrushLibraryStore {
         }
 
         await this.refresh();
+        if (storedPacks.size === 0) await this.#seedFavorites();
+    }
+
+    /**
+     * Give a painter with no packs of their own a Favorites pack to fill.
+     *
+     * Favorites is not shipped. A shipped pack is rebuilt from embedded YAML
+     * on every boot and so cannot hold an edit, which is why shipped packs are
+     * locked; Favorites is the painter's list and has to be able to hold one.
+     * So it is an ordinary pack they own, created once when there is nothing
+     * stored, and from then on it renames, restyles, deletes and persists like
+     * any other.
+     *
+     * Keyed off "the painter has no stored packs" rather than "no pack is
+     * named Favorites", so deleting it is a decision that sticks.
+     */
+    async #seedFavorites(): Promise<void> {
+        if (!app.engine) return;
+        const id = newId('pack');
+        try {
+            await app.engine.api.packCreate({
+                id,
+                name: 'Favorites',
+                description: 'The brushes you reach for most.',
+                icon: 'fa6-solid:star',
+                primary: '#f5c542',
+                secondary: '#2b2213',
+            });
+        } catch (e) {
+            console.warn('[brush library] could not seed Favorites', e);
+            return;
+        }
+        await this.refresh();
+        this.persistPack(id);
     }
 
     // ---- write-through ----

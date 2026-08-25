@@ -100,8 +100,16 @@ impl DarklyEngine {
         if id.trim().is_empty() {
             return Err("a brush needs an id".into());
         }
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("a brush needs a name".into());
+        }
         let metadata = BrushMetadata::from_graph(id, name, self.active_brush_graph());
-        library::with_mut(|lib| lib.insert(Brush::from_metadata(metadata)));
+        library::with_mut(|lib| {
+            lib.ensure_name_free(id, name)?;
+            lib.insert(Brush::from_metadata(metadata));
+            Ok::<(), String>(())
+        })?;
         // Saving establishes a new "brush baseline" — what the user just
         // saved IS what reset-to-default should now return to.
         self.snapshot_brush_defaults();
@@ -152,11 +160,7 @@ impl DarklyEngine {
     /// Delete a brush, removing it from every pack that held it.
     #[handler]
     pub fn brush_delete(&mut self, id: &str) -> Result<(), String> {
-        library::with_mut(|lib| {
-            lib.delete_brush(id)
-                .then_some(())
-                .ok_or_else(|| format!("brush '{id}' not found"))
-        })
+        library::with_mut(|lib| lib.delete_brush(id))
     }
 
     /// Create a brush pack under a caller-supplied id.

@@ -29,11 +29,6 @@ struct PackYaml {
     icon: String,
     primary: String,
     secondary: String,
-    /// Defaults to [`PackMutability::Locked`]: a shipped pack is fixed unless
-    /// it says otherwise, so Favorites is the one file that has to declare
-    /// anything.
-    #[serde(default)]
-    mutability: PackMutability,
     #[serde(default)]
     members: Vec<BrushId>,
 }
@@ -59,7 +54,10 @@ fn parsed() -> Vec<BrushPack> {
                 icon: y.icon,
                 primary: y.primary,
                 secondary: y.secondary,
-                mutability: y.mutability,
+                // A shipped pack is rebuilt from this YAML on every boot, so
+                // it can never hold an edit. `shipped_packs_are_locked` is the
+                // gate on that; there is deliberately no knob here.
+                mutability: PackMutability::Locked,
                 members: y.members,
             };
             validate_shipped_pack(&pack)
@@ -163,30 +161,18 @@ mod tests {
     }
 
     #[test]
-    fn shipped_packs_are_locked_except_favorites() {
-        // The immutability rule stated once, in data: Favorites is the one
-        // built-in whose members the painter chooses, and no shipped pack is
-        // fully editable.
+    fn shipped_packs_are_locked() {
+        // The immutability rule stated once, in data. A shipped pack is
+        // curation rebuilt from YAML on every boot, so it cannot hold an edit;
+        // anything the painter is meant to change is a pack they own.
         for pack in docs() {
-            let expected = if pack.id == "favorites" {
-                PackMutability::Members
-            } else {
-                PackMutability::Locked
-            };
-            assert_eq!(pack.mutability, expected, "`{}` mutability", pack.id);
+            assert_eq!(
+                pack.mutability,
+                PackMutability::Locked,
+                "`{}` mutability",
+                pack.id
+            );
         }
-    }
-
-    #[test]
-    fn favorites_ships_empty() {
-        let favorites = docs()
-            .iter()
-            .find(|p| p.id == "favorites")
-            .expect("a Favorites pack ships");
-        assert!(
-            favorites.members.is_empty(),
-            "Favorites is the painter's to fill"
-        );
     }
 
     #[test]

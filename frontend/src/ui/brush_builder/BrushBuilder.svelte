@@ -6,6 +6,7 @@
     import LiveBrushPreviewStrip from '../brush_picker/LiveBrushPreviewStrip.svelte';
     import NodeCanvas from './NodeCanvas.svelte';
     import AddNodeMenu from './AddNodeMenu.svelte';
+    import SaveBrushModal from '../SaveBrushModal.svelte';
     import Icon from '../../icons/Icon.svelte';
 
     // --- Add-node menu state ---
@@ -78,6 +79,10 @@
     function handleReset() {
         brushGraph.resetToDefault();
     }
+
+    /** The save dialog's open flag. Local: the builder owns the dialog, so
+     *  nothing else needs to reach it. */
+    let saveOpen = $state(false);
 
     async function handleCopy() {
         const yaml = await brushGraph.exportYaml();
@@ -250,10 +255,13 @@
         <button class="toolbar-btn" onclick={handleReset} title="Reset to default">Reset</button>
         <button class="toolbar-btn" onclick={() => brushGraph.measureAndLayout()} title="Auto-layout nodes">Layout</button>
         <div class="spacer"></div>
+        <button class="toolbar-btn" onclick={() => (saveOpen = true)} title="Save this brush to your library">Save</button>
         <button class="toolbar-btn" onclick={handleCopy} title="Copy graph as YAML to clipboard">Copy</button>
         <button class="toolbar-btn" onclick={handlePaste} title="Replace graph with YAML from clipboard">Paste</button>
     </div>
 </div>
+
+<SaveBrushModal bind:open={saveOpen} />
 
 <AddNodeMenu
     open={addMenu.open}

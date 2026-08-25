@@ -29,7 +29,7 @@
 
     function selectBrush(brush: BrushInfo) {
         ensureInit();
-        brushGraph.loadBrush(brush.name);
+        brushGraph.loadBrush(brush.name, brush.id);
         brushPickerOpen = false;
     }
 

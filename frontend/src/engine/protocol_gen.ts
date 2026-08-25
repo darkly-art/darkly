@@ -184,17 +184,17 @@ name: string, author: string, description: string, tags: Array<string>,
  * preview bake renders blank (clone, blur, smudge, liquify). See
  * [`crate::brush::graph_capabilities`].
  */
-icon: string | null, };
+icon: string | null, 
+/**
+ * Whether the painter may rename or delete this brush, so the UI can grey
+ * out affordances it would otherwise offer. A hint, not the authority —
+ * same contract as [`BrushPackInfo::can_edit_members`].
+ */
+can_edit: boolean, };
 
 export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
-
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
-
-export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
-
-export type PortDir = "Input" | "Output";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -388,6 +388,12 @@ preview_image: boolean,
  */
 source: boolean, };
 
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+
+export type PortDir = "Input" | "Output";
+
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+
 export type PreviewStaging = { 
 /**
  * Iconify glyph shown in the dab slot, where a single stationary sample
@@ -511,7 +517,13 @@ supportsPreview: boolean,
  */
 captureKind: CaptureKind | null, };
 
-export type CaptureKind = "camera" | "display" | "stream";
+export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
+/**
+ * The unit suffix alone, for a column header. Empty for unitless values.
+ */
+unit: string, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
 export type ParamInfo = { kind: string, name: string, 
 /**
@@ -530,13 +542,7 @@ widget: string, unit: UnitType, min: number | null, max: number | null, default:
  */
 options: JsonValue | null, display: ParamDisplay, };
 
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
-export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
-/**
- * The unit suffix alone, for a column header. Empty for unitless values.
- */
-unit: string, };
+export type CaptureKind = "camera" | "display" | "stream";
 
 export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
 /**

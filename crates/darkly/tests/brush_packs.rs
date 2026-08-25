@@ -22,14 +22,7 @@ fn library_list_reports_every_shipped_pack_with_its_members() {
 
     assert!(!snap.brushes.is_empty(), "shipped brushes are listed");
     let ids: Vec<&str> = snap.packs.iter().map(|p| p.id.as_str()).collect();
-    for expected in [
-        "basic",
-        "dry_media",
-        "wet_media",
-        "effects",
-        "misc",
-        "favorites",
-    ] {
+    for expected in ["basic", "dry_media", "wet_media", "effects", "misc"] {
         assert!(ids.contains(&expected), "pack '{expected}' is listed");
     }
 
@@ -56,16 +49,6 @@ fn pack_info_reports_permissions_matching_the_pack() {
     let basic = snap.packs.iter().find(|p| p.id == "basic").unwrap();
     assert!(!basic.can_edit_members, "a shipped pack is fixed");
     assert!(!basic.can_edit_identity);
-
-    let favorites = snap.packs.iter().find(|p| p.id == "favorites").unwrap();
-    assert!(
-        favorites.can_edit_members,
-        "Favorites is the painter's to fill"
-    );
-    assert!(
-        !favorites.can_edit_identity,
-        "but not theirs to rename or delete"
-    );
 }
 
 #[test]
@@ -87,21 +70,62 @@ fn brush_save_then_library_list_shows_it() {
 }
 
 #[test]
+fn brush_info_reports_who_may_edit_the_brush() {
+    // The wire hint the UI greys affordances by, and the engine gate behind
+    // it. A shipped brush is rebuilt from YAML on every boot, so an edit to
+    // one would appear to work and then undo itself.
+    let mut engine = fresh_engine();
+    engine.brush_save("my_brush", "My Brush").unwrap();
+
+    let snap = engine.library_list();
+    let shipped = snap.brushes.iter().find(|b| b.id == "ink_pen").unwrap();
+    let mine = snap.brushes.iter().find(|b| b.id == "my_brush").unwrap();
+
+    assert!(!shipped.can_edit, "a shipped brush is not the painter's");
+    assert!(mine.can_edit, "one they saved is");
+
+    // The hint is not the authority: the engine refuses regardless.
+    assert!(engine.brush_rename("ink_pen", "Mine Now").is_err());
+    assert!(engine.brush_delete("ink_pen").is_err());
+    engine.brush_rename("my_brush", "Renamed").unwrap();
+    engine.brush_delete("my_brush").unwrap();
+}
+
+#[test]
 fn brush_save_rejects_an_empty_id() {
     let mut engine = fresh_engine();
     assert!(engine.brush_save("  ", "Nameless").is_err());
 }
 
 #[test]
-fn a_shipped_brush_can_be_copied_into_favorites() {
+fn brush_save_rejects_a_name_another_brush_already_has() {
+    // Names are the engine's public lookup key, so two brushes sharing one
+    // makes `brush_load` ambiguous. `brush_rename` has always refused this;
+    // saving refuses it identically.
     let mut engine = fresh_engine();
-    engine.pack_add_brush("favorites", "ink_pen").unwrap();
+    assert!(engine.brush_save("mine", "Ink Pen").is_err());
+    assert!(engine.brush_save("mine", "  ").is_err());
+
+    engine.brush_save("mine", "My Brush").unwrap();
+    // Re-saving under the same id keeps the name: that is an update, not a
+    // collision with itself.
+    engine.brush_save("mine", "My Brush").unwrap();
+    assert!(engine.brush_save("other", "My Brush").is_err());
+}
+
+#[test]
+fn a_shipped_brush_can_be_copied_into_a_painters_pack() {
+    let mut engine = fresh_engine();
+    engine
+        .pack_create("mine", "Mine", "", "mdi:star", "#f5c542", "#2b2213")
+        .unwrap();
+    engine.pack_add_brush("mine", "ink_pen").unwrap();
 
     let snap = engine.library_list();
-    let favorites = snap.packs.iter().find(|p| p.id == "favorites").unwrap();
+    let mine = snap.packs.iter().find(|p| p.id == "mine").unwrap();
     let basic = snap.packs.iter().find(|p| p.id == "basic").unwrap();
 
-    assert!(favorites.members.contains(&"ink_pen".to_string()));
+    assert!(mine.members.contains(&"ink_pen".to_string()));
     assert!(
         basic.members.contains(&"ink_pen".to_string()),
         "copying into a pack does not remove it from another"
@@ -202,14 +226,15 @@ fn pack_export_import_round_trip_through_the_engine() {
 #[test]
 fn importing_a_pack_holding_a_brush_we_have_reuses_ours() {
     let mut engine = fresh_engine();
+    engine.brush_save("my_brush", "My Brush").unwrap();
     engine
         .pack_create("mine", "Mine", "", "mdi:water", "#3355ff", "#ffffff")
         .unwrap();
-    engine.pack_add_brush("mine", "ink_pen").unwrap();
+    engine.pack_add_brush("mine", "my_brush").unwrap();
     let bytes = engine.pack_export("mine").unwrap();
 
     let before = engine.library_list().brushes.len();
-    engine.brush_rename("ink_pen", "My Ink Pen").unwrap();
+    engine.brush_rename("my_brush", "My Renamed Brush").unwrap();
     engine.pack_import("theirs", &bytes).unwrap();
 
     let snap = engine.library_list();
@@ -217,10 +242,10 @@ fn importing_a_pack_holding_a_brush_we_have_reuses_ours() {
     assert_eq!(
         snap.brushes
             .iter()
-            .find(|b| b.id == "ink_pen")
+            .find(|b| b.id == "my_brush")
             .unwrap()
             .name,
-        "My Ink Pen",
+        "My Renamed Brush",
         "our copy wins over the sender's"
     );
     let theirs = snap.packs.iter().find(|p| p.id == "theirs").unwrap();
@@ -242,24 +267,29 @@ fn importing_corrupt_bytes_is_rejected_and_changes_nothing() {
 #[test]
 fn renaming_a_brush_leaves_pack_membership_intact() {
     let mut engine = fresh_engine();
+    engine.brush_save("my_brush", "My Brush").unwrap();
+    engine
+        .pack_create("mine", "Mine", "", "mdi:water", "#3355ff", "#ffffff")
+        .unwrap();
+    engine.pack_add_brush("mine", "my_brush").unwrap();
     let before = engine
         .library_list()
         .packs
         .iter()
-        .find(|p| p.id == "basic")
+        .find(|p| p.id == "mine")
         .unwrap()
         .members
         .clone();
 
-    engine.brush_rename("ink_pen", "Fancy Nib").unwrap();
+    engine.brush_rename("my_brush", "Fancy Nib").unwrap();
 
     let snap = engine.library_list();
-    let basic = snap.packs.iter().find(|p| p.id == "basic").unwrap();
-    assert_eq!(basic.members, before, "membership is id-keyed");
+    let mine = snap.packs.iter().find(|p| p.id == "mine").unwrap();
+    assert_eq!(mine.members, before, "membership is id-keyed");
     assert_eq!(
         snap.brushes
             .iter()
-            .find(|b| b.id == "ink_pen")
+            .find(|b| b.id == "my_brush")
             .unwrap()
             .name,
         "Fancy Nib"
@@ -269,15 +299,19 @@ fn renaming_a_brush_leaves_pack_membership_intact() {
 #[test]
 fn deleting_a_brush_removes_it_from_every_pack_through_the_engine() {
     let mut engine = fresh_engine();
-    engine.pack_add_brush("favorites", "ink_pen").unwrap();
+    engine.brush_save("my_brush", "My Brush").unwrap();
+    engine
+        .pack_create("mine", "Mine", "", "mdi:star", "#f5c542", "#2b2213")
+        .unwrap();
+    engine.pack_add_brush("mine", "my_brush").unwrap();
 
-    engine.brush_delete("ink_pen").unwrap();
+    engine.brush_delete("my_brush").unwrap();
 
     let snap = engine.library_list();
-    assert!(!snap.brushes.iter().any(|b| b.id == "ink_pen"));
+    assert!(!snap.brushes.iter().any(|b| b.id == "my_brush"));
     for pack in &snap.packs {
         assert!(
-            !pack.members.contains(&"ink_pen".to_string()),
+            !pack.members.contains(&"my_brush".to_string()),
             "pack '{}' still names the deleted brush",
             pack.id
         );
@@ -312,10 +346,11 @@ fn brush_load_still_takes_a_name() {
     engine.brush_load("Ink Pen").unwrap();
     assert!(engine.brush_load("No Such Brush").is_err());
 
-    engine.brush_rename("ink_pen", "Fancy Nib").unwrap();
+    engine.brush_save("my_brush", "My Brush").unwrap();
+    engine.brush_rename("my_brush", "Fancy Nib").unwrap();
     engine.brush_load("Fancy Nib").unwrap();
     assert!(
-        engine.brush_load("Ink Pen").is_err(),
+        engine.brush_load("My Brush").is_err(),
         "the old name no longer resolves"
     );
 }

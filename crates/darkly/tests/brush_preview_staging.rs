@@ -265,7 +265,7 @@ fn the_dab_slot_belongs_to_the_icon() {
             Some(icon),
         );
         assert_eq!(
-            darkly::brush::library::BrushInfo::from(&brush.metadata).icon,
+            darkly::brush::library::BrushInfo::from(brush).icon,
             Some(icon),
             "'{name}' projects its glyph to the picker"
         );

@@ -1,7 +1,7 @@
 <script lang="ts">
     import Modal from '../Modal.svelte';
     import Icon from '../../icons/Icon.svelte';
-    import { BUNDLED_ICON_NAMES } from '../../icons/bundle.generated';
+    import IconPicker from '../IconPicker.svelte';
     import { brushGraph, type ExposedPortInfo } from '../../state/brush_graph.svelte';
 
     type Props = {
@@ -94,26 +94,7 @@
             </label>
             <div class="field">
                 <span class="field-label">Icon</span>
-                <div class="icon-picker">
-                    <button
-                        type="button"
-                        class="icon-cell none"
-                        class:selected={!iconInput}
-                        onclick={() => (iconInput = '')}
-                        title="No icon"
-                    >None</button>
-                    {#each BUNDLED_ICON_NAMES as name (name)}
-                        <button
-                            type="button"
-                            class="icon-cell"
-                            class:selected={iconInput === name}
-                            onclick={() => (iconInput = name)}
-                            title={name}
-                        >
-                            <Icon {name} />
-                        </button>
-                    {/each}
-                </div>
+                <IconPicker bind:value={iconInput} allowNone />
             </div>
             {#if scalar}
                 <div class="field">
@@ -195,41 +176,6 @@
         resize: vertical;
         min-height: 78px;
         line-height: 1.4;
-    }
-    .icon-picker {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(34px, 1fr));
-        gap: 4px;
-        max-height: 180px;
-        overflow-y: auto;
-        padding: 6px;
-        background: var(--bg);
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-    }
-    .icon-cell {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        height: 34px;
-        font-size: 15px;
-        color: var(--text);
-        background: transparent;
-        border: 1px solid transparent;
-        border-radius: 4px;
-        cursor: pointer;
-        font-family: inherit;
-    }
-    .icon-cell:hover {
-        background: var(--bg-hover);
-    }
-    .icon-cell.selected {
-        border-color: var(--accent);
-        color: var(--accent);
-    }
-    .icon-cell.none {
-        font-size: 10px;
-        color: var(--text-muted);
     }
     .disclosure {
         display: flex;

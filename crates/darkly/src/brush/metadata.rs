@@ -50,6 +50,13 @@ pub struct Brush {
     /// every one on theme change — so one baked by the sender would be wrong
     /// for the recipient, whose own bake is a frame away.
     pub thumbnail_png: Option<Vec<u8>>,
+    /// Whether this brush ships with the app.
+    ///
+    /// A shipped brush is rebuilt from embedded YAML on every boot, so it
+    /// cannot hold a rename or a deletion: storing one would shadow the YAML
+    /// it comes back from. The painter's own brushes are theirs to change.
+    /// Same reasoning as [`crate::brush::PackMutability`], one level down.
+    pub shipped: bool,
 }
 
 fn default_engine_version() -> String {
@@ -77,12 +84,26 @@ impl BrushMetadata {
 }
 
 impl Brush {
-    /// Create a brush from metadata.
+    /// Create a brush the painter owns.
     pub fn from_metadata(metadata: BrushMetadata) -> Self {
         Brush {
             metadata,
             thumbnail_png: None,
+            shipped: false,
         }
+    }
+
+    /// Mark this brush as one that ships with the app. Only
+    /// [`crate::brush::builtin_brushes`] has any business calling this: every
+    /// other route into the library is the painter creating or importing.
+    pub fn into_shipped(mut self) -> Self {
+        self.shipped = true;
+        self
+    }
+
+    /// Whether the painter may rename or delete this brush.
+    pub fn can_edit(&self) -> bool {
+        !self.shipped
     }
 
     pub fn id(&self) -> &str {
