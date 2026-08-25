@@ -4,17 +4,19 @@
      * brush list beside it.
      *
      * A native `overflow-y: auto` scrollport, so pen and touch momentum come
-     * from the platform rather than a hand-rolled inertia integrator. That also
-     * makes fling **self-enabling**: when the cards fit, there is no scroll
-     * range, this element's `scroll` never fires, and only tap-to-jump is
-     * reachable. Nothing branches on how many packs exist.
+     * from the platform rather than a hand-rolled inertia integrator. Half a
+     * viewport of pad above and below the stack keeps the focused card in the
+     * middle of the column and gives the wheel a scroll range of its own
+     * whenever there are two packs — one card of wheel travel per pack, which
+     * is what makes it a minimap you can flick through rather than a second
+     * copy of the list's own scrolling.
      *
      * Bounded, not circular. A wheel that wrapped could not be honestly synced
      * to a list that has a real top and bottom.
      */
     import PackCard from './PackCard.svelte';
     import type { BrushGroup } from '../brush_library/grouping';
-    import { cardCurve, type WheelGeometry } from './wheel';
+    import { cardCurve, wheelPad, type WheelGeometry } from './wheel';
 
     interface Props {
         groups: BrushGroup[];
@@ -43,6 +45,7 @@
 <div
     class="pack-wheel"
     bind:this={el}
+    style:padding-block="{wheelPad(geometry)}px"
     onscroll={handleScroll}
     onpointerdown={onPointerDown}
 >
@@ -71,12 +74,15 @@
         /* An overscroll fling stops here rather than chaining out to the
          * modal or the page behind it. */
         overscroll-behavior: contain;
-        padding: 0 10px;
+        padding-inline: 10px;
         scrollbar-width: none;
-        /* The wheel's scroll content is exactly its cards, which is what
-         * `wheelContentHeight` models. Anything else in here (spacers, padding
-         * that scrolls) would make the DOM's scroll range disagree with the
-         * mapping's, and the sync would silently stop moving. */
+        /* `measure()` reads each card's `offsetTop` to find the leading pad,
+         * and `offsetTop` is relative to the nearest positioned ancestor. */
+        position: relative;
+        /* The block padding is set inline from `wheelPad`, and every card
+         * position the mapping computes is measured back off the DOM
+         * (`wheelLead`, `wheelScrollMax`) rather than assumed — the two must
+         * agree or the sync silently stops moving. */
     }
     .pack-wheel::-webkit-scrollbar {
         display: none;

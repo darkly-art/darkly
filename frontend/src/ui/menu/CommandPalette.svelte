@@ -1,13 +1,13 @@
 <script lang="ts">
+    import { tick } from 'svelte';
     import { commandPalette } from '../../state/commandPalette.svelte';
     import { actions, actionEnablement, type Action } from '../../actions/registry';
     import { registryEpoch } from '../../actions/registryEpoch.svelte';
     import { hotkeyLabel } from '../../config/store.svelte';
     import { filterPalette } from './paletteFilter';
-    import { backdropDismiss } from '../../lib/backdropDismiss';
     import Icon from '../../icons/Icon.svelte';
+    import Modal from '../Modal.svelte';
 
-    let dialogEl: HTMLDialogElement | undefined = $state();
     let inputEl: HTMLInputElement | undefined = $state();
     let query = $state('');
     let selected = $state(0);
@@ -17,18 +17,15 @@
         return filterPalette(actions.all(), query);
     });
 
-    // Bridge the reactive `open` flag to the <dialog> imperative API, mirroring
-    // Modal.svelte. Resets the query/selection and focuses the input on open.
+    // A palette you have to click into is a palette you can't drive from the
+    // keyboard, so opening it takes focus. The focus waits a tick: `Modal`
+    // promotes the dialog to the top layer from its own effect, and an element
+    // inside a dialog that is still `display: none` cannot take focus.
     $effect(() => {
-        if (!dialogEl) return;
-        if (commandPalette.open && !dialogEl.open) {
-            query = '';
-            selected = 0;
-            dialogEl.showModal();
-            inputEl?.focus();
-        } else if (!commandPalette.open && dialogEl.open) {
-            dialogEl.close();
-        }
+        if (!commandPalette.open) return;
+        query = '';
+        selected = 0;
+        void tick().then(() => inputEl?.focus());
     });
 
     // Keep the highlighted row in range as the result set shrinks.
@@ -79,12 +76,7 @@
     }
 </script>
 
-<dialog
-    bind:this={dialogEl}
-    class="palette"
-    onclose={close}
-    use:backdropDismiss={close}
->
+<Modal bind:open={commandPalette.open} size="md" align="top" bare>
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div class="palette-inner" role="presentation" onkeydown={onKeydown}>
         <input
@@ -120,41 +112,23 @@
             {/if}
         </ul>
     </div>
-</dialog>
+</Modal>
 
 <style>
-    dialog.palette {
-        background: var(--bg);
-        color: var(--text);
-        border: 1px solid var(--bg-hover);
-        border-radius: 8px;
-        padding: 0;
-        width: min(92vw, 560px);
-        max-height: 70vh;
-        overflow: hidden;
-        position: fixed;
-        inset: 0;
-        margin: 10vh auto auto;
-    }
-    dialog.palette[open] {
-        display: flex;
-        flex-direction: column;
-    }
-    dialog.palette::backdrop {
-        background: var(--scrim);
-    }
-
-    .palette-inner {
-        display: flex;
-        flex-direction: column;
-        min-height: 0;
-    }
-
+    /* The dialog chrome — surface, scrim, Escape, backdrop dismissal, key and
+     * wheel containment — is `Modal`'s. What's left here is the palette. */
     .palette-input {
+        /* Pinned while the results scroll under it. The modal body is the
+         * scrollport (the dialog's height is its content's, so there is no
+         * definite height for an inner flex scroller to resolve against), so
+         * the input sticks to it rather than sitting outside it. */
+        position: sticky;
+        top: 0;
+        z-index: 1;
         width: 100%;
         box-sizing: border-box;
         padding: 14px 16px;
-        background: none;
+        background: var(--bg);
         border: none;
         border-bottom: 1px solid var(--bg-hover);
         color: var(--text);
@@ -166,8 +140,6 @@
         list-style: none;
         margin: 0;
         padding: 4px 0;
-        overflow-y: auto;
-        min-height: 0;
     }
 
     .result {

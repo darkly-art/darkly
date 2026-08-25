@@ -261,7 +261,7 @@
     const ANCHORS = [0, 0.5, 1];
 </script>
 
-<Modal bind:open={resizeCanvas.open} title="Canvas Size" size="md">
+<Modal bind:open={resizeCanvas.open} title="Canvas Size" size="lg">
     <div class="body" onkeydown={onKeydown} role="presentation">
         <div class="dim-row">
             <label class="field">

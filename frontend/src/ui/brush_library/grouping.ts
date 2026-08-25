@@ -14,6 +14,18 @@ import type { BrushInfo, BrushPackInfo } from '../../engine/protocol_gen';
 /** Label shown over the brushes no pack holds. */
 export const NO_PACK_LABEL = 'In no pack';
 
+/**
+ * The colours a derived group wears.
+ *
+ * A pack's `primary`/`secondary` are a surface and the text on it, and the
+ * picker paints whole cards and tiles with them — so a group with no pack
+ * behind it needs a real pair, not a blank. Custom-property references rather
+ * than literals, so Recents follows the active theme while an imported pack
+ * keeps the colours it shipped with.
+ */
+export const NEUTRAL_PRIMARY = 'var(--bg-hover)';
+export const NEUTRAL_SECONDARY = 'var(--text-muted)';
+
 export interface BrushGroup {
     /** The pack's id, `''` for the derived "in no pack" section, or
      *  {@link RECENTS_ID}. Use it as a list key, never to decide behaviour. */
@@ -94,8 +106,8 @@ export function groupByPack(
             id: '',
             label: NO_PACK_LABEL,
             icon: noPackIcon,
-            primary: 'transparent',
-            secondary: 'transparent',
+            primary: NEUTRAL_PRIMARY,
+            secondary: NEUTRAL_SECONDARY,
             brushes: loose,
             pack: null,
         });
@@ -135,8 +147,8 @@ export function withRecents(
             id: RECENTS_ID,
             label: RECENTS_LABEL,
             icon,
-            primary: 'transparent',
-            secondary: 'transparent',
+            primary: NEUTRAL_PRIMARY,
+            secondary: NEUTRAL_SECONDARY,
             brushes,
             pack: null,
         },

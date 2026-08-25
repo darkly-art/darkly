@@ -213,7 +213,7 @@
     {/each}
 </svelte:head>
 
-<Modal bind:open title="Fonts" size="lg">
+<Modal bind:open title="Fonts" size="xl">
     <div class="font-browser">
         <div class="fields">
             <input

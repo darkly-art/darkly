@@ -20,6 +20,7 @@
      * mirroring a scrollport into a rune and writing it back is how the
      * oscillation gets a third participant.
      */
+    import { SvelteSet } from 'svelte/reactivity';
     import Modal from '../Modal.svelte';
     import Icon from '../../icons/Icon.svelte';
     import { brushGraph } from '../../state/brush_graph.svelte';
@@ -56,6 +57,18 @@
     let listEl: HTMLElement | undefined = $state();
     let wheelEl: HTMLElement | undefined = $state();
 
+    /** Group ids the user has folded shut. Session state, and deliberately not
+     *  persisted: a pack you closed to get it out of the way of one search is
+     *  not a pack you want closed forever. Collapsing changes the sections'
+     *  heights, which the resize observer picks up, so the wheel re-maps
+     *  itself with no extra plumbing. */
+    let collapsed = $state(new SvelteSet<string>());
+
+    function toggleGroup(id: string) {
+        if (collapsed.has(id)) collapsed.delete(id);
+        else collapsed.add(id);
+    }
+
     const packNames = $derived(packNamesByBrush(brushLibrary.packs));
     const filtered = $derived(brushLibrary.brushes.filter(b => matchesQuery(b, query, packNames)));
 
@@ -76,6 +89,7 @@
      *  from the DOM, which is the correct direction. */
     let geometry = $state<WheelGeometry>({
         cardAdvance: FALLBACK_ADVANCE,
+        wheelLead: 0,
         wheelViewport: 0,
         listViewport: 0,
         listScrollMax: 0,
@@ -129,13 +143,14 @@
 
         const next: WheelGeometry = {
             cardAdvance: cardAdvance > 0 ? cardAdvance : FALLBACK_ADVANCE,
+            wheelLead: cards.length > 0 ? cards[0].offsetTop : 0,
             wheelViewport: wheelEl.clientHeight,
             listViewport: listEl.clientHeight,
             listScrollMax: listEl.scrollHeight - listEl.clientHeight,
             wheelScrollMax: wheelEl.scrollHeight - wheelEl.clientHeight,
             sections,
         };
-        const key = `${next.cardAdvance}|${next.wheelViewport}|${next.listViewport}`
+        const key = `${next.cardAdvance}|${next.wheelLead}|${next.wheelViewport}|${next.listViewport}`
             + `|${next.listScrollMax}|${next.wheelScrollMax}|`
             + sections.map(s => `${s.id}:${s.top}:${s.height}`).join(',');
         if (key !== geometryKey) {
@@ -230,25 +245,34 @@
                     </div>
                 {:else}
                     {#each groups as group (group.id)}
-                        <section class="group">
-                            <div class="group-header">
-                                <span
-                                    class="swatch"
-                                    style:background={group.primary}
-                                    style:border-color={group.secondary}
-                                ></span>
-                                <Icon name={group.icon} class="group-icon" />
-                                <span class="group-label">{group.label}</span>
-                            </div>
-                            <div class="grid">
-                                {#each group.brushes as brush (brush.id)}
-                                    <BrushTile
-                                        {brush}
-                                        active={brush.name === brushGraph.activeBrush}
-                                        onSelect={selectBrush}
-                                    />
-                                {/each}
-                            </div>
+                        {@const shut = collapsed.has(group.id)}
+                        <section
+                            class="group"
+                            class:shut
+                            style:--pack-primary={group.primary}
+                            style:--pack-secondary={group.secondary}
+                        >
+                            <button
+                                type="button"
+                                class="spine"
+                                aria-expanded={!shut}
+                                aria-label={group.label}
+                                title={group.label}
+                                onclick={() => toggleGroup(group.id)}
+                            >
+                                <Icon name={group.icon} class="spine-icon" />
+                            </button>
+                            {#if !shut}
+                                <div class="grid">
+                                    {#each group.brushes as brush (brush.id)}
+                                        <BrushTile
+                                            {brush}
+                                            active={brush.name === brushGraph.activeBrush}
+                                            onSelect={selectBrush}
+                                        />
+                                    {/each}
+                                </div>
+                            {/if}
                         </section>
                     {/each}
                     <!-- Trailing space so the *last* pack's heading can still
@@ -272,7 +296,11 @@
     .explorer {
         display: grid;
         grid-template-columns: 232px minmax(0, 1fr);
-        gap: 8px;
+        /* No gutter between the panes: a card and the spine of the section it
+         * points at are the same colour arriving from the same side, and a gap
+         * would read as two lists rather than one. The wheel's own inline
+         * padding is all the separation there is. */
+        gap: 0;
         height: 100%;
         min-height: 0;
     }
@@ -284,7 +312,9 @@
     }
     .list-header {
         flex: none;
-        padding: 0 4px 10px;
+        /* Matches the list's own padding so the field's edges line up with the
+         * sections below it. */
+        padding: 0 4px 10px 0;
     }
     .search {
         width: 100%;
@@ -313,45 +343,57 @@
         /* Pen and touch pan this, with momentum from the platform. */
         touch-action: pan-y;
         overscroll-behavior: contain;
-        padding: 0 4px;
+        padding: 0 4px 0 0;
         display: flex;
         flex-direction: column;
-        gap: 22px;
+        gap: 12px;
     }
+    /* A pack is named once, on its card in the wheel. Here it is only a
+     * colour, entering at the left edge — where that card is — and washing
+     * right across the brushes it holds. The two panes are one object seen
+     * twice, so the colour has to arrive from the side the card is on rather
+     * than sit in a heading that repeats what the card already says. */
     .group {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
+        /* How far the colour reaches across the grid. Absolute, not a
+         * percentage: the pane's width changes with the dialog and the column
+         * count with it, and a proportional wash would mean the colour reached
+         * a different number of brushes at every size. */
+        --fade-reach: 340px;
+        display: grid;
+        grid-template-columns: 14px minmax(0, 1fr);
+        border-radius: 10px;
+        color: var(--pack-secondary);
+        background: linear-gradient(
+            to right,
+            color-mix(in srgb, var(--pack-primary) 34%, var(--bg)) 0,
+            var(--bg) var(--fade-reach)
+        );
     }
-    .group-header {
+    /* The pack's colour at full strength down the side the wheel is on, which
+     * is what carries a card's colour into the list. Doubles as the fold
+     * control — there is no heading left to put one in, and the spine is the
+     * one part of a section that belongs to the pack rather than to a brush. */
+    .spine {
         display: flex;
-        align-items: center;
-        gap: 7px;
+        justify-content: center;
+        border: none;
+        border-radius: 10px 0 0 10px;
+        background: var(--pack-primary);
+        color: var(--pack-secondary);
+        cursor: pointer;
+        padding: 0;
+    }
+    .group.shut .spine {
+        border-radius: 10px;
+    }
+    /* Rides down the spine with the scroll, so a tall pack is still identified
+     * when its top is far above the viewport. */
+    .spine :global(.spine-icon) {
         position: sticky;
         top: 0;
-        z-index: 1;
-        padding: 6px 0;
-        background: var(--bg);
-    }
-    .swatch {
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        border: 1.5px solid transparent;
-        box-sizing: border-box;
-        flex: none;
-    }
-    .group-header :global(.group-icon) {
-        font-size: 13px;
-        color: var(--text-muted);
-        flex: none;
-    }
-    .group-label {
-        font-size: 11px;
-        font-weight: 600;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
+        font-size: 10px;
+        padding: 9px 0;
+        opacity: 0.75;
     }
     /* `minmax(0, …)` disables the implicit `auto` min-track-size so a wide
      * stroke preview can't push the columns past the pane. */
@@ -359,6 +401,12 @@
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
         gap: 10px;
+        padding: 10px;
+    }
+    /* Shut, a pack is the spine alone — a bar of its colour, tall enough to
+     * stay a target. The wheel says which pack it is. */
+    .group.shut {
+        min-height: 30px;
     }
     /* One viewport of trailing space. `height: 100%` resolves against the
      * scrollport's own definite height, so no measurement is involved. */

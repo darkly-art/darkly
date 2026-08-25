@@ -27,7 +27,7 @@
     }
 </script>
 
-<Modal bind:open title="Add Veil" size="md">
+<Modal bind:open title="Add Veil" size="lg">
     <div class="grid">
         {#each veilTypes as vt (vt.type)}
             <button class="card" title={vt.description ?? undefined} onclick={() => pick(vt)}>

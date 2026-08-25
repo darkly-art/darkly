@@ -66,7 +66,7 @@
     }
 </script>
 
-<Modal bind:open title="Add Void" size="md">
+<Modal bind:open title="Add Void" size="lg">
     <div class="grid">
         {#each voidTypes as vt (vt.type)}
             <button class="card" onclick={() => pick(vt)}>

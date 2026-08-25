@@ -34,6 +34,19 @@ export interface SectionExtent {
 export interface WheelGeometry {
     /** Uniform per-card advance (card height + gap), px. */
     cardAdvance: number;
+    /**
+     * Distance from the top of the wheel's scroll content to the first card's
+     * top, px — the wheel's leading pad.
+     *
+     * The pad is half a viewport minus half a card, which is what lets the
+     * *first* and *last* cards reach the centre. Without it the wheel can only
+     * centre the cards in its middle, and every mapping near an end lands on a
+     * clamp instead: the stack sits against the top of the column, and the
+     * focused card drifts away from the centre exactly when the list is at a
+     * boundary. Measured from the DOM alongside `cardAdvance`, so the mapping
+     * cannot disagree with the layout it describes.
+     */
+    wheelLead: number;
     /** The wheel scrollport's height, px. */
     wheelViewport: number;
     /** The list scrollport's height, px. */
@@ -93,6 +106,20 @@ function listFocus(listScrollTop: number, g: WheelGeometry): number {
     return listScrollTop + g.listViewport / 2;
 }
 
+/** Where card `slot` sits in the wheel's scroll content. Fractional slots are
+ *  meaningful: 1.5 is the boundary between the second and third cards, which is
+ *  what a section's progress maps onto. */
+function cardCentre(slot: number, g: WheelGeometry): number {
+    return g.wheelLead + (slot + 0.5) * g.cardAdvance;
+}
+
+/** The pad the wheel needs above and below its cards for the first and last to
+ *  reach the centre. The component applies it; `wheelLead` is the measurement
+ *  of the result, which is what the mapping reads. */
+export function wheelPad(g: WheelGeometry): number {
+    return Math.max(0, (g.wheelViewport - g.cardAdvance) / 2);
+}
+
 /**
  * List scrollTop → the wheel scrollTop that puts the same section under the
  * wheel's centre.
@@ -103,7 +130,9 @@ function listFocus(listScrollTop: number, g: WheelGeometry): number {
 export function listToWheel(listScrollTop: number, g: WheelGeometry): number {
     const at = sectionAt(listFocus(listScrollTop, g), g.sections);
     if (!at) return 0;
-    const centre = (at.index + at.fraction) * g.cardAdvance;
+    // `index + fraction - 0.5` because `cardCentre` measures to a card's middle
+    // while a section's progress is measured from its leading edge.
+    const centre = cardCentre(at.index + at.fraction - 0.5, g);
     return clamp(centre - g.wheelViewport / 2, 0, wheelMax(g));
 }
 
@@ -115,7 +144,7 @@ export function listToWheel(listScrollTop: number, g: WheelGeometry): number {
  */
 export function wheelToList(wheelScrollTop: number, g: WheelGeometry): number {
     if (g.sections.length === 0) return 0;
-    const centre = wheelScrollTop + g.wheelViewport / 2;
+    const centre = wheelScrollTop + g.wheelViewport / 2 - g.wheelLead;
     const raw = g.cardAdvance > 0 ? centre / g.cardAdvance : 0;
     const index = clamp(Math.floor(raw), 0, g.sections.length - 1);
     const fraction = clamp(raw - index, 0, 1);
@@ -145,16 +174,22 @@ export function focusedSection(listScrollTop: number, g: WheelGeometry): number 
  * Derived arithmetically rather than from a per-card `getBoundingClientRect`,
  * so styling every card costs no layout. `t` is the card centre's signed
  * distance from the scrollport centre, normalized so ±1 is the scrollport edge.
+ *
+ * The card at the centre is the one the list is showing, so it alone is at full
+ * strength; the rest recede. `opacity` is how they recede, and against the
+ * picker's black slab that reads as sinking into the background rather than
+ * merely going faint — which is the point, since a column of saturated pack
+ * colours at equal weight has no focus at all. The falloff is superlinear so
+ * the neighbours stay legible while the far ends genuinely go dark.
  */
 export function cardCurve(
     index: number,
     wheelScrollTop: number,
     g: WheelGeometry,
 ): { t: number; rotateX: number; scale: number; opacity: number } {
-    const cardCentre = (index + 0.5) * g.cardAdvance;
     const portCentre = wheelScrollTop + g.wheelViewport / 2;
     const half = g.wheelViewport / 2;
-    const t = half > 0 ? clamp((cardCentre - portCentre) / half, -1, 1) : 0;
+    const t = half > 0 ? clamp((cardCentre(index, g) - portCentre) / half, -1, 1) : 0;
     const away = Math.abs(t);
     return {
         t,
@@ -162,6 +197,6 @@ export function cardCurve(
         // rolodex reads.
         rotateX: -t * 34,
         scale: 1 - away * 0.16,
-        opacity: 1 - away * 0.45,
+        opacity: 1 - Math.pow(away, 1.5) * 0.82,
     };
 }

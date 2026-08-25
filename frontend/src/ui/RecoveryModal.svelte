@@ -29,7 +29,7 @@
     function onDiscardAll() { void recovery.discardAll(); }
 </script>
 
-<Modal bind:open={recovery.open} title="Recover unsaved work" size="md">
+<Modal bind:open={recovery.open} title="Recover unsaved work" size="lg">
     <p class="message">
         Darkly didn't shut down cleanly. These documents had unsaved changes —
         restore the ones you want to keep.

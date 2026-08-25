@@ -8,6 +8,7 @@ import {
     cardCurve,
     listMax,
     wheelMax,
+    wheelPad,
     type WheelGeometry,
     type SectionExtent,
 } from '../wheel';
@@ -25,6 +26,7 @@ const SECTIONS: SectionExtent[] = [
  *  rather than derived, as the component reads them from the DOM. */
 const G: WheelGeometry = {
     cardAdvance: 60,
+    wheelLead: 0,
     wheelViewport: 120,
     listViewport: 200,
     listScrollMax: 400,
@@ -36,6 +38,10 @@ const G: WheelGeometry = {
 const SHORT: WheelGeometry = { ...G, wheelViewport: 400, wheelScrollMax: 0 };
 
 const EMPTY: WheelGeometry = { ...G, sections: [], listScrollMax: 0, wheelScrollMax: 0 };
+
+/** The same wheel as `G` with its leading pad applied: 30px above and below
+ *  three 60px cards in a 120px port, so the content is 240 and the range 120. */
+const PADDED: WheelGeometry = { ...G, wheelLead: 30, wheelScrollMax: 120 };
 
 describe('sectionAt', () => {
     it('a boundary belongs to the section that starts there', () => {
@@ -130,6 +136,7 @@ describe('wheelToList', () => {
         // Asserting an unqualified round trip would be asserting a falsehood.
         const TALL: WheelGeometry = {
             cardAdvance: 60,
+            wheelLead: 0,
             wheelViewport: 120,
             listViewport: 200,
             listScrollMax: 400,
@@ -197,6 +204,48 @@ describe('focusedSection', () => {
 
     it('is null with no sections', () => {
         expect(focusedSection(0, EMPTY)).toBeNull();
+    });
+});
+
+describe('the leading pad', () => {
+    it('is half a viewport less half a card', () => {
+        expect(wheelPad(G)).toBe(30);
+    });
+
+    it('is zero when a card is as tall as the port, rather than negative', () => {
+        expect(wheelPad({ ...G, cardAdvance: 400 })).toBe(0);
+    });
+
+    it('lets the first and last cards reach the centre', () => {
+        // The end cards are exactly what an unpadded wheel cannot centre: it
+        // runs out of scroll range first and leaves the stack against the top
+        // of the column.
+        expect(cardCurve(0, 0, PADDED).t).toBeCloseTo(0, 5);
+        expect(cardCurve(2, wheelMax(PADDED), PADDED).t).toBeCloseTo(0, 5);
+        expect(cardCurve(0, 0, G).t).not.toBeCloseTo(0, 5);
+    });
+
+    it('gives one card of wheel travel per pack', () => {
+        // What makes the wheel a minimap: a flick moves it pack-by-pack rather
+        // than mirroring the list's own much longer scroll.
+        expect(wheelMax(PADDED) / PADDED.cardAdvance).toBe(PADDED.sections.length - 1);
+    });
+
+    it('shifts the mapping by the pad in both directions', () => {
+        for (let y = 120; y <= 260; y += 5) {
+            expect(wheelToList(listToWheel(y, PADDED), PADDED)).toBeCloseTo(y, 5);
+        }
+    });
+
+    it('centres the focused card wherever the list is, both ends included', () => {
+        // The unclamped-interior caveat the unpadded mapping needs does not
+        // apply here: with the pad there is always range left to travel.
+        for (let y = 0; y <= listMax(PADDED); y += 9) {
+            const focused = focusedSection(y, PADDED)!;
+            const centre = listToWheel(y, PADDED) + PADDED.wheelViewport / 2;
+            const under = Math.floor((centre - PADDED.wheelLead) / PADDED.cardAdvance);
+            expect(under).toBe(focused);
+        }
     });
 });
 

@@ -73,7 +73,7 @@
 
 </script>
 
-<Modal bind:open={settings.open} title="Settings" size="lg">
+<Modal bind:open={settings.open} title="Settings" size="xl">
     <div class="settings-body">
         <header class="topbar">
             <button

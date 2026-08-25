@@ -6,7 +6,11 @@
     type Props = {
         open: boolean;
         title?: string;
-        size?: 'sm' | 'md' | 'lg' | 'full';
+        size?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
+        /** Where the dialog sits in the viewport. `top` is for dialogs the user
+         *  types into blind — a command palette lands under the pointer's
+         *  resting height instead of jumping the eye to the centre. */
+        align?: 'center' | 'top';
         /** Hide the default header row entirely. Caller provides its own chrome. */
         bare?: boolean;
         /** Dim the backdrop (default). `false` keeps the canvas fully visible —
@@ -22,6 +26,7 @@
         open = $bindable(false),
         title = '',
         size = 'md',
+        align = 'center',
         bare = false,
         dimmed = true,
         draggable = false,
@@ -93,7 +98,7 @@
     use:backdropDismiss={onClose}
     onkeydown={onKeydown}
     onwheel={onWheel}
-    class="modal size-{size}"
+    class="modal size-{size} align-{align}"
     class:bare
     class:undimmed={!dimmed}
     style={pos ? `inset: auto; margin: 0; left: ${pos.x}px; top: ${pos.y}px;` : ''}
@@ -182,10 +187,21 @@
     }
 
     dialog.modal.size-sm { width: min(90vw, 420px); }
-    dialog.modal.size-md { width: min(90vw, 720px); }
-    dialog.modal.size-lg { width: min(92vw, 960px); height: min(82vh, 720px); }
+    dialog.modal.size-md { width: min(92vw, 560px); }
+    dialog.modal.size-lg { width: min(90vw, 720px); }
+    /* The one size that also fixes a height: browsing dialogs need a stable
+     * box, not one that resizes as the result set changes. */
+    dialog.modal.size-xl { width: min(92vw, 960px); height: min(82vh, 720px); }
     /* Near-fullscreen, for a view whose whole point is room to browse. */
     dialog.modal.size-full { width: 92vw; height: 88vh; max-height: 88vh; }
+
+    /* Anchored below the top edge rather than centered. The margin replaces
+     * the centering `auto` on the top side only, so it stays horizontally
+     * centered, and the shorter max-height keeps the bottom on screen. */
+    dialog.modal.align-top {
+        margin: 10vh auto auto;
+        max-height: 70vh;
+    }
 
     header {
         --header-pad-y: 14px;
