@@ -1080,6 +1080,24 @@ impl DarklyEngine {
         ))
     }
 
+    /// Mip levels allocated on a void layer's source texture, or `None` when
+    /// the void declares no persistent frame. For test assertions only.
+    ///
+    /// The chain is what minification samples through, but whether it exists
+    /// cannot be asserted from rendered pixels: the software adapter the
+    /// headless tests run on integrates the whole footprint per sample, so a
+    /// minified image reads correctly with or without one. This reads the
+    /// structural fact instead.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_void_source_mip_levels(&self, layer_id: LayerId) -> Option<u32> {
+        Some(
+            self.compositor
+                .pixel_data_for(layer_id)?
+                .texture
+                .mip_level_count(),
+        )
+    }
+
     /// Blocking readback of the root composited canvas. For test assertions
     /// only. Returns canvas-sized RGBA8 pixels (padding excluded). Forces an
     /// offscreen composite first because headless `render()` skips the

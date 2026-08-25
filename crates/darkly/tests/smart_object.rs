@@ -208,24 +208,41 @@ fn rescale_round_trip_is_bit_identical() {
     );
 }
 
-/// Minifying one-pixel stripes must average them, not point-sample one of
-/// them. Fails against a source allocated without a mip chain.
+/// 64 → 8 px, placed at (40, 40): each output pixel covers 8 source columns of
+/// [`stripe_source`], i.e. four red and four blue.
+fn stripe_minify() -> Transform {
+    Transform::from_affine([0.125, 0.0, 40.0, 0.0, 0.125, 40.0])
+}
+
+/// Minifying one-pixel stripes must read as their average, not as one of them.
+///
+/// This pins the user-visible property — a shrunk image resolves rather than
+/// shimmering — but not the mechanism: the headless adapter integrates the
+/// whole footprint per sample, so it satisfies this with or without a mip
+/// chain. `smart_object_source_carries_a_mip_chain` is what pins the chain, and
+/// `gpu::rescale`'s own unit tests pin what each level contains.
 #[test]
 fn minified_stripes_average_instead_of_aliasing() {
     let mut engine = test_engine(128, 128);
     let id = place(&mut engine, stripe_source());
 
-    // 64 → 8 px: each output pixel covers 8 source columns, i.e. four red and
-    // four blue.
-    engine.update_void_transform(
-        id,
-        Transform::from_affine([0.125, 0.0, 40.0, 0.0, 0.125, 40.0]),
-    );
-    let canvas = engine.test_readback_canvas();
+    engine.update_void_transform(id, stripe_minify());
+    assert_stripes_averaged(&engine.test_readback_canvas());
+}
 
+/// The stripe fixture, minified 8× by [`stripe_minify`], must read as the
+/// average of its columns across the whole footprint. Shared by the tests that
+/// assert it directly and by the reload test, so the expected value and the
+/// tolerance live in one place.
+///
+/// Area-averaging is the only thing that satisfies both halves: a point or
+/// single-tap bilinear sampler returns near-pure red or blue depending on
+/// sub-texel phase, missing the expected value, and adjacent output pixels
+/// disagree by ~200 instead of agreeing.
+fn assert_stripes_averaged(canvas: &[u8]) {
     // Sample across the interior of the shrunk image, avoiding its border.
     let row = 44u32;
-    let samples: Vec<[u8; 4]> = (42..46).map(|x| px(&canvas, 128, x, row)).collect();
+    let samples: Vec<[u8; 4]> = (42..46).map(|x| px(canvas, 128, x, row)).collect();
 
     for s in &samples {
         assert!(
@@ -398,6 +415,117 @@ fn transform_round_trips_through_save_and_load() {
         reloaded.test_readback_void_frame(new_id).expect("source"),
         source_before,
         "the source pixels round-trip byte for byte",
+    );
+}
+
+/// The transform and the source bytes surviving a reload does not by itself
+/// prove the reloaded document *looks* the same: the compositor rebuilds the
+/// content rect, the sampling uniform and the mip chain from scratch on load,
+/// and a smart object is normally viewed minified, where the chain is what the
+/// hardware actually samples. Assert the rendered canvas instead.
+#[test]
+fn a_reloaded_smart_object_renders_identically() {
+    let mut engine = test_engine(128, 128);
+    let id = place(&mut engine, stripe_source());
+    engine.update_void_transform(id, stripe_minify());
+    let before = engine.test_readback_canvas();
+
+    let zip = save_to_zip(&mut engine);
+    let mut reloaded = test_engine(128, 128);
+    reloaded.open_document(&zip).expect("the document reopens");
+    let after = reloaded.test_readback_canvas();
+
+    assert_eq!(
+        after, before,
+        "a reloaded smart object must render pixel for pixel what it rendered \
+         before the save — same source, same transform, same filtering",
+    );
+    // Equality alone would also be satisfied by both renders being wrong in the
+    // same way, so assert the reloaded canvas is right on its own terms: the
+    // mip chain a minified source samples through is rebuilt on load, not
+    // saved, and this is the assertion only a real chain satisfies.
+    assert_stripes_averaged(&after);
+}
+
+/// A placed source is allocated with a full mip chain, and the chain is rebuilt
+/// on load rather than saved — the blob holds level 0 only. Asserted
+/// structurally because no rendered-pixel assertion can see it here (the
+/// headless adapter filters a full footprint per sample either way), and
+/// because the chain is the whole minification-quality work item: without this
+/// the void could quietly stop asking for one and every test would stay green.
+#[test]
+fn smart_object_source_carries_a_mip_chain() {
+    // 64 = 2⁶, so the chain runs 64, 32, 16, 8, 4, 2, 1.
+    const LEVELS: u32 = 7;
+
+    let mut engine = test_engine(128, 128);
+    let id = place(&mut engine, stripe_source());
+    assert_eq!(
+        engine.test_void_source_mip_levels(id),
+        Some(LEVELS),
+        "a freshly placed 64×64 source is allocated with its full chain",
+    );
+
+    let zip = save_to_zip(&mut engine);
+    let mut reloaded = test_engine(128, 128);
+    reloaded.open_document(&zip).expect("the document reopens");
+    let new_id = void_layer_ids(&reloaded)[0];
+
+    assert_eq!(
+        reloaded.test_void_source_mip_levels(new_id),
+        Some(LEVELS),
+        "load must reinstall the source through the same path placement uses, \
+         chain included — the saved blob is level 0 only",
+    );
+}
+
+/// Each smart object owns its own pixel blob. Two placements in one document
+/// must not converge on one key, which would reload both layers showing
+/// whichever image was written last.
+#[test]
+fn two_smart_objects_keep_their_own_sources() {
+    let mut engine = test_engine(128, 128);
+    place(&mut engine, red_blue_source());
+    place(&mut engine, opaque_source(32, 32));
+
+    let zip = save_to_zip(&mut engine);
+    let mut reloaded = test_engine(128, 128);
+    reloaded.open_document(&zip).expect("the document reopens");
+
+    let sources: Vec<Vec<u8>> = void_layer_ids(&reloaded)
+        .into_iter()
+        .map(|id| {
+            reloaded
+                .test_readback_void_frame(id)
+                .expect("each reloaded smart object owns a source")
+        })
+        .collect();
+    assert_eq!(
+        sources.len(),
+        2,
+        "both smart objects survive the round trip"
+    );
+
+    let big = sources
+        .iter()
+        .find(|s| s.len() == 64 * 64 * 4)
+        .expect("the 64×64 source keeps its own dimensions");
+    let small = sources
+        .iter()
+        .find(|s| s.len() == 32 * 32 * 4)
+        .expect("the 32×32 source keeps its own dimensions");
+    assert_eq!(
+        px(big, 64, 48, 32),
+        [0, 0, 255, 255],
+        "the 64×64 source is still the red/blue split, blue on its right half",
+    );
+    assert!(
+        small
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [255, 0, 0, 255]),
+        "the 32×32 source is still uniformly red",
     );
 }
 
