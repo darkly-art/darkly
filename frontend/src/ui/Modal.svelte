@@ -126,7 +126,10 @@
      * `display: none` for closed dialogs, leaving the modal visible
      * permanently. */
     dialog.modal {
-        background: var(--bg-active);
+        /* The base surface, not a raised one: a dialog is the darkest thing on
+         * screen and the scrim behind it lifts, rather than the other way
+         * around. `--scrim` carries that inversion per theme. */
+        background: var(--bg);
         color: var(--text);
         border: 1px solid var(--bg-hover);
         border-radius: 8px;
@@ -146,7 +149,7 @@
     }
 
     dialog.modal::backdrop {
-        background: rgba(0, 0, 0, 0.65);
+        background: var(--scrim);
     }
 
     /* Non-dimming: the canvas stays fully visible (for live-preview panels).

@@ -124,7 +124,7 @@
 
 <style>
     dialog.palette {
-        background: var(--bg-active);
+        background: var(--bg);
         color: var(--text);
         border: 1px solid var(--bg-hover);
         border-radius: 8px;
@@ -141,7 +141,7 @@
         flex-direction: column;
     }
     dialog.palette::backdrop {
-        background: rgba(0, 0, 0, 0.55);
+        background: var(--scrim);
     }
 
     .palette-inner {
