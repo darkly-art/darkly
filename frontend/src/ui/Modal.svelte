@@ -6,7 +6,7 @@
     type Props = {
         open: boolean;
         title?: string;
-        size?: 'sm' | 'md' | 'lg';
+        size?: 'sm' | 'md' | 'lg' | 'full';
         /** Hide the default header row entirely. Caller provides its own chrome. */
         bare?: boolean;
         /** Dim the backdrop (default). `false` keeps the canvas fully visible —
@@ -181,6 +181,8 @@
     dialog.modal.size-sm { width: min(90vw, 420px); }
     dialog.modal.size-md { width: min(90vw, 720px); }
     dialog.modal.size-lg { width: min(92vw, 960px); height: min(82vh, 720px); }
+    /* Near-fullscreen, for a view whose whole point is room to browse. */
+    dialog.modal.size-full { width: 92vw; height: 88vh; max-height: 88vh; }
 
     header {
         --header-pad-y: 14px;

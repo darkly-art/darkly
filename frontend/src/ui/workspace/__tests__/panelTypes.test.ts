@@ -18,7 +18,6 @@ const PANELS: { type: PanelType; movable: boolean }[] = [
     { type: 'document', movable: false },
     { type: 'layers', movable: true },
     { type: 'properties', movable: true },
-    { type: 'brushes', movable: true },
 ];
 
 for (const { type, movable } of PANELS) {
@@ -36,7 +35,7 @@ describe('the anchor rule agrees with the panel registry', () => {
 
     it('a group is an anchor if any of its tabs is', () => {
         expect(isAnchorGroup(['layers', 'document'])).toBe(true);
-        expect(isAnchorGroup(['layers', 'brushes'])).toBe(false);
+        expect(isAnchorGroup(['layers', 'properties'])).toBe(false);
         expect(isAnchorGroup([])).toBe(false);
     });
 });

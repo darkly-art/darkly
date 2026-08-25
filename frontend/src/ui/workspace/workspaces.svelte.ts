@@ -31,10 +31,8 @@ import {
     prune,
     cloneSubdivision,
     collectPanelTypes,
-    groupHolding,
     isEmptyLayout,
     foldPanelsIntoMain,
-    firstDockableGroupId,
     loadOrDefault,
     resolveSplitByPath,
 } from './tree';
@@ -178,52 +176,6 @@ class WorkspaceStore {
                 if (idx !== -1) group.state.activeTabIndex = idx;
             }
         });
-    }
-
-    // ---- panel visibility --------------------------------------------------
-
-    /** Whether `type` is docked in any open workspace, including pop-outs. */
-    hasPanel(type: PanelType): boolean {
-        return this.workspaces.some((w) => collectPanelTypes(w.layout.root).includes(type));
-    }
-
-    /**
-     * Make `type` visible and focused.
-     *
-     * Activates it wherever it is already docked — including in a pop-out
-     * window, which is raised rather than duplicated — and otherwise inserts it
-     * into the main window's first *dockable* group. Idempotent: calling it on
-     * an already-active panel focuses its window and changes nothing else,
-     * which is what makes it safe to wire to a toolbar button that a painter
-     * may press at any time.
-     */
-    revealPanel(type: PanelType): void {
-        for (const w of this.workspaces) {
-            const group = groupHolding(w.layout.root, type);
-            if (!group) continue;
-            this.setActiveTab(w.id, group.id, type);
-            try {
-                this.#windows.get(w.id)?.focus();
-            } catch {
-                // A pop-out that has gone away; the layout still holds it and
-                // the next fold will recover it.
-            }
-            return;
-        }
-        this.#mutate(MAIN_ID, (root) => {
-            const target = firstDockableGroupId(root);
-            if (target !== null) insertTab(root, target, type);
-        });
-    }
-
-    /** Remove `type` from wherever it is docked. A no-op if it is not. */
-    hidePanel(type: PanelType): void {
-        for (const w of this.workspaces) {
-            const group = groupHolding(w.layout.root, type);
-            if (!group) continue;
-            this.#mutate(w.id, (root) => removeTab(root, group.id, type));
-            return;
-        }
     }
 
     // ---- drag coordinator --------------------------------------------------

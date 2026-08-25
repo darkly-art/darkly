@@ -4,7 +4,10 @@ import {
     groupByPack,
     matchesQuery,
     packNamesByBrush,
+    withRecents,
     NO_PACK_LABEL,
+    RECENTS_ID,
+    RECENTS_LABEL,
 } from '../grouping';
 
 function brush(id: string, name = id, tags: string[] = []): BrushInfo {
@@ -176,5 +179,52 @@ describe('packNamesByBrush', () => {
         expect(map.get('ink_pen')).toEqual(['Basic', 'Favorites']);
         expect(map.get('charcoal')).toEqual(['Favorites']);
         expect(map.get('nope')).toBeUndefined();
+    });
+});
+
+describe('withRecents', () => {
+    const visible = [brush('a', 'Alpha'), brush('b', 'Beta'), brush('c', 'Gamma')];
+    const base = groupByPack(visible, [pack('p', 'Pack', ['a', 'b', 'c'])], i => i, 'x');
+
+    it('prepends at most `limit`, newest first', () => {
+        const out = withRecents(base, ['c', 'b', 'a'], visible, 2, 'star');
+        expect(out[0].id).toBe(RECENTS_ID);
+        expect(out[0].label).toBe(RECENTS_LABEL);
+        expect(out[0].brushes.map(b => b.id)).toEqual(['c', 'b']);
+    });
+
+    it('skips ids that no longer resolve rather than placeholding them', () => {
+        // A deleted brush, or one the current search excludes.
+        const out = withRecents(base, ['gone', 'a'], visible, 5, 'star');
+        expect(out[0].brushes.map(b => b.id)).toEqual(['a']);
+    });
+
+    it('yields no group at all when nothing resolves', () => {
+        expect(withRecents(base, ['gone'], visible, 5, 'star')).toEqual(base);
+        expect(withRecents(base, [], visible, 5, 'star')).toEqual(base);
+    });
+
+    it('leaves the same brushes in their packs too', () => {
+        const out = withRecents(base, ['a'], visible, 5, 'star');
+        expect(out[0].brushes.map(b => b.id)).toEqual(['a']);
+        expect(out[1].brushes.map(b => b.id)).toEqual(['a', 'b', 'c']);
+    });
+
+    it('carries no pack, so nothing about it is editable', () => {
+        const out = withRecents(base, ['a'], visible, 5, 'star');
+        expect(out[0].pack).toBeNull();
+    });
+});
+
+describe('BrushGroup.pack', () => {
+    it('is the pack for a real group and null for a derived one', () => {
+        const p = pack('p', 'Pack', ['a']);
+        const groups = groupByPack([brush('a'), brush('loose')], [p], i => i, 'x');
+        expect(groups[0].pack).toBe(p);
+        // The "in no pack" section is computed, not stored: it has no pack to
+        // ask about permissions, which is what stops a consumer from having to
+        // recognise its sentinel id.
+        expect(groups[1].label).toBe(NO_PACK_LABEL);
+        expect(groups[1].pack).toBeNull();
     });
 });

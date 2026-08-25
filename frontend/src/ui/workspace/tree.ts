@@ -21,7 +21,7 @@
  *  Graphite), so the whole window tiles and horizontal splitting (canvas |
  *  panels) is meaningful. It is a non-closable, non-poppable singleton kept
  *  present by {@link ensureDocument}. */
-export type PanelType = 'document' | 'layers' | 'properties' | 'brushes';
+export type PanelType = 'document' | 'layers' | 'properties';
 
 export interface PanelGroupState {
     tabs: PanelType[];
@@ -88,7 +88,7 @@ export function defaultMainLayout(docId: number, layersId: number, propsId: numb
                     subdivision: {
                         kind: 'split',
                         children: [
-                            { size: 0.6, subdivision: makeGroup(layersId, ['layers', 'brushes']) },
+                            { size: 0.6, subdivision: makeGroup(layersId, ['layers']) },
                             { size: 0.4, subdivision: makeGroup(propsId, ['properties']) },
                         ],
                     },
@@ -459,7 +459,7 @@ export function renumber(node: Subdivision, start = 0): number {
     return next;
 }
 
-const KNOWN_PANEL_TYPES: readonly PanelType[] = ['document', 'layers', 'properties', 'brushes'];
+const KNOWN_PANEL_TYPES: readonly PanelType[] = ['document', 'layers', 'properties'];
 
 function stripUnknownTabs(node: Subdivision): void {
     if (node.kind === 'group') {

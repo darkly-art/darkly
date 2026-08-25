@@ -23,7 +23,7 @@ import {
 
 /** What `defaultMainLayout` ships, sorted. One constant so adding a default
  *  panel is one edit here rather than five. */
-const DEFAULT_PANELS: PanelType[] = ['brushes', 'document', 'layers', 'properties'];
+const DEFAULT_PANELS: PanelType[] = ['document', 'layers', 'properties'];
 
 // --- builders --------------------------------------------------------------
 
@@ -325,14 +325,15 @@ describe('firstDockableGroupId', () => {
         expect(firstDockableGroupId(root)).toBeNull();
     });
 
-    it('a revealed panel lands beside Layers, not in the canvas', () => {
+    it('a panel folded in from a closed pop-out lands beside Layers', () => {
+        // The bug this exists for: `firstGroupId` returns the canvas group, and
+        // a tab docked there renders with no tab bar and replaces the canvas.
         const { root } = loadOrDefault(null);
         const target = firstDockableGroupId(root)!;
-        insertTab(root, target, 'brushes');
+        insertTab(root, target, 'properties');
 
-        const canvas = collectPanelTypes(root).indexOf('document');
-        expect(canvas).toBe(0);
-        expect(findGroup(root, target)!.state.tabs).toContain('brushes');
+        expect(collectPanelTypes(root).indexOf('document')).toBe(0);
         expect(findGroup(root, target)!.state.tabs).toContain('layers');
+        expect(findGroup(root, target)!.state.tabs).not.toContain('document');
     });
 });

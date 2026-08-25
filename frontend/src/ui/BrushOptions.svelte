@@ -9,7 +9,11 @@
     import ToolBarLayout from './ToolBarLayout.svelte';
     import Icon from '../icons/Icon.svelte';
     import { tooltipForAction } from '../config/store.svelte';
-    import { workspaces } from './workspace/workspaces.svelte';
+    import BrushExplorer from './brush_explorer/BrushExplorer.svelte';
+
+    /** The explorer's open flag. Local: the trigger owns the dialog, and
+     *  picking a brush closes it, so nothing else needs to reach it. */
+    let explorerOpen = $state(false);
 
     function ensureInit() {
         if (!brushGraph.graph && app.engine) brushGraph.init();
@@ -79,15 +83,14 @@
 <ToolBarLayout>
     {#snippet center()}
         <!-- The leading control in the same wrapping row as the scrubs: a
-             black rounded button that wraps alongside them. It reveals the
-             docked brush explorer rather than opening a dropdown, which is
-             also the reason an upgrading painter whose stored layout predates
-             the panel can still reach their brushes. -->
+             black rounded button that wraps alongside them. It opens the brush
+             explorer, which takes the screen and closes again as soon as a
+             brush is picked. -->
         <div class="brush-picker-section">
             <button
                 class="brush-picker-button bar-control"
-                onclick={() => { ensureInit(); workspaces.revealPanel('brushes'); }}
-                title="Show the brush explorer"
+                onclick={() => { ensureInit(); explorerOpen = true; }}
+                title="Browse brushes"
             >
                 <!-- Live preview of the active graph — same component the
                      picker's tiles use, so preset and custom states render
@@ -102,6 +105,8 @@
                 </span>
             </button>
         </div>
+
+        <BrushExplorer bind:open={explorerOpen} />
 
         {#each brushGraph.exposedPorts as port}
             {#if port.data.kind === 'scalar'}

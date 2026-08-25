@@ -15,14 +15,35 @@ import type { BrushInfo, BrushPackInfo } from '../../engine/protocol_gen';
 export const NO_PACK_LABEL = 'In no pack';
 
 export interface BrushGroup {
-    /** The pack's id, or `''` for the derived "in no pack" section. */
+    /** The pack's id, `''` for the derived "in no pack" section, or
+     *  {@link RECENTS_ID}. Use it as a list key, never to decide behaviour. */
     id: string;
     label: string;
     icon: string;
     primary: string;
     secondary: string;
     brushes: BrushInfo[];
+    /**
+     * The pack behind this group, or `null` for a derived one (Recents, "in no
+     * pack").
+     *
+     * Carried here so a consumer never has to look a pack up by group id and
+     * branch on whether it found one — that is the consumer-side classification
+     * the Modularity Principle bans, and it is what the permission booleans on
+     * `BrushPackInfo` exist to make unnecessary. A card reads
+     * `group.pack?.can_edit_members` and never sees an id.
+     */
+    pack: BrushPackInfo | null;
 }
+
+/** Id of the pinned Recents group.
+ *
+ *  Recents is **not** a pack: `recents.svelte.ts` is frontend-only and never
+ *  crosses the wasm boundary, while packs are engine-owned and persisted. It is
+ *  synthesized here so the list and the wheel can treat it like any other
+ *  group, with `pack: null` marking that nothing may be edited about it. */
+export const RECENTS_ID = 'recents';
+export const RECENTS_LABEL = 'Recent';
 
 /**
  * Group `filtered` by pack, in the packs' own order, then append the brushes
@@ -61,6 +82,7 @@ export function groupByPack(
             primary: pack.primary,
             secondary: pack.secondary,
             brushes,
+            pack,
         });
     }
 
@@ -75,9 +97,51 @@ export function groupByPack(
             primary: 'transparent',
             secondary: 'transparent',
             brushes: loose,
+            pack: null,
         });
     }
     return out;
+}
+
+/**
+ * Prepend a Recents group of at most `limit` brushes, newest first.
+ *
+ * `recentIds` is newest-first and id-keyed. Ids that no longer resolve — a
+ * deleted brush, or one the current search excludes — are skipped rather than
+ * placeheld, and nothing resolving yields no group at all, the same rule
+ * `groupByPack` applies to an empty pack. That is what keeps an empty Recents
+ * from rendering as a broken heading on a first run.
+ *
+ * A brush here also appears under its packs, which is a third source of the
+ * duplicate-cell hazard this module's header warns about.
+ */
+export function withRecents(
+    groups: BrushGroup[],
+    recentIds: string[],
+    visible: BrushInfo[],
+    limit: number,
+    icon: string,
+): BrushGroup[] {
+    const byId = new Map(visible.map(b => [b.id, b]));
+    const brushes: BrushInfo[] = [];
+    for (const id of recentIds) {
+        if (brushes.length >= limit) break;
+        const brush = byId.get(id);
+        if (brush) brushes.push(brush);
+    }
+    if (brushes.length === 0) return groups;
+    return [
+        {
+            id: RECENTS_ID,
+            label: RECENTS_LABEL,
+            icon,
+            primary: 'transparent',
+            secondary: 'transparent',
+            brushes,
+            pack: null,
+        },
+        ...groups,
+    ];
 }
 
 /** Every brush id mapped to the names of the packs holding it. Membership
