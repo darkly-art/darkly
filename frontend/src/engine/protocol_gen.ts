@@ -180,11 +180,17 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
 
-export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
-
-export type PortDir = "Input" | "Output";
-
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+export type PreviewStaging = { 
+/**
+ * Iconify glyph shown in the dab slot, where a single stationary sample
+ * has no motion to make the effect visible at all.
+ */
+icon: string, 
+/**
+ * Field painted under the stroke preview, giving the node something to
+ * transport.
+ */
+backdrop: PreviewBackdrop, };
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -378,17 +384,11 @@ preview_image: boolean,
  */
 source: boolean, };
 
-export type PreviewStaging = { 
-/**
- * Iconify glyph shown in the dab slot, where a single stationary sample
- * has no motion to make the effect visible at all.
- */
-icon: string, 
-/**
- * Field painted under the stroke preview, giving the node something to
- * transport.
- */
-backdrop: PreviewBackdrop, };
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+
+export type PortDir = "Input" | "Output";
 
 export type NodeRegistration = { 
 /**
@@ -465,6 +465,35 @@ export type CanvasDimensionsResp = { width: number, height: number, };
 
 export type CanvasRectResp = { origin_x: number, origin_y: number, width: number, height: number, };
 
+export type ParamInfo = { kind: string, name: string, 
+/**
+ * Display label. `None` → the UI title-cases `name`.
+ */
+label: string | null, description: string | null, 
+/**
+ * How to render this parameter's editor. One closed set, which both
+ * `ParamKind` and the settings schema's `WidgetHint` map into:
+ * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
+ */
+widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
+/**
+ * Enum: `["Label1", "Label2", ...]`.
+ * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
+ */
+options: JsonValue | null, display: ParamDisplay, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
+export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
+/**
+ * The unit suffix alone, for a column header. Empty for unitless values.
+ */
+unit: string, };
+
+export type CaptureKind = "camera" | "display" | "stream";
+
+export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
+
 export type CatalogEntry = { type: string, displayName: string, 
 /**
  * Iconify name, or `None` when the variant deliberately declares no icon
@@ -495,36 +524,11 @@ hotkeyAction: string | null, params: Array<ParamInfo>,
  */
 supportsPreview: boolean, 
 /**
- * How the browser captures this variant's external frames; voids only.
+ * Where this variant's pixels come from; voids only. `None` for every
+ * other registry, whose entries are effects over an existing image rather
+ * than sources of one.
  */
-captureKind: CaptureKind | null, };
-
-export type CaptureKind = "camera" | "display" | "stream";
-
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
-export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
-/**
- * The unit suffix alone, for a column header. Empty for unitless values.
- */
-unit: string, };
-
-export type ParamInfo = { kind: string, name: string, 
-/**
- * Display label. `None` → the UI title-cases `name`.
- */
-label: string | null, description: string | null, 
-/**
- * How to render this parameter's editor. One closed set, which both
- * `ParamKind` and the settings schema's `WidgetHint` map into:
- * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
- */
-widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
-/**
- * Enum: `["Label1", "Label2", ...]`.
- * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
- */
-options: JsonValue | null, display: ParamDisplay, };
+source: VoidSource | null, };
 
 export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
 /**
@@ -673,6 +677,8 @@ export type PasteInPlaceFloatingReq = { id: number, };
 export type PasteLayerRichReq = { json: string, active_layer_id: number, };
 
 export type PickColorReq = { x: number, y: number, id: number, };
+
+export type PlaceSmartObjectReq = { width: number, height: number, active_layer_id: number, };
 
 export type PreviewReq = { catalog: string, type: string, variant: PreviewVariant, };
 
@@ -934,6 +940,7 @@ export type RequestKind =
     | 'paste_in_place_floating'
     | 'paste_layer_rich'
     | 'pick_color'
+    | 'place_smart_object'
     | 'poll_copy_result'
     | 'poll_copy_rich_result'
     | 'poll_export_result'
@@ -1124,6 +1131,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'paste_in_place_floating',
     'paste_layer_rich',
     'pick_color',
+    'place_smart_object',
     'poll_copy_result',
     'poll_copy_rich_result',
     'poll_export_result',
@@ -1322,6 +1330,7 @@ export interface EngineApi {
     pasteInPlaceFloating(req: PasteInPlaceFloatingReq): Promise<boolean>;
     pasteLayerRich(req: PasteLayerRichReq): Promise<PasteResultResp>;
     pickColor(req: PickColorReq): void;
+    placeSmartObject(req: PlaceSmartObjectReq, bytes: Uint8Array): Promise<{ id: number }>;
     pollCopyResult(): Promise<ClipboardExport | null>;
     pollCopyRichResult(): Promise<string | null>;
     pollExportResult(): Promise<{ width: number, height: number, bytes: Uint8Array } | null>;
@@ -1514,6 +1523,7 @@ export function makeApi(t: Transport): EngineApi {
         pasteInPlaceFloating: (req) => t.request('paste_in_place_floating', req),
         pasteLayerRich: (req) => t.request('paste_layer_rich', req),
         pickColor: (req) => t.postFF('pick_color', req),
+        placeSmartObject: (req, bytes) => t.request('place_smart_object', req, bytes),
         pollCopyResult: () => t.request('poll_copy_result'),
         pollCopyRichResult: () => t.request('poll_copy_rich_result'),
         pollExportResult: () => t.request('poll_export_result'),

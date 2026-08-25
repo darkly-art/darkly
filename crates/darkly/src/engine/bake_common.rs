@@ -12,7 +12,7 @@
 //! can't forget and produce thumbnail-less layers.
 
 use super::DarklyEngine;
-use crate::layer::{Layer, LayerId, LayerNode};
+use crate::layer::{LayerId, LayerNode};
 
 impl DarklyEngine {
     /// Every pixel-bearing node id under `root` — raster layers, mask
@@ -33,26 +33,16 @@ impl DarklyEngine {
             return;
         };
         match node {
-            LayerNode::Layer(Layer::Raster(_)) => {
-                out.push(id);
-                let mods = node.filters().to_vec();
-                for m_id in mods {
-                    if let Some(m) = self.doc.find_filter(m_id) {
-                        if m.pixels().is_some() {
-                            out.push(m_id);
-                        }
-                    }
+            LayerNode::Layer(layer) => {
+                // The layer answers for itself whether its texture is
+                // irreplaceable. A derived one — a procedural void's render, a
+                // vector layer's rasterization — is cheaper to rebuild than to
+                // retain; a void holding an externally-sourced image is not.
+                if layer.owns_disposable_texture() {
+                    out.push(id);
                 }
-            }
-            LayerNode::Layer(Layer::Void(_))
-            | LayerNode::Layer(Layer::Filter(_))
-            | LayerNode::Layer(Layer::Vector(_)) => {
-                // Voids, filter, and vector layers hold no pixel data of their
-                // own — a void's texture is GPU-regenerable from params, a
-                // filter transforms the accumulator, a vector layer's texture
-                // is realized from its objects — so bake collection skips the
-                // node itself. Attached filter pixels (e.g. a mask attached to
-                // the node) still need to participate.
+                // Attached filter pixels (a mask on the node) participate
+                // either way.
                 let mods = node.filters().to_vec();
                 for m_id in mods {
                     if let Some(m) = self.doc.find_filter(m_id) {

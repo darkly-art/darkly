@@ -32,6 +32,12 @@ const ACTIONS: &[ActionDef] = &[
         icon: "fa6-solid:paste",
     },
     ActionDef {
+        id: "pasteAsSmartObject",
+        display_name: "Paste as Smart Object",
+        description: "Paste the clipboard image as a smart object — a layer you can resize freely without losing quality, because the original is kept and re-sampled rather than overwritten.",
+        icon: "tabler:photo-scan",
+    },
+    ActionDef {
         id: "pasteInPlace",
         display_name: "Paste in Place",
         description: "Paste from the clipboard at its original position.",

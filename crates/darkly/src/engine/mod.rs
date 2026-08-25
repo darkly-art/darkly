@@ -1035,11 +1035,15 @@ impl DarklyEngine {
             .canvas_extent()
     }
 
-    /// Plant a persistent void frame (camera void's last webcam frame) into
-    /// the void's aux texture — the same entry point the load path uses via
-    /// `restore_void_pixels`. For test assertions only: on native there is no
-    /// webcam, so this is the only way to give a camera void a frame to read
-    /// back.
+    /// Plant a persistent void frame (a camera void's last webcam frame) into
+    /// the void's source texture. For test assertions only: on native there is
+    /// no webcam, so this is the only way to give a capture void a frame.
+    ///
+    /// Mirrors the production upload path exactly — install the pixels, then
+    /// sync the document's `VoidLayer::frame`. Skipping the second half would
+    /// leave the GPU holding an image the document doesn't know about, and
+    /// every consumer that asks the document whether a void owns pixels
+    /// (save, duplicate, texture disposal) would answer wrongly.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_plant_void_frame(
         &mut self,
@@ -1048,7 +1052,7 @@ impl DarklyEngine {
         height: u32,
         bytes: &[u8],
     ) {
-        self.compositor.restore_void_pixels(
+        self.compositor.set_void_source_pixels(
             &self.gpu.device,
             &self.gpu.queue,
             layer_id,
@@ -1056,6 +1060,7 @@ impl DarklyEngine {
             height,
             bytes,
         );
+        self.sync_void_persistent_frame(layer_id);
     }
 
     /// Blocking readback of a void layer's persistent frame through the exact
@@ -1066,13 +1071,12 @@ impl DarklyEngine {
     #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_void_frame(&self, layer_id: LayerId) -> Option<Vec<u8>> {
         let data = self.compositor.pixel_data_for(layer_id)?;
-        Some(crate::gpu::test_utils::readback_texture(
+        Some(crate::gpu::test_utils::readback_texture_rect(
             &self.gpu.device,
             &self.gpu.queue,
             data.texture,
             data.format,
-            data.width,
-            data.height,
+            data.rect(),
         ))
     }
 

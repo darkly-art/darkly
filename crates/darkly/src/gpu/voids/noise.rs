@@ -14,7 +14,7 @@ use crate::gpu::effect::{
 };
 use crate::gpu::hash::pcg_hash;
 use crate::gpu::preview::{swing, PreviewAnim};
-use crate::gpu::void::{DirtyFlag, ParamDef, ParamValue, Void, VoidRegistration};
+use crate::gpu::void::{DirtyFlag, ParamDef, ParamValue, Void, VoidRegistration, VoidSource};
 use crate::units::UnitType;
 use std::sync::Arc;
 
@@ -94,7 +94,7 @@ pub fn register() -> VoidRegistration {
         preview: Some(PreviewAnim::LOOPING),
         supports_live_transform: true,
         // Purely procedural — no external capture, identity seed transform.
-        capture_kind: None,
+        source: VoidSource::Procedural,
         default_transform: |_, _| crate::transform::Transform::identity(),
         create_pipeline,
         from_params: |params, shared| Box::new(Noise::from_params(params, shared)),

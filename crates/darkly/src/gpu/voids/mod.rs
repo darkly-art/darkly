@@ -6,6 +6,7 @@ pub mod blender;
 pub mod camera;
 pub mod noise;
 pub mod screenshare;
+pub mod smart_object;
 
 use crate::gpu::void::VoidRegistration;
 
@@ -16,5 +17,6 @@ pub fn registrations() -> Vec<VoidRegistration> {
         camera::register(),
         noise::register(),
         screenshare::register(),
+        smart_object::register(),
     ]
 }

@@ -333,14 +333,15 @@
 
     // Single-file drop. Routes by content: `.darkly` opens as a new
     // tab (mirrors the Open action), image pastes as a layer in the
-    // current tab (the gesture says "I want this here"). Multi-file
+    // current tab (the gesture says "I want this here"), and Alt+drop
+    // places the image as a smart object instead. Multi-file
     // is intentionally not supported in v1 — too many ambiguous
     // semantics (open all? merge into one doc? layer-import all?).
     function onCanvasDrop(e: DragEvent) {
         const file = e.dataTransfer?.files?.[0];
         if (!file) return;
         e.preventDefault();
-        void handleDroppedFile(file);
+        void handleDroppedFile(file, e.altKey);
     }
 
     const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta']);

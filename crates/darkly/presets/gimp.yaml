@@ -13,6 +13,14 @@ hotkeys:
   # GIMP's edit-paste-in-place is <primary><alt>V (NOT <shift>V).
   # See gimp/app/actions/edit-actions.c.
   pasteInPlace: $mod+Alt+KeyV
+  # GIMP binds file-open-as-link-layers ("Open as Link Layer…", the direct
+  # analogue of placing a smart object) to <primary><alt><shift>O, beside
+  # file-open <primary>O and file-open-as-layers <primary><alt>O. See
+  # gimp/app/actions/file-actions.c. Per-overlay because the editors
+  # disagree: Krita's import_layer_from_file ships an empty <shortcut/>
+  # (krita/krita/krita.action) and Photoshop's Place Embedded has no
+  # default, so only GIMP states a preference.
+  placeSmartObject: $mod+Alt+Shift+KeyO
   # GIMP has no native Preferences hotkey. Fall through to Darkly's pick.
   openSettings: $mod+Comma
   # mirrorViewH: intentionally unbound. GIMP has no native mirror-view

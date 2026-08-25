@@ -589,7 +589,7 @@ fn upload_loaded_void_pixels(engine: &mut DarklyEngine, entries: &HashMap<String
         let Some(bytes) = entries.get(&blob_key) else {
             continue;
         };
-        engine.compositor.restore_void_pixels(
+        engine.compositor.set_void_source_pixels(
             &engine.gpu.device,
             &engine.gpu.queue,
             id,

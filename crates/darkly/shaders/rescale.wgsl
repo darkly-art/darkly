@@ -17,13 +17,18 @@
 // Rust `Params`):
 //   p0 = [new_origin.xy,  canvas_origin.xy]
 //   p1 = [inv_scale.xy,   old_origin.xy]
-//   p2 = [old_size.xy,    is_r8, _pad]
+//   p2 = [old_size.xy,    is_r8, premul_io]
 // new_origin:    canvas-space offset of the destination texture's (0,0) pixel.
 // canvas_origin: the rescale anchor (document scales about it).
 // inv_scale:     old_size / new_size — maps a dest canvas point back to source.
 // old_origin:    canvas-space offset of the source's old extent (0,0) pixel.
 // old_size:      source old-extent dimensions in canvas pixels.
 // is_r8:         0.0 = RGBA (premultiplied resample), 1.0 = R8 (straight).
+// premul_io:     1.0 = the source texture and the render target both hold
+//                premultiplied RGBA, so texels average as-is with no
+//                premultiply/un-premultiply round trip. Set when generating a
+//                mip chain over a premultiplied source; 0.0 for the
+//                straight-alpha layer/mask rescale path.
 struct Params {
     p0: vec4f,
     p1: vec4f,
@@ -51,11 +56,22 @@ fn unpremul(c: vec4f) -> vec4f {
     return vec4f(c.rgb / c.a, c.a);
 }
 
-fn load_weighted(p: vec2i, dims: vec2i, is_r8: bool) -> vec4f {
+// `raw` means "the stored texels are already in a form that averages
+// linearly" — either single-channel R8, or RGBA that is already
+// premultiplied. Both skip the premultiply/un-premultiply round trip that
+// straight-alpha RGBA needs.
+fn load_weighted(p: vec2i, dims: vec2i, raw: bool) -> vec4f {
     let c = clamp(p, vec2i(0), dims - vec2i(1));
     let texel = textureLoad(t_src, c, 0);
-    if (is_r8) { return texel; }
+    if (raw) { return texel; }
     return premul(texel);
+}
+
+// Whether this invocation averages texels as-is. `p2.z` flags R8 masks;
+// `p2.w` flags RGBA whose source *and* destination are premultiplied (mip
+// chain generation over a premultiplied source texture).
+fn is_raw() -> bool {
+    return u.p2.z > 0.5 || u.p2.w > 0.5;
 }
 
 @fragment
@@ -65,7 +81,7 @@ fn fs_resample(in: VsOut) -> @location(0) vec4f {
     let inv_scale = u.p1.xy;
     let old_origin = u.p1.zw;
     let old_size = u.p2.xy;
-    let is_r8 = u.p2.z > 0.5;
+    let raw = is_raw();
 
     let dims = vec2i(textureDimensions(t_src));
     let c_new = new_origin + in.pos.xy;
@@ -74,28 +90,28 @@ fn fs_resample(in: VsOut) -> @location(0) vec4f {
     let texel = uv * vec2f(dims) - vec2f(0.5);        // bilinear sample center
     let base = vec2i(floor(texel));
     let f = texel - floor(texel);
-    let s00 = load_weighted(base + vec2i(0, 0), dims, is_r8);
-    let s10 = load_weighted(base + vec2i(1, 0), dims, is_r8);
-    let s01 = load_weighted(base + vec2i(0, 1), dims, is_r8);
-    let s11 = load_weighted(base + vec2i(1, 1), dims, is_r8);
+    let s00 = load_weighted(base + vec2i(0, 0), dims, raw);
+    let s10 = load_weighted(base + vec2i(1, 0), dims, raw);
+    let s01 = load_weighted(base + vec2i(0, 1), dims, raw);
+    let s11 = load_weighted(base + vec2i(1, 1), dims, raw);
     let top = mix(s00, s10, f.x);
     let bot = mix(s01, s11, f.x);
     let p = mix(top, bot, f.y);
-    if (is_r8) { return p; }
+    if (raw) { return p; }
     return unpremul(p);
 }
 
 @fragment
 fn fs_halve(in: VsOut) -> @location(0) vec4f {
-    let is_r8 = u.p2.z > 0.5;
+    let raw = is_raw();
     let dims = vec2i(textureDimensions(t_src));
     let dst = vec2i(floor(in.pos.xy));
     let src = dst * 2;
-    let s00 = load_weighted(src + vec2i(0, 0), dims, is_r8);
-    let s10 = load_weighted(src + vec2i(1, 0), dims, is_r8);
-    let s01 = load_weighted(src + vec2i(0, 1), dims, is_r8);
-    let s11 = load_weighted(src + vec2i(1, 1), dims, is_r8);
+    let s00 = load_weighted(src + vec2i(0, 0), dims, raw);
+    let s10 = load_weighted(src + vec2i(1, 0), dims, raw);
+    let s01 = load_weighted(src + vec2i(0, 1), dims, raw);
+    let s11 = load_weighted(src + vec2i(1, 1), dims, raw);
     let p = (s00 + s10 + s01 + s11) * 0.25;
-    if (is_r8) { return p; }
+    if (raw) { return p; }
     return unpremul(p);
 }

@@ -783,6 +783,25 @@ impl Layer {
         !matches!(self, Layer::Filter(_))
     }
 
+    /// Whether this layer's own GPU texture holds data that cannot be
+    /// reconstructed, and therefore has to be kept alive while the layer is
+    /// undoably deleted and released once it isn't.
+    ///
+    /// Most non-raster layers say no because their texture is derived: a
+    /// procedural void re-renders from its params, a vector layer re-rasterizes
+    /// from its objects, a filter layer has no texture at all. The exception is
+    /// a void holding an externally-sourced image — a placed photo or a
+    /// captured frame — which exists nowhere else and can be large enough that
+    /// leaking it matters.
+    pub fn owns_disposable_texture(&self) -> bool {
+        match self {
+            Layer::Raster(_) => true,
+            // Document-side fact, so this needs no GPU query.
+            Layer::Void(v) => v.frame.is_some(),
+            Layer::Filter(_) | Layer::Vector(_) => false,
+        }
+    }
+
     pub fn id(&self) -> LayerId {
         match self {
             Layer::Raster(r) => r.id,
