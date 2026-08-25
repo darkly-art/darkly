@@ -316,11 +316,11 @@ fn every_previewable_entry_has_a_renderer() {
     assert!(!manifest.assets.is_empty());
 }
 
-/// Seven filters, ten veils, one void, sixteen blend modes and thirteen brushes
-/// — counted **per catalog**. A bare total of forty-seven would not notice a
+/// Seven filters, nine veils, one void, sixteen blend modes and thirteen brushes
+/// — counted **per catalog**. A bare total of forty-six would not notice a
 /// whole catalog dropping out and another gaining entries.
 #[test]
-fn all_forty_seven_assets_land() {
+fn all_forty_six_assets_land() {
     let (_, manifest) = assets();
     let counts: BTreeMap<&str, usize> = manifest
         .assets
@@ -331,13 +331,13 @@ fn all_forty_seven_assets_land() {
         counts,
         BTreeMap::from([
             ("filters", 7),
-            ("veils", 10),
+            ("veils", 9),
             ("voids", 1),
             ("blendModes", 16),
             ("brushes", 13),
         ])
     );
-    assert_eq!(counts.values().sum::<usize>(), 47);
+    assert_eq!(counts.values().sum::<usize>(), 46);
 }
 
 /// The set of directories **found by walking the output** equals the previewable
@@ -409,7 +409,7 @@ fn every_frame_is_the_size_its_entry_declares() {
             checked += 1;
         }
     }
-    assert_eq!(checked, 47);
+    assert_eq!(checked, 46);
 }
 
 /// For every asset the PNG count equals the frame count the declaration says
@@ -539,9 +539,9 @@ fn every_asset_has_real_motion() {
 
 /// Rendering an entry twice through the same `Gpu` produces the same pixels.
 ///
-/// Determinism across a reused device is what lets forty-seven assets share one
+/// Determinism across a reused device is what lets forty-six assets share one
 /// `Gpu`, and it is where a renderer that left state behind shows up. One entry
-/// per catalog rather than all forty-seven, because the cost is two full
+/// per catalog rather than all forty-six, because the cost is two full
 /// sequences each and the failure mode is per-renderer, not per-entry — except
 /// for brushes, which get
 /// [`every_brush_renders_the_same_bytes_twice`] over the whole catalog.

@@ -360,8 +360,8 @@ fn export_is_a_faithful_projection() {
         }
     }
     assert_eq!(
-        previewable, 47,
-        "7 filters + 10 veils + 1 void + 16 blend modes + 13 brushes declare a \
+        previewable, 46,
+        "7 filters + 9 veils + 1 void + 16 blend modes + 13 brushes declare a \
          preview recipe"
     );
 

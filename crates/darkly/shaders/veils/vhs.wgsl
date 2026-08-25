@@ -38,11 +38,14 @@ const PI: f32 = 3.14159265;
 // than a clamp-stretch smear. The fragment shader works in Shadertoy
 // y-up space; flip y back here so the texture sample hits the right
 // pixel under our Y-down input convention.
-fn tex2d(uv: vec2f) -> vec3f {
+// Returns alpha alongside the colour so the caller can carry coverage through.
+// The off-tape letterbox is content this effect invents rather than samples, so
+// it is opaque; only sampled texels report the source's own coverage.
+fn tex2d(uv: vec2f) -> vec4f {
     if (abs(uv.x - 0.5) > 0.5) {
-        return vec3f(0.1);
+        return vec4f(0.1, 0.1, 0.1, 1.0);
     }
-    return textureSampleLevel(t_input, t_sampler, vec2f(uv.x, 1.0 - uv.y), 0.0).rgb;
+    return textureSampleLevel(t_input, t_sampler, vec2f(uv.x, 1.0 - uv.y), 0.0);
 }
 
 fn hash2(v: vec2f) -> f32 {
@@ -96,7 +99,8 @@ fn noise2(v: vec2f) -> f32 {
     uvn.y += sn_phase * 0.3;
     uvn.x += sn_phase * ((noise2(vec2f(uv.y * 100.0, t * 10.0)) - 0.5) * 0.2);
 
-    var col = tex2d(uvn);
+    let base = tex2d(uvn);
+    var col = base.rgb;
     col *= 1.0 - tc_phase;
     col = mix(col, col.yzx, sn_phase);
 
@@ -115,5 +119,7 @@ fn noise2(v: vec2f) -> f32 {
     let beat = clamp(noise2(vec2f(0.0, uv.y + t * 0.2)) * 0.6 - 0.25, 0.0, 0.1);
     col *= 1.0 + beat * params.ac_beat;
 
-    return vec4f(col, 1.0);
+    // The chroma-bloom taps only add a fringe on top of the base tap, so
+    // coverage follows the tap the image itself comes from.
+    return vec4f(col, base.a);
 }

@@ -153,7 +153,9 @@ fn Drops(uv: vec2f, t: f32, l0: f32, l1: f32, l2: f32) -> vec2f {
 //
 // `radius` is the disc radius as a fraction of sqrt(area). The per-axis
 // UV offsets are derived so the sampling disc is circular in screen pixels.
-fn sample_fog(uv: vec2f, radius: f32, resolution: vec2f) -> vec3f {
+// Carries alpha through the same 13-tap mean as the colour: alpha is coverage,
+// so blurring the view behind the glass must blur what it covers too.
+fn sample_fog(uv: vec2f, radius: f32, resolution: vec2f) -> vec4f {
     let offsets = array<vec2f, 12>(
         vec2f(-0.326, -0.406),
         vec2f(-0.840, -0.074),
@@ -172,9 +174,9 @@ fn sample_fog(uv: vec2f, radius: f32, resolution: vec2f) -> vec3f {
     let ref_size = sqrt(resolution.x * resolution.y);
     let r = radius * ref_size / resolution;
 
-    var col = textureSampleLevel(t_input, t_sampler, uv, 0.0).rgb;
+    var col = textureSampleLevel(t_input, t_sampler, uv, 0.0);
     for (var i = 0u; i < 12u; i++) {
-        col += textureSampleLevel(t_input, t_sampler, uv + offsets[i] * r, 0.0).rgb;
+        col += textureSampleLevel(t_input, t_sampler, uv + offsets[i] * r, 0.0);
     }
     return col / 13.0;
 }
@@ -221,7 +223,5 @@ fn sample_fog(uv: vec2f, radius: f32, resolution: vec2f) -> vec3f {
     // where each LOD level doubles the blur. This makes the perceptual
     // difference between foggy regions and trail-cleared regions much larger.
     let blur_radius = (pow(2.0, focus) - 1.0) / 2048.0;
-    let col = sample_fog(UV + n, blur_radius, resolution);
-
-    return vec4f(col, 1.0);
+    return sample_fog(UV + n, blur_radius, resolution);
 }

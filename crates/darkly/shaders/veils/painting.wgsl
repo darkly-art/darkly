@@ -55,12 +55,18 @@ struct Params {
     var s1 = vec3f(0.0);
     var s2 = vec3f(0.0);
     var s3 = vec3f(0.0);
+    // Weighted alpha sums for the same four sectors, one lane each — coverage
+    // rides the identical weights the colour does, so a sector that wins on
+    // colour brings its own coverage with it. Variance is colour-only: sectors
+    // are chosen by how flat their colour is, which alpha has no say in.
+    var av = vec4f(0.0);
 
     for (var y = -kernel_radius; y <= kernel_radius; y++) {
         for (var x = -kernel_radius; x <= kernel_radius; x++) {
             let v = vec2f(f32(x), f32(y)) * inv_r;
             // Rgba8Unorm already guarantees [0,1] — no clamp needed.
-            let c = textureSampleLevel(t_input, t_sampler, uv + vec2f(f32(x), f32(y)) * texel, 0.0).rgb;
+            let sample = textureSampleLevel(t_input, t_sampler, uv + vec2f(f32(x), f32(y)) * texel, 0.0);
+            let c = sample.rgb;
 
             // Polynomial weights for the 4 axis-aligned sectors.
             let zy_pos = max(0.0, v.y + zeta);
@@ -95,6 +101,7 @@ struct Params {
             s1 += cc * wg1;
             s2 += cc * wg2;
             s3 += cc * wg3;
+            av += sample.a * vec4f(wg0, wg1, wg2, wg3);
         }
     }
 
@@ -103,26 +110,31 @@ struct Params {
     let h_scale = params.hardness * 1000.0;
 
     var out = vec4f(0.0);
+    var out_a = 0.0;
 
     let mean0 = m0.rgb / m0.w;
     let var0 = abs(s0 / m0.w - mean0 * mean0);
     let bw0 = 1.0 / (1.0 + pow(h_scale * (var0.r + var0.g + var0.b), h_pow));
     out += vec4f(mean0 * bw0, bw0);
+    out_a += (av[0] / m0.w) * bw0;
 
     let mean1 = m1.rgb / m1.w;
     let var1 = abs(s1 / m1.w - mean1 * mean1);
     let bw1 = 1.0 / (1.0 + pow(h_scale * (var1.r + var1.g + var1.b), h_pow));
     out += vec4f(mean1 * bw1, bw1);
+    out_a += (av[1] / m1.w) * bw1;
 
     let mean2 = m2.rgb / m2.w;
     let var2 = abs(s2 / m2.w - mean2 * mean2);
     let bw2 = 1.0 / (1.0 + pow(h_scale * (var2.r + var2.g + var2.b), h_pow));
     out += vec4f(mean2 * bw2, bw2);
+    out_a += (av[2] / m2.w) * bw2;
 
     let mean3 = m3.rgb / m3.w;
     let var3 = abs(s3 / m3.w - mean3 * mean3);
     let bw3 = 1.0 / (1.0 + pow(h_scale * (var3.r + var3.g + var3.b), h_pow));
     out += vec4f(mean3 * bw3, bw3);
+    out_a += (av[3] / m3.w) * bw3;
 
-    return vec4f(out.rgb / out.w, 1.0);
+    return vec4f(out.rgb / out.w, out_a / out.w);
 }

@@ -72,9 +72,14 @@ fn normal_uv(screen_uv: vec2f) -> vec2f {
     let g_uv = in.uv + disp;
     let b_uv = in.uv + disp * (1.0 - ca);
 
-    let r = textureSample(t_input, t_sampler, r_uv).r;
-    let g = textureSample(t_input, t_sampler, g_uv).g;
-    let b = textureSample(t_input, t_sampler, b_uv).b;
+    let sr = textureSample(t_input, t_sampler, r_uv);
+    let sg = textureSample(t_input, t_sampler, g_uv);
+    let sb = textureSample(t_input, t_sampler, b_uv);
 
-    return vec4f(r, g, b, 1.0);
+    // Alpha is coverage, so it is the linear mean over the same three-tap
+    // footprint the colour is gathered from — refracting across a transparent
+    // edge fades the result instead of stamping it opaque.
+    let a = (sr.a + sg.a + sb.a) / 3.0;
+
+    return vec4f(sr.r, sg.g, sb.b, a);
 }
