@@ -4,16 +4,12 @@
     import type { BrushInfo, ExposedPortInfo } from '../state/brush_graph.svelte';
     import { unitFor } from '../lib/units';
     import { brushSession, focusedBrushTool } from '../tools/brush.svelte';
-    import BrushPicker from './brush_picker/BrushPicker.svelte';
-    import LiveBrushPreviewStrip from './brush_picker/LiveBrushPreviewStrip.svelte';
+    import LiveBrushPreviewStrip from './brush_library/LiveBrushPreviewStrip.svelte';
     import Scrub from './Scrub.svelte';
     import ToolBarLayout from './ToolBarLayout.svelte';
     import Icon from '../icons/Icon.svelte';
     import { tooltipForAction } from '../config/store.svelte';
-    import { watchDismiss } from '../lib/dismiss';
-
-    let brushPickerOpen = $state(false);
-    let brushPickerTrigger: HTMLButtonElement | undefined = $state();
+    import { workspaces } from './workspace/workspaces.svelte';
 
     function ensureInit() {
         if (!brushGraph.graph && app.engine) brushGraph.init();
@@ -25,12 +21,6 @@
         // Leaving the builder also leaves fullscreen — otherwise reopening
         // would silently spring back to a window-filling panel.
         if (!brushGraph.isOpen) brushGraph.fullscreen = false;
-    }
-
-    function selectBrush(brush: BrushInfo) {
-        ensureInit();
-        brushGraph.loadBrush(brush.name, brush.id);
-        brushPickerOpen = false;
     }
 
     /** Transient feedback while a scrub is being dragged. Local only — the
@@ -67,10 +57,6 @@
         brushGraph.setInput(port.nodeId, port.portName, 'enum', index);
     }
 
-    // A pointerdown outside the brush picker (trigger + panel, both tagged
-    // data-keep-open="brush-picker") closes it.
-    $effect(() => watchDismiss('brush-picker', () => (brushPickerOpen = false)));
-
     function toggleEraseMode() {
         brushSession.eraseMode = !brushSession.eraseMode;
         app.engine?.api.setBrushBlendMode({ mode: brushSession.eraseMode ? 1 : 0 });
@@ -92,16 +78,16 @@
 
 <ToolBarLayout>
     {#snippet center()}
-        <!-- The brush picker is the leading control in the same wrapping row
-             as the scrubs — a black rounded button that wraps alongside them.
-             Its dropdown menu anchors to this button. -->
+        <!-- The leading control in the same wrapping row as the scrubs: a
+             black rounded button that wraps alongside them. It reveals the
+             docked brush explorer rather than opening a dropdown, which is
+             also the reason an upgrading painter whose stored layout predates
+             the panel can still reach their brushes. -->
         <div class="brush-picker-section">
             <button
-                bind:this={brushPickerTrigger}
                 class="brush-picker-button bar-control"
-                data-keep-open="brush-picker"
-                onclick={() => { ensureInit(); brushPickerOpen = !brushPickerOpen; }}
-                title="Select brush"
+                onclick={() => { ensureInit(); workspaces.revealPanel('brushes'); }}
+                title="Show the brush explorer"
             >
                 <!-- Live preview of the active graph — same component the
                      picker's tiles use, so preset and custom states render
@@ -114,14 +100,7 @@
                     <span class="bar-control-label">Brush</span>
                     <span class="bar-control-value name">{brushGraph.activeBrush ?? 'Custom'}</span>
                 </span>
-                <svg class="chevron" class:flipped={brushPickerOpen} width="10" height="6" viewBox="0 0 10 6">
-                    <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/>
-                </svg>
             </button>
-
-            {#if brushPickerOpen}
-                <BrushPicker anchor={brushPickerTrigger} onSelect={selectBrush} onClose={() => (brushPickerOpen = false)} />
-            {/if}
         </div>
 
         {#each brushGraph.exposedPorts as port}
@@ -208,7 +187,6 @@
     /* Anchor for the dropdown menu; the button itself sizes to content so it
      * wraps in the scrub row like any other control. */
     .brush-picker-section {
-        position: relative;
         flex-shrink: 0;
     }
 
@@ -262,15 +240,6 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-    }
-
-    .chevron {
-        flex-shrink: 0;
-        color: var(--text-muted);
-        transition: transform 0.2s ease-out;
-    }
-    .chevron.flipped {
-        transform: rotate(180deg);
     }
 
     .error-badge {

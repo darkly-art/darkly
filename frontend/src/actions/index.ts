@@ -13,6 +13,7 @@ import { exportTimelapse } from '../state/exportTimelapse.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
 import { toast } from '../state/toast.svelte';
 import { toolRegistry } from '../tools/registry';
+import { workspaces } from '../ui/workspace/workspaces.svelte';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { brushSession } from '../tools/brush.svelte';
 import { registerBrushParamActions } from './brush_params';
@@ -879,6 +880,16 @@ export function registerActions() {
         // No `menuPath`: surfaced as the gear button on the menu bar and a
         // root courtesy item in the hamburger, not as a View submenu row.
         handler: () => { settings.open = true; },
+    });
+
+    actions.register({
+        id: 'toggleBrushExplorer',
+        menuPath: ['View:20'],
+        status: () => (workspaces.hasPanel('brushes') ? 'fa6-solid:check' : undefined),
+        handler: () => {
+            if (workspaces.hasPanel('brushes')) workspaces.hidePanel('brushes');
+            else workspaces.revealPanel('brushes');
+        },
     });
 
     actions.register({

@@ -17,8 +17,13 @@ import {
     ensureDocument,
     resolveSplitByPath,
     loadOrDefault,
+    firstDockableGroupId,
     type PanelType,
 } from '../tree';
+
+/** What `defaultMainLayout` ships, sorted. One constant so adding a default
+ *  panel is one edit here rather than five. */
+const DEFAULT_PANELS: PanelType[] = ['brushes', 'document', 'layers', 'properties'];
 
 // --- builders --------------------------------------------------------------
 
@@ -198,7 +203,7 @@ describe('op-sequence round trip', () => {
         // Remove it again.
         removeTab(root, newId, 'history' as unknown as PanelType);
         prune(root);
-        expect(collectPanelTypes(root).sort()).toEqual(['document', 'layers', 'properties']);
+        expect(collectPanelTypes(root).sort()).toEqual(DEFAULT_PANELS);
     });
 });
 
@@ -211,12 +216,12 @@ describe('loadOrDefault', () => {
 
     it('falls back to the default on null', () => {
         const { root } = loadOrDefault(null);
-        expect(collectPanelTypes(root).sort()).toEqual(['document', 'layers', 'properties']);
+        expect(collectPanelTypes(root).sort()).toEqual(DEFAULT_PANELS);
     });
 
     it('falls back to the default on malformed JSON', () => {
         const { root } = loadOrDefault('{not json');
-        expect(collectPanelTypes(root).sort()).toEqual(['document', 'layers', 'properties']);
+        expect(collectPanelTypes(root).sort()).toEqual(DEFAULT_PANELS);
     });
 
     it('strips unknown panel types (and injects the missing Document)', () => {
@@ -233,7 +238,7 @@ describe('loadOrDefault', () => {
 
     it('falls back to the default when stripping empties everything', () => {
         const { root } = loadOrDefault(persist(split(group(0, ['bogus'] as unknown as PanelType[]))));
-        expect(collectPanelTypes(root).sort()).toEqual(['document', 'layers', 'properties']);
+        expect(collectPanelTypes(root).sort()).toEqual(DEFAULT_PANELS);
     });
 
     it('preserves a persisted Document without duplicating it', () => {
@@ -248,6 +253,8 @@ describe('loadOrDefault', () => {
         // injected into main.
         const raw = persist(split(group(0, ['layers'])), split(group(1, ['properties'])));
         const { root, nextGroupId } = loadOrDefault(raw);
+        // Only what was persisted, plus the injected Document — a stored
+        // layout is not topped up with the default panel set.
         expect(collectPanelTypes(root).sort()).toEqual(['document', 'layers', 'properties']);
         // Ids renumbered contiguously; nextGroupId past the max.
         expect(nextGroupId).toBeGreaterThan(0);
@@ -293,5 +300,39 @@ describe('foldPanelsIntoMain', () => {
         const root = split(group(0, ['layers']));
         foldPanelsIntoMain(root, ['properties', 'layers']);
         expect(collectPanelTypes(root)).toEqual(['layers', 'properties']);
+    });
+
+    it('never folds into the anchor group', () => {
+        const root = split(group(0, ['document']), group(1, ['layers']));
+        foldPanelsIntoMain(root, ['properties']);
+        expect(findGroup(root, 0)!.state.tabs).toEqual(['document']);
+        expect(findGroup(root, 1)!.state.tabs).toEqual(['layers', 'properties']);
+    });
+});
+
+describe('firstDockableGroupId', () => {
+    it('skips the canvas group in the default layout', () => {
+        // `firstGroupId` returns the canvas here. A tab docked into an anchor
+        // group is unreachable: the group renders no tab bar and its body shows
+        // only the active tab, so the canvas would simply be replaced.
+        const { root } = loadOrDefault(null);
+        const target = firstDockableGroupId(root)!;
+        expect(findGroup(root, target)!.state.tabs).not.toContain('document');
+    });
+
+    it('returns null when every group is an anchor', () => {
+        const root = split(group(0, ['document']));
+        expect(firstDockableGroupId(root)).toBeNull();
+    });
+
+    it('a revealed panel lands beside Layers, not in the canvas', () => {
+        const { root } = loadOrDefault(null);
+        const target = firstDockableGroupId(root)!;
+        insertTab(root, target, 'brushes');
+
+        const canvas = collectPanelTypes(root).indexOf('document');
+        expect(canvas).toBe(0);
+        expect(findGroup(root, target)!.state.tabs).toContain('brushes');
+        expect(findGroup(root, target)!.state.tabs).toContain('layers');
     });
 });

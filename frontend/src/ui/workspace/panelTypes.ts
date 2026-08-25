@@ -42,3 +42,4 @@ export function resolvePanel(type: PanelType): PanelMeta {
 export function isPanelRegistered(type: PanelType): boolean {
     return registry.has(type);
 }
+

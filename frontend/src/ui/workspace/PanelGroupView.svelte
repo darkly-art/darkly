@@ -1,6 +1,7 @@
 <script lang="ts">
     import type { Subdivision, PanelType } from './tree';
     import { resolvePanel } from './panelTypes';
+    import { isAnchorGroup } from './tree';
     import { workspaces, popOutSupported } from './workspaces.svelte';
     import ContextMenu, { type ContextMenuItem } from '../ContextMenu.svelte';
 
@@ -11,7 +12,7 @@
 
     // An anchor group holds a non-movable panel (the canvas): render no tab bar,
     // so it can't be grabbed or tabbed into — only docked around (see hitTest).
-    let anchor = $derived(group.state.tabs.some((t) => !resolvePanel(t).movable));
+    let anchor = $derived(isAnchorGroup(group.state.tabs));
     // Type-owned dispatch: the registry resolves the component; this view never
     // switches on which panel it is. Only the active tab's component is
     // rendered (mount/unmount) — load-bearing for `bindingSite` hotkey scoping,

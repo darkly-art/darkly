@@ -3,7 +3,7 @@
     import { brushGraph } from '../../state/brush_graph.svelte';
     import { config, tooltipForAction } from '../../config/store.svelte';
     import { toast } from '../../state/toast.svelte';
-    import LiveBrushPreviewStrip from '../brush_picker/LiveBrushPreviewStrip.svelte';
+    import LiveBrushPreviewStrip from '../brush_library/LiveBrushPreviewStrip.svelte';
     import NodeCanvas from './NodeCanvas.svelte';
     import AddNodeMenu from './AddNodeMenu.svelte';
     import SaveBrushModal from '../SaveBrushModal.svelte';

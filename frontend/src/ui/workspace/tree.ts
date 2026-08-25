@@ -21,7 +21,7 @@
  *  Graphite), so the whole window tiles and horizontal splitting (canvas |
  *  panels) is meaningful. It is a non-closable, non-poppable singleton kept
  *  present by {@link ensureDocument}. */
-export type PanelType = 'document' | 'layers' | 'properties';
+export type PanelType = 'document' | 'layers' | 'properties' | 'brushes';
 
 export interface PanelGroupState {
     tabs: PanelType[];
@@ -88,7 +88,7 @@ export function defaultMainLayout(docId: number, layersId: number, propsId: numb
                     subdivision: {
                         kind: 'split',
                         children: [
-                            { size: 0.6, subdivision: makeGroup(layersId, ['layers']) },
+                            { size: 0.6, subdivision: makeGroup(layersId, ['layers', 'brushes']) },
                             { size: 0.4, subdivision: makeGroup(propsId, ['properties']) },
                         ],
                     },
@@ -123,6 +123,58 @@ export function firstGroupId(node: Subdivision): number | null {
     for (const child of node.children) {
         const found = firstGroupId(child.subdivision);
         if (found !== null) return found;
+    }
+    return null;
+}
+
+/**
+ * Panels that are fixed anchors. Today: the canvas.
+ *
+ * An anchor group renders no tab bar, cannot be grabbed, and must never receive
+ * a docked tab — one landing there would be unreachable, because the body shows
+ * only the active tab and there is no bar to switch back with.
+ *
+ * This lives here rather than being read off `PanelMeta.movable` because the
+ * tree is loaded while constructing the workspace store, at module scope,
+ * before `registerPanels` has run — asking the registry then throws. `tree.ts`
+ * has no imports and is always available. `panelTypes.test.ts` asserts this
+ * agrees with every panel's declared `movable`, so the two cannot drift.
+ */
+const ANCHOR_PANELS: readonly PanelType[] = ['document'];
+
+/** Whether a group is a fixed anchor. See {@link ANCHOR_PANELS}. */
+export function isAnchorGroup(tabs: PanelType[]): boolean {
+    return tabs.some((t) => ANCHOR_PANELS.includes(t));
+}
+
+/**
+ * The first group a panel may legally be docked into, skipping anchor groups.
+ *
+ * `firstGroupId` alone is wrong for docking: in the default layout the root
+ * row's first child is the canvas, and a tab inserted there is unreachable —
+ * an anchor group renders no tab bar, and its body shows only the active tab,
+ * so the canvas would simply be replaced.
+ *
+ */
+export function firstDockableGroupId(node: Subdivision): number | null {
+    if (node.kind === 'group') return isAnchorGroup(node.state.tabs) ? null : node.id;
+    for (const child of node.children) {
+        const found = firstDockableGroupId(child.subdivision);
+        if (found !== null) return found;
+    }
+    return null;
+}
+
+/** The group holding `tab`, if any. Traversal order, so the first wins when a
+ *  malformed layout somehow lists a panel twice. */
+export function groupHolding(
+    node: Subdivision,
+    tab: PanelType,
+): Extract<Subdivision, { kind: 'group' }> | null {
+    if (node.kind === 'group') return node.state.tabs.includes(tab) ? node : null;
+    for (const child of node.children) {
+        const found = groupHolding(child.subdivision, tab);
+        if (found) return found;
     }
     return null;
 }
@@ -372,7 +424,7 @@ export function renormalize(children: SplitChild[]): void {
  *  present in main is skipped. */
 export function foldPanelsIntoMain(mainRoot: Subdivision, panels: PanelType[]): void {
     const present = new Set(collectPanelTypes(mainRoot));
-    let targetGroup = firstGroupId(mainRoot);
+    const targetGroup = firstDockableGroupId(mainRoot);
     for (const p of panels) {
         if (present.has(p)) continue;
         if (targetGroup === null) break;
@@ -407,7 +459,7 @@ export function renumber(node: Subdivision, start = 0): number {
     return next;
 }
 
-const KNOWN_PANEL_TYPES: readonly PanelType[] = ['document', 'layers', 'properties'];
+const KNOWN_PANEL_TYPES: readonly PanelType[] = ['document', 'layers', 'properties', 'brushes'];
 
 function stripUnknownTabs(node: Subdivision): void {
     if (node.kind === 'group') {

@@ -14,6 +14,12 @@ const ACTIONS: &[ActionDef] = &[
         icon: "fa6-solid:magnifying-glass",
     },
     ActionDef {
+        id: "toggleBrushExplorer",
+        display_name: "Brush Explorer",
+        description: "Show or hide the docked panel listing every brush, grouped by pack.",
+        icon: "fa6-solid:paintbrush",
+    },
+    ActionDef {
         id: "mirrorViewH",
         display_name: "Mirror View",
         description: "Flip the canvas horizontally for fresh-eyes review. View-only — the document is unchanged.",

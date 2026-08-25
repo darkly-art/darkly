@@ -1,59 +1,27 @@
 <script lang="ts">
-    import { tick } from 'svelte';
+    /**
+     * The brush explorer: a docked panel listing every brush, grouped by pack.
+     *
+     * Replaces a `position: fixed` dropdown that was hostile to a pen — it
+     * dismissed on any outside pointerdown (so resting a hand closed it),
+     * autofocused a text field, and lived inside a scrollport competing with
+     * the canvas gesture guard. A panel has none of those problems: it stays
+     * open while you paint, and it scrolls with the pen.
+     *
+     * The search query is component-local `$state`, which is also where
+     * decision 7's "the query resets when the panel closes" lives: a
+     * backgrounded or closed tab is unmounted by `PanelGroupView`, taking the
+     * query with it. Structural, not a hook.
+     */
     import { brushGraph } from '../../state/brush_graph.svelte';
-    import type { BrushInfo } from '../../state/brush_graph.svelte';
+    import type { BrushInfo } from '../../engine/protocol_gen';
     import { brushLibrary } from '../../state/brush_library.svelte';
     import Icon from '../../icons/Icon.svelte';
     import { packIcon, PACK_ICON_FALLBACK } from '../../lib/packIcon';
-    import BrushTile from './BrushTile.svelte';
-    import { brushPickerPlacement } from './placement';
-    import { groupByPack, matchesQuery, packNamesByBrush } from './grouping';
-
-    interface Props {
-        onSelect: (brush: BrushInfo) => void;
-        onClose: () => void;
-        /** Trigger element the dropdown anchors to. The picker is
-         *  `position: fixed` so it escapes the panel tiles' `overflow: hidden`
-         *  clipping and paints above the docked side panels; that means it can't
-         *  ride the trigger via CSS flow, so it measures the anchor instead. */
-        anchor: HTMLElement | undefined;
-    }
-    let { onSelect, onClose, anchor }: Props = $props();
-
-    let pickerEl: HTMLElement | undefined = $state();
-    let left = $state(0);
-    let top = $state<number | null>(null);
-    let bottom = $state<number | null>(null);
-
-    // Anchor the fixed dropdown on whichever side of the trigger has more
-    // room. The toolbar is at the bottom normally and at the top while the
-    // brush builder is fullscreen. Recompute when either layout moves.
-    function reposition() {
-        if (!anchor) return;
-        const r = anchor.getBoundingClientRect();
-        const width = pickerEl?.offsetWidth ?? 480;
-        const placement = brushPickerPlacement(
-            r,
-            { width: window.innerWidth, height: window.innerHeight },
-            width,
-        );
-        left = placement.left;
-        top = placement.top;
-        bottom = placement.bottom;
-    }
-
-    $effect(() => {
-        reposition();
-        window.addEventListener('resize', reposition);
-        window.addEventListener('scroll', reposition, true);
-        return () => {
-            window.removeEventListener('resize', reposition);
-            window.removeEventListener('scroll', reposition, true);
-        };
-    });
+    import BrushTile from '../brush_library/BrushTile.svelte';
+    import { groupByPack, matchesQuery, packNamesByBrush } from '../brush_library/grouping';
 
     let query = $state('');
-    let searchInput: HTMLInputElement | undefined = $state();
     let highlightIndex = $state(0);
 
     /** Pack names per brush, for search. */
@@ -82,19 +50,11 @@
         if (highlightIndex >= len) highlightIndex = Math.max(0, len - 1);
     });
 
-    // Autofocus search on open.
-    $effect(() => {
-        tick().then(() => searchInput?.focus());
-    });
+    function selectBrush(brush: BrushInfo) {
+        brushGraph.loadBrush(brush.name, brush.id);
+    }
 
     function handleKey(e: KeyboardEvent) {
-        // Escape closes regardless of whether any brushes match the filter,
-        // so it must come before the empty-list early return below.
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            onClose();
-            return;
-        }
         const cols = 2; // matches grid-template-columns: repeat(2, 1fr)
         const len = cells.length;
         if (len === 0) return;
@@ -117,27 +77,20 @@
                 break;
             case 'Enter':
                 e.preventDefault();
-                if (cells[highlightIndex]) onSelect(cells[highlightIndex]);
+                if (cells[highlightIndex]) selectBrush(cells[highlightIndex]);
                 break;
         }
     }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div
-    class="brush-picker"
-    bind:this={pickerEl}
-    data-keep-open="brush-picker"
-    onkeydown={handleKey}
-    style:left="{left}px"
-    style:top={top === null ? undefined : `${top}px`}
-    style:bottom={bottom === null ? undefined : `${bottom}px`}
->
-    <!-- Non-scrolling header: the search box stays put while the grid
-         below scrolls. The active brush lives on the trigger foot. -->
-    <div class="picker-header">
+<div class="brush-explorer" onkeydown={handleKey}>
+    <!-- Non-scrolling header: the search box stays put while the list below
+         scrolls. Deliberately not autofocused — a panel that grabs the
+         keyboard on every reveal fights a painter who reached for it with a
+         pen. -->
+    <div class="explorer-header">
         <input
-            bind:this={searchInput}
             bind:value={query}
             type="search"
             class="search"
@@ -145,9 +98,11 @@
         />
     </div>
 
-    <div class="picker-body">
+    <div class="explorer-body">
         {#if filtered.length === 0}
-            <div class="empty">No brushes match “{query}”.</div>
+            <div class="empty">
+                {#if query}No brushes match “{query}”.{:else}No brushes yet.{/if}
+            </div>
         {:else}
             <div class="groups">
                 {#each groups as group, gi (group.id)}
@@ -173,7 +128,7 @@
                                     <BrushTile
                                         {brush}
                                         active={brush.name === brushGraph.activeBrush}
-                                        {onSelect}
+                                        onSelect={selectBrush}
                                     />
                                 </div>
                             {/each}
@@ -186,51 +141,33 @@
 </div>
 
 <style>
-    /* A black rounded dropdown anchored to the trigger button. No border or
-     * shadow: it reads against the raised bar and the
-     * canvas by fill contrast, and its lighter tile wells give it body.
-     * `max-width` keeps it from pushing past the viewport edge.
-     *
-     * `position: fixed` (with `left`/`bottom` set from the trigger's rect in
-     * script) lifts it out of the panel tiles' `overflow: hidden` so it paints
-     * over the docked side panels; the overlay z-index matches ContextMenu. */
-    .brush-picker {
-        position: fixed;
-        width: 480px;
-        max-width: calc(100vw - 32px);
-        max-height: 60vh;
-        z-index: 1000;
-        background: var(--bg);
-        border-radius: var(--radius-md);
-        /* Non-scrolling flex column so the header stays put while only
-         * `.picker-body` scrolls. */
+    /* Fills its panel group. Non-scrolling flex column so the header stays put
+     * while only `.explorer-body` scrolls. */
+    .brush-explorer {
         display: flex;
         flex-direction: column;
-        overflow: hidden;
+        height: 100%;
+        min-height: 0;
+        background: var(--bg);
     }
-    /* Pinned header: the search box. Padding lives here so the scroll
-     * content underneath doesn't bleed through — `.picker-body` provides
-     * its own padding. */
-    .picker-header {
+    .explorer-header {
         flex-shrink: 0;
-        padding: 12px;
+        padding: 8px;
     }
-    .picker-body {
-        /* flex-basis stays `auto`, not the `flex: 1` shorthand's `0%`: the
-         * outer `.brush-picker` panel is height:auto (only max-height: 60vh), so
-         * a `flex: 1 1 0%` child has no free space to grow into and collapses to
-         * zero height in Safari, hiding the brush list. `auto` bases it on
-         * content; grow/shrink still let it scroll inside the max-height cap. */
+    .explorer-body {
         flex: 1 1 auto;
         min-height: 0;
         overflow-y: auto;
-        /* Let a pen/stylus pan the grid vertically — without this an
-         * ancestor's `touch-action: none` (canvas gesture guard) leaves the
-         * list unscrollable with anything but a mouse wheel. */
+        /* Let a pen/stylus pan the list — without this an ancestor's
+         * `touch-action: none` (the canvas gesture guard) leaves it
+         * unscrollable with anything but a mouse wheel. */
         touch-action: pan-y;
-        padding: 0 12px 12px;
+        /* Keep an overscroll fling from chaining out to whatever is behind
+         * the panel. */
+        overscroll-behavior: contain;
+        padding: 0 8px 8px;
     }
-    /* Raised well on the black slab — lighter fill, no border. */
+    /* Raised well on the panel fill — lighter, no border. */
     .search {
         width: 100%;
         padding: 8px 10px;
@@ -284,15 +221,14 @@
     }
     .grid {
         display: grid;
-        /* `minmax(0, 1fr)` disables the implicit `auto` min-track-size,
-         * so a wide stroke preview can't push columns past the
-         * container's width. */
+        /* `minmax(0, 1fr)` disables the implicit `auto` min-track-size, so a
+         * wide stroke preview can't push columns past the container. */
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 8px;
     }
-    /* Keyboard cursor: reuse the hover fill (a lighter well). `.active`
-     * (loaded brush) uses a lighter slab still, so the two remain
-     * distinguishable when they land on the same tile. */
+    /* Keyboard cursor: reuse the hover fill. `.active` (loaded brush) uses a
+     * lighter slab still, so the two remain distinguishable when they land on
+     * the same tile. */
     .grid-cell.highlight :global(.brush-tile) {
         background: var(--bg-active);
     }
