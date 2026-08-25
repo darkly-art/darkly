@@ -34,7 +34,7 @@ fn shared_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
 
 fn solid_canvas(rgba: [u8; 4]) -> Vec<u8> {
     let mut out = vec![0u8; (CANVAS * CANVAS * 4) as usize];
-    for px in out.chunks_exact_mut(4) {
+    for px in out.as_chunks_mut::<4>().0 {
         px.copy_from_slice(&rgba);
     }
     out

@@ -202,7 +202,9 @@ fn engine_brush_stroke_preview_caches_after_readback() {
     let (w, h, pixels) = decode_preview_png(&second);
     assert!(w > 0 && h > 0, "decoded preview has positive dimensions");
     let non_zero_pixels = pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|px| px[0] > 0 || px[1] > 0 || px[2] > 0)
         .count();
     assert!(
@@ -263,7 +265,7 @@ fn set_preview_theme_invalidates_cache() {
     // Sanity-check: the light-theme preview has bright bg pixels.
     let (_, _, light_pixels) = decode_preview_png(&light_png);
     let mut bright_bg = 0;
-    for chunk in light_pixels.chunks_exact(4) {
+    for chunk in light_pixels.as_chunks::<4>().0 {
         if chunk[0] > 200 && chunk[1] > 200 && chunk[2] > 200 {
             bright_bg += 1;
         }

@@ -24,6 +24,14 @@ vi.mock('../../state/app.svelte', () => ({ app: fakeApp }));
 vi.mock('../../state/toast.svelte', () => ({ toast: fakeToast }));
 
 import { decodeToRgba, placeSmartObjectFromBlob } from '../place_smart_object';
+// `handleDroppedFile` lives in `actions/index.ts`, which pulls the whole action
+// registry (and every tool's options component) in behind it. Imported at the
+// top level, not lazily inside a test: `vi.mock` is hoisted above this either
+// way, and paying that compile inside a test body puts it under the 5s test
+// timeout, where a loaded machine intermittently blows through it — and the
+// call it left in flight then lands during the *next* test, tripping that one
+// too. Collection has no such deadline.
+import { handleDroppedFile } from '../index';
 
 /** Stub the decode pipeline. Vitest runs in node: there is no
  *  `createImageBitmap` / `OffscreenCanvas`, so both are faked with plain
@@ -150,14 +158,11 @@ describe('placeSmartObjectFromBlob', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Drop routing. `handleDroppedFile` lives in `actions/index.ts`, which pulls in
-// the whole registry, so it is imported lazily inside the suite with the same
-// fakes in place.
+// Drop routing, through the real `handleDroppedFile` with the same fakes.
 // ---------------------------------------------------------------------------
 
 describe('drop routing', () => {
     async function drop(bytes: Uint8Array, altKey: boolean) {
-        const { handleDroppedFile } = await import('../index');
         const file = {
             name: 'logo.png',
             arrayBuffer: async () => bytes.buffer,

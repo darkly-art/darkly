@@ -51,7 +51,12 @@ fn luminance(px: &[u8]) -> f32 {
 
 /// Standard deviation of luminance. `0.0` means every pixel is the same colour.
 fn luminance_sd(pixels: &[u8]) -> f32 {
-    let lums: Vec<f32> = pixels.chunks_exact(4).map(luminance).collect();
+    let lums: Vec<f32> = pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|px| luminance(px))
+        .collect();
     let mean = lums.iter().sum::<f32>() / lums.len() as f32;
     (lums.iter().map(|l| (l - mean).powi(2)).sum::<f32>() / lums.len() as f32).sqrt()
 }

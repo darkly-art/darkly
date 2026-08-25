@@ -267,7 +267,11 @@ fn rotated_boundary_has_partial_coverage() {
     );
     let canvas = engine.test_readback_canvas();
 
-    let partial = canvas.chunks_exact(4).any(|p| p[3] > 8 && p[3] < 247);
+    let partial = canvas
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|p| p[3] > 8 && p[3] < 247);
     assert!(
         partial,
         "a rotated edge must produce partially covered pixels; a boolean \

@@ -238,7 +238,7 @@ fn transform_on_off_canvas_layer_cancel_restores_pixels() {
     let pw: u32 = 128;
     let ph: u32 = 128;
     let mut rgba = vec![0u8; (pw * ph * 4) as usize];
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px[0] = 255;
         px[3] = 255;
     }
@@ -312,7 +312,7 @@ fn commit_floating_translate_past_canvas_preserves_pixels() {
     let bw: u32 = 8;
     let bh: u32 = 8;
     let mut rgba = vec![0u8; (bw * bh * 4) as usize];
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px[0] = 255;
         px[3] = 255;
     }
@@ -516,7 +516,7 @@ fn thumbnail_readback_handles_layer_smaller_than_canvas() {
     let pw: u32 = 256;
     let ph: u32 = 256;
     let mut rgba = vec![0u8; (pw * ph * 4) as usize];
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px[1] = 200;
         px[3] = 255;
     }
@@ -536,7 +536,7 @@ fn thumbnail_readback_handles_layer_smaller_than_canvas() {
     let thumb = engine
         .test_thumbnail_cache_peek(pasted)
         .expect("thumbnail must complete after a few flushes");
-    let any_visible = thumb.chunks_exact(4).any(|p| p[3] > 0);
+    let any_visible = thumb.as_chunks::<4>().0.iter().any(|p| p[3] > 0);
     assert!(
         any_visible,
         "thumbnail of a non-empty paste must contain visible pixels"
@@ -559,7 +559,7 @@ fn paste_image_floating_preview_visible_before_any_drag() {
     let pw: u32 = 32;
     let ph: u32 = 32;
     let mut rgba = vec![0u8; (pw * ph * 4) as usize];
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px[1] = 255;
         px[3] = 255;
     }
@@ -607,7 +607,7 @@ fn floating_preview_visible_when_translation_extends_past_source_bbox() {
     let bw: u32 = 8;
     let bh: u32 = 8;
     let mut rgba = vec![0u8; (bw * bh * 4) as usize];
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px[0] = 255;
         px[3] = 255;
     }
@@ -659,7 +659,7 @@ fn floating_preview_does_not_leave_ghost_pixels_when_dragged() {
     let bw: u32 = 8;
     let bh: u32 = 8;
     let mut rgba = vec![0u8; (bw * bh * 4) as usize];
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px[0] = 255;
         px[3] = 255;
     }
@@ -1714,7 +1714,7 @@ fn floating_perspective_commit_keystone() {
     // Fully-opaque red layer so "cleared outside the warped quad" is
     // detectable as a drop to alpha 0.
     let mut rgba = vec![0u8; (cw * ch * 4) as usize];
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px[0] = 255;
         px[3] = 255;
     }
@@ -1822,7 +1822,9 @@ fn brush_stroke_off_canvas_undo_after_grow() {
     let n = (cw * ch * 4) as usize;
     let original_region_post_undo = &after_undo[..n.min(after_undo.len())];
     let any_opaque = original_region_post_undo
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .any(|px| px[3] > 0);
     assert!(
         !any_opaque,
@@ -5321,7 +5323,12 @@ fn isolated_selected_mask_transform_commit_uses_canvas_window_frame() {
 
     engine.commit_floating();
     let after = engine.test_readback_mask(host);
-    let expected: Vec<_> = preview.chunks_exact(4).map(|pixel| pixel[0]).collect();
+    let expected: Vec<_> = preview
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|pixel| pixel[0])
+        .collect();
     let after_bounds = engine
         .node_pixel_bounds(mask)
         .expect("committed mask bounds");

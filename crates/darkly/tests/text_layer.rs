@@ -44,7 +44,12 @@ fn drive_save_to_completion(engine: &mut DarklyEngine) -> darkly::format::manife
 
 /// Count non-transparent pixels in an RGBA buffer.
 fn covered_pixels(pixels: &[u8]) -> usize {
-    pixels.chunks_exact(4).filter(|p| p[3] > 0).count()
+    pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| p[3] > 0)
+        .count()
 }
 
 #[test]

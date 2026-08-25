@@ -186,7 +186,7 @@ mod tests {
         for buf in [subject_rgba(64), blend_source_rgba(64)] {
             assert_eq!(buf.len(), 64 * 64 * 4);
             assert!(
-                buf.chunks_exact(4).all(|p| p[3] == 255),
+                buf.as_chunks::<4>().0.iter().all(|p| p[3] == 255),
                 "a pixel is not opaque"
             );
         }
@@ -200,9 +200,12 @@ mod tests {
     #[test]
     fn subject_at_source_size_is_the_stored_image() {
         let out = subject_rgba(SUBJECT_SRC_DIM);
+        let src_px = source();
         for (i, (got, src)) in out
-            .chunks_exact(4)
-            .zip(source().chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(src_px.as_chunks::<4>().0.iter())
             .enumerate()
         {
             assert_eq!(&got[..3], &src[..3], "pixel {i} was resampled at 1:1",);
@@ -296,7 +299,7 @@ mod tests {
             (0.2126 * f32::from(p[0]) + 0.7152 * f32::from(p[1]) + 0.0722 * f32::from(p[2])) as u32
         };
         let (mut lo, mut hi) = (255u32, 0u32);
-        for px in buf.chunks_exact(4) {
+        for px in buf.as_chunks::<4>().0 {
             let l = luma(px);
             lo = lo.min(l);
             hi = hi.max(l);

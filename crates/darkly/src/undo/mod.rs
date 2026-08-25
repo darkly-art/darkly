@@ -172,7 +172,7 @@ impl UndoStack {
     ) -> Vec<Box<dyn UndoAction>> {
         doc.dirty = true;
         doc.revision += 1;
-        let mut evicted: Vec<Box<dyn UndoAction>> = self.redo_steps.drain(..).collect();
+        let mut evicted: Vec<Box<dyn UndoAction>> = std::mem::take(&mut self.redo_steps);
         for a in &evicted {
             self.total_bytes = self.total_bytes.saturating_sub(a.byte_cost());
         }
@@ -234,7 +234,7 @@ impl UndoStack {
     /// returned action so tombstoned textures release.
     #[must_use = "drained actions must have on_evict called to release tombstones"]
     pub fn drain_all(&mut self) -> Vec<Box<dyn UndoAction>> {
-        let mut all: Vec<Box<dyn UndoAction>> = self.undo_steps.drain(..).collect();
+        let mut all: Vec<Box<dyn UndoAction>> = std::mem::take(&mut self.undo_steps);
         all.append(&mut self.redo_steps);
         self.total_bytes = 0;
         all

@@ -530,7 +530,7 @@ mod tests {
         assert_eq!((w, h), (2, 2));
         // Each 2×2 block holds two transparent and two opaque texels.
         let expect = [100i32, 50, 25, 128];
-        for (i, px) in out.chunks_exact(4).enumerate() {
+        for (i, px) in out.as_chunks::<4>().0.iter().enumerate() {
             for (c, (&got, &want)) in px.iter().zip(expect.iter()).enumerate() {
                 assert!(
                     (i32::from(got) - want).abs() <= 1,

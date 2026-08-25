@@ -149,7 +149,7 @@ pub mod voids;
 /// Rounds to nearest rather than truncating, so an opaque texel is exactly
 /// unchanged (`c * 255 / 255 == c`) instead of drifting a level darker.
 pub fn premultiply_rgba8_in_place(rgba: &mut [u8]) {
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         let a = u32::from(px[3]);
         if a == 255 {
             continue;

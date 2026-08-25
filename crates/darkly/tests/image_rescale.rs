@@ -695,7 +695,7 @@ fn color_pick_reads_plane_pixel_after_rescale() {
 
     // Paste a 64×64 layer: red everywhere, green 4×4 at plane (40, 40).
     let mut rgba = vec![0u8; (2 * w * 2 * h * 4) as usize];
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px.copy_from_slice(&[200, 0, 0, 255]);
     }
     for y in 40..44 {
@@ -729,7 +729,7 @@ fn color_pick_reads_plane_pixel_after_rescale_undo() {
 
     // Paste a 32×32 layer: red everywhere, green 4×4 at plane (20, 20).
     let mut rgba = vec![0u8; (w * h * 4) as usize];
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px.copy_from_slice(&[200, 0, 0, 255]);
     }
     for y in 20..24 {

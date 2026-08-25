@@ -846,7 +846,7 @@ fn update_filter_params_mutates_and_undo_restores() {
 /// A `w`×`h` buffer filled with one opaque RGBA colour.
 fn solid_rgba(w: u32, h: u32, c: [u8; 4]) -> Vec<u8> {
     let mut v = vec![0u8; (w * h * 4) as usize];
-    for px in v.chunks_exact_mut(4) {
+    for px in v.as_chunks_mut::<4>().0 {
         px.copy_from_slice(&c);
     }
     v
