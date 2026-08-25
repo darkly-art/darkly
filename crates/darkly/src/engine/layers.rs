@@ -1638,32 +1638,44 @@ impl DarklyEngine {
     /// compositor's uniform buffer for that node. Group isolation is driven
     /// by `engine.isolated_node` and reflected uniformly across node kinds.
     pub(crate) fn refresh_blend_uniforms(&mut self, layer_id: LayerId) {
+        let Some((opacity, blend_mode_gpu)) = self
+            .doc
+            .find_node(layer_id)
+            .map(|n| (n.blend().opacity, n.blend().blend_mode.gpu_value))
+        else {
+            return;
+        };
+        let isolated = self.host_renders_isolated(layer_id);
+        self.write_blend_uniforms(layer_id, opacity, blend_mode_gpu, isolated);
+    }
+
+    /// Write arbitrary blend uniforms for a node, routing to the group or the
+    /// layer pool as the node's kind requires. The one place that dispatch
+    /// lives: [`Self::refresh_blend_uniforms`] uses it to push the document's
+    /// values, and a bake uses it to neutralize a node's own blend so the
+    /// baked result doesn't apply it twice.
+    pub(crate) fn write_blend_uniforms(
+        &mut self,
+        layer_id: LayerId,
+        opacity: f32,
+        blend_mode_gpu: u32,
+        isolated: bool,
+    ) {
         match self.doc.find_node(layer_id) {
-            Some(LayerNode::Layer(layer)) => {
-                let blend = layer.blend();
-                let opacity = blend.opacity;
-                let blend_mode_gpu = blend.blend_mode.gpu_value;
-                let isolated = self.host_renders_isolated(layer_id);
-                self.compositor.update_layer_uniforms(
-                    &self.gpu.queue,
-                    layer_id,
-                    opacity,
-                    blend_mode_gpu,
-                    isolated,
-                );
-            }
-            Some(LayerNode::Group(g)) => {
-                let opacity = g.blend.opacity;
-                let blend_mode_gpu = g.blend.blend_mode.gpu_value;
-                let isolated = self.host_renders_isolated(layer_id);
-                self.compositor.update_group_uniforms(
-                    &self.gpu.queue,
-                    layer_id,
-                    opacity,
-                    blend_mode_gpu,
-                    isolated,
-                );
-            }
+            Some(LayerNode::Layer(_)) => self.compositor.update_layer_uniforms(
+                &self.gpu.queue,
+                layer_id,
+                opacity,
+                blend_mode_gpu,
+                isolated,
+            ),
+            Some(LayerNode::Group(_)) => self.compositor.update_group_uniforms(
+                &self.gpu.queue,
+                layer_id,
+                opacity,
+                blend_mode_gpu,
+                isolated,
+            ),
             None => {}
         }
     }

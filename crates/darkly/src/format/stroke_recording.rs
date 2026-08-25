@@ -189,7 +189,9 @@ pub fn replay(
     let stream_start = recording.events[0].time_ms;
     let mut timings = Vec::with_capacity(recording.events.len());
 
-    engine.begin_stroke(layer_id);
+    // A replay into a layer that refuses paint produces no events worth
+    // timing; every `stroke_to` below no-ops on the cleared active layer.
+    let _ = engine.begin_stroke(layer_id);
 
     let wall_start = Instant::now();
     for (i, ev) in recording.events.iter().enumerate() {

@@ -409,6 +409,58 @@ fn painting_a_smart_object_is_refused() {
         "a smart object's pixels come from its source, so paint has nowhere \
          to land that would survive the next frame",
     );
+
+    // The refusal has to be reported, not silent: a stroke that paints nothing
+    // and says nothing is indistinguishable from a broken brush.
+    let refusal = engine
+        .begin_stroke(id)
+        .expect_err("a smart object must refuse the stroke");
+    assert!(
+        refusal.contains("Rasterize"),
+        "the refusal must point at the way out; got {refusal:?}",
+    );
+}
+
+/// The way out of the refusal above: rasterizing replaces the smart object
+/// with a raster holding exactly what it rendered, and that raster accepts
+/// paint. One undo step brings the smart object back.
+#[test]
+fn rasterizing_a_smart_object_makes_it_paintable() {
+    let mut engine = test_engine(128, 128);
+    let id = place(&mut engine, red_blue_source());
+    let before = engine.test_readback_canvas();
+
+    assert!(
+        engine.can_flatten_node(id),
+        "a layer whose pixels are generated must offer the rasterize path",
+    );
+    let raster = engine.flatten_node(id).expect("rasterize succeeds");
+
+    assert!(
+        engine.is_node_paintable(raster),
+        "the rasterized layer owns its pixels, so paint lands on it",
+    );
+    engine
+        .begin_stroke(raster)
+        .expect("the raster accepts paint");
+    engine.end_stroke();
+
+    assert_eq!(
+        engine.test_readback_canvas(),
+        before,
+        "rasterizing must not change a single pixel of what was on screen",
+    );
+
+    engine.undo();
+    assert!(
+        engine.void_transform_info(id).is_some(),
+        "undo brings the smart object back, transform and all",
+    );
+    assert_eq!(
+        engine.test_readback_canvas(),
+        before,
+        "and the canvas is unchanged across the round trip",
+    );
 }
 
 /// A gizmo drag is many transform updates but one undo step.

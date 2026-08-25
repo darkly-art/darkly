@@ -180,18 +180,6 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
 
-export type PreviewStaging = { 
-/**
- * Iconify glyph shown in the dab slot, where a single stationary sample
- * has no motion to make the effect visible at all.
- */
-icon: string, 
-/**
- * Field painted under the stroke preview, giving the node something to
- * transport.
- */
-backdrop: PreviewBackdrop, };
-
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
  * Slider min when the port is disconnected (UI metadata only).
@@ -384,11 +372,23 @@ preview_image: boolean,
  */
 source: boolean, };
 
+export type PortDir = "Input" | "Output";
+
 export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
 
 export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
 
-export type PortDir = "Input" | "Output";
+export type PreviewStaging = { 
+/**
+ * Iconify glyph shown in the dab slot, where a single stationary sample
+ * has no motion to make the effect visible at all.
+ */
+icon: string, 
+/**
+ * Field painted under the stroke preview, giving the node something to
+ * transport.
+ */
+backdrop: PreviewBackdrop, };
 
 export type NodeRegistration = { 
 /**
@@ -585,6 +585,17 @@ export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 
 export type LayerTransformCapabilityReq = { id: number, };
 
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * Whether this modifier participates in transforms with its host.
+ */
+linkedToHost: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
+
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
  * Effective editability — `false` when this node *or any ancestor*
@@ -593,7 +604,14 @@ export type LayerInfo = { "type": "raster", id: number, name: string, visible: b
  * inheritance rule lives in one place (the document predicate)
  * rather than being recomputed by every Svelte component.
  */
-editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, 
+editable: boolean, 
+/**
+ * Whether paint ops have somewhere to land on this node — mirrors
+ * `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+ * generated (void, filter, vector) and for groups; the panel reads it
+ * to offer "Rasterize" instead of branching on `type`.
+ */
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, 
 /**
  * Stable `type_id` from the blend-mode registry (snake_case, e.g.
  * `"normal"`, `"color_burn"`). Resolve to a display label via the
@@ -607,7 +625,14 @@ modifiers: Array<ModifierInfo>,
 /**
  * Pixel-space bounds of the layer's GPU texture in canvas coords.
  */
-bounds: { origin: { x: number, y: number }, width: number, height: number }, } | { "type": "void", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
+bounds: { origin: { x: number, y: number }, width: number, height: number }, } | { "type": "void", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, 
+/**
+ * Whether paint ops have somewhere to land on this node — mirrors
+ * `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+ * generated (void, filter, vector) and for groups; the panel reads it
+ * to offer "Rasterize" instead of branching on `type`.
+ */
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
 /**
  * Iconify icon for this void kind (e.g. `"tabler:galaxy"`), resolved
  * per-subtype from the void's registration. The layer panel renders
@@ -623,7 +648,14 @@ voidType: string,
  * Param schema + current values, in the order the void's
  * `ParamDef` slice declares them. Same shape the veil panel uses.
  */
-params: Array<ParamInfo>, } | { "type": "filter", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, 
+params: Array<ParamInfo>, } | { "type": "filter", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, 
+/**
+ * Whether paint ops have somewhere to land on this node — mirrors
+ * `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+ * generated (void, filter, vector) and for groups; the panel reads it
+ * to offer "Rasterize" instead of branching on `type`.
+ */
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, 
 /**
  * Stable filter `type_id` (e.g. `"invert"`) — UI resolves to a
  * display label via `filter_types()`.
@@ -635,18 +667,21 @@ pipeline: string,
  * carries the five tone curves for `curves`. Same shape the void panel
  * uses.
  */
-params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
-
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, 
 /**
- * Whether this modifier participates in transforms with its host.
+ * Whether paint ops have somewhere to land on this node — mirrors
+ * `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+ * generated (void, filter, vector) and for groups; the panel reads it
+ * to offer "Rasterize" instead of branching on `type`.
  */
-linkedToHost: boolean, 
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, 
 /**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
+ * Whether paint ops have somewhere to land on this node — mirrors
+ * `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+ * generated (void, filter, vector) and for groups; the panel reads it
+ * to offer "Rasterize" instead of branching on `type`.
  */
-editable: boolean, };
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -1226,7 +1261,7 @@ export interface EngineApi {
     antialiasSelection(): void;
     applyFilter(req: ApplyFilterReq): Promise<boolean>;
     applyMask(req: ApplyMaskReq): void;
-    beginStroke(req: BeginStrokeReq): void;
+    beginStroke(req: BeginStrokeReq): Promise<null>;
     beginTransform(req: BeginTransformReq): Promise<boolean>;
     borderSelection(req: BorderSelectionReq): void;
     brushActiveCapabilities(): Promise<BrushGraphCapabilities>;
@@ -1419,7 +1454,7 @@ export function makeApi(t: Transport): EngineApi {
         antialiasSelection: () => t.postFF('antialias_selection'),
         applyFilter: (req) => t.request('apply_filter', req),
         applyMask: (req) => t.postFF('apply_mask', req),
-        beginStroke: (req) => t.postFF('begin_stroke', req),
+        beginStroke: (req) => t.request('begin_stroke', req),
         beginTransform: (req) => t.request('begin_transform', req),
         borderSelection: (req) => t.postFF('border_selection', req),
         brushActiveCapabilities: () => t.request('brush_active_capabilities'),

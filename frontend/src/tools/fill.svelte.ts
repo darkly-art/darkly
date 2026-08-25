@@ -1,5 +1,6 @@
 import { ToolBase, type ToolDescriptor } from './registry';
 import type { DarklyInstance } from '../state/app.svelte';
+import { beginPaintStroke } from './paint_stroke';
 
 /** Fill-tool session state — an app-global user preference. Persists within the
  *  session; resets on reload. */
@@ -17,7 +18,7 @@ class FillTool extends ToolBase {
 
         const c = this.inst.foreground;
 
-        engine.api.beginStroke({ id: layerId });
+        beginPaintStroke(engine, layerId);
         engine.api.strokeTo({
             op: {
                 op: 'flood_fill',

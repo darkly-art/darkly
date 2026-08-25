@@ -461,7 +461,7 @@ fn liquify_stroke_through_engine_preserves_detail() {
         .expect("liquify brush loads");
 
     // A long drag: enough events to cross several checkpoint intervals.
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     for step in 0..=60 {
         let t = step as f32 / 60.0;
         engine.stroke_to(StrokeOp::BrushStroke {

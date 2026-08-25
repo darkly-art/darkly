@@ -17,7 +17,9 @@ use darkly::nodegraph::NodeInstance;
 
 /// Paint a solid-color brush stroke at a given position.
 fn paint_at(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, r: f32, g: f32, b: f32) {
-    engine.begin_stroke(layer_id);
+    // Not unwrapped: callers also use this to prove a refused target stays
+    // untouched, where opening the stroke is expected to fail.
+    let _ = engine.begin_stroke(layer_id);
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
         y,
@@ -46,7 +48,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 
 /// Paint a horizontal brush stroke across the canvas at vertical center.
 fn paint_full_stroke(engine: &mut DarklyEngine, layer_id: LayerId, w: u32, h: u32) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     for x_step in 0..20 {
         let x = x_step as f32 * (w as f32 / 20.0);
         engine.stroke_to(StrokeOp::BrushStroke {
@@ -739,7 +741,7 @@ fn lasso_selection_performance_and_correctness() {
     assert!(engine.has_selection());
 
     // Correctness: paint across canvas, verify masking works.
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     for x_step in 0..40 {
         let x = x_step as f32 * (w as f32 / 40.0);
         engine.stroke_to(StrokeOp::BrushStroke {
@@ -803,7 +805,7 @@ fn alpha_sum(pixels: &[u8], w: u32, h: u32) -> u64 {
 }
 
 fn paint_horizontal_stroke(engine: &mut DarklyEngine, layer_id: LayerId, w: u32, h: u32) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     let samples = 40;
     for i in 0..samples {
         let t = i as f32 / (samples - 1) as f32;
@@ -909,7 +911,7 @@ fn small_brush_does_not_emit_subpixel_dab_spacing() {
     let x1 = (w as f32) - 16.0;
     let stroke_length_px = (x1 - x0).abs();
 
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     let samples = 40;
     for i in 0..samples {
         let t = i as f32 / (samples - 1) as f32;
@@ -1358,7 +1360,7 @@ fn mid_stroke_growth_preserves_already_saved_region() {
     // Now do a single stroke composed of multiple events, crossing the
     // canvas right edge. The first event is in-canvas; later events
     // trigger grow.
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     for x_step in 0..10 {
         let x = (cw as f32) * 0.4 + (x_step as f32) * 80.0;
         engine.stroke_to(StrokeOp::BrushStroke {
@@ -1847,7 +1849,7 @@ fn stroke_crossing_canvas_edge_keeps_early_dabs_in_place() {
     // Stroke from canvas (50, 100) to (-100, 100). The dab center crosses
     // x=0 partway through, triggering a negative-direction grow that
     // shifts `offset_x` to ≤ -256.
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     for step in 0..20 {
         let t = step as f32 / 19.0;
         let x = 50.0 - t * 150.0;
@@ -2186,7 +2188,7 @@ fn paint_mask_dab(engine: &mut DarklyEngine, host_id: LayerId, x: f32, y: f32, v
     let mask_id = engine
         .host_mask_id(host_id)
         .expect("paint_mask_dab requires the host to have a mask filter");
-    engine.begin_stroke(mask_id);
+    engine.begin_stroke(mask_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
         y,
@@ -2401,7 +2403,7 @@ fn engine_no_mask_brush_safe_on_layer() {
     let layer_id = engine.add_raster_layer(None);
 
     // No mask added; stroking on the layer must just paint the layer.
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x: (w / 2) as f32,
         y: (h / 2) as f32,
@@ -2433,7 +2435,7 @@ fn engine_mask_flood_fill() {
     engine.add_mask(layer_id);
     let mask_id = engine.host_mask_id(layer_id).unwrap();
 
-    engine.begin_stroke(mask_id);
+    engine.begin_stroke(mask_id).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: (w / 2) as f32,
         y: (h / 2) as f32,
@@ -2633,7 +2635,7 @@ fn engine_flood_fill_on_paste_extent_layer_translates_coords() {
 
     // Bucket-fill at canvas (32, 32) — center of the visible red block.
     // Tolerance 0 ⇒ only the contiguous red region should change.
-    engine.begin_stroke(pasted);
+    engine.begin_stroke(pasted).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: 32.0,
         y: 32.0,
@@ -2796,7 +2798,7 @@ fn passthrough_sub_canvas_group_mask_samples_own_space() {
     engine.set_group_passthrough(group_id, true);
     let child_id = engine.add_raster_layer(None);
     engine.move_layer(child_id, MoveTarget::IntoGroupTop(group_id));
-    engine.begin_stroke(child_id);
+    engine.begin_stroke(child_id).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: 1.0,
         y: 1.0,
@@ -2942,7 +2944,7 @@ fn painting_mask_past_bounds_grows_mask_independently() {
         cb: 0.0,
         ca: 1.0,
     };
-    engine.begin_stroke(mask_id);
+    engine.begin_stroke(mask_id).unwrap();
     engine.stroke_to(black((ox + 30) as f32, (oy + 30) as f32));
     engine.stroke_to(black(
         (ox + cw as i32) as f32 + 40.0,
@@ -3201,7 +3203,7 @@ fn apply_mask_reveals_host_outside_mask_footprint() {
     // footprint. The host grows to cover it; the mask stays 100×100.
     engine.resize_canvas(CanvasRect::from_xywh(0, 0, 300, 300));
     let (probe_x, probe_y) = (150.0f32, 150.0f32);
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x: probe_x,
         y: probe_y,
@@ -3280,7 +3282,7 @@ fn passthrough_group_with_visible_mask_applies_via_snapshot_lerp() {
     // visibly hides part of the child's contribution.
     engine.add_mask(group_id);
     let group_mask_id = engine.host_mask_id(group_id).expect("group has mask");
-    engine.begin_stroke(group_mask_id);
+    engine.begin_stroke(group_mask_id).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: 4.0,
         y: 4.0,
@@ -3698,7 +3700,7 @@ fn masked_leaf_composites_through_projection_cropped() {
 
     let layer_id = engine.add_raster_layer(None);
     // Flood the host opaque green (seed inside the cropped host bounds).
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: (ox + 1) as f32,
         y: (oy + 1) as f32,
@@ -3916,7 +3918,7 @@ fn rgba_at(pixels: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
 
 /// Paint a flood-fill of straight RGBA `(r, g, b, 255)` across `layer_id`.
 fn fill_layer(engine: &mut DarklyEngine, layer_id: LayerId, r: u8, g: u8, b: u8) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: 1.0,
         y: 1.0,
@@ -4148,7 +4150,7 @@ fn repeated_identity_transforms_on_mask_are_idempotent() {
 
     // Mid-gray fill on the mask. Cleanly tests the multiplicative bug:
     // each darkening pass would push 128 → 27 → 6 → ~1.
-    engine.begin_stroke(mask_id);
+    engine.begin_stroke(mask_id).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: 1.0,
         y: 1.0,
@@ -4210,7 +4212,7 @@ fn isolating_mask_modifier_renders_grayscale() {
 
     // Fill the mask with mid-gray (~50% coverage). With a normal render
     // the canvas would show red at half opacity over transparent.
-    engine.begin_stroke(mask_id);
+    engine.begin_stroke(mask_id).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: 1.0,
         y: 1.0,
@@ -4251,7 +4253,7 @@ fn isolating_mask_modifier_renders_grayscale() {
 /// the commit shader (output value) or the engine's clear/save sequence
 /// (which used to require a destructive setup-clear + un-clear dance).
 fn fill_mask_value(engine: &mut DarklyEngine, mask: darkly::layer::LayerId, value: u8) {
-    engine.begin_stroke(mask);
+    engine.begin_stroke(mask).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: 1.0,
         y: 1.0,
@@ -4402,7 +4404,7 @@ fn linked_host_ellipse_transform_preserves_mask_outside_selection() {
         canvas_h,
     ));
     let host = engine.add_raster_layer(None);
-    engine.begin_stroke(host);
+    engine.begin_stroke(host).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: (canvas_origin.0 + 1) as f32,
         y: (canvas_origin.1 + 1) as f32,
@@ -4418,7 +4420,7 @@ fn linked_host_ellipse_transform_preserves_mask_outside_selection() {
 
     engine.add_mask(host);
     let mask = engine.host_mask_id(host).expect("host has mask");
-    engine.begin_stroke(mask);
+    engine.begin_stroke(mask).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: (canvas_origin.0 + 1) as f32,
         y: (canvas_origin.1 + 1) as f32,
@@ -4872,7 +4874,7 @@ fn transform_translate_on_mask_moves_pixels() {
     let mask_id = engine.host_mask_id(host).expect("host has mask");
 
     // Distinct fill so we can spot the moved pattern.
-    engine.begin_stroke(mask_id);
+    engine.begin_stroke(mask_id).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: 1.0,
         y: 1.0,
@@ -4971,7 +4973,7 @@ fn mask_visible_during_transform_drag() {
     // 50/50 visibility boundary. Flood-fill is async — flush after each
     // submission so the next stroke sees its predecessor's pixels and
     // the selection state at *completion* time matches the intent.
-    engine.begin_stroke(mask_id);
+    engine.begin_stroke(mask_id).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: 1.0,
         y: 1.0,
@@ -4993,7 +4995,7 @@ fn mask_visible_during_transform_drag() {
         false,
         0.0,
     );
-    engine.begin_stroke(mask_id);
+    engine.begin_stroke(mask_id).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: 1.0,
         y: 1.0,
@@ -5072,7 +5074,7 @@ fn cancel_transform_on_mask_leaves_texture_pristine() {
     fill_layer(&mut engine, host, 255, 255, 255);
     engine.add_mask(host);
     let mask_id = engine.host_mask_id(host).expect("host has mask");
-    engine.begin_stroke(mask_id);
+    engine.begin_stroke(mask_id).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: 1.0,
         y: 1.0,
@@ -5133,7 +5135,7 @@ fn transform_mask_under_isolation_previews_grayscale() {
         // shape. The selections here constrain painting only; the transform
         // itself deliberately has no active selection.
         engine.select_all();
-        engine.begin_stroke(mask_id);
+        engine.begin_stroke(mask_id).unwrap();
         engine.stroke_to(StrokeOp::FloodFill {
             x: (ox + 1) as f32,
             y: (oy + 1) as f32,
@@ -5160,7 +5162,7 @@ fn transform_mask_under_isolation_previews_grayscale() {
                 false,
                 0.0,
             );
-            engine.begin_stroke(mask_id);
+            engine.begin_stroke(mask_id).unwrap();
             engine.stroke_to(StrokeOp::FloodFill {
                 x: x as f32,
                 y: y as f32,
@@ -5251,7 +5253,7 @@ fn isolated_selected_mask_transform_commit_uses_canvas_window_frame() {
     let host = engine.add_raster_layer(None);
     engine.add_mask(host);
     let mask = engine.host_mask_id(host).expect("host has mask");
-    engine.begin_stroke(mask);
+    engine.begin_stroke(mask).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: (ox + 1) as f32,
         y: (oy + 1) as f32,
@@ -5382,7 +5384,7 @@ fn long_stabilized_stroke_no_fallback() {
         darkly::config::ConfigValue::Float(0.0),
     );
 
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     // 400 samples along a slow spiral — enough to push the ring well past
     // `2 * max_divergence_window` (the failure threshold for defect 2). The
     // spiral exercises divergence on every event because relaxation keeps
@@ -5449,7 +5451,7 @@ fn run_predicted_l_stroke(
         darkly::config::ConfigValue::Float(predict_ms as f64),
     );
 
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     let mut t = 0.0f64;
     let mut sample = |engine: &mut DarklyEngine, x: f32, y: f32| {
         engine.stroke_to(StrokeOp::BrushStroke {
@@ -5564,7 +5566,7 @@ fn predicted_stroke_keeps_checkpoint_coverage() {
         darkly::config::ConfigValue::Float(30.0),
     );
 
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     let samples = 400usize;
     let cx = (w / 2) as f32;
     let cy = (h / 2) as f32;
@@ -5700,7 +5702,16 @@ fn locked_layer_rejects_modifications() {
     engine.set_opacity(layer_id, 0.5);
     engine.set_node_locked(layer_id, true);
 
-    // 1. Paint is blocked: pixels must be byte-identical to baseline.
+    // 1. Paint is blocked, and the refusal says why rather than no-opping
+    //    silently — a click that paints nothing is otherwise indistinguishable
+    //    from a broken brush.
+    let refusal = engine
+        .begin_stroke(layer_id)
+        .expect_err("a locked layer must refuse the stroke");
+    assert!(
+        refusal.contains(old_name) && refusal.contains("locked"),
+        "the refusal must name the layer and the reason; got {refusal:?}",
+    );
     paint_at(&mut engine, layer_id, 10.0, 10.0, 0.0, 1.0, 0.0);
     let after_paint = engine.test_readback_layer(layer_id);
     assert_eq!(

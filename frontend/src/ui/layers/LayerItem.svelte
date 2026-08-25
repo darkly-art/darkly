@@ -22,6 +22,10 @@
             // the icon); `editable` is the effective form (drives interaction
             // gates: rename, drag, mask/layer menu mutations).
             editable?: boolean;
+            // Whether paint lands on this layer — false for kinds whose pixels
+            // are generated (void, filter, vector). Mirrors
+            // `DarklyEngine::is_node_paintable`; drives the Rasterize offer.
+            paintable?: boolean;
             // Per-kind capability flags from the layer's registration (see
             // LayerKindRegistration). The panel reads these instead of
             // branching on `type` — a new layer kind declares its own and the
@@ -42,6 +46,7 @@
     } = $props();
 
     let editable = $derived(layer.editable !== false);
+    let paintable = $derived(layer.paintable !== false);
 
     // The mask modifier (if any) is one of the host's modifiers. The model
     // permits N; the UI exposes one.
@@ -190,8 +195,16 @@
             disabled: !isMulti && (!canMergeDownForThis || !editable),
             onclick: menuMerge,
         });
-        if (!isMulti && hasMask) {
-            items.push({ label: 'Flatten', disabled: !editable, onclick: menuFlatten });
+        // One action, two names: baking a mask into the pixels it already owns
+        // is "Flatten", while handing a generated layer its own pixels is
+        // "Rasterize" — the verb every editor uses for it, and the answer to
+        // "why can't I paint on this?".
+        if (!isMulti && (hasMask || !paintable)) {
+            items.push({
+                label: paintable ? 'Flatten' : 'Rasterize',
+                disabled: !editable,
+                onclick: menuFlatten,
+            });
         }
         items.push({ separator: true });
         items.push({
