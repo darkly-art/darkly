@@ -13,6 +13,7 @@ import {
     ribbonPath,
     visibleSpan,
     present,
+    packBands,
     FOCUS_LINE,
     type WheelGeometry,
     type SectionExtent,
@@ -379,6 +380,125 @@ describe('present', () => {
         const empty = present({ listScrollTop: 0, wheelScrollTop: 0, driver: 'list' }, EMPTY);
         expect(empty.focused).toBeNull();
         expect(empty.curves).toEqual([]);
+    });
+});
+
+describe('packBands', () => {
+    /** Panes 200 tall side by side, cards ending at x=100, sections at x=140. */
+    const L = {
+        wheelTop: 0,
+        wheelBottom: 200,
+        listTop: 0,
+        listBottom: 200,
+        cardRight: 100,
+        sectionLeft: 140,
+        cardHeight: 52,
+    };
+    const PACKS = SPACED.sections.map(s => ({ id: s.id, primary: `#${s.id}` }));
+    const at = (listScrollTop: number) =>
+        packBands(
+            present({ listScrollTop, wheelScrollTop: 0, driver: 'list' }, SPACED),
+            SPACED,
+            L,
+            PACKS,
+        );
+
+    /** Where card `i` is actually painted: its own box, moved by the wheel and
+     *  shrunk by the rolodex curve about its trailing edge. Stated here from
+     *  the fixture so the assertions below are about the card, not about
+     *  however `packBands` chooses to find it. */
+    const painted = (i: number, wheelScrollTop: number) => {
+        const scale = cardCurve(i, wheelScrollTop, SPACED).scale;
+        const top = L.wheelTop + SPACED.wheelLead + i * SPACED.cardAdvance - wheelScrollTop;
+        const centreY = top + L.cardHeight / 2;
+        return {
+            centreY,
+            top: centreY - (L.cardHeight * scale) / 2,
+            bottom: centreY + (L.cardHeight * scale) / 2,
+        };
+    };
+
+    it('leaves the card at its own centre, not its slot centre', () => {
+        // The regression: a card's *slot* is its height plus the gap to the
+        // next one, so the slot's centre sits half a gap below the card's. A
+        // band drawn to the slot rides that much low against every card.
+        const y = scrollTopForSection(1, SPACED);
+        const wheel = listToWheel(y, SPACED);
+        for (const band of at(y)) {
+            const i = PACKS.findIndex(p => p.id === band.id);
+            const mid = (band.ribbon.top0 + band.ribbon.bottom0) / 2;
+            expect(mid).toBeCloseTo(painted(i, wheel).centreY, 5);
+        }
+    });
+
+    it('leaves every card on the same vertical line, whatever its scale', () => {
+        // Cards are scaled about their trailing edge, so that edge does not
+        // move and a band can simply stop there. Tracking a scaled edge instead
+        // — which is what a centre-anchored card forces — left a gap beside
+        // every card but the focused one, widening with distance from the line.
+        for (const y of [0, scrollTopForSection(1, SPACED), listMax(SPACED)]) {
+            for (const band of at(y)) {
+                expect(band.ribbon.x0).toBe(L.cardRight);
+            }
+        }
+    });
+
+    it('leaves a card without overlapping it', () => {
+        // A card is tilted and scaled by the rolodex curve, so it paints as a
+        // trapezoid inside a taller upright box. A band that overlapped that
+        // box — as it did when both ends were nudged under what they join —
+        // shows around the corners of the shape actually drawn, reading as the
+        // band sitting on top of the card instead of leaving it.
+        for (const band of at(scrollTopForSection(1, SPACED))) {
+            expect(band.ribbon.x0).toBe(L.cardRight);
+        }
+    });
+
+    it('arrives under the section, where the overlap cannot be seen', () => {
+        for (const band of at(scrollTopForSection(1, SPACED))) {
+            expect(band.ribbon.x1).toBeGreaterThan(L.sectionLeft);
+        }
+    });
+
+    it('leaves at the card height the curve is painting', () => {
+        // Not the height of the box a tilted card reports: the band has to
+        // match the card as drawn, and the scale is known without asking.
+        const band = at(scrollTopForSection(1, SPACED)).find(b => b.id === 'b')!;
+        const scale = cardCurve(1, listToWheel(scrollTopForSection(1, SPACED), SPACED), SPACED)
+            .scale;
+        expect(band.ribbon.bottom0 - band.ribbon.top0).toBeCloseTo(L.cardHeight * scale, 5);
+    });
+
+    it('draws one band per pack on screen and none for the rest', () => {
+        // Continuity comes from the set changing one pack at a time, each
+        // shrinking to nothing before it goes.
+        const centred = at(scrollTopForSection(1, SPACED));
+        expect(centred.map(b => b.id)).toContain('b');
+        for (const band of centred) {
+            expect(band.ribbon.bottom1).toBeGreaterThan(band.ribbon.top1);
+            expect(band.ribbon.bottom0).toBeGreaterThan(band.ribbon.top0);
+        }
+    });
+
+    it('trims a band to both panes rather than drawing outside them', () => {
+        for (const band of at(scrollTopForSection(2, SPACED))) {
+            expect(band.ribbon.top0).toBeGreaterThanOrEqual(L.wheelTop);
+            expect(band.ribbon.bottom0).toBeLessThanOrEqual(L.wheelBottom);
+            expect(band.ribbon.top1).toBeGreaterThanOrEqual(L.listTop);
+            expect(band.ribbon.bottom1).toBeLessThanOrEqual(L.listBottom);
+        }
+    });
+
+    it('carries each pack its own colour and the fade its card is under', () => {
+        const frame = present(
+            { listScrollTop: scrollTopForSection(0, SPACED), wheelScrollTop: 0, driver: 'list' },
+            SPACED,
+        );
+        for (const band of packBands(frame, SPACED, L, PACKS)) {
+            const i = PACKS.findIndex(p => p.id === band.id);
+            expect(band.primary).toBe(PACKS[i].primary);
+            expect(band.opacity).toBe(frame.curves[i].opacity);
+        }
     });
 });
 

@@ -116,6 +116,35 @@ export interface Ribbon {
 }
 
 /**
+ * Where the panes sit and how wide a card is, in the coordinates of the box
+ * that holds them both.
+ *
+ * Layout, not position: every field here changes only when something resizes,
+ * so it is measured on the resize observer and never in the frame loop. That is
+ * what lets a band be *computed* rather than read back — the alternative,
+ * asking the DOM for each card's and section's rectangle every frame, both
+ * forces a synchronous layout and returns the card transforms from the frame
+ * before, since those are applied after the loop yields.
+ */
+export interface PaneLayout {
+    /** The wheel scrollport's vertical extent. */
+    wheelTop: number;
+    wheelBottom: number;
+    /** The list scrollport's vertical extent. */
+    listTop: number;
+    listBottom: number;
+    /** The vertical line every card's trailing edge sits on. One number for
+     *  every card at every scale, because the rolodex curve is anchored there
+     *  (`transform-origin: right center`) — a card recedes by shrinking away
+     *  from this edge, never across it. */
+    cardRight: number;
+    /** Where a section's leading edge is. */
+    sectionLeft: number;
+    /** A card's own height, which is the advance less the gap between cards. */
+    cardHeight: number;
+}
+
+/**
  * One pack's band, ready to draw.
  *
  * There is one of these per pack *on screen*, not one for the focused pack. A
@@ -398,4 +427,74 @@ export function present(sample: Sample, g: WheelGeometry): Frame {
         focused: focusedSection(listScrollTop, g),
         curves: g.sections.map((_, i) => cardCurve(i, wheelScrollTop, g)),
     };
+}
+
+/**
+ * How far a band runs *under* the section it arrives at. The panes paint over
+ * the overlay, so the overlap is invisible and buys immunity to the half-pixel
+ * seam subpixel layout opens between boxes that merely abut.
+ *
+ * There is deliberately no counterpart at the card end. A card is tilted and
+ * scaled by the rolodex curve, so it is painted as a trapezoid inside a taller
+ * upright box; a band overlapping that box shows around the corners of the
+ * shape actually drawn, which reads as the band sitting on top of the card
+ * rather than leaving it.
+ */
+const SECTION_OVERLAP = 3;
+
+/**
+ * A band for every pack on screen, from the same numbers the wheel is being
+ * driven with this frame.
+ *
+ * Computed, not measured. Both ends therefore describe where their pane will be
+ * once this frame is painted, rather than where the DOM says it was before the
+ * frame's `scrollTop` write — and the card end matches the card's *painted*
+ * height, scaled by its own curve, instead of the upright box a tilted card
+ * still reports.
+ *
+ * A pack contributes nothing when either end has scrolled out of its pane,
+ * which is what makes the set of bands change continuously: one shrinks away as
+ * its last row leaves while the next grows from nothing.
+ */
+export function packBands(
+    frame: Frame,
+    g: WheelGeometry,
+    l: PaneLayout,
+    packs: Array<{ id: string; primary: string }>,
+): PackBand[] {
+    const out: PackBand[] = [];
+    const n = Math.min(packs.length, g.sections.length, frame.curves.length);
+    for (let i = 0; i < n; i++) {
+        const s = g.sections[i];
+        const top = l.listTop + s.top - frame.listScrollTop;
+        const arrives = visibleSpan(top, top + s.height, l.listTop, l.listBottom);
+        if (!arrives) continue;
+
+        // The card's *own* box, not the slot it occupies. A slot is the card
+        // plus the gap to the next one, so its centre sits half a gap below the
+        // card's — enough to ride visibly low against every card in the column.
+        // The mapping is free to think in slots, since a uniform offset there
+        // is invisible; a band drawn against a card is not.
+        const scale = frame.curves[i].scale;
+        const centre =
+            l.wheelTop + g.wheelLead + i * g.cardAdvance + l.cardHeight / 2 - frame.wheelScrollTop;
+        const half = (l.cardHeight * scale) / 2;
+        const leaves = visibleSpan(centre - half, centre + half, l.wheelTop, l.wheelBottom);
+        if (!leaves) continue;
+
+        out.push({
+            id: packs[i].id,
+            primary: packs[i].primary,
+            opacity: frame.curves[i].opacity,
+            ribbon: {
+                x0: l.cardRight,
+                top0: leaves.top,
+                bottom0: leaves.bottom,
+                x1: l.sectionLeft + SECTION_OVERLAP,
+                top1: arrives.top,
+                bottom1: arrives.bottom,
+            },
+        });
+    }
+    return out;
 }

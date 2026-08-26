@@ -58,9 +58,13 @@
          * edge that has to be flat for the two to meet. */
         border-radius: var(--radius-md) 0 0 var(--radius-md);
         cursor: pointer;
-        /* The curve is applied per card from `cardCurve`; keep the origin at the
-         * card's own centre so the tilt reads as depth rather than sliding. */
-        transform-origin: center center;
+        /* The curve is applied per card from `cardCurve`, anchored to the
+         * trailing edge. Cards recede toward the ends of the column but their
+         * right edges stay on one vertical line — which is what the projection
+         * leaves from, so it can meet every card at a fixed x instead of
+         * chasing an edge that moves with the scale. Anchoring the origin here
+         * is why that is true rather than approximately true. */
+        transform-origin: right center;
         will-change: transform, opacity;
         transition: background var(--transition-fast);
     }

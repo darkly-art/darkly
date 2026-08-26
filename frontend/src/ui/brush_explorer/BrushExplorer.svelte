@@ -36,11 +36,12 @@
     import { groupByPack, matchesQuery, packNamesByBrush, withRecents } from '../brush_library/grouping';
     import {
         FOCUS_LINE,
+        packBands,
         present,
         scrollTopForSection,
-        visibleSpan,
         type CardCurve,
         type PackBand,
+        type PaneLayout,
         type SectionExtent,
         type WheelGeometry,
     } from './wheel';
@@ -99,61 +100,20 @@
     let focused = $state<number | null>(null);
     let curves = $state<CardCurve[]>([]);
     /** One band per pack currently on screen, in explorer-local coordinates.
-     *
-     *  Read straight off the rendered boxes rather than derived from
-     *  `geometry`: the two panes start at different heights (the search field
-     *  sits above the list), the cards carry the rolodex transform, and both a
-     *  section's and a card's extent are clipped by their scrollport — offsets
-     *  the mapping has no reason to know about, any one of which wrong detaches
-     *  a band from what it is drawn between. */
+     *  Computed from the frame's own sample — see `packBands`. */
     let bands = $state<PackBand[]>([]);
 
-    /** Both ends of a band run this far *under* what they join. The panes are
-     *  positioned and so paint over the overlay, which hides the overlap
-     *  entirely — and buys immunity to the half-pixel seam that subpixel layout
-     *  otherwise opens between two boxes that merely abut. */
-    const OVERLAP = 3;
-
-    function updateBands() {
-        if (!explorerEl || !listEl || !wheelEl) {
-            bands = [];
-            return;
-        }
-        const cards = wheelEl.querySelectorAll<HTMLElement>('.pack-card');
-        const sections = sectionElements();
-        const base = explorerEl.getBoundingClientRect();
-        const listPort = listEl.getBoundingClientRect();
-        const wheelPort = wheelEl.getBoundingClientRect();
-
-        const next: PackBand[] = [];
-        // Bounded by all three, so a group list that has changed since the last
-        // measurement draws only the packs that exist in every one of them.
-        const n = Math.min(cards.length, sections.length, groups.length);
-        for (let i = 0; i < n; i++) {
-            const s = sections[i].getBoundingClientRect();
-            const arrives = visibleSpan(s.top, s.bottom, listPort.top, listPort.bottom);
-            if (!arrives) continue;
-            const c = cards[i].getBoundingClientRect();
-            // Clipped against the wheel too: a card scrolled out of its column
-            // would otherwise throw a band in from outside the pane.
-            const leaves = visibleSpan(c.top, c.bottom, wheelPort.top, wheelPort.bottom);
-            if (!leaves) continue;
-            next.push({
-                id: groups[i].id,
-                primary: groups[i].primary,
-                opacity: curves[i]?.opacity ?? 1,
-                ribbon: {
-                    x0: c.right - base.left - OVERLAP,
-                    top0: leaves.top - base.top,
-                    bottom0: leaves.bottom - base.top,
-                    x1: s.left - base.left + OVERLAP,
-                    top1: arrives.top - base.top,
-                    bottom1: arrives.bottom - base.top,
-                },
-            });
-        }
-        bands = next;
-    }
+    /** Where the panes and the cards sit. Measured beside `geometry`, on the
+     *  resize observer, because none of it moves when something scrolls. */
+    let layout = $state<PaneLayout>({
+        wheelTop: 0,
+        wheelBottom: 0,
+        listTop: 0,
+        listBottom: 0,
+        cardRight: 0,
+        sectionLeft: 0,
+        cardHeight: 0,
+    });
 
     /** Identity of the last geometry written, as a plain (non-reactive) local.
      *
@@ -176,10 +136,16 @@
         return listEl ? [...listEl.querySelectorAll<HTMLElement>(':scope > section')] : [];
     }
 
-    /** Read both scrollports and the rendered sections. Reads the DOM only —
-     *  never `geometry` — for the reason above. */
+    /** Read both scrollports, the rendered sections, and where everything sits.
+     *  Reads the DOM only — never `geometry` — for the reason above.
+     *
+     *  This is the *only* place the DOM is measured. The frame loop reads two
+     *  scroll offsets and writes one, and computes everything else from what
+     *  was measured here; nothing in it asks the DOM a question, so nothing in
+     *  it can force a layout or read back a value the current frame has not
+     *  applied yet. */
     function measure() {
-        if (!listEl || !wheelEl) return;
+        if (!listEl || !wheelEl || !explorerEl) return;
 
         // The card pitch comes from the stylesheet rather than being repeated
         // here. With fewer than two cards the wheel has no scroll range, so any
@@ -211,6 +177,26 @@
             geometryKey = key;
             geometry = next;
         }
+
+        // Positions of the boxes themselves, relative to the explorer. A card's
+        // `offsetLeft`/`offsetHeight` are layout, so unlike its bounding rect
+        // they describe the card the rolodex curve is applied *to* rather than
+        // the tilted box it currently occupies.
+        const base = explorerEl.getBoundingClientRect();
+        const wheelPort = wheelEl.getBoundingClientRect();
+        const listPort = listEl.getBoundingClientRect();
+        const card = cards[0];
+        layout = {
+            wheelTop: wheelPort.top - base.top,
+            wheelBottom: wheelPort.bottom - base.top,
+            listTop: listPort.top - base.top,
+            listBottom: listPort.bottom - base.top,
+            cardRight: card
+                ? wheelPort.left - base.left + card.offsetLeft + card.offsetWidth
+                : wheelPort.right - base.left,
+            sectionLeft: listPort.left - base.left + (els[0]?.offsetLeft ?? 0),
+            cardHeight: card?.offsetHeight ?? next.cardAdvance,
+        };
         wake();
     }
 
@@ -274,7 +260,7 @@
         // differently — the exact disagreement this loop exists to prevent.
         focused = frame.focused === null ? null : Math.min(frame.focused, groups.length - 1);
         curves = frame.curves;
-        updateBands();
+        bands = packBands(frame, geometry, layout, groups);
 
         const moved = listEl.scrollTop !== lastList || wheelEl.scrollTop !== lastWheel;
         lastList = listEl.scrollTop;
