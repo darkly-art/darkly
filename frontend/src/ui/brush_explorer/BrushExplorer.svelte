@@ -14,13 +14,15 @@
      * what made the old dropdown impossible to use with a pen, since resting a
      * hand closed it.
      *
-     * The right pane is the single authority for scroll position. The wheel is
-     * a projection of it that may also drive it; `ScrollSyncToken` arbitrates
-     * so the two cannot oscillate. Neither position is mirrored into `$state` —
-     * mirroring a scrollport into a rune and writing it back is how the
-     * oscillation gets a third participant.
+     * Both panes are real scrollports, so pen and touch momentum come from the
+     * platform on either side. What keeps them from oscillating is that only
+     * one of them is ever *driven*: `driver` names the pane the user has their
+     * hand on, taken from input events, and each frame the other pane is moved
+     * to match it. Nothing is derived from a `scroll` event — they only mark
+     * the frame loop as live — because a programmatic `scrollTop` write lands
+     * synchronously while its `scroll` event does not, and anything computed
+     * from the event describes a position the pane has already left.
      */
-    import { SvelteSet } from 'svelte/reactivity';
     import Modal from '../Modal.svelte';
     import Icon from '../../icons/Icon.svelte';
     import { brushGraph } from '../../state/brush_graph.svelte';
@@ -28,18 +30,17 @@
     import { brushLibrary } from '../../state/brush_library.svelte';
     import { recentBrushes } from '../../state/recents.svelte';
     import { packIcon, PACK_ICON_FALLBACK } from '../../lib/packIcon';
-    import { ScrollSyncToken } from '../../lib/scrollSync';
     import BrushTile from '../brush_library/BrushTile.svelte';
     import PackWheel from './PackWheel.svelte';
     import PackProjection from './PackProjection.svelte';
     import { groupByPack, matchesQuery, packNamesByBrush, withRecents } from '../brush_library/grouping';
     import {
-        listToWheel,
-        wheelToList,
+        FOCUS_LINE,
+        present,
         scrollTopForSection,
-        focusedSection,
         visibleSpan,
-        type Ribbon,
+        type CardCurve,
+        type PackBand,
         type SectionExtent,
         type WheelGeometry,
     } from './wheel';
@@ -61,17 +62,10 @@
     let listEl: HTMLElement | undefined = $state();
     let wheelEl: HTMLElement | undefined = $state();
 
-    /** Group ids the user has folded shut. Session state, and deliberately not
-     *  persisted: a pack you closed to get it out of the way of one search is
-     *  not a pack you want closed forever. Collapsing changes the sections'
-     *  heights, which the resize observer picks up, so the wheel re-maps
-     *  itself with no extra plumbing. */
-    let collapsed = $state(new SvelteSet<string>());
-
-    function toggleGroup(id: string) {
-        if (collapsed.has(id)) collapsed.delete(id);
-        else collapsed.add(id);
-    }
+    /** The pane the user is driving. Set from input events — a `pointerdown` or
+     *  a mouse wheel is unambiguously a hand, where a `scroll` event might be
+     *  the echo of our own write to the other pane. */
+    let driver: 'list' | 'wheel' = 'list';
 
     const packNames = $derived(packNamesByBrush(brushLibrary.packs));
     const filtered = $derived(brushLibrary.brushes.filter(b => matchesQuery(b, query, packNames)));
@@ -100,50 +94,65 @@
         wheelScrollMax: 0,
         sections: [],
     });
+    /** All published together, once per frame, from one sample. Separately
+     *  they are the three things that used to disagree. */
     let focused = $state<number | null>(null);
+    let curves = $state<CardCurve[]>([]);
+    /** One band per pack currently on screen, in explorer-local coordinates.
+     *
+     *  Read straight off the rendered boxes rather than derived from
+     *  `geometry`: the two panes start at different heights (the search field
+     *  sits above the list), the cards carry the rolodex transform, and both a
+     *  section's and a card's extent are clipped by their scrollport — offsets
+     *  the mapping has no reason to know about, any one of which wrong detaches
+     *  a band from what it is drawn between. */
+    let bands = $state<PackBand[]>([]);
 
-    /** The band joining the focused card to its section, in explorer-local
-     *  coordinates. Read straight off the rendered boxes on every scroll rather
-     *  than derived from `geometry`: the two panes start at different heights
-     *  (the search field sits above the list), the focused card carries the
-     *  rolodex transform, and a section's extent is clipped by the scrollport —
-     *  three offsets the mapping has no reason to know about, and any one of
-     *  them wrong detaches the ribbon from what it is drawn between. */
-    let ribbon = $state<Ribbon | null>(null);
-    const focusedGroup = $derived(focused === null ? undefined : groups[focused]);
+    /** Both ends of a band run this far *under* what they join. The panes are
+     *  positioned and so paint over the overlay, which hides the overlap
+     *  entirely — and buys immunity to the half-pixel seam that subpixel layout
+     *  otherwise opens between two boxes that merely abut. */
+    const OVERLAP = 3;
 
-    function updateRibbon() {
-        const section = focused === null ? undefined : sectionElements()[focused];
-        const card =
-            focused === null
-                ? undefined
-                : wheelEl?.querySelectorAll<HTMLElement>('.pack-card')[focused];
-        if (!explorerEl || !listEl || !card || !section) {
-            ribbon = null;
+    function updateBands() {
+        if (!explorerEl || !listEl || !wheelEl) {
+            bands = [];
             return;
         }
+        const cards = wheelEl.querySelectorAll<HTMLElement>('.pack-card');
+        const sections = sectionElements();
         const base = explorerEl.getBoundingClientRect();
-        const c = card.getBoundingClientRect();
-        const s = section.getBoundingClientRect();
-        const port = listEl.getBoundingClientRect();
-        const span = visibleSpan(s.top, s.bottom, port.top, port.bottom);
-        if (!span) {
-            ribbon = null;
-            return;
+        const listPort = listEl.getBoundingClientRect();
+        const wheelPort = wheelEl.getBoundingClientRect();
+
+        const next: PackBand[] = [];
+        // Bounded by all three, so a group list that has changed since the last
+        // measurement draws only the packs that exist in every one of them.
+        const n = Math.min(cards.length, sections.length, groups.length);
+        for (let i = 0; i < n; i++) {
+            const s = sections[i].getBoundingClientRect();
+            const arrives = visibleSpan(s.top, s.bottom, listPort.top, listPort.bottom);
+            if (!arrives) continue;
+            const c = cards[i].getBoundingClientRect();
+            // Clipped against the wheel too: a card scrolled out of its column
+            // would otherwise throw a band in from outside the pane.
+            const leaves = visibleSpan(c.top, c.bottom, wheelPort.top, wheelPort.bottom);
+            if (!leaves) continue;
+            next.push({
+                id: groups[i].id,
+                primary: groups[i].primary,
+                opacity: curves[i]?.opacity ?? 1,
+                ribbon: {
+                    x0: c.right - base.left - OVERLAP,
+                    top0: leaves.top - base.top,
+                    bottom0: leaves.bottom - base.top,
+                    x1: s.left - base.left + OVERLAP,
+                    top1: arrives.top - base.top,
+                    bottom1: arrives.bottom - base.top,
+                },
+            });
         }
-        // Both ends run a little way *under* what they join. The panes are
-        // positioned and so paint over the overlay, which hides the overlap
-        // entirely — and buys immunity to the half-pixel seam that subpixel
-        // layout otherwise opens between two boxes that merely abut.
-        const OVERLAP = 3;
-        ribbon = {
-            x0: c.right - base.left - OVERLAP,
-            top0: c.top - base.top,
-            bottom0: c.bottom - base.top,
-            x1: s.left - base.left + OVERLAP,
-            top1: span.top - base.top,
-            bottom1: span.bottom - base.top,
-        };
+        bands = next;
     }
 
     /** Identity of the last geometry written, as a plain (non-reactive) local.
@@ -155,9 +164,6 @@
      *  breaks that cycle, and skipping identical writes is what lets the
      *  measure/render loop settle. */
     let geometryKey = '';
-
-    const sync = new ScrollSyncToken<'list' | 'wheel'>();
-    const now = () => (typeof performance !== 'undefined' ? performance.now() : 0);
 
     /** Every rendered group section, in document order.
      *
@@ -205,8 +211,7 @@
             geometryKey = key;
             geometry = next;
         }
-        focused = focusedSection(listEl.scrollTop, next);
-        updateRibbon();
+        wake();
     }
 
     // Re-measure whenever the group set changes or anything resizes, rather
@@ -225,32 +230,80 @@
         return () => ro.disconnect();
     });
 
-    function onListScroll() {
+    /** How many still frames end the loop. A few, not one: native momentum can
+     *  deliver two successive frames at the same position and keep going. */
+    const IDLE_FRAMES = 8;
+    let raf = 0;
+    let idle = 0;
+    let lastList = -1;
+    let lastWheel = -1;
+
+    /**
+     * One frame: sample both panes, move the driven one, and publish everything
+     * that depends on where they now are.
+     *
+     * The `scrollTop` write and the ribbon's `getBoundingClientRect` reads are
+     * in the same callback on purpose — the read flushes the write and observes
+     * it, so the band is drawn to where the card *is* this frame rather than
+     * where it was last one.
+     */
+    function pump() {
+        raf = 0;
         if (!listEl || !wheelEl) return;
-        focused = focusedSection(listEl.scrollTop, geometry);
-        if (sync.claim('list', now())) {
-            wheelEl.scrollTop = listToWheel(listEl.scrollTop, geometry);
-        }
-        // Outside the claim: the ribbon is drawn from wherever the two panes
-        // *are*, including the frames where this pane lost the arbitration and
-        // is being driven by the other one.
-        updateRibbon();
+
+        const frame = present(
+            {
+                listScrollTop: listEl.scrollTop,
+                wheelScrollTop: wheelEl.scrollTop,
+                driver,
+            },
+            geometry,
+        );
+        // Only ever the pane the user is *not* touching. Writing the driver's
+        // own scrollTop would cancel the momentum it is running on.
+        const driven = driver === 'list' ? wheelEl : listEl;
+        const target = driver === 'list' ? frame.wheelScrollTop : frame.listScrollTop;
+        // Sub-pixel writes are ignored: assigning a value the pane already has
+        // still costs a scroll event, which would keep the loop awake forever.
+        if (Math.abs(driven.scrollTop - target) > 0.5) driven.scrollTop = target;
+
+        // Clamped to what is *rendered*. `geometry` is measured asynchronously,
+        // so while a search narrows the group list its sections outlive the
+        // elements by a frame, and an index past the end would leave `focused`,
+        // the card it highlights and the ribbon's colour each resolving
+        // differently — the exact disagreement this loop exists to prevent.
+        focused = frame.focused === null ? null : Math.min(frame.focused, groups.length - 1);
+        curves = frame.curves;
+        updateBands();
+
+        const moved = listEl.scrollTop !== lastList || wheelEl.scrollTop !== lastWheel;
+        lastList = listEl.scrollTop;
+        lastWheel = wheelEl.scrollTop;
+        idle = moved ? 0 : idle + 1;
+        if (idle < IDLE_FRAMES) raf = requestAnimationFrame(pump);
     }
 
-    function onWheelScroll() {
-        if (!listEl || !wheelEl) return;
-        if (sync.claim('wheel', now())) {
-            listEl.scrollTop = wheelToList(wheelEl.scrollTop, geometry);
-            focused = focusedSection(listEl.scrollTop, geometry);
-        }
-        updateRibbon();
+    /** Mark the panes as moving. Every scroll event and every input lands here
+     *  and nowhere else: an event's job is to keep the loop alive, never to
+     *  compute anything from a position it may already have left. */
+    function wake() {
+        idle = 0;
+        if (!raf) raf = requestAnimationFrame(pump);
     }
 
-    /** A tap on a card takes you to that pack. Works at every size, including
-     *  when the wheel has no scroll range of its own. */
+    function drive(side: 'list' | 'wheel') {
+        driver = side;
+        wake();
+    }
+
+    /** A tap on a card takes you to that pack. The list is the driver for the
+     *  length of the animation — a tap is a command to move the list, and the
+     *  wheel follows it frame by frame, so the card stays under the pointer and
+     *  the projection stretches through the jump instead of teleporting at the
+     *  end of it. */
     function jumpTo(index: number) {
         if (!listEl) return;
-        sync.preempt('wheel', now());
+        drive('list');
         listEl.scrollTo({ top: scrollTopForSection(index, geometry), behavior: 'smooth' });
     }
 
@@ -264,19 +317,31 @@
     $effect(() => {
         if (open) query = '';
     });
+
+    // The loop belongs to the open dialog. A closed explorer schedules nothing,
+    // and the teardown is what guarantees a stray frame cannot outlive it.
+    $effect(() => {
+        if (!open) return;
+        wake();
+        return () => {
+            if (raf) cancelAnimationFrame(raf);
+            raf = 0;
+        };
+    });
 </script>
 
 <Modal bind:open title="Brushes" size="full">
     <div class="explorer" bind:this={explorerEl}>
-        <PackProjection {ribbon} primary={focusedGroup?.primary ?? 'transparent'} />
+        <PackProjection {bands} />
 
         <PackWheel
             {groups}
             {geometry}
             {focused}
+            {curves}
             bind:el={wheelEl}
-            onScroll={onWheelScroll}
-            onPointerDown={() => sync.preempt('wheel', now())}
+            onScroll={wake}
+            onDrive={() => drive('wheel')}
             onPick={jumpTo}
         />
 
@@ -294,61 +359,50 @@
             <div
                 class="list"
                 bind:this={listEl}
-                onscroll={onListScroll}
-                onpointerdown={() => sync.preempt('list', now())}
+                onscroll={wake}
+                onpointerdown={() => drive('list')}
+                onwheel={() => drive('list')}
             >
                 {#if groups.length === 0}
                     <div class="empty">
                         {#if query}No brushes match “{query}”.{:else}No brushes yet.{/if}
                     </div>
                 {:else}
-                    <!-- Half a viewport of leading space, so the *first* pack
-                         can reach the focus line at the centre. Without it the
-                         list starts already scrolled past it: at scrollTop 0
-                         the centre lands half a viewport into the content,
-                         which is somewhere inside the second pack, and no
-                         amount of scrolling up can highlight the first. -->
-                    <div class="lead"></div>
+                    <!-- Leading space, so the *first* pack can reach the focus
+                         line. Without it the list starts already scrolled past
+                         it: at scrollTop 0 the line lands inside whatever pack
+                         is under it, and no amount of scrolling up can bring
+                         the first one to it. -->
+                    <div class="lead" style:height="{FOCUS_LINE * 100}%"></div>
                     {#each groups as group (group.id)}
-                        {@const shut = collapsed.has(group.id)}
                         <section
                             class="group"
-                            class:shut
                             style:--pack-primary={group.primary}
                             style:--pack-secondary={group.secondary}
                         >
-                            <button
-                                type="button"
-                                class="spine"
-                                aria-expanded={!shut}
-                                aria-label={group.label}
-                                title={group.label}
-                                onclick={() => toggleGroup(group.id)}
-                            >
+                            <div class="spine" title={group.label}>
                                 <Icon name={group.icon} class="spine-icon" />
-                            </button>
-                            {#if !shut}
-                                <div class="grid">
-                                    {#each group.brushes as brush (brush.id)}
-                                        <BrushTile
-                                            {brush}
-                                            active={brush.name === brushGraph.activeBrush}
-                                            onSelect={selectBrush}
-                                        />
-                                    {/each}
-                                </div>
-                            {/if}
+                            </div>
+                            <div class="grid">
+                                {#each group.brushes as brush (brush.id)}
+                                    <BrushTile
+                                        {brush}
+                                        active={brush.name === brushGraph.activeBrush}
+                                        onSelect={selectBrush}
+                                    />
+                                {/each}
+                            </div>
                         </section>
                     {/each}
-                    <!-- Trailing space so the *last* pack's heading can still
-                         reach the top of the viewport, instead of every final
-                         card jumping to the same clamped position.
+                    <!-- Trailing space so the *last* pack can reach the focus
+                         line too, instead of every final card jumping to the
+                         same clamped position.
                          Deliberately sized in CSS rather than from the measured
                          viewport: the trailing space changes `scrollHeight`,
                          which is what `listScrollMax` measures, so deriving one
                          from the other is a loop that settles a full viewport
                          short. -->
-                    <div class="tail"></div>
+                    <div class="tail" style:height="{(1 - FOCUS_LINE) * 100}%"></div>
                 {/if}
             </div>
         </div>
@@ -444,21 +498,16 @@
             var(--bg) var(--fade-reach)
         );
     }
-    /* Transparent on purpose: the section's own gradient is at full strength
-     * here, so a background of its own would be a second painting of the same
-     * colour and any disagreement between them would show as a seam down the
-     * one edge the whole design is trying to make continuous. What the spine
-     * contributes is a hit area — it is the fold control, there being no
-     * heading left to put one in, and the one part of a section that belongs
-     * to the pack rather than to a brush. */
+    /* The strip of full-strength colour the projection lands on. It paints
+     * nothing itself — the section's gradient is already at full strength here,
+     * and a second painting of the same colour would show as a seam down the
+     * one edge the whole design is trying to make continuous. What it
+     * contributes is the width of that strip, and somewhere for the pack's icon
+     * to sit. */
     .spine {
         display: flex;
         justify-content: center;
-        border: none;
-        background: transparent;
         color: var(--pack-secondary);
-        cursor: pointer;
-        padding: 0;
     }
     /* Rides down the spine with the scroll, so a tall pack is still identified
      * when its top is far above the viewport. */
@@ -477,25 +526,14 @@
         gap: 10px;
         padding: 10px;
     }
-    /* Shut, a pack is the spine alone — a bar of its colour, tall enough to
-     * stay a target. The wheel says which pack it is. */
-    .group.shut {
-        min-height: 30px;
-    }
-    /* Space at both ends of the list, so every pack can reach the focus line:
-     * half a viewport ahead of the first (the focus sits at the centre, so
-     * that is exactly what it takes to bring the first section's top to it),
-     * and a full one behind the last, which also has to clear the centre.
-     * Percentages resolve against the scrollport's own definite height, so no
-     * measurement is involved — and the sections are measured from the DOM
-     * afterwards, so the mapping picks the offset up for free. */
-    .lead {
-        flex: none;
-        height: 50%;
-    }
+    /* Space at both ends, so the first and last packs can reach the focus line
+     * like any other. The heights come from `FOCUS_LINE` itself — as
+     * percentages, which the scrollport resolves against its own height with no
+     * measurement involved, and which the sections are then measured relative
+     * to, so the mapping picks the offset up for free. */
+    .lead,
     .tail {
         flex: none;
-        height: 100%;
     }
     .empty {
         font-size: 12px;

@@ -8,9 +8,12 @@ import {
     cardCurve,
     listMax,
     wheelMax,
-    wheelPad,
+    wheelPadTop,
+    wheelPadBottom,
     ribbonPath,
     visibleSpan,
+    present,
+    FOCUS_LINE,
     type WheelGeometry,
     type SectionExtent,
 } from '../wheel';
@@ -23,9 +26,9 @@ const SECTIONS: SectionExtent[] = [
     { id: 'c', top: 500, height: 100 },
 ];
 
-/** Both panes scrollable: 600px of list content in a 200px port (max 400), and
- *  180px of wheel content in a 120px port (max 60). The scroll maxima are given
- *  rather than derived, as the component reads them from the DOM. */
+/** Both panes scrollable, and *unpadded* — the shape the panes have before the
+ *  component gives them room for their end items to reach the focus line. Used
+ *  for the mapping's own arithmetic and for the clamped cases. */
 const G: WheelGeometry = {
     cardAdvance: 60,
     wheelLead: 0,
@@ -41,9 +44,43 @@ const SHORT: WheelGeometry = { ...G, wheelViewport: 400, wheelScrollMax: 0 };
 
 const EMPTY: WheelGeometry = { ...G, sections: [], listScrollMax: 0, wheelScrollMax: 0 };
 
-/** The same wheel as `G` with its leading pad applied: 30px above and below
- *  three 60px cards in a 120px port, so the content is 240 and the range 120. */
-const PADDED: WheelGeometry = { ...G, wheelLead: 30, wheelScrollMax: 120 };
+/**
+ * Both panes spaced the way the component builds them, for a focus line down
+ * the middle of each.
+ *
+ * List: 100 of lead, three sections, 100 of tail in a 200px port — 800 of
+ * content, 600 of range. Wheel: 70 of pad either side of three 60px cards in a
+ * 200px port — 320 of content, 120 of range. Sized so no clamp binds at either
+ * end, which is what lets the tests below assert exact positions.
+ */
+const SPACED: WheelGeometry = {
+    cardAdvance: 60,
+    wheelLead: 70,
+    wheelViewport: 200,
+    listViewport: 200,
+    listScrollMax: 600,
+    wheelScrollMax: 120,
+    sections: [
+        { id: 'a', top: 100, height: 100 },
+        { id: 'b', top: 200, height: 400 },
+        { id: 'c', top: 600, height: 100 },
+    ],
+};
+
+/** Where the list must be scrolled for content coordinate `y` to sit on the
+ *  focus line. The tests state their intent in content coordinates; this is the
+ *  one conversion they need. */
+const toLine = (y: number, g: WheelGeometry) => y - g.listViewport * FOCUS_LINE;
+
+/** How far card `i` is from the focus line, in cards. Zero means "on it". */
+const offLine = (i: number, wheelScrollTop: number, g: WheelGeometry) =>
+    (cardCurve(i, wheelScrollTop, g).t *
+        g.wheelViewport *
+        Math.max(FOCUS_LINE, 1 - FOCUS_LINE)) /
+    g.cardAdvance;
+
+/** The wheel position the list is at `listScrollTop` implies. */
+const wheelFor = (listScrollTop: number, g: WheelGeometry) => listToWheel(listScrollTop, g);
 
 describe('sectionAt', () => {
     it('a boundary belongs to the section that starts there', () => {
@@ -58,6 +95,38 @@ describe('sectionAt', () => {
 
     it('is null only when there are no sections', () => {
         expect(sectionAt(0, [])).toBeNull();
+    });
+
+    it('resolves the gap between two sections to the one above it', () => {
+        // The sections do not tile the list: `.list` is a flex column with a
+        // 12px gap, so between every pair is a band of content belonging to
+        // neither. A coordinate there used to match nothing and fall out of the
+        // loop onto its "past the end" answer — the *last* section — so a focus
+        // line crossing any gap threw the wheel to its maximum for one frame
+        // and the card stack flew upward. An easing animation samples ever
+        // closer together as it settles, which is why it flashed just before
+        // the end and only most of the time.
+        const gapped: SectionExtent[] = [
+            { id: 'a', top: 0, height: 100 },
+            { id: 'b', top: 112, height: 400 },
+            { id: 'c', top: 524, height: 100 },
+        ];
+        for (let y = 100; y < 112; y++) {
+            expect(sectionAt(y, gapped)).toEqual({ index: 0, fraction: 1 });
+        }
+        expect(sectionAt(518, gapped)).toEqual({ index: 1, fraction: 1 });
+    });
+
+    it('is continuous across a gap', () => {
+        // Leaving section `i` at fraction 1 and entering `i + 1` at fraction 0
+        // are the same wheel position, so crossing a gap moves the wheel by
+        // nothing at all.
+        const gapped: SectionExtent[] = [
+            { id: 'a', top: 0, height: 100 },
+            { id: 'b', top: 112, height: 400 },
+        ];
+        const g = { ...SPACED, sections: gapped, listViewport: 0 };
+        expect(listToWheel(100, g)).toBeCloseTo(listToWheel(112, g), 5);
     });
 
     it('reports how far through a section it is', () => {
@@ -84,12 +153,65 @@ describe('content and scroll extents', () => {
     });
 });
 
+describe('the focus line', () => {
+    it('is where a pack becomes the one you are looking at', () => {
+        // Not the viewport top: the pack across the *middle* is the focused
+        // one, which is a different pack from the one the list starts with.
+        expect(focusedSection(0, G)).toBe(1);
+        expect(focusedSection(toLine(SECTIONS[2].top + 50, G), G)).toBe(2);
+    });
+
+    it('centres a card exactly when its pack is centred', () => {
+        // The invariant the two panes exist to maintain, and the one the user
+        // stated: the pack across the middle of the list is the pack whose card
+        // is across the middle of the wheel. A card therefore tracks its pack's
+        // *centre*, not its start — the whole pack's extent maps across the
+        // half-card either side of its card.
+        for (let i = 0; i < SPACED.sections.length; i++) {
+            const s = SPACED.sections[i];
+            const listScrollTop = toLine(s.top + s.height / 2, SPACED);
+            expect(focusedSection(listScrollTop, SPACED)).toBe(i);
+            expect(offLine(i, wheelFor(listScrollTop, SPACED), SPACED)).toBeCloseTo(0, 5);
+        }
+    });
+
+    it('never lets the focused card drift more than one card off it', () => {
+        // Between two pack starts the wheel glides from one card to the next,
+        // so the focused card is off the line by at most the card it is being
+        // replaced by.
+        for (let y = 0; y <= listMax(SPACED); y += 7) {
+            const focused = focusedSection(y, SPACED)!;
+            expect(Math.abs(offLine(focused, listToWheel(y, SPACED), SPACED))).toBeLessThanOrEqual(
+                1.0001,
+            );
+        }
+    });
+
+    it('never lets the focused card drift more than half a card off it', () => {
+        // A pack's whole extent maps onto the half-card either side of its own
+        // card, so the focused card is never further than that from the line —
+        // and is therefore always the *nearest* card to it. There is no scroll
+        // position at which the highlight is somewhere the eye is not.
+        for (let y = 0; y <= listMax(SPACED); y += 7) {
+            const wheel = wheelFor(y, SPACED);
+            const mine = Math.abs(offLine(focusedSection(y, SPACED)!, wheel, SPACED));
+            expect(mine).toBeLessThanOrEqual(0.5001);
+            SPACED.sections.forEach((_, i) => {
+                expect(mine).toBeLessThanOrEqual(Math.abs(offLine(i, wheel, SPACED)) + 1e-9);
+            });
+        }
+    });
+});
+
 describe('listToWheel', () => {
     it('maps uneven sections onto uniform cards', () => {
-        // Centre of section 1 (list content 300) is card index 1.5, so the
-        // wheel wants 90 under its centre: 90 - 60 = 30.
-        const listScrollTop = 300 - G.listViewport / 2;
-        expect(listToWheel(listScrollTop, G)).toBeCloseTo(30, 5);
+        // A 400px section and a 100px one both map onto one 60px card: at the
+        // middle of the tall one its card is on the line, with its neighbours
+        // exactly a card either side.
+        const wheel = wheelFor(toLine(SPACED.sections[1].top + 200, SPACED), SPACED);
+        expect(offLine(0, wheel, SPACED)).toBeCloseTo(-1, 5);
+        expect(offLine(1, wheel, SPACED)).toBeCloseTo(0, 5);
+        expect(offLine(2, wheel, SPACED)).toBeCloseTo(1, 5);
     });
 
     it('never decreases as the list scrolls down', () => {
@@ -110,8 +232,8 @@ describe('listToWheel', () => {
     });
 
     it('is constantly zero when the wheel needs no scrolling', () => {
-        // The one-group search result, and decision 11's inert case: with no
-        // scroll range the wheel simply does not move.
+        // The one-group search result: with no scroll range the wheel simply
+        // does not move.
         for (let y = 0; y <= listMax(SHORT); y += 25) {
             expect(listToWheel(y, SHORT)).toBe(0);
         }
@@ -126,37 +248,28 @@ describe('listToWheel', () => {
 
 describe('wheelToList', () => {
     it('round-trips on the interior, where neither pane is clamped', () => {
-        for (let y = 120; y <= 260; y += 5) {
-            expect(wheelToList(listToWheel(y, G), G)).toBeCloseTo(y, 5);
+        for (let y = 50; y <= 450; y += 5) {
+            expect(wheelToList(listToWheel(y, SPACED), SPACED)).toBeCloseTo(y, 5);
         }
     });
 
-    it('does not round-trip where a clamp binds, and that is the mapping', () => {
-        // A tall *first* section: the list's centre sits inside it while the
-        // wheel is already pinned at 0, so a whole range of list positions
-        // share one wheel position and the trip back cannot recover which.
-        // Asserting an unqualified round trip would be asserting a falsehood.
-        const TALL: WheelGeometry = {
-            cardAdvance: 60,
-            wheelLead: 0,
-            wheelViewport: 120,
-            listViewport: 200,
-            listScrollMax: 400,
-            wheelScrollMax: 60,
-            sections: [
-                { id: 'a', top: 0, height: 400 },
-                { id: 'b', top: 400, height: 100 },
-                { id: 'c', top: 500, height: 100 },
-            ],
-        };
-        expect(listToWheel(0, TALL)).toBe(0);
-        expect(listToWheel(50, TALL)).toBe(0);
-        expect(wheelToList(0, TALL)).not.toBeCloseTo(50, 5);
+    it('round-trips exactly at both ends once the panes are padded', () => {
+        // What the pads buy: the ends stop being special cases.
+        const first = scrollTopForSection(0, SPACED);
+        const last = scrollTopForSection(2, SPACED);
+        expect(wheelToList(listToWheel(first, SPACED), SPACED)).toBeCloseTo(first, 5);
+        expect(wheelToList(listToWheel(last, SPACED), SPACED)).toBeCloseTo(last, 5);
     });
 
-    it('round-trips exactly at both ends when no clamp binds', () => {
-        expect(wheelToList(listToWheel(0, G), G)).toBeCloseTo(0, 5);
-        expect(wheelToList(listToWheel(listMax(G), G), G)).toBeCloseTo(listMax(G), 5);
+    it('does not round-trip where a clamp binds, and that is the mapping', () => {
+        // A wheel whose cards fit has no range at all, so every list position
+        // shares one wheel position and the trip back cannot recover which.
+        // Asserting an unqualified round trip would be asserting a falsehood.
+        expect(listToWheel(0, SHORT)).toBe(0);
+        expect(listToWheel(listMax(SHORT), SHORT)).toBe(0);
+        // Both ends share the one wheel position, so at most one of them can
+        // survive the trip back — and it is not the top.
+        expect(wheelToList(0, SHORT)).not.toBeCloseTo(0, 5);
     });
 
     it('stays inside the list scroll range', () => {
@@ -169,11 +282,26 @@ describe('wheelToList', () => {
 });
 
 describe('scrollTopForSection', () => {
-    it('aligns a section heading to the top of the list viewport', () => {
-        expect(scrollTopForSection(1, G)).toBe(100);
+    it('tapping a card centres that pack and that card', () => {
+        // The regression, and the oldest bug here: the jump target aligned a
+        // section's *top* to the viewport while everything else in the mapping
+        // read its centre. Tapping a pack therefore left the centre line inside
+        // whatever pack followed it — selecting the neighbour, scrolling the
+        // wheel to a card nobody touched, and dropping the tapped pack below
+        // the middle of the screen.
+        for (let i = 0; i < SPACED.sections.length; i++) {
+            const y = scrollTopForSection(i, SPACED);
+            expect(focusedSection(y, SPACED)).toBe(i);
+            expect(offLine(i, wheelFor(y, SPACED), SPACED)).toBeCloseTo(0, 5);
+        }
     });
 
-    it('clamps the last section so it can still be reached', () => {
+    it('centres a pack in the viewport', () => {
+        // Section 1 is 200..600; a 200px viewport centred on it starts at 300.
+        expect(scrollTopForSection(1, SPACED)).toBe(300);
+    });
+
+    it('clamps a section that cannot be centred rather than losing it', () => {
         expect(scrollTopForSection(2, G)).toBe(400);
         expect(scrollTopForSection(99, G)).toBe(400);
     });
@@ -183,71 +311,74 @@ describe('scrollTopForSection', () => {
     });
 });
 
-describe('focusedSection', () => {
-    it('tracks the viewport centre, not its top', () => {
-        // scrollTop 0 shows content 0..200; its centre (100) is section 1.
-        expect(focusedSection(0, G)).toBe(1);
+describe('the end pads', () => {
+    it('are half a viewport less half a card, either side', () => {
+        expect(wheelPadTop(SPACED)).toBe(70);
+        expect(wheelPadBottom(SPACED)).toBe(70);
     });
 
-    it('agrees with listToWheel about which section is focused', () => {
-        // The regression for a mapping anchored on the top while the highlight
-        // reads the centre: the highlighted card must be the one the wheel
-        // scrolled to.
-        for (let y = 0; y <= listMax(G); y += 13) {
-            const focused = focusedSection(y, G)!;
-            const wheelCentre = listToWheel(y, G) + G.wheelViewport / 2;
-            const cardUnderCentre = Math.floor(wheelCentre / G.cardAdvance);
-            // Equal except where the wheel is clamped at an end and cannot
-            // travel far enough to centre the focused card.
-            const clamped = listToWheel(y, G) === 0 || listToWheel(y, G) === wheelMax(G);
-            if (!clamped) expect(cardUnderCentre).toBe(focused);
-        }
+    it('are zero when a card is as tall as the port, rather than negative', () => {
+        expect(wheelPadTop({ ...SPACED, cardAdvance: 400 })).toBe(0);
+        expect(wheelPadBottom({ ...SPACED, cardAdvance: 400 })).toBe(0);
     });
 
-    it('is null with no sections', () => {
-        expect(focusedSection(0, EMPTY)).toBeNull();
+    it('let the first and last cards reach the line', () => {
+        expect(offLine(0, 0, SPACED)).toBeCloseTo(0, 5);
+        expect(offLine(2, wheelMax(SPACED), SPACED)).toBeCloseTo(0, 5);
+        // Without them the stack sits against the top of the column and the
+        // first card never arrives.
+        expect(offLine(0, 0, { ...SPACED, wheelLead: 0 })).not.toBeCloseTo(0, 5);
+    });
+
+    it('give one card of wheel travel per pack', () => {
+        // What makes the wheel a minimap: a flick moves it pack-by-pack rather
+        // than mirroring the list's own much longer scroll.
+        expect(wheelMax(SPACED) / SPACED.cardAdvance).toBe(SPACED.sections.length - 1);
     });
 });
 
-describe('the leading pad', () => {
-    it('is half a viewport less half a card', () => {
-        expect(wheelPad(G)).toBe(30);
+describe('present', () => {
+    it('passes the driver through and derives only the other pane', () => {
+        // The pane under the user's hand is never written to, or the write
+        // cancels the momentum it is running on.
+        const driven = present({ listScrollTop: 260, wheelScrollTop: 999, driver: 'list' }, SPACED);
+        expect(driven.listScrollTop).toBe(260);
+        expect(driven.wheelScrollTop).not.toBe(999);
+
+        const other = present({ listScrollTop: 999, wheelScrollTop: 60, driver: 'wheel' }, SPACED);
+        expect(other.wheelScrollTop).toBe(60);
+        expect(other.listScrollTop).not.toBe(999);
     });
 
-    it('is zero when a card is as tall as the port, rather than negative', () => {
-        expect(wheelPad({ ...G, cardAdvance: 400 })).toBe(0);
+    it('draws every card from the position it is moving the wheel to', () => {
+        // The frame the old design could not produce: the transforms describe
+        // where the cards are going this frame, not where a `scroll` event says
+        // they were last one.
+        const f = present({ listScrollTop: 260, wheelScrollTop: 0, driver: 'list' }, SPACED);
+        f.curves.forEach((c, i) => {
+            expect(c).toEqual(cardCurve(i, f.wheelScrollTop, SPACED));
+        });
     });
 
-    it('lets the first and last cards reach the centre', () => {
-        // The end cards are exactly what an unpadded wheel cannot centre: it
-        // runs out of scroll range first and leaves the stack against the top
-        // of the column.
-        expect(cardCurve(0, 0, PADDED).t).toBeCloseTo(0, 5);
-        expect(cardCurve(2, wheelMax(PADDED), PADDED).t).toBeCloseTo(0, 5);
-        expect(cardCurve(0, 0, G).t).not.toBeCloseTo(0, 5);
-    });
-
-    it('gives one card of wheel travel per pack', () => {
-        // What makes the wheel a minimap: a flick moves it pack-by-pack rather
-        // than mirroring the list's own much longer scroll.
-        expect(wheelMax(PADDED) / PADDED.cardAdvance).toBe(PADDED.sections.length - 1);
-    });
-
-    it('shifts the mapping by the pad in both directions', () => {
-        for (let y = 120; y <= 260; y += 5) {
-            expect(wheelToList(listToWheel(y, PADDED), PADDED)).toBeCloseTo(y, 5);
+    it('highlights the card its own wheel position holds nearest the line', () => {
+        // The consistency that used to be three separate reads: whatever
+        // `focused` says has to be true of the wheel position published in the
+        // same frame, not of the one a scroll event reported last frame.
+        for (let y = 0; y <= listMax(SPACED); y += 17) {
+            const f = present({ listScrollTop: y, wheelScrollTop: 0, driver: 'list' }, SPACED);
+            expect(Math.abs(offLine(f.focused!, f.wheelScrollTop, SPACED))).toBeLessThanOrEqual(
+                0.5001,
+            );
         }
     });
 
-    it('centres the focused card wherever the list is, both ends included', () => {
-        // The unclamped-interior caveat the unpadded mapping needs does not
-        // apply here: with the pad there is always range left to travel.
-        for (let y = 0; y <= listMax(PADDED); y += 9) {
-            const focused = focusedSection(y, PADDED)!;
-            const centre = listToWheel(y, PADDED) + PADDED.wheelViewport / 2;
-            const under = Math.floor((centre - PADDED.wheelLead) / PADDED.cardAdvance);
-            expect(under).toBe(focused);
-        }
+    it('has a card for every section and no focus without one', () => {
+        expect(
+            present({ listScrollTop: 0, wheelScrollTop: 0, driver: 'list' }, SPACED).curves,
+        ).toHaveLength(SPACED.sections.length);
+        const empty = present({ listScrollTop: 0, wheelScrollTop: 0, driver: 'list' }, EMPTY);
+        expect(empty.focused).toBeNull();
+        expect(empty.curves).toEqual([]);
     });
 });
 
@@ -286,18 +417,19 @@ describe('the projection ribbon', () => {
 });
 
 describe('cardCurve', () => {
-    it('is flat at the scrollport centre', () => {
-        // Card 1 spans 60..120, centred at 90; a 120px port at scrollTop 30 is
-        // centred at 90 too.
-        const c = cardCurve(1, 30, G);
+    it('is flat on the focus line', () => {
+        const c = cardCurve(0, 0, SPACED);
         expect(c.t).toBeCloseTo(0, 5);
         expect(c.rotateX).toBeCloseTo(0, 5);
         expect(c.scale).toBeCloseTo(1, 5);
+        expect(c.opacity).toBeCloseTo(1, 5);
     });
 
-    it('is symmetric about the centre', () => {
-        const above = cardCurve(0, 30, G);
-        const below = cardCurve(2, 30, G);
+    it('is symmetric about the line', () => {
+        // Card 1 on the line, its neighbours one card either side of it.
+        const onCard1 = wheelFor(scrollTopForSection(1, SPACED), SPACED);
+        const above = cardCurve(0, onCard1, SPACED);
+        const below = cardCurve(2, onCard1, SPACED);
         expect(above.t).toBeCloseTo(-below.t, 5);
         expect(above.scale).toBeCloseTo(below.scale, 5);
         expect(above.opacity).toBeCloseTo(below.opacity, 5);
@@ -305,8 +437,8 @@ describe('cardCurve', () => {
 
     it('never inverts or disappears a card entirely', () => {
         for (let i = 0; i < 3; i++) {
-            for (let w = 0; w <= wheelMax(G); w += 5) {
-                const c = cardCurve(i, w, G);
+            for (let w = 0; w <= wheelMax(SPACED); w += 5) {
+                const c = cardCurve(i, w, SPACED);
                 expect(c.scale).toBeGreaterThan(0);
                 expect(c.opacity).toBeGreaterThan(0);
                 expect(Math.abs(c.t)).toBeLessThanOrEqual(1);

@@ -4,56 +4,77 @@
      * brush list beside it.
      *
      * A native `overflow-y: auto` scrollport, so pen and touch momentum come
-     * from the platform rather than a hand-rolled inertia integrator. Half a
-     * viewport of pad above and below the stack keeps the focused card in the
-     * middle of the column and gives the wheel a scroll range of its own
-     * whenever there are two packs — one card of wheel travel per pack, which
-     * is what makes it a minimap you can flick through rather than a second
-     * copy of the list's own scrolling.
+     * from the platform rather than a hand-rolled inertia integrator. The pads
+     * above and below the stack are what let the first and last cards reach the
+     * focus line, and they are asymmetric because the line is not the middle.
+     * They also give the wheel a scroll range of its own whenever there are two
+     * packs — one card of travel per pack, which is what makes it a minimap you
+     * can flick through rather than a second copy of the list's scrolling.
      *
      * Bounded, not circular. A wheel that wrapped could not be honestly synced
      * to a list that has a real top and bottom.
      */
     import PackCard from './PackCard.svelte';
     import type { BrushGroup } from '../brush_library/grouping';
-    import { cardCurve, wheelPad, type WheelGeometry } from './wheel';
+    import {
+        FLAT_CURVE,
+        wheelPadBottom,
+        wheelPadTop,
+        type CardCurve,
+        type WheelGeometry,
+    } from './wheel';
 
     interface Props {
         groups: BrushGroup[];
         geometry: WheelGeometry;
         /** Index of the group under the list's focus line. */
         focused: number | null;
+        /**
+         * The rolodex transform for each card, computed by the parent's frame
+         * loop from the same wheel position it is moving this scrollport to.
+         *
+         * Deliberately *not* derived here from this element's own `scrollTop`.
+         * A card's transform and the scroll position it describes have to be
+         * one frame's worth of the same number: a `scroll` event arrives after
+         * the write that caused it, so a wheel that styled itself from its own
+         * events painted every card tilted for the position it had just left.
+         */
+        curves: CardCurve[];
         /** Bound so the parent can drive and read this scrollport directly. */
         el: HTMLElement | undefined;
+        /** This pane moved — keep the frame loop awake. */
         onScroll: () => void;
-        onPointerDown: () => void;
+        /** The user put a hand on this pane, so it is the one driving now. */
+        onDrive: () => void;
         onPick: (index: number) => void;
     }
-    let { groups, geometry, focused, el = $bindable(), onScroll, onPointerDown, onPick }: Props = $props();
-
-    /** The wheel's own scroll offset, mirrored only to drive `cardCurve`.
-     *  Read from the DOM on each scroll rather than written back to it, so this
-     *  is not a third participant in the sync. */
-    let offset = $state(0);
-    function handleScroll() {
-        offset = el?.scrollTop ?? 0;
-        onScroll();
-    }
+    let {
+        groups,
+        geometry,
+        focused,
+        curves,
+        el = $bindable(),
+        onScroll,
+        onDrive,
+        onPick,
+    }: Props = $props();
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
     class="pack-wheel"
     bind:this={el}
-    style:padding-block="{wheelPad(geometry)}px"
-    onscroll={handleScroll}
-    onpointerdown={onPointerDown}
+    style:padding-top="{wheelPadTop(geometry)}px"
+    style:padding-bottom="{wheelPadBottom(geometry)}px"
+    onscroll={onScroll}
+    onpointerdown={onDrive}
+    onwheel={onDrive}
 >
     {#each groups as group, i (group.id)}
         <PackCard
             {group}
             active={i === focused}
-            curve={cardCurve(i, offset, geometry)}
+            curve={curves[i] ?? FLAT_CURVE}
             onSelect={() => onPick(i)}
         />
     {/each}

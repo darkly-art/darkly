@@ -1,46 +1,43 @@
 <script lang="ts">
     /**
-     * The band of colour thrown from the focused pack's card across to the
-     * brushes it holds.
+     * The bands of colour thrown from the pack cards across to the brushes they
+     * hold — one per pack currently on screen.
      *
-     * The two panes show the same packs at different scales, and nothing in
-     * either one says which card goes with which run of brushes. This does: it
-     * leaves the card at card height, arrives at the section at section height,
-     * and reshapes every frame the focus moves — so the wheel's compression is
-     * something you watch happen rather than something you have to infer.
+     * **One per pack, not one for the focused pack.** A single band would have
+     * to change hands whenever the focus did, and the two cards it would move
+     * between are a whole card apart at that moment: every pack boundary would
+     * flick the band across that gap. Drawing them all makes the transition
+     * something that cannot happen — a pack scrolling out has its band shrink
+     * to nothing as its last row leaves, while the next one's grows from
+     * nothing, and no band is ever anywhere it was not a frame ago.
+     *
+     * Each band leaves its card at card height and arrives at its section at
+     * section height, so the wheel's compression is something you watch happen
+     * rather than something you have to infer.
      *
      * Purely decorative, hence `aria-hidden` and no pointer events: the same
      * relation is already in the reading order, since the card names the pack
      * and the section follows it.
      */
-    import { ribbonPath, type Ribbon } from './wheel';
+    import { ribbonPath, type PackBand } from './wheel';
 
     interface Props {
-        /** Geometry in the overlay's own coordinates, or `null` when there is
-         *  no focused pack (an empty search) or its section is off-screen. */
-        ribbon: Ribbon | null;
-        /** The focused pack's surface colour. */
-        primary: string;
+        bands: PackBand[];
     }
-    let { ribbon, primary }: Props = $props();
+    let { bands }: Props = $props();
 </script>
 
-{#if ribbon}
-    <svg class="projection" aria-hidden="true" style:color={primary}>
-        <!-- Solid, and the same colour the card and the spine are painting.
-             Anything less than opaque shows the black slab through the band and
-             the eye reads that as a gap — the point of the ribbon is that the
-             colour is *continuous* from the card to the brushes, so the fill
-             cannot be a tint of the background it crosses. -->
-        <path d={ribbonPath(ribbon)} fill="currentColor" />
-    </svg>
-{/if}
+<svg class="projection" aria-hidden="true">
+    {#each bands as band (band.id)}
+        <path d={ribbonPath(band.ribbon)} fill={band.primary} opacity={band.opacity} />
+    {/each}
+</svg>
 
 <style>
-    /* Spans the whole explorer so the ribbon can be positioned in the same
-     * coordinates both panes were measured in. It only ever paints the gutter
-     * between them — the path starts at the card's edge and ends at the
-     * section's — so covering the panes costs nothing. */
+    /* Spans the whole explorer so the bands can be positioned in the same
+     * coordinates both panes were measured in. They only ever paint the gutter
+     * between them — each path starts at a card's edge and ends at a section's
+     * — so covering the panes costs nothing. */
     .projection {
         position: absolute;
         inset: 0;

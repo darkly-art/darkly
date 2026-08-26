@@ -12,10 +12,19 @@
  * `[i·cardAdvance, (i+1)·cardAdvance)`. A uniform wheel that still points at
  * the right place.
  *
- * **Everything anchors on the viewport centre.** Mapping a viewport *top*
- * coordinate while highlighting the section under the *centre* puts the
- * highlighted card half a list-viewport away from where the wheel is scrolled
- * to, which for a tall list scrolls it out of view entirely.
+ * **Everything anchors on the focus line** — the middle of each pane,
+ * {@link FOCUS_LINE}. The whole model is one sentence: *the pack across the
+ * middle of the list is the pack whose card is across the middle of the wheel.*
+ * Mixing anchors is how the two panes come to disagree — highlight the section
+ * under one coordinate while scrolling the wheel to another and the highlighted
+ * card sits somewhere the wheel never scrolled to, which is what a jump target
+ * aligned to the viewport top did for as long as this file existed.
+ *
+ * A card therefore tracks its pack's **centre**: the pack's whole extent maps
+ * onto the half-card either side of its own card, so the card is centred when
+ * the pack is, and hands over to its neighbour half a card either way. That
+ * bound — half a card, never more — is what keeps the highlighted card the
+ * nearest one to the line at every scroll position.
  */
 
 /** One group's vertical extent within the list's scroll content, measured from
@@ -70,6 +79,22 @@ export interface WheelGeometry {
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /**
+ * Where the focus line sits, as a fraction of each pane's height.
+ *
+ * The middle, and the same for both panes, because that is the relation being
+ * modelled: **the pack across the middle of the list is the pack whose card is
+ * across the middle of the wheel.**
+ *
+ * Not a quarter of the way down, which was tried. The wheel needs the line
+ * centred more than the list needs it high: a quarter leaves only a quarter of
+ * the column above the line, so any pack more than a few back is scrolled off
+ * the top of it, and the remaining three-quarters below sits empty. The bands
+ * inherit the same skew and fan steeply downward. A rolodex wants to fan
+ * symmetrically about its focus.
+ */
+export const FOCUS_LINE = 0.5;
+
+/**
  * The band of colour joining the focused card to the section it points at,
  * in the coordinates of the box both panes sit in.
  *
@@ -88,6 +113,26 @@ export interface Ribbon {
     x1: number;
     top1: number;
     bottom1: number;
+}
+
+/**
+ * One pack's band, ready to draw.
+ *
+ * There is one of these per pack *on screen*, not one for the focused pack. A
+ * single band would have to change hands whenever the focus did, and the two
+ * cards it would move between are a whole card apart at that moment — every
+ * pack boundary would flick it across that gap. Drawing them all makes that
+ * transition unrepresentable: a pack leaving has its band shrink to nothing as
+ * its last row goes, while the next one's grows from nothing.
+ */
+export interface PackBand {
+    /** The group's id, as a list key. */
+    id: string;
+    ribbon: Ribbon;
+    /** The pack's surface colour, and the fade its own card is under — so a
+     *  band sinks into the black slab exactly as the card it leaves does. */
+    primary: string;
+    opacity: number;
 }
 
 /**
@@ -149,33 +194,51 @@ export function sectionAt(
 ): { index: number; fraction: number } | null {
     if (sections.length === 0) return null;
     if (y < sections[0].top) return { index: 0, fraction: 0 };
-    for (let i = 0; i < sections.length; i++) {
+    // Searched from the end for the last section that has *begun*, rather than
+    // for the one containing `y`. The difference is everything the sections do
+    // not cover: the list is a flex column with a gap, so between every pair is
+    // a band belonging to neither, and the trailing spacer is one more. A
+    // containment test matches nothing there and has to fall out of the loop
+    // onto some answer — which was "the last section", throwing the wheel to
+    // its far end for as long as the focus line was in a 12px gap.
+    for (let i = sections.length - 1; i >= 0; i--) {
         const s = sections[i];
-        // A boundary belongs to the section that starts there.
-        if (y >= s.top && y < s.top + s.height) {
-            return { index: i, fraction: s.height > 0 ? (y - s.top) / s.height : 0 };
+        if (y >= s.top) {
+            // Clamped, so a gap reads as the end of the section above it and
+            // the next reads as its own start — the same wheel position, which
+            // is what makes crossing one cost no movement at all.
+            return { index: i, fraction: s.height > 0 ? clamp((y - s.top) / s.height, 0, 1) : 0 };
         }
     }
-    return { index: sections.length - 1, fraction: 1 };
+    return { index: 0, fraction: 0 };
 }
 
-/** The list content coordinate currently under the list viewport's centre. */
+/** The list content coordinate currently on the focus line. */
 function listFocus(listScrollTop: number, g: WheelGeometry): number {
-    return listScrollTop + g.listViewport / 2;
+    return listScrollTop + g.listViewport * FOCUS_LINE;
+}
+
+/** The wheel content coordinate currently on the focus line. */
+function wheelFocus(wheelScrollTop: number, g: WheelGeometry): number {
+    return wheelScrollTop + g.wheelViewport * FOCUS_LINE;
 }
 
 /** Where card `slot` sits in the wheel's scroll content. Fractional slots are
- *  meaningful: 1.5 is the boundary between the second and third cards, which is
- *  what a section's progress maps onto. */
+ *  meaningful: 1.5 is the point halfway between the second and third cards,
+ *  which is where the wheel rests halfway between two packs. */
 function cardCentre(slot: number, g: WheelGeometry): number {
     return g.wheelLead + (slot + 0.5) * g.cardAdvance;
 }
 
-/** The pad the wheel needs above and below its cards for the first and last to
- *  reach the centre. The component applies it; `wheelLead` is the measurement
- *  of the result, which is what the mapping reads. */
-export function wheelPad(g: WheelGeometry): number {
-    return Math.max(0, (g.wheelViewport - g.cardAdvance) / 2);
+/** The pads the wheel needs for its first and last cards to reach the focus
+ *  line. Asymmetric, because the line is: the component applies them, and
+ *  `wheelLead` is the measurement of the top one, which is what the mapping
+ *  reads. */
+export function wheelPadTop(g: WheelGeometry): number {
+    return Math.max(0, g.wheelViewport * FOCUS_LINE - g.cardAdvance / 2);
+}
+export function wheelPadBottom(g: WheelGeometry): number {
+    return Math.max(0, g.wheelViewport * (1 - FOCUS_LINE) - g.cardAdvance / 2);
 }
 
 /**
@@ -188,10 +251,14 @@ export function wheelPad(g: WheelGeometry): number {
 export function listToWheel(listScrollTop: number, g: WheelGeometry): number {
     const at = sectionAt(listFocus(listScrollTop, g), g.sections);
     if (!at) return 0;
-    // `index + fraction - 0.5` because `cardCentre` measures to a card's middle
-    // while a section's progress is measured from its leading edge.
+    // `- 0.5` because a card tracks its pack's *centre*: the pack's whole
+    // extent maps onto the half-card either side of its own card, so the card
+    // is on the line at `fraction = 0.5` and hands over to its neighbour half a
+    // card either way. Dropping the term instead ties the card to the pack's
+    // start, which puts the wheel on a *boundary between* two cards whenever a
+    // pack starts — the state a tap produces.
     const centre = cardCentre(at.index + at.fraction - 0.5, g);
-    return clamp(centre - g.wheelViewport / 2, 0, wheelMax(g));
+    return clamp(centre - g.wheelViewport * FOCUS_LINE, 0, wheelMax(g));
 }
 
 /**
@@ -202,22 +269,36 @@ export function listToWheel(listScrollTop: number, g: WheelGeometry): number {
  */
 export function wheelToList(wheelScrollTop: number, g: WheelGeometry): number {
     if (g.sections.length === 0) return 0;
-    const centre = wheelScrollTop + g.wheelViewport / 2 - g.wheelLead;
+    // The inverse of `cardCentre(index + fraction - 0.5)`.
+    const centre = wheelFocus(wheelScrollTop, g) - g.wheelLead;
     const raw = g.cardAdvance > 0 ? centre / g.cardAdvance : 0;
     const index = clamp(Math.floor(raw), 0, g.sections.length - 1);
     const fraction = clamp(raw - index, 0, 1);
     const s = g.sections[index];
-    const listCentre = s.top + fraction * s.height;
-    return clamp(listCentre - g.listViewport / 2, 0, listMax(g));
+    return clamp(s.top + fraction * s.height - g.listViewport * FOCUS_LINE, 0, listMax(g));
 }
 
-/** The list scrollTop putting section `index`'s top at the top of the list
- *  viewport. What a tap on a card commands — tapping means "take me to this
- *  pack", so it aligns the heading rather than centring the section. */
+/**
+ * The list scrollTop that a tap on card `index` commands: the section centred
+ * on the focus line.
+ *
+ * **Centred, not aligned to the viewport top.** This was the oldest bug in the
+ * explorer. Everything else anchors on the centre, and a jump that put the
+ * section's top at the top of the viewport left the line half a viewport
+ * lower — inside the *next* pack, for any pack shorter than the viewport. So
+ * tapping a card selected its neighbour, scrolled the wheel to a card nobody
+ * had touched, and drew the projection to that one. Landing the section's *top*
+ * on the line instead fixes the selection but drops the pack below the middle
+ * of the screen, with its predecessor filling everything above.
+ *
+ * A jump target has to satisfy the same anchor the highlight reads, or the two
+ * disagree by construction. The end spacers are what make this reachable for
+ * the first and last packs.
+ */
 export function scrollTopForSection(index: number, g: WheelGeometry): number {
     const s = g.sections[clamp(index, 0, g.sections.length - 1)];
     if (!s) return 0;
-    return clamp(s.top, 0, listMax(g));
+    return clamp(s.top + (s.height - g.listViewport) / 2, 0, listMax(g));
 }
 
 /** The section under the list viewport's centre, for highlighting its card.
@@ -240,14 +321,24 @@ export function focusedSection(listScrollTop: number, g: WheelGeometry): number 
  * colours at equal weight has no focus at all. The falloff is superlinear so
  * the neighbours stay legible while the far ends genuinely go dark.
  */
-export function cardCurve(
-    index: number,
-    wheelScrollTop: number,
-    g: WheelGeometry,
-): { t: number; rotateX: number; scale: number; opacity: number } {
-    const portCentre = wheelScrollTop + g.wheelViewport / 2;
-    const half = g.wheelViewport / 2;
-    const t = half > 0 ? clamp((cardCentre(index, g) - portCentre) / half, -1, 1) : 0;
+export interface CardCurve {
+    t: number;
+    rotateX: number;
+    scale: number;
+    opacity: number;
+}
+
+/** A card with nothing applied to it. What a card renders as while the
+ *  geometry has not caught up with a group list that just changed — flat and
+ *  full strength, rather than collapsed to a scale of zero. */
+export const FLAT_CURVE: CardCurve = { t: 0, rotateX: 0, scale: 1, opacity: 1 };
+
+export function cardCurve(index: number, wheelScrollTop: number, g: WheelGeometry): CardCurve {
+    // Normalized against the *longer* side of the focus line, so `t` reaches
+    // ±1 at the far edge of the column rather than saturating partway down it.
+    const span = g.wheelViewport * Math.max(FOCUS_LINE, 1 - FOCUS_LINE);
+    const t =
+        span > 0 ? clamp((cardCentre(index, g) - wheelFocus(wheelScrollTop, g)) / span, -1, 1) : 0;
     const away = Math.abs(t);
     return {
         t,
@@ -256,5 +347,55 @@ export function cardCurve(
         rotateX: -t * 34,
         scale: 1 - away * 0.16,
         opacity: 1 - Math.pow(away, 1.5) * 0.82,
+    };
+}
+
+/** Everything about the two panes at one instant, as read from the DOM. */
+export interface Sample {
+    listScrollTop: number;
+    wheelScrollTop: number;
+    /** Which pane the user is driving. Taken from input events rather than
+     *  from scroll events: a scroll event cannot tell a finger from the echo
+     *  of a programmatic write, and a `pointerdown` can. */
+    driver: 'list' | 'wheel';
+}
+
+/** Where both panes belong, and how every card should be drawn there. */
+export interface Frame {
+    listScrollTop: number;
+    wheelScrollTop: number;
+    focused: number | null;
+    curves: CardCurve[];
+}
+
+/**
+ * The whole presentation of one frame, from one sample.
+ *
+ * This exists to make a timing bug unspeakable rather than to add behaviour:
+ * every part of it was already computed by the functions above, but each was
+ * called at a different moment, from a different source, on a different
+ * schedule — the wheel's position from the list's `scroll` event, the card
+ * transforms from the wheel's own `scroll` event a frame later, the highlight
+ * from a third read. A programmatic `scrollTop` write lands synchronously while
+ * the `scroll` event it provokes does not, so the transforms described where
+ * the cards had been rather than where they now were, for one painted frame per
+ * write. Composing the four here means they cannot be fed different numbers.
+ *
+ * The driven pane's position is derived; the driver's is passed through
+ * untouched, so nothing ever writes back to the pane under the user's hand.
+ * `curves` and `focused` are computed from the *results*, not the sample, so
+ * they describe where the panes are going in this frame rather than where they
+ * came from.
+ */
+export function present(sample: Sample, g: WheelGeometry): Frame {
+    const listScrollTop =
+        sample.driver === 'wheel' ? wheelToList(sample.wheelScrollTop, g) : sample.listScrollTop;
+    const wheelScrollTop =
+        sample.driver === 'wheel' ? sample.wheelScrollTop : listToWheel(listScrollTop, g);
+    return {
+        listScrollTop,
+        wheelScrollTop,
+        focused: focusedSection(listScrollTop, g),
+        curves: g.sections.map((_, i) => cardCurve(i, wheelScrollTop, g)),
     };
 }
