@@ -22,7 +22,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 /// A `w`×`h` flat opaque RGBA buffer of a single color.
 fn solid_rgba(w: u32, h: u32, color: [u8; 4]) -> Vec<u8> {
     let mut v = vec![0u8; (w * h * 4) as usize];
-    for px in v.chunks_exact_mut(4) {
+    for px in v.as_chunks_mut::<4>().0 {
         px.copy_from_slice(&color);
     }
     v

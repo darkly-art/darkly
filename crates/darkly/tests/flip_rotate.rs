@@ -506,7 +506,7 @@ fn flip_canvas_transforms_every_layer_and_undo_restores_all() {
     let l1 = e.paste_image(w, h, &distinct_rgba(w, h), 0, 0, None);
     // A second, differently-valued layer so the two can't be confused.
     let mut rgba2 = distinct_rgba(w, h);
-    for p in rgba2.chunks_exact_mut(4) {
+    for p in rgba2.as_chunks_mut::<4>().0 {
         p[2] = 200; // tag layer 2 with a blue channel
     }
     let l2 = e.paste_image(w, h, &rgba2, 0, 0, None);

@@ -64,7 +64,7 @@ fn has_painted_pixels(bytes: &[u8]) -> bool {
     // brush stroke has cr=1.0, cg=0, cb=0, so the thumbnail will have
     // pixels with R near 255 and G near 0 — well outside the checker
     // values. Loose check: any pixel with R > 200 OR G+B contrast > 50.
-    bytes.chunks_exact(4).any(|p| {
+    bytes.as_chunks::<4>().0.iter().any(|p| {
         let r = p[0];
         let g = p[1];
         let b = p[2];

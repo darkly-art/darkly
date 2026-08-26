@@ -1650,7 +1650,7 @@ mod tests {
             frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, PreviewBackdrop::Flat, FG, bg);
         assert_eq!(framed.len(), (320 * 120 * 4) as usize);
         // Every pixel matches bg.
-        for chunk in framed.chunks_exact(4) {
+        for chunk in framed.as_chunks::<4>().0 {
             assert_eq!(chunk[0], bg_u8[0]);
             assert_eq!(chunk[1], bg_u8[1]);
             assert_eq!(chunk[2], bg_u8[2]);
@@ -1709,7 +1709,12 @@ mod tests {
         );
         let framed =
             frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, PreviewBackdrop::Flat, FG, bg);
-        let bright = framed.chunks_exact(4).filter(|p| p[0] > 128).count();
+        let bright = framed
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] > 128)
+            .count();
         assert!(
             bright > 100,
             "full-canvas stripe should survive the downscale, got {bright} bright pixels"
@@ -1734,7 +1739,12 @@ mod tests {
         );
         let framed =
             frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, PreviewBackdrop::Flat, FG, bg);
-        let bright = framed.chunks_exact(4).filter(|p| p[0] > 128).count();
+        let bright = framed
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] > 128)
+            .count();
         assert!(
             bright > 200,
             "off-center stripe should appear in framed output, got {bright}"

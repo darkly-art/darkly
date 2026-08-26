@@ -36,7 +36,7 @@ fn light_blue_canvas() -> Vec<u8> {
 
 fn solid_canvas(rgba: [u8; 4]) -> Vec<u8> {
     let mut out = vec![0u8; (CANVAS * CANVAS * 4) as usize];
-    for px in out.chunks_exact_mut(4) {
+    for px in out.as_chunks_mut::<4>().0 {
         px.copy_from_slice(&rgba);
     }
     out
@@ -295,7 +295,12 @@ fn rough_watercolor_renders_multiple_dabs_in_one_flush() {
     // Count pixels where the red channel exceeds the canvas's red
     // (= 100). Both dabs deposit orange over light blue, so post-
     // commit those pixels should have measurably more red.
-    let touched = rgba.chunks_exact(4).filter(|p| p[0] > 130).count();
+    let touched = rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| p[0] > 130)
+        .count();
     assert!(
         touched > 100,
         "Rough Watercolor: expected >100 pixels touched by two dabs, got {touched}"

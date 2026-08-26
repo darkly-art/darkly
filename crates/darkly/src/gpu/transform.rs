@@ -244,7 +244,7 @@ pub struct TransformState {
 fn rgba_to_mask_values(rgba: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut values = Vec::with_capacity(rgba.len());
     let mut coverage = Vec::with_capacity(rgba.len() / 4);
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         let luma = (0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32) / 255.0;
         let v = (luma.clamp(0.0, 1.0) * 255.0).round() as u8;
         values.extend_from_slice(&[v, v, v, 255]);
@@ -1087,10 +1087,12 @@ mod tests {
         assert_eq!(values[12], 0);
 
         // Values are opaque so the shared premultiply pass is the identity.
-        assert!(values.chunks_exact(4).all(|px| px[3] == 255));
+        assert!(values.as_chunks::<4>().0.iter().all(|px| px[3] == 255));
         // Gray, so the shader's red-channel read is the value whatever it picks.
         assert!(values
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .all(|px| px[0] == px[1] && px[1] == px[2]));
 
         // Coverage is the clip's alpha: transparent texels write nothing.
