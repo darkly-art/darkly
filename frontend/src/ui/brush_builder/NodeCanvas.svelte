@@ -3,6 +3,7 @@
     import { brushGraph, WIRE_COLORS } from '../../state/brush_graph.svelte';
     import { app } from '../../state/app.svelte';
     import { isModEvent } from '../../actions/mods';
+    import { isEditableTarget } from '../../lib/isEditableTarget';
     import NodeWidget from './NodeWidget.svelte';
     import WireRenderer from './WireRenderer.svelte';
     import BrushBarNode from './BrushBarNode.svelte';
@@ -215,17 +216,22 @@
         }
     }
 
-    function onPointerDown(e: PointerEvent) {
-        // Middle-click → pan
-        if (e.button === 1) {
-            e.preventDefault();
-            isPanning = true;
-            panStartX = e.clientX; panStartY = e.clientY;
-            panOriginX = panX; panOriginY = panY;
-            capturePointer(e);
-            return;
-        }
+    /** Middle-drag pans the graph, and it does so from the capture phase so the
+     *  gesture belongs to the canvas no matter what sits under the cursor —
+     *  nodes, port dots and sliders all claim pointerdown for their own drags
+     *  and would otherwise swallow it. Text fields are the exception: middle
+     *  click pastes the primary selection there on X11. */
+    function onPointerDownCapture(e: PointerEvent) {
+        if (e.button !== 1 || isEditableTarget(e.target)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        isPanning = true;
+        panStartX = e.clientX; panStartY = e.clientY;
+        panOriginX = panX; panOriginY = panY;
+        capturePointer(e);
+    }
 
+    function onPointerDown(e: PointerEvent) {
         // Wire drag bubbled up from PortWidget
         if (brushGraph.draggingFrom) {
             capturePointer(e);
@@ -357,6 +363,7 @@
     bind:this={containerEl}
     style="background-position: {panX}px {panY}px; background-size: {20 * zoom}px {20 * zoom}px; --mouse-x: {mouseX}px; --mouse-y: {mouseY}px;"
     onwheel={onWheel}
+    onpointerdowncapture={onPointerDownCapture}
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
