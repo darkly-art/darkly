@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 
 use super::metadata::Brush;
-use crate::brush::pack::{validate_pack, BrushId, BrushPack, PackId, PackMutability};
+use crate::brush::pack::{validate_pack, BrushId, BrushPack, PackId, PackMutability, PackPalette};
 use crate::brush::pack_file::PackFile;
 
 /// Summary info for listing brushes without loading the full graph.
@@ -70,8 +70,7 @@ pub struct BrushPackInfo {
     pub name: String,
     pub description: String,
     pub icon: String,
-    pub primary: String,
-    pub secondary: String,
+    pub palette: PackPalette,
     /// Member brush ids, in the pack's order. The authority on membership —
     /// nothing on [`BrushInfo`] repeats it.
     pub members: Vec<String>,
@@ -89,8 +88,7 @@ impl From<&BrushPack> for BrushPackInfo {
             name: p.name.clone(),
             description: p.description.clone(),
             icon: p.icon.clone(),
-            primary: p.primary.clone(),
-            secondary: p.secondary.clone(),
+            palette: p.palette.clone(),
             members: p.members.clone(),
             can_edit_members: p.can_edit_members(),
             can_edit_identity: p.can_edit_identity(),
@@ -347,8 +345,7 @@ impl BrushLibrary {
         name: &str,
         description: &str,
         icon: &str,
-        primary: &str,
-        secondary: &str,
+        palette: &PackPalette,
     ) -> Result<(), String> {
         if id.trim().is_empty() {
             return Err("a brush pack needs an id".into());
@@ -356,9 +353,9 @@ impl BrushLibrary {
         if self.packs.contains_key(id) {
             return Err(format!("brush pack '{id}' already exists"));
         }
-        validate_pack(name, icon, primary, secondary)?;
+        validate_pack(name, icon, palette)?;
 
-        let mut pack = BrushPack::new(id, name.trim(), icon, primary, secondary);
+        let mut pack = BrushPack::new(id, name.trim(), icon, palette.clone());
         pack.description = description.to_string();
         self.packs.insert(id.to_string(), pack);
         Ok(())
@@ -371,10 +368,9 @@ impl BrushLibrary {
         name: &str,
         description: &str,
         icon: &str,
-        primary: &str,
-        secondary: &str,
+        palette: &PackPalette,
     ) -> Result<(), String> {
-        validate_pack(name, icon, primary, secondary)?;
+        validate_pack(name, icon, palette)?;
         let taken = self
             .packs
             .values()
@@ -391,8 +387,7 @@ impl BrushLibrary {
         pack.name = name.trim().to_string();
         pack.description = description.to_string();
         pack.icon = icon.to_string();
-        pack.primary = primary.to_string();
-        pack.secondary = secondary.to_string();
+        pack.palette = palette.clone();
         Ok(())
     }
 
@@ -473,7 +468,7 @@ impl BrushLibrary {
         }
 
         let name = self.unique_pack_name(&file.name);
-        let mut pack = BrushPack::new(id, name, file.icon, file.primary, file.secondary);
+        let mut pack = BrushPack::new(id, name, file.icon, file.palette);
         pack.description = file.description;
         pack.mutability = PackMutability::Full;
         pack.members = members;
@@ -536,6 +531,12 @@ mod tests {
     use crate::brush;
     use crate::brush::metadata::BrushMetadata;
 
+    /// A shape-valid palette, for the pack tests that do not care which colors
+    /// a pack wears. One fixture rather than four literals at every call site.
+    fn palette() -> PackPalette {
+        PackPalette::new("#2f7fe0", "#2fd0c0", "#0c1a26", "#c3dae9")
+    }
+
     fn brush_named(id: &str, name: &str) -> Brush {
         Brush::from_metadata(BrushMetadata::from_graph(id, name, brush::default_graph()))
     }
@@ -584,9 +585,9 @@ mod tests {
         // The invariant the whole design rests on: adding to a pack copies a
         // reference, it does not move the brush.
         let mut lib = lib_with_two();
-        lib.create_pack("p1", "One", "", "mdi:brush", "#000000", "#ffffff")
+        lib.create_pack("p1", "One", "", "mdi:brush", &palette())
             .unwrap();
-        lib.create_pack("p2", "Two", "", "mdi:brush", "#000000", "#ffffff")
+        lib.create_pack("p2", "Two", "", "mdi:brush", &palette())
             .unwrap();
 
         lib.add_to_pack("p1", "a").unwrap();
@@ -607,7 +608,7 @@ mod tests {
             .expect("a locked shipped pack");
         let (locked_id, member) = (locked.id.clone(), locked.members[0].clone());
 
-        lib.create_pack("mine", "Mine", "", "mdi:brush", "#000000", "#ffffff")
+        lib.create_pack("mine", "Mine", "", "mdi:brush", &palette())
             .unwrap();
         lib.add_to_pack("mine", &member).unwrap();
 
@@ -638,9 +639,9 @@ mod tests {
     #[test]
     fn deleting_a_pack_leaves_its_brushes_alone() {
         let mut lib = lib_with_two();
-        lib.create_pack("p1", "One", "", "mdi:brush", "#000000", "#ffffff")
+        lib.create_pack("p1", "One", "", "mdi:brush", &palette())
             .unwrap();
-        lib.create_pack("p2", "Two", "", "mdi:brush", "#000000", "#ffffff")
+        lib.create_pack("p2", "Two", "", "mdi:brush", &palette())
             .unwrap();
         lib.add_to_pack("p1", "a").unwrap();
         lib.add_to_pack("p2", "a").unwrap();
@@ -663,9 +664,9 @@ mod tests {
     #[test]
     fn deleting_a_brush_removes_it_from_every_pack() {
         let mut lib = lib_with_two();
-        lib.create_pack("p1", "One", "", "mdi:brush", "#000000", "#ffffff")
+        lib.create_pack("p1", "One", "", "mdi:brush", &palette())
             .unwrap();
-        lib.create_pack("p2", "Two", "", "mdi:brush", "#000000", "#ffffff")
+        lib.create_pack("p2", "Two", "", "mdi:brush", &palette())
             .unwrap();
         lib.add_to_pack("p1", "a").unwrap();
         lib.add_to_pack("p2", "a").unwrap();
@@ -700,7 +701,7 @@ mod tests {
     fn renaming_a_brush_touches_no_pack() {
         // The payoff of id-keyed membership.
         let mut lib = lib_with_two();
-        lib.create_pack("p1", "One", "", "mdi:brush", "#000000", "#ffffff")
+        lib.create_pack("p1", "One", "", "mdi:brush", &palette())
             .unwrap();
         lib.add_to_pack("p1", "a").unwrap();
         let before = lib.pack("p1").unwrap().members.clone();
@@ -727,7 +728,7 @@ mod tests {
         // The reachable-orphan state: a brush does not depend on a pack to
         // exist.
         let mut lib = lib_with_two();
-        lib.create_pack("p1", "One", "", "mdi:brush", "#000000", "#ffffff")
+        lib.create_pack("p1", "One", "", "mdi:brush", &palette())
             .unwrap();
         lib.add_to_pack("p1", "a").unwrap();
         lib.remove_from_pack("p1", "a").unwrap();
@@ -740,17 +741,23 @@ mod tests {
     #[test]
     fn creating_a_pack_rejects_a_duplicate_or_empty_id() {
         let mut lib = BrushLibrary::new();
-        lib.create_pack("p1", "One", "", "mdi:brush", "#000000", "#ffffff")
+        lib.create_pack("p1", "One", "", "mdi:brush", &palette())
             .unwrap();
         assert!(lib
-            .create_pack("p1", "Other", "", "mdi:brush", "#000000", "#ffffff")
+            .create_pack("p1", "Other", "", "mdi:brush", &palette())
             .is_err());
         assert!(lib
-            .create_pack("  ", "Other", "", "mdi:brush", "#000000", "#ffffff")
+            .create_pack("  ", "Other", "", "mdi:brush", &palette())
             .is_err());
         // And a malformed color never reaches the library.
         assert!(lib
-            .create_pack("p2", "Two", "", "mdi:brush", "not-a-color", "#ffffff")
+            .create_pack(
+                "p2",
+                "Two",
+                "",
+                "mdi:brush",
+                &PackPalette::new("not-a-color", "#2fd0c0", "#0c1a26", "#c3dae9"),
+            )
             .is_err());
     }
 
@@ -758,28 +765,31 @@ mod tests {
     fn editing_a_pack_rejects_a_locked_one_and_a_taken_name() {
         let mut lib = BrushLibrary::builtin();
         assert!(lib
-            .edit_pack("basic", "Renamed", "", "mdi:brush", "#000000", "#ffffff")
+            .edit_pack("basic", "Renamed", "", "mdi:brush", &palette())
             .is_err());
 
-        lib.create_pack("p1", "One", "", "mdi:brush", "#000000", "#ffffff")
+        lib.create_pack("p1", "One", "", "mdi:brush", &palette())
             .unwrap();
-        lib.create_pack("p2", "Two", "", "mdi:brush", "#000000", "#ffffff")
+        lib.create_pack("p2", "Two", "", "mdi:brush", &palette())
             .unwrap();
         assert!(lib
-            .edit_pack("p2", "One", "", "mdi:brush", "#000000", "#ffffff")
+            .edit_pack("p2", "One", "", "mdi:brush", &palette())
             .is_err());
 
-        lib.edit_pack("p2", "Renamed", "d", "mdi:water", "#111111", "#222222")
+        let restyled = PackPalette::new("#c2521f", "#e0912b", "#e8ddc8", "#4a3826");
+        lib.edit_pack("p2", "Renamed", "d", "mdi:water", &restyled)
             .unwrap();
         let p = lib.pack("p2").unwrap();
         assert_eq!(p.name, "Renamed");
         assert_eq!(p.icon, "mdi:water");
+        // Restyling writes the whole palette, not the roles someone remembered.
+        assert_eq!(p.palette, restyled);
     }
 
     #[test]
     fn adding_a_missing_brush_to_a_pack_is_rejected() {
         let mut lib = BrushLibrary::new();
-        lib.create_pack("p1", "One", "", "mdi:brush", "#000000", "#ffffff")
+        lib.create_pack("p1", "One", "", "mdi:brush", &palette())
             .unwrap();
         assert!(lib.add_to_pack("p1", "nope").is_err());
         assert!(lib.add_to_pack("nope", "nope").is_err());
@@ -788,7 +798,7 @@ mod tests {
     #[test]
     fn pack_export_import_round_trip() {
         let mut lib = lib_with_two();
-        lib.create_pack("p1", "Mine", "d", "mdi:water", "#3355ff", "#ffffff")
+        lib.create_pack("p1", "Mine", "d", "mdi:water", &palette())
             .unwrap();
         lib.add_to_pack("p1", "a").unwrap();
         lib.add_to_pack("p1", "b").unwrap();
@@ -810,7 +820,7 @@ mod tests {
     #[test]
     fn importing_a_pack_whose_name_collides_gets_a_suffixed_name() {
         let mut lib = lib_with_two();
-        lib.create_pack("p1", "Mine", "", "mdi:brush", "#000000", "#ffffff")
+        lib.create_pack("p1", "Mine", "", "mdi:brush", &palette())
             .unwrap();
         lib.add_to_pack("p1", "a").unwrap();
         let bytes = lib.export_pack("p1").unwrap();
@@ -827,7 +837,7 @@ mod tests {
         // Re-importing your own export must not multiply your library, and
         // must not overwrite edits you made to a brush you already have.
         let mut lib = lib_with_two();
-        lib.create_pack("p1", "Mine", "", "mdi:brush", "#000000", "#ffffff")
+        lib.create_pack("p1", "Mine", "", "mdi:brush", &palette())
             .unwrap();
         lib.add_to_pack("p1", "a").unwrap();
         let bytes = lib.export_pack("p1").unwrap();
@@ -847,7 +857,7 @@ mod tests {
     #[test]
     fn importing_rejects_a_duplicate_pack_id() {
         let mut lib = lib_with_two();
-        lib.create_pack("p1", "Mine", "", "mdi:brush", "#000000", "#ffffff")
+        lib.create_pack("p1", "Mine", "", "mdi:brush", &palette())
             .unwrap();
         let bytes = lib.export_pack("p1").unwrap();
         assert!(lib.import_pack("p1", &bytes).is_err());

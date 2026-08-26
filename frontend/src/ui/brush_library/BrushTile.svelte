@@ -21,22 +21,14 @@
 </button>
 
 <style>
-    /* A tile wears its group's colours, inherited as custom properties from
-     * whatever renders it rather than passed as props: nothing about a brush
-     * changes with the pack it is being shown under, so the colour is context,
-     * not data. The fallbacks are the theme's neutrals, which is what a group
-     * with no pack behind it supplies anyway.
+    /* Tiles are the theme's own neutrals. The pack's identity is already under
+     * them — the section they sit on is filled with its surface — and the grid
+     * is the largest area in the picker, so it is the last place that should be
+     * spending colour. The one vivid mark is the outline on the loaded brush.
      *
-     * A tile is a *tint*, not the pack's colour at full strength — the pack
-     * card and the section header carry that, and a grid of saturated slabs
-     * would drown the previews they exist to show. Each state mixes the pack's
-     * surface into the neutral one it would otherwise have had, so a group with
-     * no pack lands exactly on the old greys and separation stays fill
-     * contrast rather than a border. */
+     * Being the theme's means they take the theme's text too, which is what
+     * keeps a tile legible whatever a pack is made of and in either theme. */
     .brush-tile {
-        --primary: var(--pack-primary, var(--bg-hover));
-        --secondary: var(--pack-secondary, var(--text-muted));
-        --tint: 24%;
         display: flex;
         flex-direction: column;
         gap: 6px;
@@ -47,10 +39,10 @@
          * against even when its content has no intrinsic size (the
          * icon fallback is just a 1em svg). */
         width: 100%;
-        background: color-mix(in srgb, var(--primary) var(--tint), var(--bg-hover));
+        background: var(--bg-hover);
         border: none;
         border-radius: var(--radius-md);
-        color: color-mix(in srgb, var(--secondary) 40%, var(--text-muted));
+        color: var(--text-muted);
         cursor: pointer;
         text-align: left;
         transition: background 0.1s, outline-color 0.1s;
@@ -59,15 +51,16 @@
         min-width: 0;
     }
     .brush-tile:hover {
-        background: color-mix(in srgb, var(--primary) var(--tint), var(--bg-active));
-        color: color-mix(in srgb, var(--secondary) 40%, var(--text));
+        background: var(--bg-active);
+        color: var(--text);
     }
-    /* The loaded brush: the lightest slab of the three, ringed in the pack's
-     * ink so it stays findable once several tiles are tinted alike. */
+    /* The loaded brush: the lightest slab of the three, ringed in one pixel of
+     * the pack's chroma — a strand, the same as every other place chroma is
+     * spent, and all it takes to be findable in a grid. */
     .brush-tile.active {
-        background: color-mix(in srgb, var(--primary) var(--tint), var(--thumb-bg));
-        color: color-mix(in srgb, var(--secondary) 40%, var(--text));
-        outline: 1px solid color-mix(in srgb, var(--secondary) 55%, transparent);
+        background: var(--thumb-bg);
+        color: var(--text);
+        outline: 1px solid var(--pack-chroma);
         outline-offset: -1px;
     }
     .name {

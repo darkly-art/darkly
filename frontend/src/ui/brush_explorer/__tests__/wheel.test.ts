@@ -394,7 +394,15 @@ describe('packBands', () => {
         sectionLeft: 140,
         cardHeight: 52,
     };
-    const PACKS = SPACED.sections.map(s => ({ id: s.id, primary: `#${s.id}` }));
+    const PACKS = SPACED.sections.map(s => ({
+        id: s.id,
+        palette: {
+            chroma: `#${s.id}c`,
+            refraction: `#${s.id}r`,
+            surface: `#${s.id}s`,
+            ink: `#${s.id}i`,
+        },
+    }));
     const at = (listScrollTop: number) =>
         packBands(
             present({ listScrollTop, wheelScrollTop: 0, driver: 'list' }, SPACED),
@@ -496,7 +504,7 @@ describe('packBands', () => {
         );
         for (const band of packBands(frame, SPACED, L, PACKS)) {
             const i = PACKS.findIndex(p => p.id === band.id);
-            expect(band.primary).toBe(PACKS[i].primary);
+            expect(band.palette).toEqual(PACKS[i].palette);
             expect(band.opacity).toBe(frame.curves[i].opacity);
         }
     });

@@ -4,9 +4,16 @@
 //! test's packs leak into the next within this binary.
 
 use darkly::brush::library;
+use darkly::brush::pack::PackPalette;
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
+
+/// A shape-valid palette, for the tests that do not care which colors a pack
+/// wears. One fixture rather than four literals at every call site.
+fn palette() -> PackPalette {
+    PackPalette::new("#2f7fe0", "#2fd0c0", "#0c1a26", "#c3dae9")
+}
 
 fn fresh_engine() -> DarklyEngine {
     library::reset_for_test();
@@ -117,7 +124,7 @@ fn brush_save_rejects_a_name_another_brush_already_has() {
 fn a_shipped_brush_can_be_copied_into_a_painters_pack() {
     let mut engine = fresh_engine();
     engine
-        .pack_create("mine", "Mine", "", "mdi:star", "#f5c542", "#2b2213")
+        .pack_create("mine", "Mine", "", "mdi:star", palette())
         .unwrap();
     engine.pack_add_brush("mine", "ink_pen").unwrap();
 
@@ -141,7 +148,7 @@ fn mutating_a_locked_pack_is_rejected_through_the_engine() {
     assert!(engine.pack_remove_brush("basic", "ink_pen").is_err());
     assert!(engine.pack_delete("basic").is_err());
     assert!(engine
-        .pack_edit("basic", "Renamed", "", "mdi:brush", "#000000", "#ffffff")
+        .pack_edit("basic", "Renamed", "", "mdi:brush", palette())
         .is_err());
 
     // Nothing changed.
@@ -155,7 +162,7 @@ fn mutating_a_locked_pack_is_rejected_through_the_engine() {
 fn a_painter_pack_is_created_edited_and_deleted() {
     let mut engine = fresh_engine();
     engine
-        .pack_create("mine", "Mine", "d", "mdi:water", "#3355ff", "#ffffff")
+        .pack_create("mine", "Mine", "d", "mdi:water", palette())
         .unwrap();
     engine.pack_add_brush("mine", "ink_pen").unwrap();
     engine.pack_add_brush("mine", "charcoal").unwrap();
@@ -166,9 +173,22 @@ fn a_painter_pack_is_created_edited_and_deleted() {
     assert_eq!(mine.members, vec!["charcoal", "ink_pen"]);
     assert!(mine.can_edit_members && mine.can_edit_identity);
 
+    let restyled = PackPalette::new("#c2521f", "#e0912b", "#e8ddc8", "#4a3826");
     engine
-        .pack_edit("mine", "Renamed", "d2", "mdi:brush", "#111111", "#222222")
+        .pack_edit("mine", "Renamed", "d2", "mdi:brush", restyled.clone())
         .unwrap();
+    // The whole palette crosses the boundary and comes back — the roles are not
+    // a thing the wire layer can quietly drop half of.
+    assert_eq!(
+        engine
+            .library_list()
+            .packs
+            .iter()
+            .find(|p| p.id == "mine")
+            .unwrap()
+            .palette,
+        restyled
+    );
     assert_eq!(
         engine
             .library_list()
@@ -193,7 +213,7 @@ fn a_painter_pack_is_created_edited_and_deleted() {
 fn pack_export_import_round_trip_through_the_engine() {
     let mut engine = fresh_engine();
     engine
-        .pack_create("mine", "Mine", "d", "mdi:water", "#3355ff", "#ffffff")
+        .pack_create("mine", "Mine", "d", "mdi:water", palette())
         .unwrap();
     engine.brush_save("custom", "Custom").unwrap();
     engine.pack_add_brush("mine", "custom").unwrap();
@@ -228,7 +248,7 @@ fn importing_a_pack_holding_a_brush_we_have_reuses_ours() {
     let mut engine = fresh_engine();
     engine.brush_save("my_brush", "My Brush").unwrap();
     engine
-        .pack_create("mine", "Mine", "", "mdi:water", "#3355ff", "#ffffff")
+        .pack_create("mine", "Mine", "", "mdi:water", palette())
         .unwrap();
     engine.pack_add_brush("mine", "my_brush").unwrap();
     let bytes = engine.pack_export("mine").unwrap();
@@ -269,7 +289,7 @@ fn renaming_a_brush_leaves_pack_membership_intact() {
     let mut engine = fresh_engine();
     engine.brush_save("my_brush", "My Brush").unwrap();
     engine
-        .pack_create("mine", "Mine", "", "mdi:water", "#3355ff", "#ffffff")
+        .pack_create("mine", "Mine", "", "mdi:water", palette())
         .unwrap();
     engine.pack_add_brush("mine", "my_brush").unwrap();
     let before = engine
@@ -301,7 +321,7 @@ fn deleting_a_brush_removes_it_from_every_pack_through_the_engine() {
     let mut engine = fresh_engine();
     engine.brush_save("my_brush", "My Brush").unwrap();
     engine
-        .pack_create("mine", "Mine", "", "mdi:star", "#f5c542", "#2b2213")
+        .pack_create("mine", "Mine", "", "mdi:star", palette())
         .unwrap();
     engine.pack_add_brush("mine", "my_brush").unwrap();
 

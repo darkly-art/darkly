@@ -10,21 +10,10 @@
  * cells rather than the filter.
  */
 import type { BrushInfo, BrushPackInfo } from '../../engine/protocol_gen';
+import { NEUTRAL_PALETTE, type PackPalette } from '../../lib/packPalette';
 
 /** Label shown over the brushes no pack holds. */
 export const NO_PACK_LABEL = 'In no pack';
-
-/**
- * The colours a derived group wears.
- *
- * A pack's `primary`/`secondary` are a surface and the text on it, and the
- * picker paints whole cards and tiles with them — so a group with no pack
- * behind it needs a real pair, not a blank. Custom-property references rather
- * than literals, so Recents follows the active theme while an imported pack
- * keeps the colours it shipped with.
- */
-export const NEUTRAL_PRIMARY = 'var(--bg-hover)';
-export const NEUTRAL_SECONDARY = 'var(--text-muted)';
 
 export interface BrushGroup {
     /** The pack's id, `''` for the derived "in no pack" section, or
@@ -32,8 +21,10 @@ export interface BrushGroup {
     id: string;
     label: string;
     icon: string;
-    primary: string;
-    secondary: string;
+    /** The four colours this group is drawn in. A derived group borrows
+     *  `NEUTRAL_PALETTE`, so every consumer has a real palette to read and none
+     *  has to ask whether a pack is behind it. */
+    palette: PackPalette;
     brushes: BrushInfo[];
     /**
      * The pack behind this group, or `null` for a derived one (Recents, "in no
@@ -91,8 +82,7 @@ export function groupByPack(
             id: pack.id,
             label: pack.name,
             icon: resolveIcon(pack.icon),
-            primary: pack.primary,
-            secondary: pack.secondary,
+            palette: pack.palette,
             brushes,
             pack,
         });
@@ -106,8 +96,7 @@ export function groupByPack(
             id: '',
             label: NO_PACK_LABEL,
             icon: noPackIcon,
-            primary: NEUTRAL_PRIMARY,
-            secondary: NEUTRAL_SECONDARY,
+            palette: NEUTRAL_PALETTE,
             brushes: loose,
             pack: null,
         });
@@ -147,8 +136,7 @@ export function withRecents(
             id: RECENTS_ID,
             label: RECENTS_LABEL,
             icon,
-            primary: NEUTRAL_PRIMARY,
-            secondary: NEUTRAL_SECONDARY,
+            palette: NEUTRAL_PALETTE,
             brushes,
             pack: null,
         },

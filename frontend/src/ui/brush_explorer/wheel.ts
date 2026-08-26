@@ -26,6 +26,7 @@
  * bound — half a card, never more — is what keeps the highlighted card the
  * nearest one to the line at every scroll position.
  */
+import type { PackPalette } from '../../lib/packPalette';
 
 /** One group's vertical extent within the list's scroll content, measured from
  *  the rendered DOM by the component. */
@@ -158,9 +159,11 @@ export interface PackBand {
     /** The group's id, as a list key. */
     id: string;
     ribbon: Ribbon;
-    /** The pack's surface colour, and the fade its own card is under — so a
-     *  band sinks into the black slab exactly as the card it leaves does. */
-    primary: string;
+    /** The pack's palette, and the fade its own card is under — so a band sinks
+     *  into the modal's black exactly as the card it leaves does. The band is
+     *  the middle of the pack, so it is filled and stranded like the card and
+     *  the section either side of it. */
+    palette: PackPalette;
     opacity: number;
 }
 
@@ -171,6 +174,26 @@ export interface PackBand {
  * Both curves share the same control abscissa, so the top and bottom edges
  * bend in step and the band keeps an even thickness through the turn.
  */
+/**
+ * One edge of the ribbon on its own, as an open path to be stroked.
+ *
+ * The band's fill and its strands are different shapes: the fill is the closed
+ * ribbon, while the strands run along its top and bottom only — the two vertical
+ * ends are interior to the pack, since the ribbon is the middle of a shape that
+ * starts at the card and finishes at the section.
+ *
+ * `offset` shifts the curve down, which is how the refraction strand sits
+ * directly beneath the chroma one: a stroke straddles its path, so a 2px chroma
+ * stroke covers ±1px and a 1px refraction stroke centred 1.5px lower lands in
+ * the 1px immediately below it.
+ */
+export function ribbonEdge(r: Ribbon, edge: 'top' | 'bottom', offset = 0): string {
+    const mid = (r.x0 + r.x1) / 2;
+    const [y0, y1] =
+        edge === 'top' ? [r.top0 + offset, r.top1 + offset] : [r.bottom0 + offset, r.bottom1 + offset];
+    return `M ${r.x0} ${y0} C ${mid} ${y0}, ${mid} ${y1}, ${r.x1} ${y1}`;
+}
+
 export function ribbonPath(r: Ribbon): string {
     const mid = (r.x0 + r.x1) / 2;
     return (
@@ -460,7 +483,7 @@ export function packBands(
     frame: Frame,
     g: WheelGeometry,
     l: PaneLayout,
-    packs: Array<{ id: string; primary: string }>,
+    packs: Array<{ id: string; palette: PackPalette }>,
 ): PackBand[] {
     const out: PackBand[] = [];
     const n = Math.min(packs.length, g.sections.length, frame.curves.length);
@@ -484,7 +507,7 @@ export function packBands(
 
         out.push({
             id: packs[i].id,
-            primary: packs[i].primary,
+            palette: packs[i].palette,
             opacity: frame.curves[i].opacity,
             ribbon: {
                 x0: l.cardRight,

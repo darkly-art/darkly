@@ -9,6 +9,7 @@ import {
     RECENTS_ID,
     RECENTS_LABEL,
 } from '../grouping';
+import { NEUTRAL_PALETTE } from '../../../lib/packPalette';
 
 function brush(id: string, name = id, tags: string[] = []): BrushInfo {
     return { id, name, author: '', description: '', tags, icon: null } as BrushInfo;
@@ -20,8 +21,12 @@ function pack(id: string, name: string, members: string[]): BrushPackInfo {
         name,
         description: '',
         icon: 'mdi:brush',
-        primary: '#000000',
-        secondary: '#ffffff',
+        palette: {
+            chroma: '#2f7fe0',
+            refraction: '#2fd0c0',
+            surface: '#0c1a26',
+            ink: '#c3dae9',
+        },
         members,
         can_edit_members: true,
         can_edit_identity: true,
@@ -226,5 +231,19 @@ describe('BrushGroup.pack', () => {
         // recognise its sentinel id.
         expect(groups[1].label).toBe(NO_PACK_LABEL);
         expect(groups[1].pack).toBeNull();
+    });
+});
+
+describe('BrushGroup.palette', () => {
+    it('is the pack\'s own, and the theme\'s neutrals for a derived group', () => {
+        // Every group carries a real palette, so no consumer has to ask whether
+        // a pack is behind it before it can paint anything.
+        const p = pack('p', 'Pack', ['a']);
+        const groups = groupByPack([brush('a'), brush('loose')], [p], i => i, 'x');
+        expect(groups[0].palette).toEqual(p.palette);
+        expect(groups[1].palette).toEqual(NEUTRAL_PALETTE);
+
+        const withR = withRecents(groups, ['a'], [brush('a')], 5, 'star');
+        expect(withR[0].palette).toEqual(NEUTRAL_PALETTE);
     });
 });

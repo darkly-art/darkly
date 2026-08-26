@@ -12,6 +12,7 @@
     import { packExport } from '../state/packExport.svelte';
     import { brushLibrary } from '../state/brush_library.svelte';
     import { packIcon } from '../lib/packIcon';
+    import PackSwatch from './brush_library/PackSwatch.svelte';
     import { exportPack } from '../actions/pack_actions';
 
     async function choose(id: string) {
@@ -24,11 +25,7 @@
     <div class="packs">
         {#each brushLibrary.packs as pack (pack.id)}
             <button class="pack" onclick={() => choose(pack.id)}>
-                <span
-                    class="swatch"
-                    style:background={pack.primary}
-                    style:border-color={pack.secondary}
-                ></span>
+                <PackSwatch palette={pack.palette} />
                 <Icon name={packIcon(pack.icon)} />
                 <span class="name">{pack.name}</span>
                 <span class="count">
@@ -62,14 +59,6 @@
     }
     .pack:hover {
         background: var(--bg-hover);
-    }
-    .swatch {
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        border: 1.5px solid transparent;
-        box-sizing: border-box;
-        flex: none;
     }
     .name {
         flex: 1;

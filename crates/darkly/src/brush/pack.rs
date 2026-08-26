@@ -1,4 +1,4 @@
-//! A brush pack — a named, iconed, two-colored group of brushes.
+//! A brush pack — a named, iconed, four-colored group of brushes.
 //!
 //! A brush may belong to any number of packs: adding one to a pack copies a
 //! reference, it does not move the brush. The pack is the sole authority on
@@ -36,6 +36,69 @@ pub enum PackMutability {
     Full,
 }
 
+/// The four colors a brush pack is recognized by.
+///
+/// `chroma` and `refraction` are the vivid pair, spent sparingly — a rim, a
+/// ribbon, a focused outline. `surface` and `ink` are the muted pair, spent
+/// freely — they are what the pack's own chip is made of. A palette that inverts
+/// that ratio is a wall of flat color with nothing left to accent it with.
+///
+/// `surface` and `ink` are absolutes, not derivations of the theme: a pack whose
+/// body is pale is pale on a black UI and on a white one, which is what lets a
+/// pack read as wintery or deserty at all. Alpha on `surface` is how a pack opts
+/// back *into* the theme, letting the background it sits on show through.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct PackPalette {
+    /// The pack's own hue at full vividness — the color you would name it by.
+    pub chroma: String,
+    /// The same light bent: a near neighbour in hue, equally vivid. Drawn with
+    /// `chroma` as a gradient, never alone.
+    pub refraction: String,
+    /// The body the glass sits on — light or dark, the pack's own choice, low in
+    /// saturation. Carries value, not color. Alpha here lets the background
+    /// behind it show through.
+    pub surface: String,
+    /// Text and icons on `surface` — muted in saturation, far enough from
+    /// `surface` in value to read, in whichever direction that is.
+    pub ink: String,
+}
+
+impl PackPalette {
+    pub fn new(
+        chroma: impl Into<String>,
+        refraction: impl Into<String>,
+        surface: impl Into<String>,
+        ink: impl Into<String>,
+    ) -> Self {
+        PackPalette {
+            chroma: chroma.into(),
+            refraction: refraction.into(),
+            surface: surface.into(),
+            ink: ink.into(),
+        }
+    }
+
+    /// Every role as `(name, value)`. The one place a role is enumerated, so
+    /// validation, error messages and any future consumer are additive.
+    pub fn roles(&self) -> [(&'static str, &str); 4] {
+        [
+            ("chroma", &self.chroma),
+            ("refraction", &self.refraction),
+            ("surface", &self.surface),
+            ("ink", &self.ink),
+        ]
+    }
+
+    /// Shape-check every role.
+    pub fn validate(&self) -> Result<(), String> {
+        for (role, value) in self.roles() {
+            validate_color(value, &format!("pack {role} color"))?;
+        }
+        Ok(())
+    }
+}
+
 /// A group of brushes, as the library holds it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrushPack {
@@ -44,8 +107,7 @@ pub struct BrushPack {
     #[serde(default)]
     pub description: String,
     pub icon: String,
-    pub primary: String,
-    pub secondary: String,
+    pub palette: PackPalette,
     #[serde(default)]
     pub mutability: PackMutability,
     /// The brushes in this pack, in the painter's chosen order. The sole
@@ -60,16 +122,14 @@ impl BrushPack {
         id: impl Into<PackId>,
         name: impl Into<String>,
         icon: impl Into<String>,
-        primary: impl Into<String>,
-        secondary: impl Into<String>,
+        palette: PackPalette,
     ) -> Self {
         BrushPack {
             id: id.into(),
             name: name.into(),
             description: String::new(),
             icon: icon.into(),
-            primary: primary.into(),
-            secondary: secondary.into(),
+            palette,
             mutability: PackMutability::Full,
             members: Vec::new(),
         }
@@ -197,20 +257,18 @@ pub fn validate_icon(value: &str) -> Result<(), String> {
 
 /// Validate a pack the way an imported one must be: shape-checked colors and
 /// icon, and a name that is actually a name.
-pub fn validate_pack(name: &str, icon: &str, primary: &str, secondary: &str) -> Result<(), String> {
+pub fn validate_pack(name: &str, icon: &str, palette: &PackPalette) -> Result<(), String> {
     if name.trim().is_empty() {
         return Err("a brush pack needs a name".into());
     }
     validate_icon(icon)?;
-    validate_color(primary, "pack primary color")?;
-    validate_color(secondary, "pack secondary color")?;
-    Ok(())
+    palette.validate()
 }
 
 /// Validate a *shipped* pack, which is held to the stricter rule that its icon
 /// must be one the renderer actually has.
 pub fn validate_shipped_pack(pack: &BrushPack) -> Result<(), String> {
-    validate_pack(&pack.name, &pack.icon, &pack.primary, &pack.secondary)?;
+    validate_pack(&pack.name, &pack.icon, &pack.palette)?;
     if !is_pack_icon(&pack.icon) {
         return Err(format!(
             "shipped pack '{}' names icon '{}', which is not in PACK_ICONS and would not render",
@@ -224,14 +282,17 @@ pub fn validate_shipped_pack(pack: &BrushPack) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn palette() -> PackPalette {
+        PackPalette::new("#2f7fe0", "#2fd0c0", "#0c1a26", "#c3dae9")
+    }
+
     fn pack(mutability: PackMutability) -> BrushPack {
         BrushPack {
             id: "p".into(),
             name: "P".into(),
             description: String::new(),
             icon: "mdi:brush".into(),
-            primary: "#ffffff".into(),
-            secondary: "#000000".into(),
+            palette: palette(),
             mutability,
             members: vec!["a".into(), "b".into()],
         }
@@ -325,6 +386,35 @@ mod tests {
                 "`{good}` should be accepted"
             );
         }
+    }
+
+    #[test]
+    fn every_palette_role_is_shape_validated() {
+        // Driven off `roles()` rather than four literals, so a fifth role is
+        // covered the moment it is declared there.
+        assert!(palette().validate().is_ok());
+        for (i, (role, _)) in palette().roles().iter().enumerate() {
+            let mut p = palette();
+            match i {
+                0 => p.chroma = "nope".into(),
+                1 => p.refraction = "nope".into(),
+                2 => p.surface = "nope".into(),
+                _ => p.ink = "nope".into(),
+            }
+            let err = p
+                .validate()
+                .expect_err("a malformed `{role}` should be rejected");
+            assert!(err.contains(role), "error should name `{role}`, got: {err}");
+        }
+    }
+
+    #[test]
+    fn a_translucent_surface_is_accepted() {
+        // Alpha is how a pack lets the background it sits on show through, so
+        // the eight-digit form has to survive validation on any role.
+        let mut p = palette();
+        p.surface = "#2a2148cc".into();
+        assert!(p.validate().is_ok());
     }
 
     #[test]

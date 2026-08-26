@@ -2,6 +2,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { DarklyStorage, DirEntry } from '../../storage/types';
 import { app, DarklyInstance, setActiveInstance } from '../app.svelte';
 import { BrushLibraryStore } from '../brush_library.svelte';
+import type { PackPalette } from '../../lib/packPalette';
+
+/** A shape-valid palette. Which colours a pack wears is not what any of these
+ *  tests are about, so there is one fixture rather than four literals a dozen
+ *  times over. */
+const PALETTE: PackPalette = {
+    chroma: '#2f7fe0', refraction: '#2fd0c0', surface: '#0c1a26', ink: '#c3dae9',
+};
 
 /** In-memory storage. */
 class FakeStorage implements DarklyStorage {
@@ -46,12 +54,12 @@ function fakeEngine() {
     ]);
     const packs = new Map<string, {
         id: string; name: string; description: string; icon: string;
-        primary: string; secondary: string; members: string[];
+        palette: PackPalette; members: string[];
         can_edit_members: boolean; can_edit_identity: boolean;
     }>([
         ['basic', {
             id: 'basic', name: 'Basic', description: '', icon: 'mdi:brush',
-            primary: '#000000', secondary: '#ffffff', members: ['ink_pen'],
+            palette: PALETTE, members: ['ink_pen'],
             can_edit_members: false, can_edit_identity: false,
         }],
     ]);
@@ -82,7 +90,7 @@ function fakeEngine() {
         }),
         packCreate: vi.fn(async (r: {
             id: string; name: string; description: string;
-            icon: string; primary: string; secondary: string;
+            icon: string; palette: PackPalette;
         }) => {
             if (packs.has(r.id)) throw new Error('duplicate pack id');
             packs.set(r.id, {
@@ -141,7 +149,7 @@ describe('brush library persistence', () => {
         s.put('brushes/b1.json', { id: 'b1', name: 'Mine', yaml: 'nodes: {}' });
         s.put('packs/p1.json', {
             id: 'p1', name: 'My Pack', description: 'd', icon: 'mdi:water',
-            primary: '#3355ff', secondary: '#ffffff', members: ['b1'],
+            palette: PALETTE, members: ['b1'],
         });
 
         await store.hydrate();
@@ -156,7 +164,7 @@ describe('brush library persistence', () => {
         s.put('brushes/b1.json', { id: 'b1', name: 'Mine', yaml: 'nodes: {}' });
         s.put('packs/p1.json', {
             id: 'p1', name: 'My Pack', description: '', icon: 'mdi:water',
-            primary: '#3355ff', secondary: '#ffffff', members: ['b1'],
+            palette: PALETTE, members: ['b1'],
         });
 
         await store.hydrate();
@@ -191,7 +199,7 @@ describe('brush library persistence', () => {
     it('a_member_naming_a_missing_brush_is_dropped_on_hydrate', async () => {
         s.put('packs/p1.json', {
             id: 'p1', name: 'My Pack', description: '', icon: 'mdi:water',
-            primary: '#3355ff', secondary: '#ffffff', members: ['ink_pen', 'ghost'],
+            palette: PALETTE, members: ['ink_pen', 'ghost'],
         });
 
         await store.hydrate();
@@ -205,7 +213,7 @@ describe('brush library persistence', () => {
     it('renaming_a_pack_leaves_no_stale_file', async () => {
         s.put('packs/p1.json', {
             id: 'p1', name: 'Before', description: '', icon: 'mdi:water',
-            primary: '#3355ff', secondary: '#ffffff', members: [],
+            palette: PALETTE, members: [],
         });
         await store.hydrate();
 
@@ -223,7 +231,7 @@ describe('brush library persistence', () => {
         for (const id of ['p1', 'p2']) {
             s.put(`packs/${id}.json`, {
                 id, name: id, description: '', icon: 'mdi:water',
-                primary: '#3355ff', secondary: '#ffffff', members: [],
+                palette: PALETTE, members: [],
             });
         }
         await store.hydrate();
@@ -239,11 +247,11 @@ describe('brush library persistence', () => {
         await store.hydrate();
         await fake.api.packCreate({
             id: 'id-one', name: 'A/B', description: '', icon: 'mdi:water',
-            primary: '#000000', secondary: '#ffffff',
+            palette: PALETTE,
         });
         await fake.api.packCreate({
             id: 'id-two', name: 'A:B', description: '', icon: 'mdi:water',
-            primary: '#000000', secondary: '#ffffff',
+            palette: PALETTE,
         });
         await store.refresh();
         store.persistPack('id-one');
@@ -317,7 +325,7 @@ describe('brush library persistence', () => {
         // Storage still holds a pack, so the seed does not fire again.
         s.put('packs/keep.json', {
             id: 'keep', name: 'Keep', description: '', icon: 'mdi:water',
-            primary: '#3355ff', secondary: '#ffffff', members: [],
+            palette: PALETTE, members: [],
         });
         fake = fakeEngine();
         app.engine = fake.engine;
@@ -327,11 +335,40 @@ describe('brush library persistence', () => {
         expect(second.packs.find(p => p.name === 'Favorites')).toBeUndefined();
     });
 
+    it('a_stored_pack_missing_a_palette_role_is_not_loaded', async () => {
+        // No defaulting and no migration: a record the current shape rejects is
+        // skipped rather than silently blackened. Pre-release, invalidating a
+        // painter's stored packs is the accepted cost of breaking the format.
+        s.files.set(
+            'packs/old.json',
+            new TextEncoder().encode(JSON.stringify({
+                id: 'old', name: 'Old', description: '', icon: 'mdi:brush',
+                palette: { chroma: '#2f7fe0', refraction: '#2fd0c0', surface: '#0c1a26' },
+                members: [],
+            })),
+        );
+        await store.hydrate();
+        expect(store.packs.find(p => p.id === 'old')).toBeUndefined();
+    });
+
+    it('persistPack_writes_every_palette_role', async () => {
+        await store.hydrate();
+        await fake.api.packCreate({
+            id: 'p-new', name: 'Theirs', description: '', icon: 'mdi:water',
+            palette: PALETTE,
+        });
+        await store.refresh();
+        store.persistPack('p-new');
+        await store.flush();
+
+        expect(s.json('packs/p-new.json')?.palette).toEqual(PALETTE);
+    });
+
     it('deleting_a_brush_removes_its_file_and_rewrites_the_packs_that_held_it', async () => {
         s.put('brushes/b1.json', { id: 'b1', name: 'Mine', yaml: 'nodes: {}' });
         s.put('packs/p1.json', {
             id: 'p1', name: 'My Pack', description: '', icon: 'mdi:water',
-            primary: '#3355ff', secondary: '#ffffff', members: ['b1'],
+            palette: PALETTE, members: ['b1'],
         });
         await store.hydrate();
 
@@ -346,7 +383,7 @@ describe('brush library persistence', () => {
         s.put('brushes/b1.json', { id: 'b1', name: 'Before', yaml: 'nodes: {}' });
         s.put('packs/p1.json', {
             id: 'p1', name: 'My Pack', description: '', icon: 'mdi:water',
-            primary: '#3355ff', secondary: '#ffffff', members: ['b1'],
+            palette: PALETTE, members: ['b1'],
         });
         await store.hydrate();
         await store.flush();
@@ -365,7 +402,7 @@ describe('brush library persistence', () => {
         await fake.api.brushSave({ id: 'imported', name: 'Imported' });
         await fake.api.packCreate({
             id: 'p-new', name: 'Theirs', description: '', icon: 'mdi:water',
-            primary: '#000000', secondary: '#ffffff',
+            palette: PALETTE,
         });
         await fake.api.packAddBrush({ pack: 'p-new', brush: 'imported' });
         await fake.api.packAddBrush({ pack: 'p-new', brush: 'ink_pen' });

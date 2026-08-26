@@ -196,6 +196,12 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
 
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+
+export type PortDir = "Input" | "Output";
+
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
  * Slider min when the port is disconnected (UI metadata only).
@@ -388,12 +394,6 @@ preview_image: boolean,
  */
 source: boolean, };
 
-export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
-
-export type PortDir = "Input" | "Output";
-
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
-
 export type PreviewStaging = { 
 /**
  * Iconify glyph shown in the dab slot, where a single stationary sample
@@ -483,6 +483,33 @@ export type CanvasDimensionsResp = { width: number, height: number, };
 
 export type CanvasRectResp = { origin_x: number, origin_y: number, width: number, height: number, };
 
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
+export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
+/**
+ * The unit suffix alone, for a column header. Empty for unitless values.
+ */
+unit: string, };
+
+export type ParamInfo = { kind: string, name: string, 
+/**
+ * Display label. `None` → the UI title-cases `name`.
+ */
+label: string | null, description: string | null, 
+/**
+ * How to render this parameter's editor. One closed set, which both
+ * `ParamKind` and the settings schema's `WidgetHint` map into:
+ * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
+ */
+widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
+/**
+ * Enum: `["Label1", "Label2", ...]`.
+ * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
+ */
+options: JsonValue | null, display: ParamDisplay, };
+
+export type CaptureKind = "camera" | "display" | "stream";
+
 export type CatalogEntry = { type: string, displayName: string, 
 /**
  * Iconify name, or `None` when the variant deliberately declares no icon
@@ -516,33 +543,6 @@ supportsPreview: boolean,
  * How the browser captures this variant's external frames; voids only.
  */
 captureKind: CaptureKind | null, };
-
-export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
-/**
- * The unit suffix alone, for a column header. Empty for unitless values.
- */
-unit: string, };
-
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
-export type ParamInfo = { kind: string, name: string, 
-/**
- * Display label. `None` → the UI title-cases `name`.
- */
-label: string | null, description: string | null, 
-/**
- * How to render this parameter's editor. One closed set, which both
- * `ParamKind` and the settings schema's `WidgetHint` map into:
- * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
- */
-widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
-/**
- * Enum: `["Label1", "Label2", ...]`.
- * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
- */
-options: JsonValue | null, display: ParamDisplay, };
-
-export type CaptureKind = "camera" | "display" | "stream";
 
 export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
 /**
@@ -664,7 +664,7 @@ params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visi
 
 export type LibrarySnapshot = { brushes: Array<BrushInfo>, packs: Array<BrushPackInfo>, };
 
-export type BrushPackInfo = { id: string, name: string, description: string, icon: string, primary: string, secondary: string, 
+export type BrushPackInfo = { id: string, name: string, description: string, icon: string, palette: PackPalette, 
 /**
  * Member brush ids, in the pack's order. The authority on membership —
  * nothing on [`BrushInfo`] repeats it.
@@ -676,6 +676,28 @@ members: Array<string>,
  * forbidden edit regardless of what the UI believed.
  */
 can_edit_members: boolean, can_edit_identity: boolean, };
+
+export type PackPalette = { 
+/**
+ * The pack's own hue at full vividness — the color you would name it by.
+ */
+chroma: string, 
+/**
+ * The same light bent: a near neighbour in hue, equally vivid. Drawn with
+ * `chroma` as a gradient, never alone.
+ */
+refraction: string, 
+/**
+ * The body the glass sits on — light or dark, the pack's own choice, low in
+ * saturation. Carries value, not color. Alpha here lets the background
+ * behind it show through.
+ */
+surface: string, 
+/**
+ * Text and icons on `surface` — muted in saturation, far enough from
+ * `surface` in value to read, in whichever direction that is.
+ */
+ink: string, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -697,11 +719,11 @@ export type OverlayHitTestReq = { screen_x: number, screen_y: number, };
 
 export type PackAddBrushReq = { pack: string, brush: string, };
 
-export type PackCreateReq = { id: string, name: string, description: string, icon: string, primary: string, secondary: string, };
+export type PackCreateReq = { id: string, name: string, description: string, icon: string, palette: PackPalette, };
 
 export type PackDeleteReq = { id: string, };
 
-export type PackEditReq = { id: string, name: string, description: string, icon: string, primary: string, secondary: string, };
+export type PackEditReq = { id: string, name: string, description: string, icon: string, palette: PackPalette, };
 
 export type PackExportReq = { id: string, };
 

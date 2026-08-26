@@ -1,6 +1,9 @@
 name: Basic
 description: Everyday marks — the brushes to reach for first.
 icon: mdi:brush
-primary: "#d8d4cc"
-secondary: "#2a2723"
+palette:
+  chroma: "#a89a78"
+  refraction: "#c9b98f"
+  surface: "#17181a"
+  ink: "#cfcabe"
 members: [airbrush, calligraphy, ink_pen, rough_ink]

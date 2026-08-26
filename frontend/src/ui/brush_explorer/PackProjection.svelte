@@ -15,21 +15,54 @@
      * section height, so the wheel's compression is something you watch happen
      * rather than something you have to infer.
      *
+     * A band is the *middle* of the pack rather than a decoration between two
+     * halves of it: the card, this and the section are one shape, so the band
+     * carries the same fill and the same edge strands they do, and its two
+     * vertical ends are left unstroked because they are interior to that shape.
+     *
      * Purely decorative, hence `aria-hidden` and no pointer events: the same
      * relation is already in the reading order, since the card names the pack
      * and the section follows it.
      */
-    import { ribbonPath, type PackBand } from './wheel';
+    import { ribbonEdge, ribbonPath, type PackBand } from './wheel';
 
     interface Props {
         bands: PackBand[];
     }
     let { bands }: Props = $props();
+
+    /** Where the refraction strand sits: beneath the 2px chroma stroke, which
+     *  straddles the top edge by 1px either side. A 1px stroke centred 1.5px in
+     *  lands in the 1px directly below it. */
+    const REFRACTION_OFFSET = 1.5;
 </script>
 
 <svg class="projection" aria-hidden="true">
     {#each bands as band (band.id)}
-        <path d={ribbonPath(band.ribbon)} fill={band.primary} opacity={band.opacity} />
+        <!-- Grouped so the rolodex fade applies to the band as one object.
+             Painted back to front: the fill, the refraction strand, then the
+             chroma over it. Top edge only — the bottom carries no strand,
+             matching the panes either side.
+
+             `style:` rather than presentation attributes throughout, because a
+             derived group's palette holds `var(--…)` references and those do
+             not parse in an SVG attribute. As CSS properties both those and
+             literal hex work, so there is no branch. -->
+        <g opacity={band.opacity}>
+            <path d={ribbonPath(band.ribbon)} style:fill={band.palette.surface} />
+            <path
+                d={ribbonEdge(band.ribbon, 'top', REFRACTION_OFFSET)}
+                fill="none"
+                stroke-width="1"
+                style:stroke={band.palette.refraction}
+            />
+            <path
+                d={ribbonEdge(band.ribbon, 'top')}
+                fill="none"
+                stroke-width="2"
+                style:stroke={band.palette.chroma}
+            />
+        </g>
     {/each}
 </svg>
 

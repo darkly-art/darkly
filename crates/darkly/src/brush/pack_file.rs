@@ -18,7 +18,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::brush::metadata::BrushMetadata;
-use crate::brush::pack::{validate_pack, BrushPack};
+use crate::brush::pack::{validate_pack, BrushPack, PackPalette};
 use crate::format::unzip::unzip_entries;
 use crate::format::zip_io::write_entries;
 
@@ -46,8 +46,7 @@ struct PackManifest {
     #[serde(default)]
     description: String,
     icon: String,
-    primary: String,
-    secondary: String,
+    palette: PackPalette,
     #[serde(default)]
     author: String,
     /// Entry paths of the member brushes, **in the pack's member order**.
@@ -69,8 +68,7 @@ pub struct PackFile {
     pub name: String,
     pub description: String,
     pub icon: String,
-    pub primary: String,
-    pub secondary: String,
+    pub palette: PackPalette,
     pub author: String,
     /// Member brushes, in the pack's member order.
     pub brushes: Vec<BrushMetadata>,
@@ -86,8 +84,7 @@ impl PackFile {
             name: pack.name.clone(),
             description: pack.description.clone(),
             icon: pack.icon.clone(),
-            primary: pack.primary.clone(),
-            secondary: pack.secondary.clone(),
+            palette: pack.palette.clone(),
             author: String::new(),
             brushes,
         }
@@ -99,7 +96,7 @@ impl PackFile {
 
     /// Serialize to `.darkly-brush` zip bytes.
     pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
-        validate_pack(&self.name, &self.icon, &self.primary, &self.secondary)?;
+        validate_pack(&self.name, &self.icon, &self.palette)?;
 
         let manifest = PackManifest {
             format: FORMAT_TAG.to_string(),
@@ -107,8 +104,7 @@ impl PackFile {
             name: self.name.clone(),
             description: self.description.clone(),
             icon: self.icon.clone(),
-            primary: self.primary.clone(),
-            secondary: self.secondary.clone(),
+            palette: self.palette.clone(),
             author: self.author.clone(),
             brushes: self
                 .brushes
@@ -163,12 +159,7 @@ impl PackFile {
             ));
         }
 
-        validate_pack(
-            &manifest.name,
-            &manifest.icon,
-            &manifest.primary,
-            &manifest.secondary,
-        )?;
+        validate_pack(&manifest.name, &manifest.icon, &manifest.palette)?;
 
         let mut brushes = Vec::with_capacity(manifest.brushes.len());
         for path in &manifest.brushes {
@@ -189,8 +180,7 @@ impl PackFile {
             name: manifest.name,
             description: manifest.description,
             icon: manifest.icon,
-            primary: manifest.primary,
-            secondary: manifest.secondary,
+            palette: manifest.palette,
             author: manifest.author,
             brushes,
         })
@@ -205,7 +195,12 @@ mod tests {
     use crate::format::zip_io::write_entries;
 
     fn pack() -> BrushPack {
-        let mut p = BrushPack::new("p1", "Watercolors", "mdi:water", "#3355ff", "#ffffff");
+        let mut p = BrushPack::new(
+            "p1",
+            "Watercolors",
+            "mdi:water",
+            PackPalette::new("#2f7fe0", "#2fd0c0", "#0c1a26", "#c3dae9"),
+        );
         p.description = "Wet pigment that pools and blends.".into();
         p.members = vec!["a".into(), "b".into()];
         p
@@ -227,8 +222,11 @@ mod tests {
         assert_eq!(back.name, "Watercolors");
         assert_eq!(back.description, "Wet pigment that pools and blends.");
         assert_eq!(back.icon, "mdi:water");
-        assert_eq!(back.primary, "#3355ff");
-        assert_eq!(back.secondary, "#ffffff");
+        // Every role survives the archive, not just the two that used to exist.
+        assert_eq!(
+            back.palette,
+            PackPalette::new("#2f7fe0", "#2fd0c0", "#0c1a26", "#c3dae9")
+        );
 
         // Member order is the pack's own data and must survive.
         let ids: Vec<&str> = back.brushes.iter().map(|b| b.id.as_str()).collect();
@@ -289,6 +287,15 @@ mod tests {
         assert!(err.contains("missing pack.json"), "got: {err}");
     }
 
+    /// A shape-valid palette, as a manifest carries one. Hand-written so the
+    /// rejection cases below each fail for the reason they name.
+    fn palette_json() -> serde_json::Value {
+        serde_json::json!({
+            "chroma": "#2f7fe0", "refraction": "#2fd0c0",
+            "surface": "#0c1a26", "ink": "#c3dae9",
+        })
+    }
+
     /// Build an archive from a hand-written manifest, for the rejection cases.
     fn archive_with_manifest(manifest: serde_json::Value) -> Vec<u8> {
         let json = serde_json::to_vec(&manifest).unwrap();
@@ -299,7 +306,7 @@ mod tests {
     fn version_mismatch_is_rejected() {
         let bytes = archive_with_manifest(serde_json::json!({
             "format": FORMAT_TAG, "version": 2, "name": "Future",
-            "icon": "mdi:water", "primary": "#000000", "secondary": "#ffffff",
+            "icon": "mdi:water", "palette": palette_json(),
             "brushes": [],
         }));
         let err = PackFile::from_bytes(&bytes).unwrap_err();
@@ -311,7 +318,7 @@ mod tests {
         // A `.darkly` document is also a zip; the tag is what tells them apart.
         let bytes = archive_with_manifest(serde_json::json!({
             "format": "darkly-document", "version": 1, "name": "Doc",
-            "icon": "mdi:water", "primary": "#000000", "secondary": "#ffffff",
+            "icon": "mdi:water", "palette": palette_json(),
             "brushes": [],
         }));
         let err = PackFile::from_bytes(&bytes).unwrap_err();
@@ -322,7 +329,7 @@ mod tests {
     fn a_manifest_naming_a_missing_entry_is_rejected() {
         let bytes = archive_with_manifest(serde_json::json!({
             "format": FORMAT_TAG, "version": PACK_VERSION, "name": "Truncated",
-            "icon": "mdi:water", "primary": "#000000", "secondary": "#ffffff",
+            "icon": "mdi:water", "palette": palette_json(),
             "brushes": ["brushes/gone.json"],
         }));
         let err = PackFile::from_bytes(&bytes).unwrap_err();
@@ -333,7 +340,8 @@ mod tests {
     fn a_malformed_manifest_color_is_rejected() {
         let bytes = archive_with_manifest(serde_json::json!({
             "format": FORMAT_TAG, "version": PACK_VERSION, "name": "Bad",
-            "icon": "mdi:water", "primary": "not-a-color", "secondary": "#ffffff",
+            "icon": "mdi:water", "palette": { "chroma": "not-a-color",
+                "refraction": "#2fd0c0", "surface": "#0c1a26", "ink": "#c3dae9" },
             "brushes": [],
         }));
         assert!(PackFile::from_bytes(&bytes).is_err());
@@ -343,10 +351,38 @@ mod tests {
     fn an_unqualified_manifest_icon_is_rejected() {
         let bytes = archive_with_manifest(serde_json::json!({
             "format": FORMAT_TAG, "version": PACK_VERSION, "name": "Bad",
-            "icon": "star", "primary": "#000000", "secondary": "#ffffff",
+            "icon": "star", "palette": palette_json(),
             "brushes": [],
         }));
         assert!(PackFile::from_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn a_manifest_missing_a_palette_role_is_rejected() {
+        // Pins "no defaulting, no migration": a role absent from the manifest is
+        // a rejection, not a silently blackened pack.
+        let bytes = archive_with_manifest(serde_json::json!({
+            "format": FORMAT_TAG, "version": PACK_VERSION, "name": "Partial",
+            "icon": "mdi:water",
+            "palette": { "chroma": "#2f7fe0", "refraction": "#2fd0c0", "surface": "#0c1a26" },
+            "brushes": [],
+        }));
+        let err = PackFile::from_bytes(&bytes).unwrap_err();
+        assert!(
+            err.contains("ink"),
+            "error should name the missing role: {err}"
+        );
+    }
+
+    #[test]
+    fn a_translucent_surface_round_trips() {
+        // Alpha is a pack's way of letting the app's background through, so it
+        // has to survive the archive rather than being normalized away.
+        let mut p = pack();
+        p.palette.surface = "#2a2148cc".into();
+        let bytes = PackFile::new(&p, brushes()).to_bytes().unwrap();
+        let back = PackFile::from_bytes(&bytes).unwrap();
+        assert_eq!(back.palette.surface, "#2a2148cc");
     }
 
     #[test]
@@ -357,7 +393,7 @@ mod tests {
         let bytes = archive_with_manifest(serde_json::json!({
             "format": FORMAT_TAG, "version": PACK_VERSION, "name": "Exotic",
             "icon": "some-collection:nonexistent",
-            "primary": "#000000", "secondary": "#ffffff",
+            "palette": palette_json(),
             "brushes": [],
         }));
         assert_eq!(PackFile::from_bytes(&bytes).unwrap().name, "Exotic");

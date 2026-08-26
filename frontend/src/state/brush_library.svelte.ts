@@ -19,6 +19,7 @@ import type { DarklyStorage } from '../storage/types';
 import type { BrushInfo, BrushPackInfo } from '../engine/protocol_gen';
 import { recentBrushes } from './recents.svelte';
 import { newId } from '../lib/id';
+import { PALETTE_ROLES, type PackPalette } from '../lib/packPalette';
 
 /** A painter-created brush, as stored. The graph lives in the engine; what we
  *  persist is enough to put it back. */
@@ -35,8 +36,7 @@ export interface StoredPack {
     name: string;
     description: string;
     icon: string;
-    primary: string;
-    secondary: string;
+    palette: PackPalette;
     members: string[];
 }
 
@@ -47,11 +47,22 @@ function validBrush(raw: unknown): StoredBrush | null {
     return { id: o.id, name: o.name, yaml: o.yaml };
 }
 
+/** Every role present and a string, or nothing. Not defaulted: a record missing
+ *  a role is rejected rather than silently blackened, the same rule the engine
+ *  applies to a pack file from anywhere else. */
+function validPalette(raw: unknown): PackPalette | null {
+    const o = raw as Partial<PackPalette> | null;
+    if (!o) return null;
+    for (const role of PALETTE_ROLES) if (typeof o[role] !== 'string') return null;
+    return { chroma: o.chroma!, refraction: o.refraction!, surface: o.surface!, ink: o.ink! };
+}
+
 function validPack(raw: unknown): StoredPack | null {
     const o = raw as Partial<StoredPack> | null;
     if (!o || typeof o.id !== 'string' || typeof o.name !== 'string') return null;
-    if (typeof o.icon !== 'string' || typeof o.primary !== 'string') return null;
-    if (typeof o.secondary !== 'string') return null;
+    if (typeof o.icon !== 'string') return null;
+    const palette = validPalette(o.palette);
+    if (!palette) return null;
     const members = Array.isArray(o.members)
         ? o.members.filter((m): m is string => typeof m === 'string')
         : [];
@@ -60,8 +71,7 @@ function validPack(raw: unknown): StoredPack | null {
         name: o.name,
         description: typeof o.description === 'string' ? o.description : '',
         icon: o.icon,
-        primary: o.primary,
-        secondary: o.secondary,
+        palette,
         members,
     };
 }
@@ -152,8 +162,7 @@ export class BrushLibraryStore {
                     name: record.name,
                     description: record.description,
                     icon: record.icon,
-                    primary: record.primary,
-                    secondary: record.secondary,
+                    palette: record.palette,
                 });
                 this.#ownPacks.add(id);
             } catch (e) {
@@ -203,8 +212,13 @@ export class BrushLibraryStore {
                 name: 'Favorites',
                 description: 'The brushes you reach for most.',
                 icon: 'fa6-solid:star',
-                primary: '#f5c542',
-                secondary: '#2b2213',
+                // Gold, since a star is gold — seated to read on either theme.
+                palette: {
+                    chroma: '#d9a92b',
+                    refraction: '#d8bd5e',
+                    surface: '#1e1a10',
+                    ink: '#e3d6b2',
+                },
             });
         } catch (e) {
             console.warn('[brush library] could not seed Favorites', e);
@@ -229,8 +243,7 @@ export class BrushLibraryStore {
             name: pack.name,
             description: pack.description,
             icon: pack.icon,
-            primary: pack.primary,
-            secondary: pack.secondary,
+            palette: pack.palette,
             members: pack.members,
         });
     }

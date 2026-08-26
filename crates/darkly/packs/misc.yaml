@@ -1,6 +1,9 @@
 name: Misc
 description: Everything that fits nowhere else.
 icon: mdi:dots-horizontal
-primary: "#9aa0a6"
-secondary: "#26292c"
+palette:
+  chroma: "#4f9e46"
+  refraction: "#a8cc45"
+  surface: "#12161a"
+  ink: "#c8d2c2"
 members: [clone]

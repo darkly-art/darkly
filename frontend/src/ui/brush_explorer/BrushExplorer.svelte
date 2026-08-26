@@ -30,6 +30,7 @@
     import { brushLibrary } from '../../state/brush_library.svelte';
     import { recentBrushes } from '../../state/recents.svelte';
     import { packIcon, PACK_ICON_FALLBACK } from '../../lib/packIcon';
+    import { packPalette } from '../../lib/packPalette';
     import BrushTile from '../brush_library/BrushTile.svelte';
     import PackWheel from './PackWheel.svelte';
     import PackProjection from './PackProjection.svelte';
@@ -361,11 +362,7 @@
                          the first one to it. -->
                     <div class="lead" style:height="{FOCUS_LINE * 100}%"></div>
                     {#each groups as group (group.id)}
-                        <section
-                            class="group"
-                            style:--pack-primary={group.primary}
-                            style:--pack-secondary={group.secondary}
-                        >
+                        <section class="group" use:packPalette={group.palette}>
                             <div class="spine" title={group.label}>
                                 <Icon name={group.icon} class="spine-icon" />
                             </div>
@@ -461,39 +458,54 @@
      * twice, so the colour has to arrive from the side the card is on rather
      * than sit in a heading that repeats what the card already says. */
     .group {
-        /* Full strength at the left edge, where the ribbon lands, running out
-         * across the brushes: card, ribbon and section are then one unbroken
-         * colour, which only holds if this end matches what the ribbon is
-         * painting rather than starting at a tint of it.
+        /* The right end of the pack, and the same fill as its card: `surface`
+         * at full where the ribbon lands, running out to the theme's own
+         * background as it crosses the brushes.
          *
          * How far it reaches is absolute, not a percentage: the pane's width
          * changes with the dialog and the column count with it, and a
-         * proportional wash would colour a different number of brushes at
+         * proportional fill would colour a different number of brushes at
          * every size. */
         --fade-reach: 340px;
         display: grid;
         grid-template-columns: 14px minmax(0, 1fr);
         /* Square on the left, where the projection lands, for the same reason
          * the cards are square on the right: the two edges that face each
-         * other across the gutter are the join. */
+         * other across the gutter are the join — and the left edge carries no
+         * strand, being interior to the pack rather than part of its outline. */
         border-radius: 0 10px 10px 0;
-        color: var(--pack-secondary);
+        color: var(--pack-ink);
+        /* `--bg` rather than `transparent` at the far end: it is the modal's own
+         * background, so the run-out lands on the theme in either direction. */
         background: linear-gradient(
             to right,
-            var(--pack-primary) 0,
+            var(--pack-surface) 0,
             var(--bg) var(--fade-reach)
         );
+        /* The strands, continuing the ones the card and the band carry. Above
+         * the background, so they keep full strength the whole way across
+         * rather than washing out with the fill.
+         *
+         * Shadows rather than borders, and the reason is load-bearing: this
+         * section's width sets the brush grid's column count
+         * (`repeat(auto-fill, minmax(180px, 1fr))`) and its height is measured
+         * into the scroll mapping every frame. A 1px border is enough to flip a
+         * column, which changes the height, which toggles the list's scrollbar,
+         * which changes the width back — and the wheel twitches forever because
+         * it is driven from these measurements. Decoration here must cost no
+         * layout. */
+        box-shadow:
+            inset 0 2px 0 0 var(--pack-chroma),
+            inset 0 3px 0 0 var(--pack-refraction);
     }
-    /* The strip of full-strength colour the projection lands on. It paints
-     * nothing itself — the section's gradient is already at full strength here,
-     * and a second painting of the same colour would show as a seam down the
-     * one edge the whole design is trying to make continuous. What it
-     * contributes is the width of that strip, and somewhere for the pack's icon
-     * to sit. */
+    /* Where the projection lands. It paints nothing itself — the section's own
+     * fill is already at full strength here, and a second painting of it would
+     * show as a seam down the one edge the whole design is trying to make
+     * continuous. What it contributes is the width of that strip, and somewhere
+     * for the pack's icon to sit. */
     .spine {
         display: flex;
         justify-content: center;
-        color: var(--pack-secondary);
     }
     /* Rides down the spine with the scroll, so a tall pack is still identified
      * when its top is far above the viewport. */
@@ -503,6 +515,9 @@
         font-size: 10px;
         padding: 9px 0;
         opacity: 0.75;
+        /* Ink: the icon sits on the section's own surface, so it is written in
+         * the colour that surface is written in. */
+        color: var(--pack-ink);
     }
     /* `minmax(0, …)` disables the implicit `auto` min-track-size so a wide
      * stroke preview can't push the columns past the pane. */

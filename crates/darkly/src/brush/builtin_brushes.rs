@@ -203,7 +203,12 @@ mod tests {
 
         for brush in all() {
             let (id, name) = (brush.id().to_string(), brush.name().to_string());
-            let mut pack = BrushPack::new("p", "Pack", "mdi:brush", "#000000", "#ffffff");
+            let mut pack = BrushPack::new(
+                "p",
+                "Pack",
+                "mdi:brush",
+                crate::brush::pack::PackPalette::new("#2f7fe0", "#2fd0c0", "#0c1a26", "#c3dae9"),
+            );
             pack.members = vec![id.clone()];
 
             let bytes = PackFile::new(&pack, vec![brush.metadata.clone()])

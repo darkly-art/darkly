@@ -5,6 +5,7 @@ use darkly_macros::handlers;
 use super::{DarklyEngine, ReadbackContext};
 use crate::brush::library::{self as library, BrushInfo, LibrarySnapshot};
 use crate::brush::metadata::{Brush, BrushMetadata};
+use crate::brush::pack::PackPalette;
 
 /// Dimensions used for baked brush thumbnails. Matches the live editor
 /// preview so brushes look identical in the picker grid.
@@ -171,10 +172,9 @@ impl DarklyEngine {
         name: &str,
         description: &str,
         icon: &str,
-        primary: &str,
-        secondary: &str,
+        palette: PackPalette,
     ) -> Result<(), String> {
-        library::with_mut(|lib| lib.create_pack(id, name, description, icon, primary, secondary))
+        library::with_mut(|lib| lib.create_pack(id, name, description, icon, &palette))
     }
 
     /// Change a pack's name, description, icon or colors.
@@ -185,10 +185,9 @@ impl DarklyEngine {
         name: &str,
         description: &str,
         icon: &str,
-        primary: &str,
-        secondary: &str,
+        palette: PackPalette,
     ) -> Result<(), String> {
-        library::with_mut(|lib| lib.edit_pack(id, name, description, icon, primary, secondary))
+        library::with_mut(|lib| lib.edit_pack(id, name, description, icon, &palette))
     }
 
     /// Delete a pack. Its brushes survive.
