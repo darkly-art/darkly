@@ -69,6 +69,64 @@ export interface WheelGeometry {
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
+/**
+ * The band of colour joining the focused card to the section it points at,
+ * in the coordinates of the box both panes sit in.
+ *
+ * The wheel compresses: a card is one uniform height whatever the size of the
+ * pack behind it. The ribbon is that compression made visible — it leaves the
+ * card at card height and arrives at the section at section height, so a big
+ * pack fans out and a small one pinches in, and scrolling reshapes it
+ * continuously as the focus moves.
+ */
+export interface Ribbon {
+    /** The card's trailing edge, and the extent it leaves at. */
+    x0: number;
+    top0: number;
+    bottom0: number;
+    /** The section's leading edge, and the extent it arrives at. */
+    x1: number;
+    top1: number;
+    bottom1: number;
+}
+
+/**
+ * The ribbon as an SVG path: two cubics with their control points on the
+ * midline, which is what gives the band a settled S-curve instead of a wedge.
+ *
+ * Both curves share the same control abscissa, so the top and bottom edges
+ * bend in step and the band keeps an even thickness through the turn.
+ */
+export function ribbonPath(r: Ribbon): string {
+    const mid = (r.x0 + r.x1) / 2;
+    return (
+        `M ${r.x0} ${r.top0}` +
+        ` C ${mid} ${r.top0}, ${mid} ${r.top1}, ${r.x1} ${r.top1}` +
+        ` L ${r.x1} ${r.bottom1}` +
+        ` C ${mid} ${r.bottom1}, ${mid} ${r.bottom0}, ${r.x0} ${r.bottom0}` +
+        ` Z`
+    );
+}
+
+/**
+ * Trim a section's extent to what the list is actually showing.
+ *
+ * A pack taller than the viewport runs off both ends of it, and a ribbon drawn
+ * to the untrimmed extent would fan out past the scrollport onto the search
+ * field and the dialog's edge. `null` when the section is off-screen entirely,
+ * which is the case where there is nothing to draw.
+ */
+export function visibleSpan(
+    top: number,
+    bottom: number,
+    portTop: number,
+    portBottom: number,
+): { top: number; bottom: number } | null {
+    const t = Math.max(top, portTop);
+    const b = Math.min(bottom, portBottom);
+    return b > t ? { top: t, bottom: b } : null;
+}
+
 /** The furthest either pane can be scrolled. Zero when its content fits, which
  *  is what makes a short wheel inert rather than a special case. */
 export function listMax(g: WheelGeometry): number {

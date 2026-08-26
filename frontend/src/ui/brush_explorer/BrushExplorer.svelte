@@ -31,12 +31,15 @@
     import { ScrollSyncToken } from '../../lib/scrollSync';
     import BrushTile from '../brush_library/BrushTile.svelte';
     import PackWheel from './PackWheel.svelte';
+    import PackProjection from './PackProjection.svelte';
     import { groupByPack, matchesQuery, packNamesByBrush, withRecents } from '../brush_library/grouping';
     import {
         listToWheel,
         wheelToList,
         scrollTopForSection,
         focusedSection,
+        visibleSpan,
+        type Ribbon,
         type SectionExtent,
         type WheelGeometry,
     } from './wheel';
@@ -54,6 +57,7 @@
     const FALLBACK_ADVANCE = 52;
 
     let query = $state('');
+    let explorerEl: HTMLElement | undefined = $state();
     let listEl: HTMLElement | undefined = $state();
     let wheelEl: HTMLElement | undefined = $state();
 
@@ -97,6 +101,50 @@
         sections: [],
     });
     let focused = $state<number | null>(null);
+
+    /** The band joining the focused card to its section, in explorer-local
+     *  coordinates. Read straight off the rendered boxes on every scroll rather
+     *  than derived from `geometry`: the two panes start at different heights
+     *  (the search field sits above the list), the focused card carries the
+     *  rolodex transform, and a section's extent is clipped by the scrollport —
+     *  three offsets the mapping has no reason to know about, and any one of
+     *  them wrong detaches the ribbon from what it is drawn between. */
+    let ribbon = $state<Ribbon | null>(null);
+    const focusedGroup = $derived(focused === null ? undefined : groups[focused]);
+
+    function updateRibbon() {
+        const section = focused === null ? undefined : sectionElements()[focused];
+        const card =
+            focused === null
+                ? undefined
+                : wheelEl?.querySelectorAll<HTMLElement>('.pack-card')[focused];
+        if (!explorerEl || !listEl || !card || !section) {
+            ribbon = null;
+            return;
+        }
+        const base = explorerEl.getBoundingClientRect();
+        const c = card.getBoundingClientRect();
+        const s = section.getBoundingClientRect();
+        const port = listEl.getBoundingClientRect();
+        const span = visibleSpan(s.top, s.bottom, port.top, port.bottom);
+        if (!span) {
+            ribbon = null;
+            return;
+        }
+        // Both ends run a little way *under* what they join. The panes are
+        // positioned and so paint over the overlay, which hides the overlap
+        // entirely — and buys immunity to the half-pixel seam that subpixel
+        // layout otherwise opens between two boxes that merely abut.
+        const OVERLAP = 3;
+        ribbon = {
+            x0: c.right - base.left - OVERLAP,
+            top0: c.top - base.top,
+            bottom0: c.bottom - base.top,
+            x1: s.left - base.left + OVERLAP,
+            top1: span.top - base.top,
+            bottom1: span.bottom - base.top,
+        };
+    }
 
     /** Identity of the last geometry written, as a plain (non-reactive) local.
      *
@@ -158,6 +206,7 @@
             geometry = next;
         }
         focused = focusedSection(listEl.scrollTop, next);
+        updateRibbon();
     }
 
     // Re-measure whenever the group set changes or anything resizes, rather
@@ -179,15 +228,22 @@
     function onListScroll() {
         if (!listEl || !wheelEl) return;
         focused = focusedSection(listEl.scrollTop, geometry);
-        if (!sync.claim('list', now())) return;
-        wheelEl.scrollTop = listToWheel(listEl.scrollTop, geometry);
+        if (sync.claim('list', now())) {
+            wheelEl.scrollTop = listToWheel(listEl.scrollTop, geometry);
+        }
+        // Outside the claim: the ribbon is drawn from wherever the two panes
+        // *are*, including the frames where this pane lost the arbitration and
+        // is being driven by the other one.
+        updateRibbon();
     }
 
     function onWheelScroll() {
         if (!listEl || !wheelEl) return;
-        if (!sync.claim('wheel', now())) return;
-        listEl.scrollTop = wheelToList(wheelEl.scrollTop, geometry);
-        focused = focusedSection(listEl.scrollTop, geometry);
+        if (sync.claim('wheel', now())) {
+            listEl.scrollTop = wheelToList(wheelEl.scrollTop, geometry);
+            focused = focusedSection(listEl.scrollTop, geometry);
+        }
+        updateRibbon();
     }
 
     /** A tap on a card takes you to that pack. Works at every size, including
@@ -211,7 +267,9 @@
 </script>
 
 <Modal bind:open title="Brushes" size="full">
-    <div class="explorer">
+    <div class="explorer" bind:this={explorerEl}>
+        <PackProjection {ribbon} primary={focusedGroup?.primary ?? 'transparent'} />
+
         <PackWheel
             {groups}
             {geometry}
@@ -244,6 +302,13 @@
                         {#if query}No brushes match “{query}”.{:else}No brushes yet.{/if}
                     </div>
                 {:else}
+                    <!-- Half a viewport of leading space, so the *first* pack
+                         can reach the focus line at the centre. Without it the
+                         list starts already scrolled past it: at scrollTop 0
+                         the centre lands half a viewport into the content,
+                         which is somewhere inside the second pack, and no
+                         amount of scrolling up can highlight the first. -->
+                    <div class="lead"></div>
                     {#each groups as group (group.id)}
                         {@const shut = collapsed.has(group.id)}
                         <section
@@ -296,13 +361,15 @@
     .explorer {
         display: grid;
         grid-template-columns: 232px minmax(0, 1fr);
-        /* No gutter between the panes: a card and the spine of the section it
-         * points at are the same colour arriving from the same side, and a gap
-         * would read as two lists rather than one. The wheel's own inline
-         * padding is all the separation there is. */
-        gap: 0;
+        /* The gutter is not empty space — it is where the projection is drawn,
+         * so it is sized to give the ribbon a turn to make rather than to
+         * separate the panes. */
+        column-gap: 26px;
         height: 100%;
         min-height: 0;
+        /* The overlay is positioned against this box, and both panes are
+         * measured in its coordinates. */
+        position: relative;
     }
     .list-pane {
         display: flex;
@@ -354,37 +421,44 @@
      * twice, so the colour has to arrive from the side the card is on rather
      * than sit in a heading that repeats what the card already says. */
     .group {
-        /* How far the colour reaches across the grid. Absolute, not a
-         * percentage: the pane's width changes with the dialog and the column
-         * count with it, and a proportional wash would mean the colour reached
-         * a different number of brushes at every size. */
+        /* Full strength at the left edge, where the ribbon lands, running out
+         * across the brushes: card, ribbon and section are then one unbroken
+         * colour, which only holds if this end matches what the ribbon is
+         * painting rather than starting at a tint of it.
+         *
+         * How far it reaches is absolute, not a percentage: the pane's width
+         * changes with the dialog and the column count with it, and a
+         * proportional wash would colour a different number of brushes at
+         * every size. */
         --fade-reach: 340px;
         display: grid;
         grid-template-columns: 14px minmax(0, 1fr);
-        border-radius: 10px;
+        /* Square on the left, where the projection lands, for the same reason
+         * the cards are square on the right: the two edges that face each
+         * other across the gutter are the join. */
+        border-radius: 0 10px 10px 0;
         color: var(--pack-secondary);
         background: linear-gradient(
             to right,
-            color-mix(in srgb, var(--pack-primary) 34%, var(--bg)) 0,
+            var(--pack-primary) 0,
             var(--bg) var(--fade-reach)
         );
     }
-    /* The pack's colour at full strength down the side the wheel is on, which
-     * is what carries a card's colour into the list. Doubles as the fold
-     * control — there is no heading left to put one in, and the spine is the
-     * one part of a section that belongs to the pack rather than to a brush. */
+    /* Transparent on purpose: the section's own gradient is at full strength
+     * here, so a background of its own would be a second painting of the same
+     * colour and any disagreement between them would show as a seam down the
+     * one edge the whole design is trying to make continuous. What the spine
+     * contributes is a hit area — it is the fold control, there being no
+     * heading left to put one in, and the one part of a section that belongs
+     * to the pack rather than to a brush. */
     .spine {
         display: flex;
         justify-content: center;
         border: none;
-        border-radius: 10px 0 0 10px;
-        background: var(--pack-primary);
+        background: transparent;
         color: var(--pack-secondary);
         cursor: pointer;
         padding: 0;
-    }
-    .group.shut .spine {
-        border-radius: 10px;
     }
     /* Rides down the spine with the scroll, so a tall pack is still identified
      * when its top is far above the viewport. */
@@ -408,8 +482,17 @@
     .group.shut {
         min-height: 30px;
     }
-    /* One viewport of trailing space. `height: 100%` resolves against the
-     * scrollport's own definite height, so no measurement is involved. */
+    /* Space at both ends of the list, so every pack can reach the focus line:
+     * half a viewport ahead of the first (the focus sits at the centre, so
+     * that is exactly what it takes to bring the first section's top to it),
+     * and a full one behind the last, which also has to clear the centre.
+     * Percentages resolve against the scrollport's own definite height, so no
+     * measurement is involved — and the sections are measured from the DOM
+     * afterwards, so the mapping picks the offset up for free. */
+    .lead {
+        flex: none;
+        height: 50%;
+    }
     .tail {
         flex: none;
         height: 100%;

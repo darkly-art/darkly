@@ -22,7 +22,7 @@
 
 <button
     class="pack-card"
-    class:active
+    aria-current={active}
     onclick={onSelect}
     style:--pack-primary={group.primary}
     style:--pack-secondary={group.secondary}
@@ -37,9 +37,9 @@
 
 <style>
     /* The card *is* the pack's colour: `primary` is the surface, `secondary`
-     * the ink on it. Hover and active shift the surface toward the ink rather
-     * than toward a fixed grey, so the emphasis reads the same whatever colours
-     * a pack shipped with — and a derived group, whose pair is the theme's own
+     * the ink on it. Hover shifts the surface toward the ink rather than toward
+     * a fixed grey, so the emphasis reads the same whatever colours a pack
+     * shipped with — and a derived group, whose pair is the theme's own
      * neutrals, lands back on the plain card it used to be. */
     .pack-card {
         display: flex;
@@ -52,22 +52,25 @@
         background: var(--pack-primary);
         color: var(--pack-secondary);
         text-align: left;
-        border: 1px solid transparent;
-        border-radius: var(--radius-md);
+        border: none;
+        /* Square where the projection leaves. A rounded corner there would cut
+         * the colour away from the band at exactly the join, which is the one
+         * edge that has to be flat for the two to meet. */
+        border-radius: var(--radius-md) 0 0 var(--radius-md);
         cursor: pointer;
         /* The curve is applied per card from `cardCurve`; keep the origin at the
          * card's own centre so the tilt reads as depth rather than sliding. */
         transform-origin: center center;
         will-change: transform, opacity;
-        transition: background var(--transition-fast), border-color var(--transition-fast);
+        transition: background var(--transition-fast);
     }
     .pack-card:hover {
         background: color-mix(in srgb, var(--pack-primary) 85%, var(--pack-secondary));
     }
-    /* The group under the focus line, ringed in its own ink. */
-    .pack-card.active {
-        border-color: var(--pack-secondary);
-    }
+    /* The focused card wears no ring. It is already the only card at full
+     * colour and full scale, and the projection leaves from its edge — a
+     * border would draw a line exactly where that colour has to run
+     * uninterrupted into the list. `aria-current` carries the fact instead. */
     .pack-card :global(.card-icon) {
         font-size: 13px;
         flex: none;

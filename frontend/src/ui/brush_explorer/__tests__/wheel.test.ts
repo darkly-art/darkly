@@ -9,6 +9,8 @@ import {
     listMax,
     wheelMax,
     wheelPad,
+    ribbonPath,
+    visibleSpan,
     type WheelGeometry,
     type SectionExtent,
 } from '../wheel';
@@ -246,6 +248,40 @@ describe('the leading pad', () => {
             const under = Math.floor((centre - PADDED.wheelLead) / PADDED.cardAdvance);
             expect(under).toBe(focused);
         }
+    });
+});
+
+describe('the projection ribbon', () => {
+    const R = { x0: 0, top0: 40, bottom0: 80, x1: 100, top1: 0, bottom1: 200 };
+
+    it('leaves at the card extent and arrives at the section extent', () => {
+        // The compression the wheel performs, made visible: 40px of card
+        // opening onto 200px of section.
+        const d = ribbonPath(R);
+        expect(d.startsWith('M 0 40')).toBe(true);
+        expect(d).toContain('100 0');
+        expect(d).toContain('L 100 200');
+        expect(d.endsWith('Z')).toBe(true);
+    });
+
+    it('bends both edges about the same midline', () => {
+        // Control points off the same abscissa are what keep the band an even
+        // thickness through the turn instead of pinching on one edge.
+        expect(ribbonPath(R)).toContain('C 50 40, 50 0,');
+        expect(ribbonPath(R)).toContain('C 50 200, 50 80,');
+    });
+
+    it('trims a section to what the list is showing', () => {
+        // A pack taller than the viewport: the ribbon must arrive at the
+        // scrollport's edge, not run off it onto the search field.
+        expect(visibleSpan(-500, 900, 0, 400)).toEqual({ top: 0, bottom: 400 });
+        expect(visibleSpan(100, 250, 0, 400)).toEqual({ top: 100, bottom: 250 });
+    });
+
+    it('has nothing to draw for a section scrolled off-screen', () => {
+        expect(visibleSpan(600, 900, 0, 400)).toBeNull();
+        // Touching the edge is not showing: a zero-height band is no band.
+        expect(visibleSpan(400, 900, 0, 400)).toBeNull();
     });
 });
 
