@@ -135,6 +135,7 @@ For a feature to count, it must be:
 - [x] Flip canvas H / V
 - [x] Rotate canvas 90° CW / CCW / 180°
 - [x] Flip layer / selection H / V
+- [x] Smart objects
 - [ ] Recent colors
 - [ ] Saved swatches / palettes
 - [ ] Palette popup
