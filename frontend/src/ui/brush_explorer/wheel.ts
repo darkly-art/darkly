@@ -143,6 +143,14 @@ export interface PaneLayout {
     sectionLeft: number;
     /** A card's own height, which is the advance less the gap between cards. */
     cardHeight: number;
+    /** Where a card's leading edge is. Cards share one column, so one number
+     *  serves them all — the counterpart of `sectionLeft`. */
+    cardLeft: number;
+    /** The explorer's own box. The field is sized to this in both axes, so
+     *  every surface that samples it is sampling the same image — which is what
+     *  an angled beam needs, since it varies across x as well as y. */
+    width: number;
+    height: number;
 }
 
 /**

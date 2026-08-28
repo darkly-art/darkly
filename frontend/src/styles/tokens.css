@@ -6,6 +6,67 @@
     --transition-fast: 0.1s;
 }
 
+/* A brush pack's palette, as everything drawn from it.
+
+   The four absolutes (`--pack-chroma`, `--pack-refraction`, `--pack-surface`,
+   `--pack-ink`) arrive from `use:packPalette`, which also adds this class.
+   Declared on the same element as the absolutes on purpose: a custom property
+   containing `var()` is substituted where it is declared, so a copy of this on
+   `:root` would freeze at the neutral palette and never follow an override. */
+.pack-palette {
+    /* The prism. Three knobs, all meant to be played with.
+
+       `--pack-prism-x` is where the apex sits, as a fraction of the explorer's
+       width — negative puts it off the left edge, which is what leaves the beam
+       already slightly open by the time it reaches the cards. The further left
+       it goes the *less* the beam expands, because expansion is a ratio of
+       distances: an apex just off-screen fans hard, one far away barely
+       spreads at all.
+
+       `--pack-beam-spread` is the fan's half-angle, and so both how wide the
+       beam is and how fast it opens. `--pack-beam-tilt` rakes the whole thing
+       off horizontal; at zero the beam runs level and the fan is symmetric
+       about the focus line, which is also where the wheel's own attention
+       already is. */
+    --pack-prism-x: -1%;
+    --pack-beam-spread: 16deg;
+    --pack-beam-tilt: 0deg;
+
+    /* The pack's light, as one field.
+
+       A pack is drawn across three columns — its card in the wheel, its ribbon
+       across the gutter, its section in the list — and this is the single
+       declaration all three paint. They differ only in where they sample it:
+       each offsets the image by its own position inside the explorer, so the
+       field resolves to the same place on screen everywhere and the three
+       columns are windows onto one continuous thing rather than three surfaces
+       that have to be kept looking alike. There is no seam to hide because
+       there is no join being faked.
+
+       Conic rather than linear, which is the whole of the prism: a linear beam
+       is one width everywhere, because its stops are distances across a fixed
+       axis. Conic stops are *angles* from a point, so the same angular slice
+       covers more pixels the further it gets from the apex — the beam leaves
+       the cards narrow and opens across the brushes on its own, with nothing
+       per-column telling it to.
+
+       Sized to the explorer in both axes, so the apex lands in the same place
+       for every surface sampling it. That is what an angled or fanned field
+       needs and a purely vertical one did not. */
+    --pack-field: conic-gradient(
+        from calc(90deg + var(--pack-beam-tilt) - var(--pack-beam-spread))
+            at var(--pack-prism-x) 50%,
+        var(--pack-surface) 0deg,
+        color-mix(in srgb, var(--pack-chroma) 34%, var(--pack-surface))
+            calc(var(--pack-beam-spread) * 0.55),
+        color-mix(in srgb, var(--pack-refraction) 80%, var(--pack-surface))
+            var(--pack-beam-spread),
+        color-mix(in srgb, var(--pack-chroma) 34%, var(--pack-surface))
+            calc(var(--pack-beam-spread) * 1.45),
+        var(--pack-surface) calc(var(--pack-beam-spread) * 2),
+        var(--pack-surface) 360deg);
+}
+
 /* Icon button reset — used by toolbar, panel actions, layer controls, etc. */
 .icon-btn {
     display: flex;

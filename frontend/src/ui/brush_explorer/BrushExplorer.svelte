@@ -114,7 +114,15 @@
         cardRight: 0,
         sectionLeft: 0,
         cardHeight: 0,
+        cardLeft: 0,
+        width: 0,
+        height: 0,
     });
+
+    /** Where the list's scroll content currently starts, in explorer
+     *  coordinates. One number for every section, because they all scroll
+     *  together — a section adds its own static `--section-top` to it. */
+    let listFieldY = $state(0);
 
     /** Identity of the last geometry written, as a plain (non-reactive) local.
      *
@@ -197,6 +205,11 @@
                 : wheelPort.right - base.left,
             sectionLeft: listPort.left - base.left + (els[0]?.offsetLeft ?? 0),
             cardHeight: card?.offsetHeight ?? next.cardAdvance,
+            cardLeft: card
+                ? wheelPort.left - base.left + card.offsetLeft
+                : wheelPort.left - base.left,
+            width: base.width,
+            height: base.height,
         };
         wake();
     }
@@ -261,6 +274,7 @@
         // differently — the exact disagreement this loop exists to prevent.
         focused = frame.focused === null ? null : Math.min(frame.focused, groups.length - 1);
         curves = frame.curves;
+        listFieldY = layout.listTop - frame.listScrollTop;
         bands = packBands(frame, geometry, layout, groups);
 
         const moved = listEl.scrollTop !== lastList || wheelEl.scrollTop !== lastWheel;
@@ -318,12 +332,28 @@
 </script>
 
 <Modal bind:open title="Brushes" size="full">
-    <div class="explorer" bind:this={explorerEl}>
+    {#snippet controls()}
+        <input
+            bind:value={query}
+            type="search"
+            class="search"
+            placeholder="Search brushes, packs and tags…"
+        />
+    {/snippet}
+
+    <div
+        class="explorer"
+        bind:this={explorerEl}
+        style:--field-w="{layout.width}px"
+        style:--field-h="{layout.height}px"
+    >
         <PackProjection {bands} />
 
         <PackWheel
             {groups}
             {geometry}
+            paneTop={layout.wheelTop}
+            paneLeft={layout.cardLeft}
             {focused}
             {curves}
             bind:el={wheelEl}
@@ -333,19 +363,12 @@
         />
 
         <div class="list-pane">
-            <div class="list-header">
-                <input
-                    bind:value={query}
-                    type="search"
-                    class="search"
-                    placeholder="Search brushes, packs and tags…"
-                />
-            </div>
-
 <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
                 class="list"
                 bind:this={listEl}
+                style:--list-field-y="{listFieldY}px"
+                style:--section-left="{layout.sectionLeft}px"
                 onscroll={wake}
                 onpointerdown={() => drive('list')}
                 onwheel={() => drive('list')}
@@ -361,8 +384,12 @@
                          is under it, and no amount of scrolling up can bring
                          the first one to it. -->
                     <div class="lead" style:height="{FOCUS_LINE * 100}%"></div>
-                    {#each groups as group (group.id)}
-                        <section class="group" use:packPalette={group.palette}>
+                    {#each groups as group, i (group.id)}
+                        <section
+                            class="group"
+                            use:packPalette={group.palette}
+                            style:--section-top="{geometry.sections[i]?.top ?? 0}px"
+                        >
                             <div class="spine" title={group.label}>
                                 <Icon name={group.icon} class="spine-icon" />
                             </div>
@@ -414,15 +441,13 @@
         min-height: 0;
         min-width: 0;
     }
-    .list-header {
-        flex: none;
-        /* Matches the list's own padding so the field's edges line up with the
-         * sections below it. */
-        padding: 0 4px 10px 0;
-    }
+    /* Lives in the dialog's header, which was a title and a close button with a
+     * whole row of nothing between them. */
     .search {
         width: 100%;
-        padding: 9px 12px;
+        /* Kept close to the title's own line height so moving it up here costs
+         * a few pixels of header rather than a new bar's worth. */
+        padding: 6px 12px;
         font-size: 13px;
         font-family: inherit;
         background: var(--bg-hover);
@@ -458,31 +483,23 @@
      * twice, so the colour has to arrive from the side the card is on rather
      * than sit in a heading that repeats what the card already says. */
     .group {
-        /* The right end of the pack, and the same fill as its card: `surface`
-         * at full where the ribbon lands, running out to the theme's own
-         * background as it crosses the brushes.
-         *
-         * How far it reaches is absolute, not a percentage: the pane's width
-         * changes with the dialog and the column count with it, and a
-         * proportional fill would colour a different number of brushes at
-         * every size. */
-        --fade-reach: 340px;
         display: grid;
         grid-template-columns: 14px minmax(0, 1fr);
-        /* Square on the left, where the projection lands, for the same reason
-         * the cards are square on the right: the two edges that face each
-         * other across the gutter are the join — and the left edge carries no
-         * strand, being interior to the pack rather than part of its outline. */
+        /* Square on the left, where the projection lands: the ribbon arrives
+         * flush and the field runs straight through, so a rounded corner there
+         * would cut a notch out of a continuous surface. */
         border-radius: 0 10px 10px 0;
         color: var(--pack-ink);
-        /* `--bg` rather than `transparent` at the far end: it is the modal's own
-         * background, so the run-out lands on the theme in either direction. */
-        background: linear-gradient(
-            to right,
-            var(--pack-surface) 0,
-            var(--bg) var(--fade-reach)
-        );
-
+        /* The same field the card and the ribbon paint, offset by where this
+         * section currently sits in the explorer — `--list-field-y` is where the
+         * list's content starts (one number, published per frame, shared by
+         * every section) plus this section's own static offset within it. */
+        background-image: var(--pack-field);
+        background-repeat: no-repeat;
+        background-size: var(--field-w) var(--field-h);
+        background-position:
+            calc(-1 * var(--section-left, 0px))
+            calc(-1 * (var(--list-field-y, 0px) + var(--section-top, 0px)));
     }
     /* Where the projection lands. It paints nothing itself — the section's own
      * fill is already at full strength here, and a second painting of it would

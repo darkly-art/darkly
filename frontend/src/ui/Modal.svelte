@@ -19,6 +19,14 @@
         /** Let the user reposition the dialog by dragging its header. Spawns
          *  centered (the default), then follows the drag. */
         draggable?: boolean;
+        /** Controls rendered in the header row, between the title and the close
+         *  button, filling whatever space the title leaves.
+         *
+         *  A header is a fixed cost every dialog already pays: it is one line
+         *  tall whether it holds a word or a word and a search field. Anything a
+         *  dialog needs *above* its content belongs here rather than in a second
+         *  bar below, which would spend the space twice. */
+        controls?: Snippet;
         children?: Snippet;
     };
 
@@ -30,6 +38,7 @@
         bare = false,
         dimmed = true,
         draggable = false,
+        controls,
         children,
     }: Props = $props();
 
@@ -116,6 +125,9 @@
                 </span>
             {:else if title}
                 <h2>{title}</h2>
+            {/if}
+            {#if controls}
+                <div class="header-controls">{@render controls()}</div>
             {/if}
             <button type="button" class="close" aria-label="Close" onclick={onClose}>×</button>
         </header>
@@ -209,6 +221,7 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
+        gap: 14px;
         padding: var(--header-pad-y) var(--header-pad-x);
         border-bottom: 1px solid var(--bg-hover);
         flex-shrink: 0;
@@ -218,6 +231,17 @@
         margin: 0;
         font-size: 16px;
         font-weight: 600;
+        /* The title states its size; the controls take what is left. */
+        flex: none;
+    }
+
+    /* Takes the room between the title and the close button, which is the whole
+     * point of putting anything here. */
+    .header-controls {
+        display: flex;
+        align-items: center;
+        flex: 1 1 auto;
+        min-width: 0;
     }
 
     .close {

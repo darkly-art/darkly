@@ -393,6 +393,7 @@ describe('packBands', () => {
         cardRight: 100,
         sectionLeft: 140,
         cardHeight: 52,
+        height: 200,
     };
     const PACKS = SPACED.sections.map(s => ({
         id: s.id,

@@ -48,29 +48,24 @@
         padding: 10px 12px;
         font-family: inherit;
         font-size: 12px;
-        /* The light belongs to the column, not to the card.
+        /* The field belongs to the explorer, not to this card.
          *
-         * The image is sized to the whole scrollport and offset by where this
-         * card currently sits in it, so it resolves to the same place on screen
-         * whatever the card is doing. Scrolling therefore slides the cards
-         * *under* a light that stays put: one brightens as it comes up to the
-         * focus line, dims as it leaves. Paint anchored to the card instead
-         * looks identical still or flying, which is why nothing before this read
-         * as a surface catching light rather than as a coloured rectangle.
+         * Sized to the explorer and offset by where the card currently is
+         * inside it — the wheel's own offset plus the card's position in the
+         * column — so it resolves to the same place on screen as the ribbon and
+         * the section painting the identical declaration. Scrolling slides the
+         * cards under a light that stays put, and a pack's three columns are one
+         * continuous surface rather than three that match.
          *
          * `--card-pane-y` is `CardCurve.paneY`, published every frame by the
          * same loop that sets the rolodex transform, so the light and the tilt
          * are always one frame's worth of the same number. */
-        background-color: var(--pack-surface);
-        background-image: radial-gradient(
-            120% 42% at 50% 50%,
-            color-mix(in srgb, var(--pack-refraction) 42%, transparent) 0%,
-            color-mix(in srgb, var(--pack-chroma) 16%, transparent) 45%,
-            transparent 78%
-        );
+        background-image: var(--pack-field);
         background-repeat: no-repeat;
-        background-size: 100% var(--wheel-height, 100%);
-        background-position: 0 calc(-1 * var(--card-pane-y, 0px));
+        background-size: var(--field-w) var(--field-h);
+        background-position:
+            calc(-1 * var(--pane-left, 0px))
+            calc(-1 * (var(--pane-top, 0px) + var(--card-pane-y, 0px)));
         color: var(--pack-ink);
         text-align: left;
         border: none;

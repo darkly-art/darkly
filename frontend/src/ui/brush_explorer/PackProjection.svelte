@@ -1,7 +1,7 @@
 <script lang="ts">
     /**
-     * The bands of colour thrown from the pack cards across to the brushes they
-     * hold — one per pack currently on screen.
+     * The bands joining each pack's card to the brushes it holds — one per pack
+     * currently on screen.
      *
      * **One per pack, not one for the focused pack.** A single band would have
      * to change hands whenever the focus did, and the two cards it would move
@@ -15,48 +15,57 @@
      * section height, so the wheel's compression is something you watch happen
      * rather than something you have to infer.
      *
-     * A band is the *middle* of the pack rather than a decoration between two
-     * halves of it: the card, this and the section are one shape, so the band
-     * carries the same fill and the same edge strands they do, and its two
-     * vertical ends are left unstroked because they are interior to that shape.
+     * **Clipped divs rather than SVG paths.** A band is the middle of a pack,
+     * and the card and section either side of it paint `--pack-field`, which is
+     * a CSS background. An SVG paint server cannot read one, so an SVG band
+     * would mean writing the field a second time as `<stop>` elements and
+     * keeping the two in step by hand — the duplication that guarantees a
+     * visible seam the moment they drift. A div takes the same declaration
+     * verbatim: same image, same size, same origin, so the three columns are one
+     * surface and the joins need nothing done to them.
      *
      * Purely decorative, hence `aria-hidden` and no pointer events: the same
      * relation is already in the reading order, since the card names the pack
      * and the section follows it.
      */
+    import { packPalette } from '../../lib/packPalette';
     import { ribbonPath, type PackBand } from './wheel';
 
     interface Props {
         bands: PackBand[];
     }
     let { bands }: Props = $props();
-
 </script>
 
-<svg class="projection" aria-hidden="true">
+<div class="projection" aria-hidden="true">
     {#each bands as band (band.id)}
-        <!-- Grouped so the rolodex fade applies to the band as one object.
-             `style:` rather than presentation attributes throughout, because a
-             derived group's palette holds `var(--…)` references and those do
-             not parse in an SVG attribute. As CSS properties both those and
-             literal hex work, so there is no branch. -->
-        <g opacity={band.opacity}>
-            <path d={ribbonPath(band.ribbon)} style:fill={band.palette.surface} />
-        </g>
+        <div
+            class="band"
+            use:packPalette={band.palette}
+            style:clip-path="path('{ribbonPath(band.ribbon)}')"
+            style:opacity={band.opacity}
+        ></div>
     {/each}
-</svg>
+</div>
 
 <style>
     /* Spans the whole explorer so the bands can be positioned in the same
-     * coordinates both panes were measured in. They only ever paint the gutter
-     * between them — each path starts at a card's edge and ends at a section's
-     * — so covering the panes costs nothing. */
+     * coordinates both panes were measured in — and so a band's own box *is*
+     * the explorer's box, which is what lets it sample the field at offset zero
+     * while the panes either side offset by their own position in it. */
     .projection {
         position: absolute;
         inset: 0;
-        width: 100%;
-        height: 100%;
         pointer-events: none;
-        overflow: visible;
+    }
+    /* The ribbon geometry is the clip; the paint is the pack's field, sampled
+     * exactly as the card and the section sample it. */
+    .band {
+        position: absolute;
+        inset: 0;
+        background-image: var(--pack-field);
+        background-repeat: no-repeat;
+        background-size: var(--field-w) var(--field-h);
+        background-position: 0 0;
     }
 </style>

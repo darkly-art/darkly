@@ -40,6 +40,11 @@
          * events painted every card tilted for the position it had just left.
          */
         curves: CardCurve[];
+        /** Where this scrollport sits in the explorer, px. A card adds its own
+         *  position within the column to it to find where it is in the field. */
+        paneTop: number;
+        /** Where a card's leading edge sits in the explorer, px. */
+        paneLeft: number;
         /** Bound so the parent can drive and read this scrollport directly. */
         el: HTMLElement | undefined;
         /** This pane moved — keep the frame loop awake. */
@@ -53,6 +58,8 @@
         geometry,
         focused,
         curves,
+        paneTop,
+        paneLeft,
         el = $bindable(),
         onScroll,
         onDrive,
@@ -64,7 +71,8 @@
 <div
     class="pack-wheel"
     bind:this={el}
-    style:--wheel-height="{geometry.wheelViewport}px"
+    style:--pane-top="{paneTop}px"
+    style:--pane-left="{paneLeft}px"
     style:padding-top="{wheelPadTop(geometry)}px"
     style:padding-bottom="{wheelPadBottom(geometry)}px"
     onscroll={onScroll}
