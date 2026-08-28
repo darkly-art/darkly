@@ -482,21 +482,7 @@
             var(--pack-surface) 0,
             var(--bg) var(--fade-reach)
         );
-        /* The strands, continuing the ones the card and the band carry. Above
-         * the background, so they keep full strength the whole way across
-         * rather than washing out with the fill.
-         *
-         * Shadows rather than borders, and the reason is load-bearing: this
-         * section's width sets the brush grid's column count
-         * (`repeat(auto-fill, minmax(180px, 1fr))`) and its height is measured
-         * into the scroll mapping every frame. A 1px border is enough to flip a
-         * column, which changes the height, which toggles the list's scrollbar,
-         * which changes the width back — and the wheel twitches forever because
-         * it is driven from these measurements. Decoration here must cost no
-         * layout. */
-        box-shadow:
-            inset 0 2px 0 0 var(--pack-chroma),
-            inset 0 3px 0 0 var(--pack-refraction);
+
     }
     /* Where the projection lands. It paints nothing itself — the section's own
      * fill is already at full strength here, and a second painting of it would

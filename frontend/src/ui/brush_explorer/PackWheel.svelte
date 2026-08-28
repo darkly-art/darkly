@@ -64,6 +64,7 @@
 <div
     class="pack-wheel"
     bind:this={el}
+    style:--wheel-height="{geometry.wheelViewport}px"
     style:padding-top="{wheelPadTop(geometry)}px"
     style:padding-bottom="{wheelPadBottom(geometry)}px"
     onscroll={onScroll}

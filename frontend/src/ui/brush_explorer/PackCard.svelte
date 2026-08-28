@@ -9,13 +9,14 @@
     import Icon from '../../icons/Icon.svelte';
     import { packPalette } from '../../lib/packPalette';
     import type { BrushGroup } from '../brush_library/grouping';
+    import type { CardCurve } from './wheel';
 
     interface Props {
         group: BrushGroup;
         /** The group currently under the list's focus line. */
         active: boolean;
-        /** Rolodex transform, from `cardCurve`. */
-        curve: { rotateX: number; scale: number; opacity: number };
+        /** Rolodex transform and pane position, from `cardCurve`. */
+        curve: CardCurve;
         onSelect: () => void;
     }
     let { group, active, curve, onSelect }: Props = $props();
@@ -26,6 +27,7 @@
     aria-current={active}
     onclick={onSelect}
     use:packPalette={group.palette}
+    style:--card-pane-y="{curve.paneY}px"
     style:transform="perspective(420px) rotateX({curve.rotateX}deg) scale({curve.scale})"
     style:opacity={curve.opacity}
     title={group.pack?.description || group.label}
@@ -37,12 +39,7 @@
 
 <style>
     /* The left end of the pack: `surface` filling it, `ink` written on it, and
-     * the two vivid colours at the top edge only — 2px of chroma with a 1px
-     * refraction strand beneath it.
-     *
-     * The right edge carries no strand: the ribbon leaves from there, so that
-     * edge is interior to the pack rather than part of its outline. Same reason
-     * the corner there is square. */
+     * the vivid pair spent entirely on the light that plays across it. */
     .pack-card {
         display: flex;
         align-items: center;
@@ -51,25 +48,33 @@
         padding: 10px 12px;
         font-family: inherit;
         font-size: 12px;
-        background: var(--pack-surface);
+        /* The light belongs to the column, not to the card.
+         *
+         * The image is sized to the whole scrollport and offset by where this
+         * card currently sits in it, so it resolves to the same place on screen
+         * whatever the card is doing. Scrolling therefore slides the cards
+         * *under* a light that stays put: one brightens as it comes up to the
+         * focus line, dims as it leaves. Paint anchored to the card instead
+         * looks identical still or flying, which is why nothing before this read
+         * as a surface catching light rather than as a coloured rectangle.
+         *
+         * `--card-pane-y` is `CardCurve.paneY`, published every frame by the
+         * same loop that sets the rolodex transform, so the light and the tilt
+         * are always one frame's worth of the same number. */
+        background-color: var(--pack-surface);
+        background-image: radial-gradient(
+            120% 42% at 50% 50%,
+            color-mix(in srgb, var(--pack-refraction) 42%, transparent) 0%,
+            color-mix(in srgb, var(--pack-chroma) 16%, transparent) 45%,
+            transparent 78%
+        );
+        background-repeat: no-repeat;
+        background-size: 100% var(--wheel-height, 100%);
+        background-position: 0 calc(-1 * var(--card-pane-y, 0px));
         color: var(--pack-ink);
         text-align: left;
         border: none;
-        /* Drawn entirely with inset shadows, never borders or outlines that
-         * occupy space. This pane measures its own layout every frame and feeds
-         * the result back into the wheel's padding and the scroll mapping, so
-         * decoration that changes a height or a width by even 1px can flip the
-         * brush grid's column count, which changes the section height, which
-         * toggles the list's scrollbar, which changes the width back — an
-         * oscillation with no fixed point, and the wheel twitching in sympathy
-         * because it is slaved to these numbers. A shadow costs no layout, so it
-         * cannot start one.
-         *
-         * Painted first-on-top: 2px of chroma across the head, then refraction
-         * 3px deep showing only as the 1px beneath it. */
-        box-shadow:
-            inset 0 2px 0 0 var(--pack-chroma),
-            inset 0 3px 0 0 var(--pack-refraction);
+
         /* Square where the projection leaves. A rounded corner there would cut
          * the colour away from the band at exactly the join, which is the one
          * edge that has to be flat for the two to meet. */

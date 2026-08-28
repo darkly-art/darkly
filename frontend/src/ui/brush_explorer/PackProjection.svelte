@@ -24,44 +24,24 @@
      * relation is already in the reading order, since the card names the pack
      * and the section follows it.
      */
-    import { ribbonEdge, ribbonPath, type PackBand } from './wheel';
+    import { ribbonPath, type PackBand } from './wheel';
 
     interface Props {
         bands: PackBand[];
     }
     let { bands }: Props = $props();
 
-    /** Where the refraction strand sits: beneath the 2px chroma stroke, which
-     *  straddles the top edge by 1px either side. A 1px stroke centred 1.5px in
-     *  lands in the 1px directly below it. */
-    const REFRACTION_OFFSET = 1.5;
 </script>
 
 <svg class="projection" aria-hidden="true">
     {#each bands as band (band.id)}
         <!-- Grouped so the rolodex fade applies to the band as one object.
-             Painted back to front: the fill, the refraction strand, then the
-             chroma over it. Top edge only — the bottom carries no strand,
-             matching the panes either side.
-
              `style:` rather than presentation attributes throughout, because a
              derived group's palette holds `var(--…)` references and those do
              not parse in an SVG attribute. As CSS properties both those and
              literal hex work, so there is no branch. -->
         <g opacity={band.opacity}>
             <path d={ribbonPath(band.ribbon)} style:fill={band.palette.surface} />
-            <path
-                d={ribbonEdge(band.ribbon, 'top', REFRACTION_OFFSET)}
-                fill="none"
-                stroke-width="1"
-                style:stroke={band.palette.refraction}
-            />
-            <path
-                d={ribbonEdge(band.ribbon, 'top')}
-                fill="none"
-                stroke-width="2"
-                style:stroke={band.palette.chroma}
-            />
         </g>
     {/each}
 </svg>

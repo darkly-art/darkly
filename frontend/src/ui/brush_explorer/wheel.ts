@@ -378,12 +378,23 @@ export interface CardCurve {
     rotateX: number;
     scale: number;
     opacity: number;
+    /**
+     * Where this card's top edge sits inside the wheel's scrollport, px.
+     *
+     * What lets a card's background belong to the *pane* rather than to the
+     * card. Paint applied in card coordinates travels with the card, so it looks
+     * identical whether the wheel is still or flying and there is nothing for the
+     * eye to read as a surface catching light. Offsetting the paint by this
+     * anchors it to the column instead: the light stays where it is and the
+     * cards slide under it, which is the whole of the effect.
+     */
+    paneY: number;
 }
 
 /** A card with nothing applied to it. What a card renders as while the
  *  geometry has not caught up with a group list that just changed — flat and
  *  full strength, rather than collapsed to a scale of zero. */
-export const FLAT_CURVE: CardCurve = { t: 0, rotateX: 0, scale: 1, opacity: 1 };
+export const FLAT_CURVE: CardCurve = { t: 0, rotateX: 0, scale: 1, opacity: 1, paneY: 0 };
 
 export function cardCurve(index: number, wheelScrollTop: number, g: WheelGeometry): CardCurve {
     // Normalized against the *longer* side of the focus line, so `t` reaches
@@ -399,6 +410,7 @@ export function cardCurve(index: number, wheelScrollTop: number, g: WheelGeometr
         rotateX: -t * 34,
         scale: 1 - away * 0.16,
         opacity: 1 - Math.pow(away, 1.5) * 0.82,
+        paneY: cardCentre(index, g) - g.cardAdvance / 2 - wheelScrollTop,
     };
 }
 

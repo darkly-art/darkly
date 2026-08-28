@@ -27,16 +27,17 @@
 ></span>
 
 <style>
-    /* The card in miniature: surface, with the same chroma and refraction
-     * strands across the top. */
+    /* The card in miniature: surface, lit the way a card under the column's
+     * light is. Static, since a swatch does not scroll past anything. */
     .swatch {
         display: inline-block;
         flex: none;
         box-sizing: border-box;
         border-radius: var(--radius-sm);
-        background: var(--pack-surface);
-        box-shadow:
-            inset 0 2px 0 0 var(--pack-chroma),
-            inset 0 3px 0 0 var(--pack-refraction);
+        background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--pack-refraction) 42%, var(--pack-surface)),
+            var(--pack-surface)
+        );
     }
 </style>
