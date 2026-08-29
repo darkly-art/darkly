@@ -52,19 +52,84 @@
 
        Sized to the explorer in both axes, so the apex lands in the same place
        for every surface sampling it. That is what an angled or fanned field
-       needs and a purely vertical one did not. */
-    --pack-field: conic-gradient(
+       needs and a purely vertical one did not.
+
+       Light *only*: the beam is carried alone, over `--pack-surface` painted
+       flat beneath it, rather than as a gradient that fades back into the
+       surface at either end. Two layers is what lets the rim be carved from the
+       light without also carving a hole in the pack's body — an element's mask
+       takes its background colour with it, so a single field could not be
+       masked at all without the surface going with it. The stops are the same
+       mixes either way, so the surfaces the light does reach are unchanged.
+
+       Gradients interpolate in premultiplied alpha, which is why the outer
+       stops can be plain `transparent` without the beam graduating through
+       black on its way out. */
+    --pack-beam: conic-gradient(
         from calc(90deg + var(--pack-beam-tilt) - var(--pack-beam-spread))
             at var(--pack-prism-x) 50%,
-        var(--pack-surface) 0deg,
+        transparent 0deg,
         color-mix(in srgb, var(--pack-chroma) 34%, var(--pack-surface))
             calc(var(--pack-beam-spread) * 0.55),
         color-mix(in srgb, var(--pack-refraction) 80%, var(--pack-surface))
             var(--pack-beam-spread),
         color-mix(in srgb, var(--pack-chroma) 34%, var(--pack-surface))
             calc(var(--pack-beam-spread) * 1.45),
-        var(--pack-surface) calc(var(--pack-beam-spread) * 2),
-        var(--pack-surface) 360deg);
+        transparent calc(var(--pack-beam-spread) * 2),
+        transparent 360deg);
+}
+
+/* A surface the pack's light falls on — one of the three columns.
+
+   The body is the pack's own surface, painted flat; the beam rides above it on
+   a layer of its own, at whatever offset the column samples the field at. The
+   column supplies only that offset, which is the one thing about the field that
+   differs between the three.
+
+   `position` is here to be the beam layer's containing block, so `inset: 0`
+   resolves to the column's own box; a column already positioned for its own
+   reasons keeps what it has. `isolation` is what makes the layer's negative
+   z-index mean "above this surface, beneath its contents" rather than sending it
+   behind the surface it belongs to. */
+.pack-lit {
+    position: relative;
+    isolation: isolate;
+    background-color: var(--pack-surface);
+}
+.pack-lit::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image: var(--pack-beam);
+    background-repeat: no-repeat;
+    background-size: var(--field-w) var(--field-h);
+    /* The rim is a border, and a border must not shift where the field is
+       sampled from — the whole point is that all three columns sample one
+       image. */
+    background-origin: border-box;
+}
+
+/* Rim only: the light survives in a border's width around the edge and nowhere
+   inside it, leaving the pack's body flat.
+
+   The ring is cut by excluding the padding box from the border box, so the rim
+   traces whatever shape the surface already is, rounded corners and all —
+   nothing here has to know the column's geometry. Which gives it the property
+   the joins need: an edge that is *interior* to the pack carries no border, and
+   so no rim, and the card, the band and the section run into one another with
+   nothing drawn across the seam. Each column zeroes its own facing edge.
+
+   `--pack-rim-width` is `PACK_RIM` in `wheel.ts`, published on the explorer.
+   It is defined there because the band's rim is not a border at all but a
+   clip-path computed in that file, and the two have to be the same number. */
+.pack-rim::before {
+    border: var(--pack-rim-width) solid transparent;
+    border-radius: inherit;
+    mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+    mask-clip: padding-box, border-box;
+    mask-composite: exclude;
 }
 
 /* Icon button reset — used by toolbar, panel actions, layer controls, etc. */

@@ -11,6 +11,7 @@ import {
     wheelPadTop,
     wheelPadBottom,
     ribbonPath,
+    ribbonRimPath,
     visibleSpan,
     present,
     packBands,
@@ -535,6 +536,46 @@ describe('the projection ribbon', () => {
         // thickness through the turn instead of pinching on one edge.
         expect(ribbonPath(R)).toContain('C 50 40, 50 0,');
         expect(ribbonPath(R)).toContain('C 50 200, 50 80,');
+    });
+
+    it('rims the band along both edges and nowhere else', () => {
+        // Two closed subpaths, one inside each edge — not one region with a
+        // hole, which is what a fill rule would have to resolve.
+        const d = ribbonRimPath(R, 2);
+        expect(d.match(/M /g)).toHaveLength(2);
+        expect(d.match(/Z/g)).toHaveLength(2);
+        // Each strip's outer boundary *is* the ribbon's, so the rim and the
+        // fill beneath it end on the same curve.
+        expect(d).toContain('M 0 40 C 50 40, 50 0, 100 0');
+        expect(d).toContain('C 50 200, 50 80, 0 80 Z');
+        // And each is a rim thick, taken inward.
+        expect(d).toContain('L 100 2 C 50 2, 50 42, 0 42 Z');
+        expect(d).toContain('M 0 78 C 50 78, 50 198, 100 198');
+    });
+
+    it('leaves both ends of the band open', () => {
+        // The card end and the section end are interior to the pack. A cap
+        // across either would rule a line down the join the projection exists
+        // to make continuous, so every vertical run in the rim is the rim's own
+        // thickness — where the fill's is the whole height it arrives at.
+        const spans = (d: string) =>
+            [...d.matchAll(/100 (-?[\d.]+) L 100 (-?[\d.]+)/g)].map(m =>
+                Math.abs(Number(m[2]) - Number(m[1])),
+            );
+        expect(spans(ribbonPath(R))).toEqual([200]);
+        expect(spans(ribbonRimPath(R, 2))).toEqual([2, 2]);
+    });
+
+    it('winds both strips the same way, so a pinched band still fills', () => {
+        // Where the band is thinner than twice the rim the two strips overlap,
+        // and opposite winding would cancel them out under the nonzero rule.
+        // Both therefore run left to right along their upper edge.
+        const strips = ribbonRimPath(R, 2).split('M ').filter(Boolean);
+        expect(strips).toHaveLength(2);
+        for (const s of strips) {
+            expect(s.startsWith('0 ')).toBe(true);
+            expect(s).toContain('100 ');
+        }
     });
 
     it('trims a section to what the list is showing', () => {

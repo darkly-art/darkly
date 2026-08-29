@@ -16,7 +16,7 @@
      * rather than something you have to infer.
      *
      * **Clipped divs rather than SVG paths.** A band is the middle of a pack,
-     * and the card and section either side of it paint `--pack-field`, which is
+     * and the card and section either side of it paint `--pack-beam`, which is
      * a CSS background. An SVG paint server cannot read one, so an SVG band
      * would mean writing the field a second time as `<stop>` elements and
      * keeping the two in step by hand — the duplication that guarantees a
@@ -29,7 +29,7 @@
      * and the section follows it.
      */
     import { packPalette } from '../../lib/packPalette';
-    import { ribbonPath, type PackBand } from './wheel';
+    import { ribbonPath, ribbonRimPath, type PackBand } from './wheel';
 
     interface Props {
         bands: PackBand[];
@@ -40,9 +40,10 @@
 <div class="projection" aria-hidden="true">
     {#each bands as band (band.id)}
         <div
-            class="band"
+            class="band pack-lit"
             use:packPalette={band.palette}
             style:clip-path="path('{ribbonPath(band.ribbon)}')"
+            style:--band-rim="path('{ribbonRimPath(band.ribbon)}')"
             style:opacity={band.opacity}
         ></div>
     {/each}
@@ -58,14 +59,20 @@
         inset: 0;
         pointer-events: none;
     }
-    /* The ribbon geometry is the clip; the paint is the pack's field, sampled
-     * exactly as the card and the section sample it. */
+    /* The ribbon geometry is the clip; the paint is the pack's surface, and the
+     * light rides over it exactly as it does on the card and the section. A
+     * band's own box *is* the explorer's box, so it samples the field at offset
+     * zero while the panes either side offset by their own position in it. */
     .band {
         position: absolute;
         inset: 0;
-        background-image: var(--pack-field);
-        background-repeat: no-repeat;
-        background-size: var(--field-w) var(--field-h);
         background-position: 0 0;
+    }
+    /* The band's rim, which is a path and not a border — its edges are curves,
+     * so there is no box whose padding could describe them. `ribbonRimPath` is
+     * the same two cubics the fill is bounded by, taken a rim's width inward,
+     * and open at both ends because both ends are interior to the pack. */
+    .band::before {
+        clip-path: var(--band-rim);
     }
 </style>

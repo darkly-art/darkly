@@ -37,6 +37,7 @@
     import { groupByPack, matchesQuery, packNamesByBrush, withRecents } from '../brush_library/grouping';
     import {
         FOCUS_LINE,
+        PACK_RIM,
         packBands,
         present,
         scrollTopForSection,
@@ -346,6 +347,7 @@
         style:--field-h="{layout.height}px"
         style:--field-x="{layout.viewportLeft}px"
         style:--field-y="{layout.viewportTop}px"
+        style:--pack-rim-width="{PACK_RIM}px"
     >
         <PackProjection {bands} />
 
@@ -383,7 +385,7 @@
                          the first one to it. -->
                     <div class="lead" style:height="{FOCUS_LINE * 100}%"></div>
                     {#each groups as group (group.id)}
-                        <section class="group" use:packPalette={group.palette}>
+                        <section class="group pack-lit pack-rim" use:packPalette={group.palette}>
                             <div class="spine" title={group.label}>
                                 <Icon name={group.icon} class="spine-icon" />
                             </div>
@@ -484,34 +486,37 @@
          * would cut a notch out of a continuous surface. */
         border-radius: 0 10px 10px 0;
         color: var(--pack-ink);
-        /* The same field the card and the ribbon paint, anchored to the viewport
-         * rather than to this box.
-         *
-         * `fixed` is what makes the light belong to the explorer instead of to
-         * the section. The positioning area becomes the viewport, so the image
-         * does not move when the list scrolls and the section slides across a
-         * stationary field — the effect stated once, by the surface itself,
-         * rather than maintained.
-         *
-         * The alternative is to counter-offset `background-position` by the
-         * scroll position, which has to be published from JavaScript once a
-         * frame. The list is a native scrollport, so the compositor advances it
-         * without waiting for that frame: on every frame the hand is on this
-         * pane, the published offset describes where the section *was*, and the
-         * light drags along with the packs and snaps back when they stop. A
-         * value the compositor cannot get ahead of has no such frame.
-         *
-         * `--field-x` / `--field-y` are the explorer's own top-left in viewport
-         * coordinates, measured beside the rest of the layout, so nothing about
-         * the field is on the frame loop at all. They are constant between
-         * resizes because a resize is the only thing that can move the box —
-         * `Modal`'s `draggable` defaults off and the explorer does not set it.
-         * A draggable explorer would have to remeasure on the drag. */
-        background-image: var(--pack-field);
+    }
+    /* Where this section samples the field: the same one the card and the
+     * ribbon paint, anchored to the viewport rather than to this box.
+     *
+     * `fixed` is what makes the light belong to the explorer instead of to the
+     * section. The positioning area becomes the viewport, so the image does not
+     * move when the list scrolls and the section slides across a stationary
+     * field — the effect stated once, by the surface itself, rather than
+     * maintained.
+     *
+     * The alternative is to counter-offset `background-position` by the scroll
+     * position, which has to be published from JavaScript once a frame. The list
+     * is a native scrollport, so the compositor advances it without waiting for
+     * that frame: on every frame the hand is on this pane, the published offset
+     * describes where the section *was*, and the light drags along with the
+     * packs and snaps back when they stop. A value the compositor cannot get
+     * ahead of has no such frame.
+     *
+     * `--field-x` / `--field-y` are the explorer's own top-left in viewport
+     * coordinates, measured beside the rest of the layout, so nothing about the
+     * field is on the frame loop at all. They are constant between resizes
+     * because a resize is the only thing that can move the box — `Modal`'s
+     * `draggable` defaults off and the explorer does not set it. A draggable
+     * explorer would have to remeasure on the drag.
+     *
+     * No border on the leading edge, so no rim there: that edge is where the
+     * projection lands, and it is interior to the pack. */
+    .group::before {
         background-attachment: fixed;
-        background-repeat: no-repeat;
-        background-size: var(--field-w) var(--field-h);
         background-position: var(--field-x) var(--field-y);
+        border-left-width: 0;
     }
     /* Where the projection lands. It paints nothing itself — the section's own
      * fill is already at full strength here, and a second painting of it would

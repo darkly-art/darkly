@@ -183,47 +183,80 @@ export interface PackBand {
     ribbon: Ribbon;
     /** The pack's palette, and the fade its own card is under — so a band sinks
      *  into the modal's black exactly as the card it leaves does. The band is
-     *  the middle of the pack, so it is filled and stranded like the card and
+     *  the middle of the pack, so it is filled and rimmed like the card and
      *  the section either side of it. */
     palette: PackPalette;
     opacity: number;
 }
 
 /**
- * The ribbon as an SVG path: two cubics with their control points on the
- * midline, which is what gives the band a settled S-curve instead of a wedge.
+ * How thick the pack's rim of light is, px.
  *
- * Both curves share the same control abscissa, so the top and bottom edges
- * bend in step and the band keeps an even thickness through the turn.
+ * Lives here rather than in the stylesheet because the three columns carve the
+ * rim two different ways — the card and the section as a border width, the band
+ * as a clip-path computed from this file — and one number reaching CSS through
+ * `--pack-rim-width` is one number, where a token beside the palette and a
+ * constant here would be the same number written twice.
  */
-/**
- * One edge of the ribbon on its own, as an open path to be stroked.
- *
- * The band's fill and its strands are different shapes: the fill is the closed
- * ribbon, while the strands run along its top and bottom only — the two vertical
- * ends are interior to the pack, since the ribbon is the middle of a shape that
- * starts at the card and finishes at the section.
- *
- * `offset` shifts the curve down, which is how the refraction strand sits
- * directly beneath the chroma one: a stroke straddles its path, so a 2px chroma
- * stroke covers ±1px and a 1px refraction stroke centred 1.5px lower lands in
- * the 1px immediately below it.
- */
-export function ribbonEdge(r: Ribbon, edge: 'top' | 'bottom', offset = 0): string {
-    const mid = (r.x0 + r.x1) / 2;
-    const [y0, y1] =
-        edge === 'top' ? [r.top0 + offset, r.top1 + offset] : [r.bottom0 + offset, r.bottom1 + offset];
-    return `M ${r.x0} ${y0} C ${mid} ${y0}, ${mid} ${y1}, ${r.x1} ${y1}`;
+export const PACK_RIM = 2;
+
+/** One of the ribbon's edges, displaced. Positive offsets move down the
+ *  screen, so a rim inside the bottom edge is a negative one. */
+interface RibbonLevel {
+    edge: 'top' | 'bottom';
+    offset: number;
 }
 
-export function ribbonPath(r: Ribbon): string {
+/**
+ * The closed region between two ribbon-parallel curves: two cubics with their
+ * control points on the midline, which is what gives the band a settled S-curve
+ * instead of a wedge.
+ *
+ * Both curves share the same control abscissa, so the two edges bend in step and
+ * the strip keeps an even thickness through the turn.
+ *
+ * Always wound the same way — left to right along `upper`, back along `lower` —
+ * so that two strips in one path still fill where they overlap under the nonzero
+ * rule. A band pinched thinner than twice the rim is the case that needs it.
+ */
+function ribbonStrip(r: Ribbon, upper: RibbonLevel, lower: RibbonLevel): string {
     const mid = (r.x0 + r.x1) / 2;
+    const ends = (l: RibbonLevel): [number, number] =>
+        l.edge === 'top'
+            ? [r.top0 + l.offset, r.top1 + l.offset]
+            : [r.bottom0 + l.offset, r.bottom1 + l.offset];
+    const [u0, u1] = ends(upper);
+    const [l0, l1] = ends(lower);
     return (
-        `M ${r.x0} ${r.top0}` +
-        ` C ${mid} ${r.top0}, ${mid} ${r.top1}, ${r.x1} ${r.top1}` +
-        ` L ${r.x1} ${r.bottom1}` +
-        ` C ${mid} ${r.bottom1}, ${mid} ${r.bottom0}, ${r.x0} ${r.bottom0}` +
+        `M ${r.x0} ${u0}` +
+        ` C ${mid} ${u0}, ${mid} ${u1}, ${r.x1} ${u1}` +
+        ` L ${r.x1} ${l1}` +
+        ` C ${mid} ${l1}, ${mid} ${l0}, ${r.x0} ${l0}` +
         ` Z`
+    );
+}
+
+/** The whole ribbon — the strip from its top edge to its bottom one. What the
+ *  band's surface fills. */
+export function ribbonPath(r: Ribbon): string {
+    return ribbonStrip(r, { edge: 'top', offset: 0 }, { edge: 'bottom', offset: 0 });
+}
+
+/**
+ * The ribbon's rim: a strip inside its top edge and another inside its bottom,
+ * as one path. What the band's *light* is clipped to.
+ *
+ * The two vertical ends carry no rim, because they are interior to the pack —
+ * the ribbon is the middle of a shape that begins at the card and finishes at
+ * the section, and a cap at either end would rule a line straight down the join
+ * the whole design exists to make continuous. The card and the section suppress
+ * their own facing edges the same way, by carrying no border there.
+ */
+export function ribbonRimPath(r: Ribbon, width = PACK_RIM): string {
+    return (
+        ribbonStrip(r, { edge: 'top', offset: 0 }, { edge: 'top', offset: width }) +
+        ' ' +
+        ribbonStrip(r, { edge: 'bottom', offset: -width }, { edge: 'bottom', offset: 0 })
     );
 }
 

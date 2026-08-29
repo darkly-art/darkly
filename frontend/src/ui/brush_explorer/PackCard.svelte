@@ -23,7 +23,7 @@
 </script>
 
 <button
-    class="pack-card"
+    class="pack-card pack-lit pack-rim"
     aria-current={active}
     onclick={onSelect}
     use:packPalette={group.palette}
@@ -39,7 +39,7 @@
 
 <style>
     /* The left end of the pack: `surface` filling it, `ink` written on it, and
-     * the vivid pair spent entirely on the light that plays across it. */
+     * the vivid pair spent entirely on the light that catches its edge. */
     .pack-card {
         display: flex;
         align-items: center;
@@ -48,39 +48,6 @@
         padding: 10px 12px;
         font-family: inherit;
         font-size: 12px;
-        /* The field belongs to the explorer, not to this card.
-         *
-         * Sized to the explorer and offset by where the card currently is
-         * inside it — the wheel's own offset plus the card's position in the
-         * column — so it resolves to the same place on screen as the ribbon and
-         * the section painting the identical declaration. Scrolling slides the
-         * cards under a light that stays put, and a pack's three columns are one
-         * continuous surface rather than three that match.
-         *
-         * `--card-pane-y` is `CardCurve.paneY`, published every frame by the
-         * same loop that sets the rolodex transform, so the light and the tilt
-         * are always one frame's worth of the same number.
-         *
-         * A card cannot hold the field still the way a section does
-         * (`background-attachment: fixed`, `BrushExplorer.svelte`). A transformed
-         * element is the containing block for its own fixed background, and the
-         * rolodex curve below transforms every card — so `fixed` here re-anchors
-         * the image to the card, which is precisely the "paint travels with the
-         * card" that the offset exists to avoid. Worse, the image is sized to
-         * the explorer and offset by the explorer's viewport origin, so it lands
-         * entirely outside the card's box and the card paints as bare ink on
-         * nothing.
-         *
-         * The offset is exact whenever the *list* is the driver, because the
-         * wheel is then the pane the frame loop writes, and a written position
-         * and the values derived from it land in one style commit. It is a frame
-         * stale only while the wheel itself is under the hand. */
-        background-image: var(--pack-field);
-        background-repeat: no-repeat;
-        background-size: var(--field-w) var(--field-h);
-        background-position:
-            calc(-1 * var(--pane-left, 0px))
-            calc(-1 * (var(--pane-top, 0px) + var(--card-pane-y, 0px)));
         color: var(--pack-ink);
         text-align: left;
         border: none;
@@ -99,6 +66,43 @@
         transform-origin: right center;
         will-change: transform, opacity;
         transition: filter var(--transition-fast);
+    }
+    /* Where this card samples the field.
+     *
+     * The field belongs to the explorer, not to this card: sized to the
+     * explorer and offset by where the card currently is inside it — the
+     * wheel's own offset plus the card's position in the column — so it
+     * resolves to the same place on screen as the ribbon and the section
+     * painting the identical declaration. Scrolling slides the cards under a
+     * light that stays put, and a pack's three columns are one continuous
+     * surface rather than three that match.
+     *
+     * `--card-pane-y` is `CardCurve.paneY`, published every frame by the same
+     * loop that sets the rolodex transform, so the light and the tilt are
+     * always one frame's worth of the same number.
+     *
+     * A card cannot hold the field still the way a section does
+     * (`background-attachment: fixed`, `BrushExplorer.svelte`). A transformed
+     * element is the containing block for its own fixed background, and the
+     * rolodex curve above transforms every card — so `fixed` here re-anchors
+     * the image to the card, which is precisely the "paint travels with the
+     * card" that the offset exists to avoid. Worse, the image is sized to the
+     * explorer and offset by the explorer's viewport origin, so it lands
+     * entirely outside the card's box and the card paints as bare ink on
+     * nothing.
+     *
+     * The offset is exact whenever the *list* is the driver, because the wheel
+     * is then the pane the frame loop writes, and a written position and the
+     * values derived from it land in one style commit. It is a frame stale only
+     * while the wheel itself is under the hand.
+     *
+     * No border on the trailing edge, so no rim there: that edge is where the
+     * projection leaves, and it is interior to the pack. */
+    .pack-card::before {
+        background-position:
+            calc(-1 * var(--pane-left, 0px))
+            calc(-1 * (var(--pane-top, 0px) + var(--card-pane-y, 0px)));
+        border-right-width: 0;
     }
     /* A lift rather than a second colour: every surface here is the pack's own,
      * and brightening keeps it that way whatever the pack brought. */
