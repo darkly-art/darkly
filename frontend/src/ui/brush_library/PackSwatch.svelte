@@ -28,16 +28,24 @@
 
 <style>
     /* The card in miniature: surface, lit the way a card under the column's
-     * light is. Static, since a swatch does not scroll past anything. */
+     * light is. Static, since a swatch does not scroll past anything.
+     *
+     * Surface beneath and light above, the same two layers the explorer's
+     * columns are built from — so a swatch shows a pack the way the pack will
+     * actually look, alpha and all, instead of being the one place its surface
+     * is treated as opaque. Mixing the light into the surface instead would
+     * count a translucent surface twice and leave the chip darker than the card
+     * it stands for. */
     .swatch {
         display: inline-block;
         flex: none;
         box-sizing: border-box;
         border-radius: var(--radius-sm);
-        background: linear-gradient(
+        background-color: var(--pack-surface);
+        background-image: linear-gradient(
             180deg,
-            color-mix(in srgb, var(--pack-refraction) 42%, var(--pack-surface)),
-            var(--pack-surface)
+            color-mix(in srgb, var(--pack-refraction) 42%, transparent),
+            transparent
         );
     }
 </style>

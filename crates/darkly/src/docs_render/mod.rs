@@ -622,7 +622,9 @@ fn write_frames(dir: &Path, frames: &[Vec<u8>], w: u32, h: u32) -> Result<(), Do
 /// hard block edges is visible.
 fn write_jpeg(path: &Path, pixels: &[u8], w: u32, h: u32) -> Result<(), DocsRenderError> {
     let rgb: Vec<u8> = pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|p| [p[0], p[1], p[2]])
         .collect();
     if let Some(parent) = path.parent() {

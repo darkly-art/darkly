@@ -29,7 +29,7 @@
      * and the section follows it.
      */
     import { packPalette } from '../../lib/packPalette';
-    import { ribbonPath, ribbonRimPath, type PackBand } from './wheel';
+    import { ribbonCorePath, ribbonPath, ribbonRimPath, type PackBand } from './wheel';
 
     interface Props {
         bands: PackBand[];
@@ -44,6 +44,7 @@
             use:packPalette={band.palette}
             style:clip-path="path('{ribbonPath(band.ribbon)}')"
             style:--band-rim="path('{ribbonRimPath(band.ribbon)}')"
+            style:--band-core="path('{ribbonCorePath(band.ribbon)}')"
             style:opacity={band.opacity}
         ></div>
     {/each}
@@ -74,5 +75,20 @@
      * and open at both ends because both ends are interior to the pack. */
     .band::before {
         clip-path: var(--band-rim);
+    }
+    /* And the body the rim encloses, carrying the same share of the light the
+     * card and the section hold their interiors to.
+     *
+     * A second layer because a clip is all or nothing: the two columns either
+     * side say "full here, `--pack-body-light` there" in one mask, which a box
+     * can do and a pair of cubics cannot. The regions are disjoint by
+     * construction, so the two strengths meet rather than stack — and the core
+     * sits a layer further back anyway, so a band pinched thin enough for its
+     * rims to close over the core is the rim's colour and not a blend. */
+    .band::after {
+        content: '';
+        z-index: -2;
+        clip-path: var(--band-core);
+        opacity: var(--pack-body-light);
     }
 </style>

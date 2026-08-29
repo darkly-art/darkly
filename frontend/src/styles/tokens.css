@@ -18,19 +18,34 @@
 
        `--pack-prism-x` is where the apex sits, as a fraction of the explorer's
        width — negative puts it off the left edge, which is what leaves the beam
-       already slightly open by the time it reaches the cards. The further left
-       it goes the *less* the beam expands, because expansion is a ratio of
-       distances: an apex just off-screen fans hard, one far away barely
-       spreads at all.
+       already open by the time it reaches the cards. The further left it goes
+       the *less* the beam expands, because expansion is a ratio of distances:
+       an apex just off-screen fans hard, one far away barely spreads at all.
+
+       Which makes this the knob for the two ends *against each other*, and why
+       it sits this far out. The beam's width grows with the distance from the
+       apex, so pushing the apex left adds the same absolute width everywhere —
+       which is a large fraction of a narrow left end and a small one of an
+       already-wide right end. An apex on the edge left the wheel lit barely two
+       cards deep while the list was lit across most of its height; out here the
+       cards get a band several deep and the list is hardly wider than it was.
 
        `--pack-beam-spread` is the fan's half-angle, and so both how wide the
-       beam is and how fast it opens. `--pack-beam-tilt` rakes the whole thing
-       off horizontal; at zero the beam runs level and the fan is symmetric
-       about the focus line, which is also where the wheel's own attention
-       already is. */
-    --pack-prism-x: -1%;
+       beam is and how fast it opens. Reach for it to scale both ends together,
+       and for the prism to trade one against the other. `--pack-beam-tilt`
+       rakes the whole thing off horizontal; at zero the beam runs level and the
+       fan is symmetric about the focus line, which is also where the wheel's
+       own attention already is.
+
+       `--pack-body-light` is how much of the beam reaches a pack's body, as
+       against the full strength it always keeps along the rim. It spans the
+       whole design on its own: at 100% the light washes the columns evenly and
+       there is no rim to speak of, at 0% it survives only as an outline, and in
+       between the body is lit but the edge is where the light collects. */
+    --pack-prism-x: -18%;
     --pack-beam-spread: 16deg;
     --pack-beam-tilt: 0deg;
+    --pack-body-light: 50%;
 
     /* The pack's light, as one field.
 
@@ -59,21 +74,29 @@
        surface at either end. Two layers is what lets the rim be carved from the
        light without also carving a hole in the pack's body — an element's mask
        takes its background colour with it, so a single field could not be
-       masked at all without the surface going with it. The stops are the same
-       mixes either way, so the surfaces the light does reach are unchanged.
+       masked at all without the surface going with it.
 
-       Gradients interpolate in premultiplied alpha, which is why the outer
-       stops can be plain `transparent` without the beam graduating through
-       black on its way out. */
+       So the stops mix the vivid pair with *nothing*, never with the surface,
+       and the surface arrives once — by being underneath. Compositing 34% of
+       chroma over a surface is the same arithmetic as painting 34% of chroma
+       mixed into it, so an opaque pack is unchanged either way; a pack whose
+       surface carries alpha is only correct this way. Mixing into the surface
+       here would count it twice, at whatever fraction it happened to be
+       transparent, and the light would darken exactly where the pack meant to
+       let the theme through.
+
+       Gradients interpolate in premultiplied alpha, which is why the ends can
+       be plain `transparent` without the beam graduating through black on its
+       way out, and why it fades to the surface simply by ceasing to exist. */
     --pack-beam: conic-gradient(
         from calc(90deg + var(--pack-beam-tilt) - var(--pack-beam-spread))
             at var(--pack-prism-x) 50%,
         transparent 0deg,
-        color-mix(in srgb, var(--pack-chroma) 34%, var(--pack-surface))
+        color-mix(in srgb, var(--pack-chroma) 34%, transparent)
             calc(var(--pack-beam-spread) * 0.55),
-        color-mix(in srgb, var(--pack-refraction) 80%, var(--pack-surface))
+        color-mix(in srgb, var(--pack-refraction) 80%, transparent)
             var(--pack-beam-spread),
-        color-mix(in srgb, var(--pack-chroma) 34%, var(--pack-surface))
+        color-mix(in srgb, var(--pack-chroma) 34%, transparent)
             calc(var(--pack-beam-spread) * 1.45),
         transparent calc(var(--pack-beam-spread) * 2),
         transparent 360deg);
@@ -96,8 +119,11 @@
     isolation: isolate;
     background-color: var(--pack-surface);
 }
-.pack-lit::before {
-    content: '';
+/* The light itself. `::before` is the layer every column carries; `::after` is a
+   second one that exists only for a column whose rim cannot be a border, and
+   which therefore only that column calls into being by giving it a `content`. */
+.pack-lit::before,
+.pack-lit::after {
     position: absolute;
     inset: 0;
     z-index: -1;
@@ -110,9 +136,12 @@
        image. */
     background-origin: border-box;
 }
+.pack-lit::before {
+    content: '';
+}
 
-/* Rim only: the light survives in a border's width around the edge and nowhere
-   inside it, leaving the pack's body flat.
+/* The rim: the light at full strength in a border's width around the edge, and
+   held back to `--pack-body-light` everywhere inside it.
 
    The ring is cut by excluding the padding box from the border box, so the rim
    traces whatever shape the surface already is, rounded corners and all —
@@ -121,13 +150,21 @@
    so no rim, and the card, the band and the section run into one another with
    nothing drawn across the seam. Each column zeroes its own facing edge.
 
+   The body's share is the inner layer's own alpha, inverted by the exclude. XOR
+   against an opaque backdrop leaves `1 - a`, so an inner layer at `1 - body`
+   lets exactly `body` through — while in the ring, where the inner layer is not
+   painted at all, the backdrop passes at full. One number, and nothing to keep
+   in step with it.
+
    `--pack-rim-width` is `PACK_RIM` in `wheel.ts`, published on the explorer.
    It is defined there because the band's rim is not a border at all but a
    clip-path computed in that file, and the two have to be the same number. */
 .pack-rim::before {
     border: var(--pack-rim-width) solid transparent;
     border-radius: inherit;
-    mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+    mask-image:
+        linear-gradient(rgb(0 0 0 / calc(100% - var(--pack-body-light))) 0 0),
+        linear-gradient(#000 0 0);
     mask-clip: padding-box, border-box;
     mask-composite: exclude;
 }

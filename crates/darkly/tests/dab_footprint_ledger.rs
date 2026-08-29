@@ -62,7 +62,7 @@ fn painted_layer(engine: &mut DarklyEngine) -> LayerId {
     // Smudge drags existing pigment; give it something to drag so the
     // stationary early-out is the only reason a dab could write nothing.
     set_builtin_brush(engine, "Ink Pen");
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     stroke_to(engine, 100.0, 128.0, 0.0);
     stroke_to(engine, 156.0, 128.0, 16.0);
     engine.end_stroke();
@@ -83,7 +83,7 @@ fn dab_that_writes_nothing_records_no_damage() {
     let layer_id = painted_layer(&mut engine);
 
     set_builtin_brush(&mut engine, "Smudge");
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     stroke_to(&mut engine, 128.0, 128.0, 0.0);
 
     let bbox = engine.test_stroke_save_point_bbox();
@@ -108,7 +108,7 @@ fn dab_that_writes_records_its_footprint() {
     let layer_id = painted_layer(&mut engine);
 
     set_builtin_brush(&mut engine, "Smudge");
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     stroke_to(&mut engine, 100.0, 128.0, 0.0);
     for i in 1..=8 {
         stroke_to(&mut engine, 100.0 + 8.0 * i as f32, 128.0, 16.0 * i as f64);

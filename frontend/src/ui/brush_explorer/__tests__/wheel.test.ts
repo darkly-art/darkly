@@ -10,6 +10,7 @@ import {
     wheelMax,
     wheelPadTop,
     wheelPadBottom,
+    ribbonCorePath,
     ribbonPath,
     ribbonRimPath,
     visibleSpan,
@@ -564,6 +565,29 @@ describe('the projection ribbon', () => {
             );
         expect(spans(ribbonPath(R))).toEqual([200]);
         expect(spans(ribbonRimPath(R, 2))).toEqual([2, 2]);
+    });
+
+    it('hands the band over from rim to core along one curve', () => {
+        // The two carry different strengths of the same light, so they have to
+        // meet exactly: a gap would show as a dark line inside the rim, an
+        // overlap as a bright one.
+        expect(ribbonCorePath(R, 2)).toBe(
+            'M 0 42 C 50 42, 50 2, 100 2 L 100 198 C 50 198, 50 78, 0 78 Z',
+        );
+        const rim = ribbonRimPath(R, 2);
+        expect(rim).toContain('C 50 2, 50 42, 0 42 Z');
+        expect(rim).toContain('M 0 78 C 50 78, 50 198,');
+    });
+
+    it('lets the core cross itself where the band is thinner than two rims', () => {
+        // A pack nearly scrolled out arrives 1px tall, which is less than the
+        // rims take from either side. The core inverts rather than clamping —
+        // the rims have already closed over that end, and the ribbon's own clip
+        // bounds whatever the crossing describes.
+        const pinched = { x0: 0, top0: 40, bottom0: 80, x1: 100, top1: 100, bottom1: 101 };
+        const core = ribbonCorePath(pinched, 2);
+        expect(core).toContain('100 102');
+        expect(core).toContain('L 100 99');
     });
 
     it('winds both strips the same way, so a pinched band still fills', () => {

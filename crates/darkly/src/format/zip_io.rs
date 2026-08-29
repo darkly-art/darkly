@@ -6,8 +6,8 @@
 //!
 //! `.darkly` *document* saves remain a JS-side write (via `fflate`) to keep
 //! slow encoders off the WASM main thread — [`assemble_zip`] exists only so
-//! the Rust-side kitchen-sink test can drive the full save→file→reload loop
-//! without crossing the WASM/JS boundary, and is gated `#[cfg(test)]`
+//! Rust-side tests can drive the full save→file→reload loop without crossing
+//! the WASM/JS boundary, and is gated behind the `testing` feature
 //! accordingly. A pack is a handful of small JSONs, so writing one in Rust
 //! does not run into that constraint.
 
@@ -39,10 +39,10 @@ pub fn write_entries(
     Ok(cursor.into_inner())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub use test_only::assemble_zip;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 mod test_only {
     use std::io::Cursor;
 

@@ -141,8 +141,10 @@ fn turn_rate_changes_the_painted_corner() {
     assert_eq!(free.len(), damped.len());
 
     let differing = free
-        .chunks_exact(4)
-        .zip(damped.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(damped.as_chunks::<4>().0)
         .filter(|(a, b)| {
             // Compare luminance-ish: the stroke is white on black, so any
             // channel drifting is the stamp having covered different pixels.
@@ -150,7 +152,7 @@ fn turn_rate_changes_the_painted_corner() {
         })
         .count();
 
-    let painted = free.chunks_exact(4).filter(|p| p[0] > 24).count();
+    let painted = free.as_chunks::<4>().0.iter().filter(|p| p[0] > 24).count();
     assert!(painted > 0, "the unlimited render painted nothing at all");
 
     assert!(
@@ -172,12 +174,14 @@ fn zero_rate_paints_the_whole_stroke_at_one_angle() {
     let locked = render(0.0);
     let free = render(brush_settings::STAMP_ANGLE_RATE_UNLIMITED);
 
-    let count = |px: &[u8]| px.chunks_exact(4).filter(|p| p[0] > 24).count();
+    let count = |px: &[u8]| px.as_chunks::<4>().0.iter().filter(|p| p[0] > 24).count();
     assert!(count(&locked) > 0, "the locked render painted nothing");
 
     let differing = locked
-        .chunks_exact(4)
-        .zip(free.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(free.as_chunks::<4>().0)
         .filter(|(a, b)| (a[0] as i16 - b[0] as i16).abs() > 24)
         .count();
 

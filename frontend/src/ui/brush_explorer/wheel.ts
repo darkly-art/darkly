@@ -261,6 +261,26 @@ export function ribbonRimPath(r: Ribbon, width = PACK_RIM): string {
 }
 
 /**
+ * What the rim leaves: the ribbon inside both strips, which is where the band
+ * carries the light at the body's share of it rather than at full strength.
+ *
+ * Spelled out as its own region because the band's rim is a clip and not a
+ * border. The card and the section state the same two strengths as one mask,
+ * whose partial alpha inside the ring is what a box can express and a curve
+ * cannot; a clip-path is all or nothing, so the two strengths have to become
+ * two regions. Disjoint ones — the core begins exactly where the rim ends — so
+ * that neither is painted over the other.
+ *
+ * Where the band is pinched thinner than two rims the core inverts and collapses
+ * to nothing of consequence: the rim strips have met and already cover the
+ * whole thickness, and the ribbon's own clip bounds whatever the crossing
+ * describes.
+ */
+export function ribbonCorePath(r: Ribbon, width = PACK_RIM): string {
+    return ribbonStrip(r, { edge: 'top', offset: width }, { edge: 'bottom', offset: -width });
+}
+
+/**
  * Trim a section's extent to what the list is actually showing.
  *
  * A pack taller than the viewport runs off both ends of it, and a ribbon drawn
