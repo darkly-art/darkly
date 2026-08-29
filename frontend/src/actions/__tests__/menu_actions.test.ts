@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { registerActions, NEW_LAYER_ACTION_IDS } from '../index';
+import { registerActions } from '../index';
+import { addSources } from '../../ui/layers/addSources';
 import { actions, actionEnablement, parseMenuSegment, type Action } from '../registry';
 import { buildTopMenus } from '../../ui/menu/menuModel';
 import { filterPalette } from '../../ui/menu/paletteFilter';
@@ -120,6 +121,7 @@ describe('menu action registrations', () => {
             .filter(e => e.kind === 'action')
             .map(e => (e as { actionId: string }).actionId);
         expect(ids).toEqual([
+            'addLayer',
             'newLayer',
             'newFilterLayer',
             'newVeil',
@@ -149,9 +151,13 @@ describe('menu action registrations', () => {
         expect(hit('group')).toContain('newGroup');
     });
 
-    it('backs every new-layer dropdown entry with a registered action', () => {
-        // The dropdown renders label + icon straight from these registrations.
-        const missing = NEW_LAYER_ACTION_IDS.filter(id => !actions.get(id));
+    it('backs every add source with a registered action', () => {
+        // The add-layer modal's tab rail renders label, icon and position
+        // straight from these registrations, so a source naming an
+        // unregistered action would produce a tab with no name.
+        const missing = addSources
+            .map(s => s.action)
+            .filter(id => !actions.get(id));
         expect(missing).toEqual([]);
     });
 

@@ -15,6 +15,11 @@
         /** Let the user reposition the dialog by dragging its header. Spawns
          *  centered (the default), then follows the drag. */
         draggable?: boolean;
+        /** Controls rendered in the header row, between the title and the close
+         *  button — for chrome that belongs to the dialog rather than to its
+         *  content (a search box, a mode toggle). Sits outside the drag handle,
+         *  so interacting with it never starts a drag. */
+        headerControls?: Snippet;
         children?: Snippet;
     };
 
@@ -25,6 +30,7 @@
         bare = false,
         dimmed = true,
         draggable = false,
+        headerControls,
         children,
     }: Props = $props();
 

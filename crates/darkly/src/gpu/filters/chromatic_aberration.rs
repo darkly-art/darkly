@@ -299,6 +299,12 @@ pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "chromatic_aberration",
         display_name: "Chromatic Aberration",
+        // The veil registration of this same effect owns the add path: channel
+        // displacement is an optical artifact of the whole view, which is what
+        // a veil is. Offering both would put one effect in the picker twice.
+        // This filter stays applicable destructively from the Colors menu via
+        // `hotkey_action`, and documents already holding one keep rendering.
+        addable: false,
         icon: "lucide-lab:venn",
         description: DESCRIPTION,
         hotkey_action: "filterChromatic_aberration",

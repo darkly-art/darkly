@@ -24,6 +24,7 @@ pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "painting",
         display_name: "Painting",
+        addable: true,
         description: "Smooth the view into painterly, brush-like daubs.",
         params: PARAMS,
         preview: Some(PreviewAnim::LOOPING),

@@ -59,6 +59,7 @@ pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: bw::TYPE_ID,
         display_name: bw::DISPLAY_NAME,
+        addable: true,
         description: bw::DESCRIPTION,
         hotkey_action: "filterBlack_and_white",
         icon: "fa6-solid:droplet-slash",

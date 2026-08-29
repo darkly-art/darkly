@@ -17,6 +17,7 @@ pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "chromatic_aberration",
         display_name: "Chromatic Aberration",
+        addable: true,
         description: DESCRIPTION,
         params: PARAMS,
         preview: Some(PREVIEW),

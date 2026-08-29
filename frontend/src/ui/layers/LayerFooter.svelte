@@ -1,13 +1,10 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
-    import NewLayerMenu from './NewLayerMenu.svelte';
     import { actions } from '../../actions/registry';
     import { tooltipForAction } from '../../config/store.svelte';
     import Icon from '../../icons/Icon.svelte';
 
     let { onupdate }: { onupdate: () => void } = $props();
-
-    let menuOpen = $state(false);
 
     function findNode(nodes: any[], id: number): any | null {
         for (const n of nodes) {
@@ -26,7 +23,6 @@
     // the behaviour — selection-aware "wrap or empty group", picker modals for
     // the typed kinds — has one home in actions/index.ts.
     function pick(actionId: string) {
-        menuOpen = false;
         actions.dispatch(actionId);
         onupdate();
     }
@@ -101,26 +97,13 @@
 </script>
 
 <div class="footer">
-    <div class="split-btn">
-        <button
-            class="footer-btn split-main"
-            onclick={() => pick('newLayer')}
-            title={tooltipForAction('New layer', 'newLayer')}
-        >
-            <Icon name="fa6-solid:plus" />
-        </button>
-        <button
-            class="footer-btn split-chevron new-layer-trigger"
-            data-keep-open="new-layer"
-            onclick={() => (menuOpen = !menuOpen)}
-            title="New layer type…"
-        >
-            <Icon name="fa6-solid:chevron-down" />
-        </button>
-        {#if menuOpen}
-            <NewLayerMenu onpick={pick} onclose={() => (menuOpen = false)} />
-        {/if}
-    </div>
+    <button
+        class="footer-btn add-layer"
+        onclick={() => pick('addLayer')}
+        title={tooltipForAction('Add layer', 'addLayer')}
+    >
+        <Icon name="fa6-solid:plus" />
+    </button>
 
     <button
         class="footer-btn"
@@ -192,33 +175,10 @@
         cursor: default;
     }
 
-    .split-btn {
-        position: relative;
-        display: flex;
-        align-items: center;
-        margin-right: 4px;
-    }
-
-    .split-main {
-        width: 34px;
-        height: 34px;
-        border-top-right-radius: 0;
-        border-bottom-right-radius: 0;
-        padding-right: 0;
+    /* The add button keeps the split button's weight so the footer reads the
+       same after the chevron went away. */
+    .footer > .footer-btn.add-layer {
         font-size: 18px;
-    }
-
-    .split-chevron {
-        width: 16px;
-        height: 34px;
-        font-size: 9px;
-        border-top-left-radius: 0;
-        border-bottom-left-radius: 0;
-        padding-left: 0;
-        border-left: 1px solid var(--bg);
-    }
-
-    .split-main + .split-chevron {
-        margin-left: 0;
+        margin-right: 4px;
     }
 </style>

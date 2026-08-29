@@ -49,6 +49,12 @@ pub struct CatalogEntry {
     pub supports_preview: bool,
     /// How the browser captures this variant's external frames; voids only.
     pub capture_kind: Option<CaptureKind>,
+    /// May the user add this variant from the add-layer modal? `false` where a
+    /// second registration of the same `type_id` in another registry owns the
+    /// add path, so the picker offers it once rather than twice. A non-addable
+    /// variant is still applicable, loadable and renderable — this gates the
+    /// picker and nothing else.
+    pub addable: bool,
 }
 
 impl CatalogEntry {
@@ -67,6 +73,7 @@ impl CatalogEntry {
             params: Vec::new(),
             supports_preview: false,
             capture_kind: None,
+            addable: true,
         }
     }
 
@@ -108,6 +115,11 @@ impl CatalogEntry {
 
     pub fn with_capture_kind(mut self, capture_kind: Option<CaptureKind>) -> Self {
         self.capture_kind = capture_kind;
+        self
+    }
+
+    pub fn with_addable(mut self, addable: bool) -> Self {
+        self.addable = addable;
         self
     }
 }
@@ -211,6 +223,8 @@ pub fn settings_catalogs() -> Vec<Catalog> {
                 params,
                 supports_preview: false,
                 capture_kind: None,
+                // Settings sections are not picker variants; nothing adds one.
+                addable: false,
             };
             let mut catalog = Catalog::new(
                 // `id` must be `'static`; sections are `'static` data, so lean

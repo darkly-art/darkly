@@ -13,6 +13,11 @@ pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: bw::TYPE_ID,
         display_name: bw::DISPLAY_NAME,
+        // The filter registration of this same effect owns the add path: a
+        // filter layer exports, takes a mask and sits anywhere in the tree,
+        // all of which a veil cannot do. Offering both would put one effect in
+        // the picker twice.
+        addable: false,
         description: bw::DESCRIPTION,
         params: bw::PARAMS,
         preview: Some(bw::PREVIEW),

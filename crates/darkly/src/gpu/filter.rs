@@ -101,6 +101,13 @@ pub struct FilterPipelineRegistration {
     /// for a filter with no parameters to sweep.
     pub preview_at: Option<fn(f32) -> Vec<ParamValue>>,
     pub create_pipeline: fn(&wgpu::Device) -> Arc<dyn FilterEffect>,
+    /// May the user add this filter as a new filter layer from the add-layer
+    /// modal? `false` where the same `type_id` is also registered as a veil and
+    /// that registration owns the add path, so the picker offers the effect once
+    /// rather than twice. A non-addable filter is still applicable destructively
+    /// from the Colors menu and still loads and renders in documents that
+    /// already contain it — this gates the picker and nothing else.
+    pub addable: bool,
 }
 
 /// Id of the catalog this registry projects into. Distinct from the
@@ -116,6 +123,7 @@ impl FilterPipelineRegistration {
             .with_hotkey_action(self.hotkey_action)
             .with_params(self.params)
             .with_supports_preview(self.preview.is_some())
+            .with_addable(self.addable)
     }
 }
 

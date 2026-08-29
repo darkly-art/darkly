@@ -35,6 +35,7 @@ pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "invert",
         display_name: "Invert Colors",
+        addable: true,
         icon: "fa6-solid:circle-half-stroke",
         description: "Invert every color channel for a photo-negative.",
         hotkey_action: "filterInvert",

@@ -11,13 +11,14 @@
     import ImageRescaleModal from './ui/ImageRescaleModal.svelte';
     import SelectionModifyModal from './ui/SelectionModifyModal.svelte';
     import FilterModal from './ui/filters/FilterModal.svelte';
-    import LayerPickers from './ui/layers/LayerPickers.svelte';
+    import AddLayerModal from './ui/layers/AddLayerModal.svelte';
     import ConfirmDiscardModal from './ui/ConfirmDiscardModal.svelte';
     import RecoveryModal from './ui/RecoveryModal.svelte';
     import AboutModal from './ui/AboutModal.svelte';
     import MenuBar from './ui/menu/MenuBar.svelte';
     import CommandPalette from './ui/menu/CommandPalette.svelte';
     import { menuBar } from './state/menuBar.svelte';
+    import { addLayerModal } from './state/addLayerModal.svelte';
     import CanvasOverlay from './multi_tab/CanvasOverlay.svelte';
     import { shell } from './multi_tab/shell.svelte';
     import { anyTabDirty } from './multi_tab/closeGuard.svelte';
@@ -68,7 +69,9 @@
 <ImageRescaleModal />
 <SelectionModifyModal />
 <FilterModal />
-<LayerPickers />
+{#if addLayerModal.open}
+    <AddLayerModal />
+{/if}
 <ConfirmDiscardModal />
 <RecoveryModal />
 <AboutModal />
