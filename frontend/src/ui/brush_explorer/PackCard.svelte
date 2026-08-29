@@ -59,7 +59,22 @@
          *
          * `--card-pane-y` is `CardCurve.paneY`, published every frame by the
          * same loop that sets the rolodex transform, so the light and the tilt
-         * are always one frame's worth of the same number. */
+         * are always one frame's worth of the same number.
+         *
+         * A card cannot hold the field still the way a section does
+         * (`background-attachment: fixed`, `BrushExplorer.svelte`). A transformed
+         * element is the containing block for its own fixed background, and the
+         * rolodex curve below transforms every card — so `fixed` here re-anchors
+         * the image to the card, which is precisely the "paint travels with the
+         * card" that the offset exists to avoid. Worse, the image is sized to
+         * the explorer and offset by the explorer's viewport origin, so it lands
+         * entirely outside the card's box and the card paints as bare ink on
+         * nothing.
+         *
+         * The offset is exact whenever the *list* is the driver, because the
+         * wheel is then the pane the frame loop writes, and a written position
+         * and the values derived from it land in one style commit. It is a frame
+         * stale only while the wheel itself is under the hand. */
         background-image: var(--pack-field);
         background-repeat: no-repeat;
         background-size: var(--field-w) var(--field-h);

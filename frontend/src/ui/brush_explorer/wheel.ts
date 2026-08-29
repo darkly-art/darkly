@@ -118,7 +118,8 @@ export interface Ribbon {
 
 /**
  * Where the panes sit and how wide a card is, in the coordinates of the box
- * that holds them both.
+ * that holds them both — with the two exceptions at the end, which are what
+ * place that box in the viewport.
  *
  * Layout, not position: every field here changes only when something resizes,
  * so it is measured on the resize observer and never in the frame loop. That is
@@ -151,6 +152,19 @@ export interface PaneLayout {
      *  an angled beam needs, since it varies across x as well as y. */
     width: number;
     height: number;
+    /**
+     * The explorer's top-left in *viewport* coordinates — where the field is
+     * anchored, as `width` and `height` are how large it is.
+     *
+     * Every other number here is explorer-local, because that is the frame the
+     * bands are drawn in. These two cannot be: the sections hold the field still
+     * with `background-attachment: fixed`, whose positioning area is the
+     * viewport, so the offset that places the image has to be expressed there.
+     * Measured with the rest of the layout, which is what keeps it a constant
+     * between resizes rather than something the frame loop has to publish.
+     */
+    viewportLeft: number;
+    viewportTop: number;
 }
 
 /**

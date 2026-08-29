@@ -17,6 +17,7 @@ import {
     FOCUS_LINE,
     type WheelGeometry,
     type SectionExtent,
+    type PaneLayout,
 } from '../wheel';
 
 /** Sections of deliberately uneven height, which is the whole point of a
@@ -384,8 +385,9 @@ describe('present', () => {
 });
 
 describe('packBands', () => {
-    /** Panes 200 tall side by side, cards ending at x=100, sections at x=140. */
-    const L = {
+    /** Panes 200 tall side by side, cards spanning x=0..100, sections at x=140,
+     *  in an explorer sitting at the viewport's origin. */
+    const L: PaneLayout = {
         wheelTop: 0,
         wheelBottom: 200,
         listTop: 0,
@@ -393,7 +395,11 @@ describe('packBands', () => {
         cardRight: 100,
         sectionLeft: 140,
         cardHeight: 52,
+        cardLeft: 0,
+        width: 240,
         height: 200,
+        viewportLeft: 0,
+        viewportTop: 0,
     };
     const PACKS = SPACED.sections.map(s => ({
         id: s.id,
