@@ -1,6 +1,7 @@
 import { ToolBase, type ToolDescriptor } from './registry';
 import { getActiveInstance, type DarklyInstance, type Color } from '../state/app.svelte';
 import { runHook } from './tool_session';
+import { beginPaintStroke } from './paint_stroke';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { effectivePressure } from '../lib/pressure';
 import { strokeRecorder, currentCanvasDimensions } from '../lib/strokeRecorder';
@@ -243,7 +244,7 @@ class BrushTool extends ToolBase {
         this.clearHover();
         this.inst.toolCursor = 'none';
         const params = brushStrokeParams(e, cx, cy, this.inst.consumeForeground());
-        engine.api.beginStroke({ id: layerId });
+        beginPaintStroke(engine, layerId);
         engine.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
         // Capture the clone dest anchor so the source marker tracks the cursor
         // in aligned mode (no-op for non-clone brushes).

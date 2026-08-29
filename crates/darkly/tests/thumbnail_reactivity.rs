@@ -31,7 +31,7 @@ fn fresh_engine() -> DarklyEngine {
 
 /// Paint a short brush stroke across the layer at its vertical center.
 fn paint_short_stroke(engine: &mut DarklyEngine, layer_id: darkly::layer::LayerId) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     for step in 0..10 {
         engine.stroke_to(StrokeOp::BrushStroke {
             x: step as f32 * 20.0 + 10.0,
@@ -64,7 +64,7 @@ fn has_painted_pixels(bytes: &[u8]) -> bool {
     // brush stroke has cr=1.0, cg=0, cb=0, so the thumbnail will have
     // pixels with R near 255 and G near 0 — well outside the checker
     // values. Loose check: any pixel with R > 200 OR G+B contrast > 50.
-    bytes.chunks_exact(4).any(|p| {
+    bytes.as_chunks::<4>().0.iter().any(|p| {
         let r = p[0];
         let g = p[1];
         let b = p[2];
@@ -231,7 +231,7 @@ fn brush_stroke_queues_thumbnail_readback_only_at_end() {
     engine.test_flush_readbacks();
     let v_baseline = engine.thumbnail_version();
 
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     for step in 0..20 {
         engine.stroke_to(StrokeOp::BrushStroke {
             x: step as f32 * 10.0 + 10.0,

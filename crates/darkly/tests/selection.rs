@@ -36,7 +36,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 
 /// Paint a horizontal brush stroke across the canvas at vertical center.
 fn paint_full_stroke(engine: &mut DarklyEngine, layer_id: LayerId, w: u32, h: u32) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     for x_step in 0..20 {
         let x = x_step as f32 * (w as f32 / 20.0);
         engine.stroke_to(StrokeOp::BrushStroke {
@@ -469,7 +469,7 @@ fn selection_intersect_mode() {
     );
 
     // Paint horizontal strokes at two heights: y=32 (top) and y=96 (bottom).
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     for x_step in 0..20 {
         let x = x_step as f32 * (w as f32 / 20.0);
         engine.stroke_to(StrokeOp::BrushStroke {
@@ -489,7 +489,7 @@ fn selection_intersect_mode() {
     }
     engine.end_stroke();
 
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     for x_step in 0..20 {
         let x = x_step as f32 * (w as f32 / 20.0);
         engine.stroke_to(StrokeOp::BrushStroke {
@@ -591,7 +591,7 @@ fn selection_clear() {
     assert!(!engine.has_selection());
 
     // Paint at right side — should work (no selection masking).
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     for step in 0..5 {
         engine.stroke_to(StrokeOp::BrushStroke {
             x: 48.0,
@@ -726,7 +726,7 @@ fn clear_selection_contents() {
 
     // Paint at center — default brush (scale=0.1, size=0.5) at pressure=1.0
     // produces ~26px diameter dab, centered at (64,64).
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x: 64.0,
         y: 64.0,
@@ -786,7 +786,7 @@ fn flood_fill_floods_layer_emptied_by_clear_selection_contents() {
     );
 
     // Fill green from inside the former stroke.
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: (w / 2) as f32,
         y: (h / 2) as f32,
@@ -834,7 +834,7 @@ fn no_selection_paints_normally() {
 
     assert!(!engine.has_selection());
 
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x: 32.0,
         y: 32.0,

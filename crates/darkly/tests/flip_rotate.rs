@@ -378,7 +378,7 @@ fn flip_layer_with_ellipse_selection_clips_to_shape() {
 
 /// Paint a short red horizontal stroke centred near plane `(cx, cy)`.
 fn paint_feature(engine: &mut DarklyEngine, layer_id: LayerId, cx: f32, cy: f32) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     let steps = 16;
     for i in 0..=steps {
         let x = cx - 3.0 + 6.0 * (i as f32 / steps as f32);
@@ -506,7 +506,7 @@ fn flip_canvas_transforms_every_layer_and_undo_restores_all() {
     let l1 = e.paste_image(w, h, &distinct_rgba(w, h), 0, 0, None);
     // A second, differently-valued layer so the two can't be confused.
     let mut rgba2 = distinct_rgba(w, h);
-    for p in rgba2.chunks_exact_mut(4) {
+    for p in rgba2.as_chunks_mut::<4>().0 {
         p[2] = 200; // tag layer 2 with a blue channel
     }
     let l2 = e.paste_image(w, h, &rgba2, 0, 0, None);
@@ -785,7 +785,7 @@ fn paint_through_flipped_selection_masks_mirrored_band() {
 
     // Mirror of x in [4,12) about a 32-wide canvas → x in [20,28).
     // Paint a row spanning both the (now-unselected) left and (selected) right.
-    e.begin_stroke(layer);
+    e.begin_stroke(layer).unwrap();
     let steps = 64;
     for i in 0..=steps {
         let x = 2.0 + 28.0 * (i as f32 / steps as f32); // sweep x in [2,30]

@@ -407,14 +407,18 @@ impl DarklyEngine {
     //
     // All stroke ops go through GPU render passes.
 
+    /// Open a stroke on `id`. The refusal is a `Result` rather than a silent
+    /// no-op because a click that paints nothing is indistinguishable from a
+    /// broken brush: the caller surfaces the message. Every paint tool opens
+    /// its stroke here, so this is the one place the reason has to be phrased.
     #[handler]
-    pub fn begin_stroke(&mut self, id: LayerId) {
+    pub fn begin_stroke(&mut self, id: LayerId) -> Result<(), String> {
         if !self.doc.is_node_editable(id) || !self.is_node_paintable(id) {
             // Leave `active_stroke_layer` cleared so every queued stroke_to
             // for this gesture no-ops uniformly — matches the "node missing"
             // path and avoids partial-stroke state.
             self.active_stroke_layer = None;
-            return;
+            return Err(self.paint_refusal_reason(id));
         }
         self.auto_commit_floating();
         self.active_stroke_layer = Some(id);
@@ -426,6 +430,7 @@ impl DarklyEngine {
         self.brush_full_rerender_events = 0;
         self.last_brush_perf = BrushPerfCounters::default();
         // GPU setup is deferred to first stroke_to (lazy init).
+        Ok(())
     }
 
     /// True when paint operations have somewhere to land. Raster layers and
@@ -436,6 +441,27 @@ impl DarklyEngine {
     /// entry point through this predicate so the rejection is uniform.
     pub fn is_node_paintable(&self, layer_id: LayerId) -> bool {
         self.doc.pixel_buffer(layer_id).is_some()
+    }
+
+    /// Why a paint op on `layer_id` was refused, phrased for the user. Names
+    /// the layer rather than its kind: "Smart Object" is what the layer panel
+    /// shows, and a renamed layer reads better as itself than as its kind.
+    fn paint_refusal_reason(&self, layer_id: LayerId) -> String {
+        let name = self
+            .doc
+            .find_node(layer_id)
+            .map(|n| n.common().name.clone())
+            .or_else(|| {
+                self.doc
+                    .find_filter(layer_id)
+                    .map(|f| f.common.name.clone())
+            })
+            .unwrap_or_else(|| "That layer".into());
+        if !self.doc.is_node_editable(layer_id) {
+            format!("\"{name}\" is locked")
+        } else {
+            format!("\"{name}\" can't be painted on — right-click it and choose Rasterize")
+        }
     }
 
     /// Read the most recent `render()` sub-phase timings. Used by the WASM

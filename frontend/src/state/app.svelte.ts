@@ -286,13 +286,13 @@ export class DarklyInstance {
         const byId: Record<string, Catalog> = {};
         for (const c of (await engine.api.catalogs()) ?? []) byId[c.id] = c;
         this.catalogs = byId;
-        // Map each void type to its browser capture API, if any. Voids with a
-        // `captureKind` (camera / screenshare) drive the generic MediaStream
-        // lifecycle; procedural voids (noise) leave it null and never appear
-        // here.
+        // Map each void type to its browser capture API, if any. Only voids
+        // whose source is a capture stream (camera / screenshare) drive the
+        // generic MediaStream lifecycle; procedural and image-sourced voids
+        // never appear here.
         const capKinds = new Map<string, CaptureKind>();
         for (const v of this.entries('voids')) {
-            if (v.captureKind) capKinds.set(v.type, v.captureKind);
+            if (v.source?.kind === 'capture') capKinds.set(v.type, v.source.capture);
         }
         this.voidCaptureKind = capKinds;
     }

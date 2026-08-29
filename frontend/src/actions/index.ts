@@ -22,6 +22,7 @@ import { registerClipboardActions } from './clipboard';
 import { registerPackActions } from './pack_actions';
 import { pickOpenFile, type OpenedFile } from '../storage/fileHandle';
 import { detectKind, isImageKind, type FileKind } from '../storage/detectKind';
+import { decodeToRgba, placeSmartObjectFromBlob } from './place_smart_object';
 import { saveDocument } from '../storage/saveDocument';
 import { fontLibrary } from '../state/font_library.svelte';
 import { processRecording } from '../recording/recorder.svelte';
@@ -149,28 +150,14 @@ export function openDarklyAsTab(picked: OpenedFile): void {
  *  No file handle is cached on the new tab — re-saving the image as
  *  `.darkly` is a Save As, not a write-back to the source PNG. */
 async function openImageAsTab(picked: OpenedFile, kind: FileKind): Promise<void> {
-    let bitmap: ImageBitmap;
-    try {
-        // BlobPart requires Uint8Array<ArrayBuffer>; TS 5.7+ defaults to
-        // <ArrayBufferLike>. WASM-sourced bytes are non-shared.
-        bitmap = await createImageBitmap(new Blob([picked.bytes as Uint8Array<ArrayBuffer>]));
-    } catch (e) {
+    // BlobPart requires Uint8Array<ArrayBuffer>; TS 5.7+ defaults to
+    // <ArrayBufferLike>. WASM-sourced bytes are non-shared.
+    const decoded = await decodeToRgba(new Blob([picked.bytes as Uint8Array<ArrayBuffer>]));
+    if (!decoded) {
         toast.show('error', `Failed to decode ${kind.toUpperCase()}: ${picked.name}`);
-        console.error('[open] image decode failed', e);
         return;
     }
-    const { width, height } = bitmap;
-
-    const canvas = new OffscreenCanvas(width, height);
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-        bitmap.close();
-        toast.show('error', '2D canvas context unavailable');
-        return;
-    }
-    ctx.drawImage(bitmap, 0, 0);
-    bitmap.close();
-    const rgba = new Uint8Array(ctx.getImageData(0, 0, width, height).data.buffer);
+    const { width, height, rgba } = decoded;
 
     const inst = shell.open(tabNameFromFile(picked.name), { width, height });
     inst.onHandleReady = async (engine) => {
@@ -193,45 +180,40 @@ async function openImageAsTab(picked: OpenedFile, kind: FileKind): Promise<void>
 export async function pasteImageIntoCurrent(file: File): Promise<number> {
     const engine = app.engine;
     if (!engine) return -1;
-    try {
-        const bitmap = await createImageBitmap(file);
-        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-        const ctx = canvas.getContext('2d')!;
-        ctx.drawImage(bitmap, 0, 0);
-        bitmap.close();
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const rgba = new Uint8Array(imageData.data.buffer);
-        const activeId = app.activeLayerId ?? -1;
-        const { id: layerId } = await engine.api.pasteImage({
-                width: canvas.width,
-                height: canvas.height,
-                offset_x: 0,
-                offset_y: 0,
-                active_layer_id: activeId,
-            },
-            rgba,
-        );
-        app.selectLayer(layerId);
-        await app.refreshLayerTree();
-        app.requestFrame();
-        return layerId;
-    } catch (e) {
+    const decoded = await decodeToRgba(file);
+    if (!decoded) {
         toast.show('error', `Failed to decode dropped image: ${file.name}`);
-        console.error('[drop] image decode failed', e);
         return -1;
     }
+    const { id: layerId } = await engine.api.pasteImage({
+            width: decoded.width,
+            height: decoded.height,
+            offset_x: 0,
+            offset_y: 0,
+            active_layer_id: app.activeLayerId ?? -1,
+        },
+        decoded.rgba,
+    );
+    app.selectLayer(layerId);
+    await app.refreshLayerTree();
+    app.requestFrame();
+    return layerId;
 }
 
 /** Route a dropped file (from `CanvasView`'s `ondrop` handler) through
  *  the same kind-sniff the Open action uses:
  *    - `.darkly` → open as a new tab (mirrors Ctrl+O on a `.darkly`).
- *    - image → paste into the current tab as a raster layer.
+ *    - image → paste into the current tab as a raster layer, or, with Alt
+ *      held, place it as a smart object.
  *    - anything else → toast, no-op.
  *
  *  Drag-drop deliberately diverges from the picker for images: a drop
  *  onto the canvas is the explicit "I want this here" gesture, while
- *  the Open action is the explicit "open as a document" gesture. */
-export async function handleDroppedFile(file: File): Promise<void> {
+ *  the Open action is the explicit "open as a document" gesture. Holding
+ *  Alt selects the smart-object form rather than prompting: a chooser would
+ *  charge every drop an extra click to serve the rarer case, and the two
+ *  menu actions are the discoverable route. */
+export async function handleDroppedFile(file: File, altKey = false): Promise<void> {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const kind = detectKind(bytes);
     if (kind === 'darkly') {
@@ -239,7 +221,8 @@ export async function handleDroppedFile(file: File): Promise<void> {
         return;
     }
     if (isImageKind(kind)) {
-        await pasteImageIntoCurrent(file);
+        if (altKey) await placeSmartObjectFromBlob(file, file.name);
+        else await pasteImageIntoCurrent(file);
         return;
     }
     toast.show('error', `Unsupported file type: ${file.name}`);
@@ -495,6 +478,26 @@ export function registerActions() {
         menuPath: ['File:20'],
         handler: () => {
             void openFlow();
+        },
+    });
+    actions.register({
+        id: 'placeSmartObject',
+        menuPath: ['File:21'],
+        handler: () => {
+            void (async () => {
+                if (!app.engine) return;
+                const picked = await pickOpenFile();
+                if (!picked) return;
+                const kind = detectKind(picked.bytes);
+                if (!isImageKind(kind)) {
+                    toast.show('error', `Not an image: ${picked.name}`);
+                    return;
+                }
+                await placeSmartObjectFromBlob(
+                    new Blob([picked.bytes as Uint8Array<ArrayBuffer>]),
+                    picked.name,
+                );
+            })();
         },
     });
     actions.register({

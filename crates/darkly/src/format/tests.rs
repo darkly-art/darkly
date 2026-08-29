@@ -731,7 +731,7 @@ fn sub_canvas_mask_survives_save_load_round_trip() {
     let mut original = kitchen_sink_engine(32, 32);
     let host = original.add_raster_layer(None);
     // Fill the host opaque so the mask's hiding is observable in the composite.
-    original.begin_stroke(host);
+    original.begin_stroke(host).unwrap();
     original.stroke_to(StrokeOp::FloodFill {
         x: 1.0,
         y: 1.0,
@@ -747,7 +747,7 @@ fn sub_canvas_mask_survives_save_load_round_trip() {
     original.add_mask(host);
     let mask_id = original.host_mask_id(host).expect("mask");
     // Black dab on the mask → a distinct hidden region.
-    original.begin_stroke(mask_id);
+    original.begin_stroke(mask_id).unwrap();
     original.stroke_to(StrokeOp::BrushStroke {
         x: 10.0,
         y: 10.0,

@@ -1,6 +1,7 @@
 import { ToolBase, type ToolDescriptor } from './registry';
 import type { DarklyInstance } from '../state/app.svelte';
 import { OverlayBuilder } from '../canvas/gpu_overlay';
+import { beginPaintStroke } from './paint_stroke';
 
 // Click-vs-drag detection: when clicking on the canvas with an active
 // placement, we defer starting a new gradient until a drag threshold is
@@ -30,7 +31,7 @@ class GradientTool extends ToolBase {
         const c = this.inst.consumeForeground();
         const bg = this.inst.background;
 
-        engine.api.beginStroke({ id: layerId });
+        beginPaintStroke(engine, layerId);
         engine.api.strokeTo({
             op: {
                 op: 'linear_gradient',

@@ -19,7 +19,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 }
 
 fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
         y,
@@ -115,7 +115,7 @@ fn rich_copy_paste_preserves_blend_mode_opacity_and_pixels() {
         !pasted_pixels.is_empty(),
         "pasted layer should have non-empty pixel readback"
     );
-    let nonzero = pasted_pixels.chunks_exact(4).any(|p| p[3] > 0);
+    let nonzero = pasted_pixels.as_chunks::<4>().0.iter().any(|p| p[3] > 0);
     assert!(
         nonzero,
         "pasted layer should contain at least one non-zero alpha pixel"

@@ -205,10 +205,17 @@ impl DarklyEngine {
             LayerNode::Layer(Layer::Void(v)) => {
                 let void_type = v.void_type.clone();
                 let params = v.params.clone();
+                // Kept for the realize-and-copy path below, which runs after
+                // `add_void_layer` has consumed the originals.
+                let (realize_type, realize_params) = (void_type.clone(), params.clone());
                 // Carry the source's gizmo transform onto the copy so a
                 // duplicated camera keeps its flip / framing rather than
                 // resetting to the kind's default seed.
                 let transform = v.transform;
+                // A void that holds an externally-sourced image (a placed photo,
+                // a captured frame) has pixels that exist nowhere else, so the
+                // copy has to declare one too — see the GPU copy below.
+                let frame = v.frame.clone();
                 // The duplicated layer's name is overwritten with the
                 // source's `"… copy"` below; the display_label here only
                 // primes the per-type counter so a later fresh-add picks up
@@ -233,12 +240,32 @@ impl DarklyEngine {
                     nv.common.locked = common_locked;
                     nv.blend.opacity = blend_opacity;
                     nv.blend.blend_mode = blend_mode_reg;
+                    nv.frame = frame.clone();
                 }
-                // The compositor void cache + texture are allocated lazily by
-                // `sync_compositor_layers` (or directly by `add_void_layer`
-                // on the engine side); duplication doesn't need a manual
-                // `ensure_*` call because there are no pixels to copy — the
-                // procedural output is identical from identical params.
+                // A purely procedural void needs no pixel copy — its output is
+                // identical from identical params, and the compositor allocates
+                // its cache lazily. One holding a source image is the opposite:
+                // those texels came from outside the document and cannot be
+                // regenerated, so realize the copy now and clone them across.
+                if frame.is_some() {
+                    let void = self.compositor.create_void_box(
+                        &self.gpu.device,
+                        &realize_type,
+                        &realize_params,
+                    );
+                    self.compositor.ensure_void_layer(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        new_id,
+                        void,
+                    );
+                    self.compositor.copy_void_source(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        source_id,
+                        new_id,
+                    );
+                }
                 self.refresh_blend_uniforms(new_id);
 
                 // Voids can carry mask filters like any other host.

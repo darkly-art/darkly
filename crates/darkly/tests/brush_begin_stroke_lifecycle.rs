@@ -193,8 +193,8 @@ fn builtin_graph(name: &str) -> Graph<BrushWireType> {
 fn assert_all(rgba: &[u8], expected: [u8; 4]) {
     let mut mismatches = 0usize;
     let mut first_bad = None;
-    for (i, px) in rgba.chunks_exact(4).enumerate() {
-        if px != expected {
+    for (i, px) in rgba.as_chunks::<4>().0.iter().enumerate() {
+        if *px != expected {
             if first_bad.is_none() {
                 first_bad = Some((i, [px[0], px[1], px[2], px[3]]));
             }
@@ -271,7 +271,9 @@ fn liquify_terminal_clears_scratch_to_zero_field() {
         }),
     );
     let field: Vec<f32> = raw
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         .collect();
     let worst = field.iter().cloned().fold(0.0_f32, |a, b| a.max(b.abs()));

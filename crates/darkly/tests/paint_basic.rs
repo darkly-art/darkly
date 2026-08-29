@@ -34,7 +34,7 @@ fn shared_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
 
 fn black_canvas() -> Vec<u8> {
     let mut out = vec![0u8; (CANVAS * CANVAS * 4) as usize];
-    for px in out.chunks_exact_mut(4) {
+    for px in out.as_chunks_mut::<4>().0 {
         px[3] = 255;
     }
     out
@@ -171,7 +171,9 @@ fn center_rgba(rgba: &[u8]) -> [u8; 4] {
 }
 
 fn count_deposited(rgba: &[u8]) -> usize {
-    rgba.chunks_exact(4)
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| p[0] > 0 || p[1] > 0 || p[2] > 0)
         .count()
 }

@@ -261,7 +261,7 @@ fn center_pixel(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
 /// Initial canvas: opaque black, so a dab depositing red is unmistakable.
 fn black_canvas() -> Vec<u8> {
     let mut out = vec![0u8; (CANVAS * CANVAS * 4) as usize];
-    for px in out.chunks_exact_mut(4) {
+    for px in out.as_chunks_mut::<4>().0 {
         px[3] = 255;
     }
     out

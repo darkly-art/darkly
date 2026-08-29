@@ -215,7 +215,8 @@ fn void_previewability_is_the_declaration() {
         .find(|c| c.id == darkly::gpu::void::CATALOG_ID)
         .expect("the voids catalog")
         .entries;
-    assert_eq!(entries.len(), 4);
+    // camera, screenshare, blender, noise, smart_object
+    assert_eq!(entries.len(), 5);
     for e in &entries {
         assert_eq!(
             e.supports_preview,
@@ -590,8 +591,10 @@ fn invert_is_the_exact_inverse_of_the_source_it_was_given() {
     let frame = &rendered.frames[0];
     assert_eq!(frame.len(), source.len());
     for (i, (out, src)) in frame
-        .chunks_exact(4)
-        .zip(source.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(source.as_chunks::<4>().0.iter())
         .enumerate()
     {
         assert_eq!(
@@ -626,7 +629,7 @@ fn black_and_white_veil_frame_is_neutral_gray() {
 
     let rendered = render_one(&mut Gpu::new(), "veils", "black_and_white");
     let frame = &rendered.frames[0];
-    for (i, px) in frame.chunks_exact(4).enumerate() {
+    for (i, px) in frame.as_chunks::<4>().0.iter().enumerate() {
         assert!(
             px[0] == px[1] && px[1] == px[2],
             "pixel {i} is {:?}, not neutral grey",
@@ -645,7 +648,7 @@ fn noise_void_frames_are_not_uniform() {
     for (i, frame) in rendered.frames.iter().enumerate() {
         let first: &[u8] = &frame[..4];
         assert!(
-            frame.chunks_exact(4).any(|px| px != first),
+            frame.as_chunks::<4>().0.iter().any(|px| px != first),
             "noise frame {i} is a flat colour"
         );
     }

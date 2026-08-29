@@ -196,11 +196,11 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
 
+export type PortDir = "Input" | "Output";
+
 export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
 
 export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
-
-export type PortDir = "Input" | "Output";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -483,33 +483,6 @@ export type CanvasDimensionsResp = { width: number, height: number, };
 
 export type CanvasRectResp = { origin_x: number, origin_y: number, width: number, height: number, };
 
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
-export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
-/**
- * The unit suffix alone, for a column header. Empty for unitless values.
- */
-unit: string, };
-
-export type ParamInfo = { kind: string, name: string, 
-/**
- * Display label. `None` → the UI title-cases `name`.
- */
-label: string | null, description: string | null, 
-/**
- * How to render this parameter's editor. One closed set, which both
- * `ParamKind` and the settings schema's `WidgetHint` map into:
- * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
- */
-widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
-/**
- * Enum: `["Label1", "Label2", ...]`.
- * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
- */
-options: JsonValue | null, display: ParamDisplay, };
-
-export type CaptureKind = "camera" | "display" | "stream";
-
 export type CatalogEntry = { type: string, displayName: string, 
 /**
  * Iconify name, or `None` when the variant deliberately declares no icon
@@ -540,9 +513,40 @@ hotkeyAction: string | null, params: Array<ParamInfo>,
  */
 supportsPreview: boolean, 
 /**
- * How the browser captures this variant's external frames; voids only.
+ * Where this variant's pixels come from; voids only. `None` for every
+ * other registry, whose entries are effects over an existing image rather
+ * than sources of one.
  */
-captureKind: CaptureKind | null, };
+source: VoidSource | null, };
+
+export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
+/**
+ * The unit suffix alone, for a column header. Empty for unitless values.
+ */
+unit: string, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
+export type ParamInfo = { kind: string, name: string, 
+/**
+ * Display label. `None` → the UI title-cases `name`.
+ */
+label: string | null, description: string | null, 
+/**
+ * How to render this parameter's editor. One closed set, which both
+ * `ParamKind` and the settings schema's `WidgetHint` map into:
+ * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
+ */
+widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
+/**
+ * Enum: `["Label1", "Label2", ...]`.
+ * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
+ */
+options: JsonValue | null, display: ParamDisplay, };
+
+export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
+
+export type CaptureKind = "camera" | "display" | "stream";
 
 export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
 /**
@@ -618,7 +622,14 @@ export type LayerInfo = { "type": "raster", id: number, name: string, visible: b
  * inheritance rule lives in one place (the document predicate)
  * rather than being recomputed by every Svelte component.
  */
-editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, 
+editable: boolean, 
+/**
+ * Whether paint ops have somewhere to land on this node — mirrors
+ * `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+ * generated (void, filter, vector) and for groups; the panel reads it
+ * to offer "Rasterize" instead of branching on `type`.
+ */
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, 
 /**
  * Stable `type_id` from the blend-mode registry (snake_case, e.g.
  * `"normal"`, `"color_burn"`). Resolve to a display label via the
@@ -632,7 +643,14 @@ modifiers: Array<ModifierInfo>,
 /**
  * Pixel-space bounds of the layer's GPU texture in canvas coords.
  */
-bounds: { origin: { x: number, y: number }, width: number, height: number }, } | { "type": "void", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
+bounds: { origin: { x: number, y: number }, width: number, height: number }, } | { "type": "void", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, 
+/**
+ * Whether paint ops have somewhere to land on this node — mirrors
+ * `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+ * generated (void, filter, vector) and for groups; the panel reads it
+ * to offer "Rasterize" instead of branching on `type`.
+ */
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
 /**
  * Iconify icon for this void kind (e.g. `"tabler:galaxy"`), resolved
  * per-subtype from the void's registration. The layer panel renders
@@ -648,7 +666,14 @@ voidType: string,
  * Param schema + current values, in the order the void's
  * `ParamDef` slice declares them. Same shape the veil panel uses.
  */
-params: Array<ParamInfo>, } | { "type": "filter", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, 
+params: Array<ParamInfo>, } | { "type": "filter", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, 
+/**
+ * Whether paint ops have somewhere to land on this node — mirrors
+ * `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+ * generated (void, filter, vector) and for groups; the panel reads it
+ * to offer "Rasterize" instead of branching on `type`.
+ */
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, 
 /**
  * Stable filter `type_id` (e.g. `"invert"`) — UI resolves to a
  * display label via `filter_types()`.
@@ -660,7 +685,21 @@ pipeline: string,
  * carries the five tone curves for `curves`. Same shape the void panel
  * uses.
  */
-params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
+params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, 
+/**
+ * Whether paint ops have somewhere to land on this node — mirrors
+ * `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+ * generated (void, filter, vector) and for groups; the panel reads it
+ * to offer "Rasterize" instead of branching on `type`.
+ */
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, 
+/**
+ * Whether paint ops have somewhere to land on this node — mirrors
+ * `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+ * generated (void, filter, vector) and for groups; the panel reads it
+ * to offer "Rasterize" instead of branching on `type`.
+ */
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
 
 export type LibrarySnapshot = { brushes: Array<BrushInfo>, packs: Array<BrushPackInfo>, };
 
@@ -744,6 +783,8 @@ export type PasteInPlaceFloatingReq = { id: number, };
 export type PasteLayerRichReq = { json: string, active_layer_id: number, };
 
 export type PickColorReq = { x: number, y: number, id: number, };
+
+export type PlaceSmartObjectReq = { width: number, height: number, active_layer_id: number, };
 
 export type PreviewReq = { catalog: string, type: string, variant: PreviewVariant, };
 
@@ -1015,6 +1056,7 @@ export type RequestKind =
     | 'paste_in_place_floating'
     | 'paste_layer_rich'
     | 'pick_color'
+    | 'place_smart_object'
     | 'poll_copy_result'
     | 'poll_copy_rich_result'
     | 'poll_export_result'
@@ -1215,6 +1257,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'paste_in_place_floating',
     'paste_layer_rich',
     'pick_color',
+    'place_smart_object',
     'poll_copy_result',
     'poll_copy_rich_result',
     'poll_export_result',
@@ -1309,7 +1352,7 @@ export interface EngineApi {
     antialiasSelection(): void;
     applyFilter(req: ApplyFilterReq): Promise<boolean>;
     applyMask(req: ApplyMaskReq): void;
-    beginStroke(req: BeginStrokeReq): void;
+    beginStroke(req: BeginStrokeReq): Promise<null>;
     beginTransform(req: BeginTransformReq): Promise<boolean>;
     borderSelection(req: BorderSelectionReq): void;
     brushActiveCapabilities(): Promise<BrushGraphCapabilities>;
@@ -1423,6 +1466,7 @@ export interface EngineApi {
     pasteInPlaceFloating(req: PasteInPlaceFloatingReq): Promise<boolean>;
     pasteLayerRich(req: PasteLayerRichReq): Promise<PasteResultResp>;
     pickColor(req: PickColorReq): void;
+    placeSmartObject(req: PlaceSmartObjectReq, bytes: Uint8Array): Promise<{ id: number }>;
     pollCopyResult(): Promise<ClipboardExport | null>;
     pollCopyRichResult(): Promise<string | null>;
     pollExportResult(): Promise<{ width: number, height: number, bytes: Uint8Array } | null>;
@@ -1511,7 +1555,7 @@ export function makeApi(t: Transport): EngineApi {
         antialiasSelection: () => t.postFF('antialias_selection'),
         applyFilter: (req) => t.request('apply_filter', req),
         applyMask: (req) => t.postFF('apply_mask', req),
-        beginStroke: (req) => t.postFF('begin_stroke', req),
+        beginStroke: (req) => t.request('begin_stroke', req),
         beginTransform: (req) => t.request('begin_transform', req),
         borderSelection: (req) => t.postFF('border_selection', req),
         brushActiveCapabilities: () => t.request('brush_active_capabilities'),
@@ -1625,6 +1669,7 @@ export function makeApi(t: Transport): EngineApi {
         pasteInPlaceFloating: (req) => t.request('paste_in_place_floating', req),
         pasteLayerRich: (req) => t.request('paste_layer_rich', req),
         pickColor: (req) => t.postFF('pick_color', req),
+        placeSmartObject: (req, bytes) => t.request('place_smart_object', req, bytes),
         pollCopyResult: () => t.request('poll_copy_result'),
         pollCopyRichResult: () => t.request('poll_copy_rich_result'),
         pollExportResult: () => t.request('poll_export_result'),

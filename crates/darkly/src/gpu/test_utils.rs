@@ -166,16 +166,29 @@ pub fn readback_texture(
     width: u32,
     height: u32,
 ) -> Vec<u8> {
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("test-readback"),
-    });
-    let request = super::readback::request_readback(
+    readback_texture_rect(
         device,
-        &mut encoder,
+        queue,
         texture,
         format,
         crate::coord::LayerRect::from_xywh(0, 0, width, height),
-    );
+    )
+}
+
+/// Read back a sub-rect of a texture to CPU memory (blocking). For test
+/// assertions about textures whose savable region is narrower than the
+/// allocation — a void source's transparent border, for instance.
+pub fn readback_texture_rect(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    format: wgpu::TextureFormat,
+    rect: crate::coord::LayerRect,
+) -> Vec<u8> {
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("test-readback"),
+    });
+    let request = super::readback::request_readback(device, &mut encoder, texture, format, rect);
     queue.submit([encoder.finish()]);
     request.blocking_read(device)
 }

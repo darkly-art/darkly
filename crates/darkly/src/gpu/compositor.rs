@@ -228,6 +228,16 @@ pub struct PixelDataRef<'a> {
     pub height: u32,
 }
 
+impl PixelDataRef<'_> {
+    /// The savable region as a rect, for handing to a readback. Always the
+    /// whole texture — a `LayerRect` is a function-local translation type and
+    /// never a struct field (see `tests/coord_invariants.rs`), so it is built
+    /// here rather than stored.
+    pub fn rect(&self) -> crate::coord::LayerRect {
+        crate::coord::LayerRect::from_xywh(0, 0, self.width, self.height)
+    }
+}
+
 /// Outcome of a layer-grow request — distinguishes a genuine reallocation
 /// (callers must rebase stroke scratch / region store) from a no-op.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -1243,7 +1253,7 @@ impl Compositor {
     /// exposing the registry itself. Used by [`VoidLayer`]'s
     /// [`LayerKindGpu::realize_in`] so the registry stays private to the
     /// compositor.
-    fn create_void_box(
+    pub(crate) fn create_void_box(
         &mut self,
         device: &wgpu::Device,
         type_id: &str,
@@ -1851,6 +1861,9 @@ impl Compositor {
             canvas_size: [width as f32, height as f32],
             canvas_origin: [origin.x as f32, origin.y as f32],
         };
+        // Voids sample through a window-local uniform, so the shared canvas
+        // uniform above is not enough — each one has to rewrite its own.
+        self.resync_voids_to_canvas(device, queue);
         queue.write_buffer(
             &self.canvas_uniform_buf,
             0,
@@ -2212,13 +2225,13 @@ impl Compositor {
         // through). Without this ordering the save reads back the composited
         // output and the camera frame is lost on reload.
         if let Some(proc) = self.procedural_content(node_id) {
-            if let Some((w, h)) = proc.void.persistent_frame_size() {
+            if let Some((width, height)) = proc.void.persistent_frame_size() {
                 if let Some(tex) = proc.cache.aux_textures.first() {
                     return Some(PixelDataRef {
                         texture: tex,
                         format: tex.format(),
-                        width: w,
-                        height: h,
+                        width,
+                        height,
                     });
                 }
             }
@@ -2255,12 +2268,17 @@ impl Compositor {
             .and_then(|p| p.void.persistent_frame_size())
     }
 
-    /// Restore a saved void frame at document load. Wraps
-    /// [`crate::gpu::void::Void::restore_persistent_pixels`] — sized for
-    /// the saved dimensions, the void rebuilds its bind group around the
-    /// new texture and writes the bytes via `queue.write_texture`. Marks
-    /// the void dirty so the next composite re-renders it.
-    pub fn restore_void_pixels(
+    /// Install a void layer's source image. Wraps
+    /// [`crate::gpu::void::Void::set_source_pixels`] — the void reallocates its
+    /// source texture at `(width, height)`, rebuilds its bind group, and writes
+    /// the bytes. Two callers: document load restoring a saved frame, and
+    /// placement installing a user-supplied image. `bytes` are premultiplied
+    /// RGBA8 in both cases.
+    ///
+    /// A source allocated with mip levels gets its chain regenerated here,
+    /// because the pass that does it is the compositor's. The texture declares
+    /// its own need: more than one level means the void asked for a chain.
+    pub fn set_void_source_pixels(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -2273,7 +2291,113 @@ impl Compositor {
             return;
         };
         proc.void
-            .restore_persistent_pixels(device, queue, &mut proc.cache, width, height, bytes);
+            .set_source_pixels(device, queue, &mut proc.cache, width, height, bytes);
+
+        if let Some(tex) = proc.cache.aux_textures.first() {
+            let levels = tex.mip_level_count();
+            if levels > 1 {
+                let tex = tex.clone();
+                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("void-source-mips"),
+                });
+                // Void sources are stored premultiplied, so texels average
+                // as-is — no premultiply/un-premultiply round trip.
+                self.rescale_pass.generate_mip_chain(
+                    device,
+                    queue,
+                    &mut encoder,
+                    &tex,
+                    levels,
+                    true,
+                );
+                queue.submit([encoder.finish()]);
+            }
+        }
+        self.mark_dirty();
+    }
+
+    /// Copy one void's source image onto another's, mip chain included.
+    ///
+    /// Duplication needs this because an externally-sourced image is not
+    /// reproducible from the layer's params — the copy would otherwise render
+    /// blank. Both voids must already be realized; the destination's source is
+    /// reallocated to match the origin's so the copy is a straight
+    /// same-extent blit.
+    pub fn copy_void_source(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        src_id: LayerId,
+        dst_id: LayerId,
+    ) {
+        let Some(src) = self
+            .procedural_content(src_id)
+            .and_then(|p| p.cache.aux_textures.first())
+            .cloned()
+        else {
+            return;
+        };
+        let Some((logical_w, logical_h)) = self
+            .procedural_content(src_id)
+            .and_then(|p| p.void.persistent_frame_size())
+        else {
+            return;
+        };
+
+        // Size the destination through the void's own installer so it applies
+        // the same allocation and mip policy, then overwrite every level with
+        // the origin's texels. The zeroed upload is a formality the blit
+        // immediately replaces, but it is what makes the destination's
+        // allocation match.
+        let zeroed = vec![0u8; (logical_w as usize) * (logical_h as usize) * 4];
+        if let Some(dst) = self.procedural_content_mut(dst_id) {
+            dst.void.set_source_pixels(
+                device,
+                queue,
+                &mut dst.cache,
+                logical_w,
+                logical_h,
+                &zeroed,
+            );
+        }
+
+        let Some(dst) = self
+            .procedural_content(dst_id)
+            .and_then(|p| p.cache.aux_textures.first())
+            .cloned()
+        else {
+            return;
+        };
+        if dst.size() != src.size() || dst.mip_level_count() != src.mip_level_count() {
+            return;
+        }
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("copy-void-source"),
+        });
+        for level in 0..src.mip_level_count() {
+            let size = src.size();
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &src,
+                    mip_level: level,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &dst,
+                    mip_level: level,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: (size.width >> level).max(1),
+                    height: (size.height >> level).max(1),
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        queue.submit([encoder.finish()]);
         self.mark_dirty();
     }
 
@@ -2787,15 +2911,59 @@ impl Compositor {
         self.mark_dirty();
     }
 
-    /// The void's active-pixel bbox in WINDOW-LOCAL coords, via
-    /// [`Void::content_extent`]. Canvas-filling for most voids; the cover-fit
-    /// rect for the camera. `None` if `layer_id` isn't a realized void.
-    pub fn void_content_extent(&self, layer_id: LayerId) -> Option<(f32, f32, f32, f32)> {
+    /// The void's active-pixel bbox in PLANE coords, via
+    /// [`Void::content_extent`]. The canvas window for most voids; the
+    /// cover-fit rect for a stream; the source's natural rect for a placed
+    /// image. `None` if `layer_id` isn't a realized void.
+    pub fn void_content_extent(&self, layer_id: LayerId) -> Option<crate::gpu::void::ContentRect> {
         let proc = self.procedural_content(layer_id)?;
-        Some(
-            proc.void
-                .content_extent(self.canvas_width, self.canvas_height),
-        )
+        Some(proc.void.content_extent(self.canvas_rect()))
+    }
+
+    /// Push a new canvas rect to every realized void, so those caching canvas
+    /// geometry in their sampling uniforms rewrite them. Called from
+    /// [`Self::set_canvas_rect`]; without it a resize or crop leaves a void
+    /// sampling through the old window while reporting the new one.
+    fn resync_voids_to_canvas(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let canvas = self.canvas_rect();
+
+        // A void's output texture is canvas-sized by definition, and
+        // `ensure_void_layer` allocates it once — so a resize has to
+        // reallocate it here or the void keeps drawing into the old window's
+        // footprint. Collected first: the loop below writes `node_textures`
+        // while `layer_cache` is borrowed.
+        let void_ids: Vec<LayerId> = self
+            .layer_cache
+            .iter()
+            .filter(|(_, entry)| matches!(entry.content, LayerContent::Procedural(_)))
+            .map(|(id, _)| *id)
+            .collect();
+
+        for id in void_ids {
+            if self
+                .node_textures
+                .get(&id)
+                .is_none_or(|t| t.canvas_extent() != canvas)
+            {
+                // `swap_node_texture` also refreshes the blend uniform's
+                // `layer_offset` / `layer_size` and drops the bind groups that
+                // named the old view — without that the composite samples the
+                // new texture through the old extent and clips the void to the
+                // previous window.
+                let tex = LayerTexture::with_bounds(device, canvas);
+                self.swap_node_texture(device, queue, id, tex);
+            }
+            if let Some(entry) = self.layer_cache.get_mut(&id) {
+                if let LayerContent::Procedural(proc) = &mut entry.content {
+                    // The sampling uniform is window-local and, for a cover
+                    // fit, derived from the canvas size; both moved.
+                    proc.void.set_canvas_rect(queue, &proc.cache, canvas);
+                    // The texture above is freshly allocated and empty, so the
+                    // void must redraw it even if its own state is unchanged.
+                    proc.void.mark_dirty();
+                }
+            }
+        }
     }
 
     /// Push a fresh external image frame (webcam, screenshare, …) into a

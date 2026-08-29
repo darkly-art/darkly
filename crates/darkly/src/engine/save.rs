@@ -486,27 +486,21 @@ fn queue_pixel_readback(
 
     let texture = data.texture.clone();
     let format = data.format;
-    let width = data.width;
-    let height = data.height;
+    let rect = data.rect();
     let key = spec.blob_key.clone();
 
     pinned.push(texture.clone());
     blobs.insert(key.clone(), None);
 
     engine.gpu.encode("save-pixel-readback", |encoder| {
-        let request = readback::request_readback(
-            &engine.gpu.device,
-            encoder,
-            &texture,
-            format,
-            crate::coord::LayerRect::from_xywh(0, 0, width, height),
-        );
+        let request =
+            readback::request_readback(&engine.gpu.device, encoder, &texture, format, rect);
         engine.readbacks.submit(
             request,
             ReadbackContext::SaveDocument {
                 kind: SaveReadbackKind::BlobBytes { key },
-                width,
-                height,
+                width: rect.width,
+                height: rect.height,
             },
         );
     });

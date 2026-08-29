@@ -329,8 +329,8 @@ fn export_is_a_faithful_projection() {
             .collect(),
     );
 
-    // The capture kind is voids' alone, and it rides beside the previewability
-    // every catalog now answers.
+    // Where a void's pixels come from is voids' alone, and it rides beside the
+    // previewability every catalog now answers.
     for r in darkly::gpu::void::VoidRegistry::new().types() {
         let e = catalog(&json, "voids")["entries"]
             .as_array()
@@ -338,10 +338,8 @@ fn export_is_a_faithful_projection() {
             .iter()
             .find(|e| e["type"] == r.type_id)
             .unwrap();
-        let want_capture = r.capture_kind.map(|k| serde_json::to_value(k).unwrap());
-        let got = e["captureKind"].clone();
-        let got = (!got.is_null()).then_some(got);
-        assert_eq!(got, want_capture, "`voids/{}` captureKind", r.type_id);
+        let want_source = serde_json::to_value(r.source).unwrap();
+        assert_eq!(e["source"], want_source, "`voids/{}` source", r.type_id);
     }
 
     // Previewability is one question every catalog answers, and the artifact

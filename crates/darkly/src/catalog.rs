@@ -13,7 +13,7 @@
 //! so a registry cannot be silently left out of the projection.
 
 use crate::engine::types::ParamInfo;
-use crate::gpu::void::CaptureKind;
+use crate::gpu::void::VoidSource;
 
 /// One browsable entry in a registry of typed variants — the single shape the
 /// UI pickers, the settings surface and the metadata export all consume.
@@ -46,8 +46,10 @@ pub struct CatalogEntry {
     /// [`preview_mechanisms`](crate::catalog::preview_mechanisms)' answer, not
     /// this field's.
     pub supports_preview: bool,
-    /// How the browser captures this variant's external frames; voids only.
-    pub capture_kind: Option<CaptureKind>,
+    /// Where this variant's pixels come from; voids only. `None` for every
+    /// other registry, whose entries are effects over an existing image rather
+    /// than sources of one.
+    pub source: Option<VoidSource>,
 }
 
 impl CatalogEntry {
@@ -65,7 +67,7 @@ impl CatalogEntry {
             hotkey_action: None,
             params: Vec::new(),
             supports_preview: false,
-            capture_kind: None,
+            source: None,
         }
     }
 
@@ -105,8 +107,8 @@ impl CatalogEntry {
         self
     }
 
-    pub fn with_capture_kind(mut self, capture_kind: Option<CaptureKind>) -> Self {
-        self.capture_kind = capture_kind;
+    pub fn with_source(mut self, source: VoidSource) -> Self {
+        self.source = Some(source);
         self
     }
 }
@@ -208,7 +210,7 @@ pub fn settings_catalogs() -> Vec<Catalog> {
                 hotkey_action: None,
                 params,
                 supports_preview: false,
-                capture_kind: None,
+                source: None,
             };
             let mut catalog = Catalog::new(
                 // `id` must be `'static`; sections are `'static` data, so lean
