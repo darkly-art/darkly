@@ -175,10 +175,10 @@
         cursor: default;
     }
 
-    /* The add button keeps the split button's weight so the footer reads the
-       same after the chevron went away. */
+    /* The add button keeps the split button's larger glyph, but not its
+       trailing margin — that separated the welded plus+chevron unit from the
+       rest, and a lone button just takes the footer's gap like its neighbours. */
     .footer > .footer-btn.add-layer {
         font-size: 18px;
-        margin-right: 4px;
     }
 </style>

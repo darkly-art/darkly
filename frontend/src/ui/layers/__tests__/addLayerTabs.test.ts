@@ -30,7 +30,7 @@ function deps(over: Partial<TabDeps> = {}): TabDeps {
         { action: 'newFilterLayer', catalog: 'filters' },
         { action: 'newVeil', catalog: 'veils' },
         { action: 'newVoid', catalog: 'voids' },
-        { action: 'newGroup', catalog: '', title: 'Group' },
+        { action: 'newGroup', catalog: '', title: 'Normal' },
     ];
     const catalogs: Record<string, Catalog> = {
         filters: catalog('filters', 'Filters', [entry('invert'), entry('curves')]),
@@ -67,12 +67,19 @@ function deps(over: Partial<TabDeps> = {}): TabDeps {
 describe('buildTabs', () => {
     it('orders the rail by each action’s menu position', () => {
         const titles = buildTabs(deps()).map(t => t.title);
-        expect(titles).toEqual(['Normal', 'Filters', 'Veils', 'Voids', 'Group']);
+        expect(titles).toEqual(['Normal', 'Filters', 'Veils', 'Voids']);
+    });
+
+    it('merges two sources that name the same tab, in rail order', () => {
+        // A group is document structure rather than a kind of effect, so it
+        // sits beside the plain layer instead of in a rail entry of its own.
+        const normal = buildTabs(deps()).find(t => t.title === 'Normal')!;
+        expect(normal.cards.map(c => c.entry.displayName)).toEqual(['New Layer', 'New Group']);
+        expect(normal.cards.map(c => c.source.action)).toEqual(['newLayer', 'newGroup']);
     });
 
     it('gives a catalog-less source one synthetic card from its action', () => {
         const normal = buildTabs(deps()).find(t => t.title === 'Normal')!;
-        expect(normal.cards).toHaveLength(1);
         expect(normal.cards[0].entry.displayName).toBe('New Layer');
         expect(normal.cards[0].entry.icon).toBe('fa6-solid:square-plus');
         expect(normal.cards[0].entry.supportsPreview).toBe(false);
@@ -81,7 +88,8 @@ describe('buildTabs', () => {
     });
 
     it('titles a catalog-less tab by the kind, not the command that adds it', () => {
-        expect(buildTabs(deps()).map(t => t.title)).toContain('Group');
+        // Left to itself the tab would read "New Layer", the command's name.
+        expect(buildTabs(deps()).map(t => t.title)).toContain('Normal');
     });
 
     it('yields one tab per catalog when no entry declares a category', () => {
@@ -149,7 +157,7 @@ describe('buildTabs', () => {
 
     it('drops a tab whose catalog has not arrived yet', () => {
         const tabs = buildTabs(deps({ catalog: () => undefined }));
-        expect(tabs.map(t => t.title)).toEqual(['Normal', 'Group']);
+        expect(tabs.map(t => t.title)).toEqual(['Normal']);
     });
 });
 
@@ -161,7 +169,7 @@ describe('filterTabs', () => {
     });
 
     it('returns every tab for an empty query', () => {
-        expect(filterTabs(buildTabs(deps()), '   ')).toHaveLength(5);
+        expect(filterTabs(buildTabs(deps()), '   ')).toHaveLength(4);
     });
 
     it('never resurrects an entry the addability gate removed', () => {

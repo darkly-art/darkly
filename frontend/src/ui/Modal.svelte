@@ -106,6 +106,9 @@
             {:else if title}
                 <h2>{title}</h2>
             {/if}
+            {#if headerControls}
+                <div class="header-controls">{@render headerControls()}</div>
+            {/if}
             <button type="button" class="close" aria-label="Close" onclick={onClose}>×</button>
         </header>
     {/if}
@@ -185,6 +188,17 @@
         padding: var(--header-pad-y) var(--header-pad-x);
         border-bottom: 1px solid var(--bg-hover);
         flex-shrink: 0;
+        gap: 16px;
+    }
+
+    /* Takes the slack so the title stays left and the close button stays
+       right, whatever the controls are. */
+    .header-controls {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
     }
 
     header h2 {

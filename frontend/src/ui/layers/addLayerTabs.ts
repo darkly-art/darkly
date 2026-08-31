@@ -73,17 +73,21 @@ function syntheticCard(source: AddSource, deps: TabDeps): AddCard | null {
  */
 export function buildTabs(deps: TabDeps): AddTab[] {
     const ordered = [...deps.sources].sort((a, b) => railOrder(a, deps) - railOrder(b, deps));
-    const tabs: AddTab[] = [];
+    // Keyed by title so two sources naming the same tab land in one group —
+    // which is how "New Group" sits beside "New Layer" under Normal — and so a
+    // category interleaved across a catalog collects rather than repeating.
+    const byTitle = new Map<string, AddCard[]>();
+
+    const add = (title: string, cards: AddCard[]) => {
+        const existing = byTitle.get(title);
+        if (existing) existing.push(...cards);
+        else byTitle.set(title, cards);
+    };
 
     for (const source of ordered) {
         if (!source.catalog) {
             const card = syntheticCard(source, deps);
-            if (card) {
-                tabs.push({
-                    title: source.title ?? card.entry.displayName,
-                    cards: [card],
-                });
-            }
+            if (card) add(source.title ?? card.entry.displayName, [card]);
             continue;
         }
 
@@ -94,18 +98,14 @@ export function buildTabs(deps: TabDeps): AddTab[] {
 
         const fallback = source.title ?? catalog.title ?? source.action;
         for (const group of groupByCategory(offered, e => e.category, fallback)) {
-            tabs.push({
-                title: group.category,
-                cards: group.items.map(entry => ({
-                    entry,
-                    source,
-                    catalog: source.catalog,
-                })),
-            });
+            add(
+                group.category,
+                group.items.map(entry => ({ entry, source, catalog: source.catalog })),
+            );
         }
     }
 
-    return tabs;
+    return [...byTitle.entries()].map(([title, cards]) => ({ title, cards }));
 }
 
 /** Narrow every tab by a query, dropping tabs left empty. Searches name,

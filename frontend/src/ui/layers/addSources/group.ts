@@ -5,12 +5,13 @@ import type { AddSource } from './types';
  * adds an empty group otherwise, and that branch belongs in the action rather
  * than copied here.
  *
- * `title` because the rail names a kind ("Group") while the action names a
- * command ("New Group"); a catalog-bearing source gets that from its catalog's
- * own title, and a catalog-less one has to say it.
+ * Shares the `Normal` tab with the raster source — a group is plain document
+ * structure rather than a kind of effect, so it belongs beside the plain layer
+ * instead of alone in a rail entry of its own. Sources naming the same title
+ * merge into one group, in rail order, so this is the whole declaration.
  */
 export const source: AddSource = {
     action: 'newGroup',
     catalog: '',
-    title: 'Group',
+    title: 'Normal',
 };
