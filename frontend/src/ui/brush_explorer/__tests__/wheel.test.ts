@@ -6,6 +6,7 @@ import {
     scrollTopForSection,
     focusedSection,
     cardCurve,
+    cardEdge,
     listMax,
     wheelMax,
     wheelPadTop,
@@ -467,9 +468,14 @@ describe('packBands', () => {
         }
     });
 
-    it('arrives under the section, where the overlap cannot be seen', () => {
+    it('arrives at the section without overlapping it', () => {
+        // A pack's surface carries alpha, so anything painted twice is a
+        // darker strip rather than the same colour again. The band used to
+        // tuck a few pixels under the section to hide a subpixel seam, which
+        // drew that strip down every join except the derived packs' — they
+        // wear the theme's opaque greys, which hid it.
         for (const band of at(scrollTopForSection(1, SPACED))) {
-            expect(band.ribbon.x1).toBeGreaterThan(L.sectionLeft);
+            expect(band.ribbon.x1).toBe(L.sectionLeft);
         }
     });
 
