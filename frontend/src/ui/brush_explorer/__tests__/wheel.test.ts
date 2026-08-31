@@ -425,14 +425,10 @@ describe('packBands', () => {
      *  the fixture so the assertions below are about the card, not about
      *  however `packBands` chooses to find it. */
     const painted = (i: number, wheelScrollTop: number) => {
-        const scale = cardCurve(i, wheelScrollTop, SPACED).scale;
+        const edge = cardEdge(cardCurve(i, wheelScrollTop, SPACED), L.cardHeight);
         const top = L.wheelTop + SPACED.wheelLead + i * SPACED.cardAdvance - wheelScrollTop;
         const centreY = top + L.cardHeight / 2;
-        return {
-            centreY,
-            top: centreY - (L.cardHeight * scale) / 2,
-            bottom: centreY + (L.cardHeight * scale) / 2,
-        };
+        return { centreY, top: centreY + edge.top, bottom: centreY + edge.bottom };
     };
 
     it('leaves the card at its own centre, not its slot centre', () => {

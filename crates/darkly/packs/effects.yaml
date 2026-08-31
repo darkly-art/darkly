@@ -4,6 +4,6 @@ icon: mdi:blur
 palette:
   chroma: "#8b5cf6"
   refraction: "#e05ccb"
-  surface: "#1b1922"
+  surface: "#6d3ce01a"
   ink: "#d8cbee"
 members: [blur, liquify, smudge]

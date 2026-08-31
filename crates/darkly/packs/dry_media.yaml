@@ -4,6 +4,6 @@ icon: mdi:pencil
 palette:
   chroma: "#c2521f"
   refraction: "#e0912b"
-  surface: "#231a12"
+  surface: "#b4491a1a"
   ink: "#e6d2b4"
 members: [charcoal, hair, sponge]

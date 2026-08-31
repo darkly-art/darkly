@@ -4,6 +4,15 @@
     --radius-sm: 4px;
     --radius-md: 6px;
     --transition-fast: 0.1s;
+
+    /* Full coverage, for a mask.
+
+       A mask reads alpha and nothing else, so a mask stop is a coverage value
+       wearing a colour's syntax — this one means "covered", as `transparent`
+       means "not". Its hue is arbitrary and never reaches a pixel; it is spelled
+       out here so that a mask stop in a stylesheet cannot be read as a black
+       fill, which is exactly what it looks like written inline. */
+    --mask-opaque: #000;
 }
 
 /* A brush pack's palette, as everything drawn from it.
@@ -37,15 +46,24 @@
        fan is symmetric about the focus line, which is also where the wheel's
        own attention already is.
 
-       `--pack-body-light` is how much of the beam reaches a pack's body, as
-       against the full strength it always keeps along the rim. It spans the
-       whole design on its own: at 100% the light washes the columns evenly and
-       there is no rim to speak of, at 0% it survives only as an outline, and in
-       between the body is lit but the edge is where the light collects. */
+       `--pack-body-ramp` is how much of the beam reaches a pack's *body*,
+       as against the full strength it always keeps along the rim — an image
+       rather than a number, so it can say something different at each end.
+       Black is lit and transparent is not, so this leaves the left end an
+       outline and opens into a full wash on the right: a pack arrives at the
+       wheel as an edge and is a surface by the time it reaches the brushes.
+       Which is the journey the beam itself makes, for the same reason — cards
+       are small and dense, where an edge is the whole of what can be read, and
+       sections are large and open, where a wash is.
+
+       A flat colour makes it a constant again: `#000` washes every column
+       evenly, `transparent` holds the whole pack to an outline. Sampled in
+       field coordinates like everything else, so the three columns share one
+       ramp rather than each restarting it at its own left edge. */
     --pack-prism-x: -18%;
     --pack-beam-spread: 16deg;
     --pack-beam-tilt: 0deg;
-    --pack-body-light: 50%;
+    --pack-body-ramp: linear-gradient(90deg, transparent, var(--mask-opaque));
 
     /* The pack's light, as one field.
 
@@ -141,20 +159,29 @@
 }
 
 /* The rim: the light at full strength in a border's width around the edge, and
-   held back to `--pack-body-light` everywhere inside it.
+   at `--pack-body-ramp`'s pleasure everywhere inside it.
 
-   The ring is cut by excluding the padding box from the border box, so the rim
-   traces whatever shape the surface already is, rounded corners and all —
-   nothing here has to know the column's geometry. Which gives it the property
-   the joins need: an edge that is *interior* to the pack carries no border, and
-   so no rim, and the card, the band and the section run into one another with
-   nothing drawn across the seam. Each column zeroes its own facing edge.
+   Read the layers bottom up. The last fills the border box, and the middle
+   excludes the padding box from it — an XOR against an opaque backdrop, leaving
+   the ring. The ring therefore traces whatever shape the surface already is,
+   rounded corners and all, and nothing here has to know the column's geometry.
+   Which is what gives the joins their property: an edge that is *interior* to
+   the pack carries no border, and so no rim, and the card, the band and the
+   section run into one another with nothing drawn across the seam. Each column
+   zeroes its own facing edge.
 
-   The body's share is the inner layer's own alpha, inverted by the exclude. XOR
-   against an opaque backdrop leaves `1 - a`, so an inner layer at `1 - body`
-   lets exactly `body` through — while in the ring, where the inner layer is not
-   painted at all, the backdrop passes at full. One number, and nothing to keep
-   in step with it.
+   The first layer then adds the ramp back inside the padding box. Adding is
+   safe because the two regions are disjoint by construction — the ring is
+   exactly what the padding box is not — so the ramp reaches the body at its own
+   strength without touching the rim. Which is why the ramp is carried as the
+   body's share rather than as the mask that suppresses it: the band states the
+   same thing with one mask and no arithmetic, and a token that had to be
+   written once each way would be a token to keep in step.
+
+   Only the ramp is a field: the other two are flat, and sizing them to anything
+   but their own box would slide them off it and mask the column away entirely.
+   Hence the per-layer size and position, and `--pack-field-offset` — which each
+   column sets to wherever it sits in the field.
 
    `--pack-rim-width` is `PACK_RIM` in `wheel.ts`, published on the explorer.
    It is defined there because the band's rim is not a border at all but a
@@ -162,11 +189,12 @@
 .pack-rim::before {
     border: var(--pack-rim-width) solid transparent;
     border-radius: inherit;
-    mask-image:
-        linear-gradient(rgb(0 0 0 / calc(100% - var(--pack-body-light))) 0 0),
-        linear-gradient(#000 0 0);
-    mask-clip: padding-box, border-box;
-    mask-composite: exclude;
+    mask-image: var(--pack-body-ramp), linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+    mask-clip: padding-box, padding-box, border-box;
+    mask-composite: add, exclude, add;
+    mask-size: var(--field-w) var(--field-h), auto, auto;
+    mask-position: var(--pack-field-offset, 0 0), 0 0, 0 0;
+    mask-repeat: no-repeat;
 }
 
 /* Icon button reset — used by toolbar, panel actions, layer controls, etc. */

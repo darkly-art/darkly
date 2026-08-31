@@ -4,6 +4,6 @@ icon: mdi:dots-horizontal
 palette:
   chroma: "#4f9e46"
   refraction: "#a8cc45"
-  surface: "#12161a"
+  surface: "#3f8a361a"
   ink: "#c8d2c2"
 members: [clone]

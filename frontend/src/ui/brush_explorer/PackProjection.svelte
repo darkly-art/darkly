@@ -80,15 +80,23 @@
      * card and the section hold their interiors to.
      *
      * A second layer because a clip is all or nothing: the two columns either
-     * side say "full here, `--pack-body-light` there" in one mask, which a box
-     * can do and a pair of cubics cannot. The regions are disjoint by
-     * construction, so the two strengths meet rather than stack — and the core
-     * sits a layer further back anyway, so a band pinched thin enough for its
-     * rims to close over the core is the rim's colour and not a blend. */
+     * side say "full at the edge, `--pack-body-ramp` within" in a single mask,
+     * which a box can do and a pair of cubics cannot. The regions are disjoint
+     * by construction, so the two strengths meet rather than stack — and the
+     * core sits a layer further back anyway, so a band pinched thin enough for
+     * its rims to close over the core is the rim's colour and not a blend.
+     *
+     * The ramp itself is a plain mask here, with no ring to hold out of it, and
+     * it needs no offset: a band's box *is* the explorer's, so the field and
+     * the ramp both land at zero. This is the whole of the arithmetic the other
+     * two columns need three layers to reproduce. */
     .band::after {
         content: '';
         z-index: -2;
         clip-path: var(--band-core);
-        opacity: var(--pack-body-light);
+        mask-image: var(--pack-body-ramp);
+        mask-size: var(--field-w) var(--field-h);
+        mask-position: 0 0;
+        mask-repeat: no-repeat;
     }
 </style>

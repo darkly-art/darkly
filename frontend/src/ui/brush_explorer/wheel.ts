@@ -471,6 +471,37 @@ export interface CardCurve {
  *  full strength, rather than collapsed to a scale of zero. */
 export const FLAT_CURVE: CardCurve = { t: 0, rotateX: 0, scale: 1, opacity: 1, paneY: 0 };
 
+/**
+ * How far the eye sits from the rolodex, px — the card's own `perspective()`.
+ *
+ * Here rather than in the card's stylesheet because the band has to leave from
+ * the card's *painted* edge, and cannot work out where that is without it.
+ * `PackCard` reads it back for the transform, so the two cannot disagree.
+ */
+export const CARD_PERSPECTIVE = 420;
+
+/**
+ * A card's trailing edge as it is actually drawn, as offsets from its centre.
+ *
+ * `scale` and `rotateX` describe the card before the perspective divide, and
+ * that divide is not symmetric: the edge turning toward the eye is magnified
+ * and the one turning away is shrunk. So a card paints shorter than
+ * `cardHeight * scale` and off-centre about its own middle — and a band leaving
+ * from half that height overshoots the shape drawn at both ends, by a couple of
+ * pixels that a flat opaque card hid and a tinted one with a lit rim does not.
+ */
+export function cardEdge(curve: CardCurve, cardHeight: number): { top: number; bottom: number } {
+    const half = (cardHeight * curve.scale) / 2;
+    const radians = (curve.rotateX * Math.PI) / 180;
+    const cos = Math.cos(radians);
+    const sin = Math.sin(radians);
+    // `rotateX` sends local y to (y·cos, z = y·sin) and the perspective divides
+    // by `1 - z/p`. That denominator cannot approach zero here — `y` is half a
+    // card and `p` is hundreds of pixels — so there is no degenerate case.
+    const project = (y: number) => (y * cos) / (1 - (y * sin) / CARD_PERSPECTIVE);
+    return { top: project(-half), bottom: project(half) };
+}
+
 export function cardCurve(index: number, wheelScrollTop: number, g: WheelGeometry): CardCurve {
     // Normalized against the *longer* side of the focus line, so `t` reaches
     // ±1 at the far edge of the column rather than saturating partway down it.
@@ -540,27 +571,26 @@ export function present(sample: Sample, g: WheelGeometry): Frame {
 }
 
 /**
- * How far a band runs *under* the section it arrives at. The panes paint over
- * the overlay, so the overlap is invisible and buys immunity to the half-pixel
- * seam subpixel layout opens between boxes that merely abut.
- *
- * There is deliberately no counterpart at the card end. A card is tilted and
- * scaled by the rolodex curve, so it is painted as a trapezoid inside a taller
- * upright box; a band overlapping that box shows around the corners of the
- * shape actually drawn, which reads as the band sitting on top of the card
- * rather than leaving it.
- */
-const SECTION_OVERLAP = 3;
-
-/**
  * A band for every pack on screen, from the same numbers the wheel is being
  * driven with this frame.
  *
  * Computed, not measured. Both ends therefore describe where their pane will be
  * once this frame is painted, rather than where the DOM says it was before the
  * frame's `scrollTop` write — and the card end matches the card's *painted*
- * height, scaled by its own curve, instead of the upright box a tilted card
+ * edge, projected by its own curve, instead of the upright box a tilted card
  * still reports.
+ *
+ * **Both ends abut; neither overlaps.** A pack's surface carries alpha, so it
+ * may be painted over any pixel once and only once — two of them stacked is not
+ * the same colour twice, it is a darker colour, and an overlap is a strip of
+ * that darker colour down the very join the projection exists to make
+ * invisible. A band used to run a few pixels under its section to buy immunity
+ * to the half-pixel seam subpixel layout can open between boxes that merely
+ * abut. That trade only held while every surface was opaque: it exchanges a
+ * seam that might appear for a doubling that always does, and it showed on
+ * every pack except the derived ones, which wear the theme's opaque greys. Two
+ * edges on one measured coordinate antialias to full coverage between them, and
+ * whatever residue is left is a fraction of a tint rather than a tint twice.
  *
  * A pack contributes nothing when either end has scrolled out of its pane,
  * which is what makes the set of bands change continuously: one shrinks away as
@@ -585,11 +615,20 @@ export function packBands(
         // card's — enough to ride visibly low against every card in the column.
         // The mapping is free to think in slots, since a uniform offset there
         // is invisible; a band drawn against a card is not.
-        const scale = frame.curves[i].scale;
+        //
+        // And the card's edge as the perspective paints it, not as its scale
+        // alone would put it: the two agree only on the focused card, and
+        // everywhere else the band would leave from a line the card is not
+        // drawing.
         const centre =
             l.wheelTop + g.wheelLead + i * g.cardAdvance + l.cardHeight / 2 - frame.wheelScrollTop;
-        const half = (l.cardHeight * scale) / 2;
-        const leaves = visibleSpan(centre - half, centre + half, l.wheelTop, l.wheelBottom);
+        const edge = cardEdge(frame.curves[i], l.cardHeight);
+        const leaves = visibleSpan(
+            centre + edge.top,
+            centre + edge.bottom,
+            l.wheelTop,
+            l.wheelBottom,
+        );
         if (!leaves) continue;
 
         out.push({
@@ -600,7 +639,7 @@ export function packBands(
                 x0: l.cardRight,
                 top0: leaves.top,
                 bottom0: leaves.bottom,
-                x1: l.sectionLeft + SECTION_OVERLAP,
+                x1: l.sectionLeft,
                 top1: arrives.top,
                 bottom1: arrives.bottom,
             },

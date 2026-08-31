@@ -348,6 +348,7 @@
         style:--field-x="{layout.viewportLeft}px"
         style:--field-y="{layout.viewportTop}px"
         style:--pack-rim-width="{PACK_RIM}px"
+        style:--section-left="{layout.sectionLeft}px"
     >
         <PackProjection {bands} />
 
@@ -485,7 +486,6 @@
          * flush and the field runs straight through, so a rounded corner there
          * would cut a notch out of a continuous surface. */
         border-radius: 0 10px 10px 0;
-        color: var(--pack-ink);
     }
     /* Where this section samples the field: the same one the card and the
      * ribbon paint, anchored to the viewport rather than to this box.
@@ -512,8 +512,17 @@
      * explorer would have to remeasure on the drag.
      *
      * No border on the leading edge, so no rim there: that edge is where the
-     * projection lands, and it is interior to the pack. */
+     * projection lands, and it is interior to the pack.
+     *
+     * The body ramp cannot be held still the same way — there is no
+     * `mask-attachment`, so a mask is always anchored to the box it masks. It
+     * does not need to be: the ramp runs left to right and this pane scrolls up
+     * and down, so only its x has to land, and `--section-left` puts the ramp's
+     * origin on the explorer's left edge where the beam's already is. The y is
+     * free, which is why it is zero rather than a number nobody would be able
+     * to account for. */
     .group::before {
+        --pack-field-offset: calc(-1 * var(--section-left, 0px)) 0;
         background-attachment: fixed;
         background-position: var(--field-x) var(--field-y);
         border-left-width: 0;
@@ -535,9 +544,11 @@
         font-size: 10px;
         padding: 9px 0;
         opacity: 0.75;
-        /* Ink: the icon sits on the section's own surface, so it is written in
-         * the colour that surface is written in. */
-        color: var(--pack-ink);
+        /* Chroma, as on the card the section answers to. A pack's surface is a
+         * tint the theme shows through, so what the icon actually sits on is
+         * the theme — and the vivid pair is the part of a palette that reads
+         * against a light background and a dark one alike. */
+        color: var(--pack-chroma);
     }
     /* `minmax(0, …)` disables the implicit `auto` min-track-size so a wide
      * stroke preview can't push the columns past the pane. */
