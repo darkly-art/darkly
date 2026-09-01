@@ -188,6 +188,7 @@ describe('menu action registrations', () => {
         expect(ids).toEqual([
             'newDocument',
             'open',
+            'placeSmartObject',
             'saveDocument',
             'saveDocumentAs',
             'exportTimelapse',

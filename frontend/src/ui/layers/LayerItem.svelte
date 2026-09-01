@@ -7,6 +7,7 @@
     import { toast } from '../../state/toast.svelte';
     import Icon from '../../icons/Icon.svelte';
     import ContextMenu, { type ContextMenuItem } from '../ContextMenu.svelte';
+    import { flattenOffer } from './flatten_offer';
     import MaskChainControl from './MaskChainControl.svelte';
 
     interface Modifier {
@@ -22,6 +23,10 @@
             // the icon); `editable` is the effective form (drives interaction
             // gates: rename, drag, mask/layer menu mutations).
             editable?: boolean;
+            // Whether paint lands on this layer — false for kinds whose pixels
+            // are generated (void, filter, vector). Mirrors
+            // `DarklyEngine::is_node_paintable`; drives the Rasterize offer.
+            paintable?: boolean;
             // Per-kind capability flags from the layer's registration (see
             // LayerKindRegistration). The panel reads these instead of
             // branching on `type` — a new layer kind declares its own and the
@@ -42,6 +47,7 @@
     } = $props();
 
     let editable = $derived(layer.editable !== false);
+    let paintable = $derived(layer.paintable !== false);
 
     // The mask modifier (if any) is one of the host's modifiers. The model
     // permits N; the UI exposes one.
@@ -103,6 +109,9 @@
     });
 
     let canAddMask = $derived(Boolean(layer.canHaveMask) && !hasMask && editable);
+
+    // Drives both the menu entry and its click handler — see `flattenOffer`.
+    let flattenLabel = $derived(flattenOffer({ paintable, hasMask }));
 
     // Chord dispatch is owned by `use:bindingSite` on each preview
     // element below — `bindingSite` intercepts modifier+click in capture
@@ -190,8 +199,12 @@
             disabled: !isMulti && (!canMergeDownForThis || !editable),
             onclick: menuMerge,
         });
-        if (!isMulti && hasMask) {
-            items.push({ label: 'Flatten', disabled: !editable, onclick: menuFlatten });
+        if (!isMulti && flattenLabel) {
+            items.push({
+                label: flattenLabel,
+                disabled: !editable,
+                onclick: menuFlatten,
+            });
         }
         items.push({ separator: true });
         items.push({
@@ -225,7 +238,7 @@
     }
 
     function menuFlatten() {
-        if (!hasMask) return;
+        if (!flattenLabel) return;
         actions.dispatch('flatten');
         onupdate();
     }

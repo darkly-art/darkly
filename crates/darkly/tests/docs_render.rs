@@ -215,7 +215,8 @@ fn void_previewability_is_the_declaration() {
         .find(|c| c.id == darkly::gpu::void::CATALOG_ID)
         .expect("the voids catalog")
         .entries;
-    assert_eq!(entries.len(), 4);
+    // camera, screenshare, blender, noise, smart_object
+    assert_eq!(entries.len(), 5);
     for e in &entries {
         assert_eq!(
             e.supports_preview,

@@ -15,7 +15,7 @@ use darkly::gpu::test_utils::test_device;
 use darkly::layer::LayerId;
 
 fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, r: f32, g: f32, b: f32) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
         y,

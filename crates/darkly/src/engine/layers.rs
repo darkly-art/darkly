@@ -727,6 +727,20 @@ impl DarklyEngine {
         params: Vec<crate::gpu::params::ParamValue>,
         anchor: Option<LayerId>,
     ) -> Option<LayerId> {
+        self.add_void_layer_with_transform(void_type, params, anchor, None)
+    }
+
+    /// [`Self::add_void_layer`] with an explicit initial transform, overriding
+    /// the kind's registered seed. Placement uses it: a smart object's opening
+    /// transform is derived from the source image's dimensions, which the
+    /// registration — a plain `fn(u32, u32)` over the canvas size — cannot see.
+    pub fn add_void_layer_with_transform(
+        &mut self,
+        void_type: &str,
+        params: Vec<crate::gpu::params::ParamValue>,
+        anchor: Option<LayerId>,
+        transform_override: Option<crate::transform::Transform>,
+    ) -> Option<LayerId> {
         if !self.compositor.void_registry().has(void_type) {
             return None;
         }
@@ -737,11 +751,13 @@ impl DarklyEngine {
         // everything else = identity) atomically with creation, so it's one
         // undo step and round-trips through save/load like any later edit.
         let canvas = self.doc.canvas_rect();
-        let initial_transform = self.compositor.void_registry().default_transform(
-            void_type,
-            canvas.width,
-            canvas.height,
-        );
+        let initial_transform = transform_override.unwrap_or_else(|| {
+            self.compositor.void_registry().default_transform(
+                void_type,
+                canvas.width,
+                canvas.height,
+            )
+        });
         let id = self.doc.add_void_layer(
             void_type.to_string(),
             display_label,
@@ -761,6 +777,13 @@ impl DarklyEngine {
         );
         self.compositor
             .ensure_void_layer(&self.gpu.device, &self.gpu.queue, id, void);
+        // A fresh void instance starts at identity, so push the seeded
+        // transform down now rather than waiting for the next frame's
+        // doc→compositor sync. Otherwise the layer renders untransformed for
+        // one frame — and never gets corrected at all on paths that composite
+        // without going through `render()`.
+        self.compositor
+            .update_void_layer_transform(&self.gpu.queue, id, &initial_transform);
         self.compositor.mark_dirty();
 
         let parent = self.doc.parent_of(id);
@@ -908,12 +931,12 @@ impl DarklyEngine {
 
     /// Read a void layer's current transform + the gizmo bbox to draw around
     /// its active pixels. Returns `(origin_x, origin_y, w, h, transform)` in
-    /// PLANE space. The bbox is the void's [`crate::gpu::void::Void::content_extent`]
-    /// (canvas-filling for most voids, the cover-fit rect for the camera —
-    /// which extends beyond the canvas), lifted from window-local to plane by
-    /// adding `canvas_origin` so it sits correctly even after a crop. Falls
-    /// back to the canvas rect if the void instance isn't realized yet.
-    /// `None` if `layer_id` isn't a void.
+    /// PLANE space. The bbox is the void's
+    /// [`crate::gpu::void::Void::content_extent`], which already answers in
+    /// plane space — canvas-filling for most voids, the cover-fit rect for a
+    /// stream (extending beyond the canvas), the source's natural rect for a
+    /// placed image. Falls back to the canvas rect if the void instance isn't
+    /// realized yet. `None` if `layer_id` isn't a void.
     pub fn void_transform_info(
         &self,
         layer_id: LayerId,
@@ -922,18 +945,16 @@ impl DarklyEngine {
             Some(LayerNode::Layer(Layer::Void(v))) => v.transform,
             _ => return None,
         };
-        let rect = self.doc.canvas_rect();
-        let (ox, oy, w, h) = self.compositor.void_content_extent(layer_id).unwrap_or((
-            0.0,
-            0.0,
-            rect.width as f32,
-            rect.height as f32,
-        ));
+        let canvas = self.doc.canvas_rect();
+        let content = self
+            .compositor
+            .void_content_extent(layer_id)
+            .unwrap_or_else(|| crate::gpu::void::ContentRect::covering(canvas));
         Some((
-            rect.origin.x as f32 + ox,
-            rect.origin.y as f32 + oy,
-            w,
-            h,
+            content.x,
+            content.y,
+            content.width,
+            content.height,
             transform,
         ))
     }
@@ -1003,7 +1024,88 @@ impl DarklyEngine {
     /// nothing changed (compares before writing). Called after every
     /// external-image upload and once at document open after a successful
     /// `restore_void_pixels` so saves and reloads stay consistent.
-    fn sync_void_persistent_frame(&mut self, layer_id: LayerId) {
+    /// Place `rgba` as a smart object — a layer that holds the image at its
+    /// native resolution and displays it through a stored transform, so
+    /// resizing it is a change to that transform rather than a resample of the
+    /// pixels. Returns the new layer's id, or `None` if the dimensions are
+    /// degenerate or don't match the buffer.
+    ///
+    /// `rgba` is **straight-alpha** RGBA8, as it arrives from an image decode.
+    /// It is premultiplied here, at the boundary, because that is the
+    /// convention every sampled source stores.
+    ///
+    /// The whole placement is one undo step: the layer, its transform and its
+    /// pixels all land together, so there is no intermediate state in which an
+    /// empty smart object exists.
+    ///
+    /// Not a `#[handler]`: the pixels ride the protocol's binary side-channel
+    /// rather than the JSON payload, so the request is registered by hand in
+    /// `protocol::handlers::image_io` alongside the paste requests.
+    pub fn place_smart_object(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+        anchor: Option<LayerId>,
+    ) -> Option<LayerId> {
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let expected = (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(4)?;
+        if rgba.len() != expected {
+            return None;
+        }
+
+        let mut rgba = rgba;
+        crate::gpu::premultiply_rgba8_in_place(&mut rgba);
+
+        let transform = Self::initial_placement_transform(self.doc.canvas_rect(), width, height);
+        let id = self.add_void_layer_with_transform(
+            crate::gpu::voids::smart_object::TYPE_ID,
+            Vec::new(),
+            anchor,
+            Some(transform),
+        )?;
+
+        self.compositor.set_void_source_pixels(
+            &self.gpu.device,
+            &self.gpu.queue,
+            id,
+            width,
+            height,
+            &rgba,
+        );
+        self.sync_void_persistent_frame(id);
+        self.compositor.mark_dirty();
+        Some(id)
+    }
+
+    /// Opening transform for a placed image: centred in the canvas, scaled
+    /// down to fit if it is larger than the canvas, never scaled up.
+    ///
+    /// A smart object's content rect is its source's natural size at the plane
+    /// origin, so without this a 6000px photo dropped on a 1000px canvas would
+    /// land almost entirely off-screen with no visible handle to grab. Matches
+    /// what every editor does on Place.
+    fn initial_placement_transform(
+        canvas: crate::coord::CanvasRect,
+        width: u32,
+        height: u32,
+    ) -> crate::transform::Transform {
+        let (cw, ch) = (canvas.width as f32, canvas.height as f32);
+        let (sw, sh) = (width as f32, height as f32);
+        let scale = (cw / sw).min(ch / sh).min(1.0);
+        // Translate in plane terms: the content rect starts at the plane
+        // origin, so centring it in the window means offsetting by the window's
+        // own origin plus the leftover margin.
+        let tx = canvas.origin.x as f32 + (cw - sw * scale) * 0.5;
+        let ty = canvas.origin.y as f32 + (ch - sh * scale) * 0.5;
+        crate::transform::Transform::from_affine([scale, 0.0, tx, 0.0, scale, ty])
+    }
+
+    pub(crate) fn sync_void_persistent_frame(&mut self, layer_id: LayerId) {
         let Some((w, h)) = self.compositor.void_persistent_frame_size(layer_id) else {
             return;
         };
@@ -1536,32 +1638,44 @@ impl DarklyEngine {
     /// compositor's uniform buffer for that node. Group isolation is driven
     /// by `engine.isolated_node` and reflected uniformly across node kinds.
     pub(crate) fn refresh_blend_uniforms(&mut self, layer_id: LayerId) {
+        let Some((opacity, blend_mode_gpu)) = self
+            .doc
+            .find_node(layer_id)
+            .map(|n| (n.blend().opacity, n.blend().blend_mode.gpu_value))
+        else {
+            return;
+        };
+        let isolated = self.host_renders_isolated(layer_id);
+        self.write_blend_uniforms(layer_id, opacity, blend_mode_gpu, isolated);
+    }
+
+    /// Write arbitrary blend uniforms for a node, routing to the group or the
+    /// layer pool as the node's kind requires. The one place that dispatch
+    /// lives: [`Self::refresh_blend_uniforms`] uses it to push the document's
+    /// values, and a bake uses it to neutralize a node's own blend so the
+    /// baked result doesn't apply it twice.
+    pub(crate) fn write_blend_uniforms(
+        &mut self,
+        layer_id: LayerId,
+        opacity: f32,
+        blend_mode_gpu: u32,
+        isolated: bool,
+    ) {
         match self.doc.find_node(layer_id) {
-            Some(LayerNode::Layer(layer)) => {
-                let blend = layer.blend();
-                let opacity = blend.opacity;
-                let blend_mode_gpu = blend.blend_mode.gpu_value;
-                let isolated = self.host_renders_isolated(layer_id);
-                self.compositor.update_layer_uniforms(
-                    &self.gpu.queue,
-                    layer_id,
-                    opacity,
-                    blend_mode_gpu,
-                    isolated,
-                );
-            }
-            Some(LayerNode::Group(g)) => {
-                let opacity = g.blend.opacity;
-                let blend_mode_gpu = g.blend.blend_mode.gpu_value;
-                let isolated = self.host_renders_isolated(layer_id);
-                self.compositor.update_group_uniforms(
-                    &self.gpu.queue,
-                    layer_id,
-                    opacity,
-                    blend_mode_gpu,
-                    isolated,
-                );
-            }
+            Some(LayerNode::Layer(_)) => self.compositor.update_layer_uniforms(
+                &self.gpu.queue,
+                layer_id,
+                opacity,
+                blend_mode_gpu,
+                isolated,
+            ),
+            Some(LayerNode::Group(_)) => self.compositor.update_group_uniforms(
+                &self.gpu.queue,
+                layer_id,
+                opacity,
+                blend_mode_gpu,
+                isolated,
+            ),
             None => {}
         }
     }

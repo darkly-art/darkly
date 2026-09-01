@@ -51,7 +51,7 @@ function syntheticCard(source: AddSource, deps: TabDeps): AddCard | null {
             hotkeyAction: source.action,
             params: [],
             supportsPreview: false,
-            captureKind: null,
+            source: null,
             addable: true,
         } as CatalogEntry,
         source,

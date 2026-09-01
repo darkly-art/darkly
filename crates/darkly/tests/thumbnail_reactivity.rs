@@ -31,7 +31,7 @@ fn fresh_engine() -> DarklyEngine {
 
 /// Paint a short brush stroke across the layer at its vertical center.
 fn paint_short_stroke(engine: &mut DarklyEngine, layer_id: darkly::layer::LayerId) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     for step in 0..10 {
         engine.stroke_to(StrokeOp::BrushStroke {
             x: step as f32 * 20.0 + 10.0,
@@ -231,7 +231,7 @@ fn brush_stroke_queues_thumbnail_readback_only_at_end() {
     engine.test_flush_readbacks();
     let v_baseline = engine.thumbnail_version();
 
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     for step in 0..20 {
         engine.stroke_to(StrokeOp::BrushStroke {
             x: step as f32 * 10.0 + 10.0,

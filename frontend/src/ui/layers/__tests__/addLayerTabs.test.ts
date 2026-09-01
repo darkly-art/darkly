@@ -13,7 +13,7 @@ function entry(type: string, over: Partial<CatalogEntry> = {}): CatalogEntry {
         hotkeyAction: null,
         params: [],
         supportsPreview: false,
-        captureKind: null,
+        source: null,
         addable: true,
         ...over,
     } as CatalogEntry;

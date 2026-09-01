@@ -19,7 +19,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 }
 
 fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
         y,

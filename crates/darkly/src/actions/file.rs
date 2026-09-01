@@ -14,6 +14,12 @@ const ACTIONS: &[ActionDef] = &[
         icon: "fa6-solid:folder-open",
     },
     ActionDef {
+        id: "placeSmartObject",
+        display_name: "Place as Smart Object",
+        description: "Place an image (PNG / JPEG / WebP) as a smart object in the current document — a layer you can resize freely without losing quality, because the original is kept and re-sampled rather than overwritten.",
+        icon: "tabler:photo-scan",
+    },
+    ActionDef {
         id: "saveDocument",
         display_name: "Save",
         description: "Save the current document. Re-saves to the same `.darkly` file after the first Save As; otherwise opens the Save picker (`.darkly`, or PNG / JPEG / WebP to export the canvas).",

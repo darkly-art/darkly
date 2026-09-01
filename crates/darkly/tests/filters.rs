@@ -55,7 +55,7 @@ fn inv(p: [u8; 4]) -> [u8; 4] {
 /// Paint a single grayscale brush dab onto a node so an R8 mask becomes
 /// non-uniform — `value` lands in the mask's R channel.
 fn paint_dab(engine: &mut DarklyEngine, node_id: LayerId, x: f32, y: f32, value: f32) {
-    engine.begin_stroke(node_id);
+    engine.begin_stroke(node_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
         y,
@@ -411,7 +411,7 @@ fn invert_mask_with_selection_after_crop() {
 /// composite reads back as the layer color (no premultiply / checker ambiguity)
 /// and `invert` is unambiguous: `(r,g,b)` → `(255-r, 255-g, 255-b)`.
 fn fill_layer(engine: &mut DarklyEngine, layer_id: LayerId, r: u8, g: u8, b: u8) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: 1.0,
         y: 1.0,

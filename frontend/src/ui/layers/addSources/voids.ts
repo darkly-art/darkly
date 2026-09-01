@@ -1,4 +1,5 @@
 import { app } from '../../../state/app.svelte';
+import { actions } from '../../../actions/registry';
 import type { CaptureKind } from '../../../lib/frameSource';
 import type { AddSource } from './types';
 
@@ -14,6 +15,14 @@ export const source: AddSource = {
     catalog: 'voids',
     async spawn(entry) {
         if (!app.engine) return;
+        // An image-sourced void has no empty state to add — it needs the user to
+        // choose a file first — so hand it straight to the placement action
+        // rather than creating a blank layer here. Keyed on the void's declared
+        // source, so a future ingress is additive at this match.
+        if (entry.source?.kind === 'image') {
+            actions.dispatch('placeSmartObject');
+            return;
+        }
         // For MediaStream-backed voids (camera / screenshare), acquire the
         // MediaStream IN this click gesture, BEFORE the awaitable `add_void`
         // round-trip. `getDisplayMedia` requires transient user activation,
@@ -22,7 +31,8 @@ export const source: AddSource = {
         // error so the properties panel can offer Resume. A `stream` void
         // (Blender) needs no gesture or permission — it connects over localhost
         // HTTP after the layer exists — so skip acquisition entirely.
-        const captureKind: CaptureKind | undefined = entry.captureKind ?? undefined;
+        const captureKind: CaptureKind | undefined =
+            entry.source?.kind === 'capture' ? entry.source.capture : undefined;
         let stream: MediaStream | undefined;
         let acquireError: unknown;
         if (captureKind === 'camera' || captureKind === 'display') {

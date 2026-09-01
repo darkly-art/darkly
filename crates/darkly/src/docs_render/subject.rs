@@ -200,12 +200,12 @@ mod tests {
     #[test]
     fn subject_at_source_size_is_the_stored_image() {
         let out = subject_rgba(SUBJECT_SRC_DIM);
-        let src_pixels = source();
+        let src_px = source();
         for (i, (got, src)) in out
             .as_chunks::<4>()
             .0
             .iter()
-            .zip(src_pixels.as_chunks::<4>().0)
+            .zip(src_px.as_chunks::<4>().0.iter())
             .enumerate()
         {
             assert_eq!(&got[..3], &src[..3], "pixel {i} was resampled at 1:1",);

@@ -297,7 +297,7 @@ fn install_clone_brush(engine: &mut DarklyEngine) {
 /// irrelevant for clone brushes (the source snapshot drives the colour)
 /// but meaningful for the default brush used to seed layer content.
 fn paint_dab(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, rgb: [f32; 3]) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
         y,

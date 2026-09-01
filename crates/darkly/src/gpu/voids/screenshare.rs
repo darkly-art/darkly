@@ -1,13 +1,14 @@
 //! Screenshare void — a live `getDisplayMedia()` capture as a layer.
 //!
 //! Sibling of the camera void: a thin config over the shared
-//! [`crate::gpu::video_stream_void`] machinery. The only differences from the
+//! [`crate::gpu::textured_void`] machinery. The only differences from the
 //! camera are metadata (name, icon), the capture API ([`CaptureKind::Display`]
 //! → `getDisplayMedia`), and the seeded transform (identity — a shared screen
 //! has no natural "selfie" orientation to flip).
 
-use crate::gpu::video_stream_void::{self, VideoStreamConfig};
-use crate::gpu::void::{CaptureKind, ParamDef, VoidRegistration};
+use crate::gpu::textured_void::ContentFit;
+use crate::gpu::textured_void::{self, TexturedVoidConfig};
+use crate::gpu::void::{CaptureKind, ParamDef, VoidRegistration, VoidSource};
 
 pub const TYPE_ID: &str = "screenshare";
 
@@ -26,19 +27,22 @@ const PARAMS: &[ParamDef] = &[
         .with_description("Capture one frame in this many, to lighten the load."),
 ];
 
-static CONFIG: VideoStreamConfig = VideoStreamConfig {
+static CONFIG: TexturedVoidConfig = TexturedVoidConfig {
     type_id: TYPE_ID,
     display_name: "Screen Share",
     description: "Live frames from a shared screen, window or browser tab.",
     icon: "tabler:screen-share",
     params: PARAMS,
-    capture_kind: CaptureKind::Display,
+    source: VoidSource::Capture {
+        capture: CaptureKind::Display,
+    },
+    fit: ContentFit::Cover,
     default_transform: |_, _| crate::transform::Transform::identity(),
 };
 
 pub fn register() -> VoidRegistration {
-    video_stream_void::registration(&CONFIG, |params, shared| {
-        video_stream_void::build_void(&CONFIG, params, shared)
+    textured_void::registration(&CONFIG, |params, shared| {
+        textured_void::build_void(&CONFIG, params, shared)
     })
 }
 
@@ -53,7 +57,7 @@ mod tests {
         let reg = register();
         assert_eq!(reg.type_id, "screenshare");
         assert_eq!(reg.display_name, "Screen Share");
-        assert_eq!(reg.capture_kind, Some(CaptureKind::Display));
+        assert_eq!(reg.source.capture_kind(), Some(CaptureKind::Display));
     }
 
     #[test]

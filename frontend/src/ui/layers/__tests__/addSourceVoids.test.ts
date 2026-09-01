@@ -4,8 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * `getDisplayMedia` needs transient user activation, which an `addVoid`
  * round-trip would expire. The void spawn therefore acquires the MediaStream
  * before it awaits anything else — an ordering constraint that is invisible in
- * the source and was untested before this modal lifted the body out of
- * `VoidPickerModal.svelte`.
+ * the source, so it is pinned here.
  */
 
 const calls: string[] = [];
@@ -33,7 +32,12 @@ const app = {
     requestFrame: vi.fn(),
 };
 
+const dispatch = vi.fn((id: string) => {
+    calls.push(`dispatch:${id}`);
+});
+
 vi.mock('../../../state/app.svelte', () => ({ app }));
+vi.mock('../../../actions/registry', () => ({ actions: { dispatch } }));
 
 const { source } = await import('../addSources/voids');
 
@@ -47,7 +51,7 @@ function entry(over: Record<string, unknown> = {}) {
         hotkeyAction: null,
         params: [],
         supportsPreview: false,
-        captureKind: 'display',
+        source: { kind: 'capture', capture: 'display' },
         addable: true,
         ...over,
     } as any;
@@ -80,8 +84,17 @@ describe('the void add source', () => {
     });
 
     it('skips acquisition entirely for a void that needs no capture', async () => {
-        await source.spawn!(entry({ type: 'noise', captureKind: null }));
+        await source.spawn!(entry({ type: 'noise', source: { kind: 'procedural' } }));
         expect(app.acquireMediaStream).not.toHaveBeenCalled();
         expect(calls).toEqual(['addVoid']);
+    });
+
+    // An image void has no empty state to add — it needs a file first — so it
+    // goes to the placement action rather than becoming a blank layer.
+    it('hands an image-sourced void to the placement action', async () => {
+        await source.spawn!(entry({ type: 'image', source: { kind: 'image' } }));
+        expect(calls).toEqual(['dispatch:placeSmartObject']);
+        expect(app.engine.api.addVoid).not.toHaveBeenCalled();
+        expect(app.acquireMediaStream).not.toHaveBeenCalled();
     });
 });

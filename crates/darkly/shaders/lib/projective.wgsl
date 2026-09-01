@@ -3,7 +3,7 @@
 // per-pixel perspective divide". Concatenated ahead of every consumer shader
 // at pipeline-build time (`include_str!` / `concat!`), the same mechanism
 // `lib/fbm.wgsl` and `lib/color.wgsl` use — so the floating commit path
-// (`transform_commit.wgsl`) and the voids (`voids/video_stream.wgsl`,
+// (`transform_commit.wgsl`) and the voids (`voids/textured.wgsl`,
 // `voids/noise.wgsl`) share one implementation instead of three affine copies.
 //
 // The three rows are an inverse matrix packed `[m00,m01,m02,_], [m10,m11,m12,_],

@@ -757,3 +757,140 @@ fn camera_void_frame_round_trips_through_save_readback() {
         "the camera void's persistent frame must read back byte-for-byte through the save path",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Persistent-source regressions.
+//
+// A void that declares a persistent frame owns bulk pixel data that is not
+// regenerable from its params. Three engine paths predate that fact and treat
+// every void as purely procedural. Each test below plants a known frame on a
+// camera void and asserts on the bytes.
+// ---------------------------------------------------------------------------
+
+/// A 4×4 RGBA pattern standing in for captured external input.
+fn known_frame() -> (u32, u32, Vec<u8>) {
+    let (w, h) = (4u32, 4u32);
+    let bytes = (0..(w * h))
+        .flat_map(|i| {
+            let v = (i * 16) as u8;
+            [v, 255 - v, 128, 255]
+        })
+        .collect();
+    (w, h, bytes)
+}
+
+/// Duplicating a void must carry its persistent source. `duplicate_node` copies
+/// `void_type` / `params` / `transform` on the assumption that a void's output
+/// is reproducible from its params — false for a void holding externally
+/// sourced pixels, which leaves the duplicate blank.
+#[test]
+fn duplicating_a_void_carries_its_persistent_frame() {
+    let mut engine = test_engine(64, 64);
+    let cam = engine
+        .add_void_layer("camera", camera_defaults(&engine), None)
+        .expect("camera void should be addable");
+
+    let (w, h, known) = known_frame();
+    engine.test_plant_void_frame(cam, w, h, &known);
+
+    let dup = engine
+        .duplicate_node(cam)
+        .expect("a void layer should be duplicable");
+    assert_ne!(dup, cam, "duplicate must be a distinct node");
+
+    let copied = engine.test_readback_void_frame(dup).expect(
+        "the duplicate of a void with a persistent frame must itself declare \
+         one — otherwise the copy renders blank",
+    );
+    assert_eq!(
+        copied, known,
+        "the duplicate's source must be byte-identical to the original's",
+    );
+}
+
+/// A removed void's source texture must be reclaimed once its undo entry is
+/// evicted. `collect_pixel_node_ids` skips voids on the grounds that their
+/// output is regenerable, so the tombstone never names the node and the cache
+/// — holding the full-resolution source — outlives the undo entry forever.
+#[test]
+fn evicting_a_removed_void_disposes_its_source() {
+    let mut engine = test_engine(64, 64);
+    // A second layer, so deleting the void isn't refused as "the last layer".
+    engine.add_group(None);
+    let cam = engine
+        .add_void_layer("camera", camera_defaults(&engine), None)
+        .expect("camera void should be addable");
+
+    let (w, h, known) = known_frame();
+    engine.test_plant_void_frame(cam, w, h, &known);
+    assert!(
+        engine.test_readback_void_frame(cam).is_some(),
+        "precondition: the planted frame is readable before removal",
+    );
+
+    engine
+        .remove_layer(cam)
+        .expect("the void should be removable");
+
+    // The engine's undo stack caps at 50 steps; push past it so the removal's
+    // action is evicted and `on_evict` runs.
+    for _ in 0..51 {
+        engine.add_group(None);
+    }
+
+    assert!(
+        engine.test_readback_void_frame(cam).is_none(),
+        "once the removal is no longer undoable the void's source texture must \
+         be disposed, not retained for the lifetime of the document",
+    );
+}
+
+/// A void's sampling uniform must track canvas resizes. `content_extent` (the
+/// gizmo bbox) is computed from the *live* canvas rect while the shader's
+/// uniform is written once at `create_cache` from the canvas dims of that
+/// moment, so after a resize the two disagree: the bbox covers the new canvas
+/// while the sampler still maps the source across the old one.
+#[test]
+fn void_uniform_tracks_canvas_resize() {
+    use darkly::coord::CanvasRect;
+    let mut engine = test_engine(64, 64);
+    let cam = engine
+        .add_void_layer("camera", camera_defaults(&engine), None)
+        .expect("camera void should be addable");
+
+    // Drop the camera's seeded selfie flip, which mirrors about the canvas
+    // width at creation time. That transform is document state and must not
+    // silently follow a resize, so leaving it in would confound this test with
+    // a second, unrelated effect.
+    engine.update_void_transform(cam, darkly::transform::Transform::identity());
+
+    // A fully opaque square source. Cover-fit of a 1:1 source into a 1:1
+    // canvas is the whole canvas, so every canvas pixel must be opaque —
+    // at whatever size the canvas currently is.
+    let (w, h) = (8u32, 8u32);
+    let opaque: Vec<u8> = std::iter::repeat_n([255u8, 0, 0, 255], (w * h) as usize)
+        .flatten()
+        .collect();
+    engine.test_plant_void_frame(cam, w, h, &opaque);
+
+    let before = engine.test_readback_canvas();
+    let px = |buf: &[u8], x: u32, y: u32, stride: u32| {
+        let i = ((y * stride + x) * 4) as usize;
+        [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+    };
+    assert_eq!(
+        px(&before, 32, 32, 64)[3],
+        255,
+        "precondition: the source covers the 64×64 canvas",
+    );
+
+    engine.resize_canvas(CanvasRect::from_xywh(0, 0, 128, 128));
+    let after = engine.test_readback_canvas();
+
+    assert_eq!(
+        px(&after, 100, 100, 128)[3],
+        255,
+        "after growing the canvas the source must still cover it; a stale \
+         uniform leaves everything outside the old canvas bounds transparent",
+    );
+}

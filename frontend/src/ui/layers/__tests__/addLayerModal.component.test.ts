@@ -54,7 +54,7 @@ function entry(type: string, displayName: string, over: Record<string, unknown> 
         hotkeyAction: null,
         params: [],
         supportsPreview: false,
-        captureKind: null,
+        source: null,
         addable: true,
         ...over,
     };
