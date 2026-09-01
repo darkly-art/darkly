@@ -1129,6 +1129,226 @@ impl DarklyEngine {
         )
     }
 
+    /// Whether the active floating content can become a smart object.
+    ///
+    /// False for a destructive transform session (which owes its source layer a
+    /// clear that a conversion would strand), for a mask target, and when
+    /// nothing is floating.
+    ///
+    /// The mask gate reads the session's `target_format`, **not** the source
+    /// texture's. They disagree: an interactively-transformed mask allocates an
+    /// R8 source, but the *paste* path allocates RGBA8 and converts mask values
+    /// into it, so a source-format gate would wave a mask paste through and
+    /// produce a smart object holding mask values as colour.
+    #[handler]
+    pub fn can_convert_floating_to_smart_object(&self) -> bool {
+        match &self.transform_session {
+            // A transform session lifts a region out of a layer and owes that
+            // layer a hole, which only lands at commit. Converting can honour
+            // that debt by consuming the whole layer — but only when the
+            // session covers the layer outright. With a selection, or with a
+            // linked mask riding along, part of the source has to survive, and
+            // that needs the region clear committed into the same undo step.
+            Some(session) => {
+                session.selection.is_none()
+                    && session.targets.len() == 1
+                    && session.targets[0].semantics.format != wgpu::TextureFormat::R8Unorm
+            }
+            // A paste has no doc-side target record, so its format comes from
+            // the session state. It must be the *target's*: the paste path
+            // allocates an RGBA8 source even for a mask, so the source texture
+            // cannot tell the two apart.
+            None => {
+                self.floating.is_some()
+                    && self
+                        .compositor
+                        .floating_target_format()
+                        .is_some_and(|f| f != wgpu::TextureFormat::R8Unorm)
+            }
+        }
+    }
+
+    /// Turn the active floating content into a smart object layer instead of
+    /// committing it.
+    ///
+    /// The floating source is already what a smart object needs: a trimmed
+    /// texture at native resolution, in the premultiplied convention the void
+    /// aux texture uses, plus a plane-space origin. So this is a blit and a
+    /// transform composition — the target layer is never written, which is the
+    /// whole point. Commit resamples the source into the target and throws the
+    /// original away; this keeps it and makes the transform re-editable.
+    ///
+    /// One undo step: the layer is added, and undoing removes it, leaving the
+    /// document as it was before the paste — the same end state as undoing a
+    /// committed paste.
+    #[handler]
+    pub fn convert_floating_to_smart_object(&mut self) -> Result<LayerId, String> {
+        if !self.can_convert_floating_to_smart_object() {
+            return Err("No convertible floating content".into());
+        }
+        if self.transform_session.is_some() {
+            return self.convert_transform_session_to_smart_object();
+        }
+        // Read everything needed before mutating; the float is consumed below.
+        // Copied out, not borrowed: everything below takes `&mut self`.
+        let fc = {
+            let fc = self.floating.as_ref().ok_or("No floating content")?;
+            (
+                fc.source_origin,
+                fc.source_width,
+                fc.source_height,
+                fc.transform,
+                fc.target_layer,
+            )
+        };
+        let (source_origin, src_w, src_h, fc_transform, target_layer) = fc;
+        if src_w == 0 || src_h == 0 {
+            return Err("Floating content is empty".into());
+        }
+
+        // The source is anchored at `source_origin` in the plane and the user's
+        // transform acts in the source's own frame, so the composition that
+        // lands it where the preview is drawn is `translate(origin) ∘ M`.
+        // Mode-preserving, so a perspective drag stays perspective.
+        let transform =
+            fc_transform.then_translated(source_origin.0 as f32, source_origin.1 as f32);
+
+        let anchor = Some(target_layer);
+        let id = self
+            .create_void_layer(
+                crate::gpu::voids::smart_object::TYPE_ID,
+                Vec::new(),
+                anchor,
+                Some(transform),
+            )
+            .ok_or("Smart object void is not registered")?;
+
+        // Cloned out of the pass before the `&mut self` ingress call — both
+        // borrow the compositor. A wgpu texture handle is refcounted, so this
+        // costs nothing.
+        let Some(source) = self.compositor.floating_source_texture() else {
+            // Creation is not yet in an undo entry, so unwind it by hand
+            // rather than leaving an orphan.
+            self.doc.detach_for_undo(id);
+            self.compositor.dispose_layer(id);
+            return Err("Floating content has no source texture".into());
+        };
+        self.compositor.set_void_source_from_texture(
+            &self.gpu.device,
+            &self.gpu.queue,
+            id,
+            &source,
+            (0, 0),
+            src_w,
+            src_h,
+        );
+        // Mirror the installed size onto the document so the layer saves,
+        // duplicates, and survives undo/redo. Without it `frame` stays `None`,
+        // `owns_disposable_texture` is false, and the tombstone machinery frees
+        // the source out from under a redo.
+        self.sync_void_persistent_frame(id);
+
+        // Drop the float without committing. Nothing was ever written to the
+        // target, so there is nothing to restore.
+        self.discard_floating();
+
+        let parent = self.doc.parent_of(id);
+        let pos = self.doc.position_in_parent(id).unwrap_or(0);
+        self.push_undo(Box::new(crate::undo::EntityAddAction::new(id, parent, pos)));
+        self.compositor.mark_dirty();
+        Ok(id)
+    }
+
+    /// Turn an in-progress whole-layer transform into a smart object.
+    ///
+    /// A transform session is a *destructive move*: it lifted the layer's
+    /// content and will clear the original at commit. Conversion honours that
+    /// by consuming the source layer entirely and replacing it with the smart
+    /// object, rather than clearing a region and leaving an emptied husk
+    /// behind — which for a whole-layer session is the same end state, reached
+    /// without a region-level undo capture.
+    ///
+    /// Restricted to a single target with no selection (see
+    /// [`Self::can_convert_floating_to_smart_object`]): anything narrower needs
+    /// part of the source to survive.
+    fn convert_transform_session_to_smart_object(&mut self) -> Result<LayerId, String> {
+        let (node_id, extraction, operation, operation_frame) = {
+            let session = self
+                .transform_session
+                .as_ref()
+                .ok_or("No transform session")?;
+            let target = session.targets.first().ok_or("Session has no target")?;
+            (
+                target.node_id,
+                target.extraction_bounds,
+                session.operation,
+                session.operation_frame,
+            )
+        };
+        if extraction.is_empty() {
+            return Err("Nothing to convert".into());
+        }
+        // Read the source before anything mutates: the session is torn down
+        // below, and a failure after that point would have nothing to restore.
+        let source = self
+            .compositor
+            .transform_session_source_texture()
+            .ok_or("Transform session has no source texture")?;
+
+        // Source pixel `p` is plane `extraction.origin + p` before the
+        // operation, and the operation acts about `operation_frame`. So
+        // `T = translate(frame) ∘ M ∘ translate(extraction.origin − frame)`,
+        // which lands the smart object exactly where the preview is drawn.
+        let transform = operation
+            .pre_translated(
+                (extraction.x0() - operation_frame.origin.x) as f32,
+                (extraction.y0() - operation_frame.origin.y) as f32,
+            )
+            .then_translated(
+                operation_frame.origin.x as f32,
+                operation_frame.origin.y as f32,
+            );
+
+        // Drop the session without committing: nothing was written to the
+        // source layer, and the layer itself is about to be consumed.
+        self.transform_setup_generation = self.transform_setup_generation.wrapping_add(1);
+        self.pending_transform = None;
+        self.transform_session = None;
+        self.compositor.clear_transform_session();
+        self.compositor.clear_floating_content();
+
+        self.replace_layer_with_smart_object(
+            node_id,
+            transform,
+            &source,
+            (0, 0),
+            extraction.width,
+            extraction.height,
+        )
+    }
+
+    /// Drop the active floating content without committing it, releasing a
+    /// paste-created placeholder target along with it.
+    ///
+    /// Shared by cancel and by conversion: both end the session with nothing
+    /// written to the target, and neither owes an undo entry for it, because a
+    /// paste only pushes one on commit.
+    fn discard_floating(&mut self) {
+        let Some(fc) = self.floating.take() else {
+            return;
+        };
+        let FloatingMode::Paste { created_layer_id } = fc.mode;
+        if let Some(id) = created_layer_id {
+            self.doc.detach_for_undo(id);
+            self.compositor.dispose_layer(id);
+        }
+        self.compositor.clear_floating_content();
+        if let Some(selection) = self.selection_cpu_cache().map(<[u8]>::to_vec) {
+            self.update_selection_overlay_from_readback(selection);
+        }
+        self.compositor.mark_dirty();
+    }
+
     /// Cancel floating content: drop the floating session. The live target
     /// texture was never mutated during a transform (preview lives on a
     /// separate texture), so cancel is a pure session-state reset.
@@ -1148,26 +1368,9 @@ impl DarklyEngine {
             self.compositor.mark_dirty();
             return;
         }
-        let fc = match self.floating.take() {
-            Some(fc) => fc,
-            None => return,
-        };
-
-        let FloatingMode::Paste { created_layer_id } = fc.mode;
-        if let Some(id) = created_layer_id {
-            // Paste auto-created a target layer; drop it silently. No undo
-            // entry to maintain — `EntityAddAction` is only pushed on commit.
-            self.doc.detach_for_undo(id);
-            self.compositor.dispose_layer(id);
-            self.compositor.mark_dirty();
-        }
         // Paste onto an existing target never mutates the live texture before
-        // commit, so cancel has nothing to restore.
-
-        self.compositor.clear_floating_content();
-        if let Some(selection) = self.selection_cpu_cache().map(<[u8]>::to_vec) {
-            self.update_selection_overlay_from_readback(selection);
-        }
-        self.compositor.mark_dirty();
+        // commit, so cancel has nothing to restore beyond dropping the float
+        // and any placeholder layer the paste created.
+        self.discard_floating();
     }
 }

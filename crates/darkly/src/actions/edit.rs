@@ -38,6 +38,12 @@ const ACTIONS: &[ActionDef] = &[
         icon: "tabler:photo-scan",
     },
     ActionDef {
+        id: "convertFloatingToSmartObject",
+        display_name: "Convert to Smart Object",
+        description: "Turn the content you are positioning into a smart object layer instead of stamping it down, so you can keep resizing it without losing quality.",
+        icon: "tabler:photo-scan",
+    },
+    ActionDef {
         id: "pasteInPlace",
         display_name: "Paste in Place",
         description: "Paste from the clipboard at its original position.",

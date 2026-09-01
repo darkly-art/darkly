@@ -23,6 +23,7 @@ pub mod protocol;
 pub mod rendering;
 pub mod save;
 mod selection_support;
+mod smart_object;
 pub mod types;
 mod undo_dispatch;
 mod veils;

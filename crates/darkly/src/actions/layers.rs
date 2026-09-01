@@ -86,6 +86,12 @@ const ACTIONS: &[ActionDef] = &[
         icon: "fa6-solid:arrows-down-to-line",
     },
     ActionDef {
+        id: "convertLayerToSmartObject",
+        display_name: "Convert to Smart Object",
+        description: "Turn the selected layer into a smart object — the pixels are kept as an embedded original, so you can resize the layer freely without losing quality.",
+        icon: "tabler:photo-scan",
+    },
+    ActionDef {
         id: "flatten",
         display_name: "Flatten",
         description: "Bake a layer into plain pixels: apply its mask, rasterize a generated layer (smart object, camera, text) so it can be painted on, or flatten a group into a single raster that inherits the group’s blend props.",

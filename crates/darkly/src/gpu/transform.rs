@@ -523,8 +523,12 @@ impl TransformPass {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
+            // COPY_SRC so the trimmed, premultiplied source can be handed to
+            // something other than the commit shader — converting a float or a
+            // layer to a smart object blits straight out of it.
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
@@ -716,8 +720,12 @@ impl TransformPass {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: target_format,
+            // COPY_SRC so the trimmed, premultiplied source can be handed to
+            // something other than the commit shader — converting a float or a
+            // layer to a smart object blits straight out of it.
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });

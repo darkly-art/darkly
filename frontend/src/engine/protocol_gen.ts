@@ -180,6 +180,24 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
 
+export type PreviewStaging = { 
+/**
+ * Iconify glyph shown in the dab slot, where a single stationary sample
+ * has no motion to make the effect visible at all.
+ */
+icon: string, 
+/**
+ * Field painted under the stroke preview, giving the node something to
+ * transport.
+ */
+backdrop: PreviewBackdrop, };
+
+export type PortDir = "Input" | "Output";
+
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
  * Slider min when the port is disconnected (UI metadata only).
@@ -372,24 +390,6 @@ preview_image: boolean,
  */
 source: boolean, };
 
-export type PortDir = "Input" | "Output";
-
-export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
-
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
-
-export type PreviewStaging = { 
-/**
- * Iconify glyph shown in the dab slot, where a single stationary sample
- * has no motion to make the effect visible at all.
- */
-icon: string, 
-/**
- * Field painted under the stroke preview, giving the node something to
- * transport.
- */
-backdrop: PreviewBackdrop, };
-
 export type NodeRegistration = { 
 /**
  * Unique identifier (e.g. "pen_input", "multiply").
@@ -457,6 +457,8 @@ export type BrushThumbnailReq = { name: string, };
 
 export type BrushUploadImageReq = { resource_name: string, width: number, height: number, };
 
+export type CanConvertLayerToSmartObjectReq = { node_id: number, };
+
 export type CanFlattenNodeReq = { node_id: number, };
 
 export type CanMergeDownReq = { source_id: number, };
@@ -464,35 +466,6 @@ export type CanMergeDownReq = { source_id: number, };
 export type CanvasDimensionsResp = { width: number, height: number, };
 
 export type CanvasRectResp = { origin_x: number, origin_y: number, width: number, height: number, };
-
-export type ParamInfo = { kind: string, name: string, 
-/**
- * Display label. `None` → the UI title-cases `name`.
- */
-label: string | null, description: string | null, 
-/**
- * How to render this parameter's editor. One closed set, which both
- * `ParamKind` and the settings schema's `WidgetHint` map into:
- * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
- */
-widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
-/**
- * Enum: `["Label1", "Label2", ...]`.
- * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
- */
-options: JsonValue | null, display: ParamDisplay, };
-
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
-export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
-/**
- * The unit suffix alone, for a column header. Empty for unitless values.
- */
-unit: string, };
-
-export type CaptureKind = "camera" | "display" | "stream";
-
-export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
 
 export type CatalogEntry = { type: string, displayName: string, 
 /**
@@ -530,6 +503,35 @@ supportsPreview: boolean,
  */
 source: VoidSource | null, };
 
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
+export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
+/**
+ * The unit suffix alone, for a column header. Empty for unitless values.
+ */
+unit: string, };
+
+export type ParamInfo = { kind: string, name: string, 
+/**
+ * Display label. `None` → the UI title-cases `name`.
+ */
+label: string | null, description: string | null, 
+/**
+ * How to render this parameter's editor. One closed set, which both
+ * `ParamKind` and the settings schema's `WidgetHint` map into:
+ * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
+ */
+widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
+/**
+ * Enum: `["Label1", "Label2", ...]`.
+ * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
+ */
+options: JsonValue | null, display: ParamDisplay, };
+
+export type CaptureKind = "camera" | "display" | "stream";
+
+export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
+
 export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
 /**
  * Presentation order, for catalogs that declare one. Registry catalogs do
@@ -540,6 +542,8 @@ order: number | null, entries: Array<CatalogEntry>, };
 export type ClearSelectionContentsReq = { id: number, };
 
 export type CommitFilterPreviewReq = { node_id: number, filter_type: string, params: JsonValue, };
+
+export type ConvertLayerToSmartObjectReq = { node_id: number, };
 
 export type CopyReq = { id: number, };
 
@@ -611,7 +615,14 @@ editable: boolean,
  * generated (void, filter, vector) and for groups; the panel reads it
  * to offer "Rasterize" instead of branching on `type`.
  */
-paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, 
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
+/**
+ * Whether this row offers "Convert to Smart Object" — mirrors
+ * `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+ * answers so the rule (owns its pixels, editable, no mask) lives with
+ * the operation instead of being restated by the panel.
+ */
+canBecomeSmartObject: boolean, icon: string, kindName: string, opacity: number, 
 /**
  * Stable `type_id` from the blend-mode registry (snake_case, e.g.
  * `"normal"`, `"color_burn"`). Resolve to a display label via the
@@ -634,6 +645,13 @@ bounds: { origin: { x: number, y: number }, width: number, height: number }, } |
  */
 paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
 /**
+ * Whether this row offers "Convert to Smart Object" — mirrors
+ * `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+ * answers so the rule (owns its pixels, editable, no mask) lives with
+ * the operation instead of being restated by the panel.
+ */
+canBecomeSmartObject: boolean, 
+/**
  * Iconify icon for this void kind (e.g. `"tabler:galaxy"`), resolved
  * per-subtype from the void's registration. The layer panel renders
  * it as the void layer's thumbnail.
@@ -655,7 +673,14 @@ params: Array<ParamInfo>, } | { "type": "filter", id: number, name: string, visi
  * generated (void, filter, vector) and for groups; the panel reads it
  * to offer "Rasterize" instead of branching on `type`.
  */
-paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, 
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
+/**
+ * Whether this row offers "Convert to Smart Object" — mirrors
+ * `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+ * answers so the rule (owns its pixels, editable, no mask) lives with
+ * the operation instead of being restated by the panel.
+ */
+canBecomeSmartObject: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, 
 /**
  * Stable filter `type_id` (e.g. `"invert"`) — UI resolves to a
  * display label via `filter_types()`.
@@ -674,14 +699,28 @@ params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visi
  * generated (void, filter, vector) and for groups; the panel reads it
  * to offer "Rasterize" instead of branching on `type`.
  */
-paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, 
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
+/**
+ * Whether this row offers "Convert to Smart Object" — mirrors
+ * `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+ * answers so the rule (owns its pixels, editable, no mask) lives with
+ * the operation instead of being restated by the panel.
+ */
+canBecomeSmartObject: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, 
 /**
  * Whether paint ops have somewhere to land on this node — mirrors
  * `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
  * generated (void, filter, vector) and for groups; the panel reads it
  * to offer "Rasterize" instead of branching on `type`.
  */
-paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
+/**
+ * Whether this row offers "Convert to Smart Object" — mirrors
+ * `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+ * answers so the rule (owns its pixels, editable, no mask) lives with
+ * the operation instead of being restated by the panel.
+ */
+canBecomeSmartObject: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -909,6 +948,8 @@ export type RequestKind =
     | 'brush_thumbnail'
     | 'brush_topology_version'
     | 'brush_upload_image'
+    | 'can_convert_floating_to_smart_object'
+    | 'can_convert_layer_to_smart_object'
     | 'can_flatten'
     | 'can_flatten_node'
     | 'can_merge_down'
@@ -927,6 +968,8 @@ export type RequestKind =
     | 'clone_source_anchored'
     | 'commit_filter_preview'
     | 'commit_floating'
+    | 'convert_floating_to_smart_object'
+    | 'convert_layer_to_smart_object'
     | 'copy'
     | 'copy_layer_rich'
     | 'crop_to_selection'
@@ -1100,6 +1143,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'brush_thumbnail',
     'brush_topology_version',
     'brush_upload_image',
+    'can_convert_floating_to_smart_object',
+    'can_convert_layer_to_smart_object',
     'can_flatten',
     'can_flatten_node',
     'can_merge_down',
@@ -1118,6 +1163,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'clone_source_anchored',
     'commit_filter_preview',
     'commit_floating',
+    'convert_floating_to_smart_object',
+    'convert_layer_to_smart_object',
     'copy',
     'copy_layer_rich',
     'crop_to_selection',
@@ -1299,6 +1346,8 @@ export interface EngineApi {
     brushThumbnail(req: BrushThumbnailReq): Promise<{ bytes: Uint8Array }>;
     brushTopologyVersion(): Promise<{ value: number }>;
     brushUploadImage(req: BrushUploadImageReq, bytes: Uint8Array): Promise<void>;
+    canConvertFloatingToSmartObject(): Promise<boolean>;
+    canConvertLayerToSmartObject(req: CanConvertLayerToSmartObjectReq): Promise<boolean>;
     canFlatten(): Promise<boolean>;
     canFlattenNode(req: CanFlattenNodeReq): Promise<boolean>;
     canMergeDown(req: CanMergeDownReq): Promise<boolean>;
@@ -1317,6 +1366,8 @@ export interface EngineApi {
     cloneSourceAnchored(): Promise<boolean>;
     commitFilterPreview(req: CommitFilterPreviewReq): Promise<boolean>;
     commitFloating(): void;
+    convertFloatingToSmartObject(): Promise<number>;
+    convertLayerToSmartObject(req: ConvertLayerToSmartObjectReq): Promise<number>;
     copy(req: CopyReq): Promise<ClipboardExport | null>;
     copyLayerRich(req: CopyLayerRichReq): void;
     cropToSelection(): void;
@@ -1492,6 +1543,8 @@ export function makeApi(t: Transport): EngineApi {
         brushThumbnail: (req) => t.request('brush_thumbnail', req),
         brushTopologyVersion: () => t.request('brush_topology_version'),
         brushUploadImage: (req, bytes) => t.request('brush_upload_image', req, bytes),
+        canConvertFloatingToSmartObject: () => t.request('can_convert_floating_to_smart_object'),
+        canConvertLayerToSmartObject: (req) => t.request('can_convert_layer_to_smart_object', req),
         canFlatten: () => t.request('can_flatten'),
         canFlattenNode: (req) => t.request('can_flatten_node', req),
         canMergeDown: (req) => t.request('can_merge_down', req),
@@ -1510,6 +1563,8 @@ export function makeApi(t: Transport): EngineApi {
         cloneSourceAnchored: () => t.request('clone_source_anchored'),
         commitFilterPreview: (req) => t.request('commit_filter_preview', req),
         commitFloating: () => t.postFF('commit_floating'),
+        convertFloatingToSmartObject: () => t.request('convert_floating_to_smart_object'),
+        convertLayerToSmartObject: (req) => t.request('convert_layer_to_smart_object', req),
         copy: (req) => t.request('copy', req),
         copyLayerRich: (req) => t.postFF('copy_layer_rich', req),
         cropToSelection: () => t.postFF('crop_to_selection'),

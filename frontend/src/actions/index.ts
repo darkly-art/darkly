@@ -838,6 +838,25 @@ export function registerActions() {
     });
 
     actions.register({
+        id: 'convertLayerToSmartObject',
+        menuPath: ['Layer:130'],
+        handler: async (ctx) => {
+            const engine = app.engine;
+            if (!engine) return;
+            const id = ctx.layerId ?? app.activeLayerId;
+            if (id == null) return;
+            try {
+                const newId = await engine.api.convertLayerToSmartObject({ node_id: id });
+                await app.refreshLayerTree();
+                if (newId) app.selectLayer(newId);
+                app.requestFrame();
+            } catch (e: any) {
+                toast.show('error', e.message ?? String(e));
+            }
+        },
+    });
+
+    actions.register({
         id: 'flatten',
         menuPath: ['Layer:120'],
         handler: async (ctx) => {
@@ -964,7 +983,7 @@ export function registerActions() {
             // No-op if the brush builder isn't visible. The actual placement
             // — at the cursor in canvas coords — happens in NodeCanvas, which
             // owns pan/zoom and the cursor; we just signal it via an event.
-            if (!brushGraph.isOpen) return;
+            if (!brushGraph.isVisible) return;
             window.dispatchEvent(new CustomEvent('darkly:add-node-request'));
         },
     });

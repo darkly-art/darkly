@@ -7,7 +7,7 @@
     import { toast } from '../../state/toast.svelte';
     import Icon from '../../icons/Icon.svelte';
     import ContextMenu, { type ContextMenuItem } from '../ContextMenu.svelte';
-    import { flattenOffer } from './flatten_offer';
+    import { flattenOffer, smartObjectOffer } from './menu_offers';
     import MaskChainControl from './MaskChainControl.svelte';
 
     interface Modifier {
@@ -34,6 +34,10 @@
             canHaveMask?: boolean;
             canRename?: boolean;
             hasThumbnail?: boolean;
+            // Whether this row offers "Convert to Smart Object" — answered by
+            // the engine (`can_convert_layer_to_smart_object`) so the rule
+            // lives with the operation rather than being restated here.
+            canBecomeSmartObject?: boolean;
             opacity?: number; blendMode?: string;
             modifiers?: Modifier[];
             // Iconify icon rendered as the panel thumbnail when the kind has no
@@ -112,6 +116,7 @@
 
     // Drives both the menu entry and its click handler — see `flattenOffer`.
     let flattenLabel = $derived(flattenOffer({ paintable, hasMask }));
+    let offersSmartObject = $derived(smartObjectOffer(layer, isMulti));
 
     // Chord dispatch is owned by `use:bindingSite` on each preview
     // element below — `bindingSite` intercepts modifier+click in capture
@@ -206,6 +211,16 @@
                 onclick: menuFlatten,
             });
         }
+        // Sits next to Flatten: both swap the layer for a different
+        // representation of the same picture, in opposite directions — one
+        // bakes it down to pixels, the other keeps the pixels as a source you
+        // can keep rescaling.
+        if (offersSmartObject) {
+            items.push({
+                label: 'Convert to Smart Object',
+                onclick: menuConvertToSmartObject,
+            });
+        }
         items.push({ separator: true });
         items.push({
             label: deleteLabel,
@@ -240,6 +255,15 @@
     function menuFlatten() {
         if (!flattenLabel) return;
         actions.dispatch('flatten');
+        onupdate();
+    }
+
+    // Dispatched with an explicit `layerId`: this one acts on the row that was
+    // right-clicked, not on the selection — the entry is offered for a single
+    // row only (see `smartObjectOffer`).
+    function menuConvertToSmartObject() {
+        if (!offersSmartObject) return;
+        actions.dispatch('convertLayerToSmartObject', { layerId: layer.id });
         onupdate();
     }
 

@@ -135,6 +135,7 @@ describe('menu action registrations', () => {
             'addMask',
             'mergeDown',
             'flatten',
+            'convertLayerToSmartObject',
         ]);
     });
 

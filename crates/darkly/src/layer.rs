@@ -674,12 +674,9 @@ impl LayerNode {
     /// keep in sync with the registration files.
     pub fn kind(&self) -> &'static crate::document::LayerKindRegistration {
         use crate::document::layer_kind::registry;
-        use crate::document::layer_kinds::{filter, group, raster, vector, void};
+        use crate::document::layer_kinds::group;
         match self {
-            LayerNode::Layer(Layer::Raster(_)) => registry().get(raster::TYPE_ID).unwrap(),
-            LayerNode::Layer(Layer::Void(_)) => registry().get(void::TYPE_ID).unwrap(),
-            LayerNode::Layer(Layer::Filter(_)) => registry().get(filter::TYPE_ID).unwrap(),
-            LayerNode::Layer(Layer::Vector(_)) => registry().get(vector::TYPE_ID).unwrap(),
+            LayerNode::Layer(layer) => layer.kind(),
             LayerNode::Group(_) => registry().get(group::TYPE_ID).unwrap(),
         }
     }
@@ -781,6 +778,49 @@ impl Layer {
     /// so it is realized by `compose_filter_arm`, not the content walk.
     pub fn is_blend_content(&self) -> bool {
         !matches!(self, Layer::Filter(_))
+    }
+
+    /// The registration record for this layer's kind. Arms reference each kind
+    /// module's own `TYPE_ID` rather than re-typing the string, so there is no
+    /// parallel name to keep in sync with the registration files.
+    /// [`LayerNode::kind`] delegates here and adds the group arm.
+    pub fn kind(&self) -> &'static crate::document::LayerKindRegistration {
+        use crate::document::layer_kind::registry;
+        use crate::document::layer_kinds::{filter, raster, vector, void};
+        match self {
+            Layer::Raster(_) => registry().get(raster::TYPE_ID).unwrap(),
+            Layer::Void(_) => registry().get(void::TYPE_ID).unwrap(),
+            Layer::Filter(_) => registry().get(filter::TYPE_ID).unwrap(),
+            Layer::Vector(_) => registry().get(vector::TYPE_ID).unwrap(),
+        }
+    }
+
+    /// Whether this layer's pixels are *already* a pristine embedded source
+    /// shown through a stored transform — a smart object, or any future void
+    /// kind whose pixels arrive as one supplied image.
+    ///
+    /// Converting such a layer to a smart object could only discard the
+    /// original it already holds, so conversion refuses it. Answered from the
+    /// void registration rather than by matching on `void_type`, so a new
+    /// image-sourced kind is covered without editing this.
+    pub fn holds_scalable_source(&self, reg: &crate::gpu::void::VoidRegistry) -> bool {
+        match self {
+            Layer::Void(v) => reg.source(&v.void_type) == Some(crate::gpu::void::VoidSource::Image),
+            _ => false,
+        }
+    }
+
+    /// Whether the layer panel should show a rendered thumbnail of this layer
+    /// rather than its kind's icon.
+    ///
+    /// Defaults to the kind's declaration. The exception is a void holding a
+    /// supplied image: the kind says no, because most voids are procedural or
+    /// live and a glyph describes them better than a frame would — but a placed
+    /// photo *is* the thing the user recognises, and a converted layer that
+    /// swapped its thumbnail for a glyph would look like it had lost its
+    /// content on an operation that changes nothing visible.
+    pub fn has_thumbnail(&self, reg: &crate::gpu::void::VoidRegistry) -> bool {
+        self.kind().has_thumbnail || self.holds_scalable_source(reg)
     }
 
     /// Whether this layer's own GPU texture holds data that cannot be

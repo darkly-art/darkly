@@ -184,8 +184,24 @@ export class BrushGraphState {
     /** Last compilation error (null = valid). */
     error = $state<string | null>(null);
 
-    /** Whether the brush builder panel is open. */
+    /** Whether the brush builder panel is expanded.
+     *
+     *  Expanded is not the same as **visible**: the panel is the brush tool's
+     *  `panelComponent`, so it only mounts while that tool is active, and this
+     *  flag survives a tool switch. Anything asking "should I behave as though
+     *  the builder is on screen" wants {@link isVisible}, not this. */
     isOpen = $state(false);
+
+    /** Whether the brush builder is actually on screen.
+     *
+     *  Expanded *and* the brush tool active, which is what mounts the panel.
+     *  Consumers that redirect behaviour towards the builder — paste, node
+     *  insertion — must gate on this: keying off {@link isOpen} alone lets an
+     *  invisible panel swallow input, which is exactly how a paste ended up in
+     *  a hidden node editor instead of on the canvas. */
+    get isVisible(): boolean {
+        return this.isOpen && app.activeToolId === 'brush';
+    }
 
     /** Whether the brush builder panel is expanded to fill the window. The
      *  fullscreen surface is the whole bottom area (tool-options strip +

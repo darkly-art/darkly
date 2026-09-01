@@ -648,7 +648,9 @@ fn merge_layers_does_not_double_the_topmosts_opacity() {
     paint_dot(&mut engine, top, 16.0, 16.0, [1.0, 0.0, 0.0]);
     engine.set_opacity(top, 0.5);
 
-    engine.merge_layers(vec![bottom, top]).expect("merge_layers");
+    engine
+        .merge_layers(vec![bottom, top])
+        .expect("merge_layers");
     engine.render(0.0);
 
     let px = engine.test_readback_canvas();
@@ -774,7 +776,10 @@ fn flatten_undo_restores_a_hidden_source_with_its_pixels() {
     engine.set_layer_visible(hidden, false);
 
     let result = engine.flatten_image().expect("flatten succeeded");
-    assert!(!engine.has_layer(hidden), "hidden source detached by flatten");
+    assert!(
+        !engine.has_layer(hidden),
+        "hidden source detached by flatten"
+    );
 
     engine.undo();
     assert!(engine.has_layer(hidden), "hidden source restored");

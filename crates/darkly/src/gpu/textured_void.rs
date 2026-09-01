@@ -616,6 +616,25 @@ impl Void for TexturedVoid {
         self.has_source.then_some((self.src_w, self.src_h))
     }
 
+    fn allocate_source(
+        &mut self,
+        device: &wgpu::Device,
+        cache: &mut EffectCache,
+        width: u32,
+        height: u32,
+    ) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        self.resize_aux_texture(device, cache, width, height);
+        // `has_source` is what switches `content_rect` off its canvas-covering
+        // fallback and onto the source's natural size, and what makes
+        // `persistent_frame_size` report. Both have to be true before a caller
+        // blits, or the uniform written below describes the placeholder.
+        self.has_source = true;
+        self.dirty.mark();
+    }
+
     fn set_source_pixels(
         &mut self,
         device: &wgpu::Device,
@@ -628,7 +647,7 @@ impl Void for TexturedVoid {
         if width == 0 || height == 0 {
             return;
         }
-        self.resize_aux_texture(device, cache, width, height);
+        self.allocate_source(device, cache, width, height);
         // Bytes are Rgba8Unorm in the source texture's premultiplied-alpha
         // convention — the save flow read back exactly these texels, and the
         // placement path premultiplies before calling.
@@ -651,7 +670,6 @@ impl Void for TexturedVoid {
                 depth_or_array_layers: 1,
             },
         );
-        self.has_source = true;
         queue.write_buffer(
             &cache.uniform_bufs[0],
             0,
@@ -1312,5 +1330,54 @@ mod tests {
         let canvas_aspect = 1.0_f32;
         let factor = canvas_aspect / source_aspect;
         assert!((factor - 1.0).abs() < 1e-6);
+    }
+    /// `allocate_source` is the allocation half of `set_source_pixels`, used by
+    /// callers that blit from the GPU. By the time it returns, the void must
+    /// already describe the new source — natural-size content rect and a
+    /// reported persistent frame — or the blit lands against a placeholder.
+    #[test]
+    fn allocate_source_adopts_the_new_dimensions() {
+        static NATURAL: TexturedVoidConfig = TexturedVoidConfig {
+            type_id: "test_allocate",
+            display_name: "Test Allocate",
+            description: "Test fixture.",
+            icon: "tabler:test",
+            params: &[],
+            source: VoidSource::Image,
+            fit: ContentFit::Natural,
+            default_transform: |_, _| crate::transform::Transform::identity(),
+        };
+        // One device for the pipeline and the cache — `test_device()` mints a
+        // fresh one per call, and a bind group layout cannot cross devices.
+        let (device, queue) = crate::gpu::test_utils::test_device();
+        let shared = Arc::new(create_pipeline(&device, wgpu::TextureFormat::Rgba8Unorm));
+        let mut v = TexturedVoid::from_params(&NATURAL, &[], shared);
+
+        // Before: no source, so the content rect falls back to the canvas and
+        // there is nothing worth saving.
+        assert_eq!(v.persistent_frame_size(), None);
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+        let (dst, dst_view) = make_frame_texture(&device, 8, 8, true);
+        let mut cache = v.create_cache(&device, &queue, &dst_view, &sampler, 8, 8);
+        drop(dst);
+
+        v.allocate_source(&device, &mut cache, 300, 200);
+
+        assert_eq!(v.persistent_frame_size(), Some((300, 200)));
+        assert_eq!(
+            v.content_extent(CanvasRect::from_xywh(0, 0, 8, 8)),
+            ContentRect::new(0.0, 0.0, 300.0, 200.0),
+            "a Natural void sits at its own pixel size at the plane origin",
+        );
+        assert_eq!(
+            cache.aux_textures[0].width(),
+            300,
+            "the aux texture was reallocated, so a blit has somewhere to land",
+        );
+        assert!(
+            cache.aux_textures[0].mip_level_count() > 1,
+            "a one-shot source keeps its mip chain across reallocation",
+        );
     }
 }
