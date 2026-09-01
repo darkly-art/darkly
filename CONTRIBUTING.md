@@ -247,7 +247,7 @@ Every system must be implemented properly. No hacks, no hardcoding, no shortcuts
 
 ## No Migrations / No Backwards Compatibility (pre-release)
 
-Darkly is in pre-release / alpha. Until the first public release, breaking on-disk and on-the-wire formats is fine: do not write migrations, format-version upgrade paths, or legacy compatibility shims. Make the breaking change directly and update every producer and consumer in the same pass; existing user data can be invalidated.
+Darkly is in pre-release / alpha. Until the first public release, breaking on-disk and on-the-wire formats is fine: do not write migrations, format-version upgrade paths, or legacy compatibility shims. Make the breaking change directly and update every producer and consumer in the same pass; existing artist data can be invalidated.
 
 ## PR Descriptions
 

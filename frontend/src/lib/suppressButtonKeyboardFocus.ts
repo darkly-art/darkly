@@ -4,7 +4,7 @@
  * Why: a focused button hijacks Space (activates it) and Tab (cycles to the
  * next button), both of which are bound as canvas hotkeys. We want those
  * keys to always reach the global tinykeys handler regardless of what the
- * user last clicked.
+ * artist last clicked.
  *
  * Strategy:
  *   1. Capture-phase mousedown preventDefault for buttons → no click-focus.

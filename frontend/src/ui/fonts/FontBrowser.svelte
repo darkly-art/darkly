@@ -135,7 +135,7 @@
         if (scrollEl) scrollEl.scrollTop = 0;
     });
 
-    /** What a tile renders in its own face: the user's custom preview text, or
+    /** What a tile renders in its own face: the artist's custom preview text, or
      *  the family's own name when the override is empty. */
     function sampleFor(family: string): string {
         const custom = preview.trim();
@@ -145,7 +145,7 @@
     /** Preview stylesheet URLs: one keyless css2 embed per *visible* Google font
      *  so each tile renders in its own face. Virtualization keeps this list small
      *  (only the on-screen window), so preview fetches are bounded no matter how
-     *  large the catalog or how far the user scrolls. Loads the full Latin subset
+     *  large the catalog or how far the artist scrolls. Loads the full Latin subset
      *  (not a per-tile `&text=` subset, which hits a CORS-flaky endpoint), so the
      *  custom preview override re-renders from already-loaded glyphs. */
     const previewLinks = $derived(googleWindow.map((f) => previewUrl(f)));

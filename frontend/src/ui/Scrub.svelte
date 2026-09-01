@@ -16,7 +16,7 @@
         /** Apply the value under the pointer. Fires on every move, so it must
          *  be cheap: local or session state, not an engine round-trip. */
         onChange: (v: number) => void;
-        /** The value the user settled on, once per gesture. For consumers
+        /** The value the artist settled on, once per gesture. For consumers
          *  whose real work is too expensive to repeat mid-drag; omit it when
          *  `onChange` is already the whole story. */
         onCommit?: (v: number) => void;

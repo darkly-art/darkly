@@ -61,7 +61,7 @@ const GA_SIN: f32 = 0.6755;
         );
 
         // Offset in pixels: max (at i=16) = params.radius * 0.03 * sqrt(area).
-        // The 0.03 maps the user-facing 0..1 radius onto a useful range
+        // The 0.03 maps the artist-facing 0..1 radius onto a useful range
         // (~3% of sqrt(area) at the maximum). Dividing by `resolution`
         // converts to a UV-space offset whose disc is circular in screen pixels.
         let offset_px = p * (i * params.radius * 0.03 * ref_size / 16.0);

@@ -51,7 +51,7 @@ const CURSOR_SIZE = 128;
 // Geometry: the dropper's tip and the crosshair form a diagonal pair.
 // `OFFSET` is the dropper-tip offset diagonally up-and-right from the
 // hotspot, giving visible clearance between the dropper's tip and the
-// crosshair so the user can see the pixel under the crosshair without
+// crosshair so the artist can see the pixel under the crosshair without
 // the dropper covering it.
 const OFFSET = 6;
 
@@ -91,7 +91,7 @@ function rgbCss(c: Color): string {
  *      of the dropper body, making the swatch comparison the
  *      dominant visual.
  *  - **Crosshair** at the hotspot: frames the exact pixel that will be
- *    sampled (the 1-pixel-wide center is left empty so the user can see
+ *    sampled (the 1-pixel-wide center is left empty so the artist can see
  *    the pixel under the cursor).
  *
  *  The ring's colored region is rendered *without* a stroke so the swatch

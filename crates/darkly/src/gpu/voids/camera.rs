@@ -41,10 +41,10 @@ const PARAMS: &[ParamDef] = &[
 ];
 
 /// Horizontal flip about the canvas center: the selfie view every video-call
-/// app shows, because the webcam points at the user and they expect their
+/// app shows, because the webcam points at the artist and they expect their
 /// reflection, not a backwards view. It's just the affine the shader already
 /// samples through (no extra shader/uniform work), it round-trips through
-/// save/load, and the user can drag a scale handle past the anchor to un-flip.
+/// save/load, and the artist can drag a scale handle past the anchor to un-flip.
 fn selfie_flip(canvas_w: u32, _canvas_h: u32) -> crate::transform::Transform {
     // x' = canvas_w - x, y' = y.
     crate::transform::Transform::from_affine([-1.0, 0.0, canvas_w as f32, 0.0, 1.0, 0.0])

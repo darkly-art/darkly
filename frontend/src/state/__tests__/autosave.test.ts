@@ -19,7 +19,7 @@ describe('snapshotEligible', () => {
         expect(snapshotEligible({ ...base, isDirty: false })).toBe(false);
     });
 
-    it('skips while the user is mid-stroke (not idle)', () => {
+    it('skips while the artist is mid-stroke (not idle)', () => {
         expect(snapshotEligible({ ...base, idle: false })).toBe(false);
     });
 

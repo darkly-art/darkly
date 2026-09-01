@@ -35,7 +35,7 @@
     /** Re-seed the inputs whenever the modal opens for a fresh entry:
      *  the engine emits the current effective values (registration
      *  fallbacks applied) so the placeholders/values match what the
-     *  brush user actually sees. */
+     *  artist using the brush actually sees. */
     $effect(() => {
         if (open && entry) {
             labelInput = entry.label;
@@ -89,7 +89,7 @@
                     class="text-input description"
                     bind:value={descriptionInput}
                     rows="4"
-                    placeholder="Shown as a tooltip to the brush user."
+                    placeholder="Shown as a tooltip to the artist using the brush."
                 ></textarea>
             </label>
             <div class="field">

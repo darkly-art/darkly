@@ -1,7 +1,7 @@
 //! Authored value carried by a disconnected brush-graph input.
 //!
 //! Every brush-node input is a [`crate::nodegraph::PortDef`]. When the input
-//! is unwired, the value the user authored lives here: a scalar slider
+//! is unwired, the value the artist authored lives here: a scalar slider
 //! value, an enum-dropdown index, a texture name, curve control points, a
 //! color. Wired inputs ignore this and take the upstream expression instead
 //! (see [`crate::brush::wgsl::InputBinding`]).

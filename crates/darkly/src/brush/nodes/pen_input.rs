@@ -35,7 +35,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Horizontal tilt of the pen barrel (-1 = left, 1 = right)"),
             PortDef::output("y_tilt", BrushWireType::Scalar)
                 .with_natural_range(-1.0, 1.0)
-                .with_description("Vertical tilt of the pen barrel (-1 = toward user, 1 = away)"),
+                .with_description("Vertical tilt of the pen barrel (-1 = toward artist, 1 = away)"),
             PortDef::output("tilt_magnitude", BrushWireType::Scalar)
                 .with_natural_range(0.0, 1.0)
                 .with_description(
@@ -43,7 +43,7 @@ pub fn register() -> BrushNodeRegistration {
                 ),
             // No `natural_range`: radians are a unit, not a normalized
             // signal. A wire from `tilt_direction → stamp.rotation` (both
-            // in radians) is a unit-preserving identity. Users who want a
+            // in radians) is a unit-preserving identity. Artists who want a
             // normalized angle can pre-scale through `multiply` or `curve`.
             PortDef::output("tilt_direction", BrushWireType::Scalar)
                 .with_description(

@@ -10,7 +10,7 @@ import { runHook } from '../tools/tool_session';
  * brush parameter keyboard-and-drag adjustable.
  *
  * - `kind: 'mult'` applies a multiplicative step (`v * step^dir`). Use for
- *   parameters that feel logarithmic to users (size).
+ *   parameters that feel logarithmic to artists (size).
  * - `kind: 'add'` applies an additive step (`v + step*dir`). Use for
  *   parameters that feel linear (opacity, hardness).
  */
@@ -48,7 +48,7 @@ function commit(nodeId: string, portName: string, value: number) {
 /** Discrete step in the given direction (used by `[` / `]` hotkeys).
  *  After committing, refresh the on-canvas hover overlay so the brush
  *  cursor preview reflects the new value immediately; without this
- *  the circle stays at the old size until the user moves the pointer. */
+ *  the circle stays at the old size until the artist moves the pointer. */
 function adjustBrushParam(role: Role, dir: 1 | -1): void {
     const found = findScalarPort(role);
     if (!found) return;

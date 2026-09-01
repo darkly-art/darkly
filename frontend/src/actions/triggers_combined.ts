@@ -14,7 +14,7 @@ export type TriggerKind = 'kbd' | 'mouse';
 export interface Trigger {
     kind: TriggerKind;
     /** Full `[site:]chord` binding string. May be `""` for a freshly-added
-     *  row the user hasn't captured into yet. */
+     *  row the artist hasn't captured into yet. */
     binding: string;
 }
 
@@ -37,7 +37,7 @@ export function parseTriggerStrings(
 
 export function serializeTriggers(triggers: Trigger[]): { kbd: string; mouse: string } {
     // Drop rows with an empty chord, including ones that only carry a
-    // `<site>:` prefix (a freshly-added row the user didn't capture into
+    // `<site>:` prefix (a freshly-added row the artist didn't capture into
     // before navigating away). Those would persist as ghost entries that
     // dispatch to nothing.
     const isBound = (t: Trigger) => !!t.binding && !!parseBinding(t.binding).chord;

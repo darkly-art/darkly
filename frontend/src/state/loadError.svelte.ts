@@ -1,7 +1,7 @@
 /**
  * Persistent "this file failed to load" banner state. Backs
  * `ui/LoadErrorToast.svelte` (separate from the auto-dismissing
- * `Toast` system) because load errors warrant a stickier UI: the user
+ * `Toast` system) because load errors warrant a stickier UI: the artist
  * needs time to read the missing-features list and decide whether to
  * update.
  *

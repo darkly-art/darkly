@@ -38,13 +38,13 @@ class ToastState {
         // A repeat replaces its predecessor rather than stacking beside it:
         // clicking three times on a layer that refuses paint is one complaint,
         // not three. Dropping the old entry also restarts the dismiss delay,
-        // so the message stays up as long as the user keeps provoking it.
+        // so the message stays up as long as the artist keeps provoking it.
         const dup = this.toasts.find((t) => t.level === level && t.message === message);
         if (dup) this.dismiss(dup.id);
 
         const id = nextId++;
         this.toasts.push({ id, level, message, action: opts.action });
-        // Sticky toasts (e.g. the update prompt) persist until the user acts.
+        // Sticky toasts (e.g. the update prompt) persist until the artist acts.
         if (!opts.sticky) {
             const ms = opts.durationMs ?? AUTO_DISMISS_MS[level];
             setTimeout(() => this.dismiss(id), ms);

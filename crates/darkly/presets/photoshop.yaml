@@ -8,7 +8,7 @@ description: Adobe Photoshop-style keybindings
 hotkeys:
   # placeSmartObject: intentionally unbound. Photoshop states no default for
   # placing an image as a non-destructive object, and inventing one would
-  # set an expectation its users don't have; leave it to the menu and to
+  # set an expectation Photoshop artists don't have; leave it to the menu and to
   # explicit user binding. GIMP does state one, so it binds this in
   # gimp.yaml.
   # Edit / clipboard (non-unanimous slice). PS matches Krita on these but
@@ -18,7 +18,7 @@ hotkeys:
   # Photoshop binds Edit > Preferences to Ctrl+K (Cmd+K on macOS).
   openSettings: $mod+KeyK
   # mirrorViewH: intentionally unbound. Photoshop has no native mirror-
-  # view action, and M is already taken by rectSelectTool here. Users
+  # view action, and M is already taken by rectSelectTool here. Artists
   # who want a mirror-view hotkey under the PS preset can set one via
   # the settings UI.
   # View framing. Photoshop binds View > "Fit on Screen" to Ctrl+0

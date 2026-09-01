@@ -98,7 +98,7 @@ function primedSource(videoWidth = 4, videoHeight = 4) {
 describe('MediaStreamSource freeze suppresses uploads without closing', () => {
     // Regression: freezing a screenshare used to tear down the source (the
     // reconciler called stop()), which ends a getDisplayMedia track for good;
-    // unfreeze then showed nothing until the user re-picked. Freeze must only
+    // unfreeze then showed nothing until the artist re-picked. Freeze must only
     // gate `tick()`; the stream stays open so unfreeze resumes instantly.
     it('uploads when live, skips when frozen, resumes when unfrozen', async () => {
         const { src, uploads } = primedSource();

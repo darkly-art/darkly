@@ -254,7 +254,7 @@ fn flatten_undo_restores_original_tree() {
 //
 // Protects the "every write-site marks its node thumbnail-dirty" invariant
 // (see `Compositor::mark_node_pixels_dirty` docs). Without that, a fresh
-// duplicate appears in the panel as a thumbnail-less row until the user
+// duplicate appears in the panel as a thumbnail-less row until the artist
 // makes their first edit: the original bug this refactor was written to
 // kill, recurring "the fourth or fifth time" in the codebase's history.
 
@@ -554,7 +554,7 @@ fn merge_layers_undo_restores_all_sources() {
 }
 
 /// `merge_layers` aborts if any source is locked, since a partial bake
-/// would destroy the user's data.
+/// would destroy the artist's data.
 #[test]
 fn merge_layers_rejects_locked() {
     let mut engine = test_engine(32, 32);

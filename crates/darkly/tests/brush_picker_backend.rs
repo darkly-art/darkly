@@ -294,7 +294,7 @@ fn theme_change_invalidates_active_dab_preview() {
 #[test]
 fn size_scrub_does_not_change_active_dab_pixels() {
     // The dab thumbnail represents brush identity (shape, texture,
-    // dynamics); scrubbing the brush bar's user-facing size should leave
+    // dynamics); scrubbing the brush bar's artist-facing size should leave
     // the icon visually unchanged. Verified end-to-end: render, scrub
     // size, render again, compare bytes.
     //
@@ -359,7 +359,7 @@ fn set_node_comment_does_not_advance_topology_version() {
     // A node comment is inert w.r.t. render output and preset identity, so
     // setting one must NOT advance `brush_topology_version`; otherwise the
     // brush bar would flip the active preset name to "Custom" the moment a
-    // user annotated a node. The comment must still land on the graph.
+    // artist annotated a node. The comment must still land on the graph.
     let mut engine = fresh_engine();
 
     let target = engine

@@ -1,7 +1,7 @@
 # Brush System: Runtime Architecture
 
 This is the runtime side of the brush system: what actually happens from the
-moment the user puts a stylus down to the moment the layer texture changes
+moment the artist puts a stylus down to the moment the layer texture changes
 on-screen. For *authoring* (how to add a node or build a preset), see
 [node-system.md](node-system.md).
 
@@ -109,7 +109,7 @@ Three independent reasons every stroke needs this pair:
    re-renders forward. On full rewind the engine calls `runner.begin_stroke`
    again, so each terminal re-initialises its scratch however it wants:
    clear, re-copy the layer, whatever.
-3. **Atomic commit per event.** The user only sees changes land when the
+3. **Atomic commit per event.** The artist only sees changes land when the
    active terminal's `commit` hook writes to the layer. That boundary lets
    commit apply blend modes (paint/erase), replace wholesale (warp), or
    anything else, without the per-dab render path knowing anything about

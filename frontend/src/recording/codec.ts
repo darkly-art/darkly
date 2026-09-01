@@ -23,7 +23,7 @@ export type IsConfigSupported = (
     config: VideoEncoderConfig,
 ) => Promise<{ supported?: boolean }>;
 
-/** Fixed long-edge fallbacks probed (below the user's cap) when the
+/** Fixed long-edge fallbacks probed (below the artist's cap) when the
  *  preferred resolution is rejected by every codec. */
 const FALLBACK_LONG_EDGES = [1920, 1280, 854, 640];
 

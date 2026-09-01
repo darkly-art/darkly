@@ -101,7 +101,7 @@ impl Config {
         self.defaults.get(key)
     }
 
-    /// The overlay the user has selected, if any.
+    /// The overlay the artist has selected, if any.
     fn active_overlay(&self) -> Option<&str> {
         match self.user.get("app.baseSettings") {
             Some(ConfigValue::Str(name)) => Some(name.as_str()),
@@ -308,7 +308,7 @@ pub fn reset(key: &str) {
 }
 
 /// Clear every user override **except** `app.baseSettings`: the picker
-/// choice survives a global reset so the user isn't bumped back to the
+/// choice survives a global reset so the artist isn't bumped back to the
 /// first-run picker by clicking "Reset everything".
 pub fn reset_all() {
     CONFIG.with(|c| {
@@ -386,8 +386,8 @@ impl Binding {
 ///
 /// Bindings live under `hotkeys.` / `mouseclicks.`, with one exception: the
 /// canvas-navigation held modifiers (`hotkeys.nav.trigger` and friends) are
-/// prefs declared by [`sections`], sharing the prefix because that is where a
-/// user looks for them. Nothing dispatches an action from a pref, so asking the
+/// prefs declared by [`sections`], sharing the prefix because that is where an
+/// artist looks for them. Nothing dispatches an action from a pref, so asking the
 /// schema is what separates the two; there is no rule about dots in ids.
 pub fn bound_action_id(key: &str) -> Option<&str> {
     use std::collections::HashSet;

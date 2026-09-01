@@ -37,7 +37,7 @@ describe('brush pack actions', () => {
 
     it('both_labels_say_pack_not_brush', () => {
         // The extension names a container, not a count: one `.darkly-brush`
-        // may hold twenty brushes, so the user-facing wording must not imply
+        // may hold twenty brushes, so the artist-facing wording must not imply
         // one.
         for (const id of ['importBrushPack', 'exportBrushPack']) {
             const action = actions.all().find(a => a.id === id)!;

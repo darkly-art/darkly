@@ -168,7 +168,7 @@ describe('the focus line', () => {
     });
 
     it('centres a card exactly when its pack is centred', () => {
-        // The invariant the two panes exist to maintain, and the one the user
+        // The invariant the two panes exist to maintain, and the one the artist
         // stated: the pack across the middle of the list is the pack whose card
         // is across the middle of the wheel. A card therefore tracks its pack's
         // *centre*, not its start: the whole pack's extent maps across the
@@ -345,7 +345,7 @@ describe('the end pads', () => {
 
 describe('present', () => {
     it('passes the driver through and derives only the other pane', () => {
-        // The pane under the user's hand is never written to, or the write
+        // The pane under the artist's hand is never written to, or the write
         // cancels the momentum it is running on.
         const driven = present({ listScrollTop: 260, wheelScrollTop: 999, driver: 'list' }, SPACED);
         expect(driven.listScrollTop).toBe(260);

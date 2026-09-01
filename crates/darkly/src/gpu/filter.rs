@@ -78,7 +78,7 @@ pub struct FilterPipelineRegistration {
     pub icon: &'static str,
     /// One-sentence summary shown as a picker tooltip and folded into the
     /// Colors-menu action description, where the command palette's substring
-    /// search indexes it; include the terms users would search for.
+    /// search indexes it; include the terms artists would search for.
     pub description: &'static str,
     /// Id of the action that applies this filter to the active layer. Bindings
     /// in `presets/*.yaml` name this string; declaring it here rather than

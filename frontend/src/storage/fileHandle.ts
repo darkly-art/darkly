@@ -1,10 +1,10 @@
 /**
- * User-facing file save/open via the File System Access API, with a
+ * Artist-facing file save/open via the File System Access API, with a
  * hidden-input fallback for browsers that don't ship it.
  *
  * Distinct from `./index.ts`'s `DarklyStorage`: that's the *internal*
  * config directory (presets, settings, brushes). This module is the
- * *user-facing* file picker for `.darkly` documents the user opens or
+ * *artist-facing* file picker for `.darkly` documents the artist opens or
  * saves through Ctrl+S, Ctrl+O, the hamburger menu, etc.
  *
  * Three backends, picked per-call:
@@ -39,7 +39,7 @@ export interface SaveAccept {
  *  caller's `detectKind(bytes)` routes by magic-byte sniff (see
  *  `actions/index.ts::openFlow`). The first entry is the picker's
  *  default-selected filter, so it's a combined "Supported Files" that
- *  shows documents and images at once; the user can still narrow to a
+ *  shows documents and images at once; the artist can still narrow to a
  *  single type via the dropdown's later entries. */
 const OPEN_TYPES = [
     {
@@ -81,7 +81,7 @@ export interface OpenedFile {
 }
 
 /** Show the native Save picker. Returns the chosen handle, or `null` if
- *  the user cancelled. Throws on permission denial / API errors so the
+ *  the artist cancelled. Throws on permission denial / API errors so the
  *  caller can surface a toast.
  *
  *  `accepts` populates the picker's "Save as type" dropdown (first entry
@@ -137,7 +137,7 @@ export async function writeToHandle(
 /** Show the Open picker. Tries the FS Access API first so the
  *  returned handle can be cached for subsequent saves; falls back to
  *  a transient hidden `<input type="file">` for browsers without it.
- *  Returns `null` if the user cancelled or no file was chosen.
+ *  Returns `null` if the artist cancelled or no file was chosen.
  *
  *  Must be called from a user-activation context (same as Save). */
 export async function pickOpenFile(): Promise<OpenedFile | null> {

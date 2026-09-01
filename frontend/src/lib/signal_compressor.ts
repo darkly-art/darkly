@@ -10,7 +10,7 @@
  *
  * Typical use: slider drags fire dozens of times per second; the WASM
  * preview render takes ~10-30ms each. Without throttling, updates pile up
- * and fall behind the user's input. With leading-edge throttling, the user
+ * and fall behind the artist's input. With leading-edge throttling, the artist
  * sees an immediate response and the final value always wins.
  */
 export class SignalCompressor {

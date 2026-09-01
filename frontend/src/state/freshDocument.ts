@@ -30,7 +30,7 @@ interface FreshDocumentRecipe {
 /** Per-flavor starter-content recipes. Exported for tests; consumers use
  *  {@link freshDocument}, the entry for this build's flavor. */
 export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
-    // Demo: the night-sky background image plus the four hidden veils new users
+    // Demo: the night-sky background image plus the four hidden veils new artists
     // discover the feature through.
     demo: {
         defaultBrushName: 'Rough Watercolor',

@@ -29,7 +29,7 @@ use crate::nodegraph::{ExecutionPlan, NodeId, PortDef, PortDir};
 /// save-point rewind, the save-point system cleared pixels outside the
 /// CPU bbox but only restored into it, so anything the shader wrote in
 /// the inflation margin was lost, visibly truncating previous dabs to a
-/// smaller square as the user kept drawing.
+/// smaller square as the artist kept drawing.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ExtentContribution {
     /// No effect: bbox passes through unchanged from upstream.

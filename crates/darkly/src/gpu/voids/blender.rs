@@ -90,7 +90,7 @@ mod tests {
     fn exposes_url_string_param_with_default() {
         // The `url` param is the frontend's connection endpoint. It must be a
         // String param carrying the localhost default so a freshly-created void
-        // connects without the user typing anything.
+        // connects without the artist typing anything.
         let reg = register();
         let names: Vec<_> = reg.params.iter().map(|p| p.name).collect();
         assert_eq!(names, vec!["freeze", "frame_divisor", "url"]);

@@ -248,7 +248,7 @@ impl DarklyEngine {
 
         // Save the mask's R8 pixels too. The filter is removed at the end
         // of apply_mask; without this save, undo gets back the filter shell
-        // with a fresh (all-white) mask texture and the user's painting on
+        // with a fresh (all-white) mask texture and the artist's painting on
         // the mask is lost forever. Its GpuRegionAction is bundled below into
         // the single CompoundAction alongside the host-alpha region and the
         // EntityRemoveAction, so one undo replays them in the right order:

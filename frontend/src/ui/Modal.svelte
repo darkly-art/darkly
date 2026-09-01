@@ -7,7 +7,7 @@
         open: boolean;
         title?: string;
         size?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
-        /** Where the dialog sits in the viewport. `top` is for dialogs the user
+        /** Where the dialog sits in the viewport. `top` is for dialogs the artist
          *  types into blind: a command palette lands under the pointer's
          *  resting height instead of jumping the eye to the centre. */
         align?: 'center' | 'top';
@@ -16,7 +16,7 @@
         /** Dim the backdrop (default). `false` keeps the canvas fully visible
          *  for panels that live-preview onto it (e.g. the filter apply dialog). */
         dimmed?: boolean;
-        /** Let the user reposition the dialog by dragging its header. Spawns
+        /** Let the artist reposition the dialog by dragging its header. Spawns
          *  centered (the default), then follows the drag. */
         draggable?: boolean;
         /** Controls rendered in the header row, between the title and the close

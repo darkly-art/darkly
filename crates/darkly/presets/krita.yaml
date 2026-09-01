@@ -9,7 +9,7 @@ description: Krita-style keybindings
 hotkeys:
   # placeSmartObject: intentionally unbound. Krita states no default for
   # placing an image as a non-destructive object, and inventing one would
-  # set an expectation its users don't have; leave it to the menu and to
+  # set an expectation Krita artists don't have; leave it to the menu and to
   # explicit user binding. GIMP does state one, so it binds this in
   # gimp.yaml.
   # Edit / clipboard (non-unanimous slice). Krita matches PS on these but
@@ -18,7 +18,7 @@ hotkeys:
   redo: $mod+Shift+KeyZ
   pasteInPlace: $mod+Shift+KeyV
   # Krita has no native Preferences hotkey. Fall through to Darkly's
-  # macOS-convention pick; users can rebind via the settings UI.
+  # macOS-convention pick; artists can rebind via the settings UI.
   openSettings: $mod+Comma
   # View > Mirror View. Krita binds M (kritamenu.action `mirror_canvas`,
   # <shortcut>M</shortcut>). Photoshop and GIMP have no opinion; their
@@ -29,7 +29,7 @@ hotkeys:
   # <shortcut> in kritamenu.action (no default key) and Krita has no
   # center-in-window action at all. Both fitToScreen and centerView are
   # therefore left unbound under the Krita preset (neither lives in
-  # defaults.yaml, so omission here means no key). Users can bind them
+  # defaults.yaml, so omission here means no key). Artists can bind them
   # via the settings UI; GIMP/Photoshop carry their own defaults.
   # Tools.
   brushTool: KeyB

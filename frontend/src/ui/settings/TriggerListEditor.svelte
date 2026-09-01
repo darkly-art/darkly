@@ -20,7 +20,7 @@
         action: Action;
         /** When true, each row shows an editable scope <select>. When
          *  false, non-global scope is still surfaced via a small read-only
-         *  chip so the user knows the binding isn't unconditional. */
+         *  chip so the artist knows the binding isn't unconditional. */
         showScope: boolean;
     };
     let { action, showScope }: Props = $props();
@@ -42,7 +42,7 @@
      *  storage clean of ghost overrides). If we wrote a fresh empty row
      *  through config, it'd be filtered out before the reactive re-read
      *  could surface it, and "Add trigger" would visibly do nothing.
-     *  Promoted to `stored` the moment the user captures a chord; dropped
+     *  Promoted to `stored` the moment the artist captures a chord; dropped
      *  silently on ×, modal close, or reset. */
     let pending = $state<Trigger[]>([]);
 
@@ -66,7 +66,7 @@
     });
 
     /** Index of the row to auto-start capture on. Set by "+ Add trigger"
-     *  to save the user a click; cleared on next mutation. */
+     *  to save the artist a click; cleared on next mutation. */
     let pendingAutostart = $state<number | null>(null);
 
     /** Compose a binding string from kind + site + chord. Mouse chords
@@ -129,7 +129,7 @@
     function onCapture(index: number, newChord: string) {
         if (!newChord) {
             // Cleared via Backspace/Delete: drop the row entirely so the
-            // user doesn't end up with a ghost row that can't dispatch.
+            // artist doesn't end up with a ghost row that can't dispatch.
             removeTrigger(index);
             return;
         }

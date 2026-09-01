@@ -16,7 +16,7 @@
      *
      * Both panes are real scrollports, so pen and touch momentum come from the
      * platform on either side. What keeps them from oscillating is that only
-     * one of them is ever *driven*: `driver` names the pane the user has their
+     * one of them is ever *driven*: `driver` names the pane the artist has their
      * hand on, taken from input events, and each frame the other pane is moved
      * to match it. Nothing is derived from a `scroll` event (they only mark
      * the frame loop as live), because a programmatic `scrollTop` write lands
@@ -66,7 +66,7 @@
     let listEl: HTMLElement | undefined = $state();
     let wheelEl: HTMLElement | undefined = $state();
 
-    /** The pane the user is driving. Set from input events: a `pointerdown` or
+    /** The pane the artist is driving. Set from input events: a `pointerdown` or
      *  a mouse wheel is unambiguously a hand, where a `scroll` event might be
      *  the echo of our own write to the other pane. */
     let driver: 'list' | 'wheel' = 'list';
@@ -296,7 +296,7 @@
             },
             geometry,
         );
-        // Only ever the pane the user is *not* touching. Writing the driver's
+        // Only ever the pane the artist is *not* touching. Writing the driver's
         // own scrollTop would cancel the momentum it is running on.
         const driven = driver === 'list' ? wheelEl : listEl;
         const target = driver === 'list' ? frame.wheelScrollTop : frame.listScrollTop;

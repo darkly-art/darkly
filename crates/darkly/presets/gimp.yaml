@@ -24,7 +24,7 @@ hotkeys:
   # GIMP has no native Preferences hotkey. Fall through to Darkly's pick.
   openSettings: $mod+Comma
   # mirrorViewH: intentionally unbound. GIMP has no native mirror-view
-  # hotkey, and Krita's M would set no established GIMP-user expectation;
+  # hotkey, and Krita's M would set no established expectation for GIMP artists;
   # leave it for explicit user binding rather than invent a default.
   # View framing. GIMP binds View > "Fit Image in Window" to
   # <primary><shift>J and "Center Image in Window" to <shift>J (see

@@ -361,10 +361,10 @@ pub fn compile_from_json(json: &str) -> Result<eval::BrushGraphRunner, String> {
 
 /// Reset every exposed input port on every node back to its registration
 /// default. This produces a "canonical" view of the graph that's
-/// independent of any user-facing scrubs (size, opacity, hardness, etc.).
+/// independent of any artist-facing scrubs (size, opacity, hardness, etc.).
 ///
 /// Used by the active-dab thumbnail render so the brush icon represents
-/// the brush's identity (shape, texture, dynamics) rather than the user's
+/// the brush's identity (shape, texture, dynamics) rather than the artist's
 /// momentary parameter adjustments. Generalizes per-port pinning so adding
 /// a new exposed scrub (opacity hotkey, hardness hotkey, …) requires no
 /// changes here.
@@ -376,7 +376,7 @@ pub fn reset_exposed_scrubs(graph: &mut crate::nodegraph::Graph<BrushWireType>) 
     let registry = registry();
     let mut resets: Vec<(crate::nodegraph::NodeId, String, f32)> = Vec::new();
     // Walk every node and consult the *registration*'s `.exposed()`
-    // flag; only ports the node type declares as user-tunable by
+    // flag; only ports the node type declares as artist-tunable by
     // default get neutralized. Author-added entries in
     // `graph.exposed_ports` (size, opacity, etc. that the author
     // surfaced themselves) are part of the brush's identity and stay

@@ -21,7 +21,7 @@ import {
 } from './clone_source_cursor';
 import { isToolHoverSuppressed } from './modifier_cursor';
 
-/** Brush-tool session state: an app-global user preference (not per-document),
+/** Brush-tool session state: an app-global artist preference (not per-document),
  *  so it stays module-level even though the brush *tool* is per-instance.
  *  Persists across strokes within the session; resets on reload. The engine-side
  *  blend-mode mirror is pushed by `onActivate` / `onDeactivate` and by the
@@ -208,7 +208,7 @@ class BrushTool extends ToolBase {
         // will pick this up on the next stroke.
         engine.api.setBrushBlendMode({ mode: brushSession.eraseMode ? 1 : 0 });
         // Hide the native cursor only if a preview is available; otherwise fall
-        // back to the default cursor so the user has *something* to see.
+        // back to the default cursor so the artist has *something* to see.
         const info = await engine.api.getBrushCursorPreviewInfo();
         // Re-check after the await: a modifier cursor may have engaged in the
         // meantime (hotkeying into the brush with the chord already held) and

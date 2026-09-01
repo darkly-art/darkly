@@ -108,7 +108,7 @@ class TabRecorder {
     worker: Worker | null = null;
     workerReady = false;
     active = false;
-    /** Worker hit its retry limit: capture stays off until the user
+    /** Worker hit its retry limit: capture stays off until the artist
      *  toggles the setting (which rebuilds the recorder). */
     sessionDisabled = false;
     negotiated: NegotiatedCodec | null = null;
@@ -409,7 +409,7 @@ class ProcessRecordingService {
         void rec.run(async () => {
             if (!cfg.enabled) {
                 if (rec.active) await rec.deactivate(true);
-                // An explicit toggle is a fresh user request; clear any
+                // An explicit toggle is a fresh artist request; clear any
                 // per-session failure latch so re-enabling retries.
                 rec.sessionDisabled = false;
                 rec.applied = cfg;

@@ -38,7 +38,7 @@
 
     // Effective editability of the active layer: mirrors the engine's
     // `is_node_editable` (locked node OR any ancestor locked → not editable).
-    // Used to grey out destructive footer actions so users don't get the
+    // Used to grey out destructive footer actions so artists don't get the
     // "drag the slider, nothing happens" feedback loop.
     let activeEditable = $derived.by(() => {
         if (app.activeLayerId === null) return true;
@@ -71,7 +71,7 @@
     );
 
     // Show the multi-selection count in the footer button tooltips so
-    // the user has a heads-up that the trash/duplicate buttons will
+    // the artist has a heads-up that the trash/duplicate buttons will
     // operate on the whole selection, not just the active layer.
     let selectionSize = $derived(app.selectedLayerIds.size);
     let isMulti = $derived(selectionSize > 1);

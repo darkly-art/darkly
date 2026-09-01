@@ -208,7 +208,7 @@ mod tests {
     #[test]
     fn is_user_exposable_truth_table() {
         // The brush bar has a widget for these (a scrub, a toggle, a
-        // dropdown), so they may be exposed as user controls.
+        // dropdown), so they may be exposed as artist controls.
         for ty in [
             BrushWireType::Scalar,
             BrushWireType::Bool,

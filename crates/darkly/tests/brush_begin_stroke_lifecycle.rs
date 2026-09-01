@@ -258,7 +258,7 @@ fn smudge_terminal_seeds_scratch_from_pre_stroke() {
 ///
 /// Pre-fill with a non-zero field first, so a missed clear is visible:
 /// stale displacement surviving into a new stroke would warp the image
-/// before the user has moved the pen.
+/// before the artist has moved the pen.
 #[test]
 fn liquify_terminal_clears_scratch_to_zero_field() {
     let raw = run_begin_stroke(

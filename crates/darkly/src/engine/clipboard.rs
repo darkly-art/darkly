@@ -496,7 +496,7 @@ impl DarklyEngine {
         // dirty so the next render queues a thumbnail readback;
         // forgetting the dirty mark was the bug that left
         // `open_document`-loaded layers without thumbnails until the
-        // user's first edit.
+        // artist's first edit.
         self.compositor
             .upload_node_pixels(&self.gpu.queue, id, rgba);
 
@@ -545,7 +545,7 @@ impl DarklyEngine {
     #[handler(post)]
     pub fn copy_layer_rich(&mut self, id: LayerId) -> Option<()> {
         // Snapshot metadata up-front. Layers can mutate while the readback
-        // is in flight; pinning at copy time matches user intent and keeps
+        // is in flight; pinning at copy time matches artist intent and keeps
         // the snapshot independent of whatever happens before completion.
         //
         // Rich metadata (blend mode, opacity, …) only exists for raster

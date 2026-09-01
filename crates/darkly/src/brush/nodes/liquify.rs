@@ -72,12 +72,12 @@
 //!
 //! ## Softness waveshape
 //!
-//! User-facing slider: `0 = hard` (uniform displacement across the
+//! Artist-facing slider: `0 = hard` (uniform displacement across the
 //! disc, square edge) ↔ `1 = soft` (sharp peak at the brush centre,
 //! near-zero past the half-radius; only the cursor itself drags
 //! pixels). Internally the falloff helper takes the *opposite*
 //! convention (`0 = spike → 1 = square`), and the WGSL body inverts
-//! the slider value before passing it in. The mapping the user sees:
+//! the slider value before passing it in. The mapping the artist sees:
 //!   0    → uniform / square     (helper input `1.0`)
 //!   0.5  → sine                  (helper input `0.5`)
 //!   0.6  → linear saw            (helper input `0.4`)
@@ -283,7 +283,7 @@ impl ReadMirrorTerminal for LiquifyEvaluator {
         // `d.bbox_target_px`. We additionally discard past
         // `local_dist >= 1.0` so the warp stays outside the disc alone.
         // The falloff helper takes `0 = spike` / `1 = square`. The
-        // user-facing slider is labelled "Softness" with the opposite
+        // artist-facing slider is labelled "Softness" with the opposite
         // intuition: `1 = soft / feathery`, `0 = hard / sharp`. Invert
         // before passing to the helper so the slider matches the label.
         //

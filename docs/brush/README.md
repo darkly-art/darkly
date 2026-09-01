@@ -35,7 +35,7 @@ brush in the wild needs it.
 
 Where to find `.kpp` files to test with:
 
-- User-saved presets:
+- Artist-saved presets:
   - Linux: `~/.local/share/krita/paintoppresets/`
   - macOS: `~/Library/Application Support/krita/paintoppresets/`
   - Windows: `%APPDATA%\krita\paintoppresets\`

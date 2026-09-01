@@ -254,7 +254,7 @@ impl PerBrushPipeline {
         // engine registry and build the `@group(3)` bind group.
         // Missing names fall back to the registry's `_fallback`
         // texture so the pipeline always builds, surfacing a
-        // `log::warn` instead of crashing while the user types in
+        // `log::warn` instead of crashing while the artist types in
         // the node editor.
         // A graph with any live slot rebuilds its bind group every
         // `flush_dabs` from whatever the producing nodes published, so

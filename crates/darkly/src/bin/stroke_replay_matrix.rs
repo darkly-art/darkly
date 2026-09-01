@@ -230,7 +230,7 @@ struct CellResult {
     /// Worst single-event lateness: the max over events of
     /// `max(0, cpu_us/1000 - event_step_ms)`, where `event_step_ms` is the
     /// inter-event gap from the recording. Captures the worst dropped
-    /// frame the user would have felt, where `behind_by_ms` only captures
+    /// frame the artist would have felt, where `behind_by_ms` only captures
     /// the cumulative stroke-level lag.
     max_event_behind_ms: f64,
     cpu_median_us: f64,

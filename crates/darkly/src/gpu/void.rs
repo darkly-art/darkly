@@ -231,7 +231,7 @@ pub trait Void: std::fmt::Debug {
     /// would otherwise wipe the displayed image.
     fn update_params(&mut self, queue: &wgpu::Queue, cache: &EffectCache, params: &[ParamValue]);
 
-    /// Apply a user transform (pan / scale / rotate) in place: the void
+    /// Apply an artist transform (pan / scale / rotate) in place: the void
     /// *consuming* the generic transform helper's output. Like
     /// [`Self::update_params`], this rewrites the uniform buffer in place and
     /// must NOT rebuild via `from_params` (that drops the aux webcam texture).
@@ -323,7 +323,7 @@ pub trait Void: std::fmt::Debug {
     /// never declared a source.
     ///
     /// Two callers: document load (restoring a saved frame from the `.darkly`
-    /// zip) and placement (installing a user-supplied image). `bytes` are
+    /// zip) and placement (installing an artist-supplied image). `bytes` are
     /// **premultiplied** RGBA8 in both cases: the convention every sampled
     /// void source uses, so linear filtering doesn't bleed colour out of
     /// transparent texels.
@@ -377,7 +377,7 @@ pub enum VoidSource {
     /// A continuous stream of browser-supplied frames. The payload tells the
     /// frontend which capture API to open.
     Capture { capture: CaptureKind },
-    /// A single still image the user supplies once, held at its native
+    /// A single still image the artist supplies once, held at its native
     /// resolution and resampled through the layer's transform. The frontend
     /// opens a file picker rather than adding an empty layer.
     Image,
@@ -405,7 +405,7 @@ pub struct VoidRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
     /// One-sentence summary shown as a tooltip in the Add Void picker;
-    /// include the terms users would search for.
+    /// include the terms artists would search for.
     pub description: &'static str,
     pub params: &'static [ParamDef],
     /// Iconify icon name (e.g. `"tabler:galaxy"`). Always present: the layer
@@ -420,7 +420,7 @@ pub struct VoidRegistration {
     /// arrives, so there is nothing to render and nothing to animate.) What the
     /// preview *does* over that span is [`Void::preview_at`].
     pub preview: Option<PreviewAnim>,
-    /// Whether this void exposes a live, user-editable transform (driven by the
+    /// Whether this void exposes a live, artist-editable transform (driven by the
     /// generic gizmo, stored on [`crate::layer::VoidLayer::transform`]). Voids
     /// that opt in implement [`Void::set_transform`]; the rest leave it false
     /// and the engine never hands them a transform.
@@ -556,7 +556,7 @@ impl VoidRegistry {
         self.entries.get_key_value(type_id).map(|(k, _)| *k)
     }
 
-    /// Whether the named void kind exposes a live, user-editable transform.
+    /// Whether the named void kind exposes a live, artist-editable transform.
     /// Consumed by [`crate::layer::Layer::transform_capability`]. Unknown
     /// types return false.
     pub fn supports_live_transform(&self, type_id: &str) -> bool {

@@ -2,7 +2,7 @@
 //! cut/paste precision, lasso performance.
 //!
 //! These tests construct a real `DarklyEngine` via headless `GpuContext` and
-//! exercise the same code paths that users hit.
+//! exercise the same code paths that artists hit.
 //! Run with: `cargo test -p darkly --test engine`
 
 use darkly::brush::nodes::brush_settings;
@@ -443,8 +443,8 @@ fn paste_image_direct_preserves_off_canvas_extent() {
 }
 
 /// Regression: `floating_target_layer` returns the auto-created layer for
-/// a paste-as-floating, so the frontend can distinguish "user switched away
-/// from floating's layer" from "user just activated floating's own target".
+/// a paste-as-floating, so the frontend can distinguish "artist switched away
+/// from floating's layer" from "artist just activated floating's own target".
 #[test]
 fn paste_floating_target_layer_matches_created() {
     let (w, h) = (128, 128);
@@ -2341,7 +2341,7 @@ fn engine_mask_brush_respects_selection() {
 }
 
 /// Adding a mask while a selection is active seeds the new mask from
-/// the selection. This gives users a one-click "selection → mask"
+/// the selection. This gives artists a one-click "selection → mask"
 /// gesture: pixels inside the selection reveal (255), pixels outside
 /// hide (0).
 #[test]
@@ -2524,7 +2524,7 @@ fn engine_magic_wand_on_mask_reads_mask_not_layer() {
 /// upward by `ensure_layer_covers_dab`). The result: the seed sampled the
 /// wrong texture pixel, the produced mask was layer-local but applied as
 /// canvas-aligned, and the selection (or paint deposit) landed shifted from
-/// where the user clicked.
+/// where the artist clicked.
 #[test]
 fn engine_magic_wand_on_paste_extent_layer_translates_coords() {
     use darkly::coord::CanvasRect;
@@ -2614,7 +2614,7 @@ fn engine_magic_wand_on_paste_extent_layer_translates_coords() {
 /// Regression: same coordinate bug as `engine_magic_wand_on_paste_extent_layer_translates_coords`,
 /// for the paint-bucket / `StrokeOp::FloodFill` path. Pre-fix the seed sampled
 /// the wrong texture pixel and the deposited fill color landed shifted from
-/// where the user clicked.
+/// where the artist clicked.
 #[test]
 fn engine_flood_fill_on_paste_extent_layer_translates_coords() {
     let (cw, ch) = (64u32, 64u32);
@@ -2700,7 +2700,7 @@ fn engine_flood_fill_on_paste_extent_layer_translates_coords() {
 /// Regression: the interactive transform preview must apply the target
 /// layer's mask. Pre-fix the transform-blend shader sampled the floating
 /// source unconditionally and never sampled the mask, so masked-off regions
-/// of the layer "lit back up" as soon as the user began a transform, even
+/// of the layer "lit back up" as soon as the artist began a transform, even
 /// though the committed pixels would re-mask on the next blend pass. This
 /// produced a flicker-on-grab visual bug.
 #[test]
@@ -3323,7 +3323,7 @@ fn passthrough_group_with_visible_mask_applies_via_snapshot_lerp() {
 }
 
 /// Changing a passthrough group's blend mode must implicitly switch it to
-/// isolated: passthrough ignores the group blend mode, so the user's
+/// isolated: passthrough ignores the group blend mode, so the artist's
 /// choice would have no visible effect otherwise. Both fields ride a single
 /// undo step so one Ctrl-Z restores the original state.
 #[test]
@@ -3992,7 +3992,7 @@ fn isolation_does_not_mutate_layer_visibility() {
     let blue = engine.add_raster_layer(None);
     fill_layer(&mut engine, blue, 0, 0, 255);
 
-    // User hides the red layer manually. Doc state: red.visible = false.
+    // Artist hides the red layer manually. Doc state: red.visible = false.
     engine.set_layer_visible(red, false);
     engine.test_flush_readbacks();
     engine.render(0.0);
@@ -4952,7 +4952,7 @@ fn transform_translate_on_mask_moves_pixels() {
 
 /// While a mask transform is active, the host's blend must read through
 /// the *preview* texture so the mask's effect on the canvas reflects the
-/// currently-dragged matrix. Specifically: if the user translated the
+/// currently-dragged matrix. Specifically: if the artist translated the
 /// mask far away, the host pixels at the original mask position should
 /// no longer be hidden by the (moved-away) mask coverage.
 ///
@@ -5728,7 +5728,7 @@ fn locked_layer_rejects_modifications() {
 
     // 2. Property mutations are blocked. Read back through `layer_tree`,
     //    which is the same serialized view the UI sees, so we know what
-    //    actually reaches users.
+    //    actually reaches artists.
     engine.set_layer_name(layer_id, "should-be-ignored");
     engine.set_opacity(layer_id, 1.0);
     engine.set_blend_mode(layer_id, "multiply");
@@ -6213,7 +6213,7 @@ fn group_layers_wraps_selection_at_topmost_slot() {
 
 /// Grouping a cross-parent selection pulls each source out of its
 /// current parent and into the new group. Source groups can end up
-/// empty: that's fine; users can delete them if they want.
+/// empty: that's fine; artists can delete them if they want.
 #[test]
 fn group_layers_cross_parent() {
     use darkly::document::MoveTarget;

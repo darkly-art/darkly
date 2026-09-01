@@ -92,7 +92,7 @@ pub fn config_schema() -> String {
 ///
 /// Takes the binding as written in the presets; the optional
 /// `site@scope@brush:` prefix is stripped here, since only the chord is
-/// user-facing. `is_mac` selects the Apple glyphs (`⌘⇧⌥⌃`) over the
+/// artist-facing. `is_mac` selects the Apple glyphs (`⌘⇧⌥⌃`) over the
 /// Windows/Linux names; only the browser knows which to use.
 #[wasm_bindgen]
 pub fn format_chord(binding: &str, is_mac: bool) -> String {

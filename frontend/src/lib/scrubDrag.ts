@@ -5,7 +5,7 @@
 //
 // The intermediate values of a scrub are transient session state. Sending each
 // one to the engine makes every frame of a gesture a committed mutation, which
-// recompiles the brush graph and re-derives its previews for values the user is
+// recompiles the brush graph and re-derives its previews for values the artist is
 // only passing through.
 
 export interface ScrubDragOptions {
@@ -34,7 +34,7 @@ export interface ScrubDrag {
  * the gesture should take effect from the pointerdown position (a slider track
  * that jumps to the click).
  *
- * A drag whose pointer capture is lost mid-gesture still commits: the user has
+ * A drag whose pointer capture is lost mid-gesture still commits: the artist has
  * already seen the previewed value, so committing is what keeps the caller's
  * local state and the engine in agreement.
  */

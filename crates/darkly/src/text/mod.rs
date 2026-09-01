@@ -52,7 +52,7 @@ pub struct FontCapabilities {
 /// "Noto Sans" family: the upright variable face covers the whole weight range,
 /// and the italic variable face gives parley a real face to satisfy
 /// `FontStyle::Italic` (synthesis would be poor). OS-font enumeration (fontique
-/// does it for free on native) and user upload are additive behind this same
+/// does it for free on native) and artist upload are additive behind this same
 /// registry.
 const BUNDLED_FONTS: &[&[u8]] = &[
     include_bytes!("../../resources/fonts/NotoSans-VF.ttf"),
@@ -71,7 +71,7 @@ pub struct FontRegistry {
     /// Display names of every registered family, surfaced to the UI font picker.
     families: Vec<String>,
     /// Content-addressed cache of the raw SFNT bytes behind every
-    /// user-registered font, keyed by the hex content hash. One blob can
+    /// artist-registered font, keyed by the hex content hash. One blob can
     /// register several families, so bytes are keyed by hash (not family) and
     /// deduped: registering the same bytes twice is free. The bundled fallback
     /// (Noto Sans) is deliberately absent: it's binary-resident and never
@@ -135,7 +135,7 @@ impl FontRegistry {
         &self.families
     }
 
-    /// Register a user-supplied font (uploaded `.ttf`/`.otf`, a Google import,
+    /// Register an artist-supplied font (uploaded `.ttf`/`.otf`, a Google import,
     /// or a font embedded in an opened `.darkly`). Caches the raw bytes under
     /// their content hash so the families they provide can be re-embedded on
     /// save, and returns the family names it contributed so the picker can

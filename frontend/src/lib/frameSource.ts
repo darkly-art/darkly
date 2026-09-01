@@ -60,7 +60,7 @@ export abstract class FrameSource {
     readonly layerId: number;
     readonly captureKind: CaptureKind;
     protected readonly engine: Engine;
-    /** Invoked when the feed ends *externally* (the user clicks the browser's
+    /** Invoked when the feed ends *externally* (the artist clicks the browser's
      *  "Stop sharing" bar, unplugs the webcam, or the HTTP stream closes). The
      *  app uses it to stop the source (kept in the map so its error/status
      *  stay visible) and re-show the "Connect"/"Resume" affordance. */
@@ -99,7 +99,7 @@ export abstract class FrameSource {
 
     /** Record a failure that happened outside the source's own machinery
      *  (media acquisition is app-owned: the permission prompt runs before
-     *  `start` is ever called). Sets the user-facing error and lands the
+     *  `start` is ever called). Sets the artist-facing error and lands the
      *  status, without flipping `ended`; the feed never began. */
     markFailed(message: string): void {
         this.error = message;

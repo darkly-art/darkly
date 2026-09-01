@@ -5,7 +5,7 @@
 
     Used wherever a preview of the *active* graph is needed: the brush
     builder's preview dock, and the picker dropdown's active strip when
-    the user has loaded a custom (unnamed) graph. Visually matches the
+    the artist has loaded a custom (unnamed) graph. Visually matches the
     preset preview so the dropdown looks consistent across both cases.
 -->
 <script lang="ts">

@@ -73,7 +73,7 @@ function tabNameFromFile(fileName: string): string {
  *  handler) or the clipboard paste, not this action.
  *
  *  Exported so the canvas drop handler can re-enter this flow when the
- *  user drags a `.darkly` (drop bypasses the picker but routes to the
+ *  artist drags a `.darkly` (drop bypasses the picker but routes to the
  *  same loader). */
 export async function openFlow(): Promise<void> {
     const picked = await pickOpenFile();
@@ -100,7 +100,7 @@ async function routePickedFile(picked: OpenedFile): Promise<void> {
 /** Open a `.darkly` archive in a new tab. The engine's
  *  `open_document(bytes)` is all-or-nothing: a refused load is
  *  surfaced through `LoadErrorToast` and the failed tab is rolled
- *  back so the user is left with their previous focus. Exposed so
+ *  back so the artist is left with their previous focus. Exposed so
  *  the canvas drop handler can route a dropped `.darkly` through the
  *  same path the picker uses. */
 export function openDarklyAsTab(picked: OpenedFile): void {
@@ -173,7 +173,7 @@ async function openImageAsTab(picked: OpenedFile, kind: FileKind): Promise<void>
 
 /** Decode an image file and paste it as a new raster layer in the
  *  CURRENT document. Used by the canvas drag-drop handler: drop is
- *  the explicit "user wants this image in this doc" gesture (Open from
+ *  the explicit "artist wants this image in this doc" gesture (Open from
  *  the menu / Ctrl+O always lands a new tab instead).
  *
  *  Returns the new layer id, or `-1` on decode failure. */
@@ -467,7 +467,7 @@ export function registerActions() {
         id: 'newDocument',
         menuPath: ['File:10'],
         // No default hotkey: `$mod+KeyN` is reserved by every major browser
-        // for "new window" and cannot be intercepted by the page. Users can
+        // for "new window" and cannot be intercepted by the page. Artists can
         // still bind it via the Hotkeys tab if their browser/OS allows.
         handler: () => {
             newDocument.open = true;
@@ -682,7 +682,7 @@ export function registerActions() {
             // Structural rule: operate on the current selection. The
             // right-click handler ensures the clicked row is in the
             // selection BEFORE the menu opens, so reading from
-            // `app.selectedLayerIds` here picks up exactly what the user
+            // `app.selectedLayerIds` here picks up exactly what the artist
             // expects. We do NOT accept a `ctx.layerId` override: the
             // v1 attempt did, and that's what made "Delete N Layers" act
             // on just one layer.
@@ -978,7 +978,7 @@ export function registerActions() {
 //
 // Isolation is pure session state: the engine's `isolated_node` is the
 // single source of truth. We never touch `set_layer_visible` here, so eye
-// icons stay independent: a user can toggle visibility on hidden siblings
+// icons stay independent: an artist can toggle visibility on hidden siblings
 // while soloed and those changes persist after un-solo.
 
 function toggleIsolation(targetId: number) {

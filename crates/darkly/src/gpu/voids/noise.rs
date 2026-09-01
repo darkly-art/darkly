@@ -115,7 +115,7 @@ struct NoiseUniforms {
     // struct, so every uniform write rebuilds the whole struct from state.
     canvas_scale: f32,
     _pad0: f32,
-    // Inverse of the user transform's homography (packed rows [m, _], see
+    // Inverse of the artist transform's homography (packed rows [m, _], see
     // gpu::transform::pack_inv_rows), applied to the canvas-space sampling
     // coordinate so the field pans / scales / rotates / warps with the gizmo.
     // Affine carries inv_row2 = [0,0,1,_], collapsing the perspective divide.
@@ -133,11 +133,11 @@ pub struct Noise {
     pub size: f32,
     pub warp: f32,
     pub darkness: f32,
-    /// Z-axis offset into the 3D noise volume. User-controlled slider; a
+    /// Z-axis offset into the 3D noise volume. Artist-controlled slider; a
     /// scrub control for exploring different cross-sections of the field
     /// without changing the seed.
     pub time: f32,
-    /// User transform (gizmo affine). The shader samples the field through its
+    /// Artist transform (gizmo affine). The shader samples the field through its
     /// inverse, so the noise pattern pans / scales / rotates under the gizmo.
     transform: crate::transform::Transform,
     /// Render-target→canvas px scale, kept from `create_cache` so every
@@ -594,7 +594,7 @@ fn create_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> Effec
 /// decorrelated noise (currently only `.x` is read, but the others are
 /// reserved for future use). The seed makes per-instance volumes distinct:
 /// if two voids have the same `seed` param they share an identical
-/// volume layout, which is the user-visible determinism contract.
+/// volume layout, which is the artist-visible determinism contract.
 fn seed_noise_volume(dim: u32, seed: u32) -> Vec<u8> {
     let count = (dim * dim * dim) as usize;
     let mut bytes = vec![0u8; count * 4];

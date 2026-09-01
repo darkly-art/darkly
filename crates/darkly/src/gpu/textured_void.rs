@@ -14,7 +14,7 @@
 //! hands the element to this void via [`Void::upload_external_image`]. For
 //! one-shot kinds the engine installs the decoded image once via
 //! [`Void::set_source_pixels`]. Either way the shader samples that source,
-//! applies the inverse of the user's transform, and writes the layer texture.
+//! applies the inverse of the artist's transform, and writes the layer texture.
 //!
 //! **Scaling.** A one-shot source is the authority and is never resampled in
 //! place: the stored transform changes, and each frame re-samples the pristine
@@ -72,7 +72,7 @@ pub enum ContentFit {
     Cover,
     /// Occupy the source's own pixel dimensions, anchored in the document
     /// plane. Does not move when the canvas is cropped; a placed image stays
-    /// where the user put it relative to the artwork, not to the window.
+    /// where the artist put it relative to the artwork, not to the window.
     Natural,
 }
 
@@ -84,7 +84,7 @@ pub struct TexturedVoidConfig {
     pub type_id: &'static str,
     pub display_name: &'static str,
     /// One-sentence summary shown as a tooltip in the Add Void picker:
-    /// include the terms users would search for.
+    /// include the terms artists would search for.
     pub description: &'static str,
     pub icon: &'static str,
     /// Param schema: looked up by *name* (`"freeze"`, `"frame_divisor"`) by the
@@ -182,7 +182,7 @@ fn normalize_params(config: &TexturedVoidConfig, params: &[ParamValue]) -> Vec<P
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct TexturedVoidUniforms {
-    /// Inverse of the user transform's homography, row 0: `[m00, m01, m02, _]`.
+    /// Inverse of the artist transform's homography, row 0: `[m00, m01, m02, _]`.
     /// The shader maps a window-local fragment (relative to the content rect)
     /// through this inverse (with the perspective divide via the shared
     /// `proj_local`) to find the pre-transform position, then normalizes to a
@@ -208,7 +208,7 @@ pub struct TexturedVoid {
     /// Static per-kind description (display name, icon, capture kind, seed
     /// transform). The trait's `type_id()` reads `config.type_id`.
     config: &'static TexturedVoidConfig,
-    /// User transform (pan / scale / rotate) edited by the gizmo. The shader
+    /// Artist transform (pan / scale / rotate) edited by the gizmo. The shader
     /// samples through its inverse. NOTE: `canvas_origin` deliberately does not
     /// enter here; the gizmo edits this affine in the void's local frame,
     /// which coincides with window-local (the frame `FragCoord.xy` is in), so
@@ -228,7 +228,7 @@ pub struct TexturedVoid {
     /// `frame_divisor` are modeled by the typed fields above and read from them;
     /// any *other* param a config declares (e.g. the Blender void's `url`) is
     /// opaque passthrough, never interpreted here, but stored so `param_values`
-    /// echoes the user's edits back for save/load and the frontend reconciler.
+    /// echoes the artist's edits back for save/load and the frontend reconciler.
     /// This keeps the shared machinery generic: a config can add a
     /// frontend-only param without a bespoke field.
     param_snapshot: Vec<ParamValue>,
@@ -296,7 +296,7 @@ impl TexturedVoid {
     }
 
     fn uniforms(&self) -> TexturedVoidUniforms {
-        // Sample through the inverse of the user transform's homography (shared
+        // Sample through the inverse of the artist transform's homography (shared
         // packing; singular matrices fall back to identity rather than NaN-ing
         // the UV). Affine transforms carry a `[0,0,1]` bottom row, so the
         // shader's perspective divide is a no-op for them.
@@ -519,7 +519,7 @@ impl Void for TexturedVoid {
                 "freeze" => ParamValue::Bool(self.freeze),
                 "frame_divisor" => ParamValue::Int(self.frame_divisor as i32),
                 // Passthrough param (e.g. `url`): echo the stored value so the
-                // user's edits round-trip through save/load and reach the
+                // artist's edits round-trip through save/load and reach the
                 // frontend reconciler. Falls back to the schema default if the
                 // snapshot is somehow short.
                 _ => self
@@ -968,7 +968,7 @@ mod tests {
     };
 
     /// A passthrough param (`url`) the machinery never interprets must still
-    /// round-trip: its user-edited value has to survive `from_params` →
+    /// round-trip: its artist-edited value has to survive `from_params` →
     /// `param_values` (save/load) and `update_params` (the properties panel),
     /// or the frontend would always reconnect to the default endpoint. Before
     /// `param_snapshot`, `param_values` regenerated non-modeled params from
@@ -1074,7 +1074,7 @@ mod tests {
     /// void's accumulated GPU state: earlier the compositor's
     /// `update_void_layer_params` rebuilt the void from `from_params` and
     /// re-allocated `EffectCache`, dropping the aux texture that holds the live
-    /// frame. The user reported "clicking freeze disappears the whole layer"
+    /// frame. The artist reported "clicking freeze disappears the whole layer"
     /// because the rebuild reset `src_w/h` to the 1×1 placeholder.
     /// `update_params` must mutate fields in place.
     #[test]

@@ -59,7 +59,7 @@ describe('serializeTriggers', () => {
     });
 
     it('writes empty strings for namespaces with no triggers', () => {
-        // A user who only has keyboard triggers should reset the mouse
+        // An artist who only has keyboard triggers should reset the mouse
         // namespace to an empty (explicit-unbound) override, not leave it
         // dangling at the prior value.
         expect(serializeTriggers([{ kind: 'kbd', binding: 'KeyZ' }])).toEqual({
@@ -69,7 +69,7 @@ describe('serializeTriggers', () => {
     });
 
     it('drops triggers whose binding is empty (ghost rows)', () => {
-        // Freshly-added rows that the user never finished capturing into
+        // Freshly-added rows that the artist never finished capturing into
         // shouldn't pollute storage when they save.
         expect(serializeTriggers([
             { kind: 'kbd', binding: 'KeyZ' },
@@ -115,7 +115,7 @@ describe('detectKind', () => {
     });
 
     it('treats empty chord as kbd (default for unbound rows)', () => {
-        // An empty trigger row's kind is meaningful only when the user
+        // An empty trigger row's kind is meaningful only when the artist
         // actually captures, so defaulting to kbd matches the most common
         // "Press a key…" prompt.
         expect(detectKind('')).toBe('kbd');

@@ -34,7 +34,7 @@ struct Params {
     // produces the same feature size in the final output at any aux scale.
     canvas_scale: f32,
     _pad0: f32,
-    // Inverse of the user transform's homography (packed rows [m, _], see
+    // Inverse of the artist transform's homography (packed rows [m, _], see
     // gpu::transform::pack_inv_rows). Applied to the canvas-space coordinate so
     // the field pans / scales / rotates / warps with the gizmo. Affine carries
     // inv_row2 = [0,0,1,_]; identity when untransformed.
@@ -58,7 +58,7 @@ const Z_SCALE: f32 = 0.15;
     // FBM domain is independent of aux-texture resolution. The noise content
     // rect is the canvas (content_origin = 0), so canvas px == content-local.
     let canvas_px = in.position.xy * params.canvas_scale;
-    // Apply the inverse user transform (shared proj_local, perspective divide)
+    // Apply the inverse artist transform (shared proj_local, perspective divide)
     // so the field tracks the gizmo. The field is infinite, so a degenerate
     // sample (.z == 0) just reads the origin; no special-casing needed.
     let tp = proj_local(params.inv_row0, params.inv_row1, params.inv_row2, canvas_px).xy;

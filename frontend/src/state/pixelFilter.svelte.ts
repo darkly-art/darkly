@@ -1,7 +1,7 @@
 /**
  * Pushes the `display.pixelFilter` config value to WASM whenever it changes,
  * so the present shader's canvas-to-screen sampling updates immediately when
- * the user toggles the Settings dropdown; no zoom/pan needed to trigger an
+ * the artist toggles the Settings dropdown; no zoom/pan needed to trigger an
  * upload.
  *
  * Parallel to `theme.svelte.ts`: the module subscribes to `config.onChange`

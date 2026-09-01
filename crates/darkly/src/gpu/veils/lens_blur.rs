@@ -4,9 +4,9 @@ use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    // User-facing 0..1 slider. The shader multiplies by 0.03 to derive the
-    // blur radius as a fraction of sqrt(canvas area), so user 1.0 = 3% of
-    // sqrt(area) (≈ 30 px on a 1024² canvas) and the default user 1/3
+    // Artist-facing 0..1 slider. The shader multiplies by 0.03 to derive the
+    // blur radius as a fraction of sqrt(canvas area), so artist 1.0 = 3% of
+    // sqrt(area) (≈ 30 px on a 1024² canvas) and the default artist 1/3
     // ≈ 0.01 of sqrt(area) (≈ 10 px on 1024²).
     ParamDef::float("radius", 0.0, 1.0, 1.0 / 3.0)
         .with_label("Radius")

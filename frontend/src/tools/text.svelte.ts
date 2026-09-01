@@ -5,7 +5,7 @@ import { createTextFromPending, flushTextContent, type FullStyle, type Rgba } fr
 import { TextBoxGizmo } from './text_box_gizmo';
 import { ToolBase, type ToolDescriptor } from './registry';
 
-/** Creation *defaults* for the text tool: an app-global user preference (not
+/** Creation *defaults* for the text tool: an app-global artist preference (not
  *  per-document), written by panel style edits and read when the panel creates
  *  the next text object. Stays module-level even though the text *tool* is
  *  per-instance (the per-document edit/placement state moved onto {@link
@@ -161,7 +161,7 @@ class TextTool extends ToolBase {
         // is imminent, so the compile overlaps the gap before the first click
         // instead of stalling the frame that would show the new box.
         this.inst.engine?.api.warmVectorRenderer();
-        // Pick up the persisted default size if the user configured one.
+        // Pick up the persisted default size if the artist configured one.
         const cfgSize = config.get('tools.textSize');
         if (typeof cfgSize === 'number') textSession.size = cfgSize;
         // If a text layer is already selected, show its box immediately (the

@@ -156,7 +156,7 @@ impl UndoStack {
     /// `Document::dirty` flag: every undoable mutation funnels through
     /// here, which makes this the only place dirty-tracking has to live.
     /// Undo/redo deliberately don't touch the flag (an undo back to the
-    /// original state still leaves the doc "dirty" from the user's POV).
+    /// original state still leaves the doc "dirty" from the artist's POV).
     ///
     /// Returns every action that leaves the stack as a result of this push:
     /// the entire previous redo history (cleared because a fresh action
@@ -209,7 +209,7 @@ impl UndoStack {
     /// This collapses rapid slider drags into a single undo step.
     ///
     /// Marks the document dirty whether the action coalesces or pushes
-    /// fresh: coalescing means the user did something mid-drag, which
+    /// fresh: coalescing means the artist did something mid-drag, which
     /// is just as much "unsaved work" as a brand-new action.
     ///
     /// Returns evicted actions like [`Self::push`], empty when the action
@@ -522,7 +522,7 @@ mod tests {
     #[test]
     fn dirty_flag_sticky_through_undo_redo() {
         // Sticky semantics: undoing back to the original state must
-        // *not* clear dirty. The user worked, then undid; from a
+        // *not* clear dirty. The artist worked, then undid; from a
         // "should this prompt before close?" POV the file is still
         // different from the last saved state.
         let mut doc = Document::new(64, 64);

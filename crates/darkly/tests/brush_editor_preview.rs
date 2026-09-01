@@ -318,7 +318,7 @@ fn brush_save_bakes_thumbnail_asynchronously() {
 /// be clipped against the cache border: the leftmost and rightmost
 /// columns of the framed preview must contain only background pixels.
 ///
-/// This is the user-visible bug: with the previous size-aware inset
+/// This is the artist-visible bug: with the previous size-aware inset
 /// hack, the path was shrunk so endpoints landed inside the canvas,
 /// but the inset clamped to half the canvas at any non-trivial size and
 /// the path degenerated. Without an inset, endpoints sit on the canvas
@@ -376,9 +376,9 @@ fn airbrush_endpoint_dabs_not_clipped_against_cache_border() {
 /// Regression: scrubbing a `pen_input.stabilize` setting must not
 /// invalidate the editor-preview cache. The synthetic-stroke preview
 /// always renders with `PassThrough`, so the rendered pixels can't
-/// change in response to a user scrub. Bumping `brush_graph_version`
+/// change in response to an artist scrub. Bumping `brush_graph_version`
 /// on these scrubs would trigger a wasted full-stroke re-render every
-/// 100 ms while the user drags the slider (~1 GB/s of GPU work for no
+/// 100 ms while the artist drags the slider (~1 GB/s of GPU work for no
 /// visible effect).
 ///
 /// The fix declares stabilize via `preview_irrelevant_scrub()` and routes
@@ -460,7 +460,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
 /// caller-side `graph.apply_preview_overrides()` on the stroke-preview
 /// path and rewrote the `ChangeKind` classifier to key off
 /// `preview_irrelevant_scrub` only, with the rationale "the preview
-/// must match what the user would actually paint". That made the
+/// must match what the artist would actually paint". That made the
 /// brush picker tile and the editor stroke preview inconsistent:
 /// the tile stayed size-invariant via `reset_exposed_scrubs`, but the
 /// stroke preview now mutated visibly on every size scrub.
@@ -578,7 +578,7 @@ fn squash_active_brush_to_extreme_nib(engine: &mut darkly::engine::DarklyEngine)
 /// stroke-preview render canvas. The tip's anisotropy stretches the dab
 /// footprint up to ~10×, so a fixed small canvas + absolute inset clipped the
 /// endpoints (and even mid-stroke edges) before the changed-pixel crop ever
-/// saw them: the user-reported "calligraphy stroke is cut off" bug.
+/// saw them: the artist-reported "calligraphy stroke is cut off" bug.
 ///
 /// The invariant is size-agnostic: whatever canvas the preview pipeline picks,
 /// the neutralized preview stroke must stay clear of its border. We assert

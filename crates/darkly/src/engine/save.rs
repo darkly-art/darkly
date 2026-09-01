@@ -7,7 +7,7 @@
 //! filters, selection metadata, veil chain, and the `requires`
 //! inventory at submit time. Pixels are pinned via refcounted
 //! [`wgpu::Texture`] handles in the same synchronous prelude, so the
-//! user can keep painting / mutating the doc while readbacks complete
+//! artist can keep painting / mutating the doc while readbacks complete
 //! over the next few frames without affecting (or being affected by)
 //! the in-flight save.
 //!
@@ -54,16 +54,16 @@ impl std::error::Error for SaveError {}
 ///
 /// Autosave reuses the exact same readback pipeline as a real save, so
 /// without this distinction every autosave tick would mark the document
-/// clean even though nothing reached the user's file, silently
+/// clean even though nothing reached the artist's file, silently
 /// suppressing the close-confirmation guard and the `beforeunload`
 /// warning that protect genuinely-unsaved work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SavePurpose {
-    /// A real save to the user's `.darkly` file. Draining clears `dirty`:
+    /// A real save to the artist's `.darkly` file. Draining clears `dirty`:
     /// the document on disk now matches the snapshot we sealed.
     File,
     /// An autosave recovery snapshot written to OPFS. Draining must NOT
-    /// clear `dirty`: nothing reached the user's file, so unsaved-work
+    /// clear `dirty`: nothing reached the artist's file, so unsaved-work
     /// tracking must still see the document as dirty.
     Snapshot,
 }
@@ -95,7 +95,7 @@ pub struct SaveJob {
     manifest: Manifest,
     /// Refcounted handles to every texture this save reads from. wgpu
     /// `Texture` is internally `Arc`-shared, so cloning here keeps the
-    /// GPU resource alive even if the user deletes the source layer
+    /// GPU resource alive even if the artist deletes the source layer
     /// mid-save and the compositor drops its handle.
     #[allow(dead_code)] // held purely to keep textures alive across readbacks
     pinned_textures: Vec<wgpu::Texture>,
@@ -238,7 +238,7 @@ impl DarklyEngine {
         // Stable ordering for tests + bit-stable output.
         blobs.sort_by(|a, b| a.path.cmp(&b.path));
         // Only a real file save means "disk matches"; an autosave snapshot
-        // wrote to OPFS, not the user's file, so it must leave `dirty` set.
+        // wrote to OPFS, not the artist's file, so it must leave `dirty` set.
         if job.purpose == SavePurpose::File {
             self.doc.dirty = false;
         }
@@ -586,7 +586,7 @@ mod tests {
     }
 
     /// Successful save clears the sticky [`crate::document::Document::dirty`]
-    /// bit. This is the "file matches disk now" handoff: anything the user
+    /// bit. This is the "file matches disk now" handoff: anything the artist
     /// did between `start_save_document` and the drain is intentionally not
     /// re-dirty: the snapshot the bundle holds *is* the file we just wrote.
     #[test]
@@ -617,7 +617,7 @@ mod tests {
     }
 
     /// Regression: an autosave [`SavePurpose::Snapshot`] writes to OPFS,
-    /// not the user's file, so draining it must leave `dirty` set.
+    /// not the artist's file, so draining it must leave `dirty` set.
     /// Otherwise the close-confirmation guard + `beforeunload` warning
     /// would silently treat genuinely-unsaved work as saved.
     #[test]

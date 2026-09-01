@@ -149,7 +149,7 @@ impl DarklyEngine {
     /// Wire entry for `preview_filter`: coerces `params`, then
     /// [`Self::preview_filter_typed`]. Drives the destructive modal's live
     /// preview: the effect is shown on the canvas non-destructively until the
-    /// user commits or cancels.
+    /// artist commits or cancels.
     #[handler]
     pub fn preview_filter(
         &mut self,
@@ -261,7 +261,7 @@ impl DarklyEngine {
     }
 
     /// Discard a live preview, restoring the node's pristine pixels. A no-op
-    /// when no preview is active (e.g. the user never edited a param).
+    /// when no preview is active (e.g. the artist never edited a param).
     #[handler]
     pub fn cancel_filter_preview(&mut self) {
         if let Some(preview) = self.filter_preview.take() {

@@ -94,7 +94,7 @@
         // preventDefault above suppresses the default focus behavior on the
         // tabindex=0 container, so focus it explicitly, otherwise the keydown
         // handler never fires and Delete/Backspace appear broken until the
-        // user happens to spawn a new point (which doesn't preventDefault).
+        // artist happens to spawn a new point (which doesn't preventDefault).
         rootEl.focus();
         selectedIndex = index;
         draggingIndex = index;

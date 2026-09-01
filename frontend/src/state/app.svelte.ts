@@ -220,7 +220,7 @@ export class DarklyInstance {
     }
 
     /** Last activated sub-tool per cluster id. Lets a cluster button restore
-     *  the user's previous choice on click (e.g. "the last selection tool I
+     *  the artist's previous choice on click (e.g. "the last selection tool I
      *  used was lasso"). Populated by a $effect in LeftSidebar that watches
      *  activeToolId. */
     lastToolByCluster = $state<Record<string, string>>({});
@@ -428,7 +428,7 @@ export class DarklyInstance {
     // Tool cursor: when non-null, overrides nav cursor on the canvas element.
     toolCursor = $state<string | null>(null);
 
-    // Transform-mode context menu: viewport coords where the user right-clicked
+    // Transform-mode context menu: viewport coords where the artist right-clicked
     // inside the active transform gizmo, or null when closed. The transform
     // tool sets it; `TransformModeMenu` renders against it (mirrors how
     // `toolCursor` flows tool → reactive UI).
@@ -441,7 +441,7 @@ export class DarklyInstance {
 
     selectLayer(id: number | null) {
         // Clicking any layer other than the currently isolated one exits
-        // isolation. The user is asking to navigate to a layer that's
+        // isolation. The artist is asking to navigate to a layer that's
         // off-path under the current solo, so the click implies they're
         // done with the solo session: keeping isolation would be a
         // confusing UI deadlock (the click would silently appear to do
@@ -540,7 +540,7 @@ export class DarklyInstance {
             this.selectLayer(id);
             return;
         }
-        // Visible order only: shift-click spans the rows the user can see, so
+        // Visible order only: shift-click spans the rows the artist can see, so
         // it never reaches into a collapsed group.
         const order = indexLayerTree(this.layerTree).visibleOrder;
         const anchorIdx = order.indexOf(this.activeLayerId);
@@ -554,7 +554,7 @@ export class DarklyInstance {
             : [targetIdx, anchorIdx];
         this.selectedLayerIds = new Set(order.slice(lo, hi + 1));
         // Active follows the click so subsequent shift-clicks extend from
-        // where the user is currently pointing (standard Photoshop).
+        // where the artist is currently pointing (standard Photoshop).
         this.activeLayerId = id;
         this.activeVeilIndex = null;
     }
@@ -562,7 +562,7 @@ export class DarklyInstance {
     /** Replace the multi-selection with `ids`. The last id becomes
      *  active (matches plain-click semantics: focus follows the most
      *  recent touch). Used by batch ops like duplicate that want the
-     *  user to land on the freshly-created layers. */
+     *  artist to land on the freshly-created layers. */
     selectLayers(ids: number[]) {
         if (ids.length === 0) {
             this.clearSelection();
@@ -592,7 +592,7 @@ export class DarklyInstance {
 
     /** Pick the first id in `set` that appears in panel order, skipping rows
      *  inside collapsed groups: the caller is the ctrl-click demotion path, so
-     *  the answer should be a row the user can see. Returns null when the set is
+     *  the answer should be a row the artist can see. Returns null when the set is
      *  empty or none of its ids are still visible. Indexed fresh from the live
      *  tree, since callers may have assigned `layerTree` without a refresh. */
     private firstInTreeOrder(set: Set<number>): number | null {
@@ -658,7 +658,7 @@ export class DarklyInstance {
             }
         }
 
-        // A row the panel doesn't draw reads to the user as "nothing selected",
+        // A row the panel doesn't draw reads to the artist as "nothing selected",
         // which is the complaint reselection exists to fix. Open whatever hides
         // it, as GIMP's tree view does for every newly selected item.
         if (this.activeLayerId !== null) {
@@ -688,17 +688,17 @@ export class DarklyInstance {
      *  the properties panel re-renders when an entry's `error` string changes. */
     streamSources = $state<Map<number, FrameSource>>(new Map());
 
-    /** Set of stream-backed void layer IDs the user has explicitly authorized
+    /** Set of stream-backed void layer IDs the artist has explicitly authorized
      *  for this session. The picker adds the id when a new layer is created;
      *  the "Connect"/"Resume" button in VoidProperties adds it for layers loaded
      *  from a `.darkly` (or after an external stop / disconnect). Reopening a
      *  document does NOT add to this set, so the saved last frame is shown until
-     *  the user opts back in: no surprise permission prompt or capture
+     *  the artist opts back in: no surprise permission prompt or capture
      *  indicator. Session-only: never persisted, cleared on document open /
      *  page reload. */
     streamSessionStarted = $state<Set<number>>(new Set());
 
-    /** Mark a stream-backed void as explicitly user-started for this session.
+    /** Mark a stream-backed void as explicitly artist-started for this session.
      *  Idempotent. Triggers a layer-tree refresh so the reconciler picks the
      *  new state up (drives `showResume` in VoidProperties). The actual source
      *  is started by the gesture via `startStreamSource`, not here. */
@@ -726,7 +726,7 @@ export class DarklyInstance {
      *  gestures do (the picker and the Resume button), which keeps every start
      *  inside a user activation. The picker, which has already `await`ed
      *  `add_void`, passes its in-gesture pre-acquired `stream` (or `acquireError`
-     *  if the user cancelled); Resume passes neither and acquires in-gesture
+     *  if the artist cancelled); Resume passes neither and acquires in-gesture
      *  here. `stream` voids (Blender) build an `HttpStreamSource` and connect to
      *  the layer's `url` param immediately; no gesture or permission needed for
      *  a localhost HTTP stream. Idempotent. */
@@ -1140,7 +1140,7 @@ export class DarklyInstance {
      *  stroke or runs its offscreen composite mid-stroke. */
     pointerActive = $state(false);
 
-    /** Safe to take an autosave snapshot right now? False while the user
+    /** Safe to take an autosave snapshot right now? False while the artist
      *  is mid-stroke on the canvas or mid-drag in the brush builder. */
     get idleForSnapshot(): boolean {
         return !this.pointerActive && this._interactionCount === 0;

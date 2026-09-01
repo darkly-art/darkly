@@ -428,7 +428,7 @@ fn every_animated_entry_actually_moves() {
 /// The test that says there is one system: the two consumers differ in how they
 /// *capture*, and in nothing else. Comparing two consumers over two
 /// differently-loaded subjects would be asserting something else: the engine
-/// loads the user's composite and the binary loads its own field.
+/// loads the artist's composite and the binary loads its own field.
 #[test]
 fn the_driver_is_sink_agnostic() {
     let mut off = Offscreen::new();

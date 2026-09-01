@@ -1,6 +1,6 @@
 //! Curve node applies an adjustable spline transfer function to a scalar input.
 //!
-//! Maps 0-1 → 0-1 via a monotone cubic Hermite spline defined by user-placed
+//! Maps 0-1 → 0-1 via a monotone cubic Hermite spline defined by artist-placed
 //! control points.  The spline is precomputed into a 256-entry LUT at graph
 //! compile time (see `BrushGraphRunner`), so per-dab evaluation is a single
 //! O(1) table lookup.

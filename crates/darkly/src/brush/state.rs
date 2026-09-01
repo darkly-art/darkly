@@ -44,13 +44,13 @@ pub struct BrushState {
     /// readbacks can be discarded) and as a skip predicate: if the
     /// last-rendered version matches, there's nothing to re-render.
     ///
-    /// Reflects ALL changes including user-facing scrubs (size, opacity,
-    /// …) so the editor and hover previews update as the user adjusts.
+    /// Reflects ALL changes including artist-facing scrubs (size, opacity,
+    /// …) so the editor and hover previews update as the artist adjusts.
     pub version: u64,
 
     /// Bumped only on changes that affect the brush's *identity*: graph
     /// topology (nodes, wires, exposed flags), node params, and unwired
-    /// non-exposed port defaults. User-facing exposed-port scrubs do NOT
+    /// non-exposed port defaults. Artist-facing exposed-port scrubs do NOT
     /// bump this version because [`crate::brush::reset_exposed_scrubs`]
     /// neutralises them in the dab-thumbnail render path. The dab cache
     /// keys off this version so resizing the brush leaves the icon alone.

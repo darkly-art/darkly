@@ -40,7 +40,7 @@ struct AberrationParams {
 }
 
 // Sample at UV, returning transparent (`vec4f(0)`) outside [0,1] so edge content
-// doesn't streak outward where users expect transparency (Step 2 boundary
+// doesn't streak outward where artists expect transparency (Step 2 boundary
 // policy). Straight-alpha in, straight-alpha out. Explicit-LOD sample so it is
 // valid in any control flow.
 fn aberration_sample_uv(tex: texture_2d<f32>, samp: sampler, uv: vec2f) -> vec4f {

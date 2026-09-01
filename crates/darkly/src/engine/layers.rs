@@ -901,7 +901,7 @@ impl DarklyEngine {
         ));
     }
 
-    /// Set a void layer's user transform (the void *consuming* the generic
+    /// Set a void layer's artist transform (the void *consuming* the generic
     /// transform gizmo's output). Mirrors [`Self::update_void_params`]:
     /// reads the layer's CURRENT transform as the undo `old_value` before
     /// writing, so a whole gizmo drag coalesces into one undo step that
@@ -959,7 +959,7 @@ impl DarklyEngine {
         ))
     }
 
-    /// How the user may transform a layer: `live` / `destructive` / `none`.
+    /// How the artist may transform a layer: `live` / `destructive` / `none`.
     /// Resolves the void's static capability through the compositor-owned
     /// registry. Returned as a stable string for the WASM boundary.
     #[handler]
@@ -1347,7 +1347,7 @@ impl DarklyEngine {
         }
 
         // Sort by document DFS order so subsequent `After(prev)` chaining
-        // preserves the user's original top-to-bottom layout at the
+        // preserves the artist's original top-to-bottom layout at the
         // destination.
         let order = self.doc.all_node_ids_in_order();
         let order_idx = |id: LayerId| order.iter().position(|&x| x == id).unwrap_or(usize::MAX);
@@ -1417,7 +1417,7 @@ impl DarklyEngine {
         };
         // Picking a blend mode on a passthrough group implicitly switches it
         // to isolated; passthrough ignores the group's blend mode, so the
-        // user's choice would have no visible effect otherwise.
+        // artist's choice would have no visible effect otherwise.
         let was_passthrough = matches!(
             self.doc.find_node(id),
             Some(LayerNode::Group(g)) if g.passthrough,
@@ -1514,7 +1514,7 @@ impl DarklyEngine {
     /// Pure session state: no document mutation. The eye-icon column on
     /// every layer is independent: toggling visibility while isolated
     /// modifies that layer's `visible` field, and clearing isolation
-    /// preserves whatever the user set.
+    /// preserves whatever the artist set.
     #[handler]
     pub fn set_isolated_node(&mut self, id: Option<LayerId>) -> Option<LayerId> {
         if self.isolated_node == id {
@@ -1545,7 +1545,7 @@ impl DarklyEngine {
     }
 
     /// True when the host's `isolated` blend uniform should fire, i.e. the
-    /// current isolation target is one of `host_id`'s filters (the user
+    /// current isolation target is one of `host_id`'s filters (the artist
     /// asked to see the mask channel as grayscale on canvas). Isolating the
     /// host itself doesn't trigger this; the host renders normally and the
     /// compose walk hides its siblings instead.
@@ -1556,7 +1556,7 @@ impl DarklyEngine {
         }
     }
 
-    /// User-visible document name. Backs the tab title and the Save As
+    /// Artist-visible document name. Backs the tab title and the Save As
     /// picker's `suggestedName`. Persisted on disk as `manifest.name`.
     #[handler]
     pub fn document_name(&self) -> &str {
@@ -1604,7 +1604,7 @@ impl DarklyEngine {
     }
 
     /// Rename the document. Not undoable: renaming is a metadata change
-    /// users expect to be free-standing, matching every other editor's
+    /// artists expect to be free-standing, matching every other editor's
     /// "title bar rename" affordance. The save flow picks the new name
     /// up from `doc.name` the next time `start_save_document` runs.
     #[handler]

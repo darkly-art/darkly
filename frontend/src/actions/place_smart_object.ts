@@ -13,7 +13,7 @@ import { toast } from '../state/toast.svelte';
  *  Two reasons, both real: the pixels cross the WASM boundary as a copy, so a
  *  huge source costs a proportional transfer (4096² RGBA is already 64 MB), and
  *  a smart object keeps its source resident in VRAM alongside a mip chain.
- *  4096 is comfortably above any logo or photograph a user places and well
+ *  4096 is comfortably above any logo or photograph an artist places and well
  *  inside every backend's `maxTextureDimension2D`. */
 const MAX_SOURCE_DIM = 4096;
 
@@ -25,7 +25,7 @@ export type DecodedImage = { width: number; height: number; rgba: Uint8Array };
  *  out of a `Blob`/`File` goes through here rather than repeating the
  *  `createImageBitmap` → `OffscreenCanvas` → `getImageData` dance.
  *
- *  Returns `null` on decode failure; the caller owns the user-facing message,
+ *  Returns `null` on decode failure; the caller owns the artist-facing message,
  *  since what to say depends on how the image arrived. */
 export async function decodeToRgba(blob: Blob): Promise<DecodedImage | null> {
     let bitmap: ImageBitmap;

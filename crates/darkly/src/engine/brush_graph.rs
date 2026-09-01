@@ -31,7 +31,7 @@ enum ChangeKind {
     /// version counters need to bump to invalidate both preview caches.
     /// Used for orientation knobs like `circle.rotation`.
     ThumbnailRelevantScrub,
-    /// User-facing exposed-port scrub on a port the editor preview
+    /// Artist-facing exposed-port scrub on a port the editor preview
     /// pipeline actually reads (size, opacity, hardness, …). Bumps only
     /// `brush_graph_version`: the dab thumbnail render neutralises
     /// scrubs via `reset_exposed_scrubs`, so its cache stays valid.
@@ -422,7 +422,7 @@ impl DarklyEngine {
     ///   scrubbed port is overridden by
     ///   [`crate::nodegraph::Graph::apply_preview_overrides`] before
     ///   every editor-preview render, so its rendered output is
-    ///   independent of the user's port value, so invalidating the cache
+    ///   independent of the artist's port value, so invalidating the cache
     ///   would just cause a wasted full-stroke re-render.
     ///
     /// Returns Ok on success or an error string.
@@ -480,7 +480,7 @@ impl DarklyEngine {
     /// the frontend scales the result via CSS to whatever display size it
     /// needs.
     ///
-    /// Uses the theme colors stored via `set_preview_theme`, not the user's
+    /// Uses the theme colors stored via `set_preview_theme`, not the artist's
     /// active paint color, keeping the editor preview visually consistent
     /// with the brush picker's brush thumbnails.
     #[handler(returns = bytes)]
@@ -728,7 +728,7 @@ impl DarklyEngine {
     ///
     /// `apply_preview_overrides` makes every stroke preview size-invariant:
     /// the tile-shape thumbnail, the save bake, and the editor preview all
-    /// show brush *identity*, not the momentary scrub value the user happened
+    /// show brush *identity*, not the momentary scrub value the artist happened
     /// to have. Per-node knowledge of what to neutralize lives on the port
     /// registrations: this pipeline never introspects node types.
     /// The backdrop travels with the request rather than being read off the
@@ -768,7 +768,7 @@ impl DarklyEngine {
     /// Shared by the baked dab thumbnail and the active-dab preview: they
     /// differ only in the graph and the [`ReadbackContext`] variant. The dab
     /// thumbnail represents brush identity (shape, texture, dynamics), so
-    /// user-facing scrubs that vary across instances shouldn't bias it.
+    /// artist-facing scrubs that vary across instances shouldn't bias it.
     ///
     /// Always [`PreviewBackdrop::Flat`]: a stationary full-pressure sample has
     /// no motion for a displacement to reveal, so a field under it would show
@@ -969,11 +969,11 @@ impl DarklyEngine {
     }
 
     /// Return info about every brush-bar entry in the active brush graph,
-    /// in the dict's insertion order (which is the user-facing display
+    /// in the dict's insertion order (which is the artist-facing display
     /// order, since the brush-bar node lets the author drag-reorder).
     ///
     /// Entries that reference a node/port no longer present, or whose
-    /// target port has an incoming connection (the user can't scrub a
+    /// target port has an incoming connection (the artist can't scrub a
     /// wire-driven value), are skipped silently.
     #[handler]
     pub fn brush_exposed_ports(&self) -> Vec<ExposedPortInfo> {
@@ -999,7 +999,7 @@ impl DarklyEngine {
                 continue;
             };
 
-            // A connected input is driven by its wire, not the user.
+            // A connected input is driven by its wire, not the artist.
             if brush
                 .graph
                 .connections

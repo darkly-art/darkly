@@ -129,7 +129,7 @@ pub struct Catalog {
     /// Whether an entry's icon identifies it within the catalog.
     ///
     /// True for the registries whose entries are picker variants, where the
-    /// glyph is most of what the user has to tell two of them apart and a
+    /// glyph is most of what the artist has to tell two of them apart and a
     /// duplicate is a copy-pasted `register()` that kept the donor's. Actions
     /// declare it false: an action's glyph depicts the *operation*, so the same
     /// operation at another scope wants the same glyph (flipping the canvas and

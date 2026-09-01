@@ -313,7 +313,7 @@ class WorkspaceStore {
         const handle = mount(Workspace, { target: win.document.body, props: { workspaceId: newId } });
         this.#mounted.set(newId, handle);
 
-        // The user closing the OS window (or the browser folding PiP back) must
+        // The artist closing the OS window (or the browser folding PiP back) must
         // return its panels to the main tree.
         win.addEventListener('pagehide', () => this.closeWindow(newId), { once: true });
 

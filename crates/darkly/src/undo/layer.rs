@@ -49,7 +49,7 @@ impl UndoAction for EntityAddAction {
 /// across undo/redo with no copy. The subtree's GPU textures are
 /// tombstoned so the pixels survive too; they're disposed only when this
 /// action is evicted from the undo stack while the deletion is still in
-/// effect (i.e. the user never undid it). Undo relinks the entity; redo
+/// effect (i.e. the artist never undid it). Undo relinks the entity; redo
 /// unlinks again.
 ///
 /// Callers that manage a filter's pixels themselves (`remove_mask` saves the

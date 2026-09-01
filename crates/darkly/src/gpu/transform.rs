@@ -81,7 +81,7 @@ pub struct FloatingContent {
     /// Source dimensions in pixels.
     pub source_width: u32,
     pub source_height: u32,
-    /// Current user transform: affine (`Basic`) or projective
+    /// Current artist transform: affine (`Basic`) or projective
     /// (`Perspective`). The GPU consumes its [`Transform::to_projective`].
     pub transform: Transform,
     /// Target node id. Resolves to either a raster layer or a mask filter;

@@ -161,7 +161,7 @@ fn hair_expresses_both_controls_without_helper_nodes() {
 
     // Neither control routes through a helper node any more: `multiply_3.b`
     // and `multiply_2.a` are unwired, which is also what keeps them
-    // user-scrubbable at all.
+    // artist-scrubbable at all.
     for (node, port_name) in [("multiply_3", "b"), ("multiply_2", "a")] {
         assert!(
             !graph

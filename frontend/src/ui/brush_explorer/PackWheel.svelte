@@ -49,7 +49,7 @@
         el: HTMLElement | undefined;
         /** This pane moved; keep the frame loop awake. */
         onScroll: () => void;
-        /** The user put a hand on this pane, so it is the one driving now. */
+        /** The artist put a hand on this pane, so it is the one driving now. */
         onDrive: () => void;
         onPick: (index: number) => void;
     }

@@ -151,7 +151,7 @@ export async function saveDocument({ forceAs = false }: { forceAs?: boolean } = 
         sanitizeFilename(await instance.engine.api.documentName()) || 'darkly-document';
 
     // Firefox / Safari: no native picker; route to the in-app Save modal,
-    // which drives produce + download and resolves when the user is done.
+    // which drives produce + download and resolves when the artist is done.
     if (!hasFilePicker) {
         await saveModal.request(suggested);
         return;
@@ -162,7 +162,7 @@ export async function saveDocument({ forceAs = false }: { forceAs?: boolean } = 
     // transient activation; `writeToHandle` on the returned handle does not.
     try {
         const handle = await pickFileHandle(`${suggested}.darkly`, SAVE_ACCEPTS, PICKER_ID);
-        if (!handle) return; // user cancelled
+        if (!handle) return; // artist cancelled
         const format = formatFromName(handle.name);
         const data = await SAVE_FORMATS[format].produce(instance);
         await writeToHandle(handle, data);

@@ -9,7 +9,7 @@
     import { createGraphCoords, type GraphCoords } from './coords';
 
     interface Props {
-        /** Fires when the user requests "add node" from inside the canvas
+        /** Fires when the artist requests "add node" from inside the canvas
          *  (currently: Shift+A while the cursor is over the graph). The
          *  parent owns the popup; coords let it both place the popup and
          *  drop the resulting node at the cursor. */
@@ -26,8 +26,8 @@
     // --- Auto-layout when nodes lack positions ---
     // Positions are UI-only state. After a brush load/reset they're
     // cleared, and this effect lays everything out using DOM-measured
-    // sizes for tight packing. User drags update positions in place;
-    // re-laying out then would clobber the user's arrangement, so the
+    // sizes for tight packing. Artist drags update positions in place;
+    // re-laying out then would clobber the artist's arrangement, so the
     // guard keeps this a one-shot per fresh graph.
     $effect(() => {
         if (!brushGraph.needsInitialLayout) return;
@@ -301,7 +301,7 @@
 
     // --- 'addBrushNode' action → open menu at the cursor ---
     // The action lives in the global registry (so it appears in the
-    // hotkey cheat sheet and respects user-overridden shortcuts). Its
+    // hotkey cheat sheet and respects artist-overridden shortcuts). Its
     // handler dispatches `darkly:add-node-request`; we listen here
     // because pan/zoom and cursor tracking are local to this component.
     function handleAddNodeRequest() {

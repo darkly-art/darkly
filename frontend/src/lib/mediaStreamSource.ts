@@ -61,7 +61,7 @@ export class MediaStreamSource extends FrameSource {
         this.stream = stream;
         try {
             // Fire `onEnded` when the capture stops outside our control: the
-            // common path for screenshare (the user clicks the browser's "Stop
+            // common path for screenshare (the artist clicks the browser's "Stop
             // sharing" bar), and possible for the camera (device unplugged).
             const track = stream.getVideoTracks()[0];
             track?.addEventListener('ended', () => this.handleTrackEnded());
@@ -186,7 +186,7 @@ export function describeMediaError(err: unknown, captureKind: CaptureKind): stri
     switch (name) {
         case 'NotAllowedError':
         case 'PermissionDeniedError':
-            // getDisplayMedia rejects with NotAllowedError both when the user
+            // getDisplayMedia rejects with NotAllowedError both when the artist
             // cancels the OS picker and when sharing is policy-blocked.
             return captureKind === 'display'
                 ? 'Screen share was denied or cancelled.'

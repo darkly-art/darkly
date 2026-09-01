@@ -20,10 +20,10 @@
 
 ### ABR Import: Barely Functional
 
-A major pain point that surprises users constantly:
+A major pain point that surprises artists constantly:
 
-- **Only brush tips are imported** - all dynamics, parameters, presets, patterns, and texture settings are silently discarded. Users must manually recreate every preset from scratch
-- **Modern ABR versions often fail** - Krita handles PS 7.x era formats but struggles with newer versions. Users resort to third-party tools like abrMate to downconvert
+- **Only brush tips are imported** - all dynamics, parameters, presets, patterns, and texture settings are silently discarded. Artists must manually recreate every preset from scratch
+- **Modern ABR versions often fail** - Krita handles PS 7.x era formats but struggles with newer versions. Artists resort to third-party tools like abrMate to downconvert
 - **Confusing UX** - after import, "nothing happens": tips appear in the brush editor (F5) but NOT in the preset docker, causing massive confusion
 - **A draft MR exists** (#2539, Dec 2025) for improved ABR import with descriptor parsing and auto-preset creation, but it's not merged
 - **Heavily attempted, rarely successful** - one of the most common support topics on krita-artists.org, precisely because artists coming from Photoshop expect their ABR collections to work and hit a wall
@@ -100,7 +100,7 @@ The central method is `KisBrush::generateMaskAndApplyMaskOrCreateDab()`. Two pat
 |------|--------|-----------|
 | **Default** (hard/soft) | `KisCircleMaskGenerator` | `KisRectangleMaskGenerator` |
 | **Gaussian** | `KisGaussCircleMaskGenerator` | `KisGaussRectMaskGenerator` |
-| **Curve** (user-defined falloff) | `KisCurveCircleMaskGenerator` | `KisCurveRectMaskGenerator` |
+| **Curve** (artist-defined falloff) | `KisCurveCircleMaskGenerator` | `KisCurveRectMaskGenerator` |
 
 Parameters: radius, ratio (aspect), horizontal/vertical fade, spikes (star/polygon shapes when > 2), antialiasEdges, softness, custom curve string.
 
@@ -327,7 +327,7 @@ This means `.kpp` files can be previewed as regular images by any PNG viewer.
 
 **Version 2.2 (legacy):**
 - Resources are referenced by filename but NOT embedded
-- External brush tips/patterns must exist in the user's resource folder
+- External brush tips/patterns must exist in the artist's resource folder
 - Resource filenames tracked via `"dependent_resources_filenames"` metadata
 
 **Version 5.0 (current):**

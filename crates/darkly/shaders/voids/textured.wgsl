@@ -1,8 +1,8 @@
 // Video-stream void: sample an external image (webcam / screenshare frame)
-// with a user transform.
+// with an artist transform.
 //
 // Bind group 0:
-//   0: Params uniform (inverse user-transform affine, cover-fit content rect)
+//   0: Params uniform (inverse artist-transform affine, cover-fit content rect)
 //   1: Source texture (the video frame, uploaded by upload_external_image)
 //   2: Sampler (linear clamp-to-edge)
 //
@@ -21,7 +21,7 @@
 // window-local pixels; the gizmo edits the transform in the content rect's
 // local frame, so `canvas_origin` cancels and never appears here):
 //   FragCoord.xy → subtract content_origin → content-local pixel
-//                → inverse user homography (perspective divide) → pre-transform
+//                → inverse artist homography (perspective divide) → pre-transform
 //                  content-local pixel
 //                → normalize by content_size → src_uv ∈ [0, 1]
 //   src_uv outside [0, 1] (or a degenerate, behind-camera sample) → transparent.
@@ -53,7 +53,7 @@ struct VertexOutput {
 }
 
 struct Params {
-    // Inverse of the user transform's homography, packed rows [m, _] (see
+    // Inverse of the artist transform's homography, packed rows [m, _] (see
     // gpu::transform::pack_inv_rows). Affine carries inv_row2 = [0,0,1,_].
     inv_row0: vec4f,
     inv_row1: vec4f,
@@ -69,7 +69,7 @@ struct Params {
 @group(0) @binding(2) var src_sampler: sampler;
 
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    // Window-local fragment → content-local → inverse user homography (shared
+    // Window-local fragment → content-local → inverse artist homography (shared
     // proj_local; .z flags a degenerate / behind-camera sample).
     let cl = in.position.xy - params.content_origin;
     let pre = proj_local(params.inv_row0, params.inv_row1, params.inv_row2, cl);

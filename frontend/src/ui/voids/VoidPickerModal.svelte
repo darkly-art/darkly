@@ -18,7 +18,7 @@
 
     async function pick(vt: any) {
         if (!app.engine) return;
-        // An image-sourced void has no empty state to add: it needs the user
+        // An image-sourced void has no empty state to add: it needs the artist
         // to choose a file first, so hand it straight to the placement action
         // rather than creating a blank layer here. Keyed on the void's declared
         // source, so a future ingress is additive at this match.
@@ -31,7 +31,7 @@
         // MediaStream IN this click gesture, BEFORE the awaitable `add_void`
         // round-trip. `getDisplayMedia` requires transient user activation,
         // which would expire if we acquired only after awaiting add_void. If
-        // the user cancels / denies, we still create the layer and record the
+        // the artist cancels / denies, we still create the layer and record the
         // error so the properties panel can offer Resume. A `stream` void
         // (Blender) needs no gesture or permission: it connects over localhost
         // HTTP after the layer exists, so skip acquisition entirely.
@@ -62,7 +62,7 @@
             // gesture: opt the new layer into this session's allow-list and
             // hand it the pre-acquired stream (or the acquire error). Reopening
             // a saved doc does NOT add to this set, which is why loaded
-            // stream voids hold their saved frame until the user clicks Resume.
+            // stream voids hold their saved frame until the artist clicks Resume.
             if (captureKind) {
                 app.markStreamVoidStarted(id);
                 await app.startStreamSource(id, captureKind, stream, acquireError);

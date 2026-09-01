@@ -22,11 +22,11 @@ it shows up. No central list to edit (but see [Gap](#gap) below about evaluators
 ## Exposing a tunable value: one rule
 
 A port **is** the knob. To ship a preset with a non-default value on a port,
-set the default on the port instance. To let the user adjust it at runtime,
+set the default on the port instance. To let the artist adjust it at runtime,
 mark the port exposed.
 
 ```rust
-b.set_port(node, "port_name", value);        // preset-specific default, not user-adjustable
+b.set_port(node, "port_name", value);        // preset-specific default, not artist-adjustable
 b.expose_port(node, "port_name", value);     // preset-specific default + toolbar slider
 ```
 
@@ -61,7 +61,7 @@ fn canvas_brush() -> PresetBundle {
 The port-default path breaks for three cases. These are the *only* legitimate
 reasons to add a `user_input` node:
 
-1. **Range rescaling.** The port expects 0-1 but the user should see a range
+1. **Range rescaling.** The port expects 0-1 but the artist should see a range
    in different units (e.g. pixels 1-500). `user_input` normalizes its
    displayed value back to 0-1 before feeding the port.
 2. **Fan-out.** One slider drives multiple ports (or one port through some
@@ -102,7 +102,7 @@ PortDef::input("my_knob", BrushWireType::Scalar)
     .exposed()                        // optional: show on node by default (preset can override)
 ```
 
-`.exposed()` on the node definition means the port is user-facing *by default*;
+`.exposed()` on the node definition means the port is artist-facing *by default*;
 the preset can still call `set_port_exposed(..., false)` to hide it.
 Presets that don't mark the node-def as exposed can still call
 `set_port_exposed(..., true)` per-instance via `expose_port`.

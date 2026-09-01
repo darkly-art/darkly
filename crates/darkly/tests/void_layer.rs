@@ -97,8 +97,8 @@ fn layer_name(engine: &DarklyEngine, layer_id: darkly::layer::LayerId) -> String
 /// Regression: a void layer must not accept brush strokes. The compositor
 /// regenerates the void's texture from `(void_type, params)` each frame
 /// (or eagerly on param change), so any paint that lands there either
-/// vanishes on the next dirty tick or stays only because the user hasn't
-/// touched a slider yet; both are confusing and neither is the user's
+/// vanishes on the next dirty tick or stays only because the artist hasn't
+/// touched a slider yet; both are confusing and neither is the artist's
 /// intent when they clicked a void in the layer panel and started painting.
 /// `is_node_paintable` rejects voids at every stroke entry point.
 #[test]

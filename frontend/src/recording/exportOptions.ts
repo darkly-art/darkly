@@ -7,7 +7,7 @@
  *
  * A recording holds one segment per encoder run; the document's aspect
  * ratio can change between runs (canvas resize / crop). Export renders to
- * a single output canvas, so the user picks a target aspect ratio (one of
+ * a single output canvas, so the artist picks a target aspect ratio (one of
  * those present in the recording) and how segments of *other* aspect
  * ratios are converted onto it. Grouping uses the true document canvas
  * dims stored per segment; encoder dims are macroblock-aligned (width) /

@@ -580,7 +580,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
-    /// Every parameter a user can see carries a label and a description, so no
+    /// Every parameter an artist can see carries a label and a description, so no
     /// documentation table ships with a blank cell and no properties panel
     /// falls back to a raw snake_case field name. Walks the catalogs rather
     /// than the registries directly, which is exactly the set that reaches

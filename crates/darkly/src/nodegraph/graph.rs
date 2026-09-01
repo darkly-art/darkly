@@ -98,13 +98,13 @@ pub struct PortDef<W: WireKind> {
     /// `add_node` / portable import) sets it correctly; serde round-trips it.
     #[serde(default)]
     pub wirable: bool,
-    /// Whether a user may *expose* this input as a brush-bar control.
+    /// Whether an artist may *expose* this input as a brush-bar control.
     /// Computed from `wire_type.is_user_exposable()` at construction and
     /// carried as data so the frontend gates its expose affordance directly
     /// off one value rather than re-deriving the type rule; the single
     /// source of truth is [`WireKind::is_user_exposable`]. Orthogonal to
     /// `wirable`: an enum is exposable but not wirable; a wired scalar is
-    /// wirable but (while connected) not user-scrubbable. `expose_port`
+    /// wirable but (while connected) not artist-scrubbable. `expose_port`
     /// enforces it, so a control the brush bar can't render can never be
     /// surfaced. Serde round-trips it.
     #[serde(default)]
@@ -128,7 +128,7 @@ pub struct PortDef<W: WireKind> {
     /// Iconify icon name (e.g. `"fa6-solid:circle"`), or empty.
     #[serde(default)]
     pub icon: String,
-    /// User-facing display label.  Falls back to `name` if empty.
+    /// Artist-facing display label.  Falls back to `name` if empty.
     #[serde(default)]
     pub label: String,
     /// Whether this port is exposed in the brush properties panel.
@@ -140,12 +140,12 @@ pub struct PortDef<W: WireKind> {
     /// compiler clones the graph, drops incoming wires on flagged
     /// ports, and replaces `default` with this constant, so all
     /// previews read as a showcase of the brush regardless of the
-    /// user's working scrub. Real strokes still honour the
+    /// artist's working scrub. Real strokes still honour the
     /// configured value.
     ///
-    /// Use when the port is something the user actively scrubs but
+    /// Use when the port is something the artist actively scrubs but
     /// the preview must stay at a canonical value (otherwise the
-    /// preview becomes a moving target as the user dials in their
+    /// preview becomes a moving target as the artist dials in their
     /// brush). The picker dab tile uses a more aggressive
     /// neutralizer (`reset_exposed_scrubs`) that targets every
     /// exposed scrub regardless of `preview_value`.
@@ -165,7 +165,7 @@ pub struct PortDef<W: WireKind> {
     /// `PassThrough` as the stabilizer (the path is pre-cooked), so
     /// the live `stabilize` value never reaches it. Marking this
     /// declaratively avoids re-rendering a full stroke every ~100 ms
-    /// while the user drags the slider for no visible effect.
+    /// while the artist drags the slider for no visible effect.
     ///
     /// Distinct from [`PortDef::preview_value`]: that one substitutes
     /// values into the *cursor overlay shader*; this one skips a
@@ -183,7 +183,7 @@ pub struct PortDef<W: WireKind> {
     /// the frontend hides the port row whenever the named param's current
     /// value is outside the allowed list. This is purely a UI affordance:
     /// the engine still accepts and reads the port's value normally; it
-    /// just stops showing the user a control they wouldn't act on.
+    /// just stops showing the artist a control they wouldn't act on.
     /// Used by the Shape node to hide algorithm-specific knobs (Perlin's
     /// `seed`, Superformula's `n1`/`n2`/`n3`) under the wrong algorithm.
     #[serde(default)]
@@ -202,12 +202,12 @@ pub struct PortDef<W: WireKind> {
     #[serde(default)]
     pub natural_range: Option<(f32, f32)>,
     /// Mark this exposed port as part of the brush's *identity* so its
-    /// user-set value persists into the dab thumbnail render.
+    /// artist-set value persists into the dab thumbnail render.
     ///
     /// By default `crate::brush::reset_exposed_scrubs` resets every
     /// exposed input back to its registration default before rendering
     /// the dab thumbnail: the icon represents brush shape/texture, not
-    /// the user's working size/opacity/flow knobs. That policy is wrong
+    /// the artist's working size/opacity/flow knobs. That policy is wrong
     /// for orientation knobs (rotation): a calligraphy nib at
     /// 45° *is* a different-looking brush, and the icon should reflect
     /// that.
@@ -418,7 +418,7 @@ impl<W: WireKind> PortDef<W> {
 
     /// Opt this port out of preview rendering by spoofing it to a
     /// fixed value. See [`PortDef::preview_value`] for the contract.
-    /// Use when the port's user-facing value is a working parameter
+    /// Use when the port's artist-facing value is a working parameter
     /// (size, position, time) rather than part of the brush's identity.
     pub fn with_preview_value(mut self, value: f32) -> Self {
         self.preview_value = Some(value);
@@ -435,7 +435,7 @@ impl<W: WireKind> PortDef<W> {
     }
 
     /// Mark this exposed port as part of the brush's identity: its
-    /// user-set value persists into the dab thumbnail, and scrubs of
+    /// artist-set value persists into the dab thumbnail, and scrubs of
     /// it rebake the thumbnail. See [`PortDef::persist_in_thumbnail`]
     /// for the contract. Use for orientation knobs (rotation)
     /// that visibly change the dab; don't use for magnitude knobs
@@ -626,8 +626,8 @@ impl std::error::Error for FindTerminalError {}
 /// brush bar renders the entry.
 ///
 /// Lives in `Graph::exposed_ports` rather than on `PortDef` per instance
-/// because the brush bar is a single user-facing surface: centralizing
-/// "what the user sees" in one ordered dict makes display order natural
+/// because the brush bar is a single artist-facing surface: centralizing
+/// "what the artist sees" in one ordered dict makes display order natural
 /// (map iteration order is the brush-bar order) and gives the
 /// brush-author editor one canonical place to read and write.
 #[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -918,7 +918,7 @@ impl<W: WireKind> Graph<W> {
     /// constant. Ports without a `preview_value` are left alone.
     ///
     /// Called by every renderer that wants brush-identity output rather
-    /// than the user's momentary scrub state:
+    /// than the artist's momentary scrub state:
     /// - the WGSL compiler, on a clone, before emitting
     ///   `CompiledBrush::cursor_preview_wgsl` (the cursor halo);
     /// - the brush-editor stroke preview;
@@ -1014,7 +1014,7 @@ impl<W: WireKind> Graph<W> {
     ///
     /// `min`/`max` are UI bounds only: nothing clamps the authored value to
     /// them (see [`PortDef::min`]), so an existing out-of-range value
-    /// survives the override untouched until the user next scrubs.
+    /// survives the override untouched until the artist next scrubs.
     pub fn set_port_range(
         &mut self,
         id: &NodeId,

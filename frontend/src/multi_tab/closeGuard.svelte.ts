@@ -1,10 +1,10 @@
 /**
- * Unsaved-changes guard for tab close. Holds the in-flight "user clicked
+ * Unsaved-changes guard for tab close. Holds the in-flight "artist clicked
  * × on a dirty tab" prompt state and routes the modal's three buttons
  * (Save / Discard / Cancel) back through the shell.
  *
  * The guard always focuses the target tab before showing the modal, because
- * `saveDocument()` operates on `app.engine`, so the engine the user is
+ * `saveDocument()` operates on `app.engine`, so the engine the artist is
  * being prompted about must be the active one. Side effect: the modal
  * doubles as a visual cue for which tab is in question.
  */
@@ -18,7 +18,7 @@ import { processRecording } from '../recording/recorder.svelte';
 /** Drop a tab's recovery snapshot and recording scratch: it's being
  *  closed deliberately, so its unsaved work is no longer something to
  *  recover from a crash, and its recording lives (only) in whatever file
- *  the user last saved. */
+ *  the artist last saved. */
 function clearSnapshot(recoveryId: string): void {
     void removeSnapshot(sessionId, recoveryId).catch(() => {});
     void processRecording.clearScratchFor(recoveryId).catch(() => {});
@@ -73,9 +73,9 @@ class CloseGuardState {
     }
 
     /** "Save" button: run the save flow against the focused tab. On
-     *  success (dirty bit cleared) the tab closes; if the user cancelled
+     *  success (dirty bit cleared) the tab closes; if the artist cancelled
      *  the file picker mid-save the dirty bit stays set and the tab
-     *  stays open with the modal dismissed (user can retry from the ×). */
+     *  stays open with the modal dismissed (artist can retry from the ×). */
     async save() {
         const id = this.tabId;
         this.open = false;
@@ -92,7 +92,7 @@ export const closeGuard = new CloseGuardState();
 
 /** True when any open tab has unsaved changes. Backs the
  *  `window.beforeunload` handler so the browser prompts on accidental
- *  reload / navigation. Walks every instance because the user may have
+ *  reload / navigation. Walks every instance because the artist may have
  *  multiple dirty tabs open at once.
  *
  *  Reads each instance's `engineState` mirror (refreshed each frame from

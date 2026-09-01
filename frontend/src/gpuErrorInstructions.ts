@@ -9,14 +9,14 @@ import type { Browser, Os, Platform } from './platform';
 export interface FlagLink {
     /** Displayed inline as code with a copy-to-clipboard button. */
     url: string;
-    /** What the user should change once they reach the URL. */
+    /** What the artist should change once they reach the URL. */
     action: string;
 }
 
 export interface Instructions {
     /** Short human-readable label, e.g. "Chromium on Linux". */
     title: string;
-    /** Ordered steps for the user to follow. */
+    /** Ordered steps for the artist to follow. */
     steps: string[];
     /** URLs to surface with copy buttons (flags, settings pages). */
     flags: FlagLink[];

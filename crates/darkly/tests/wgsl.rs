@@ -73,7 +73,7 @@ fn rough_ink_brush_compiles_to_nonempty_wgsl() {
 /// `pen.drawing_angle` (`atan2(dy, dx)`) lives in, where positive angles
 /// are clockwise visually. For a polar formula `r(θ)`, adding α to the
 /// argument rotates the geometry CCW in this frame; subtracting rotates
-/// it CW. The user-facing semantic is "rotation = α (radians) points the
+/// it CW. The artist-facing semantic is "rotation = α (radians) points the
 /// shape's θ=0 reference ray at screen angle α," which makes
 /// `pen.drawing_angle → circle.rotation_input` an identity wire that
 /// orients the shape along the stroke direction. That semantic requires
@@ -105,7 +105,7 @@ fn shape_rotation_subtracts_from_theta_for_drawing_angle_compatibility() {
 }
 
 /// Regression test: brush stamp rotation must counteract view rotation,
-/// so the on-screen orientation is invariant under the user spinning
+/// so the on-screen orientation is invariant under the artist spinning
 /// the canvas. The implementation places this correction at two
 /// places in the compiled WGSL: every circle node and the canonical
 /// stroke-follow wire share these two intercepts, no per-node code.
@@ -115,7 +115,7 @@ fn shape_rotation_subtracts_from_theta_for_drawing_angle_compatibility() {
 ///    effective canvas-frame stamp rotation becomes
 ///    `p.rotation + view_rotation`. The present shader's canvas→screen
 ///    transform then subtracts `view_rotation` again, leaving the on-
-///    screen orientation = the user-set `p.rotation`. Static rotation
+///    screen orientation = the artist-set `p.rotation`. Static rotation
 ///    knobs (e.g. Charcoal's constant 6.3) become screen-relative.
 ///
 /// 2. `pen_input` subtracts `u.intrinsic.view_rotation` from
@@ -954,7 +954,7 @@ fn polygon_extent_grows_with_squeeze() {
 
 /// Coordinate-frame guard: the polygon tip must be screen-relative like every
 /// theta-based tip. Because it works from raw `local_uv`, it has to fold
-/// `view_rotation` into its own rotation, otherwise the dab spins as the user
+/// `view_rotation` into its own rotation, otherwise the dab spins as the artist
 /// rotates the canvas view. Assert both variants build the rotation angle with
 /// `view_rotation` folded in.
 #[test]

@@ -56,7 +56,7 @@
     // stream-related affordance below.
     const captureKind = $derived(app.voidCaptureKind.get(node.voidType));
 
-    // Stream-backed voids surface source-level errors here so the user sees a
+    // Stream-backed voids surface source-level errors here so the artist sees a
     // human-readable reason ("Camera access was denied", "Could not connect to
     // the Blender stream…", …) instead of a silently-transparent layer.
     const streamError = $derived(
@@ -81,7 +81,7 @@
     // True for a stream-backed void whose layer exists but isn't currently
     // streaming, either loaded from a `.darkly` (showing the saved last frame)
     // or stopped externally (the browser's "Stop sharing" bar, a Blender
-    // disconnect). The button lets the user explicitly (re)connect. The session
+    // disconnect). The button lets the artist explicitly (re)connect. The session
     // opt-in is cleared on external stop, so this re-appears then too.
     const showResume = $derived(
         !!captureKind

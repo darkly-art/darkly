@@ -115,11 +115,11 @@
 
             if (isOnButton) {
                 // Bare click on our own button while capturing: treat as
-                // a no-op (don't cancel; user might be re-focusing).
+                // a no-op (don't cancel; artist might be re-focusing).
                 return;
             }
 
-            // Anywhere else cancels the capture so the user can dismiss
+            // Anywhere else cancels the capture so the artist can dismiss
             // by clicking outside.
             stop();
         };
@@ -143,7 +143,7 @@
     });
 
     // Belt-and-braces: tear down listeners if the component is unmounted
-    // mid-capture (e.g. user closes the Settings modal while a row is
+    // mid-capture (e.g. artist closes the Settings modal while a row is
     // capturing).
     $effect(() => () => captureCleanup?.());
 

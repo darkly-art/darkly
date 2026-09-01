@@ -690,7 +690,7 @@ fn crop_does_not_anisotropically_squash_presented_content() {
     );
 }
 
-/// REGRESSION: the squash must not COMPOUND across successive crops (the user
+/// REGRESSION: the squash must not COMPOUND across successive crops (the artist
 /// reports each resize/crop "progressively fucks up the situation even more").
 #[test]
 fn successive_crops_do_not_compound_squash() {

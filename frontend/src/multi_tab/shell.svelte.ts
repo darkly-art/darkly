@@ -20,7 +20,7 @@ class MultiTabShell {
 
     /** Display name per instance id. The shell is the authoritative mirror
      *  of the engine's document name: `setName` is the single write path
-     *  (user rename, Save As, and the post-load sync in `actions/index.ts`
+     *  (artist rename, Save As, and the post-load sync in `actions/index.ts`
      *  all route through it), and `pendingName` seeds it before init. Reads
      *  go through this reactive map so the tab strip re-renders on rename,
      *  because the engine's `document_name` is async and can't back a
@@ -92,7 +92,7 @@ class MultiTabShell {
         // The brushGraph singleton caches the focused engine's graph /
         // exposed ports. Without this resync, preview consumers' $effects
         // (keyed on brushGraph.graph) wouldn't re-fire on tab switch and
-        // their previews would freeze until the user picked a brush.
+        // their previews would freeze until the artist picked a brush.
         brushGraph.syncFromActiveEngine();
     }
 

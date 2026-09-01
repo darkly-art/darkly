@@ -4,7 +4,7 @@
  * The WebGPU canvases (`CanvasStack`) must be mounted **exactly once**; a
  * remount destroys each canvas's WebGPU surface and its bound `DarklyHandle`.
  * But the docking system freely moves, splits, and remounts the `Document`
- * panel as the user tiles it. To reconcile the two, the panel renders only an
+ * panel as the artist tiles it. To reconcile the two, the panel renders only an
  * empty *placeholder* and publishes it here; a single persistent `CanvasOverlay`
  * (mounted once at the app root) tracks the placeholder's rect and positions
  * itself over it. The canvas thus *follows* the panel around the tree without

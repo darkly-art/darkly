@@ -71,7 +71,7 @@ describe('pickFileHandle', () => {
         });
     });
 
-    it('returns null when the user cancels (AbortError)', async () => {
+    it('returns null when the artist cancels (AbortError)', async () => {
         vi.stubGlobal(
             'showSaveFilePicker',
             vi.fn(async () => {

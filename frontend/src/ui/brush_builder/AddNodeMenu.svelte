@@ -26,7 +26,7 @@
     let expanded = $state<string | null>(null);
     /** Final placement after viewport clamping. `null` while the popup is
      *  rendered-but-not-yet-measured; the template hides it (visibility:hidden)
-     *  in that state so the user never sees an unclamped first frame. */
+     *  in that state so the artist never sees an unclamped first frame. */
     let placed = $state<{ left: number; top: number } | null>(null);
     /** Side the submenu opens on. Flipped to the left when the popup is too
      *  close to the right edge to fit a right-side submenu. */
@@ -281,7 +281,7 @@
     .add-node-menu {
         position: fixed;
         /* Above the fullscreen brush builder (z-index 9999) so the menu
-         * stays visible when the user expands the editor. */
+         * stays visible when the artist expands the editor. */
         z-index: 10000;
         min-width: 200px;
         max-width: 260px;

@@ -41,9 +41,9 @@ pub trait WireKind:
         true
     }
 
-    /// Returns `true` if a user may *expose* an input of this type as a
+    /// Returns `true` if an artist may *expose* an input of this type as a
     /// brush-bar control (a scrub, toggle, dropdown, …). Orthogonal to
-    /// [`is_wirable`](Self::is_wirable): a value can be user-facing without
+    /// [`is_wirable`](Self::is_wirable): a value can be artist-facing without
     /// being per-dab wirable (an enum dropdown) and vice versa. A type is
     /// exposable only when the properties panel has a widget that can
     /// render and edit it, so this is an explicit allow-list per domain;

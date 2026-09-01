@@ -61,7 +61,7 @@ export async function writeJson(
     await writeText(path, JSON.stringify(value, null, 2), s);
 }
 
-/** Sanitize a user-supplied name into something safe to use as a filename
+/** Sanitize an artist-supplied name into something safe to use as a filename
  *  inside the Darkly directory. Strips path separators, control chars, and
  *  trims to a sane length. */
 export function sanitizeFilename(name: string): string {

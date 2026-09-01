@@ -162,7 +162,7 @@ impl DarklyEngine {
     /// Compile the vector renderer's GPU pipelines ahead of first use, so the
     /// first text (or path) object doesn't stall the frame that would show it on
     /// Vello's one-time shader compile. The frontend fires this when the text
-    /// tool is selected: the compile overlaps the gap before the user commits a
+    /// tool is selected: the compile overlaps the gap before the artist commits a
     /// box. Idempotent: a no-op once the renderer is warm.
     #[handler]
     pub fn warm_vector_renderer(&mut self) {

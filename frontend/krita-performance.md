@@ -150,7 +150,7 @@ allocated and copied on the hot path. This reduces COW latency from ~10-100 µs
 
 Each layer has two paint devices:
 
-- **`original()`** - the raw pixel data the user paints on
+- **`original()`** - the raw pixel data the artist paints on
 - **`projection()`** - the result after applying that layer's effect masks
   (blur, levels, etc.)
 
@@ -208,7 +208,7 @@ These ensure each layer processes the **minimum necessary rectangle**.
 ### 5.1 The Dirty Signal Chain
 
 ```
-User paints 200×200 pixels on Layer 5
+Artist paints 200×200 pixels on Layer 5
     │
     ▼
 KisNode::setDirty(QRect(100,100, 200,200))
@@ -268,7 +268,7 @@ The scheduler manages two queues:
 ```
 ┌─────────────────────┐     ┌──────────────────────┐
 │  KisStrokesQueue    │     │ KisSimpleUpdateQueue  │
-│  (user actions:     │     │ (projection updates:  │
+│  (artist actions:   │     │ (projection updates:  │
 │   brush dabs,       │     │  compositing dirty    │
 │   transforms,       │     │  regions)             │
 │   filters)          │     │                       │
@@ -856,7 +856,7 @@ In a browser, you can't swap to disk like Krita does. Instead:
   access (~1-5ms per tile) but removes them from the 4 GB budget entirely.
 - **GPU-resident layers**: layers that aren't being painted on (locked,
   hidden, reference layers) can keep tile data only on the GPU, evicting from
-  WASM memory. Re-fetch via readback only if the user starts painting on them.
+  WASM memory. Re-fetch via readback only if the artist starts painting on them.
 - **Drop oldest undo states**: when memory is tight, discard the oldest undo
   snapshots. COW means only the unique (unshared) tiles are freed.
 - **Use `WeakRef` / `FinalizationRegistry`** to detect GC pressure and trigger

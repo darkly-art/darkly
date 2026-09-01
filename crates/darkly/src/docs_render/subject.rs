@@ -1,6 +1,6 @@
 //! The fixed image every documentation asset is rendered against.
 //!
-//! The editor's own pickers sample whatever is on the user's canvas, which is
+//! The editor's own pickers sample whatever is on the artist's canvas, which is
 //! exactly the right answer there and exactly the wrong one for documentation:
 //! two assets are only comparable if they depict the same thing.
 //!

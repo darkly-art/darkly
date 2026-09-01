@@ -62,7 +62,7 @@
     const group = $derived(info?.groups[groupIndex] ?? null);
 
     // Re-read the recording summary each time the modal opens: the
-    // recording grows while the user paints.
+    // recording grows while the artist paints.
     $effect(() => {
         if (exportTimelapse.open) void refreshInfo();
     });

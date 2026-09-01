@@ -81,7 +81,7 @@
     }
 
     /** The one text object the panel edits; a vector layer can own many, but
-     *  only the selected one is shown (the user picks it by clicking it on the
+     *  only the selected one is shown (the artist picks it by clicking it on the
      *  canvas; the text tool tracks it in `textSession.editing`). */
     interface Block {
         objectId: number;

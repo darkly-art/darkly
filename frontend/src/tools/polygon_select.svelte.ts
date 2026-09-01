@@ -148,7 +148,7 @@ class PolygonSelectTool extends ToolBase {
 
     onPointerLeave(): void {
         // Drop the rubber-band so it doesn't dangle off-canvas, but keep
-        // the placed vertices so the user can come back and continue.
+        // the placed vertices so the artist can come back and continue.
         this.cursor = null;
         if (this.points.length > 0) this.pushPreviewOverlay();
     }

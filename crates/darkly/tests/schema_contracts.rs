@@ -41,7 +41,7 @@ fn no_duplicate_pref_keys() {
 /// Every schema-declared pref except `app.baseSettings` must have a value in
 /// `defaults.yaml` or in every overlay: without that, `get_*` would panic
 /// at runtime. `app.baseSettings` itself is the picker choice; it's
-/// legitimately absent before the user picks an editor.
+/// legitimately absent before the artist picks an editor.
 #[test]
 fn every_pref_has_a_resolvable_value() {
     let names = config::base_names();

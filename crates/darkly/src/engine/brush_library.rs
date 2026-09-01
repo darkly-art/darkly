@@ -111,7 +111,7 @@ impl DarklyEngine {
             lib.insert(Brush::from_metadata(metadata));
             Ok::<(), String>(())
         })?;
-        // Saving establishes a new "brush baseline": what the user just
+        // Saving establishes a new "brush baseline": what the artist just
         // saved IS what reset-to-default should now return to.
         self.snapshot_brush_defaults();
 
@@ -119,7 +119,7 @@ impl DarklyEngine {
         // fg) so the picker grid looks consistent across brushes. The shared
         // helper applies preview overrides so the saved brush thumbnails are
         // size-invariant: the picker grid should show brush identity, not a
-        // snapshot of whatever scrub value the user happened to have when
+        // snapshot of whatever scrub value the artist happened to have when
         // saving.
         self.request_stroke_preview_readback(
             self.active_brush_graph(),

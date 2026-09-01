@@ -37,7 +37,7 @@ export interface Tool {
      *  PointerEvent. Called by systems that briefly steal the pointer
      *  pipeline and need to hand it back (e.g. the modifier-held color
      *  picker releasing, where the next genuine pointermove may be far
-     *  off and the user expects the preview to be there immediately). */
+     *  off and the artist expects the preview to be there immediately). */
     restoreHover?(canvasX: number, canvasY: number): void;
 
     /** Inverse of {@link restoreHover}: tear down hover-time visual feedback

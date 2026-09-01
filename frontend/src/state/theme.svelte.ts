@@ -4,7 +4,7 @@
  * Owns the `dark` | `light` choice, applies it to the document body, and
  * keeps WASM in sync with the colors used for baking preset thumbnails,
  * so the brush picker grid looks consistent regardless of the paint color
- * the user is currently painting with.
+ * the artist is currently painting with.
  *
  * Persistence flows through the unified config store (`ui.theme`) rather
  * than direct localStorage, so the Settings modal's Theme widget and the
@@ -77,7 +77,7 @@ function readCanvasBg(): Float32Array | null {
 }
 
 class ThemeState {
-    /** The user's stated preference (what's persisted). */
+    /** The artist's stated preference (what's persisted). */
     preference = $state<ThemePreference>('dark');
     /** The concrete theme actually applied to the document. */
     current = $state<ThemeName>('dark');
@@ -92,7 +92,7 @@ class ThemeState {
         this.pushToWasm();
     }
 
-    /** User action: change the theme preference, persist it through config. */
+    /** Artist action: change the theme preference, persist it through config. */
     set(pref: ThemePreference) {
         config.set('ui.theme', pref);
         // syncFromConfig will run via the config.onChange subscriber below.
@@ -124,5 +124,5 @@ class ThemeState {
 export const theme = new ThemeState();
 
 // Keep theme in sync whenever the config mutates (covers: initial load,
-// applyPreset, direct user set via the Settings modal or hamburger menu).
+// applyPreset, direct artist set via the Settings modal or hamburger menu).
 config.onChange(() => theme.syncFromConfig());

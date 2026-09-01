@@ -63,7 +63,7 @@
     </div>
 </div>
 <!-- The WebGPU canvases live here, mounted once, positioned over the Document
-     panel's placeholder wherever the user tiles it (see CanvasOverlay). -->
+     panel's placeholder wherever the artist tiles it (see CanvasOverlay). -->
 <CanvasOverlay />
 <PackExportModal />
 <Toast />

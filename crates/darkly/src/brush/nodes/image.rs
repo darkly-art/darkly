@@ -11,7 +11,7 @@
 //! Sampling frame: because an `image` node is a brush *tip*, it defaults
 //! to **Dab** space: the picture rides the stamp, rotating and
 //! translating with each dab (`local_uv` rotated by the `rotation` input).
-//! **Canvas** space is also available for users who tile a picture as a
+//! **Canvas** space is also available for artists who tile a picture as a
 //! fixed canvas texture: it anchors the pattern to the canvas so
 //! overlapping strokes share phase. `fract(...)` wraps cleanly in either
 //! frame because the registry's shared sampler uses repeat addressing.

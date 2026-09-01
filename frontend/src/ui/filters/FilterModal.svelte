@@ -8,7 +8,7 @@
     // The destructive-apply dialog. Reuses `Modal` (so Escape / × / backdrop /
     // Cancel all close through one tested path) in its non-dimming + draggable
     // mode: the canvas stays visible and the filter is applied to the target
-    // node *non-destructively* as the user edits (`previewFilter`). Apply commits
+    // node *non-destructively* as the artist edits (`previewFilter`). Apply commits
     // it (one undo step); any close path restores the pixels.
 
     // Scratch params edited in the dialog, seeded from the schema defaults each

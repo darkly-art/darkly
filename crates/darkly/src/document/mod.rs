@@ -89,7 +89,7 @@ impl Entity {
 }
 
 pub struct Document {
-    /// User-visible document name. Sourced by the tab strip, used as the
+    /// Artist-visible document name. Sourced by the tab strip, used as the
     /// default filename in the Save As picker, and serialized at the top
     /// of `manifest.json`. Defaults to `"Untitled"` for fresh documents.
     ///
@@ -297,7 +297,7 @@ impl Document {
         matches!(self.entities.get(id), Some(Entity::Filter(_)))
     }
 
-    /// True when `id` may be mutated by the user.
+    /// True when `id` may be mutated by the artist.
     ///
     /// `false` when the node itself or any ancestor (host for a filter;
     /// parent group for a layer/group, walked to the root) carries
@@ -1013,7 +1013,7 @@ impl Document {
 
     /// Resolve a UI "anchor" (typically the currently selected node in the
     /// layers panel) into a [`MoveTarget`] that places a newly-created node
-    /// where the user expects.
+    /// where the artist expects.
     ///
     /// - `None` / unknown / stale id → top of root.
     /// - Filter id → recurse against the filter's host.

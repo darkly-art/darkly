@@ -164,8 +164,8 @@ impl DarklyEngine {
     }
 
     /// Return the layer the active floating content will commit to.
-    /// Used by the frontend to distinguish "user switched away from the
-    /// floating's layer" (dismiss) from "user activated the floating's
+    /// Used by the frontend to distinguish "artist switched away from the
+    /// floating's layer" (dismiss) from "artist activated the floating's
     /// own target layer" (keep: paste-as-floating sets active to its
     /// auto-created target).
     #[handler]
@@ -224,7 +224,7 @@ impl DarklyEngine {
         // Build the preview now so the paste is visible on the first frame.
         // Without this, `set_floating_content` allocates an empty preview
         // texture and the host's blend pass samples uninitialized pixels
-        // until the user drags (which triggers `update_floating_matrix` →
+        // until the artist drags (which triggers `update_floating_matrix` →
         // `update_floating_preview`). The paste appeared invisible until
         // the first move.
         self.update_floating_preview();

@@ -216,7 +216,7 @@ fn stripe_minify() -> Transform {
 
 /// Minifying one-pixel stripes must read as their average, not as one of them.
 ///
-/// This pins the user-visible property (a shrunk image resolves rather than
+/// This pins the artist-visible property (a shrunk image resolves rather than
 /// shimmering), but not the mechanism: the headless adapter integrates the
 /// whole footprint per sample, so it satisfies this with or without a mip
 /// chain. `smart_object_source_carries_a_mip_chain` is what pins the chain, and

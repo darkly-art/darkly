@@ -573,7 +573,7 @@ pub struct DarklyEngine {
     pub(crate) brush_blend_mode: u32,
 
     /// Clone-brush set-source anchor in plane / canvas pixels, or `None`
-    /// until the user sets it via the set-source gesture. Session state:
+    /// until the artist sets it via the set-source gesture. Session state:
     /// persists across strokes and across brush / tool switches (so the
     /// source survives lifting the pen), but not across reload. A clone
     /// brush with no anchor set paints nothing (the no-op gate in
@@ -799,12 +799,12 @@ impl DarklyEngine {
         };
 
         // Snapshot the default graph's port defaults so reset-to-default
-        // works even before the user loads a brush.
+        // works even before the artist loads a brush.
         engine.snapshot_brush_defaults();
 
         // Populate the brush preview mask + cached info from the default
         // graph so the hover overlay is live immediately, without needing
-        // the user to trigger a `compile_active` via a param change.
+        // the artist to trigger a `compile_active` via a param change.
         engine.regenerate_brush_cursor_preview();
 
         // Eagerly allocate the document selection filter + its GPU state.

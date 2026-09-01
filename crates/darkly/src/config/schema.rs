@@ -81,7 +81,7 @@ pub enum WidgetHint {
     Color,
     /// Persisted via the backend but not rendered in the Settings UI.
     /// For UI state (panel visibility, panel sizes, recent-files list, …)
-    /// that lives on the same persistence pipe as user-visible prefs but
+    /// that lives on the same persistence pipe as artist-visible prefs but
     /// shouldn't show up as a "setting".
     Hidden,
 }

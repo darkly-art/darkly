@@ -49,7 +49,7 @@
         pinned = false;
     }
 
-    // Dismiss the pinned state when the user clicks outside this cluster.
+    // Dismiss the pinned state when the artist clicks outside this cluster.
     // Mirrors LeftSidebar's color-picker dismissal pattern.
     $effect(() => {
         if (!pinned) return;

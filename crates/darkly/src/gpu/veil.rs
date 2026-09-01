@@ -104,7 +104,7 @@ pub struct VeilRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
     /// One-sentence summary shown as a tooltip in the Add Veil picker:
-    /// include the terms users would search for.
+    /// include the terms artists would search for.
     pub description: &'static str,
     pub params: &'static [ParamDef],
     /// How long this veil's preview runs, or `None` for a veil with nothing

@@ -18,7 +18,7 @@ class RectSelectTool extends ToolBase {
     // Krita-style integer-pixel snapping: rectangle selections always commit to
     // pixel-aligned bounds (mirrors `QRectF::toRect()` in Krita's
     // `KisToolSelectRectangular::finishRect`). The preview overlay snaps too so
-    // what the user sees during the drag matches what they get on release.
+    // what the artist sees during the drag matches what they get on release.
     private pushPreviewOverlay(): void {
         const engine = this.engine;
         if (!engine || !this.dragStart || !this.dragEnd) return;

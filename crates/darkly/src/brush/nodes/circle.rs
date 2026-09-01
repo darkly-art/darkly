@@ -94,7 +94,7 @@ pub fn register() -> BrushNodeRegistration {
             // No `natural_range`: radians are a unit, not a normalized
             // signal. `pen.drawing_angle → rotation_input` is a unit-
             // preserving identity wire: values pass through raw and
-            // sum with the user's `rotation` offset. Users wanting
+            // sum with the artist's `rotation` offset. Artists wanting
             // `random → rotation_input` to span a full revolution must
             // pre-scale through `multiply`.
             PortDef::input("rotation_input", BrushWireType::Scalar)
@@ -108,7 +108,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                 .with_label("Rotation")
                 .with_unit(UnitType::Degrees)
-                // Orientation is part of shape identity; if the user
+                // Orientation is part of shape identity; if the artist
                 // exposes this knob, the dab thumbnail should follow it.
                 .persist_in_thumbnail()
                 .with_description(

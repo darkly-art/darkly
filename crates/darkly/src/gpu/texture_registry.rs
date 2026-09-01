@@ -280,7 +280,7 @@ impl TextureRegistry {
 
 /// Name of the built-in 1×1 white texture used when a brush
 /// references a texture name that isn't registered. Lets the
-/// per-brush pipeline build succeed even while the user is
+/// per-brush pipeline build succeed even while the artist is
 /// mid-typing a texture name in the node editor.
 pub const FALLBACK_TEXTURE: &str = "_fallback";
 

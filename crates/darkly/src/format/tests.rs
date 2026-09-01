@@ -817,7 +817,7 @@ fn sub_canvas_mask_survives_save_load_round_trip() {
 }
 
 /// Regression: after `open_document`, the layer panel must show
-/// thumbnails immediately, not wait until the user's first edit.
+/// thumbnails immediately, not wait until the artist's first edit.
 ///
 /// The bug was that `engine/load.rs::upload_pixels` wrote bytes via
 /// `queue.write_texture` but never called `mark_node_pixels_dirty`, so

@@ -4,11 +4,11 @@
  * tab when you switch away from it so every open document is covered. The
  * snapshot bytes come from `produceDarklyBytes`, which keeps the tab's
  * render loop alive (via `onSaveResult`) until the readback lands, so even
- * a backgrounded tab completes without the user looking at it.
+ * a backgrounded tab completes without the artist looking at it.
  *
  * Snapshots reuse the exact `.darkly` save pipeline and are marked
  * `'snapshot'` so they leave the document's dirty flag set (nothing
- * reached the user's file). See `storage/recovery.ts` for the store and
+ * reached the artist's file). See `storage/recovery.ts` for the store and
  * `state/recoverySession.ts` for crash detection.
  */
 import { config } from '../config/store.svelte';
@@ -23,7 +23,7 @@ import type { DarklyInstance } from './app.svelte';
 const SWITCH_DEBOUNCE_MS = 5_000;
 
 /** Pure eligibility check, extracted for unit testing. A snapshot runs
- *  only when the tab has unsaved work, the user isn't mid-stroke, no
+ *  only when the tab has unsaved work, the artist isn't mid-stroke, no
  *  snapshot is already in flight for it, and (for switch-away) it wasn't
  *  snapshotted within the debounce window. */
 export function snapshotEligible(opts: {

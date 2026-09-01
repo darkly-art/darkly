@@ -7,7 +7,7 @@
 //! the other way: nothing in this file may reference `gpu`, `layer`,
 //! `engine`, or `document` types.
 //!
-//! A consumer that wants to be user-transformable owns a [`Transform`] and
+//! A consumer that wants to be artist-transformable owns a [`Transform`] and
 //! wires the gizmo to itself through a thin binding (see
 //! `frontend/src/tools/transform_gizmo.ts`). The gizmo takes a bounding box +
 //! the current transform + pointer input and outputs an updated [`Transform`].
@@ -101,7 +101,7 @@ pub fn affine_rotate(angle: f32) -> Affine2D {
 // Transform record: mode-tagged, serializable
 // ---------------------------------------------------------------------------
 
-/// A user-editable 2D transform. Mode-tagged so future interaction modes
+/// An artist-editable 2D transform. Mode-tagged so future interaction modes
 /// (perspective homography, warp mesh) slot in additively without consumers
 /// changing how they store or apply it.
 ///
@@ -114,7 +114,7 @@ pub fn affine_rotate(angle: f32) -> Affine2D {
 pub enum Transform {
     /// Affine: pan / scale / rotate. Stored as [`Affine2D`].
     Basic(Affine2D),
-    /// Projective: true perspective / vanishing-point warp, the user dragging
+    /// Projective: true perspective / vanishing-point warp, the artist dragging
     /// four corners independently. Stored as a 3×3 homography [`Mat3`].
     Perspective(Mat3),
 }

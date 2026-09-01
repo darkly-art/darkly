@@ -1313,7 +1313,7 @@ impl Compositor {
         self.node_textures.insert(layer_id, layer_tex);
         // A freshly-allocated layer still needs a thumbnail slot; without
         // this, an empty new layer renders as "no thumbnail" in the panel
-        // until the user paints. Part of the "any write/alloc to a node
+        // until the artist paints. Part of the "any write/alloc to a node
         // texture marks it dirty" invariant; see `mark_node_pixels_dirty`.
         self.mark_node_pixels_dirty(layer_id);
     }
@@ -2272,7 +2272,7 @@ impl Compositor {
     /// [`crate::gpu::void::Void::set_source_pixels`]: the void reallocates its
     /// source texture at `(width, height)`, rebuilds its bind group, and writes
     /// the bytes. Two callers: document load restoring a saved frame, and
-    /// placement installing a user-supplied image. `bytes` are premultiplied
+    /// placement installing an artist-supplied image. `bytes` are premultiplied
     /// RGBA8 in both cases.
     ///
     /// A source allocated with mip levels gets its chain regenerated here,
@@ -2828,7 +2828,7 @@ impl Compositor {
     /// Compile the vector renderer's pipelines now (if not already), so the first
     /// vector layer doesn't stall on the shader-compile cost. Building it compiles
     /// Vello's full compute-pipeline set (a >1s one-time cost). Called when the
-    /// text tool is selected: the compile then overlaps the gap before the user
+    /// text tool is selected: the compile then overlaps the gap before the artist
     /// commits a text box, rather than blocking the frame that would show it.
     /// Idempotent: a no-op once the renderer exists.
     pub fn ensure_vector_renderer(&mut self, device: &wgpu::Device) {
@@ -2893,7 +2893,7 @@ impl Compositor {
         self.mark_dirty();
     }
 
-    /// Apply a void's user transform in place. Sibling of
+    /// Apply a void's artist transform in place. Sibling of
     /// [`Self::update_void_layer_params`]: delegates to [`Void::set_transform`],
     /// which rewrites the uniform without rebuilding (preserving any aux
     /// textures, e.g. the camera's live frame). No-op for non-procedural or

@@ -28,7 +28,7 @@ pub enum Property {
     /// curve drag into one undo step. The compositor rebuilds the derived LUT
     /// from the restored params on the next `sync_projection_states`.
     FilterParams(Vec<ParamValue>),
-    /// A void layer's user transform (gizmo-edited pan / scale / rotate).
+    /// A void layer's artist transform (gizmo-edited pan / scale / rotate).
     /// Coalesces on `same_kind` so a whole gizmo drag is one undo step,
     /// exactly like `VoidParams`. The GPU re-sync happens in
     /// `sync_compositor_layers` after the doc is restored.

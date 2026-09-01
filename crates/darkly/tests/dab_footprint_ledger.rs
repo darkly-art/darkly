@@ -7,7 +7,7 @@
 //! and the shader's real write footprint were maintained independently,
 //! disagreed by the compiled brush's extent inflation, and a mid-stroke rewind
 //! then cleared pixels outside the CPU bbox while restoring only into it,
-//! visibly truncating earlier dabs into a square as the user kept painting.
+//! visibly truncating earlier dabs into a square as the artist kept painting.
 //!
 //! `smudge` gives a reachable instance. Its `read_half` early-outs on a
 //! stationary dab, and `advance_dab_motion` reports zero motion for the first

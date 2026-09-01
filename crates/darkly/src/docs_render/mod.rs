@@ -12,7 +12,7 @@
 //! registration's `preview_at`), and the driver that runs it is
 //! [`crate::gpu::preview`], the same one the editor's pickers go through. What
 //! is left here is what only a headless documentation run needs: one fixed
-//! subject instead of the user's canvas, a blocking capture sink instead of an
+//! subject instead of the artist's canvas, a blocking capture sink instead of an
 //! asynchronous one, PNGs on disk, and an index beside them.
 //!
 //! **Two leftover renderers.** A blend mode is a relation between two images

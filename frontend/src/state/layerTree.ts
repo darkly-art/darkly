@@ -42,7 +42,7 @@ export interface LayerTreeIndex {
     ids: Set<number>;
     /**
      * Panel order, top to bottom, each host immediately followed by its
-     * modifiers. Descends into collapsed groups: a row the user can't currently
+     * modifiers. Descends into collapsed groups: a row the artist can't currently
      * see is still a live, selectable node.
      */
     order: number[];
@@ -138,7 +138,7 @@ export function nextActiveAfterRemoval(
 
 /**
  * The collapsed groups between `id` and the root, outermost first: the set that
- * must be expanded for `id` to be a row the user can see. Empty when `id` is
+ * must be expanded for `id` to be a row the artist can see. Empty when `id` is
  * already visible, absent, or hidden by nothing.
  */
 export function collapsedAncestorsOf(index: LayerTreeIndex, id: number): number[] {

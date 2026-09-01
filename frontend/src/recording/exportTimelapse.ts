@@ -1,6 +1,6 @@
 /**
  * Timelapse export: turn a tab's recorded segments into an MP4 or GIF at
- * user-chosen options (playback rate, output resolution, target aspect
+ * artist-chosen options (playback rate, output resolution, target aspect
  * ratio + stretch/fit/fill conversion for segments of other aspects, see
  * `exportOptions.ts`).
  *
@@ -57,7 +57,7 @@ export interface RecordingInfo {
     defaultGroupIndex: number;
 }
 
-/** User-chosen export parameters, sanitized by the modal
+/** Artist-chosen export parameters, sanitized by the modal
  *  (`clampFps` / `lockedDims`). */
 export interface TimelapseExportOptions {
     fps: number;

@@ -45,7 +45,7 @@ struct VoidBody {
     /// declares them. Variant identity (`Int` vs `Float`) round-trips via
     /// the regression-tested `#[serde(untagged)]` ordering in `ParamValue`.
     params: Vec<ParamValue>,
-    /// User transform (gizmo-edited pan / scale / rotate). `#[serde(default)]`
+    /// Artist transform (gizmo-edited pan / scale / rotate). `#[serde(default)]`
     /// so procedural voids and pre-transform saves load as identity.
     #[serde(default)]
     transform: crate::transform::Transform,
@@ -222,7 +222,7 @@ mod tests {
     /// `ManifestPixelRef` AND emit a matching `PixelBlobSpec` so the save
     /// flow knows to readback the aux texture. This is the regression
     /// shield for the camera-void persistence feature: without the spec
-    /// the save pipeline silently drops the frame and the user reopens to
+    /// the save pipeline silently drops the frame and the artist reopens to
     /// a black layer.
     #[test]
     fn void_with_frame_emits_pixel_blob_spec() {

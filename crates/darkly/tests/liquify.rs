@@ -434,7 +434,7 @@ fn warp_magnitude_is_size_invariant() {
 /// texture, any liquify stroke long enough to check-point died on a wgpu
 /// validation error.
 ///
-/// It also closes the loop on the ghosting bug at the level the user
+/// It also closes the loop on the ghosting bug at the level the artist
 /// actually meets it: a real stroke through `DarklyEngine`, with
 /// stabilization, dab scheduling, checkpointing and mid-stroke commits
 /// all live, not the hand-driven dab harness the tests above use.

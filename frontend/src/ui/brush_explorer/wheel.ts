@@ -595,7 +595,7 @@ export function cardCurve(index: number, wheelScrollTop: number, g: WheelGeometr
 export interface Sample {
     listScrollTop: number;
     wheelScrollTop: number;
-    /** Which pane the user is driving. Taken from input events rather than
+    /** Which pane the artist is driving. Taken from input events rather than
      *  from scroll events: a scroll event cannot tell a finger from the echo
      *  of a programmatic write, and a `pointerdown` can. */
     driver: 'list' | 'wheel';
@@ -623,7 +623,7 @@ export interface Frame {
  * write. Composing the four here means they cannot be fed different numbers.
  *
  * The driven pane's position is derived; the driver's is passed through
- * untouched, so nothing ever writes back to the pane under the user's hand.
+ * untouched, so nothing ever writes back to the pane under the artist's hand.
  * `curves` and `focused` are computed from the *results*, not the sample, so
  * they describe where the panes are going in this frame rather than where they
  * came from.

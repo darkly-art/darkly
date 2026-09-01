@@ -298,7 +298,7 @@ impl DarklyEngine {
     }
 
     /// Fill the layer with a solid RGBA color, clipped to the canvas. Used by
-    /// the "New Document" flow to seed a fresh raster layer with the user's
+    /// the "New Document" flow to seed a fresh raster layer with the artist's
     /// chosen background color. Pushes a `GpuRegionAction` for undo, matching
     /// `fill_background`'s pattern.
     #[handler]
@@ -324,7 +324,7 @@ impl DarklyEngine {
     /// position (the set-source gesture), pinning the layer that was
     /// active at the gesture (`None` means same-layer clone). Persists as
     /// session state until overwritten, surviving strokes and brush /
-    /// tool switches so the source stays put while the user paints.
+    /// tool switches so the source stays put while the artist paints.
     /// Rounded to whole pixels (the snapshot is sampled at pixel
     /// resolution).
     #[handler]
@@ -443,7 +443,7 @@ impl DarklyEngine {
         self.doc.pixel_buffer(layer_id).is_some()
     }
 
-    /// Why a paint op on `layer_id` was refused, phrased for the user. Names
+    /// Why a paint op on `layer_id` was refused, phrased for the artist. Names
     /// the layer rather than its kind: "Smart Object" is what the layer panel
     /// shows, and a renamed layer reads better as itself than as its kind.
     fn paint_refusal_reason(&self, layer_id: LayerId) -> String {
@@ -645,7 +645,7 @@ impl DarklyEngine {
         };
 
         // Trigger: dab center outside current extent. Doesn't grow when the
-        // user paints inside the canvas with a brush whose footprint
+        // artist paints inside the canvas with a brush whose footprint
         // happens to cross the canvas edge; those edge pixels would clip
         // anyway with the canvas-aligned layer, matching pre-P2 behavior.
         let cx = x.floor() as i32;

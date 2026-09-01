@@ -321,7 +321,7 @@
     function onDragStart(e: DragEvent) {
         // Grabbed row IS in selection → drag the whole set. Grabbed row
         // is NOT in selection → drag only it, and replace the selection
-        // with just it (focus commits to what the user grabbed).
+        // with just it (focus commits to what the artist grabbed).
         const ids = app.isSelected(layer.id)
             ? [...app.selectedLayerIds]
             : [layer.id];

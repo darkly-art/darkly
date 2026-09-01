@@ -1,6 +1,6 @@
 //! Settable-source ports + the `brush_settings.size` signal: brush-level guards.
 //!
-//! Covers the migration's user-visible invariants across every builtin: the
+//! Covers the migration's artist-visible invariants across every builtin: the
 //! base-size knob is exposed on the `brush_settings` node (never a terminal),
 //! each brush's base size survived the move (the silent-shrink guard), and
 //! every builtin still compiles.

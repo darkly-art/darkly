@@ -70,7 +70,7 @@ pub const MAX_SPEED_PX_PER_SEC: f32 = 4000.0;
 impl PaintInformation {
     /// Synthetic pen input for dry-run previews.
     /// Full pressure so pressure-driven sensors show the brush at its
-    /// fully-engaged tip: the silhouette the user expects when previewing
+    /// fully-engaged tip: the silhouette the artist expects when previewing
     /// "what this brush looks like."
     pub fn cursor_preview_dummy() -> Self {
         Self {
@@ -132,7 +132,7 @@ impl PaintInformation {
 ///
 /// Stores raw pre-smoothing events so the stroke can be replayed with
 /// different smoothing, dynamics, or brush parameters.  Discarded on
-/// the next user action (Darkly is raster; layer pixels are truth).
+/// the next artist action (Darkly is raster; layer pixels are truth).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct StrokeRecord {
     /// Raw pen events in chronological order (pre-smoothing).

@@ -278,7 +278,7 @@ export function effectiveHotkey(actionId: string): string {
  * a human-readable shortcut string (e.g. `"Shift+R"`, `"Ctrl+A"` / `"Cmd+A"`,
  * `"⌘+click"`). Accepts bindings with an optional site/scope prefix
  * (`"layerPanel:Delete"`, `"@paint:KeyB"`, `"canvas@paint:$mod+drag"`) and
- * strips it before formatting; only the chord is user-facing.
+ * strips it before formatting; only the chord is artist-facing.
  *
  * The chord vocabulary lives in Rust (`config::chord`), because the metadata
  * export ships chords already rendered and a second copy of that table here
@@ -292,10 +292,10 @@ export function formatHotkey(binding: string | undefined): string | undefined {
 }
 
 /**
- * An action's shortcut as shown to the user: its first effective binding,
+ * An action's shortcut as shown to the artist: its first effective binding,
  * formatted. This is the single entry point for anything that displays a
  * hotkey for an action id: menus, the command palette, tooltips. Reactive to
- * the config, so displays re-render whenever the user rebinds or switches
+ * the config, so displays re-render whenever the artist rebinds or switches
  * editor overlays.
  */
 export function hotkeyLabel(actionId: string): string | undefined {

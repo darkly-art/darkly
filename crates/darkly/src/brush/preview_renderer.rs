@@ -179,7 +179,7 @@ impl BrushStrokePreviewRenderer {
 
         // Fresh StrokeEngine every render: reusing the engine's own
         // `brush_stroke_engine` would contaminate save-points and dab-size
-        // state with the user's in-flight real stroke.
+        // state with the artist's in-flight real stroke.
         //
         // Spacing comes from the graph's brush_settings node (same source
         // the real stroke uses) so scrubbing the spacing slider actually
@@ -253,7 +253,7 @@ impl BrushStrokePreviewRenderer {
                     blend_mode: 0,
                     // Editor preview always renders at identity view; the
                     // S-curve preview shouldn't shift orientation when the
-                    // user happens to rotate the canvas while editing.
+                    // artist happens to rotate the canvas while editing.
                     view_rotation: 0.0,
                     perf: BrushPerfCounters::default(),
                     // Preview render target is canvas-aligned RGBA8.
@@ -318,7 +318,7 @@ impl Default for BrushStrokePreviewRenderer {
 ///
 /// Drives the brush graph through the regular stroke pipeline with one
 /// stationary sample, useful for the brush picker's tile-shape thumbnail
-/// (and the BrushBar trigger button), where the user wants to see the
+/// (and the BrushBar trigger button), where the artist wants to see the
 /// tip silhouette without a full stroke arc.
 pub fn synthesize_dab_path(width: f32, height: f32) -> Vec<PaintInformation> {
     vec![PaintInformation {
@@ -331,7 +331,7 @@ pub fn synthesize_dab_path(width: f32, height: f32) -> Vec<PaintInformation> {
 /// Synthesize an S-curve preview stroke of the given dimensions.
 ///
 /// Samples `n_points` evenly along a cubic Bezier from lower-left to upper-
-/// right. Pressure ramps 0 → 1 → 0.2 along the curve so users can see
+/// right. Pressure ramps 0 → 1 → 0.2 along the curve so artists can see
 /// pressure-driven dynamics (size taper, flow attenuation, etc.).
 ///
 /// `inset` is the canvas-pixel margin reserved on every edge so an

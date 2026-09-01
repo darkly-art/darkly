@@ -57,7 +57,7 @@ impl Clipboard {
     /// copy produces, not just flat image clips.
     ///
     /// Trimmed to the pasted object (see [`trim_to_content`]). What was copied
-    /// is the region the user swept, but what is *pasted* is the thing inside
+    /// is the region the artist swept, but what is *pasted* is the thing inside
     /// it, and the floating session draws its bounding box from these
     /// dimensions: untrimmed, a select-all copy hands the transform gizmo a
     /// canvas-sized box around a small stroke.
@@ -271,7 +271,7 @@ impl LayerClipboard {
 mod tests {
     use super::*;
 
-    /// What a paste puts down is the object, not the region the user swept to
+    /// What a paste puts down is the object, not the region the artist swept to
     /// copy it: a select-all copy of one small dab must not paste a
     /// canvas-sized rect, because the floating session takes its bounding box
     /// from these dimensions.

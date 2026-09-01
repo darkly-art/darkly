@@ -64,7 +64,7 @@ pub struct LayerKindRegistration {
     /// (or out) here, in its own file, and the UI follows automatically.
     pub can_have_mask: bool,
 
-    /// May the user rename instances of this kind? Drives the layer panel's
+    /// May the artist rename instances of this kind? Drives the layer panel's
     /// double-click-to-rename gate.
     pub can_rename: bool,
 

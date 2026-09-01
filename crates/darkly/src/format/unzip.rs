@@ -1,7 +1,7 @@
 //! Rust-side unzip + entry extraction for `.darkly` load.
 //!
 //! Load isn't the hot path: files are small (a typical doc is a few
-//! tens of MB at most) and the user is already waiting on a file
+//! tens of MB at most) and the artist is already waiting on a file
 //! picker, so we keep unzip on the Rust side rather than round-trip
 //! bytes through JS twice. The save path is JS-side (`fflate` via
 //! `OffscreenCanvas`) to keep slow PNG encoders off the WASM main

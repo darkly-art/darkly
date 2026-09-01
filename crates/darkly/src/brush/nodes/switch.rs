@@ -8,10 +8,10 @@
 //! and it becomes a 2-way mux.
 //!
 //! `select` is a Bool input port (not a `ParamDef`) so the brush author can
-//! expose it to the brush user as a toggle in BrushOptions. Per-instance
+//! expose it to the painting artist as a toggle in BrushOptions. Per-instance
 //! `label`/`description` overrides (set via `Graph::set_port_label` /
-//! `set_port_description`) let the author rename the toggle for the brush
-//! user without inventing a parallel mechanism.
+//! `set_port_description`) let the author rename the toggle for the artist
+//! without inventing a parallel mechanism.
 //!
 //! The switch is dispatched at graph-rewrite time, before compilation, by
 //! [`apply_to`]: that walks the graph and, for every switch whose `select`
@@ -133,7 +133,7 @@ impl BrushNodeEvaluator for SwitchEvaluator {
 /// [`SwitchEvaluator::compile_wgsl`].
 ///
 /// Called by [`crate::brush::compile_graph`] on a throwaway clone of the
-/// user's graph: the persisted graph is never mutated.
+/// artist's graph: the persisted graph is never mutated.
 pub(crate) fn apply_to(graph: &mut Graph<BrushWireType>) {
     let switch_ids: Vec<_> = graph
         .nodes()

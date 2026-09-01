@@ -238,7 +238,7 @@ class TransformTool extends ToolBase {
         if (engine && (await engine.api.hasFloating())) {
             // Activating the floating's own target layer (e.g.
             // paste-as-floating creates a new layer and selects it) is part of
-            // the floating workflow, not a user-switched-away signal.
+            // the floating workflow, not an artist-switched-away signal.
             const id = await engine.api.floatingTargetLayer();
             if (id !== null && id === this.inst.activeLayerId) {
                 return;

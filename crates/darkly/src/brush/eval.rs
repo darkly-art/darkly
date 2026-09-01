@@ -413,7 +413,7 @@ pub trait BrushNodeEvaluator: Send + Sync {
 /// Stroke-constant clone uniforms, seeded into a `clone_source` node's
 /// per-node uniform fields once per stroke.
 ///
-/// `source_anchor` is the user-set clone source (the set-source gesture,
+/// `source_anchor` is the artist-set clone source (the set-source gesture,
 /// persisted on the engine across strokes); `dest_anchor` is captured at
 /// the first dab of the stroke (the stabilizer offsets the first rendered
 /// dab, so this is taken from `place_dab`, not the raw engine input).
@@ -436,7 +436,7 @@ pub struct CloneState {
 /// A compiled, ready-to-run brush graph with pre-allocated slot table.
 ///
 /// The evaluation model is **compile once, evaluate per-dab**.  When the
-/// user edits the brush graph, we compile a new runner (cheap, just a
+/// artist edits the brush graph, we compile a new runner (cheap, just a
 /// topo sort and slot allocation).  During a stroke, each dab reuses the
 /// same runner with zero heap allocation:
 ///

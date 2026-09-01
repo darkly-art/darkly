@@ -203,10 +203,10 @@ pub fn compile_brush_to_wgsl(
     // upstream node body but rebuilds the terminal step's
     // `CompileWgslCtx` against this clone so the emitted preview body
     // literalizes the preview defaults regardless of what the live
-    // user-facing scrubs are set to. Encoding the override inside the
+    // artist-facing scrubs are set to. Encoding the override inside the
     // compiler (rather than at every caller) means the active-brush
     // compile and `regenerate_brush_cursor_preview_with_pen_internal` (which
-    // intentionally do not pre-mutate the user's graph) still emit a
+    // intentionally do not pre-mutate the artist's graph) still emit a
     // correct preview shader.
     let preview_graph = {
         let mut g = graph.clone();

@@ -21,8 +21,8 @@ pub struct ActionDef {
     pub id: &'static str,
     pub display_name: &'static str,
     /// One sentence describing what running the action does. The command
-    /// palette's substring search indexes it, so it should carry the words a
-    /// user would reach for.
+    /// palette's substring search indexes it, so it should carry the words an
+    /// artist would reach for.
     pub description: &'static str,
     /// Iconify name, rendered in the menu gutter, the command-palette row and
     /// the reference manual's table.

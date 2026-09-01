@@ -1,4 +1,4 @@
-// User-facing "Painting" veil. The underlying algorithm is the
+// Artist-facing "Painting" veil. The underlying algorithm is the
 // generalized Kuwahara filter; see shader header for prior-art credit.
 
 use crate::gpu::effect::{create_effect_pipeline, Binding, EffectCache, EffectPipeline};

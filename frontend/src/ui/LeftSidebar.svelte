@@ -13,7 +13,7 @@
     let showColorPicker = $state(false);
 
     // Track the last-activated sub-tool per cluster id so a cluster-button
-    // click can restore the user's previous choice. The mutation is wrapped
+    // click can restore the artist's previous choice. The mutation is wrapped
     // in `untrack` so the write doesn't subscribe this effect to its own
     // target; otherwise the spread-and-reassign would re-fire infinitely.
     $effect(() => {

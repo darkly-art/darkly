@@ -5,7 +5,7 @@
 //! `BrushCursorPreviewInfo.rotation_rad`, a CPU-side overlay rotation that
 //! only affected the cursor halo, not the painted dab. That port was removed
 //! because it produced "rotation that only the cursor sees, not the paint",
-//! which surprised users. Rotation now lives in the WGSL pipeline (sum of
+//! which surprised artists. Rotation now lives in the WGSL pipeline (sum of
 //! `circle.rotation` + `circle.rotation_input`, minus `view_rotation`), so
 //! the cursor preview and the stroke deposit always agree.
 //!
@@ -82,7 +82,7 @@ fn build_graph_with_rotation_wire() -> Graph<BrushWireType> {
 
     let wires = [
         (pen.clone(), "position", term.clone(), "position"),
-        // Canonical stroke-follow wire: what users wire when they want
+        // Canonical stroke-follow wire: what artists wire when they want
         // the dab to face the stroke direction.
         (
             pen.clone(),

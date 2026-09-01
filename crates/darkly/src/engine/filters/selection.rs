@@ -9,7 +9,7 @@
 //! - **Compositor**: `compositor.selection_state` carries the ping-pong R8
 //!   textures, the shared selection-mask bind group, and the filter id used
 //!   for region-store / undo keying.
-//! - **Engine**: this file. The high-level ops the user invokes (select_rect,
+//! - **Engine**: this file. The high-level ops the artist invokes (select_rect,
 //!   apply_selection_mask, invert, clear, magic wand, …) plus the bridge
 //!   helpers consumers reach for (`selection_active`, `selection_cpu_cache`,
 //!   `selection_pixel_bounds`, …).
@@ -208,7 +208,7 @@ impl DarklyEngine {
     }
 
     // ========================================================================
-    // Selection ops: the user-facing shape fills, booleans, invert, clear.
+    // Selection ops: the artist-facing shape fills, booleans, invert, clear.
     // ========================================================================
 
     #[handler]

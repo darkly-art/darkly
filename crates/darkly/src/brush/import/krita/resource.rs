@@ -44,7 +44,7 @@ pub enum ResourceFormat {
     /// Adobe brush bundle.
     Abr,
     /// Format not recognized. Includes a short hex dump of the leading bytes
-    /// so the inspector can show *something* to the user.
+    /// so the inspector can show *something* to the artist.
     Unknown { magic_hex: String },
 }
 

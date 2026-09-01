@@ -144,7 +144,7 @@
             }
 
             // Push the initial UI theme colors so preset-thumbnail bakes
-            // match the user's current theme from frame one.
+            // match the artist's current theme from frame one.
             theme.pushToWasm();
             pixelFilter.syncFromConfig();
 

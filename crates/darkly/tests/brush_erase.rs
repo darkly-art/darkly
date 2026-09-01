@@ -1,4 +1,4 @@
-//! Regression test for brush-tool erase mode (the user-facing E toggle).
+//! Regression test for brush-tool erase mode (the artist-facing E toggle).
 //!
 //! Drives a real `DarklyEngine` end-to-end: fill a layer red, flip
 //! `set_brush_blend_mode(1)`, stroke across the centre, and assert the

@@ -3,7 +3,7 @@
 Branch: `dab-compute-shader`. Running log for the stabilization
 performance problem: at high stabilization the stroke engine emits
 many dabs per pen event, and the per-event GPU cost balloons. The
-end-to-end behavior the user sees is **stroke lag**: frames stall,
+end-to-end behavior the artist sees is **stroke lag**: frames stall,
 the stroke trails the pen, the editor stops feeling responsive.
 
 Predecessor doc: [`darkly-stabilization-perf-investigation.md`](darkly-stabilization-perf-investigation.md).
@@ -368,7 +368,7 @@ single residual outlier (4K + 2000px) is the heavily-overlapping-
 large-dabs regime called out in the plan's "where this could lose"
 hedge: 3.3 dabs × ~20 M px² union with heavy overdraw produces ~60 M
 shaded fragment invocations per event, borderline. Still well under
-the threshold where the user feels lag. If a future use case ever
+the threshold where the artist feels lag. If a future use case ever
 makes this regime first-class, a per-dab tile-bin or a coarse
 overdraw cull is the next lever.
 
@@ -376,7 +376,7 @@ overdraw cull is the next lever.
 cells (1px) read slightly higher than #3 (+15 ms vs +5 ms in the 4K
 column). The difference is bench noise and the modest CPU cost of
 appending 900 dab records to the storage buffer per event vs writing
-the same records as compute-buffer dabs. Neither is felt by a user;
+the same records as compute-buffer dabs. Neither is felt by an artist;
 the matrix's noise floor is around ±20 ms.
 
 ## Background changes that are NOT competing attempts

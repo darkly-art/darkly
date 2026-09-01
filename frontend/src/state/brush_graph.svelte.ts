@@ -46,7 +46,7 @@ export interface PortDef {
      *  `BrushWireType::is_wirable` in Rust and carried as data; the wire dot
      *  is drawn only when true. */
     wirable: boolean;
-    /** Whether a user may expose this input as a brush-bar control. Sourced
+    /** Whether an artist may expose this input as a brush-bar control. Sourced
      *  from `BrushWireType::is_user_exposable` in Rust and carried as data;
      *  the expose eye toggle is shown only when true (so curves/strings,
      *  which the brush bar can't render, offer no toggle). */
@@ -148,7 +148,7 @@ export class BrushGraphState {
      *  after every structural change; never sent to Rust. */
     nodePositions = $state<Record<string, [number, number]>>({});
 
-    /** UI-only set of node ids whose numeric-input sliders the user has
+    /** UI-only set of node ids whose numeric-input sliders the artist has
      *  unlocked to [`EXTENDED_RANGE_MAX`]. A pure editor affordance for
      *  entering large gains on math nodes, never sent to Rust, never
      *  persisted. The port *value* persists in the graph as normal; this only
@@ -614,7 +614,7 @@ export class BrushGraphState {
         const id = (result as { added_node_id?: string }).added_node_id;
         if (!id) return null;
         // Position assignment is local-only: auto-layout would
-        // disturb the user's current arrangement.
+        // disturb the artist's current arrangement.
         this.nodePositions[id] = [x, y];
         return id;
     }

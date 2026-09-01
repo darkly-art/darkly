@@ -7,7 +7,7 @@
     import { readImageFromClipboard } from '../clipboard';
 
     // Seeded from the global canvas defaults each time the modal opens, so the
-    // user always starts from "what a fresh tab would normally be" but can
+    // artist always starts from "what a fresh tab would normally be" but can
     // override per document. Black bg matches the spec.
     let width = $state(1920);
     let height = $state(1080);
@@ -15,7 +15,7 @@
 
     // Reseed dimensions whenever the modal transitions to open. Reading
     // `config.get` requires the WASM module to be initialised: the modal is
-    // gated on a user click well after boot, so by the time the user can open
+    // gated on an artist click well after boot, so by the time the artist can open
     // it, config has already loaded.
     let prevOpen = false;
     $effect(() => {
@@ -33,7 +33,7 @@
     });
 
     // Clipboard peek: populated when the modal opens, surfaces the dimensions
-    // and a thumbnail above the "From Clipboard" button so the user can see
+    // and a thumbnail above the "From Clipboard" button so the artist can see
     // what they're about to paste before committing. Silently empty when no
     // image is on the clipboard or permission is denied; the button still
     // works as a fallback (it reads again on click).

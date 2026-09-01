@@ -6,7 +6,7 @@
 //! placement, `stabilize` selects the stabilizer, and `size` is injected as
 //! the ambient base size every terminal multiplies its per-touch modulation
 //! onto. They live on their own node (rather than on `pen_input`) because
-//! they are user settings, not stylus signals; `pen_input` stays pure live
+//! they are artist settings, not stylus signals; `pen_input` stays pure live
 //! sensor data.
 //!
 //! `size` is additionally a **settable-source** (`.source()`): any node can

@@ -155,7 +155,7 @@ impl RasterLayer {
     /// layer panel: owners (the [`Document`]) supply a sequential
     /// "Layer N" string rather than letting each constructor invent one
     /// from the slotmap key, which would surface raw ffi values like
-    /// "Layer 4294967301" to the user.
+    /// "Layer 4294967301" to the artist.
     pub fn new(id: LayerId, bounds: CanvasRect, name: String) -> Self {
         RasterLayer {
             id,
@@ -169,7 +169,7 @@ impl RasterLayer {
 
 /// A void (procedural) layer. Generates its pixels from a GPU shader instead
 /// of storing them (see [`crate::gpu::void::Void`] for the trait + registry,
-/// and the README's "Voids" section for the user-facing concept).
+/// and the README's "Voids" section for the artist-facing concept).
 ///
 /// Void state is exactly: a [`crate::gpu::void::VoidRegistration::type_id`]
 /// string identifying which procedural kind to run, plus the parameter
@@ -187,7 +187,7 @@ pub struct VoidLayer {
     /// Parameter values matching the void type's
     /// [`crate::gpu::void::ParamDef`] schema, in order.
     pub params: Vec<ParamValue>,
-    /// User transform (pan / scale / rotate) applied to the void's output,
+    /// Artist transform (pan / scale / rotate) applied to the void's output,
     /// edited by the generic transform gizmo. Persistent / undoable /
     /// serializable document state. Voids that don't opt into live transform
     /// (see [`crate::gpu::void::VoidRegistration::supports_live_transform`])
@@ -436,7 +436,7 @@ pub struct VectorLayer {
     /// Next [`ObjectId`] to mint. Monotonic, never reused; survives
     /// serialization so reload can't re-issue a live id.
     pub next_object_id: u64,
-    /// Layer-level user transform (gizmo-edited). Baked into the realized
+    /// Layer-level artist transform (gizmo-edited). Baked into the realized
     /// texture at rasterization: a change is an object change and re-rasters
     /// on commit, never a shader-time affine on a stale texture.
     pub transform: crate::transform::Transform,
@@ -721,7 +721,7 @@ impl LayerNode {
     }
 }
 
-/// How a layer answers "can the user transform me, and how?", consumed by the
+/// How a layer answers "can the artist transform me, and how?", consumed by the
 /// Transform tool to pick which binding drives the generic gizmo. This is the
 /// layer describing *itself* (type-owned dispatch); the transform subsystem
 /// never branches on layer kind.
@@ -732,7 +732,7 @@ pub enum TransformCapability {
     Live,
     /// Destructive extract-and-commit (raster layers: today's floating).
     Destructive,
-    /// Not user-transformable (groups, non-transformable voids).
+    /// Not artist-transformable (groups, non-transformable voids).
     None,
 }
 
@@ -744,7 +744,7 @@ pub enum Layer {
 }
 
 impl Layer {
-    /// Whether and how the user can transform this layer. The void's opinion is
+    /// Whether and how the artist can transform this layer. The void's opinion is
     /// static, looked up from the registry by `void_type`, passed in because
     /// [`VoidRegistry`] is owned by the compositor, not a global.
     ///

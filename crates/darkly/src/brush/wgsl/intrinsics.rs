@@ -30,7 +30,7 @@ pub struct IntrinsicUniforms {
     /// Active view rotation in radians (the `rotation` parameter passed to
     /// `ViewTransform::from_pan_zoom_rotate`). Subtracted from `theta` in the
     /// per-fragment skeleton so brush stamp orientation counteracts view
-    /// rotation, so on-screen orientation stays put as the user rotates the
+    /// rotation, so on-screen orientation stays put as the artist rotates the
     /// view. See `_prelude.wgsl` and `wgsl/mod.rs::assemble_shader`.
     pub view_rotation: f32,
     /// How many dabs land on a given texel as the brush passes over it

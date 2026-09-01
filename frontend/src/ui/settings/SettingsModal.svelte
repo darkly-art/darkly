@@ -14,7 +14,7 @@
     let activeTab = $state<'settings' | 'hotkeys'>('settings');
     /** Reveal per-trigger Scope dropdowns in the Hotkeys tab. When off,
      *  non-global scopes are still surfaced as a read-only chip beside
-     *  the chord so the user isn't blind to them. */
+     *  the chord so the artist isn't blind to them. */
     let showScopes = $state(false);
 
     /** Settings tab: every visible (non-Hidden) schema-defined pref. */

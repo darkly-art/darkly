@@ -95,14 +95,11 @@ hotkeys:
   # `flatten` and `addMask` are intentionally left unbound here:
   #   - addMask: no reference editor has a default key (PS, Krita,
   #     and GIMP all expose mask creation through a button click).
-  #     Inventing a Darkly-only binding would surprise users with no
-  #     prior-art expectation, and commit a key slot we'd later have
-  #     to fight if we register e.g. GIMP's Ctrl+M "Merge Visible".
   #   - flatten: Krita binds Ctrl+Shift+E to "Flatten image" (the
   #     whole-canvas composite, which is Darkly's `flatten_image`
   #     engine op, not yet a registered action). Borrowing that key
   #     for Darkly's single-layer flatten (apply-mask / flatten-group)
-  #     would mislead Krita users. If someone registers `flattenImage`
+  #     would mislead Krita artists. If someone registers `flattenImage`
   #     as an action, that's where Ctrl+Shift+E belongs.
   #   - maskToSelection: no editor ships a keyboard key (Krita/GIMP both
   #     use empty/NULL accelerators); the canonical gesture is Ctrl/Cmd+

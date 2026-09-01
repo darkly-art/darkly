@@ -42,7 +42,7 @@ pub struct Manifest {
     pub container_version: u32,
     /// Tooling that produced this file (informational).
     pub writer: ManifestWriter,
-    /// User-visible document name. Defaults to `"Untitled"` for fresh
+    /// Artist-visible document name. Defaults to `"Untitled"` for fresh
     /// documents; updated by `set_document_name` or the Save As picker.
     pub name: String,
     /// Canvas dimensions in pixels.

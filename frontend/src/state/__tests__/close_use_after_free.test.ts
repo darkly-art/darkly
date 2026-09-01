@@ -52,7 +52,7 @@ describe('closing a tab mid-frame does not render on a freed handle', () => {
         inst.requestFrame();
         expect(rafCb).toBeInstanceOf(Function);
 
-        // The load fails / the user closes the tab: the instance is disposed,
+        // The load fails / the artist closes the tab: the instance is disposed,
         // which frees the handle.
         inst.dispose();
         expect(inst.engine).toBeNull();

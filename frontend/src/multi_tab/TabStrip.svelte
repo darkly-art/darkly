@@ -51,7 +51,7 @@
         editingId = id;
         editValue = shell.nameOf(id);
         // Wait for Svelte to render the <input>, then focus + select-all so
-        // the user can immediately start typing a replacement name.
+        // the artist can immediately start typing a replacement name.
         await tick();
         inputEl?.focus();
         inputEl?.select();

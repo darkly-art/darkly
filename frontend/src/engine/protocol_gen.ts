@@ -236,13 +236,13 @@ enum_options?: Array<string>,
  */
 wirable: boolean, 
 /**
- * Whether a user may *expose* this input as a brush-bar control.
+ * Whether an artist may *expose* this input as a brush-bar control.
  * Computed from `wire_type.is_user_exposable()` at construction and
  * carried as data so the frontend gates its expose affordance directly
  * off one value rather than re-deriving the type rule - the single
  * source of truth is [`WireKind::is_user_exposable`]. Orthogonal to
  * `wirable`: an enum is exposable but not wirable; a wired scalar is
- * wirable but (while connected) not user-scrubbable. `expose_port`
+ * wirable but (while connected) not artist-scrubbable. `expose_port`
  * enforces it, so a control the brush bar can't render can never be
  * surfaced. Serde round-trips it.
  */
@@ -271,7 +271,7 @@ unit_type: UnitType,
  */
 icon: string, 
 /**
- * User-facing display label.  Falls back to `name` if empty.
+ * Artist-facing display label.  Falls back to `name` if empty.
  */
 label: string, 
 /**
@@ -285,12 +285,12 @@ exposed: boolean,
  * compiler clones the graph, drops incoming wires on flagged
  * ports, and replaces `default` with this constant - so all
  * previews read as a showcase of the brush regardless of the
- * user's working scrub. Real strokes still honour the
+ * artist's working scrub. Real strokes still honour the
  * configured value.
  *
- * Use when the port is something the user actively scrubs but
+ * Use when the port is something the artist actively scrubs but
  * the preview must stay at a canonical value (otherwise the
- * preview becomes a moving target as the user dials in their
+ * preview becomes a moving target as the artist dials in their
  * brush). The picker dab tile uses a more aggressive
  * neutralizer (`reset_exposed_scrubs`) that targets every
  * exposed scrub regardless of `preview_value`.
@@ -311,7 +311,7 @@ preview_value: number | null,
  * `PassThrough` as the stabilizer (the path is pre-cooked), so
  * the live `stabilize` value never reaches it. Marking this
  * declaratively avoids re-rendering a full stroke every ~100 ms
- * while the user drags the slider for no visible effect.
+ * while the artist drags the slider for no visible effect.
  *
  * Distinct from [`PortDef::preview_value`]: that one substitutes
  * values into the *cursor overlay shader*; this one skips a
@@ -330,7 +330,7 @@ preview_irrelevant_scrub: boolean,
  * the frontend hides the port row whenever the named param's current
  * value is outside the allowed list. This is purely a UI affordance -
  * the engine still accepts and reads the port's value normally; it
- * just stops showing the user a control they wouldn't act on.
+ * just stops showing the artist a control they wouldn't act on.
  * Used by the Shape node to hide algorithm-specific knobs (Perlin's
  * `seed`, Superformula's `n1`/`n2`/`n3`) under the wrong algorithm.
  */
@@ -351,12 +351,12 @@ visible_when: [string, Array<number>] | null,
 natural_range: [number, number] | null, 
 /**
  * Mark this exposed port as part of the brush's *identity* so its
- * user-set value persists into the dab thumbnail render.
+ * artist-set value persists into the dab thumbnail render.
  *
  * By default `crate::brush::reset_exposed_scrubs` resets every
  * exposed input back to its registration default before rendering
  * the dab thumbnail - the icon represents brush shape/texture, not
- * the user's working size/opacity/flow knobs. That policy is wrong
+ * the artist's working size/opacity/flow knobs. That policy is wrong
  * for orientation knobs (rotation): a calligraphy nib at
  * 45° *is* a different-looking brush, and the icon should reflect
  * that.

@@ -71,7 +71,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_description("Edge softness (0% = hard, 100% = feathered)"),
                 // No `natural_range`: radians are a unit, not a normalized
                 // signal. `pen.drawing_angle → rotation_input` passes through
-                // raw and sums with the user's `rotation` offset.
+                // raw and sums with the artist's `rotation` offset.
                 PortDef::input("rotation_input", BrushWireType::Scalar)
                     .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                     .with_label("Rotation Input")
@@ -83,7 +83,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                     .with_label("Rotation")
                     .with_unit(UnitType::Degrees)
-                    // Orientation is part of shape identity; if the user
+                    // Orientation is part of shape identity; if the artist
                     // exposes this knob, the dab thumbnail should follow it.
                     .persist_in_thumbnail()
                     .with_description(

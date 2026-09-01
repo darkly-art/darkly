@@ -59,7 +59,7 @@
     });
 
     /** Effective slider bounds. Math-node sliders widen from the declared
-     *  `0..1` to `0..EXTENDED_RANGE_MAX` when the user has unlocked the node's
+     *  `0..1` to `0..EXTENDED_RANGE_MAX` when the artist has unlocked the node's
      *  extended range, or when the current value already sits outside the base
      *  range, so a loaded gain like `2.56` shows correctly and isn't clamped on
      *  first touch. UI-only; the engine never enforces these bounds. */

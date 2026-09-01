@@ -35,7 +35,7 @@
         brushGraph.setExposedPortValueLocal(nodeId, portName, displayValue);
     }
 
-    /** The value the user settled on. Refreshes the on-canvas hover overlay
+    /** The value the artist settled on. Refreshes the on-canvas hover overlay
      *  afterward so the brush outline reflects the new value without waiting
      *  for a pointer move, the same courtesy the `[` / `]` hotkeys extend. */
     async function commitExposedPort(nodeId: string, portName: string, displayValue: number) {
@@ -68,7 +68,7 @@
 
     // Brushes whose terminal doesn't honor `gpu.blend_mode` (smudge,
     // liquify, watercolor) report `supportsErase = false`. Reactively
-    // force erase-mode off when the user switches to one of them so the
+    // force erase-mode off when the artist switches to one of them so the
     // session flag and the engine flag don't drift out of sync with the
     // hidden toggle. Re-runs on every graph change because both reads
     // are $state-tracked.

@@ -16,7 +16,7 @@ impl DarklyEngine {
     /// overflowed past `max_steps`).
     ///
     /// Flushes any pending diff-based undo commit from a just-finished brush
-    /// stroke first, so the on-stack action ordering matches the user's
+    /// stroke first, so the on-stack action ordering matches the artist's
     /// temporal order: a "paint, then duplicate, then undo" sequence first
     /// undoes the duplicate.
     pub(crate) fn push_undo(&mut self, action: Box<dyn UndoAction>) {
