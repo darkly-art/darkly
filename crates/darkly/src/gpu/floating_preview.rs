@@ -238,6 +238,7 @@ impl Compositor {
         paint_pipelines: &crate::gpu::paint_target::PaintPipelines,
         staged: &crate::gpu::compositor::StagedNodeTexture,
         param: &TransformPreviewParams<'_>,
+        lifted: crate::gpu::transform::LiftedContent,
     ) -> bool {
         let Some(state) = self
             .transform_session
@@ -282,15 +283,17 @@ impl Compositor {
                 *uncovered,
             ),
         }
-        encoder.with_raw(|raw| {
-            self.transform_pass.render_state_commit(
-                device,
-                raw,
-                state,
-                staged.texture(),
-                staged.view(),
-            )
-        });
+        if lifted == crate::gpu::transform::LiftedContent::ReturnedToSource {
+            encoder.with_raw(|raw| {
+                self.transform_pass.render_state_commit(
+                    device,
+                    raw,
+                    state,
+                    staged.texture(),
+                    staged.view(),
+                )
+            });
+        }
         true
     }
 

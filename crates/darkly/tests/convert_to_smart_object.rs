@@ -302,20 +302,16 @@ fn converting_a_transformed_layer_is_one_undo_step() {
     );
 }
 
-/// With an active selection only part of the source may be consumed, which
-/// needs a region clear this path does not perform — so it is refused rather
-/// than silently eating the rest of the layer.
-#[test]
-fn converting_a_selection_transform_is_refused() {
-    let mut engine = test_engine(64, 64);
-    let layer = engine.add_raster_layer(None);
-    paint_dot(&mut engine, layer, 32.0, 32.0, [0.0, 0.0, 1.0]);
-
+/// Start a transform through a left-half selection of a fully red layer.
+/// Returns the layer holding the red.
+fn begin_half_selected_transform(engine: &mut DarklyEngine) -> LayerId {
+    let layer = engine.paste_image(64, 64, &opaque_block(64, 64, [255, 0, 0]), 0, 0, None);
+    engine.render(0.0);
     engine.select_rect(
-        8.0,
-        8.0,
-        16.0,
-        16.0,
+        0.0,
+        0.0,
+        32.0,
+        64.0,
         darkly::document::SelectionMode::Replace,
         false,
         0.0,
@@ -326,13 +322,80 @@ fn converting_a_selection_transform_is_refused() {
         "selection transform starts at once"
     );
     engine.render(0.0);
+    layer
+}
+
+/// A selection transform is convertible. Whether a selection is active decides
+/// what the conversion *owes the source*, never whether it is allowed: the lift
+/// took only the selected pixels, so the rest of the layer stays and the
+/// conversion cuts the hole the lift owes it.
+#[test]
+fn converting_a_selection_transform_keeps_the_unlifted_remainder() {
+    let mut engine = test_engine(64, 64);
+    let layer = begin_half_selected_transform(&mut engine);
 
     assert!(
-        !engine.can_convert_floating_to_smart_object(),
-        "a selection transform must not be offered",
+        engine.can_convert_floating_to_smart_object(),
+        "a selection transform is convertible",
     );
-    assert!(engine.convert_floating_to_smart_object().is_err());
-    assert!(engine.has_layer(layer), "the layer survives the refusal");
+    let id = engine
+        .convert_floating_to_smart_object()
+        .expect("selection session converts");
+    engine.render(0.0);
+
+    assert!(is_smart_object(&engine, id));
+    assert!(
+        engine.has_layer(layer),
+        "the source layer survives — only part of it was lifted",
+    );
+
+    // Erase zeroes alpha and leaves the colour channels alone (layers store
+    // straight alpha), so the hole reads as the original red at zero coverage —
+    // the same residue an ordinary commit's clear leaves.
+    let px = engine.test_readback_layer(layer);
+    assert_eq!(
+        rgba_at(&px, 64, 8, 32),
+        [255, 0, 0, 0],
+        "the lifted half is left as a hole",
+    );
+    assert_eq!(
+        rgba_at(&px, 64, 48, 32),
+        [255, 0, 0, 255],
+        "the unselected half is untouched",
+    );
+    assert!(
+        engine.test_readback_void_frame(id).is_some(),
+        "the smart object owns the lifted pixels",
+    );
+}
+
+/// The hole and the new layer are one edit: undo puts the pixels back and takes
+/// the smart object away together, or the user is left with a half-erased layer.
+#[test]
+fn converting_a_selection_transform_is_one_undo_step() {
+    let mut engine = test_engine(64, 64);
+    let layer = begin_half_selected_transform(&mut engine);
+    let before = engine.test_readback_layer(layer);
+    let depth_before = engine.test_transform_commit_observables().0;
+
+    let id = engine
+        .convert_floating_to_smart_object()
+        .expect("selection session converts");
+    engine.render(0.0);
+    assert_eq!(
+        engine.test_transform_commit_observables().0 - depth_before,
+        1,
+        "exactly one undo step",
+    );
+
+    engine.undo();
+    engine.render(0.0);
+    assert!(!engine.has_layer(id), "undo removes the smart object");
+    assert_eq!(
+        engine.test_readback_layer(layer),
+        before,
+        "undo restores the lifted pixels in the same step",
+    );
 }
 
 // ============================================================================

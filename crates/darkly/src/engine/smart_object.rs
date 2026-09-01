@@ -83,6 +83,45 @@ impl DarklyEngine {
         )
     }
 
+    /// Add a smart object holding `source`, anchored directly above `anchor`.
+    ///
+    /// No undo entry is pushed: every caller is already assembling a step (a
+    /// paste discards its float in the same breath, a partial lift cuts a hole
+    /// in its source), and an add that pushed its own would split those in two.
+    pub(crate) fn add_smart_object_from_texture(
+        &mut self,
+        anchor: LayerId,
+        transform: Transform,
+        source: &wgpu::Texture,
+        source_origin: (u32, u32),
+        width: u32,
+        height: u32,
+    ) -> Result<LayerId, String> {
+        let id = self
+            .create_void_layer(
+                crate::gpu::voids::smart_object::TYPE_ID,
+                Vec::new(),
+                Some(anchor),
+                Some(transform),
+            )
+            .ok_or("Smart object void is not registered")?;
+        self.compositor.set_void_source_from_texture(
+            &self.gpu.device,
+            &self.gpu.queue,
+            id,
+            source,
+            source_origin,
+            width,
+            height,
+        );
+        // Mirror the installed size onto the document so the layer saves,
+        // duplicates, and survives undo/redo. Without it `frame` stays `None`,
+        // `owns_disposable_texture` is false, and the tombstone machinery frees
+        // the source out from under a redo.
+        self.sync_void_persistent_frame(id);
+        Ok(id)
+    }
+
     /// Consume `node_id` and put a smart object in its slot, carrying the
     /// layer's identity and blend props across and taking `source` as its
     /// embedded image.
