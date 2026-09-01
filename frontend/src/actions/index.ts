@@ -748,13 +748,13 @@ export function registerActions() {
             app.requestFrame();
         },
     });
-    // Destructive color filters (invert, …) are registered dynamically
-    // from the Rust filter-pipeline registry (the `filters` catalog fetched
-    // during `loadRegistries`), so a new filter in the core surfaces a
-    // Colors-menu entry with no frontend edit. The target is the active *node*
+    // Destructive applies (invert, …) are registered dynamically from the
+    // Rust effect registry (the `effects` catalog fetched during
+    // `loadRegistries`), so a new effect in the core surfaces a Colors-menu
+    // entry with no frontend edit. The target is the active *node*
     // (`activeLayerId` is the mask filter id when a mask is selected), which
     // is what makes "invert the mask" reachable from the same entry.
-    for (const flt of app.entries?.('filters') ?? []) {
+    for (const flt of app.entries?.('effects') ?? []) {
         const filterType = flt.type;
         if (!flt.hotkeyAction) continue;
         // A parametric filter (curves/levels/hsv) can't apply in one click — its
@@ -764,10 +764,10 @@ export function registerActions() {
         const parametric = (flt.params?.length ?? 0) > 0;
         actions.register({
             id: flt.hotkeyAction,
-            // Like tool selection, the documentation is the filter's own and
-            // arrives through the `filters` catalog. What this side composes is
-            // the phrasing: the `…` that marks a filter as opening a dialog,
-            // and the note about what the filter lands on.
+            // Like tool selection, the documentation is the effect's own and
+            // arrives through the `effects` catalog. What this side composes is
+            // the phrasing: the `…` that marks one as opening a dialog, and the
+            // note about what it lands on.
             doc: {
                 displayName: parametric ? `${flt.displayName}…` : flt.displayName,
                 category: 'layers',

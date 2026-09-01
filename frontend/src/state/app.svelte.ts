@@ -211,8 +211,8 @@ export class DarklyInstance {
      *  activeToolId. */
     lastToolByCluster = $state<Record<string, string>>({});
 
-    /** Every registry the Rust core declares, keyed by catalog id ("filters",
-     *  "veils", "tools", …). Fetched once at startup (see `loadRegistries`).
+    /** Every registry the Rust core declares, keyed by catalog id ("effects",
+     *  "tools", …). Fetched once at startup (see `loadRegistries`).
      *  Per-instance payloads (LayerInfo, VeilInfo, …) carry only the stable
      *  `type_id`; UI code resolves the human-readable label and the icon
      *  through here, so there is no second copy of either. */

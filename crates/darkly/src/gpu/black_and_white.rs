@@ -1,10 +1,8 @@
-//! Black and White — the shared core behind the `black_and_white` veil
-//! (`gpu/veils/black_and_white.rs`) and filter
-//! (`gpu/filters/black_and_white.rs`). One identity, one param schema, one
+//! Black and White — the shared core behind the `black_and_white` effect
+//! (`gpu/effects/black_and_white.rs`). One identity, one param schema, one
 //! uniform layout, one WGSL transform
-//! ([`black_and_white.wgsl`](../../shaders/lib/black_and_white.wgsl)); the two
-//! surfaces are thin wrappers over their respective pipeline infrastructures
-//! (`EffectPipeline` for the veil, `ParamFilter` for the filter).
+//! ([`black_and_white.wgsl`](../../shaders/lib/black_and_white.wgsl)); the
+//! registration is a thin wrapper that wires them into a `ParamEffect`.
 //!
 //! The six fixed gray formulas match Krita's desaturate adjustment
 //! (`plugins/color/colorspaceextensions/kis_desaturate_adjustment.cpp`), which
@@ -83,9 +81,8 @@ pub static PREVIEW: PreviewAnim = PreviewAnim::LOOPING.with_still_at(0.0);
 /// forward puts the peak at 180° instead, and 360° ≡ 0° means the sequence still
 /// closes on the colour it opened with.
 ///
-/// The filter reads this off its registration and the veil calls it from
-/// [`Veil::preview_at`](crate::gpu::veil::Veil::preview_at) — the two surfaces
-/// share the motion the same way they share the schema.
+/// Read off the registration as its `preview_at`, so the sweep and the schema
+/// it sweeps live beside each other.
 pub fn preview_params(t: f32) -> Vec<ParamValue> {
     let mut params: Vec<ParamValue> = PARAMS.iter().map(ParamDef::default_value).collect();
     params[4] = ParamValue::Float(360.0 * t);
@@ -98,7 +95,7 @@ pub fn preview_params(t: f32) -> Vec<ParamValue> {
 pub const SHADER_LIB: &str = include_str!("../../shaders/lib/black_and_white.wgsl");
 
 /// Positional float lookup with schema-default fallback — params arrive
-/// positionally, like every pack in `gpu/filters/`.
+/// positionally, like every pack in `gpu/effects/`.
 fn float_param(params: &[ParamValue], idx: usize) -> f32 {
     if let Some(ParamValue::Float(v)) = params.get(idx) {
         return *v;
@@ -112,7 +109,7 @@ fn float_param(params: &[ParamValue], idx: usize) -> f32 {
 /// Pack the shared schema into the shader's 32-byte `BwParams` uniform:
 /// `[mode: u32, red_w, green_w, blue_w, tint_r, tint_g, tint_b,
 /// tint_strength]` — floats stored as bit patterns beside the u32 (the same
-/// packing `gpu/filters/hsv.rs` uses). Missing or mistyped entries fall back
+/// packing `gpu/effects/hsv.rs` uses). Missing or mistyped entries fall back
 /// to the schema defaults.
 ///
 /// Two conversions happen here rather than per pixel in the shader: the
@@ -250,32 +247,23 @@ mod tests {
         }
     }
 
-    /// The veil and filter registries expose the *same* black-and-white:
-    /// identical schema const (by pointer — compile-level DRY), identical
-    /// display name, and a description containing "desaturate" so the
-    /// command-palette substring search finds it under its old name.
+    /// The single registration reads off this shared core rather than
+    /// restating it, and its description carries "desaturate" so the
+    /// command-palette substring search finds it under that name.
     #[test]
-    fn veil_and_filter_share_one_identity() {
-        let veil = crate::gpu::veils::registrations()
+    fn registration_reads_the_shared_core() {
+        let reg = crate::gpu::effects::registrations()
             .into_iter()
             .find(|r| r.type_id == TYPE_ID)
-            .expect("black_and_white veil registered");
-        let filter = crate::gpu::filters::registrations()
-            .into_iter()
-            .find(|r| r.type_id == TYPE_ID)
-            .expect("black_and_white filter registered");
+            .expect("black_and_white registered");
         assert!(
-            std::ptr::eq(veil.params.as_ptr(), filter.params.as_ptr())
-                && veil.params.len() == filter.params.len(),
-            "both surfaces must reference the shared PARAMS const"
+            std::ptr::eq(reg.params.as_ptr(), PARAMS.as_ptr()) && reg.params.len() == PARAMS.len(),
+            "the registration must reference the shared PARAMS const"
         );
-        assert_eq!(veil.display_name, filter.display_name);
-        assert_eq!(veil.display_name, DISPLAY_NAME);
-        for description in [veil.description, filter.description] {
-            assert!(
-                description.to_lowercase().contains("desaturate"),
-                "palette search for 'desaturate' must find Black and White"
-            );
-        }
+        assert_eq!(reg.display_name, DISPLAY_NAME);
+        assert!(
+            reg.description.to_lowercase().contains("desaturate"),
+            "palette search for 'desaturate' must find Black and White"
+        );
     }
 }

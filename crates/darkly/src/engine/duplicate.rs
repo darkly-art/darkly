@@ -278,7 +278,7 @@ impl DarklyEngine {
                 let params = f.params.clone();
                 let display_label = self
                     .compositor
-                    .filter_pipeline_registry()
+                    .effect_registry()
                     .display_name(&pipeline)
                     .to_string();
                 let new_id = self

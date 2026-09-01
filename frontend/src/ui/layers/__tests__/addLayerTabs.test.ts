@@ -14,7 +14,6 @@ function entry(type: string, over: Partial<CatalogEntry> = {}): CatalogEntry {
         params: [],
         supportsPreview: false,
         source: null,
-        addable: true,
         ...over,
     } as CatalogEntry;
 }
@@ -27,14 +26,19 @@ function catalog(id: string, title: string, entries: CatalogEntry[]): Catalog {
 function deps(over: Partial<TabDeps> = {}): TabDeps {
     const sources: AddSource[] = [
         { action: 'newLayer', catalog: '', title: 'Normal' },
-        { action: 'newFilterLayer', catalog: 'filters' },
-        { action: 'newVeil', catalog: 'veils' },
+        { action: 'newFilterLayer', catalog: 'effects', category: 'Filters' },
+        { action: 'newVeil', catalog: 'effects', category: 'Veils' },
         { action: 'newVoid', catalog: 'voids' },
         { action: 'newGroup', catalog: '', title: 'Normal' },
     ];
     const catalogs: Record<string, Catalog> = {
-        filters: catalog('filters', 'Filters', [entry('invert'), entry('curves')]),
-        veils: catalog('veils', 'Veils', [entry('grain'), entry('vhs')]),
+        // One catalog, two categories — the shape the merged registry emits.
+        effects: catalog('effects', 'Effects', [
+            entry('invert', { category: 'Filters' }),
+            entry('curves', { category: 'Filters' }),
+            entry('grain', { category: 'Veils' }),
+            entry('vhs', { category: 'Veils' }),
+        ]),
         voids: catalog('voids', 'Voids', [entry('noise')]),
     };
     const menus: Record<string, string> = {
@@ -118,25 +122,25 @@ describe('buildTabs', () => {
         expect(tabs[0].cards.map(c => c.entry.type)).toEqual(['invert', 'curves']);
     });
 
-    it('offers an effect registered in two catalogs exactly once', () => {
-        // The real duplication: `black_and_white` and `chromatic_aberration`
-        // are registered as both a veil and a filter. Each declares which
-        // registration owns its add path.
-        const filters = catalog('filters', 'Filters', [
-            entry('black_and_white', { displayName: 'Black and White' }),
-            entry('chromatic_aberration', { displayName: 'Chromatic Aberration', addable: false }),
-        ]);
-        const veils = catalog('veils', 'Veils', [
-            entry('black_and_white', { displayName: 'Black and White', addable: false }),
-            entry('chromatic_aberration', { displayName: 'Chromatic Aberration' }),
+    it('offers each effect once, under the source that names its category', () => {
+        // `black_and_white` and `chromatic_aberration` used to be registered
+        // twice — once as a veil, once as a filter — and appeared twice. One
+        // catalog now holds one of each, and the two sources split it by
+        // category rather than by which registry it came from.
+        const effects = catalog('effects', 'Effects', [
+            entry('black_and_white', { displayName: 'Black and White', category: 'Filters' }),
+            entry('chromatic_aberration', {
+                displayName: 'Chromatic Aberration',
+                category: 'Veils',
+            }),
         ]);
         const tabs = buildTabs(
             deps({
                 sources: [
-                    { action: 'newFilterLayer', catalog: 'filters' },
-                    { action: 'newVeil', catalog: 'veils' },
+                    { action: 'newFilterLayer', catalog: 'effects', category: 'Filters' },
+                    { action: 'newVeil', catalog: 'effects', category: 'Veils' },
                 ],
-                catalog: id => (id === 'filters' ? filters : id === 'veils' ? veils : undefined),
+                catalog: id => (id === 'effects' ? effects : undefined),
             }),
         );
 
@@ -144,15 +148,19 @@ describe('buildTabs', () => {
         expect(all.filter(t => t === 'black_and_white')).toHaveLength(1);
         expect(all.filter(t => t === 'chromatic_aberration')).toHaveLength(1);
 
-        // ...and each lands under the registration that owns it, which is what
-        // makes its preview and its spawn path correct.
+        // ...and each lands under the source that offers it, which is what makes
+        // its spawn path correct — a filter layer for one, a veil for the other.
         const bw = tabs.find(t => t.cards.some(c => c.entry.type === 'black_and_white'))!;
         expect(bw.title).toBe('Filters');
-        expect(bw.cards.find(c => c.entry.type === 'black_and_white')!.catalog).toBe('filters');
+        expect(bw.cards.find(c => c.entry.type === 'black_and_white')!.source.action).toBe(
+            'newFilterLayer',
+        );
 
         const ca = tabs.find(t => t.cards.some(c => c.entry.type === 'chromatic_aberration'))!;
         expect(ca.title).toBe('Veils');
-        expect(ca.cards.find(c => c.entry.type === 'chromatic_aberration')!.source.action).toBe('newVeil');
+        expect(ca.cards.find(c => c.entry.type === 'chromatic_aberration')!.source.action).toBe(
+            'newVeil',
+        );
     });
 
     it('drops a tab whose catalog has not arrived yet', () => {
@@ -172,14 +180,14 @@ describe('filterTabs', () => {
         expect(filterTabs(buildTabs(deps()), '   ')).toHaveLength(4);
     });
 
-    it('never resurrects an entry the addability gate removed', () => {
-        const veils = catalog('veils', 'Veils', [
-            entry('black_and_white', { displayName: 'Black and White', addable: false }),
+    it('never resurrects an entry the category filter removed', () => {
+        const effects = catalog('effects', 'Effects', [
+            entry('black_and_white', { displayName: 'Black and White', category: 'Filters' }),
         ]);
         const tabs = buildTabs(
             deps({
-                sources: [{ action: 'newVeil', catalog: 'veils' }],
-                catalog: id => (id === 'veils' ? veils : undefined),
+                sources: [{ action: 'newVeil', catalog: 'effects', category: 'Veils' }],
+                catalog: id => (id === 'effects' ? effects : undefined),
             }),
         );
         expect(filterTabs(tabs, 'black')).toEqual([]);

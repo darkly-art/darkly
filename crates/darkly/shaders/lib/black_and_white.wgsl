@@ -1,6 +1,6 @@
 // Black and White — shared RGB → gray transform used by both surfaces of the
-// `black_and_white` type: the veil (`shaders/veils/black_and_white.wgsl`) and
-// the filter (`shaders/filters/black_and_white.wgsl`). Each wrapper declares
+// `black_and_white` effect (`shaders/effects/black_and_white.wgsl`). The
+// wrapper declares
 // its own `var<uniform> params: BwParams` at its own binding slot; this file
 // carries only binding-free declarations, so it is prepended verbatim.
 //

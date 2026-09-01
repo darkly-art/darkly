@@ -39,13 +39,12 @@ use crate::brush::preview_renderer::BrushStrokePreviewRenderer;
 use crate::catalog::preview_mechanisms;
 use crate::engine::DarklyEngine;
 use crate::gpu::context::{GpuContext, GpuDevice};
-use crate::gpu::filter::FilterPipelineRegistry;
+use crate::gpu::effect::EffectRegistry;
 use crate::gpu::preview::{
     close_loop, drive, frame_t, swing, PreviewAnim, PreviewMechanism, PreviewRegistries,
     PreviewSequence, PreviewTarget, PreviewVariant, PREVIEW_FORMAT,
 };
 use crate::gpu::test_utils::{readback_texture, test_device};
-use crate::gpu::veil::VeilRegistry;
 use crate::gpu::void::VoidRegistry;
 use crate::layer::LayerId;
 use subject::{blend_source_rgba, subject_rgba, DOCS_SUBJECT_DIM};
@@ -191,9 +190,8 @@ pub struct Gpu {
     /// Kept alive for the target's loaded source; the downscale has already
     /// consumed it, but dropping the texture it was read from is still wrong.
     subject: Option<wgpu::Texture>,
-    veils: VeilRegistry,
+    effects: EffectRegistry,
     voids: VoidRegistry,
-    filters: FilterPipelineRegistry,
     blend_doc: Option<BlendDoc>,
     /// The brush engine's GPU pipelines and its stroke-preview scratch target.
     /// Both are reusable for the whole run and both are expensive to build, for
@@ -230,9 +228,8 @@ impl Gpu {
             gpu: Arc::new(GpuDevice { device, queue }),
             target: PreviewTarget::new(),
             subject: None,
-            veils: VeilRegistry::new(),
+            effects: EffectRegistry::new(),
             voids: VoidRegistry::new(),
-            filters: FilterPipelineRegistry::new(),
             blend_doc: None,
             brush: None,
         }
@@ -334,19 +331,14 @@ impl Gpu {
         {
             let Gpu {
                 target,
-                veils,
+                effects,
                 voids,
-                filters,
                 ..
             } = self;
             // The binary's counterpart of `Compositor::preview_registries`,
             // destructured here rather than behind a method so `target` stays
             // borrowable alongside it.
-            let regs = PreviewRegistries {
-                veils,
-                voids,
-                filters,
-            };
+            let regs = PreviewRegistries { effects, voids };
             // The whole sequence: a documentation asset is every frame, and the
             // poster is recorded as an index into it rather than written twice.
             let mut seq = PreviewSequence::open(mech, regs, type_id, PreviewVariant::Animated)

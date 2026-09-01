@@ -8,7 +8,8 @@ import type { AddSource } from './types';
  */
 export const source: AddSource = {
     action: 'newVeil',
-    catalog: 'veils',
+    catalog: 'effects',
+    category: 'Veils',
     async spawn(entry) {
         if (!app.engine) return;
         const defaults: Record<string, any> = {};

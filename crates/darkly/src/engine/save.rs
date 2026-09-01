@@ -405,7 +405,7 @@ fn build_font_blobs(engine: &DarklyEngine) -> (Vec<ManifestFontRef>, Vec<SaveBlo
 }
 
 fn build_manifest_veils(engine: &DarklyEngine) -> Vec<ManifestVeil> {
-    let chain = engine.compositor.veil_chain();
+    let chain = engine.compositor.effect_chain();
     let count = chain.count();
     let mut veils = Vec::with_capacity(count);
     // Chain order on the wire matches apply order (bottom of stack to
@@ -445,7 +445,7 @@ pub fn requires_from_doc(engine: &DarklyEngine) -> ManifestRequires {
         }
     }
 
-    let chain = engine.compositor.veil_chain();
+    let chain = engine.compositor.effect_chain();
     for i in 0..chain.count() {
         if let Some(id) = chain.type_id(i) {
             veil_types.insert(id.to_string());
@@ -551,7 +551,7 @@ mod tests {
         // viewport and `add_veil` panics on the `views.unwrap()`.
         engine
             .compositor
-            .veil_chain_mut()
+            .effect_chain_mut()
             .resize(&engine.gpu.device, &engine.gpu.queue, 32, 32);
 
         let defaults: Vec<crate::gpu::params::ParamValue> = engine

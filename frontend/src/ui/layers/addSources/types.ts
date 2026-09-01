@@ -22,6 +22,13 @@ export interface AddSource {
     action: string;
     /** Registry catalog to pick from, or `''` when choosing the kind is the whole choice. */
     catalog: string;
+    /**
+     * Narrow the catalog to entries declaring this category. Two sources share
+     * the `effects` catalog — a filter layer and a veil are the same kind of
+     * thing to the engine and differ only in where they render — so each names
+     * the half it offers. Absent means the whole catalog.
+     */
+    category?: string;
     /** Tab title. Falls back to the catalog's own title, then the action's name. */
     title?: string;
     /**

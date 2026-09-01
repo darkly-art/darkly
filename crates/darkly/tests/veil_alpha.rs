@@ -15,9 +15,9 @@
 //! Run with:
 //! `cargo test -p darkly --test veil_alpha --features testing -- --test-threads=1`
 
+use darkly::gpu::effect::EffectRegistry;
 use darkly::gpu::params::ParamDef;
 use darkly::gpu::test_utils::*;
-use darkly::gpu::veil::VeilRegistry;
 
 const W: u32 = 64;
 const H: u32 = 64;
@@ -79,13 +79,15 @@ fn veil_centre_alpha(type_id: &str) -> u8 {
         ..Default::default()
     });
 
-    let mut registry = VeilRegistry::new();
+    let mut registry = EffectRegistry::new();
     let params: Vec<_> = registry
-        .param_defs(type_id)
+        .params(type_id)
         .iter()
         .map(ParamDef::default_value)
         .collect();
-    let mut veil = registry.create_veil(type_id, &params, &device, format);
+    let mut veil = registry
+        .instance(type_id, &params, &device, format)
+        .expect("registered effect");
     let cache = veil.create_cache(&device, &queue, &ping_pong, &sampler, W, H);
 
     let (dst, dst_view) = render_target(&device);
@@ -163,13 +165,15 @@ fn veil_over_transparent(type_id: &str) -> u8 {
         ..Default::default()
     });
 
-    let mut registry = VeilRegistry::new();
+    let mut registry = EffectRegistry::new();
     let params: Vec<_> = registry
-        .param_defs(type_id)
+        .params(type_id)
         .iter()
         .map(ParamDef::default_value)
         .collect();
-    let mut veil = registry.create_veil(type_id, &params, &device, format);
+    let mut veil = registry
+        .instance(type_id, &params, &device, format)
+        .expect("registered effect");
     let cache = veil.create_cache(&device, &queue, &ping_pong, &sampler, W, H);
 
     let (dst, dst_view) = render_target(&device);

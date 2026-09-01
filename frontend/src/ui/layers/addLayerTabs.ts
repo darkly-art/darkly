@@ -52,7 +52,6 @@ function syntheticCard(source: AddSource, deps: TabDeps): AddCard | null {
             params: [],
             supportsPreview: false,
             source: null,
-            addable: true,
         } as CatalogEntry,
         source,
         catalog: '',
@@ -64,12 +63,8 @@ function syntheticCard(source: AddSource, deps: TabDeps): AddCard | null {
  *
  * Sources order by their action's menu position, so the rail and the Layer menu
  * cannot drift. A source contributes one tab per distinct `category` its
- * entries declare, or a single tab when none does — the rule that makes Filters
- * and Veils two tabs of one source once the registries merge, with no change
- * here.
- *
- * Entries declaring `addable: false` are dropped: an effect registered in two
- * registries names its own add path, so the picker offers it once.
+ * entries declare, or a single tab when none does — which is what makes Filters
+ * and Veils two tabs over one merged catalog, with no change here.
  */
 export function buildTabs(deps: TabDeps): AddTab[] {
     const ordered = [...deps.sources].sort((a, b) => railOrder(a, deps) - railOrder(b, deps));
@@ -93,7 +88,9 @@ export function buildTabs(deps: TabDeps): AddTab[] {
 
         const catalog = deps.catalog(source.catalog);
         if (!catalog) continue;
-        const offered = catalog.entries.filter(e => e.addable !== false);
+        const offered = source.category
+            ? catalog.entries.filter(e => e.category === source.category)
+            : catalog.entries;
         if (offered.length === 0) continue;
 
         const fallback = source.title ?? catalog.title ?? source.action;

@@ -401,7 +401,7 @@ fn invert_mask_with_selection_after_crop() {
 //
 // A *filter layer* is a non-destructive node in the layer tree that transforms
 // the composite of everything below it (the running group accumulator) via the
-// same `gpu/filters/*` pipeline the destructive path uses — pixels below are
+// same `gpu/effects/*` pipeline the destructive path uses — pixels below are
 // never modified. These tests pin the feature's promises: it inverts what's
 // below it, it leaves what's above untouched, an isolated group scopes it, and
 // — the core guarantee — it is non-destructive (toggle / delete restores the

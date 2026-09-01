@@ -228,7 +228,7 @@ impl VoidLayer {
 /// non-passthrough (isolated) group.
 ///
 /// State is exactly: a `pipeline` id naming which
-/// [`crate::gpu::filter::FilterPipelineRegistry`] transform to run (e.g.
+/// [`crate::gpu::effect::EffectRegistry`] transform to run (e.g.
 /// `"invert"`), plus that transform's parameter values. There is no pixel
 /// buffer — the compositor runs the shared filter pipeline over the running
 /// accumulator each frame.
@@ -236,13 +236,12 @@ pub struct FilterLayer {
     pub id: LayerId,
     pub common: NodeCommon,
     pub blend: BlendProps,
-    /// Stable `type_id` from [`crate::gpu::filter::FilterPipelineRegistry`]
-    /// (e.g. `"invert"`). Named `pipeline` rather than `filter_type` because
-    /// `filters` (below) already means the attached mask/selection list — two
-    /// "filter" fields on one struct would be a footgun.
+    /// Stable `type_id` from [`crate::gpu::effect::EffectRegistry`] (e.g.
+    /// `"invert"`). Named `pipeline` rather than `effect_type` because
+    /// `filters` (below) already means the attached mask/selection list.
     pub pipeline: String,
-    /// Parameter values matching the filter pipeline's schema, in order. Empty
-    /// for parameter-free filters like invert.
+    /// Parameter values matching the effect's schema, in order. Empty for
+    /// parameter-free effects like invert.
     pub params: Vec<ParamValue>,
     /// Attached mask / selection filters (same polymorphic list every layer
     /// kind carries).
@@ -706,18 +705,31 @@ impl LayerNode {
     /// Whether this node transforms the running parent accumulator *in place*
     /// (the composite of everything below it) rather than blending its own
     /// discrete texture in. A passthrough group inlines its children into the
-    /// parent; a filter layer runs its pipeline over the accumulator. Both want
-    /// a snapshot+lerp detour when they carry a visible mask, so the compositor
-    /// keys its mask-snapshot resource off this predicate instead of
-    /// enumerating which kinds qualify — a new in-place kind is purely additive.
-    /// Isolated groups, raster, and void layers blend a texture and answer
-    /// `false`.
+    /// parent; an effect layer runs its pipeline over the accumulator. The
+    /// compositor routes on this predicate instead of enumerating which kinds
+    /// qualify, so a new in-place kind is purely additive. Isolated groups,
+    /// raster, vector and void layers blend a texture and answer `false`.
     pub fn composites_in_place(&self) -> bool {
         match self {
             LayerNode::Group(g) => g.passthrough,
             LayerNode::Layer(Layer::Filter(_)) => true,
             LayerNode::Layer(_) => false,
         }
+    }
+
+    /// Whether this node's in-place result has to be captured *before* it runs.
+    ///
+    /// A passthrough group's "after" is written by an arbitrary number of child
+    /// passes straight into the parent accumulator, so the only way to keep its
+    /// "before" is to copy the accumulator first. An effect layer instead
+    /// writes into a scratch target, so both images exist without a copy — one
+    /// full-canvas `copy_texture_to_texture` per effect per frame that the
+    /// snapshot path would have cost.
+    ///
+    /// Answered by the node rather than asked about it, so the compositor never
+    /// branches on which kind it is looking at.
+    pub fn needs_before_snapshot(&self) -> bool {
+        matches!(self, LayerNode::Group(g) if g.passthrough)
     }
 }
 

@@ -24,7 +24,7 @@
 //! three-arm match at the single bind point (`make_bind_group`). This is data
 //! only — no trait, no registry. When a *third* bakeable field lands (e.g. a
 //! procedural paper/hatch source), promote [`BakeKind`] to a `Bakeable` trait
-//! with per-variant files, mirroring `gpu/veils/*`; the arms here are one
+//! with per-variant files, mirroring `gpu/effects/*`; the arms here are one
 //! expression each and are not yet a subsystem.
 
 /// How a `@group(3)` slot resolves to a bound texture.

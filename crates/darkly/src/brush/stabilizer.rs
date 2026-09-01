@@ -6,7 +6,7 @@
 //! algorithm at stroke start.
 //!
 //! Follows the same modular registry pattern as veils (`gpu/veil.rs` +
-//! `gpu/veils/*.rs`): each algorithm is a self-contained module that
+//! `gpu/effects/*.rs`): each algorithm is a self-contained module that
 //! declares its own params and factory.  A registry maps type_id →
 //! registration.  New algorithms are added by dropping a `.rs` file in
 //! `brush/stabilizers/` — no other files touched.

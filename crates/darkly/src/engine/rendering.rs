@@ -775,7 +775,7 @@ impl DarklyEngine {
         }
         self.gpu.resize(width, height);
         self.compositor
-            .veil_chain_mut()
+            .effect_chain_mut()
             .resize(&self.gpu.device, &self.gpu.queue, width, height);
         self.compositor.mark_needs_present();
     }

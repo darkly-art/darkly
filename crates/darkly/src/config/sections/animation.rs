@@ -4,10 +4,10 @@ use crate::config::schema::{Pref, PrefKind, SchemaSection, WidgetHint};
 // Rust callers. New prefs should use camelCase dot-paths.
 const PREFS: &[Pref] = &[
     Pref {
-        key: "animation.veil_divisor",
-        display_name: "Veil animation divisor",
+        key: "animation.effect_divisor",
+        display_name: "Effect animation divisor",
         description: Some(
-            "How often animated veils tick, as a fraction of the master frame rate. 1 = every frame, 2 = every other, 4 = every fourth.",
+            "How often animated effects tick, as a fraction of the master frame rate. 1 = every frame, 2 = every other, 4 = every fourth.",
         ),
         kind: PrefKind::Int { min: 1, max: 16 },
         widget: WidgetHint::Auto,
@@ -24,7 +24,7 @@ const PREFS: &[Pref] = &[
         display_name: "Void animation divisor",
         description: Some(
             "How often animated void layers re-render, as a fraction of the master frame rate. \
-             Voids piggyback on the same clock as veils so ticks line up.",
+             Voids piggyback on the same clock as effects so ticks line up.",
         ),
         kind: PrefKind::Int { min: 1, max: 16 },
         widget: WidgetHint::Auto,

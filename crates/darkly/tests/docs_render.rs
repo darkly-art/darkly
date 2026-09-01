@@ -97,26 +97,18 @@ fn previewable() -> Vec<Previewable> {
 // The declarations — GPU-free
 // ---------------------------------------------------------------------------
 
-/// Every filter, every veil, every blend mode and `noise` declares a preview.
+/// Every effect, every blend mode and `noise` declares a preview.
 ///
-/// Driven off the four **registries** rather than a hand-written list, so
-/// adding a filter without a preview fails here — which is the whole point of
-/// putting the declaration on the registration.
+/// Driven off the **registries** rather than a hand-written list, so adding an
+/// effect without a preview fails here — which is the whole point of putting
+/// the declaration on the registration.
 #[test]
 fn every_previewable_entry_declares_a_preview() {
-    let filters = darkly::gpu::filter::FilterPipelineRegistry::new();
-    for reg in filters.types() {
+    let effects = darkly::gpu::effect::EffectRegistry::new();
+    for reg in effects.registrations() {
         assert!(
-            filters.preview(reg.type_id).is_some(),
-            "filter `{}` declares no preview",
-            reg.type_id
-        );
-    }
-    let veils = darkly::gpu::veil::VeilRegistry::new();
-    for reg in veils.types() {
-        assert!(
-            veils.preview(reg.type_id).is_some(),
-            "veil `{}` declares no preview",
+            effects.preview(reg.type_id).is_some(),
+            "effect `{}` declares no preview",
             reg.type_id
         );
     }
@@ -177,30 +169,20 @@ fn every_previewable_catalog_has_a_mechanism_or_is_the_exception() {
 /// The two effects with two surfaces declare one preview and sweep one set of
 /// values, from the module they share rather than a copy in each.
 ///
-/// The filter half is checked structurally — the registration's swept values
-/// *are* the shared function's. The veil half calls the same function from its
-/// `preview_at`, which only pixels can witness; `every_asset_has_real_motion`
-/// and `preview_at_is_absolute` cover it there.
+/// The registration's swept values *are* the shared module's, so the two
+/// cannot drift apart into a preview that no longer shows what the effect does.
 #[test]
 fn shared_effects_share_one_preview() {
-    let filters = darkly::gpu::filter::FilterPipelineRegistry::new();
-    let veils = darkly::gpu::veil::VeilRegistry::new();
-    for shared in ["black_and_white", "chromatic_aberration"] {
-        assert_eq!(
-            filters.preview(shared),
-            veils.preview(shared),
-            "`{shared}`'s filter and veil declare different previews"
-        );
-    }
+    let effects = darkly::gpu::effect::EffectRegistry::new();
     for i in 0..8 {
         let t = i as f32 / 8.0;
         assert_eq!(
-            filters.preview_params("black_and_white", t),
+            effects.preview_params("black_and_white", t),
             darkly::gpu::black_and_white::preview_params(t),
         );
         assert_eq!(
-            filters.preview_params("chromatic_aberration", t),
-            darkly::gpu::filters::chromatic_aberration::preview_params(t),
+            effects.preview_params("chromatic_aberration", t),
+            darkly::gpu::effects::chromatic_aberration::preview_params(t),
         );
     }
 }
@@ -317,11 +299,11 @@ fn every_previewable_entry_has_a_renderer() {
     assert!(!manifest.assets.is_empty());
 }
 
-/// Seven filters, nine veils, one void, sixteen blend modes and thirteen brushes
-/// — counted **per catalog**. A bare total of forty-six would not notice a
-/// whole catalog dropping out and another gaining entries.
+/// Fourteen effects, one void, sixteen blend modes and thirteen brushes —
+/// counted **per catalog**. A bare total of forty-four would not notice a whole
+/// catalog dropping out and another gaining entries.
 #[test]
-fn all_forty_six_assets_land() {
+fn all_forty_four_assets_land() {
     let (_, manifest) = assets();
     let counts: BTreeMap<&str, usize> = manifest
         .assets
@@ -331,14 +313,13 @@ fn all_forty_six_assets_land() {
     assert_eq!(
         counts,
         BTreeMap::from([
-            ("filters", 7),
-            ("veils", 9),
+            ("effects", 14),
             ("voids", 1),
             ("blendModes", 16),
             ("brushes", 13),
         ])
     );
-    assert_eq!(counts.values().sum::<usize>(), 46);
+    assert_eq!(counts.values().sum::<usize>(), 44);
 }
 
 /// The set of directories **found by walking the output** equals the previewable
@@ -410,7 +391,7 @@ fn every_frame_is_the_size_its_entry_declares() {
             checked += 1;
         }
     }
-    assert_eq!(checked, 46);
+    assert_eq!(checked, 44);
 }
 
 /// For every asset the PNG count equals the frame count the declaration says
@@ -478,16 +459,16 @@ fn manifest_frames_fps_and_loop_match_the_declaration() {
         }
     }
 
-    // The three time-driven veils integrate their clocks forward and declare so
+    // The three time-driven effects integrate their clocks forward and declare so
     // rather than being made periodic by a shader change. They still ship as
     // loops: `close_loop` closes the sequence in the one place both the picker
     // and this binary go through, so nothing downstream carries a special case.
     assert_eq!(
         non_looping,
         BTreeSet::from([
-            "veils/grain".to_string(),
-            "veils/rainy_glass".to_string(),
-            "veils/vhs".to_string(),
+            "effects/grain".to_string(),
+            "effects/rainy_glass".to_string(),
+            "effects/vhs".to_string(),
         ])
     );
     for id in &non_looping {
@@ -550,8 +531,8 @@ fn every_asset_has_real_motion() {
 fn rendering_an_entry_twice_is_deterministic() {
     let mut gpu = Gpu::new();
     for (catalog, type_id) in [
-        ("filters", "hsv"),
-        ("veils", "frozen"),
+        ("effects", "hsv"),
+        ("effects", "frozen"),
         ("voids", "noise"),
         ("blendModes", "multiply"),
         ("brushes", "ink_pen"),
@@ -571,14 +552,14 @@ fn rendering_an_entry_twice_is_deterministic() {
 /// Compared against the target's *loaded* source rather than `subject_rgba`,
 /// because the offscreen path area-averages the 2× subject before the filter
 /// sees it — pinning the raw subject would be pinning the resample. Rendered
-/// after every other filter through the same session, so it also pins that none
+/// after every other effect through the same session, so it also pins that none
 /// of them left state behind.
 #[test]
 fn invert_is_the_exact_inverse_of_the_source_it_was_given() {
     let mut gpu = Gpu::new();
     let mut rendered = None;
-    for reg in darkly::gpu::filter::FilterPipelineRegistry::new().types() {
-        let r = render_one(&mut gpu, "filters", reg.type_id);
+    for reg in darkly::gpu::effect::EffectRegistry::new().registrations() {
+        let r = render_one(&mut gpu, "effects", reg.type_id);
         if reg.type_id == "invert" {
             rendered = Some(r);
         }
@@ -615,7 +596,7 @@ fn invert_is_the_exact_inverse_of_the_source_it_was_given() {
 fn black_and_white_veil_frame_is_neutral_gray() {
     // Frame 0 is where the shared sweep rests: no tint, so the result is the
     // bare desaturation.
-    let defs = darkly::gpu::veil::VeilRegistry::new().param_defs("black_and_white");
+    let defs = darkly::gpu::effect::EffectRegistry::new().params("black_and_white");
     let tint = defs
         .iter()
         .position(|d| d.name == "tint_strength")
@@ -626,7 +607,7 @@ fn black_and_white_veil_frame_is_neutral_gray() {
         "the shared sweep starts untinted"
     );
 
-    let rendered = render_one(&mut Gpu::new(), "veils", "black_and_white");
+    let rendered = render_one(&mut Gpu::new(), "effects", "black_and_white");
     let frame = &rendered.frames[0];
     for (i, px) in frame.as_chunks::<4>().0.iter().enumerate() {
         assert!(

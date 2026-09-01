@@ -1,4 +1,4 @@
-//! Destructive color filters — apply a `MaskedFilterPipeline` to a node's
+//! Destructive effects — apply a registered effect to a node's
 //! pixels in place, respecting an active selection.
 //!
 //! Mirrors [`layer_flip`](super::super::layer_flip)'s structure: the region machinery
@@ -53,9 +53,9 @@ impl DarklyEngine {
     /// Apply a destructive filter (by registered `filter_type` id) to the given
     /// node (raster layer or mask filter) with typed `params`. Returns `false`
     /// if the node isn't editable, has no texture, the type is unknown, or the
-    /// filter was deferred waiting on the selection cache. Parametric filters
-    /// bake `params` into a throwaway cache inside `filter_node_region`, exactly
-    /// as the filter-layer compose path does.
+    /// apply was deferred waiting on the selection cache. The effect instance
+    /// and its resources are built inside `apply_effect_to_region`, at the
+    /// node's own format.
     pub fn apply_filter_typed(
         &mut self,
         node_id: LayerId,
@@ -65,7 +65,7 @@ impl DarklyEngine {
         if !self.doc.is_node_editable(node_id) {
             return false;
         }
-        if !self.compositor.filter_pipeline_registry().has(filter_type) {
+        if !self.compositor.effect_registry().has(filter_type) {
             return false;
         }
         self.auto_commit_floating();
@@ -90,17 +90,6 @@ impl DarklyEngine {
                 self.kick_selection_readback();
                 return false;
             }
-        };
-
-        // Resolve the (lazily-built, shared) pipeline before touching undo so a
-        // missing type fails before we snapshot. `has()` above guarantees Some.
-        let pipeline = match self
-            .compositor
-            .filter_pipeline_registry_mut()
-            .pipeline(filter_type, &self.gpu.device)
-        {
-            Some(p) => p,
-            None => return false,
         };
 
         // Snapshot the affected region for a single-step undo.
@@ -129,14 +118,14 @@ impl DarklyEngine {
             .as_ref()
             .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
         self.gpu.encode("apply-filter", |enc| {
-            self.compositor.filter_node_region(
+            self.compositor.apply_effect_to_region(
                 &self.gpu.device,
                 &self.gpu.queue,
                 enc,
                 node_id,
                 region,
                 mask_view.as_ref(),
-                pipeline.as_ref(),
+                filter_type,
                 &params,
             );
         });
@@ -173,7 +162,7 @@ impl DarklyEngine {
         filter_type: &str,
         params: Vec<ParamValue>,
     ) -> bool {
-        if !self.compositor.filter_pipeline_registry().has(filter_type) {
+        if !self.compositor.effect_registry().has(filter_type) {
             return false;
         }
         // A preview for a different node/type must be undone before starting a new one.
@@ -227,31 +216,20 @@ impl DarklyEngine {
             preview.region,
             &preview.snapshot,
         );
-        let pipeline = match self
-            .compositor
-            .filter_pipeline_registry_mut()
-            .pipeline(filter_type, &self.gpu.device)
-        {
-            Some(p) => p,
-            None => {
-                self.filter_preview = Some(preview);
-                return false;
-            }
-        };
         let mask_view = preview
             .mask
             .as_ref()
             .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
         let region = preview.region;
         self.gpu.encode("preview-filter", |enc| {
-            self.compositor.filter_node_region(
+            self.compositor.apply_effect_to_region(
                 &self.gpu.device,
                 &self.gpu.queue,
                 enc,
                 node_id,
                 region,
                 mask_view.as_ref(),
-                pipeline.as_ref(),
+                filter_type,
                 &params,
             );
         });

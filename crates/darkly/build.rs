@@ -80,8 +80,8 @@ fn main() {
     );
 
     generate_catalog_registry(
-        &src.join("gpu/veils"),
-        "crate::gpu::veil::VeilRegistration",
+        &src.join("gpu/effects"),
+        "crate::gpu::effect::EffectRegistration",
         &src,
         &mut catalog_sources,
     );
@@ -89,13 +89,6 @@ fn main() {
     generate_catalog_registry(
         &src.join("gpu/voids"),
         "crate::gpu::void::VoidRegistration",
-        &src,
-        &mut catalog_sources,
-    );
-
-    generate_catalog_registry(
-        &src.join("gpu/filters"),
-        "crate::gpu::filter::FilterPipelineRegistration",
         &src,
         &mut catalog_sources,
     );
@@ -234,7 +227,7 @@ fn generate_catalog_sources(mut sources: Vec<(String, String)>, src: &Path) {
     code.push_str("/// A registry directory the build scan found to produce a catalog.\n");
     code.push_str("pub struct CatalogSource {\n");
     code.push_str("    /// The directory the build scan walked, as that scan named it:\n");
-    code.push_str("    /// `gpu/veils` and friends relative to `crates/darkly/src`,\n");
+    code.push_str("    /// `gpu/effects` and friends relative to `crates/darkly/src`,\n");
     code.push_str("    /// `brushes` beside it.\n");
     code.push_str("    pub dir: &'static str,\n");
     code.push_str("    /// Id of the catalog the registry in that directory produces.\n");

@@ -5,16 +5,18 @@
 //!
 //!   RGB (composite), Red, Green, Blue, Alpha, Hue, Saturation, Lightness
 //!
-//! — into one 256×2 RGBA8 LUT read by [`shaders/filters/curves.wgsl`], then runs
+//! — into one 256×2 RGBA8 LUT read by [`shaders/effects/curves.wgsl`], then runs
 //! that one fragment shader. Only the *evaluator* differs: Curves reads a
 //! natural-cubic spline, Levels a black/gamma/white/output transfer. Everything
 //! shared lives here — the LUT layout, the composite-over-channel fold, the
-//! HSV/Lab stage gate flags, the pipeline, and the `ensure`/`render` contract —
-//! so each filter is a thin "give me eight per-channel evaluators" provider.
+//! HSV/Lab stage gate flags, and the pipeline — so each filter is a thin "give
+//! me eight per-channel evaluators" provider.
 
-use crate::gpu::effect::EffectCache;
-use crate::gpu::param_filter::{ParamFilter, SrcSampling};
-use crate::gpu::params::ParamValue;
+use std::sync::Arc;
+
+use crate::gpu::effect::{create_effect_pipeline, Binding, EffectCache, EffectPipeline};
+use crate::gpu::param_effect::{ParamEffectKind, Resources};
+use crate::gpu::params::{ParamDef, ParamValue};
 
 /// The LUT fragment-shader source shared by every LUT filter (Curves, Levels):
 /// the shared colour-space lib prepended to `curves.wgsl`. Built at load time
@@ -24,7 +26,7 @@ pub fn lut_shader_source() -> String {
     format!(
         "{}\n{}",
         include_str!("../../shaders/lib/colorspace.wgsl"),
-        include_str!("../../shaders/filters/curves.wgsl"),
+        include_str!("../../shaders/effects/curves.wgsl"),
     )
 }
 
@@ -118,51 +120,50 @@ pub fn bake_lut(eval: impl Fn(Channel, f32) -> f32) -> Baked {
     }
 }
 
-/// Allocate (once) and refresh the LUT texture + gate uniform for a LUT filter —
-/// the [`ParamFilter`] `prepare` half for the aux-carrying Curves/Levels family.
-/// `bake` turns the layer's params into the baked LUT + stage-gate flags.
-fn lut_prepare(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    bake: fn(&[ParamValue]) -> Baked,
-    params: &[ParamValue],
-    cache: &mut EffectCache,
-) {
-    // Allocate the LUT texture + gate uniform once; param edits reuse them.
-    if cache.aux_textures.is_empty() {
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("filter-lut-tex"),
-            size: wgpu::Extent3d {
-                width: LUT_LEN as u32,
-                height: LUT_ROWS as u32,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        cache.aux_textures.push(tex);
-        cache.aux_views.push(view);
-    }
-    if cache.uniform_bufs.is_empty() {
-        cache
-            .uniform_bufs
-            .push(device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("filter-lut-flags"),
-                size: 16,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }));
-    }
+/// The bind-group shape every LUT effect declares: `[src(0), lut(1),
+/// uniform(2)]`. The LUT is read at an integer index, so no sampler.
+pub const BINDINGS: &[Binding] = &[Binding::Texture, Binding::Texture, Binding::Uniform];
 
-    let baked = bake(params);
+/// Allocate the 256×2 LUT texture and the stage-gate uniform. Runs once per
+/// instance; a parameter change re-fills them through [`lut_write`] rather than
+/// reallocating, which is what keeps a curve drag off the allocator.
+fn lut_alloc(device: &wgpu::Device, cache: &mut EffectCache) {
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("effect-lut-tex"),
+        size: wgpu::Extent3d {
+            width: LUT_LEN as u32,
+            height: LUT_ROWS as u32,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+    cache.aux_textures.push(tex);
+    cache.aux_views.push(view);
+    cache
+        .uniform_bufs
+        .push(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("effect-lut-flags"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+}
+
+/// Write a baked LUT and its stage-gate flags into resources [`lut_alloc`]
+/// already created.
+fn lut_write(queue: &wgpu::Queue, baked: &Baked, cache: &EffectCache) {
+    let Some(tex) = cache.aux_textures.first() else {
+        return;
+    };
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
-            texture: &cache.aux_textures[0],
+            texture: tex,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
@@ -185,28 +186,43 @@ fn lut_prepare(
         0u32,
         0u32,
     ];
-    queue.write_buffer(&cache.uniform_bufs[0], 0, bytemuck::cast_slice(&flags));
+    cache.write_uniform(queue, 0, bytemuck::cast_slice(&flags));
 }
 
-/// Build the aux-carrying [`ParamFilter`] specialization every LUT filter
-/// (Curves, Levels) shares: the `[src, lut, uniform]` bind-group shape and the
-/// `fs_curves` / `fs_curves_masked` entry points, with a `prepare` that bakes
-/// `bake(params)` into the LUT texture + gate uniform on each param change.
-/// `shader_src`'s fragment entries must be `fs_curves` (plain) and
-/// `fs_curves_masked` (selection-clipped).
-pub fn lut_param_filter(
+/// Build the shared LUT pipeline for one target format. Every LUT effect
+/// compiles the same `fs_curves` entry point; only the baked contents differ.
+pub fn lut_pipeline(
     device: &wgpu::Device,
-    shader_src: &str,
-    bake: fn(&[ParamValue]) -> Baked,
-) -> ParamFilter {
-    ParamFilter::new(
+    format: wgpu::TextureFormat,
+    label: &str,
+) -> EffectPipeline {
+    create_effect_pipeline(
         device,
-        "filter-lut",
-        shader_src,
+        format,
+        label,
+        BINDINGS,
+        &lut_shader_source(),
         "fs_curves",
-        "fs_curves_masked",
-        true, // aux-carrying (the 256×2 LUT texture at binding 1)
-        SrcSampling::Load,
-        move |device, queue, params, cache| lut_prepare(device, queue, bake, params, cache),
+    )
+}
+
+/// The [`ParamEffectKind`] every LUT effect (Curves, Levels) shares: the
+/// `[src, lut, uniform]` shape over a `bake` that turns this effect's params
+/// into the LUT and its stage-gate flags.
+pub fn lut_kind(
+    type_id: &'static str,
+    label: &'static str,
+    schema: &'static [ParamDef],
+    bake: fn(&[ParamValue]) -> Baked,
+) -> Arc<ParamEffectKind> {
+    ParamEffectKind::new(
+        type_id,
+        label,
+        schema,
+        BINDINGS,
+        Resources::Baked {
+            alloc: lut_alloc,
+            write: Box::new(move |queue, params, cache| lut_write(queue, &bake(params), cache)),
+        },
     )
 }

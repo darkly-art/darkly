@@ -808,13 +808,10 @@ impl DarklyEngine {
         params: Vec<crate::gpu::params::ParamValue>,
         anchor: Option<LayerId>,
     ) -> Option<LayerId> {
-        if !self.compositor.filter_pipeline_registry().has(pipeline) {
+        if !self.compositor.effect_registry().has(pipeline) {
             return None;
         }
-        let display_label = self
-            .compositor
-            .filter_pipeline_registry()
-            .display_name(pipeline);
+        let display_label = self.compositor.effect_registry().display_name(pipeline);
         let id = self
             .doc
             .add_filter_layer(pipeline.to_string(), display_label, params, anchor);
@@ -869,7 +866,7 @@ impl DarklyEngine {
     /// Parameter schema for a filter type (empty for parameter-free filters).
     /// Backs the protocol handler's JSON→`ParamValue` conversion.
     pub fn filter_param_defs(&self, type_id: &str) -> &'static [crate::gpu::params::ParamDef] {
-        self.compositor.filter_pipeline_registry().params(type_id)
+        self.compositor.effect_registry().params(type_id)
     }
 
     /// Replace a filter layer's parameter values. Coalesces with prior

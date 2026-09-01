@@ -132,43 +132,27 @@ fn export_is_a_faithful_projection() {
 
     let some = |s: &'static str| (!s.is_empty()).then_some(s);
 
-    check(
-        &json,
-        "filters",
-        darkly::gpu::filter::FilterPipelineRegistry::new()
-            .types()
-            .into_iter()
+    check(&json, "effects", {
+        // The effect catalog is emitted in (category, display_name) order
+        // so the frontend can run-length group it, which is not the
+        // registry's own type_id order — so the expectation is built from
+        // the same sort the catalog applies.
+        let registry = darkly::gpu::effect::EffectRegistry::new();
+        let mut regs = registry.registrations();
+        regs.sort_by_key(|r| (r.category, r.display_name));
+        regs.into_iter()
             .map(|r| {
                 (
                     r.type_id,
                     r.display_name,
                     some(r.icon),
                     some(r.description),
-                    None,
+                    some(r.category),
                     some(r.hotkey_action),
                 )
             })
-            .collect(),
-    );
-
-    check(
-        &json,
-        "veils",
-        darkly::gpu::veil::VeilRegistry::new()
-            .types()
-            .into_iter()
-            .map(|r| {
-                (
-                    r.type_id,
-                    r.display_name,
-                    None,
-                    some(r.description),
-                    None,
-                    None,
-                )
-            })
-            .collect(),
-    );
+            .collect()
+    });
 
     check(
         &json,
@@ -358,9 +342,9 @@ fn export_is_a_faithful_projection() {
         }
     }
     assert_eq!(
-        previewable, 46,
-        "7 filters + 9 veils + 1 void + 16 blend modes + 13 brushes declare a \
-         preview recipe"
+        previewable, 44,
+        "14 effects + 1 void + 16 blend modes + 13 brushes declare a preview \
+         recipe"
     );
 
     // Brushes carry no `preview` field of their own — the recipe lives on the
@@ -453,12 +437,8 @@ fn params_match_the_registration_slice() {
     }
 
     let mut checked = 0;
-    for r in darkly::gpu::filter::FilterPipelineRegistry::new().types() {
-        check(&json, "filters", r.type_id, r.params);
-        checked += 1;
-    }
-    for r in darkly::gpu::veil::VeilRegistry::new().types() {
-        check(&json, "veils", r.type_id, r.params);
+    for r in darkly::gpu::effect::EffectRegistry::new().registrations() {
+        check(&json, "effects", r.type_id, r.params);
         checked += 1;
     }
     for r in darkly::gpu::void::VoidRegistry::new().types() {

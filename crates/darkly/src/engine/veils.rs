@@ -25,7 +25,7 @@ impl DarklyEngine {
     /// index is a silent no-op.
     #[handler]
     pub fn update_veil(&mut self, index: usize, params: RawParams) {
-        let Some(type_id) = self.compositor.veil_chain().type_id(index) else {
+        let Some(type_id) = self.compositor.effect_chain().type_id(index) else {
             return;
         };
         let pv = params_from_json(&params.0, self.veil_param_defs(type_id));
@@ -33,47 +33,39 @@ impl DarklyEngine {
     }
 
     pub fn add_veil_layer(&mut self, veil_type: &str, params: &[ParamValue]) {
-        let chain = self.compositor.veil_chain_mut();
-        let format = chain.accum_format();
-        let veil = chain
-            .registry_mut()
-            .create_veil(veil_type, params, &self.gpu.device, format);
-        chain.add_veil(&self.gpu.device, &self.gpu.queue, veil);
+        self.compositor
+            .add_screen_effect(&self.gpu.device, &self.gpu.queue, veil_type, params);
     }
 
     #[handler]
     pub fn remove_veil(&mut self, index: usize) {
-        self.compositor.veil_chain_mut().remove_veil(index);
+        self.compositor.effect_chain_mut().remove_effect(index);
     }
 
     #[handler]
     pub fn clear_veils(&mut self) {
-        self.compositor.veil_chain_mut().clear_veils();
+        self.compositor.effect_chain_mut().clear_effects();
     }
 
     #[handler]
     pub fn set_veil_visible(&mut self, index: usize, visible: bool) {
         self.compositor
-            .veil_chain_mut()
-            .set_veil_visible(index, visible);
+            .effect_chain_mut()
+            .set_effect_visible(index, visible);
     }
 
     #[handler]
     pub fn move_veil(&mut self, from: usize, to: usize) {
-        self.compositor.veil_chain_mut().move_veil(from, to);
+        self.compositor.effect_chain_mut().move_effect(from, to);
     }
 
     pub fn update_veil_layer(&mut self, index: usize, params: &[ParamValue]) {
-        let type_id: &'static str = match self.compositor.veil_chain().type_id(index) {
-            Some(t) => t,
-            None => return,
-        };
-        let chain = self.compositor.veil_chain_mut();
-        let format = chain.accum_format();
-        let new_veil = chain
-            .registry_mut()
-            .create_veil(type_id, params, &self.gpu.device, format);
-        chain.update_veil(&self.gpu.device, &self.gpu.queue, index, new_veil);
+        self.compositor.effect_chain_mut().set_effect_params(
+            &self.gpu.device,
+            &self.gpu.queue,
+            index,
+            params,
+        );
     }
 
     // --- Queries ---
@@ -88,7 +80,7 @@ impl DarklyEngine {
                 node_to_layer_info(
                     &self.doc,
                     self.compositor.void_registry(),
-                    self.compositor.filter_pipeline_registry(),
+                    self.compositor.effect_registry(),
                     *id,
                 )
             })
@@ -97,12 +89,12 @@ impl DarklyEngine {
 
     #[handler]
     pub fn veil_list(&self) -> Vec<VeilInfo> {
-        let chain = self.compositor.veil_chain();
+        let chain = self.compositor.effect_chain();
         let count = chain.count();
         let mut list = Vec::with_capacity(count);
         for i in (0..count).rev() {
             if let Some((type_id, visible)) = chain.info(i) {
-                let param_defs = chain.registry().param_defs(type_id);
+                let param_defs = self.compositor.effect_registry().params(type_id);
                 let values = chain.param_values(i).unwrap_or_default();
                 let params = param_defs
                     .iter()
@@ -132,6 +124,6 @@ impl DarklyEngine {
 
     /// Get the parameter definitions for a veil type.
     pub fn veil_param_defs(&self, type_id: &str) -> &'static [ParamDef] {
-        self.compositor.veil_chain().registry().param_defs(type_id)
+        self.compositor.effect_registry().params(type_id)
     }
 }

@@ -64,15 +64,15 @@ hotkeys:
   # Colors. Krita binds Ctrl+I to Invert (`krita_filter_invert`); Invert
   # Selection is the Shift variant above. Photoshop agrees (Ctrl+I → Image >
   # Adjustments > Invert); GIMP does NOT (Ctrl+I is its Invert Selection), so
-  # this is per-overlay, not a default. The action id is `filterInvert` —
-  # the dynamically-registered id for the `invert` filter (`filter` + type).
-  filterInvert: $mod+KeyI
+  # this is per-overlay, not a default. The action id is `effectInvert` —
+  # the dynamically-registered id for the `invert` effect (`effect` + type).
+  effectInvert: $mod+KeyI
   # Krita binds Ctrl+Shift+U to Desaturate (`krita_filter_desaturate`, per
   # docs/krita-default-hotkeys.md). Photoshop agrees (Shift+Ctrl+U → Image >
   # Adjustments > Desaturate); GIMP has no default Desaturate shortcut, so
   # this is per-overlay, not a default.
-  # Our desaturate is the `black_and_white` filter.
-  filterBlack_and_white: $mod+Shift+KeyU
+  # Our desaturate is the `black_and_white` effect.
+  effectBlack_and_white: $mod+Shift+KeyU
 
 mouse_clicks:
   # Krita's default "Sample FG color from merged image" — Ctrl+drag on

@@ -1,23 +1,24 @@
 //! How a previewable registry entry's preview moves, and the primitives every
 //! preview is rendered through.
 //!
-//! A preview is a short sequence of thumbnail frames of one effect, shown in
-//! the editor's pickers and written to disk as documentation. An entry declares
+//! A preview is a short sequence of thumbnail frames of one entry, shown in the
+//! editor's pickers and written to disk as documentation. An entry declares
 //! *that* it has one — a [`PreviewAnim`] on its registration — and *how it
-//! moves* as code: `Veil::preview_at` / `Void::preview_at` for the per-instance
-//! kinds, a `fn(f32) -> Vec<ParamValue>` on the registration for filters, whose
-//! effect object is shared and holds no parameters.
+//! moves* as code: a `fn(f32) -> Vec<ParamValue>` on the registration for what
+//! its parameters do over the sweep, and [`Effect::seek`](super::effect::Effect::seek)
+//! / `Void::preview_at` for entries whose motion is a clock rather than a
+//! parameter.
 //!
-//! **The convention every `preview_at` body follows**: take `t`, set fields,
-//! sync the GPU resources those fields feed — in that order, once. Repetition
-//! across bodies is extracted into plain helpers here ([`swing`],
-//! [`swing_signed`]) that a body calls and stays in control of.
+//! **The convention every sweep follows**: take `t`, set fields, sync the GPU
+//! resources those fields feed — in that order, once. Repetition across bodies
+//! is extracted into plain helpers here ([`swing`], [`swing_signed`]) that a
+//! body calls and stays in control of.
 //!
-//! **Absolute, not incremental.** `preview_at(0.5)` puts the instance in the
-//! same state whether it follows `preview_at(0.4)` or nothing at all. That is
-//! what lets a sequence be rebuilt, resumed, or sampled out of order without a
-//! replay, and `preview_at_is_absolute` in `tests/picker_preview.rs` is what
-//! holds every entry to it.
+//! **Absolute, not incremental.** `t = 0.5` puts the instance in the same state
+//! whether it follows `t = 0.4` or nothing at all. That is what lets a sequence
+//! be rebuilt, resumed, or sampled out of order without a replay, and
+//! `preview_at_is_absolute` in `tests/picker_preview.rs` is what holds every
+//! entry to it.
 
 /// Longest preview-thumbnail edge, in pixels. The source is fit into this box
 /// preserving its aspect ratio, so previews aren't distorted regardless of the
@@ -28,7 +29,7 @@ pub const PREVIEW_MAX_DIM: u32 = 256;
 pub const ANIMATED_FRAMES: u32 = 48;
 /// Capture / playback rate, in frames per second.
 pub const PREVIEW_FPS: u32 = 24;
-/// Seconds of an effect's own clock one preview sequence covers. A veil whose
+/// Seconds of an effect's own clock one preview sequence covers. An effect whose
 /// motion is temporal rather than parametric maps `t` onto this span.
 pub const PREVIEW_SECONDS: f32 = 2.0;
 /// Frames [`close_loop`] spends dissolving a one-way sequence back onto its own
@@ -552,7 +553,7 @@ impl PreviewTarget {
             .unwrap_or((0, 0))
     }
 
-    /// Both views, in the ping-pong order a [`Veil`](super::veil::Veil)'s
+    /// Both views, in the ping-pong order an [`Effect`](super::effect::Effect)'s
     /// `create_cache` expects: it reads index 0 and is encoded against index 1.
     pub fn views(&self) -> &[wgpu::TextureView; 2] {
         &self.textures.as_ref().expect("load or clear first").views
@@ -663,9 +664,8 @@ fn make_textures(device: &wgpu::Device, width: u32, height: u32) -> PreviewTextu
 /// `Compositor::preview_registries` and `docs_render::Gpu`; a new
 /// non-previewable catalog costs nothing.
 pub struct PreviewRegistries<'a> {
-    pub veils: &'a mut super::veil::VeilRegistry,
+    pub effects: &'a mut super::effect::EffectRegistry,
     pub voids: &'a mut super::void::VoidRegistry,
-    pub filters: &'a mut super::filter::FilterPipelineRegistry,
 }
 
 /// Everything a catalog knows statically about one previewable entry.
@@ -822,7 +822,7 @@ impl<'a> PreviewSequence<'a> {
 
 /// Make a one-way sequence hand back to its own first frame.
 ///
-/// Three veils — grain, rainy glass, VHS — declare [`PreviewAnim::ONE_WAY`]:
+/// Three effects — grain, rainy glass, VHS — declare [`PreviewAnim::ONE_WAY`]:
 /// their motion is a clock integrated forward, so the last frame does not lead
 /// back to the first, and the bodies that wrote them are right not to fake that
 /// by making the effect itself periodic. But **both** consumers play a sequence

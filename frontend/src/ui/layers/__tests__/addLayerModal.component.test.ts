@@ -4,34 +4,25 @@ import { flushSync, mount, unmount } from 'svelte';
 
 /**
  * The end-to-end form of the user's complaint: one modal, one tab per kind,
- * and an effect registered in two registries offered exactly once.
+ * and each effect offered exactly once.
  */
 
 const spawned: string[] = [];
 
 const catalogs: Record<string, any> = {
-    filters: {
-        id: 'filters',
-        title: 'Filters',
+    // One catalog holding both categories — the shape the merged registry
+    // emits, sorted by (category, displayName) as it is on the wire.
+    effects: {
+        id: 'effects',
+        title: 'Effects',
         description: null,
         icon: null,
         order: null,
         entries: [
-            entry('black_and_white', 'Black and White'),
-            entry('chromatic_aberration', 'Chromatic Aberration', { addable: false }),
-            entry('invert', 'Invert'),
-        ],
-    },
-    veils: {
-        id: 'veils',
-        title: 'Veils',
-        description: null,
-        icon: null,
-        order: null,
-        entries: [
-            entry('black_and_white', 'Black and White', { addable: false }),
-            entry('chromatic_aberration', 'Chromatic Aberration'),
-            entry('grain', 'Grain'),
+            entry('black_and_white', 'Black and White', { category: 'Filters' }),
+            entry('invert', 'Invert', { category: 'Filters' }),
+            entry('chromatic_aberration', 'Chromatic Aberration', { category: 'Veils' }),
+            entry('grain', 'Grain', { category: 'Veils' }),
         ],
     },
     voids: {
@@ -55,7 +46,6 @@ function entry(type: string, displayName: string, over: Record<string, unknown> 
         params: [],
         supportsPreview: false,
         source: null,
-        addable: true,
         ...over,
     };
 }
@@ -86,14 +76,16 @@ vi.mock('../../EffectPreview.svelte', async () => {
 vi.mock('../addSources/filters', () => ({
     source: {
         action: 'newFilterLayer',
-        catalog: 'filters',
+        catalog: 'effects',
+        category: 'Filters',
         spawn: async (e: any) => { spawned.push(`filter:${e.type}`); },
     },
 }));
 vi.mock('../addSources/veils', () => ({
     source: {
         action: 'newVeil',
-        catalog: 'veils',
+        catalog: 'effects',
+        category: 'Veils',
         spawn: async (e: any) => { spawned.push(`veil:${e.type}`); },
     },
 }));

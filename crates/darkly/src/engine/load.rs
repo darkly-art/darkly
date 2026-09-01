@@ -163,7 +163,7 @@ fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Res
         }
     }
 
-    let veil_registry = engine.compositor.veil_chain().registry();
+    let veil_registry = engine.compositor.effect_registry();
     for id in &requires.veil {
         if !veil_registry.has(id) {
             missing.push(format!("veil/{id}"));
@@ -435,7 +435,7 @@ fn install_staging(
     // then unwrap on `views`. Seed to canvas dimensions so the
     // restore path always sees a sized viewport — the next real
     // resize cascades to the right surface size automatically.
-    engine.compositor.veil_chain_mut().resize(
+    engine.compositor.effect_chain_mut().resize(
         &engine.gpu.device,
         &engine.gpu.queue,
         engine.doc.width,
@@ -645,11 +645,11 @@ fn register_embedded_fonts(
 /// changed between pre-check and restore (impossible without a
 /// concurrent mutation we don't allow).
 fn restore_veils(engine: &mut DarklyEngine, manifest: &Manifest) {
-    engine.compositor.veil_chain_mut().clear_veils();
+    engine.compositor.effect_chain_mut().clear_effects();
     for veil in &manifest.veils {
         let type_id = veil.instance.type_id.clone();
         let params = veil.instance.params.clone();
-        if !engine.compositor.veil_chain().registry().has(&type_id) {
+        if !engine.compositor.effect_registry().has(&type_id) {
             log::error!(
                 "load: veil '{type_id}' missing despite requires pre-check — \
                  registry drift?"
@@ -658,7 +658,7 @@ fn restore_veils(engine: &mut DarklyEngine, manifest: &Manifest) {
         }
         engine.add_veil_layer(&type_id, &params);
         if !veil.visible {
-            let last = engine.compositor.veil_chain().count().saturating_sub(1);
+            let last = engine.compositor.effect_chain().count().saturating_sub(1);
             engine.set_veil_visible(last, false);
         }
     }

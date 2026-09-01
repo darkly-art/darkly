@@ -2,13 +2,13 @@
 //! tree.
 //!
 //! A filter layer carries no pixel buffer: its entire state is a `pipeline` id
-//! (which [`crate::gpu::filter::FilterPipelineRegistry`] transform to run) plus
+//! (which [`crate::gpu::effect::EffectRegistry`] transform to run) plus
 //! that transform's parameter values, so the whole layer round-trips through
 //! the manifest body — there are no pixel blobs to read back, exactly like a
 //! procedural [`void`](crate::document::layer_kinds::void).
 //!
 //! The pipeline id and parameter values are validated against the
-//! [`FilterPipelineRegistry`](crate::gpu::filter::FilterPipelineRegistry) at the
+//! [`FilterPipelineRegistry`](crate::gpu::effect::EffectRegistry) at the
 //! engine layer when a filter layer is added; an unknown id in a save file
 //! surfaces as a [`LoadError::CorruptManifest`] rather than a silent fallback.
 
@@ -29,7 +29,7 @@ struct FilterBody {
     locked: bool,
     opacity: f32,
     blend_mode: String,
-    /// Stable `type_id` from [`crate::gpu::filter::FilterPipelineRegistry`],
+    /// Stable `type_id` from [`crate::gpu::effect::EffectRegistry`],
     /// e.g. `"invert"`. Anchors the param vector — a load that doesn't
     /// recognize this id is rejected by the engine as `CorruptManifest`.
     pipeline: String,
@@ -192,7 +192,7 @@ mod tests {
     /// `List([]) → Curve([])` degradation as a passthrough (`count == 0`).
     #[test]
     fn chromatic_aberration_list_params_round_trip() {
-        use crate::gpu::filters::chromatic_aberration::{pack_uniform, PARAMS};
+        use crate::gpu::effects::chromatic_aberration::{pack_uniform, PARAMS};
 
         let mut doc = Document::new(64, 64);
         let params: Vec<ParamValue> = PARAMS.iter().map(|d| d.default_value()).collect();

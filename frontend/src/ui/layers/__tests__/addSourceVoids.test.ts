@@ -52,7 +52,6 @@ function entry(over: Record<string, unknown> = {}) {
         params: [],
         supportsPreview: false,
         source: { kind: 'capture', capture: 'display' },
-        addable: true,
         ...over,
     } as any;
 }

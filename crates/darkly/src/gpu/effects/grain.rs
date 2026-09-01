@@ -1,0 +1,420 @@
+use crate::gpu::effect::{
+    create_effect_pipeline, Binding, Effect, EffectCache, EffectPipeline, EffectRegistration,
+    COLOR_TARGETS,
+};
+use crate::gpu::hash::pcg_hash;
+use crate::gpu::params::{ParamDef, ParamValue};
+use crate::gpu::preview::{PreviewAnim, ANIMATED_FRAMES};
+use std::sync::Arc;
+
+const PARAMS: &[ParamDef] = &[
+    ParamDef::float("speed", 0.0, 1.0, 0.05)
+        .with_label("Speed")
+        .with_description("How fast the grain reshuffles; zero holds a single still pattern."),
+    ParamDef::float("color", 0.0, 1.0, 0.0)
+        .with_label("Color")
+        .with_description("Blends the grain from monochrome speckle toward colored noise."),
+    ParamDef::float("opacity", 0.0, 1.0, 1.0)
+        .with_label("Opacity")
+        .with_description("How strongly the grain shows over the image."),
+];
+
+pub fn register() -> EffectRegistration {
+    EffectRegistration {
+        type_id: "grain",
+        display_name: "Grain",
+        category: "Veils",
+        icon: "tabler:grain",
+        hotkey_action: "effectGrain",
+        description: "Film grain noise over the view, optionally animated.",
+        params: PARAMS,
+        preview: Some(PreviewAnim::ONE_WAY),
+        // The preview runs the grain at full reshuffle rate; `color` and
+        // `opacity` hold at their defaults so what moves is only the noise.
+        preview_at: Some(|_t| {
+            let mut params: Vec<ParamValue> = PARAMS.iter().map(ParamDef::default_value).collect();
+            params[0] = ParamValue::Float(1.0);
+            params
+        }),
+        targets: COLOR_TARGETS,
+        create_pipeline: create_evolve_pipeline,
+        from_params: |params, shared| {
+            let (speed, color, opacity) = read_params(params);
+            Box::new(Grain::new(speed, color, opacity, shared))
+        },
+    }
+}
+
+/// Read the schema-ordered parameter vector, falling back to the schema
+/// defaults per slot. The one place the positional order is decoded, so
+/// construction and a later parameter change cannot disagree about it.
+fn read_params(params: &[ParamValue]) -> (f32, f32, f32) {
+    let speed = match params.first() {
+        Some(ParamValue::Float(v)) => *v,
+        _ => 0.0,
+    };
+    let color = match params.get(1) {
+        Some(ParamValue::Float(v)) => *v,
+        _ => 0.0,
+    };
+    let opacity = match params.get(2) {
+        Some(ParamValue::Float(v)) => *v,
+        _ => 1.0,
+    };
+    (speed, color, opacity)
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct GrainUniforms {
+    seed: f32,
+    color: f32,
+    rate: f32,
+    opacity: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct Grain {
+    /// Per-frame blend rate toward fresh noise. 0 = static, 1 = fully random each frame.
+    pub speed: f32,
+    /// 0 = grayscale noise, 1 = full RGB noise.
+    pub color: f32,
+    /// Blend amount between the original image and the grain-overlaid result.
+    /// 0 = veil is a no-op, 1 = full overlay.
+    pub opacity: f32,
+    /// Monotonic frame counter used as hash seed.
+    frame_count: f32,
+    /// Which noise texture to write next (ping-pong index).
+    noise_idx: usize,
+    shared: Arc<EffectPipeline>,
+}
+
+impl Grain {
+    pub fn new(speed: f32, color: f32, opacity: f32, shared: Arc<EffectPipeline>) -> Self {
+        Grain {
+            speed,
+            color,
+            opacity,
+            frame_count: 0.0,
+            noise_idx: 0,
+            shared,
+        }
+    }
+
+    fn uniforms(&self) -> GrainUniforms {
+        GrainUniforms {
+            seed: self.frame_count,
+            color: self.color,
+            rate: self.speed,
+            opacity: self.opacity,
+        }
+    }
+}
+
+impl Effect for Grain {
+    fn type_id(&self) -> &'static str {
+        "grain"
+    }
+
+    fn clone_boxed(&self) -> Box<dyn Effect> {
+        Box::new(self.clone())
+    }
+
+    fn param_values(&self) -> Vec<ParamValue> {
+        vec![
+            ParamValue::Float(self.speed),
+            ParamValue::Float(self.color),
+            ParamValue::Float(self.opacity),
+        ]
+    }
+
+    fn needs_animation(&self) -> bool {
+        self.speed > 0.0
+    }
+
+    /// Two seconds of grain reshuffling, one fresh pattern per frame.
+    ///
+    /// The evolve pass replaces a `speed` fraction of pixels and keeps the
+    /// rest, so at any lower rate what a frame shows depends on the frames
+    /// before it. Pinning the rate to its maximum makes every pixel fresh, so
+    /// the pattern is a function of `seed` alone — which is both what makes
+    /// this absolute and the most legible thing a grain preview can show.
+    fn set_params(
+        &mut self,
+        queue: &wgpu::Queue,
+        cache: &EffectCache,
+        params: &[ParamValue],
+    ) -> bool {
+        let (speed, color, opacity) = read_params(params);
+        self.speed = speed;
+        self.color = color;
+        self.opacity = opacity;
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
+        true
+    }
+
+    /// The seed is the frame counter, so positioning the preview is picking
+    /// which frame of noise to hash.
+    fn seek(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) {
+        self.frame_count = (t * ANIMATED_FRAMES as f32).round();
+        // A full reshuffle leaves nothing of the previous state to preserve, so
+        // the ping-pong has nothing to alternate for and the slot is fixed.
+        self.noise_idx = 0;
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
+    }
+
+    fn update_time(&mut self, queue: &wgpu::Queue, cache: &EffectCache, _dt: f32) {
+        self.frame_count += 1.0;
+        self.noise_idx = 1 - self.noise_idx;
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
+    }
+
+    fn create_cache(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        ping_pong_views: &[wgpu::TextureView; 2],
+        sampler: &wgpu::Sampler,
+        render_width: u32,
+        render_height: u32,
+    ) -> EffectCache {
+        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("grain-uniforms"),
+            size: std::mem::size_of::<GrainUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&self.uniforms()));
+
+        // Two noise state textures for ping-pong evolution.
+        let noise_textures: Vec<wgpu::Texture> = (0..2)
+            .map(|i| {
+                device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(&format!("grain-state-{i}")),
+                    size: wgpu::Extent3d {
+                        width: render_width,
+                        height: render_height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                })
+            })
+            .collect();
+
+        let noise_views: Vec<wgpu::TextureView> = noise_textures
+            .iter()
+            .map(|t| t.create_view(&Default::default()))
+            .collect();
+
+        // Initialize both noise textures with identical random data so the first
+        // frame produces correct output regardless of which texture is read.
+        let pixel_count = (render_width * render_height) as usize;
+        let mut noise_data = vec![0u8; pixel_count * 4];
+        let mut s = 42u32;
+        for pixel in noise_data.as_chunks_mut::<4>().0 {
+            s = pcg_hash(s);
+            let r = (s >> 24) as u8;
+            s = pcg_hash(s);
+            let g = (s >> 24) as u8;
+            s = pcg_hash(s);
+            let b = (s >> 24) as u8;
+            s = pcg_hash(s);
+            let a = (s >> 24) as u8;
+            pixel.copy_from_slice(&[r, g, b, a]);
+        }
+        for tex in &noise_textures {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &noise_data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(render_width * 4),
+                    rows_per_image: Some(render_height),
+                },
+                wgpu::Extent3d {
+                    width: render_width,
+                    height: render_height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+
+        // --- Evolve bind groups (3-binding layout from shared pipeline) ---
+        let evolve_bgs: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&format!("grain-evolve-bg-{i}")),
+                layout: &self.shared.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&noise_views[i]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: uniform_buf.as_entire_binding(),
+                    },
+                ],
+            })
+        });
+
+        // Apply pipeline: input + sampler + uniform + per-frame noise texture.
+        let apply = create_effect_pipeline(
+            device,
+            wgpu::TextureFormat::Rgba8Unorm,
+            "grain-apply",
+            &[
+                Binding::Texture,
+                Binding::Sampler,
+                Binding::Uniform,
+                Binding::Texture,
+            ],
+            include_str!("../../../shaders/effects/grain.wgsl"),
+            "fs_apply",
+        );
+
+        // --- Apply bind groups: [noise_idx][input_ping_pong_idx] ---
+        // Stored as bind_groups[1 + noise_idx][input_idx].
+        let apply_bgs_noise0: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&format!("grain-apply-bg-n0-i{i}")),
+                layout: &apply.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&ping_pong_views[i]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: uniform_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&noise_views[0]),
+                    },
+                ],
+            })
+        });
+
+        let apply_bgs_noise1: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&format!("grain-apply-bg-n1-i{i}")),
+                layout: &apply.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&ping_pong_views[i]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: uniform_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&noise_views[1]),
+                    },
+                ],
+            })
+        });
+
+        EffectCache {
+            uniform_bufs: vec![uniform_buf],
+            bind_groups: vec![evolve_bgs, apply_bgs_noise0, apply_bgs_noise1],
+            aux_textures: noise_textures,
+            aux_views: noise_views,
+            aux_pipelines: vec![apply.pipeline],
+        }
+    }
+
+    fn encode(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        cache: &EffectCache,
+        src_idx: usize,
+        dst_view: &wgpu::TextureView,
+    ) {
+        // Which noise texture the apply pass should read from.
+        let apply_noise_idx = if self.speed > 0.0 {
+            let noise_write = self.noise_idx;
+            let noise_read = 1 - noise_write;
+
+            // Evolve pass: read noise[read], replace random pixels, write noise[write].
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("grain-evolve"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &cache.aux_views[noise_write],
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            rpass.set_pipeline(&self.shared.pipeline);
+            rpass.set_bind_group(0, &cache.bind_groups[0][noise_read], &[]);
+            rpass.draw(0..3, 0..1);
+            drop(rpass);
+
+            noise_write
+        } else {
+            // Static noise: skip evolve, read from the initialized texture.
+            0
+        };
+
+        // Apply pass: overlay-blend noise onto scene image.
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("grain-apply"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: dst_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            rpass.set_pipeline(&cache.aux_pipelines[0]);
+            rpass.set_bind_group(0, &cache.bind_groups[1 + apply_noise_idx][src_idx], &[]);
+            rpass.draw(0..3, 0..1);
+        }
+    }
+}
+
+fn create_evolve_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> EffectPipeline {
+    create_effect_pipeline(
+        device,
+        format,
+        "grain-evolve",
+        &[Binding::Texture, Binding::Sampler, Binding::Uniform],
+        include_str!("../../../shaders/effects/grain.wgsl"),
+        "fs_evolve",
+    )
+}

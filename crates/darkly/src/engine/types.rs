@@ -503,7 +503,7 @@ pub struct ClipboardExport {
 pub(crate) fn node_to_layer_info(
     doc: &crate::document::Document,
     void_registry: &crate::gpu::void::VoidRegistry,
-    filter_registry: &crate::gpu::filter::FilterPipelineRegistry,
+    effect_registry: &crate::gpu::effect::EffectRegistry,
     node_id: crate::layer::LayerId,
 ) -> Option<LayerInfo> {
     use crate::layer::{Layer, LayerNode};
@@ -570,13 +570,13 @@ pub(crate) fn node_to_layer_info(
                 }
             }
             Layer::Filter(f) => {
-                let param_defs = filter_registry.params(&f.pipeline);
+                let param_defs = effect_registry.params(&f.pipeline);
                 let params = param_defs
                     .iter()
                     .enumerate()
                     .map(|(j, def)| ParamInfo::from_def(def, f.params.get(j)))
                     .collect();
-                let pipeline_icon = filter_registry.icon(&f.pipeline);
+                let pipeline_icon = effect_registry.icon(&f.pipeline);
                 LayerInfo::Filter {
                     id: f.id.to_ffi() as f64,
                     name: f.common.name.clone(),
@@ -650,7 +650,7 @@ pub(crate) fn node_to_layer_info(
                 .children
                 .iter()
                 .rev()
-                .filter_map(|cid| node_to_layer_info(doc, void_registry, filter_registry, *cid))
+                .filter_map(|cid| node_to_layer_info(doc, void_registry, effect_registry, *cid))
                 .collect(),
         },
     };

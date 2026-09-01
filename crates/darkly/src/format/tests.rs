@@ -17,9 +17,9 @@ use crate::document::filter;
 use crate::document::layer_kind;
 use crate::gpu::blend_mode;
 use crate::gpu::context::GpuContext;
+use crate::gpu::effect::EffectRegistry;
 use crate::gpu::params::{ParamDef, ParamValue};
 use crate::gpu::test_utils::test_device;
-use crate::gpu::veil::VeilRegistry;
 use crate::nodegraph::Graph;
 
 /// Build a default `Vec<ParamValue>` from a `&[ParamDef]` schema. Mirrors
@@ -37,10 +37,12 @@ fn kitchen_sink_engine(width: u32, height: u32) -> crate::engine::DarklyEngine {
     let (device, queue) = test_device();
     let gpu = GpuContext::new_headless(device, queue);
     let mut engine = crate::engine::DarklyEngine::new(gpu, width, height);
-    engine
-        .compositor
-        .veil_chain_mut()
-        .resize(&engine.gpu.device, &engine.gpu.queue, width, height);
+    engine.compositor.effect_chain_mut().resize(
+        &engine.gpu.device,
+        &engine.gpu.queue,
+        width,
+        height,
+    );
     engine
 }
 
@@ -57,27 +59,30 @@ fn kitchen_sink_engine(width: u32, height: u32) -> crate::engine::DarklyEngine {
 fn round_trip_every_veil() {
     let (device, queue) = test_device();
     let gpu = GpuContext::new_headless(device, queue);
-    let format = gpu.surface_format();
-    let mut registry = VeilRegistry::new();
+    // Effects compile only against a format they declare in `targets`, and the
+    // screen-space chain runs at the accumulator format — so that is what a
+    // round-trip instantiates against.
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let mut registry = EffectRegistry::new();
 
-    // `VeilRegistry::types()` returns (type_id, display_name, description,
-    // params). The params shape comes from the static `&[ParamDef]` in each
-    // registration. Cloning into a Vec keeps the borrow scoped so
-    // `create_veil` can take `&mut registry` below without contention with
-    // the iteration.
+    // Cloning the (type_id, params) pairs into a Vec keeps the borrow scoped so
+    // `instance` can take `&mut registry` below without contending with the
+    // iteration.
     let types: Vec<(&'static str, &'static [ParamDef])> = registry
-        .types()
+        .registrations()
         .into_iter()
         .map(|reg| (reg.type_id, reg.params))
         .collect();
     assert!(
         !types.is_empty(),
-        "veil registry must contain at least one veil"
+        "the effect registry must contain at least one effect"
     );
 
     for (type_id, params_schema) in types {
         let defaults = defaults_of(params_schema);
-        let veil = registry.create_veil(type_id, &defaults, &gpu.device, format);
+        let veil = registry
+            .instance(type_id, &defaults, &gpu.device, format)
+            .expect("registered effect");
 
         // Serialize via the canonical wire envelope.
         let json = serialize_instance(veil.type_id(), veil.param_values())
@@ -88,7 +93,9 @@ fn round_trip_every_veil() {
             .unwrap_or_else(|e| panic!("deserialize veil '{type_id}' failed: {e}"));
         assert_eq!(payload.type_id, type_id);
 
-        let restored = registry.create_veil(&payload.type_id, &payload.params, &gpu.device, format);
+        let restored = registry
+            .instance(&payload.type_id, &payload.params, &gpu.device, format)
+            .expect("registered effect");
         assert_eq!(
             restored.type_id(),
             veil.type_id(),
@@ -119,8 +126,8 @@ fn chromatic_aberration_veil_round_trips_non_default_list() {
 
     let (device, queue) = test_device();
     let gpu = GpuContext::new_headless(device, queue);
-    let format = gpu.surface_format();
-    let mut registry = VeilRegistry::new();
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let mut registry = EffectRegistry::new();
 
     let params = vec![ParamValue::List(vec![
         BTreeMap::from([
@@ -137,12 +144,16 @@ fn chromatic_aberration_veil_round_trips_non_default_list() {
         ]),
     ])];
 
-    let veil = registry.create_veil("chromatic_aberration", &params, &gpu.device, format);
+    let veil = registry
+        .instance("chromatic_aberration", &params, &gpu.device, format)
+        .expect("registered effect");
     let json =
         serialize_instance(veil.type_id(), veil.param_values()).expect("serialize CA veil failed");
     let payload = deserialize_instance(&json).expect("deserialize CA veil failed");
     assert_eq!(payload.type_id, "chromatic_aberration");
-    let restored = registry.create_veil(&payload.type_id, &payload.params, &gpu.device, format);
+    let restored = registry
+        .instance(&payload.type_id, &payload.params, &gpu.device, format)
+        .expect("registered effect");
     assert_eq!(
         restored.param_values(),
         params,
@@ -456,9 +467,8 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
     // One of every veil — keep params at default, leave visibility on.
     let veil_types: Vec<(&'static str, &'static [ParamDef])> = engine
         .compositor
-        .veil_chain()
-        .registry()
-        .types()
+        .effect_registry()
+        .registrations()
         .into_iter()
         .map(|reg| (reg.type_id, reg.params))
         .collect();
@@ -489,8 +499,8 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
     // `layer_kind/filter` participates in the save round-trip test.
     let filter_types: Vec<String> = engine
         .compositor
-        .filter_pipeline_registry()
-        .types()
+        .effect_registry()
+        .registrations()
         .into_iter()
         .map(|reg| reg.type_id.to_string())
         .collect();
@@ -1284,8 +1294,8 @@ fn legacy_type_id_migration() {
     // Today: assert every registered veil resolves to itself in its
     // registry — confirms the registry interface is the dispatch
     // surface the migration will plug into.
-    let registry = VeilRegistry::new();
-    for reg in registry.types() {
+    let registry = EffectRegistry::new();
+    for reg in registry.registrations() {
         assert!(
             registry.has(reg.type_id),
             "legacy migration scaffold: registry must resolve every registered \

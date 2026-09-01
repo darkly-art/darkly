@@ -9,7 +9,7 @@
 // The blur's golden-angle spiral tap distribution follows the same
 // sunflower/Fibonacci construction as veils/lens_blur.wgsl.
 
-// Array size must match `MAX_ABERRATIONS` in gpu/filters/chromatic_aberration.rs
+// Array size must match `MAX_ABERRATIONS` in gpu/effects/chromatic_aberration.rs
 // — the standard Rust↔WGSL uniform-layout contract.
 const CA_MAX: u32 = 16u;
 const CA_EPS: f32 = 1e-4;
@@ -21,7 +21,7 @@ const CA_GA_SIN: f32 = 0.6754904;
 // two scalars, then a vec3 `axis` at offset 16 (aligned) with `k1`, then `k2`
 // (+ trailing pad). `axis` is the entry color's hue direction — the red axis
 // rotated about the gray diagonal so the color's hue lands on it (see the CPU
-// packing in gpu/filters/chromatic_aberration.rs); `k1`/`k2` split the entry's
+// packing in gpu/effects/chromatic_aberration.rs); `k1`/`k2` split the entry's
 // strength between an achromatic full-pixel shift and a chromatic axis shift.
 struct Aberration {
     offset_px: vec2f,

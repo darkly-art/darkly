@@ -514,6 +514,30 @@ impl Document {
         }
     }
 
+    /// The nearest ancestor of `id` whose children composite into their own
+    /// accumulator — where `id`'s contribution actually lands.
+    ///
+    /// A passthrough group has no accumulator of its own: its children inline
+    /// into whatever accumulator it inlines into, which is what makes an effect
+    /// inside one transform its grandparent's content rather than just its
+    /// siblings'. So the walk skips passthrough groups and stops at the first
+    /// isolated one, or at the root, which always owns one.
+    ///
+    /// Structural and GPU-free, which is why it lives here rather than being
+    /// re-derived from whatever the compose walk happens to be carrying.
+    pub fn accumulator_host_of(&self, id: LayerId) -> Option<LayerId> {
+        let mut cursor = self.parent_of(id)?;
+        loop {
+            if cursor == self.root {
+                return Some(self.root);
+            }
+            match self.find_node(cursor) {
+                Some(LayerNode::Group(g)) if !g.passthrough => return Some(cursor),
+                _ => cursor = self.parent_of(cursor)?,
+            }
+        }
+    }
+
     pub fn all_groups(&self) -> Vec<&LayerGroup> {
         let mut out = Vec::new();
         self.collect_groups(self.root, &mut out);
@@ -532,12 +556,12 @@ impl Document {
         }
     }
 
-    /// Host ids of every node that composites in place (a passthrough group or
-    /// a filter layer) *and* carries a visible mask — the set the compositor
-    /// must keep a snapshot+lerp buffer for. Kind-agnostic: it asks each node
-    /// [`LayerNode::composites_in_place`] rather than enumerating which kinds
+    /// Host ids of every node whose in-place result must be captured before it
+    /// runs *and* which carries a visible mask — the set the compositor must
+    /// keep a snapshot buffer for. Kind-agnostic: it asks each node
+    /// [`LayerNode::needs_before_snapshot`] rather than enumerating which kinds
     /// qualify, so a new in-place kind is picked up with no edit here.
-    pub fn masked_in_place_hosts(&self) -> Vec<LayerId> {
+    pub fn snapshot_in_place_hosts(&self) -> Vec<LayerId> {
         let mut out = Vec::new();
         self.collect_masked_in_place(self.root, &mut out);
         out
@@ -551,7 +575,7 @@ impl Document {
             let Some(node) = self.find_node(child_id) else {
                 continue;
             };
-            if node.composites_in_place()
+            if node.needs_before_snapshot()
                 && self
                     .mask_filter(child_id)
                     .map(|m| m.common.visible)
@@ -730,7 +754,7 @@ impl Document {
     /// `display_label` is the registry's display name for the filter type
     /// (e.g. `"Invert Colors"`) — used as the default layer name. The caller
     /// (engine wrapper) is responsible for validating `pipeline` against the
-    /// [`FilterPipelineRegistry`](crate::gpu::filter::FilterPipelineRegistry);
+    /// [`FilterPipelineRegistry`](crate::gpu::effect::EffectRegistry);
     /// that registry is GPU-coupled and lives on the compositor, so it can't be
     /// dereferenced here.
     pub fn add_filter_layer(
@@ -1214,9 +1238,9 @@ mod tests {
             "filter layer composites in place"
         );
         assert_eq!(
-            doc.masked_in_place_hosts(),
-            vec![filter],
-            "the masked filter layer is collected as an in-place masked host",
+            doc.snapshot_in_place_hosts(),
+            Vec::<LayerId>::new(),
+            "an effect layer redirects into a scratch, so it needs no snapshot",
         );
     }
 
