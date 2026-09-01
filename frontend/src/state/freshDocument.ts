@@ -24,8 +24,9 @@ interface FreshDocumentRecipe {
     /** Fill the freshly-created initial background layer. */
     fillInitialLayer(engine: Engine, layerId: number): void;
     /** Seed starter viewport effects / extras after the initial layer is
-     *  filled. */
-    seedViewportEffects(instance: DarklyInstance, docW: number, docH: number): void;
+     *  filled. Async because the layers it adds have to exist before their
+     *  visibility can be set and before the panel is told to re-read. */
+    seedViewportEffects(instance: DarklyInstance, docW: number, docH: number): Promise<void>;
 }
 
 /** Per-flavor starter-content recipes. Exported for tests; consumers use
@@ -38,12 +39,14 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
         foreground: { r: 0, g: 0, b: 0, a: 255 },
         background: { r: 255, g: 255, b: 255, a: 255 },
         fillInitialLayer: (engine, id) => engine.api.fillBackground({ id }),
-        seedViewportEffects: (instance, _w, _h) => {
-            // Four effect layers, hidden, then the divider dragged over all
-            // four so they are viewport-only. Order matters: each is added at
-            // the top of the stack, and `setScreenSpaceBoundary` runs once at
-            // the end because the run only grows when the user (or this) says
-            // so — adding a layer never crosses the divider on its own.
+        seedViewportEffects: async (instance, _w, _h) => {
+            // Four effect layers, added **hidden** — they are there to be
+            // discovered, not to redecorate the canvas before the user has
+            // touched anything.
+            //
+            // Then the divider moves above all four in one call, because the
+            // run never grows on its own: adding a layer always lands it below
+            // the line, whatever it is.
             const api = instance.engine!.api;
             for (const [pipeline, params] of [
                 ['rainy_glass', { direction: 135 }],
@@ -51,9 +54,15 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
                 ['lens_blur', { radius: 0.25 }],
                 ['vhs', {}],
             ] as const) {
-                api.addFilter({ pipeline, params, anchor: null });
+                const id = await api.addFilter({ pipeline, params, anchor: null });
+                if (id != null) api.setLayerVisible({ id, visible: false });
             }
             api.setScreenSpaceBoundary({ count: 4 });
+            // The panel read the tree when it mounted, which is before any of
+            // this existed. Nothing else refreshes it — these layers are added
+            // straight through the API rather than through an app-state method.
+            await instance.refreshLayerTree();
+            instance.requestFrame();
         },
     },
     // App: a clean editor — an opaque black layer painted with a white ink pen,
@@ -64,7 +73,7 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
         foreground: { r: 255, g: 255, b: 255, a: 255 },
         background: { r: 0, g: 0, b: 0, a: 255 },
         fillInitialLayer: (engine, id) => engine.api.fillBackgroundColor({ id, rgba: [0, 0, 0, 255] }),
-        seedViewportEffects: () => {},
+        seedViewportEffects: async () => {},
     },
 };
 

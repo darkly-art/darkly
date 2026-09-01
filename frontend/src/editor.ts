@@ -184,9 +184,13 @@ export async function createInstance(
  *  (skipped for tabs that load existing documents). Living as a free
  *  function (not a `DarklyInstance` method) keeps "what's in a fresh tab"
  *  at the application layer — the engine itself stays opinion-free. */
-export function seedFreshDocument(instance: DarklyInstance, docW: number, docH: number): void {
-    if (!instance.engine) return;
-    freshDocument.seedViewportEffects(instance, docW, docH);
+export function seedFreshDocument(
+    instance: DarklyInstance,
+    docW: number,
+    docH: number,
+): Promise<void> {
+    if (!instance.engine) return Promise.resolve();
+    return freshDocument.seedViewportEffects(instance, docW, docH);
 }
 
 /** Single-instance boot path used by the standalone (non-multi-tab) host.
@@ -205,7 +209,7 @@ export async function initEditor(canvas: HTMLCanvasElement): Promise<Engine> {
     const instance = await createInstance(canvas, docWidth, docHeight, new DarklyInstance(), {
         seedBackground: true,
     });
-    seedFreshDocument(instance, docWidth, docHeight);
+    await seedFreshDocument(instance, docWidth, docHeight);
     setActiveInstance(instance);
     theme.pushToWasm();
     pixelFilter.syncFromConfig();

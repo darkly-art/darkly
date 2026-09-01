@@ -5,14 +5,24 @@ import type { DarklyInstance } from '../app.svelte';
 
 /** Minimal fake engine exposing just the `api` methods the recipes call. */
 function fakeEngine() {
+    let nextId = 1;
     const api = {
         fillBackground: vi.fn(),
         fillBackgroundColor: vi.fn(),
         resize: vi.fn(),
-        addFilter: vi.fn(),
+        addFilter: vi.fn((_req: { pipeline: string }) => Promise.resolve(nextId++)),
+        setLayerVisible: vi.fn(),
         setScreenSpaceBoundary: vi.fn(),
     };
     return { engine: { api } as unknown as Engine, api };
+}
+
+/// A `DarklyInstance` stub carrying the two app-state hooks the seed calls.
+function fakeInstance(engine: Engine) {
+    const refreshLayerTree = vi.fn().mockResolvedValue(undefined);
+    const requestFrame = vi.fn();
+    const inst = { engine, refreshLayerTree, requestFrame } as unknown as DarklyInstance;
+    return { inst, refreshLayerTree, requestFrame };
 }
 
 describe('freshDocument recipes', () => {
@@ -30,10 +40,10 @@ describe('freshDocument recipes', () => {
             expect(api.fillBackgroundColor).not.toHaveBeenCalled();
         });
 
-        it('seeds four effect layers and puts the divider above all of them', () => {
+        it('seeds four effect layers and puts the divider above all of them', async () => {
             const { engine, api } = fakeEngine();
-            const inst = { engine } as unknown as DarklyInstance;
-            RECIPES.demo.seedViewportEffects(inst, 800, 600);
+            const { inst } = fakeInstance(engine);
+            await RECIPES.demo.seedViewportEffects(inst, 800, 600);
             expect(api.addFilter).toHaveBeenCalledTimes(4);
             expect(api.addFilter.mock.calls.map((c) => c[0].pipeline)).toEqual([
                 'rainy_glass',
@@ -45,6 +55,30 @@ describe('freshDocument recipes', () => {
             // never crosses the divider on its own.
             expect(api.setScreenSpaceBoundary).toHaveBeenCalledTimes(1);
             expect(api.setScreenSpaceBoundary).toHaveBeenCalledWith({ count: 4 });
+        });
+
+        // Regression: the demo booted with all four effects applied, because
+        // the seed added them at their default visibility. They exist to be
+        // discovered, not to redecorate the canvas before the user has touched
+        // anything.
+        it('seeds every effect hidden', async () => {
+            const { engine, api } = fakeEngine();
+            const { inst } = fakeInstance(engine);
+            await RECIPES.demo.seedViewportEffects(inst, 800, 600);
+            expect(api.setLayerVisible).toHaveBeenCalledTimes(4);
+            for (const call of api.setLayerVisible.mock.calls) {
+                expect(call[0].visible).toBe(false);
+            }
+        });
+
+        // Regression: the panel read the tree when it mounted, which is before
+        // any of this exists, and nothing else refreshed it — so the seeded
+        // effects were in the document but absent from the layer panel.
+        it('refreshes the layer panel once the effects exist', async () => {
+            const { engine } = fakeEngine();
+            const { inst, refreshLayerTree } = fakeInstance(engine);
+            await RECIPES.demo.seedViewportEffects(inst, 800, 600);
+            expect(refreshLayerTree).toHaveBeenCalled();
         });
     });
 
