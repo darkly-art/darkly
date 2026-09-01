@@ -40,7 +40,7 @@ fn alpha_at(pixels: &[u8], w: u32, x: u32, y: u32) -> u8 {
     pixels[((y * w + x) * 4 + 3) as usize]
 }
 
-/// Paint a black dab onto a host's mask filter — R8 value drops toward 0
+/// Paint a black dab onto a host's mask filter: R8 value drops toward 0
 /// where the brush lands, leaving the rest of the mask at its prior value
 /// (255 for a freshly-added, all-reveal mask).
 fn paint_mask_dot(engine: &mut DarklyEngine, host_id: LayerId, x: f32, y: f32) {
@@ -185,7 +185,7 @@ fn merge_down_undo_restores_both_sources() {
     assert!(engine.has_layer(upper), "upper restored");
     assert!(!engine.has_layer(result), "result detached on undo");
 
-    // Source pixels must be intact — tombstoning kept textures alive.
+    // Source pixels must be intact: tombstoning kept textures alive.
     let lower_px = engine.test_readback_layer(lower);
     assert!(
         alpha_at(&lower_px, w, 32, 48) > 0,
@@ -255,7 +255,7 @@ fn flatten_undo_restores_original_tree() {
 // Protects the "every write-site marks its node thumbnail-dirty" invariant
 // (see `Compositor::mark_node_pixels_dirty` docs). Without that, a fresh
 // duplicate appears in the panel as a thumbnail-less row until the user
-// makes their first edit — the original bug this refactor was written to
+// makes their first edit: the original bug this refactor was written to
 // kill, recurring "the fourth or fifth time" in the codebase's history.
 
 #[test]
@@ -340,7 +340,7 @@ fn flatten_group_with_masks_undo_restores_tree_and_pixels() {
     //     └─ child_b (green dot at 48,32)
     //
     // Flattening the group must consume every child and every mask. Undo
-    // must put all of it back — tree shape, both masks, and every pixel
+    // must put all of it back: tree shape, both masks, and every pixel
     // byte-for-byte.
     let (w, h) = (64u32, 64u32);
     let mut engine = test_engine(w, h);
@@ -367,7 +367,7 @@ fn flatten_group_with_masks_undo_restores_tree_and_pixels() {
     let result = engine.flatten_node(group).expect("group flatten succeeded");
     assert!(engine.has_layer(result), "result raster attached");
     assert!(!group_at_root(&engine, group), "group consumed by flatten");
-    // Result composite must reflect both children — proof the bake actually
+    // Result composite must reflect both children, proof the bake actually
     // walked the subtree, rather than emitting an empty placeholder.
     let result_pixels = engine.test_readback_layer(result);
     assert!(
@@ -421,7 +421,7 @@ fn flatten_group_with_masks_undo_restores_tree_and_pixels() {
 }
 
 // ============================================================================
-// merge_layers — multi-source bake, same-parent and cross-parent
+// merge_layers: multi-source bake, same-parent and cross-parent
 // ============================================================================
 
 /// Merging a same-parent selection lands the result at the panel-topmost
@@ -553,7 +553,7 @@ fn merge_layers_undo_restores_all_sources() {
     );
 }
 
-/// `merge_layers` aborts if any source is locked — a partial bake
+/// `merge_layers` aborts if any source is locked, since a partial bake
 /// would destroy the user's data.
 #[test]
 fn merge_layers_rejects_locked() {

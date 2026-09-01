@@ -26,7 +26,7 @@ describe('beginPaintStroke', () => {
     it("toasts the engine's reason when the target refuses paint", async () => {
         show.mockClear();
         const refusal = Promise.reject({
-            message: '"Smart Object" can\'t be painted on — right-click it and choose Rasterize',
+            message: '"Smart Object" can\'t be painted on; right-click it and choose Rasterize',
         });
         beginPaintStroke(engineWith(refusal as never), 7);
         await new Promise((r) => setTimeout(r, 0));

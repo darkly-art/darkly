@@ -1,8 +1,8 @@
-//! Destructive color-filter integration tests — the "Invert Colors"
+//! Destructive color-filter integration tests: the "Invert Colors"
 //! filter over the shared `filter_node_region` substrate.
 //!
 //! These are **regression** tests for the node-generic invert path: they pin
-//! `1 - c` exactly (per-pixel, RGBA8 layer *and* R8 mask — masks ride the same
+//! `1 - c` exactly (per-pixel, RGBA8 layer *and* R8 mask: masks ride the same
 //! substrate and must not be left half-done), the invert-twice round-trip,
 //! undo/redo, and selection clipping (rect on a layer, ellipse shape-clip, and
 //! a selection on a *mask* node). A no-op invert would fail the once-checks.
@@ -53,7 +53,7 @@ fn inv(p: [u8; 4]) -> [u8; 4] {
 }
 
 /// Paint a single grayscale brush dab onto a node so an R8 mask becomes
-/// non-uniform — `value` lands in the mask's R channel.
+/// non-uniform: `value` lands in the mask's R channel.
 fn paint_dab(engine: &mut DarklyEngine, node_id: LayerId, x: f32, y: f32, value: f32) {
     engine.begin_stroke(node_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
@@ -205,7 +205,7 @@ fn invert_layer_with_ellipse_selection_clips_to_shape() {
     assert_eq!(e.test_readback_layer(layer), before);
 }
 
-// ---- Mask (R8) — guards the node-generic path ------------------------------
+// ---- Mask (R8): guards the node-generic path ------------------------------
 
 #[test]
 fn invert_mask_negates_r8_and_round_trips() {
@@ -221,7 +221,7 @@ fn invert_mask_negates_r8_and_round_trips() {
     assert_eq!(
         before.len(),
         (w * h) as usize,
-        "mask is R8 — one byte/pixel"
+        "mask is R8 (one byte/pixel)"
     );
 
     assert!(e.apply_filter_typed(mask, "invert", vec![]));
@@ -247,7 +247,7 @@ fn invert_mask_with_selection_only_inverts_selected_region() {
     let mask = e.test_mask_id(layer).expect("mask present");
     let before = e.test_readback_layer(mask);
 
-    // Rect x,y ∈ [3,8) — only this region of the mask inverts.
+    // Rect x,y ∈ [3,8): only this region of the mask inverts.
     e.select_rect(3.0, 3.0, 5.0, 5.0, SelectionMode::Replace, false, 0.0);
     assert!(e.apply_filter_typed(mask, "invert", vec![]));
     let after = e.test_readback_layer(mask);
@@ -296,13 +296,13 @@ fn invert_layer_with_selection_after_crop_uses_plane_coords() {
     assert!(e.apply_filter_typed(layer, "invert", vec![]));
     let after = e.test_readback_layer(layer);
 
-    // Inside the selected PLANE region — inverted.
+    // Inside the selected PLANE region: inverted.
     assert_eq!(px(&after, w, 12, 12), inv(px(&before, w, 12, 12)));
     assert_eq!(px(&after, w, 17, 17), inv(px(&before, w, 17, 17)));
-    // Outside it — untouched.
+    // Outside it: untouched.
     assert_eq!(px(&after, w, 2, 2), px(&before, w, 2, 2));
     assert_eq!(px(&after, w, 25, 25), px(&before, w, 25, 25));
-    // Window-local (2,2) is plane (10,10) — already covered above. The mirror
+    // Window-local (2,2) is plane (10,10), already covered above. The mirror
     // guard: plane (18,18) is window-local (10,10), one past the selection's
     // far edge, so it must NOT invert. A missing `to_canvas` shift (treating
     // window-local [2,10) as plane) would invert here and skip (12,12).
@@ -322,7 +322,7 @@ fn invert_layer_with_selection_after_rescale() {
     let mut e = test_engine(w, h);
     let layer = e.paste_image(w, h, &distinct_rgba(w, h), 0, 0, None);
 
-    // Content-scaling resize to 2× — layer pixels are resampled to the new dims.
+    // Content-scaling resize to 2×: layer pixels are resampled to the new dims.
     e.rescale_image(2 * w, 2 * h);
     let nw = 2 * w;
     let before = e.test_readback_layer(layer);
@@ -337,7 +337,7 @@ fn invert_layer_with_selection_after_rescale() {
     assert!(e.apply_filter_typed(layer, "invert", vec![]));
     let after = e.test_readback_layer(layer);
 
-    // Inside the selection — inverted; outside — untouched. Confirms the bbox
+    // Inside the selection: inverted; outside: untouched. Confirms the bbox
     // tracks the post-rescale dims rather than the original 16².
     assert_eq!(px(&after, nw, 12, 12), inv(px(&before, nw, 12, 12)));
     assert_eq!(px(&after, nw, 20, 20), inv(px(&before, nw, 20, 20)));
@@ -375,16 +375,16 @@ fn invert_mask_with_selection_after_crop() {
         "mask keeps its full extent across the crop (R8, one byte/pixel)"
     );
 
-    // Plane selection [10,18)² — same plane region a layer would invert.
+    // Plane selection [10,18)²: same plane region a layer would invert.
     e.select_rect(10.0, 10.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
     assert!(e.apply_filter_typed(mask, "invert", vec![]));
     let after = e.test_readback_layer(mask);
 
     let at = |buf: &[u8], x: u32, y: u32| buf[(y * w + x) as usize];
-    // Inside plane [10,18)² — inverted.
+    // Inside plane [10,18)²: inverted.
     assert_eq!(at(&after, 12, 12), 255 - at(&before, 12, 12));
     assert_eq!(at(&after, 17, 17), 255 - at(&before, 17, 17));
-    // Outside — untouched. (18,18) is one past the far edge (a missing
+    // Outside: untouched. (18,18) is one past the far edge (a missing
     // `to_canvas` shift would inflate the region here).
     assert_eq!(at(&after, 2, 2), at(&before, 2, 2));
     assert_eq!(at(&after, 18, 18), at(&before, 18, 18));
@@ -401,10 +401,10 @@ fn invert_mask_with_selection_after_crop() {
 //
 // A *filter layer* is a non-destructive node in the layer tree that transforms
 // the composite of everything below it (the running group accumulator) via the
-// same `gpu/filters/*` pipeline the destructive path uses — pixels below are
+// same `gpu/filters/*` pipeline the destructive path uses; pixels below are
 // never modified. These tests pin the feature's promises: it inverts what's
 // below it, it leaves what's above untouched, an isolated group scopes it, and
-// — the core guarantee — it is non-destructive (toggle / delete restores the
+// (the core guarantee) it is non-destructive (toggle / delete restores the
 // original composite byte-for-byte).
 
 /// Flood-fill a layer with straight opaque `(r, g, b, 255)`. Opaque so the
@@ -450,7 +450,7 @@ fn filter_layer_at_root_inverts_everything_below() {
     );
 }
 
-/// A filter layer transforms only what is *below* it — a layer stacked above
+/// A filter layer transforms only what is *below* it: a layer stacked above
 /// the filter is composited after the filter runs, so it is untouched. Blue
 /// `(0,0,255)` on top stays blue (a leak would make it yellow `(255,255,0)`).
 #[test]
@@ -512,7 +512,7 @@ fn filter_layer_in_isolated_group_is_scoped() {
 
     // Negative: hide the group's content. The group accumulator is now empty,
     // so the filter inverts nothing and the group contributes nothing. The
-    // outside red layer shows through unchanged — proving the filter did NOT
+    // outside red layer shows through unchanged, proving the filter did NOT
     // leak out of the isolated group onto the layer below it (a leak would
     // invert outside red → cyan).
     engine.set_layer_visible(inside, false);
@@ -530,7 +530,7 @@ fn filter_layer_in_isolated_group_is_scoped() {
 /// mask the inverted result shows; outside, the original pixels pass through;
 /// a mid-gray mask value lerps between the two (soft masking, not a hard
 /// threshold). This is the adjustment-layer-mask behavior. Fails before the
-/// `compose_filter_arm` mask branch — the filter would invert the whole canvas
+/// `compose_filter_arm` mask branch: the filter would invert the whole canvas
 /// and the right half would read cyan instead of red.
 #[test]
 fn masked_filter_layer_confines_inversion() {
@@ -544,7 +544,7 @@ fn masked_filter_layer_confines_inversion() {
 
     // Seed the filter's mask from a left-half selection: left → reveal (1.0,
     // filter applies), right → hide (0.0, original passes through). A selection
-    // gives flat, hard-edged regions — no brush feathering to reason about.
+    // gives flat, hard-edged regions: no brush feathering to reason about.
     engine.select_rect(
         0.0,
         0.0,
@@ -596,7 +596,7 @@ fn masked_filter_layer_in_isolated_group_lerps_against_group_accum() {
     let (cw, ch) = (16u32, 16u32);
     let mut engine = test_engine(cw, ch);
 
-    // A distinct color outside the group, at the root bottom — the group is
+    // A distinct color outside the group, at the root bottom: the group is
     // opaque and covers it, so seeing it anywhere would mean a leak.
     let outside = engine.add_raster_layer(None);
     fill_layer(&mut engine, outside, 0, 255, 0);
@@ -643,7 +643,7 @@ fn masked_filter_layer_in_isolated_group_lerps_against_group_accum() {
 
 /// The core promise: a filter layer is **non-destructive**. Toggling its
 /// visibility returns the composite to the original red (the layer below was
-/// never modified), and deleting it likewise restores the original — a
+/// never modified), and deleting it likewise restores the original: a
 /// destructive filter would have baked cyan into the raster's pixels.
 #[test]
 fn filter_layer_is_non_destructive() {
@@ -709,7 +709,7 @@ const CH_RGB: usize = 0;
 const CH_HUE: usize = 5;
 const CH_LIGHTNESS: usize = 7;
 
-/// An identity curve — a straight diagonal.
+/// An identity curve, a straight diagonal.
 fn identity_curve() -> ParamValue {
     ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]])
 }
@@ -756,7 +756,7 @@ fn filter_layer_icon(e: &DarklyEngine, id: LayerId) -> String {
     panic!("filter layer {ffi} not found in layer tree");
 }
 
-/// Each filter pipeline reports its own icon in the layer tree — the row must
+/// Each filter pipeline reports its own icon in the layer tree: the row must
 /// reflect *which* filter it is, not a single generic filter-layer glyph. Guards
 /// the `node_to_layer_info` Filter arm against regressing to the static
 /// `kind.icon` (which would make every filter layer identical).
@@ -837,7 +837,7 @@ fn update_filter_params_mutates_and_undo_restores() {
 //
 // Regression for two bugs the generic destructive path fixes together: (1) the
 // `params.is_empty()` guard that rejected every parametric filter, and (2)
-// `filter_node_region` handing `render` an *empty* cache — so a parametric
+// `filter_node_region` handing `render` an *empty* cache, so a parametric
 // destructive apply ignored both its params and the selection shape. Each test
 // applies a non-identity parametric filter over a rect selection and pins that
 // only the selected region changed (params honored) and the rest is untouched
@@ -852,7 +852,7 @@ fn solid_rgba(w: u32, h: u32, c: [u8; 4]) -> Vec<u8> {
     v
 }
 
-/// Darkening RGB curve over otherwise-identity curves — halves every channel.
+/// Darkening RGB curve over otherwise-identity curves: halves every channel.
 fn darkening_curves() -> Vec<ParamValue> {
     let mut p = vec![identity_curve(); 8];
     p[CH_RGB] = ParamValue::Curve(vec![[0.0, 0.0], [1.0, 0.5]]);
@@ -932,19 +932,19 @@ fn destructive_levels_with_selection_only_touches_selection() {
 
 #[test]
 fn destructive_hsv_with_selection_only_touches_selection() {
-    // Hue rotate 120° in HSV — visibly changes a coloured pixel.
+    // Hue rotate 120° in HSV: visibly changes a coloured pixel.
     assert_destructive_selection("hsv", hsv_params(0, 120.0, 0.0, 0.0, false));
 }
 
 #[test]
 fn destructive_brightness_contrast_with_selection_only_touches_selection() {
-    // Brightness +50 — visibly lightens a coloured pixel.
+    // Brightness +50: visibly lightens a coloured pixel.
     assert_destructive_selection("brightness_contrast", bc_params(50.0, 0.0));
 }
 
 #[test]
 fn destructive_black_and_white_with_selection_only_touches_selection() {
-    // Luminosity BT.709 — visibly grays the [200,100,50] fixture.
+    // Luminosity BT.709: visibly grays the [200,100,50] fixture.
     assert_destructive_selection("black_and_white", vec![ParamValue::Int(1)]);
 }
 
@@ -1012,7 +1012,7 @@ fn preview_with_selection_only_touches_selection() {
     assert!(e.preview_filter_typed(layer, "hsv", hsv_params(0, 120.0, 0.0, 0.0, false)));
     let previewed = e.test_readback_layer(layer);
 
-    // Selected pixel changed; unselected pixels untouched — preview clips too.
+    // Selected pixel changed; unselected pixels untouched, confirming preview clips too.
     assert_ne!(px(&previewed, w, 5, 5), px(&before, w, 5, 5));
     assert_eq!(px(&previewed, w, 0, 0), px(&before, w, 0, 0));
     assert_eq!(px(&previewed, w, 10, 10), px(&before, w, 10, 10));
@@ -1222,7 +1222,7 @@ fn curves_hue_curve_rotates_hue() {
 }
 
 /// A Lightness curve darkens on CIELAB L* (Krita's "Lightness L*a*b*"): halving
-/// L on a neutral gray yields a darker — but still neutral — gray. Exercises the
+/// L on a neutral gray yields a darker (but still neutral) gray. Exercises the
 /// sRGB→Lab→sRGB round trip and the `lightness_active` gate.
 #[test]
 fn curves_lightness_curve_darkens_neutral() {
@@ -1284,7 +1284,7 @@ fn black_and_white_modes_produce_expected_grays() {
     }
 }
 
-/// Custom Weights (mode 6) grays by the normalized weighted mix — an all-red
+/// Custom Weights (mode 6) grays by the normalized weighted mix: an all-red
 /// weight isolates the R channel of the [200,100,50] fixture.
 #[test]
 fn black_and_white_custom_weights_isolate_a_channel() {

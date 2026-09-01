@@ -21,7 +21,7 @@ struct PendingDiff {
     bbox: PendingBbox,
     /// Canvas-space extent of the layer at the time of `request`. Used to
     /// translate the shader's layer-local bounding rect back to canvas
-    /// coords on `poll` — must be captured at request time so the result
+    /// coords on `poll`. It must be captured at request time so the result
     /// remains correct even if the layer grows between request and poll.
     layer_canvas_extent: crate::coord::CanvasRect,
 }
@@ -117,7 +117,7 @@ impl DiffRectPass {
     ///
     /// `scratch_view` is the pre-stroke snapshot, `current_view` is the
     /// post-stroke canvas. `layer_canvas_extent` is the canvas-space rect
-    /// occupied by the layer at request time — used to translate the
+    /// occupied by the layer at request time, used to translate the
     /// layer-local result back to canvas coords when [`poll`] resolves.
     /// Capturing it at request time keeps the result correct even if the
     /// layer grows before the result is read. Results arrive asynchronously
@@ -199,7 +199,7 @@ impl DiffRectPass {
     pub fn poll(&mut self, device: &wgpu::Device) -> Option<Option<crate::coord::CanvasRect>> {
         // Still pending (no request, or the reduction hasn't landed) → None.
         let ready = self.pending.as_mut()?.bbox.poll(device)?;
-        // The reduction landed — consume the request and map its texel-local
+        // The reduction landed: consume the request and map its texel-local
         // rect into canvas coords via the extent captured at request time.
         let pending = self.pending.take().unwrap();
         Some(ready.map(|[x, y, w, h]| {

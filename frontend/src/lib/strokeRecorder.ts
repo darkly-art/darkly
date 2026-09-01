@@ -10,7 +10,7 @@
  *
  * **Perf cost when disabled:** `init()` reads the URL search once at boot
  * and stores `enabled = false`. Every recorder method early-returns on
- * that flag before doing any work — one boolean check per pointer event,
+ * that flag before doing any work: one boolean check per pointer event,
  * no allocations, no buffer growth, no event projection. The brush tool
  * calls `beginStroke / addEvent / endStroke` unconditionally; the cost
  * when disabled is below the measurement floor.

@@ -77,7 +77,7 @@ class RectSelectTool extends ToolBase {
         const h = Math.abs(sy1 - sy0);
 
         // Only commit if the snapped rect has meaningful size. `antialias`
-        // is off — pixel-aligned bounds need no SDF smoothing and the result
+        // is off: pixel-aligned bounds need no SDF smoothing and the result
         // is a crisp 1-bit mask.
         if (w > 0 && h > 0) {
             const mode = selectionMode(e);

@@ -3,7 +3,7 @@
  * keep-open controls. A popup tags its trigger and its panel (wherever they
  * live, even in different components) with `data-keep-open="<scope>"`; a
  * pointerdown whose target isn't inside an element of that scope closes the
- * popup. One rule covers everything non-interactive uniformly — surrounding
+ * popup. One rule covers everything non-interactive uniformly: surrounding
  * chrome, the panel's own padding/separators, and the canvas.
  *
  * The `scope` keeps independent popups from holding each other open: each only

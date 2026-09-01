@@ -16,13 +16,13 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         id: "newVeil",
         display_name: "New Veil",
-        description: "Add a veil — a post-process effect (rainy glass, VHS, grain, …) over the whole canvas.",
+        description: "Add a veil, a post-process effect (rainy glass, VHS, grain, …) over the whole canvas.",
         icon: "material-symbols:curtains-rounded",
     },
     ActionDef {
         id: "newVoid",
         display_name: "New Void",
-        description: "Add a void — a layer filled from a procedural or live source (noise, camera, screen share, …).",
+        description: "Add a void: a layer filled from a procedural or live source (noise, camera, screen share, …).",
         icon: "tabler:galaxy",
     },
     ActionDef {

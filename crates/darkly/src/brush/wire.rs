@@ -3,7 +3,7 @@
 //! Everything speaks 0-1.  Sensors output 0-1.  Curves map 0-1 → 0-1.
 //! GPU stage inputs expect 0-1 and internally map to their actual range.
 //!
-//! Wire types are strictly the WGSL data shape — `Scalar` / `Int` /
+//! Wire types are strictly the WGSL data shape: `Scalar` / `Int` /
 //! `Bool` / `Vec2` / `Vec4`. There is no separate `Color`, `Texture`,
 //! or `Mask` "semantic" type: an RGBA color is just a `Vec4`, a
 //! coverage value is just a `Scalar`. Two wires connect iff their
@@ -11,7 +11,7 @@
 //! scalar channel, that's an explicit `split_color` node.
 //!
 //! Pre-WGSL there was a `Texture` wire that carried a runtime
-//! `TextureHandle` — that whole infrastructure was deleted in
+//! `TextureHandle`; that whole infrastructure was deleted in
 //! commit `ff5a2eb`. The vestigial wire-type labels (`Texture`,
 //! `Mask`, `Color`) stuck around as labels even though nothing
 //! texture-shaped flows on the wires anymore. They've now been
@@ -24,12 +24,12 @@ use crate::nodegraph::WireKind;
 // ── Wire types ──────────────────────────────────────────────────────
 
 /// The set of data types that can flow along wires in a brush graph.
-/// Strictly mirrors WGSL shapes — no semantic skins.
+/// Strictly mirrors WGSL shapes: no semantic skins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum BrushWireType {
     /// Single `f32`. Used for sensor outputs, coverage values, mask
-    /// luminance — anything one-channel.
+    /// luminance, anything one-channel.
     Scalar,
     /// `i32` value (enum index, count).
     Int,
@@ -42,13 +42,13 @@ pub enum BrushWireType {
     /// A dropdown-selected index that picks a compile-time WGSL branch
     /// (shape algorithm, sampling space, random mode). Carries an `i32`
     /// value like `Int`, but is a distinct type so it's editable as a
-    /// labeled dropdown and — crucially — **not wirable**: a per-dab wire
+    /// labeled dropdown and (crucially) **not wirable**: a per-dab wire
     /// can't drive a compile-time branch.
     Enum,
     /// A texture / icon name, resolved at compile time. **Not wirable.**
     String,
     /// Curve control points, baked into a LUT at compile time. **Not
-    /// wirable** — the whole spline is a compile-time constant.
+    /// wirable**: the whole spline is a compile-time constant.
     Curve,
 }
 
@@ -68,15 +68,15 @@ impl WireKind for BrushWireType {
 
     /// `Enum`/`String`/`Curve` select a compile-time arm or bake a
     /// constant, so no per-dab wire can drive them. Every scalar-family
-    /// shape computes per fragment and is wirable — defaulted here so a
+    /// shape computes per fragment and is wirable, defaulted here so a
     /// new wire type is wirable unless it opts out.
     fn is_wirable(self) -> bool {
         !matches!(self, Self::Enum | Self::String | Self::Curve)
     }
 
     /// The brush bar can render a scrub (`Scalar`), a toggle (`Bool`), and
-    /// a dropdown (`Enum`). Every other shape — `Int`, `String`, `Curve`,
-    /// `Vec2`, `Vec4` — has no brush-bar widget, so it is *not*
+    /// a dropdown (`Enum`). Every other shape (`Int`, `String`, `Curve`,
+    /// `Vec2`, `Vec4`) has no brush-bar widget, so it is *not*
     /// user-exposable: an exposed control the bar can't draw would be a
     /// dead end. This is an explicit allow-list (not an opt-out) so a new
     /// wire type stays non-exposable until its widget lands.
@@ -91,7 +91,7 @@ impl WireKind for BrushWireType {
 ///
 /// Every wire in the brush graph carries one of these.  A single enum
 /// rather than generic typed slots because the slot table is a flat
-/// `Vec<Option<ScalarValue>>` — uniform size means no boxing, no trait
+/// `Vec<Option<ScalarValue>>`: uniform size means no boxing, no trait
 /// objects, and direct array indexing.  16 bytes, `Copy`, no heap.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ScalarValue {
@@ -134,7 +134,7 @@ impl ScalarValue {
 
     /// Coerce this value to match a target wire type. The non-wirable
     /// data shapes (`Enum`/`String`/`Curve`) never carry a runtime slot
-    /// value — the connect guard rejects wiring them — so they collapse to
+    /// value (the connect guard rejects wiring them), so they collapse to
     /// the scalar coercion; the arm exists only to keep the match total.
     pub fn coerce(self, target: BrushWireType) -> Self {
         match target {
@@ -195,7 +195,7 @@ mod tests {
         ] {
             assert!(ty.is_wirable(), "{ty:?} should be wirable");
         }
-        // Branch/data shapes resolve at compile time — never wirable.
+        // Branch/data shapes resolve at compile time, never wirable.
         for ty in [
             BrushWireType::Enum,
             BrushWireType::String,
@@ -207,8 +207,8 @@ mod tests {
 
     #[test]
     fn is_user_exposable_truth_table() {
-        // The brush bar has a widget for these — a scrub, a toggle, a
-        // dropdown — so they may be exposed as user controls.
+        // The brush bar has a widget for these (a scrub, a toggle, a
+        // dropdown), so they may be exposed as user controls.
         for ty in [
             BrushWireType::Scalar,
             BrushWireType::Bool,
@@ -216,7 +216,7 @@ mod tests {
         ] {
             assert!(ty.is_user_exposable(), "{ty:?} should be user-exposable");
         }
-        // No brush-bar widget yet — exposing these would be a dead end, so
+        // No brush-bar widget yet: exposing these would be a dead end, so
         // they are non-exposable (allow-list, orthogonal to wirability:
         // `Enum` is exposable-not-wirable, `Int` is wirable-not-exposable).
         for ty in [

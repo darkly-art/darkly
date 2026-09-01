@@ -122,7 +122,7 @@ fn brush_stroke_paints_normally_after_disabling_erase_mode() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
 
-    // Erase mode on, then off — the layer starts empty so the erase
+    // Erase mode on, then off. The layer starts empty, so the erase
     // stroke is a no-op; we're checking the toggle round-trip.
     engine.set_brush_blend_mode(1);
     engine.set_brush_blend_mode(0);

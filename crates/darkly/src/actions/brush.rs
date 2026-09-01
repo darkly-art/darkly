@@ -36,7 +36,7 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         id: "importBrushPack",
         display_name: "Import Brush Pack…",
-        description: "Import a `.darkly-brush` pack — one file may contain any number of brushes.",
+        description: "Import a `.darkly-brush` pack; one file may contain any number of brushes.",
         icon: "fa6-solid:file-import",
     },
     ActionDef {

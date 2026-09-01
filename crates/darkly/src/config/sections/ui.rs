@@ -12,7 +12,7 @@ const PREFS: &[Pref] = &[
         },
         widget: WidgetHint::Auto,
     },
-    // Brush builder pane state — persisted via the unified backend so it
+    // Brush builder pane state, persisted via the unified backend so it
     // survives reloads, but hidden from the Settings UI: it's UI state,
     // not a configurable preference.
     Pref {

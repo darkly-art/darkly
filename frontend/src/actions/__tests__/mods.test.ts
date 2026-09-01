@@ -16,7 +16,7 @@ async function loadModsAs(os: 'linux' | 'windows' | 'macos') {
 }
 
 describe('canonicalModsFromEvent', () => {
-    it('emits ctrl and meta as separate primitives — no fold', async () => {
+    it('emits ctrl and meta as separate primitives (no fold)', async () => {
         const { canonicalModsFromEvent } = await loadModsAs('linux');
         const e = { ctrlKey: true, metaKey: true, altKey: false, shiftKey: false };
         expect(canonicalModsFromEvent(e)).toEqual(['ctrl', 'meta']);
@@ -75,7 +75,7 @@ describe('substituteModInBinding', () => {
 
     it('leaves site/scope strings alone even if they contain "$mod" (defensive)', async () => {
         const { substituteModInBinding } = await loadModsAs('linux');
-        // Hypothetical malformed binding — the site/scope grammar doesn't
+        // Hypothetical malformed binding: the site/scope grammar doesn't
         // permit `$mod`, but if it did, only the chord portion should be
         // substituted.
         expect(substituteModInBinding('$mod:$mod+drag')).toBe('$mod:ctrl+drag');

@@ -7,7 +7,7 @@
 //!
 //! `--check` is what `tests/docs_md.rs` asserts and what CI therefore enforces;
 //! the writing mode is what you run by hand to make a stale checkout correct.
-//! Needs no GPU — every fragment builds from `&'static` registration data, the
+//! Needs no GPU: every fragment builds from `&'static` registration data, the
 //! same property that lets the check live in the ordinary test suite.
 
 use std::path::PathBuf;
@@ -16,7 +16,7 @@ use std::process::ExitCode;
 use darkly::docs_md::{self, Mode};
 
 const HELP: &str = "\
-sync-docs — fill the generated regions of the repository's markdown
+sync-docs - fill the generated regions of the repository's markdown
 
 USAGE:
     sync-docs [--check] [--root <path>]

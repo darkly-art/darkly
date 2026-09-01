@@ -10,8 +10,8 @@ const HOTKEYS: Record<string, string> = {
     'hotkeys.isolateLayer': '',
 };
 // Chord rendering itself lives in Rust (`config::chord`) and is covered there;
-// what this file exercises is the layer above it — `|`-splitting and
-// first-binding selection — so the stub renders the handful of chords the
+// what this file exercises is the layer above it (`|`-splitting and
+// first-binding selection), so the stub renders the handful of chords the
 // fixtures use and strips the site prefix the way the bridge does.
 const CHORDS: Record<string, string> = {
     '$mod+Shift+KeyP': 'Ctrl+Shift+P',

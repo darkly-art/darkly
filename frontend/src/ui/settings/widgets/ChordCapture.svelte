@@ -6,7 +6,7 @@
         value: string;
         /** Called with the new bare chord. Empty string == cleared. */
         onchange: (chord: string) => void;
-        /** When false, mouse chords are rejected — only keyboard chords are
+        /** When false, mouse chords are rejected; only keyboard chords are
          *  captured. Used by the schema-pref hotkey widget (`nav.trigger`
          *  etc.) where mouse bindings are nonsensical. */
         acceptMouse?: boolean;
@@ -37,7 +37,7 @@
     /** Begin capture. Installs document-level keydown + pointerdown
      *  listeners in the *capture phase* so we win the race against
      *  tinykeys' window-bubble handler (and don't depend on the button
-     *  retaining focus — the prior `<button onblur=stop onkeydown=…>`
+     *  retaining focus: the prior `<button onblur=stop onkeydown=…>`
      *  pattern broke whenever the browser detoured focus, e.g. inside a
      *  `<dialog>.showModal()`). */
     function beginCapture() {
@@ -52,7 +52,7 @@
 
         const onKey = (e: KeyboardEvent) => {
             // Swallow the event regardless of what we end up doing with
-            // it — otherwise capturing a hotkey would *also* fire its
+            // it; otherwise capturing a hotkey would *also* fire its
             // dispatch handler. Pure-modifier presses fall through after
             // preventDefault to wait for the real keystroke.
             e.preventDefault();
@@ -93,7 +93,7 @@
             const hasMod = e.ctrlKey || e.metaKey || e.altKey || e.shiftKey;
 
             if (acceptMouse && isOnButton && hasMod) {
-                // Capture a mouse chord on the button itself — the only
+                // Capture a mouse chord on the button itself, the only
                 // safe place to register a click without sending it
                 // elsewhere in the UI.
                 e.preventDefault();
@@ -114,7 +114,7 @@
             }
 
             if (isOnButton) {
-                // Bare click on our own button while capturing — treat as
+                // Bare click on our own button while capturing: treat as
                 // a no-op (don't cancel; user might be re-focusing).
                 return;
             }
@@ -164,7 +164,7 @@
     onclick={beginCapture}
     title={conflict
         ?? (acceptMouse
-            ? 'Click, then press a key — or hold a modifier and click here'
+            ? 'Click, then press a key, or hold a modifier and click here'
             : 'Click, then press a key combination')}
 >
     {#if capturing}

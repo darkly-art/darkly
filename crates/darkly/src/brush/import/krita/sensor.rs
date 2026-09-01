@@ -1,13 +1,13 @@
 //! Decoders for sensor curves and sensor XML param values.
 //!
-//! Krita stores curve transfer functions as a tiny ad-hoc string format —
-//! `x1,y1;x2,y2;…` — and sensor configurations as a small XML blob like
+//! Krita stores curve transfer functions as a tiny ad-hoc string format
+//! (`x1,y1;x2,y2;…`) and sensor configurations as a small XML blob like
 //! `<params id="pressure"/>`. These show up as the inner text of `<param>`
 //! elements with `type="string"`.
 
 /// Try parsing `s` as a Krita curve point string (`x1,y1;x2,y2;…`).
 ///
-/// The grammar is permissive — Krita accepts trailing semicolons and runs of
+/// The grammar is permissive: Krita accepts trailing semicolons and runs of
 /// whitespace. Returns `None` on any malformed input so the caller can fall
 /// back to other decoders.
 pub fn parse_curve_points(s: &str) -> Option<Vec<(f32, f32)>> {
@@ -35,7 +35,7 @@ pub fn parse_curve_points(s: &str) -> Option<Vec<(f32, f32)>> {
 
 /// If `s` is a Krita sensor XML blob, return its `id` attribute (e.g.
 /// `pressure`, `tilt`, `speed`). The sensor blob looks like
-/// `<!DOCTYPE params> <params id="pressure"/>` — sometimes wrapped, sometimes
+/// `<!DOCTYPE params> <params id="pressure"/>`, sometimes wrapped, sometimes
 /// without the doctype. We do a best-effort attribute extract rather than a
 /// full XML parse.
 pub fn extract_sensor_id(s: &str) -> Option<String> {

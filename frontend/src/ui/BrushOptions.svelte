@@ -22,12 +22,12 @@
     function toggleBuilder() {
         ensureInit();
         brushGraph.isOpen = !brushGraph.isOpen;
-        // Leaving the builder also leaves fullscreen — otherwise reopening
+        // Leaving the builder also leaves fullscreen, otherwise reopening
         // would silently spring back to a window-filling panel.
         if (!brushGraph.isOpen) brushGraph.fullscreen = false;
     }
 
-    /** Transient feedback while a scrub is being dragged. Local only — the
+    /** Transient feedback while a scrub is being dragged. Local only: the
      *  engine recompiles the graph and re-derives its previews on every
      *  exposed-port write, which is work the values a drag passes through
      *  don't warrant. */
@@ -37,14 +37,14 @@
 
     /** The value the user settled on. Refreshes the on-canvas hover overlay
      *  afterward so the brush outline reflects the new value without waiting
-     *  for a pointer move — same courtesy the `[` / `]` hotkeys extend. */
+     *  for a pointer move, the same courtesy the `[` / `]` hotkeys extend. */
     async function commitExposedPort(nodeId: string, portName: string, displayValue: number) {
         brushGraph.setExposedPortValueLocal(nodeId, portName, displayValue);
         await brushGraph.setExposedPortValue(nodeId, portName, displayValue);
         focusedBrushTool()?.refreshHoverOverlay();
     }
 
-    /** Flip a Bool exposed port — toggles the input value between 0 and 1 via
+    /** Flip a Bool exposed port: toggles the input value between 0 and 1 via
      *  the display-space exposed-port setter (Bool reads as `value >= 0.5`). */
     function handleExposedBool(nodeId: string, portName: string, current: boolean) {
         const next = current ? 0 : 1;
@@ -92,7 +92,7 @@
                 onclick={() => { ensureInit(); explorerOpen = true; }}
                 title="Browse brushes"
             >
-                <!-- Live preview of the active graph — same component the
+                <!-- Live preview of the active graph: same component the
                      picker's tiles use, so preset and custom states render
                      identically. The value switches between the preset name
                      and "Custom". The preview stands in for a scrub's icon. -->
@@ -158,7 +158,7 @@
              itself; this toggle just mirrors it and pushes the engine flag.
              Hidden for brushes whose terminal opts out of erase (smudge,
              liquify, watercolor) via `supports_erase = false` on its node
-             registration — for those brushes flipping `gpu.blend_mode`
+             registration: for those brushes flipping `gpu.blend_mode`
              would do nothing, so the toggle would be a lie. -->
         {#if brushGraph.supportsErase}
             <Scrub
@@ -217,14 +217,14 @@
         outline: none;
         color: var(--accent);
     }
-    /* The popup list still uses the OS surface — theme it so options stay
+    /* The popup list still uses the OS surface; theme it so options stay
      * legible on the dark bar. */
     .exposed-enum-select option {
         background: var(--bg-active);
         color: var(--text);
     }
 
-    /* Width-bound wrapper for the embedded preview strip — the strip
+    /* Width-bound wrapper for the embedded preview strip: the strip
      * is `width: 100%; aspect-ratio: 11/3`, so the wrapper width picks the
      * trigger preview's height. 64px → ~17px tall, matching the scrubs. */
     .trigger-preview {

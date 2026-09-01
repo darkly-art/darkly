@@ -6,13 +6,13 @@
 #
 #   1. A binding lives here iff Krita, Photoshop, and GIMP all agree on its
 #      value. Verify against the actual editor sources (krita/, gimp/, and
-#      Photoshop docs) — not against memory or web claims — before adding.
+#      Photoshop docs), not against memory or web claims, before adding.
 #
 #   2. Darkly-original actions (no reference editor has any prior art) also
 #      live here. Mark them explicitly so reviewers don't mistake them for #1.
 #
-#   3. Anything else — any binding where the editors disagree, or where some
-#      editors have an opinion and others don't — must be split into each
+#   3. Anything else (any binding where the editors disagree, or where some
+#      editors have an opinion and others don't) must be split into each
 #      per-editor overlay (krita.yaml / photoshop.yaml / gimp.yaml). The
 #      `user → overlay → defaults` fallthrough makes silent inheritance the
 #      default; this rule keeps the per-editor file authoritative for any
@@ -25,7 +25,7 @@
 # tools.colorPickerSampleSource) are split into the per-editor overlays.
 
 hotkeys:
-  # Universal edit / clipboard / file bindings — all three editors agree.
+  # Universal edit / clipboard / file bindings: all three editors agree.
   # (redo, pasteInPlace differ between editors and live per-overlay.)
   undo: $mod+KeyZ
   copy: $mod+KeyC
@@ -47,10 +47,10 @@ hotkeys:
   clearSelectionContents: Delete
   commitFloating: Enter
   cancelFloating: Escape
-  # Colors — all three editors use D to reset, X to swap.
+  # Colors: all three editors use D to reset, X to swap.
   resetColors: KeyD
   swapColors: KeyX
-  # Brush parameter hotkeys — `[` / `]` is the universal sizing convention.
+  # Brush parameter hotkeys: `[` / `]` is the universal sizing convention.
   brushSizeUp: BracketRight
   brushSizeDown: BracketLeft
   # Photoshop binds Edit > Preferences to $mod+K; Krita/GIMP have no
@@ -58,7 +58,7 @@ hotkeys:
   openSettings: $mod+Comma
   # Image export is folded into Save As (the save picker's type dropdown
   # offers PNG/JPEG/WebP alongside `.darkly`), so there's no separate
-  # export-image hotkey — Save As ($mod+Shift+KeyS) covers it.
+  # export-image hotkey; Save As ($mod+Shift+KeyS) covers it.
   # Photoshop binds Lasso to L and Polygonal Lasso to Shift+L; Krita's
   # selection-tool .action files have empty <shortcut>; GIMP's analog is
   # "Free Select" (KeyF) with no polygonal counterpart. Darkly inherits
@@ -72,7 +72,7 @@ hotkeys:
   # Photoshop's Canvas Size binding. `cropToSelection` stays menu-only (no
   # reference editor binds it).
   resizeCanvas: $mod+Alt+KeyC
-  # Darkly-original (brush builder) — no reference-editor prior art.
+  # Darkly-original (brush builder): no reference-editor prior art.
   addBrushNode: Shift+KeyA
   # Darkly-original (command palette). No Krita/PS/GIMP prior art, so it
   # belongs here rather than a per-editor overlay. Follows the VS Code
@@ -87,8 +87,8 @@ hotkeys:
   # nothing selected, creates an empty group.
   newGroup: $mod+KeyG
   # PS + Krita both bind Merge Down to Ctrl+E. GIMP's only layer-merge
-  # default is Ctrl+M for "Merge Visible Layers" — semantically
-  # different. The `mergeDown` action handler is selection-aware:
+  # default is Ctrl+M for "Merge Visible Layers", a semantically
+  # different action. The `mergeDown` action handler is selection-aware:
   # with ≥2 selected it bakes the selection via merge_layers, with 1
   # it does the classic single-layer merge-down. One hotkey, two ops.
   mergeDown: $mod+KeyE
@@ -100,7 +100,7 @@ hotkeys:
   #     to fight if we register e.g. GIMP's Ctrl+M "Merge Visible".
   #   - flatten: Krita binds Ctrl+Shift+E to "Flatten image" (the
   #     whole-canvas composite, which is Darkly's `flatten_image`
-  #     engine op — not yet a registered action). Borrowing that key
+  #     engine op, not yet a registered action). Borrowing that key
   #     for Darkly's single-layer flatten (apply-mask / flatten-group)
   #     would mislead Krita users. If someone registers `flattenImage`
   #     as an action, that's where Ctrl+Shift+E belongs.

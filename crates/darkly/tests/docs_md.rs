@@ -1,7 +1,7 @@
 //! The generated regions of this repository's own markdown, checked against the
 //! registries they are generated from.
 //!
-//! `docs_md`'s unit tests cover the machinery — the marker grammar, relative
+//! `docs_md`'s unit tests cover the machinery: the marker grammar, relative
 //! links, idempotence. What is left is the part that can only be asserted
 //! against the checkout: that what is committed matches what the registries say
 //! today, and that everything those regions point a reader at exists.
@@ -19,7 +19,7 @@ use darkly::docs_md::{self, Mode};
 /// Committed markdown says what the registries say.
 ///
 /// This is the test that fires when someone adds a veil, renames one, or edits
-/// a `description:` — none of which look like documentation changes from inside
+/// a `description:`, none of which look like documentation changes from inside
 /// `crates/darkly/src/`.
 #[test]
 fn generated_regions_are_up_to_date() {
@@ -28,7 +28,7 @@ fn generated_regions_are_up_to_date() {
 
     assert!(
         !report.generated.is_empty(),
-        "no generated regions found under {} — the walk is not reaching the \
+        "no generated regions found under {}: the walk is not reaching the \
          checkout, so this test is asserting nothing",
         root.display()
     );
@@ -72,7 +72,7 @@ fn generated_regions_link_to_images_that_exist() {
             let path = normalize(&root.join(dir).join(&src));
             assert!(
                 path.exists(),
-                "{} links to `{src}`, which is not in the checkout — run \
+                "{} links to `{src}`, which is not in the checkout: run \
                  `cargo run --release -p darkly --features testing --bin render_docs \
                  -- --stills --catalog <id>`",
                 rel.display()
@@ -82,7 +82,7 @@ fn generated_regions_link_to_images_that_exist() {
     }
     assert!(
         checked > 0,
-        "no local images in any generated region — nothing was asserted"
+        "no local images in any generated region: nothing was asserted"
     );
 }
 
@@ -96,7 +96,7 @@ fn image_sources(text: &str) -> Vec<String> {
 }
 
 /// Resolve `..` segments textually. `Path::canonicalize` would do it, but only
-/// for a path that already exists — and a missing image is what this is for.
+/// for a path that already exists, and a missing image is what this is for.
 fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in path.components() {

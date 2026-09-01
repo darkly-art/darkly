@@ -1,13 +1,13 @@
-//! Framework tests for `crate::brush::wgsl` — the brush-graph
+//! Framework tests for `crate::brush::wgsl`: the brush-graph
 //! → WGSL fragment shader compiler.
 //!
 //! Asserts:
 //!
-//! 1. **Identical topologies hash to the same id** — two structurally
+//! 1. **Identical topologies hash to the same id**: two structurally
 //!    identical graphs (independent of node ID allocation) hash to the
 //!    same `topology_hash` so the per-brush pipeline cache shares
 //!    pipelines.
-//! 2. **The Rough Ink builtin compiles end-to-end** — the framework
+//! 2. **The Rough Ink builtin compiles end-to-end**: the framework
 //!    handles a real graph with random + curve + shape + stamp +
 //!    paint and produces non-empty WGSL.
 
@@ -35,16 +35,16 @@ fn empty_graph_errors_cleanly() {
     let reg = registry();
     let plan = compile(&graph, reg.as_map()).unwrap();
     let err = compile_brush_to_wgsl(&graph, &plan, &evals())
-        .expect_err("empty graph has no terminal — must error");
+        .expect_err("empty graph has no terminal, must error");
     assert!(matches!(err, CompileError::NoTerminal));
 }
 
 #[test]
 fn rough_ink_brush_compiles_to_nonempty_wgsl() {
-    // Lift the Rough Ink graph straight from `builtin_brushes::all()`
-    // — it's the canonical demo brush this framework was built to
-    // support, and a quick smoke test that every per-node
-    // `compile_wgsl` works in the context of a real graph.
+    // Lift the Rough Ink graph straight from `builtin_brushes::all()`;
+    // it's the canonical demo brush this framework was built to support,
+    // and a quick smoke test that every per-node `compile_wgsl` works in
+    // the context of a real graph.
     let rough_ink = darkly::brush::builtin_brushes::all()
         .into_iter()
         .find(|b| b.metadata.name == "Rough Ink")
@@ -69,7 +69,7 @@ fn rough_ink_brush_compiles_to_nonempty_wgsl() {
 
 /// Regression test: `shape_r_theta` must *subtract* the rotation from θ
 /// (not add it). The fragment shader's `theta` is
-/// `atan2(local_uv.y, local_uv.x)` with screen y-down — the same frame
+/// `atan2(local_uv.y, local_uv.x)` with screen y-down, the same frame
 /// `pen.drawing_angle` (`atan2(dy, dx)`) lives in, where positive angles
 /// are clockwise visually. For a polar formula `r(θ)`, adding α to the
 /// argument rotates the geometry CCW in this frame; subtracting rotates
@@ -99,7 +99,7 @@ fn shape_rotation_subtracts_from_theta_for_drawing_angle_compatibility() {
         );
         assert!(
             !wgsl.contains("theta + p.rotation"),
-            "{label} must not add rotation to theta — that rotates the shape opposite to drawing_angle"
+            "{label} must not add rotation to theta, which rotates the shape opposite to drawing_angle"
         );
     }
 }
@@ -107,7 +107,7 @@ fn shape_rotation_subtracts_from_theta_for_drawing_angle_compatibility() {
 /// Regression test: brush stamp rotation must counteract view rotation,
 /// so the on-screen orientation is invariant under the user spinning
 /// the canvas. The implementation places this correction at two
-/// places in the compiled WGSL — every circle node and the canonical
+/// places in the compiled WGSL: every circle node and the canonical
 /// stroke-follow wire share these two intercepts, no per-node code.
 ///
 /// 1. The per-fragment skeleton subtracts `u.intrinsic.view_rotation`
@@ -120,7 +120,7 @@ fn shape_rotation_subtracts_from_theta_for_drawing_angle_compatibility() {
 ///
 /// 2. `pen_input` subtracts `u.intrinsic.view_rotation` from
 ///    `drawing_angle`'s wire output. `drawing_angle` is
-///    `atan2(canvas_dy, canvas_dx)` — a canvas-frame angle. The
+///    `atan2(canvas_dy, canvas_dx)`, a canvas-frame angle. The
 ///    subtraction lifts it to screen-frame so the canonical
 ///    `pen.drawing_angle → circle.rotation_input` wire keeps following
 ///    the on-screen stroke direction after the skeleton's
@@ -174,14 +174,14 @@ fn stamp_rotation_counteracts_view_rotation() {
         // (1) Skeleton intercept.
         assert!(
             wgsl.contains("atan2(local_uv.y, local_uv.x) - u.intrinsic.view_rotation"),
-            "{label} skeleton must subtract view_rotation from theta — without it, \
+            "{label} skeleton must subtract view_rotation from theta: without it, \
              stamps rotate with the canvas instead of counteracting view rotation"
         );
         // (2) pen.drawing_angle wire intercept. Field name embeds the
         // node id (e.g. `f0_drawing_angle`); match the suffix.
         assert!(
             wgsl.contains("_drawing_angle - u.intrinsic.view_rotation"),
-            "{label} pen.drawing_angle must subtract view_rotation — without it, \
+            "{label} pen.drawing_angle must subtract view_rotation: without it, \
              the canonical drawing_angle → rotation_input wire would push the \
              stamp off the on-screen stroke direction by V"
         );
@@ -190,12 +190,12 @@ fn stamp_rotation_counteracts_view_rotation() {
         // and the cursor rotated at 2× the view's rate.
         assert!(
             !wgsl.contains("atan2(local_uv.y, local_uv.x) + u.intrinsic.view_rotation"),
-            "{label} adds view_rotation to theta — sign error rotates stamp WITH \
+            "{label} adds view_rotation to theta; sign error rotates stamp WITH \
              the view at 2× rate"
         );
         assert!(
             !wgsl.contains("_drawing_angle + u.intrinsic.view_rotation"),
-            "{label} adds view_rotation to drawing_angle — sign error rotates \
+            "{label} adds view_rotation to drawing_angle; sign error rotates \
              stamp WITH the view at 2× rate"
         );
     }
@@ -271,7 +271,7 @@ fn extent_protocol_composes_along_chain() {
     );
     assert!(
         compiled.brush_extent_extra_px.abs() < 1e-6,
-        "no displacement nodes — extra_px must be zero, got {}",
+        "no displacement nodes, extra_px must be zero, got {}",
         compiled.brush_extent_extra_px,
     );
 }
@@ -375,7 +375,7 @@ fn extent_neutral_when_aspect_unwired() {
 
 #[test]
 fn extent_default_identity_when_no_shape() {
-    // pen → paint with no upstream circle node — every node
+    // pen → paint with no upstream circle node: every node
     // returns the trait-default `Identity`, so the brush extent
     // collapses to (factor=1.0, extra_px=0.0). bbox_radius then
     // equals the dab's effective_radius, matching the existing
@@ -400,12 +400,12 @@ fn extent_default_identity_when_no_shape() {
     let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
     assert!(
         (compiled.brush_extent_factor - 1.0).abs() < 1e-6,
-        "no shape upstream — factor must be 1.0, got {}",
+        "no shape upstream, factor must be 1.0, got {}",
         compiled.brush_extent_factor,
     );
     assert!(
         compiled.brush_extent_extra_px.abs() < 1e-6,
-        "no shape upstream — extra_px must be 0.0, got {}",
+        "no shape upstream, extra_px must be 0.0, got {}",
         compiled.brush_extent_extra_px,
     );
 }
@@ -445,7 +445,7 @@ fn paint_only_graph_falls_through_to_disc() {
 /// clone-sample helper, and the preview variant compiles too (it declares
 /// the same slot and binds `_fallback`, since hover publishes nothing).
 /// Naga validation of the assembled shader happens when the pipeline
-/// builds — see `tests/clone.rs`.
+/// builds; see `tests/clone.rs`.
 #[test]
 fn clone_brush_reserves_a_live_source_slot() {
     let clone = darkly::brush::builtin_brushes::all()
@@ -474,7 +474,7 @@ fn clone_brush_reserves_a_live_source_slot() {
     // Regression: the source sample sits behind a `uv`-dependent in-bounds
     // branch (non-uniform control flow), so it must use derivative-free
     // `textureSampleLevel`. `textureSample` computes implicit derivatives
-    // and is illegal in non-uniform control flow — native naga is lenient,
+    // and is illegal in non-uniform control flow; native naga is lenient,
     // but the browser's WGSL validator rejects it and the brush fails at
     // pipeline-build time in-app.
     assert!(
@@ -498,7 +498,7 @@ fn clone_brush_reserves_a_live_source_slot() {
         .cursor_preview_wgsl
         .contains("@group(3) @binding(0) var graph_smp"));
     assert!(compiled.cursor_preview_wgsl.contains("fn clone_sample"));
-    // But the preview *body* must not sample the source — it emits a neutral
+    // But the preview *body* must not sample the source; it emits a neutral
     // constant instead. The tell is the call site, not the declaration.
     assert!(
         !compiled.cursor_preview_wgsl.contains("= clone_sample"),
@@ -516,7 +516,7 @@ fn clone_brush_reserves_a_live_source_slot() {
 }
 
 /// With a static field, the noise node **bakes**: its `color` output compiles
-/// to a single `textureSample` of a cached RGBA tile — not three per-fragment
+/// to a single `textureSample` of a cached RGBA tile, not three per-fragment
 /// `fbm_tile` calls. This is the complexity-class win: the ~80-hash kernel runs
 /// once per texel at bake time, not per fragment per overlapping dab. The 3D
 /// noise lib path must not leak in, and the shader validates under naga.
@@ -635,7 +635,7 @@ fn noise_wired_field_falls_back_to_live_kernel() {
 }
 
 /// A consumer that wires only the scalar `value` output bakes a single
-/// **grayscale** (R8) tile and samples it once — no chromatic RGBA tile, no
+/// **grayscale** (R8) tile and samples it once, no chromatic RGBA tile, no
 /// per-fragment fBm. This is the monochrome grain path a brush like `sponge`
 /// takes.
 #[test]
@@ -698,7 +698,7 @@ fn noise_static_value_bakes_grayscale() {
 
 /// When a graph consumes **both** `value` and `color`, two tiles bake (one
 /// grayscale, one RGBA) and both sample off the **one** shared coordinate
-/// binding — no duplicated coordinate setup.
+/// binding, with no duplicated coordinate setup.
 #[test]
 fn noise_both_outputs_share_one_coord() {
     let reg = registry();
@@ -877,7 +877,7 @@ fn polygon_sdf_geometry() {
 /// (the circumradius), like the circle family's `shape_coverage`. An earlier
 /// symmetric feather (`1 - smoothstep(-band, band, sd)`) bloomed *outward* past
 /// the circumradius, where the skeleton's disc clip (`local_dist >=
-/// bbox_target_px`) hard-cut it — filling the gaps between the vertices out to
+/// bbox_target_px`) hard-cut it, filling the gaps between the vertices out to
 /// the circumcircle and flattening a soft polygon into a plain circle. The
 /// inward feather has zero coverage the moment `sd >= 0`, so nothing ever
 /// reaches the clip.
@@ -890,7 +890,7 @@ fn polygon_softness_feathers_inward() {
         t * t * (3.0 - 2.0 * t)
     }
     for &softness in &[0.0_f32, 0.5, 1.0] {
-        // Outside the boundary (sd > 0) coverage is exactly 0 for any softness —
+        // Outside the boundary (sd > 0) coverage is exactly 0 for any softness -
         // the feather never blooms past the circumradius into the disc clip.
         assert_eq!(
             coverage(0.01, softness),
@@ -954,7 +954,7 @@ fn polygon_extent_grows_with_squeeze() {
 
 /// Coordinate-frame guard: the polygon tip must be screen-relative like every
 /// theta-based tip. Because it works from raw `local_uv`, it has to fold
-/// `view_rotation` into its own rotation — otherwise the dab spins as the user
+/// `view_rotation` into its own rotation, otherwise the dab spins as the user
 /// rotates the canvas view. Assert both variants build the rotation angle with
 /// `view_rotation` folded in.
 #[test]
@@ -987,7 +987,7 @@ fn polygon_is_view_rotation_invariant() {
         );
         assert!(
             w.contains("+ u.intrinsic.view_rotation);"),
-            "{label} polygon rotation must fold in view_rotation — without it the \
+            "{label} polygon rotation must fold in view_rotation, without it the \
              tip spins with the canvas view (coordinate-frame regression)",
         );
     }
@@ -999,7 +999,7 @@ fn polygon_is_view_rotation_invariant() {
 // ---------------------------------------------------------------------------
 
 /// Map a base circumradius-`r` vertex from the polygon's own frame into screen
-/// space: `screen = R(β−φ)·diag(a,1/a)·R(−β)·p` — the inverse of the node's
+/// space: `screen = R(β−φ)·diag(a,1/a)·R(−β)·p`, the inverse of the node's
 /// forward squeeze transform.
 fn poly_to_screen(p: [f32; 2], a: f32, phi: f32, beta: f32) -> [f32; 2] {
     let (cb, sb) = (beta.cos(), beta.sin());
@@ -1097,7 +1097,7 @@ fn polygon_softness_band_isotropic_under_squeeze() {
 
 /// Feature: `squeeze_angle` aims the squash independently of `rotation`. With
 /// rotation held fixed, the squeezed (narrow) axis of the tip should rotate with
-/// the squeeze angle — so which of the +x / +y boundary radii is shorter flips
+/// the squeeze angle - so which of the +x / +y boundary radii is shorter flips
 /// as the angle goes 0 → 90°.
 #[test]
 fn polygon_squeeze_angle_steers_independently() {
@@ -1136,7 +1136,7 @@ fn polygon_squeeze_angle_steers_independently() {
 }
 
 /// Feature (the reported bug): squeezing a square and rounding it must produce a
-/// proper rounded rectangle — a **convex** outline — not a shape whose corners
+/// proper rounded rectangle (a **convex** outline), not a shape whose corners
 /// balloon outward. We march the boundary all the way around and assert the
 /// turning is monotone (every consecutive cross-product keeps one sign), which a
 /// ballooned, non-convex corner would violate.
@@ -1197,7 +1197,7 @@ fn polygon_rounded_rectangle_stays_convex() {
 }
 
 /// Feature invariant: for every squeeze / angle / rounding, nothing beyond the
-/// tip's screen-space footprint bound is inside — the rounding never grows the
+/// tip's screen-space footprint bound is inside: the rounding never grows the
 /// tip past its budgeted extent.
 ///
 /// The bound comes from `silhouette_support`, the same function `extent()`
@@ -1258,9 +1258,9 @@ fn static_texture_brush_preview_declares_single_graph_texture() {
         .into_iter()
         .find(|b| b.metadata.name == "Charcoal")
         .expect("Charcoal brush registered");
-    // Go through `compile_graph` — it applies the Switch rewrite the
+    // Go through `compile_graph` (it applies the Switch rewrite the
     // persisted graph needs before WGSL compilation, matching the in-app
-    // path — and read the compiled brush off the runner.
+    // path) and read the compiled brush off the runner.
     let runner = darkly::brush::compile_graph(&charcoal.metadata.graph).expect("charcoal compiles");
     let compiled = runner
         .compiled_brush()
@@ -1358,7 +1358,7 @@ fn noise_canvas_space_is_byte_identical() {
     let plan = compile(&graph, reg.as_map()).unwrap();
     let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
     // `scale` is now a Scalar *input* read via `cctx.input("scale").as_f32()`,
-    // and `sample_frame` interpolates the scale expression parenthesized — so
+    // and `sample_frame` interpolates the scale expression parenthesized, so
     // an unwired 32.0 default emits `target_pos / (32.000000)`. The numeric
     // literal (`32.000000`) is unchanged; the surrounding parens are the only
     // permitted textual delta, required so a *wired* scale expression composes.
@@ -1379,7 +1379,7 @@ fn noise_canvas_space_is_byte_identical() {
 /// The settable-source `brush_settings.size` must reach a *compiled* brush:
 /// wiring it into a node that reads its input in WGSL (`noise.scale`) has to
 /// emit the packed per-dab size field in the shader, not the node's default
-/// literal. This is the guard for the review's F1 — a source seeded only in the
+/// literal. This is the guard for the review's F1: a source seeded only in the
 /// CPU slot table would compile clean here and silently deliver nothing.
 #[test]
 fn settings_size_source_reaches_compiled_brush() {
@@ -1390,7 +1390,7 @@ fn settings_size_source_reaches_compiled_brush() {
         "brush_settings",
         reg.get("brush_settings").unwrap().ports.clone(),
     );
-    // A distinctive base size — packed per-dab at runtime, so it appears in the
+    // A distinctive base size, packed per-dab at runtime, so it appears in the
     // shader as a `d.<field>` reference, never as a baked literal.
     graph
         .set_port_default(&settings, "size", 0.25)
@@ -1410,7 +1410,7 @@ fn settings_size_source_reaches_compiled_brush() {
     let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
 
     // `noise.scale` now divides by the wired size dab field, not the 32.0
-    // default literal — proof the source flows through the compiled path.
+    // default literal, which proves the source flows through the compiled path.
     let size_field = format!("d.n{}_size", settings.0);
     assert!(
         compiled.stroke_wgsl.contains(&size_field),
@@ -1428,8 +1428,8 @@ fn settings_size_source_reaches_compiled_brush() {
 }
 
 /// A wirable scalar input (`noise.scale`) driven by a per-dab sensor
-/// (`pen.pressure`) must emit the upstream expression in the divide — not a
-/// literal — and both shader variants must still pass naga validation. Guards
+/// (`pen.pressure`) must emit the upstream expression in the divide, not a
+/// literal, and both shader variants must still pass naga validation. Guards
 /// the subsumed scalar-to-port conversion at its highest-risk seam.
 #[test]
 fn noise_scale_wired_emits_upstream_expr_and_validates() {
@@ -1449,7 +1449,7 @@ fn noise_scale_wired_emits_upstream_expr_and_validates() {
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
     let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
-    // The literal default must be gone — the divide now reads the wired dab
+    // The literal default must be gone: the divide now reads the wired dab
     // field (`d.n0_pressure` or similar), parenthesized.
     assert!(
         !compiled.stroke_wgsl.contains("target_pos / (32.000000)"),
@@ -1464,8 +1464,8 @@ fn noise_scale_wired_emits_upstream_expr_and_validates() {
 }
 
 /// A wired `octaves` input must emit the `clamp(i32(round(..)), 1, 8)` guard
-/// (i32, not u32 — `fbm_tile`'s octave arg is i32) and validate on both
-/// variants — the naga-riskiest arm of the subsumed conversion.
+/// (i32, not u32, since `fbm_tile`'s octave arg is i32) and validate on both
+/// variants: the naga-riskiest arm of the subsumed conversion.
 #[test]
 fn noise_octaves_wired_emits_i32_clamp_and_validates() {
     let reg = registry();
@@ -1649,13 +1649,13 @@ fn image_dab_tip_needs_no_shape_node() {
 /// paints, not the enclosing circle of the squeeze ellipse.
 ///
 /// The emitted body builds the n-gon at circumradius `cr = 1 − ρ`, maps its
-/// vertices through `T⁻¹` (semi-axes `a` and `1/a`), then dilates by `ρ` —
+/// vertices through `T⁻¹` (semi-axes `a` and `1/a`), then dilates by `ρ` -
 /// an *isotropic* offset applied after the anisotropic map. So the reach is
 /// `cr · maxᵢ‖diag(a, 1/a)·R(−β)·v̂ᵢ‖ + ρ`.
 ///
 /// Regression: the bound was a flat `1/a`, which ignores both the rounding
 /// inset and where the vertices sit relative to the squeeze axis. At the
-/// settings below (Sponge's shipped tip) that reads 1.818 instead of 1.175 —
+/// settings below (Sponge's shipped tip) that reads 1.818 instead of 1.175 -
 /// over-covering by 1.55× in radius, 2.4× in area. The fragment stage's only
 /// early-out is a circular discard at this radius, so every pixel of the
 /// excess is fully shaded before being thrown away.
@@ -1699,8 +1699,8 @@ fn polygon_extent_is_the_rounded_silhouette_support() {
 }
 
 /// When the squeeze *axis* is wired its value is unknown at compile time, so
-/// the bound must fall back to the orientation-agnostic worst case — a vertex
-/// landing on the stretched axis — rather than guessing an axis.
+/// the bound must fall back to the orientation-agnostic worst case (a vertex
+/// landing on the stretched axis) rather than guessing an axis.
 #[test]
 fn polygon_extent_falls_back_when_squeeze_axis_is_wired() {
     let reg = registry();

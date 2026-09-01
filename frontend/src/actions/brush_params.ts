@@ -47,7 +47,7 @@ function commit(nodeId: string, portName: string, value: number) {
 
 /** Discrete step in the given direction (used by `[` / `]` hotkeys).
  *  After committing, refresh the on-canvas hover overlay so the brush
- *  cursor preview reflects the new value immediately — without this
+ *  cursor preview reflects the new value immediately; without this
  *  the circle stays at the old size until the user moves the pointer. */
 function adjustBrushParam(role: Role, dir: 1 | -1): void {
     const found = findScalarPort(role);

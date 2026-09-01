@@ -1,5 +1,5 @@
 /**
- * Hotkey Cheat Sheet — opens a printable, searchable reference of all
+ * Hotkey Cheat Sheet: opens a printable, searchable reference of all
  * effective keyboard shortcuts in a separate browser window. Snapshots the
  * action registry + active preset (and current theme) at open time; re-open
  * to see updates.

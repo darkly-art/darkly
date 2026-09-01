@@ -115,7 +115,7 @@ impl Veil for Grain {
     /// The evolve pass replaces a `speed` fraction of pixels and keeps the
     /// rest, so at any lower rate what a frame shows depends on the frames
     /// before it. Pinning the rate to its maximum makes every pixel fresh, so
-    /// the pattern is a function of `seed` alone — which is both what makes
+    /// the pattern is a function of `seed` alone, which is both what makes
     /// this absolute and the most legible thing a grain preview can show.
     fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
         self.speed = 1.0;

@@ -11,7 +11,7 @@ use super::graph::{Graph, NodeId, PortDir};
 use super::WireKind;
 
 /// Map of node id → `[x, y]` produced by auto-layout. Positions are a
-/// pure UI concern — they are not stored on the graph.
+/// pure UI concern: they are not stored on the graph.
 pub type NodeLayout = HashMap<NodeId, [f32; 2]>;
 
 /// Horizontal spacing between layers (pixels).
@@ -95,7 +95,7 @@ impl<W: WireKind> Graph<W> {
     /// When no measured sizes are available (tests, freshly loaded brushes),
     /// falls back to port-count-based height estimation.
     ///
-    /// Positions are not stored on the graph — the returned map is the
+    /// Positions are not stored on the graph: the returned map is the
     /// authoritative result and callers (currently the frontend node
     /// editor) keep it as UI-only state.
     pub fn auto_layout(&self) -> NodeLayout {

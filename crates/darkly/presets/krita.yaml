@@ -9,11 +9,11 @@ description: Krita-style keybindings
 hotkeys:
   # placeSmartObject: intentionally unbound. Krita states no default for
   # placing an image as a non-destructive object, and inventing one would
-  # set an expectation its users don't have — leave it to the menu and to
+  # set an expectation its users don't have; leave it to the menu and to
   # explicit user binding. GIMP does state one, so it binds this in
   # gimp.yaml.
   # Edit / clipboard (non-unanimous slice). Krita matches PS on these but
-  # GIMP differs (Redo: <primary>Y, Paste-In-Place: <primary><alt>V — see
+  # GIMP differs (Redo: <primary>Y, Paste-In-Place: <primary><alt>V, see
   # gimp/app/actions/edit-actions.c), so each value is pinned per-overlay.
   redo: $mod+Shift+KeyZ
   pasteInPlace: $mod+Shift+KeyV
@@ -26,7 +26,7 @@ hotkeys:
   # M is rectSelectTool).
   mirrorViewH: KeyM
   # View framing. Krita's `zoom_to_fit` ("Fit to View") ships an empty
-  # <shortcut> in kritamenu.action — no default key — and Krita has no
+  # <shortcut> in kritamenu.action (no default key) and Krita has no
   # center-in-window action at all. Both fitToScreen and centerView are
   # therefore left unbound under the Krita preset (neither lives in
   # defaults.yaml, so omission here means no key). Users can bind them
@@ -64,7 +64,7 @@ hotkeys:
   # Colors. Krita binds Ctrl+I to Invert (`krita_filter_invert`); Invert
   # Selection is the Shift variant above. Photoshop agrees (Ctrl+I → Image >
   # Adjustments > Invert); GIMP does NOT (Ctrl+I is its Invert Selection), so
-  # this is per-overlay, not a default. The action id is `filterInvert` —
+  # this is per-overlay, not a default. The action id is `filterInvert`:
   # the dynamically-registered id for the `invert` filter (`filter` + type).
   filterInvert: $mod+KeyI
   # Krita binds Ctrl+Shift+U to Desaturate (`krita_filter_desaturate`, per
@@ -75,16 +75,16 @@ hotkeys:
   filterBlack_and_white: $mod+Shift+KeyU
 
 mouse_clicks:
-  # Krita's default "Sample FG color from merged image" — Ctrl+drag on
+  # Krita's default "Sample FG color from merged image": Ctrl+drag on
   # Linux/Win, Cmd+drag on macOS (Qt::CTRL auto-maps to Command).
   sampleColor: canvas@paint:$mod+drag
-  # Clone brush set-source — Krita sets the clone origin with Ctrl+click,
+  # Clone brush set-source: Krita sets the clone origin with Ctrl+click,
   # the same modifier as its colour sampler. Brush-scoped so it out-ranks
   # `sampleColor` only while the Clone brush is active (see
   # `hotkey_resolve.ts` specificity); with any other brush the same
   # $mod+drag still samples colour.
   setCloneSource: canvas@paint@clone:$mod+drag
-  # Krita's "Change Primary Setting" — shift+drag scrubs brush size.
+  # Krita's "Change Primary Setting" (shift+drag) scrubs brush size.
   brushSizeAdjust: canvas@paint:shift+drag
   # Krita uses Alt+click on a layer/mask thumbnail to isolate the node.
   isolateLayer:

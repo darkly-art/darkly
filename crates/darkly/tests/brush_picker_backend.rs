@@ -2,8 +2,8 @@
 //!
 //! Exercises the lazy thumbnail bake and active-dab preview cache through
 //! a real `DarklyEngine` with a headless GPU context. Each behaviour the
-//! frontend depends on — first call returns empty, post-flush returns
-//! valid bytes, version + theme invalidation drop the cache — is asserted
+//! frontend depends on (first call returns empty, post-flush returns
+//! valid bytes, version + theme invalidation drop the cache) is asserted
 //! end-to-end via the test-only `test_flush_readbacks` helper.
 
 use darkly::engine::{DarklyEngine, ExposedValue};
@@ -20,14 +20,14 @@ fn fresh_engine() -> DarklyEngine {
 fn brush_thumbnail_first_call_kicks_bake_then_returns_png() {
     let mut engine = fresh_engine();
 
-    // First call returns empty bytes — the bake was scheduled, not run.
+    // First call returns empty bytes: the bake was scheduled, not run.
     let first = engine.brush_thumbnail("Airbrush");
     assert!(
         first.is_empty(),
         "first call should return empty bytes while the bake is in flight"
     );
 
-    // Calling again before the readback completes returns empty too —
+    // Calling again before the readback completes returns empty too:
     // we don't queue a second bake on top of an in-flight one.
     let second = engine.brush_thumbnail("Airbrush");
     assert!(
@@ -195,17 +195,17 @@ fn brush_thumbnail_unknown_name_returns_empty() {
 ///
 /// Regression for a bug where the live preview rendered at the
 /// caller's display CSS pixel size (e.g. 22×22 for the BrushBar
-/// trigger), causing the brush footprint — fixed at hundreds of pixels —
+/// trigger), causing the brush footprint (fixed at hundreds of pixels)
 /// to overflow the canvas. Visible symptom: 100% white blob in the
 /// dropdown trigger and a clipped, oversized preview in the picker's
 /// active-brush strip, while the picker tile thumbnails for the same
 /// brush rendered correctly. Both paths now render at
 /// `BRUSH_DAB_RENDER_SIZE`, apply `reset_exposed_scrubs`, and frame
-/// through `frame_dab_thumbnail` — so they must produce byte-identical
+/// through `frame_dab_thumbnail`, so they must produce byte-identical
 /// PNGs for the same brush. Combined with the basic readback-shape
 /// asserts here to share one engine (and one wgpu device) across the
 /// two checks; otherwise parallel tests run into device resource
-/// limits — see `size_scrub_does_not_change_active_dab_pixels` for the
+/// limits: see `size_scrub_does_not_change_active_dab_pixels` for the
 /// same concern.
 #[test]
 fn active_dab_preview_first_call_empty_then_present_after_flush() {
@@ -217,7 +217,7 @@ fn active_dab_preview_first_call_empty_then_present_after_flush() {
     let first = engine.brush_active_dab_preview();
     assert!(
         first.is_empty(),
-        "cache miss returns an empty Vec — frontends use that as 'no fresh \
+        "cache miss returns an empty Vec: frontends use that as 'no fresh \
          bytes' so the previous render stays on screen instead of flashing \
          transparent. Got {} bytes.",
         first.len(),
@@ -229,7 +229,7 @@ fn active_dab_preview_first_call_empty_then_present_after_flush() {
     assert_eq!(
         &live[..8],
         &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
-        "bytes start with the PNG signature — same wire format as `brush_dab_thumbnail`"
+        "bytes start with the PNG signature: same wire format as `brush_dab_thumbnail`"
     );
 
     // Byte-equality invariant: bake the picker-tile thumbnail and
@@ -241,7 +241,7 @@ fn active_dab_preview_first_call_empty_then_present_after_flush() {
     assert_eq!(
         live, baked,
         "active-brush preview must be byte-identical to the baked thumbnail \
-         for the same brush — divergence means the BrushBar trigger / \
+         for the same brush; divergence means the BrushBar trigger / \
          picker active strip will visually disagree with the picker tile."
     );
 }
@@ -269,7 +269,7 @@ fn theme_change_invalidates_active_dab_preview() {
     let before = engine.brush_active_dab_preview();
     assert!(!before.is_empty(), "baseline has framed PNG");
 
-    // Swap to a contrasting palette — invalidation drops the cache so
+    // Swap to a contrasting palette: invalidation drops the cache so
     // the next call has to re-bake. The shape of the buffer doesn't
     // change, but the bg pixels (everywhere outside the dab) shift to
     // the new background colour, so byte-equality must fail.
@@ -294,14 +294,14 @@ fn theme_change_invalidates_active_dab_preview() {
 #[test]
 fn size_scrub_does_not_change_active_dab_pixels() {
     // The dab thumbnail represents brush identity (shape, texture,
-    // dynamics) — scrubbing the brush bar's user-facing size should leave
+    // dynamics); scrubbing the brush bar's user-facing size should leave
     // the icon visually unchanged. Verified end-to-end: render, scrub
     // size, render again, compare bytes.
     //
     // Also locks in the topology-version contract the brush-bar UI relies
     // on: a scrub must not advance `brush_topology_version`. The frontend
     // uses that counter to decide whether the active preset name still
-    // applies — a false bump would flip "Airbrush" → "Custom" on every
+    // applies: a false bump would flip "Airbrush" → "Custom" on every
     // size drag. Regression for that bug lives here, against the same
     // engine, to avoid creating an extra wgpu device in parallel.
     let mut engine = fresh_engine();
@@ -325,7 +325,7 @@ fn size_scrub_does_not_change_active_dab_pixels() {
     assert_eq!(
         engine.brush_topology_version(),
         topo_before_scrub,
-        "exposed-port scrub must not advance the topology version — \
+        "exposed-port scrub must not advance the topology version: \
          the frontend uses this to keep the active preset name across scrubs"
     );
 
@@ -340,8 +340,8 @@ fn size_scrub_does_not_change_active_dab_pixels() {
     );
 
     // Conversely, a structural change MUST advance the topology version,
-    // so the frontend correctly clears the preset name. Unexpose a port
-    // — cheaper than brush_load and avoids extra GPU work (no
+    // so the frontend correctly clears the preset name. Unexpose a port:
+    // cheaper than brush_load and avoids extra GPU work (no
     // compile_active call), but still classified as topology.
     let topo_before_toggle = engine.brush_topology_version();
     engine
@@ -357,7 +357,7 @@ fn size_scrub_does_not_change_active_dab_pixels() {
 #[test]
 fn set_node_comment_does_not_advance_topology_version() {
     // A node comment is inert w.r.t. render output and preset identity, so
-    // setting one must NOT advance `brush_topology_version` — otherwise the
+    // setting one must NOT advance `brush_topology_version`; otherwise the
     // brush bar would flip the active preset name to "Custom" the moment a
     // user annotated a node. The comment must still land on the graph.
     let mut engine = fresh_engine();
@@ -391,7 +391,7 @@ fn set_node_comment_does_not_advance_topology_version() {
 /// the live preview strips' iconify fallback (`preview_fallback_icon`,
 /// shown in the dab slot instead of a baked thumbnail for
 /// content-dependent brushes). One engine across all three loads to avoid extra wgpu
-/// devices in parallel — see
+/// devices in parallel: see
 /// `size_scrub_does_not_change_active_dab_pixels`.
 #[test]
 fn brush_active_capabilities_reflect_loaded_brush() {
@@ -468,7 +468,7 @@ fn graph_change_triggers_active_dab_rebake() {
 #[test]
 fn exposed_enum_input_surfaces_as_dropdown_control() {
     // An exposed enum input must surface as an `Enum` control carrying its
-    // option labels and current index — earlier the read builder skipped
+    // option labels and current index; earlier the read builder skipped
     // every wire type but Scalar/Bool (`_ => continue`), so an exposed enum
     // never reached the bar at all. This is the feature's end-to-end backend
     // guard.

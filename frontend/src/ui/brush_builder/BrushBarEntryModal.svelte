@@ -19,8 +19,8 @@
     let iconInput = $state('');
 
     // Slider bounds, in the same display space the control renders in.
-    // Only scalars have them — a toggle or a dropdown has no travel to
-    // re-range — so the whole section is hidden for other kinds.
+    // Only scalars have them (a toggle or a dropdown has no travel to
+    // re-range), so the whole section is hidden for other kinds.
     let minInput = $state(0);
     let maxInput = $state(1);
     let advancedOpen = $state(false);
@@ -32,7 +32,7 @@
         Number.isFinite(minInput) && Number.isFinite(maxInput) && minInput < maxInput,
     );
 
-    /** Re-seed the inputs whenever the modal opens for a fresh entry —
+    /** Re-seed the inputs whenever the modal opens for a fresh entry:
      *  the engine emits the current effective values (registration
      *  fallbacks applied) so the placeholders/values match what the
      *  brush user actually sees. */
@@ -111,7 +111,7 @@
                         <div class="advanced">
                             <p class="hint">
                                 Slider range for this brush. Narrow it onto the values that
-                                actually do something, or re-center it — a range of −1 to 1
+                                actually do something, or re-center it: a range of −1 to 1
                                 gives a control that works in both directions.
                             </p>
                             <div class="range-row">

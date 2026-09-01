@@ -8,7 +8,7 @@ import {
 } from '../packPalette';
 
 /** A node the action can dress. Vitest runs in the node environment with no
- *  DOM, so this is a plain fake with the two surfaces the action touches — the
+ *  DOM, so this is a plain fake with the two surfaces the action touches: the
  *  same technique `clickOutside.test.ts` uses for `window`. */
 function fakeNode() {
     const classes = new Set<string>();
@@ -33,7 +33,7 @@ describe('the pack palette action', () => {
     it('sets every role and the class that derives from them', () => {
         // The coupling is the whole point of this being one action: the derived
         // tokens are substituted on the element declaring the absolutes, so
-        // properties without the class — or the class without the properties —
+        // properties without the class (or the class without the properties)
         // silently renders every pack in the neutral palette.
         const { classes, props, node } = fakeNode();
         packPalette(node, PACK);

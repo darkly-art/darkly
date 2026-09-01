@@ -24,21 +24,21 @@ const PACK_ICONS: string[] = (() => {
 })();
 
 // Register the menu/palette actions. Tools are imported lazily inside the tool
-// test instead — registering tool-switch actions needs app methods that aren't
+// test instead: registering tool-switch actions needs app methods that aren't
 // stood up in the node test env, exactly as in menu_actions.test.ts.
 beforeAll(() => {
     actions.setDocs(rustActionDocs());
     registerActions();
 });
 
-/** An icon name resolves iff the offline bundle contains it — generateIcon
+/** An icon name resolves iff the offline bundle contains it: generateIcon
  *  returns null for an unregistered name. No network, no API. This is the
  *  guard that a referenced icon was actually discovered + bundled. */
 function resolves(name: string | undefined): boolean {
     return !!name && generateIcon({ icon: name }) !== null;
 }
 
-// All component source, loaded as raw text via Vite (no node:fs — the frontend
+// All component source, loaded as raw text via Vite (no node:fs; the frontend
 // tsconfig is browser-targeted). Keys are paths relative to this file.
 const SVELTE_SOURCES = import.meta.glob('../**/*.svelte', {
     query: '?raw',
@@ -47,7 +47,7 @@ const SVELTE_SOURCES = import.meta.glob('../**/*.svelte', {
 }) as Record<string, string>;
 
 /** Pull every literal icon name out of `name=`/`icon=` attributes in component
- *  markup — the direct `"fa6-solid:eye"` form and quoted literals inside a
+ *  markup: the direct `"fa6-solid:eye"` form and quoted literals inside a
  *  `{cond ? 'a' : 'b'}` expression. Dynamic, registry-driven values (e.g.
  *  `name={entry.icon}`) have no quoted literal and are covered by the registry
  *  tests above; we only collect icon-shaped (`prefix:name`) literals, so a bare
@@ -74,7 +74,7 @@ function markupIconNames(): { file: string; name: string }[] {
 
 describe('icon bundle completeness (offline)', () => {
     // Action glyphs live in `crates/darkly/src/actions/`, which the generator
-    // scans along with the rest of the crate — this is what proves that scan
+    // scans along with the rest of the crate; this is what proves that scan
     // reaches them.
     it('bundles every registered action icon', () => {
         const missing = actions
@@ -140,11 +140,11 @@ function viewBox(name: string): [number, number, number, number] {
 
 // Every icon renders into the same 1em box (Icon.svelte + `.tool svg`), so its
 // on-screen size is how much of its viewBox the artwork fills. gen-icons
-// shrink-wraps each viewBox to the inked bounds at build time so all icons —
-// regardless of source set's built-in margins — render at a uniform optical
+// shrink-wraps each viewBox to the inked bounds at build time so all icons
+// (regardless of source set's built-in margins) render at a uniform optical
 // A brush pack's icon comes from the curated list in
-// `crates/darkly/src/brush/pack_icons.rs`. That file exists so the generator —
-// which scrapes Iconify name literals out of `.ts`/`.svelte`/`.rs` sources —
+// `crates/darkly/src/brush/pack_icons.rs`. That file exists so the generator
+// (which scrapes Iconify name literals out of `.ts`/`.svelte`/`.rs` sources)
 // finds them: an icon named only in a pack's YAML would be absent from the
 // bundle and would draw nothing at all.
 describe('brush pack icons', () => {

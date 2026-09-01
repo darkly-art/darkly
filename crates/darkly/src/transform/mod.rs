@@ -1,4 +1,4 @@
-//! Generic 2D transform record — a dependency-free helper.
+//! Generic 2D transform record: a dependency-free helper.
 //!
 //! This module is **consumer-agnostic**: it knows nothing about voids, layers,
 //! floating content, the compositor, or the document. It defines the affine
@@ -36,8 +36,8 @@ use crate::coord::{CanvasPoint, CanvasRect};
 /// **CONTRACT:** this row-major `[a, b, tx, c, d, ty]` layout is mirrored by
 /// the TS gizmo (`frontend/src/tools/transform_affine.ts`) and by the WGSL
 /// that samples through the inverse. The three cannot share one
-/// implementation — the gizmo computes interactively in JS and ships the baked
-/// affine over the wire — so the layout is pinned by [`tests::affine_contract`]
+/// implementation: the gizmo computes interactively in JS and ships the baked
+/// affine over the wire, so the layout is pinned by [`tests::affine_contract`]
 /// here and a mirrored vitest on the TS side. Do not reorder the components.
 pub type Affine2D = [f32; 6];
 
@@ -98,14 +98,14 @@ pub fn affine_rotate(angle: f32) -> Affine2D {
 }
 
 // ---------------------------------------------------------------------------
-// Transform record — mode-tagged, serializable
+// Transform record: mode-tagged, serializable
 // ---------------------------------------------------------------------------
 
 /// A user-editable 2D transform. Mode-tagged so future interaction modes
 /// (perspective homography, warp mesh) slot in additively without consumers
 /// changing how they store or apply it.
 ///
-/// `Basic` stores the affine directly — lossless, and exactly what the gizmo's
+/// `Basic` stores the affine directly, lossless and exactly what the gizmo's
 /// handle math produces. The `mode_tag` value crossing the WASM boundary picks
 /// the frontend mode strategy.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -137,7 +137,7 @@ impl Transform {
     }
 
     /// Bake to a single affine matrix. For `Basic` this is the stored matrix;
-    /// for `Perspective` it drops the projective bottom row (lossy — used only
+    /// for `Perspective` it drops the projective bottom row (lossy, used only
     /// by the affine-only void path, which never stores `Perspective`).
     pub fn to_affine(&self) -> Affine2D {
         match self {
@@ -146,7 +146,7 @@ impl Transform {
         }
     }
 
-    /// Widen to a 3×3 projective matrix — what the GPU commit path consumes.
+    /// Widen to a 3×3 projective matrix: what the GPU commit path consumes.
     /// `Basic` widens via [`affine_to_mat3`]; `Perspective` returns its matrix.
     pub fn to_projective(&self) -> Mat3 {
         match self {
@@ -204,7 +204,7 @@ impl Transform {
 
     /// Decompose into translation / rotation / scale.
     ///
-    /// **ASSUMES NO SHEAR** (translate-rotate-scale only) — lossy for sheared
+    /// **ASSUMES NO SHEAR** (translate-rotate-scale only), lossy for sheared
     /// matrices. The gizmo never produces shear, so this is faithful for
     /// gizmo-authored transforms; it exists only to back a future numeric
     /// input panel, not to round-trip arbitrary affines.
@@ -308,7 +308,7 @@ pub fn affected_bounds(
     extraction_bounds.union(transformed)
 }
 
-/// TRS view of a [`Transform`] — see [`Transform::decompose`] (no-shear).
+/// TRS view of a [`Transform`]: see [`Transform::decompose`] (no-shear).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Decomposed {
     /// Translation `(tx, ty)`.
@@ -329,7 +329,7 @@ mod tests {
 
     /// Pins the row-major `[a, b, tx, c, d, ty]` contract. A mirrored vitest
     /// (`frontend/src/tools/__tests__/transform_affine.test.ts`) transforms the
-    /// SAME matrix + point and must produce the SAME result — that's the guard
+    /// SAME matrix + point and must produce the SAME result; that's the guard
     /// against the JS/Rust conventions silently diverging.
     #[test]
     fn affine_contract() {

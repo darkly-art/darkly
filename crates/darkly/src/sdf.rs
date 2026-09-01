@@ -3,9 +3,9 @@
 //! These pure-math functions compute signed distances from a point to geometric
 //! primitives. Negative = inside, positive = outside (except `sdf_segment` which
 //! returns unsigned distance). The same formulas appear in `shaders/overlay.wgsl`
-//! for GPU rendering — one is the source of truth for the other.
+//! for GPU rendering; one is the source of truth for the other.
 //!
-//! The `sdf_coverage` function converts an SDF value to alpha coverage (0.0–1.0)
+//! The `sdf_coverage` function converts an SDF value to alpha coverage (0.0-1.0)
 //! with three modes: hard edge, antialiased (1px smoothstep), or feathered.
 
 // ---------------------------------------------------------------------------
@@ -71,7 +71,7 @@ pub fn sdf_rounded_rect(
 ///
 /// Uses implicit surface approximation: `f(x,y) / |∇f(x,y)|` where
 /// `f = (x/rx)² + (y/ry)² - 1`. Exact on the boundary, accurate within
-/// ±1px near it — sufficient for antialiased rasterization.
+/// ±1px near it, sufficient for antialiased rasterization.
 pub fn sdf_ellipse(px: f32, py: f32, cx: f32, cy: f32, rx: f32, ry: f32) -> f32 {
     let dx = px - cx;
     let dy = py - cy;
@@ -82,7 +82,7 @@ pub fn sdf_ellipse(px: f32, py: f32, cx: f32, cy: f32, rx: f32, ry: f32) -> f32 
     let gy = 2.0 * dy / (ry * ry);
     let grad_len = (gx * gx + gy * gy).sqrt();
     if grad_len < 1e-12 {
-        // At the center of the ellipse — return negative min radius
+        // At the center of the ellipse: return negative min radius
         return -rx.min(ry);
     }
     f / grad_len
@@ -153,7 +153,7 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 /// Convert a signed distance value to alpha coverage (0.0 = outside, 1.0 = inside).
 ///
 /// Three modes:
-/// - `antialias=false, feather=0`: hard edge — binary 0/1 at boundary
+/// - `antialias=false, feather=0`: hard edge, binary 0/1 at boundary
 /// - `antialias=true, feather=0`: smooth 1px transition via smoothstep (matches overlay shader)
 /// - `feather > 0`: smooth transition over `feather` pixels (antialias flag ignored)
 pub fn sdf_coverage(sdf: f32, antialias: bool, feather: f32) -> f32 {

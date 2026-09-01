@@ -4,7 +4,7 @@
  * Ported from Graphite's `WorkspacePanelLayout`
  * (`editor/src/messages/portfolio/utility_types.rs`, functions
  * `insert_split_adjacent` / `prune` / `split_panel_group` / `find_group`).
- * We keep the same "axis implicit from depth" trick — a `split`'s orientation
+ * We keep the same "axis implicit from depth" trick: a `split`'s orientation
  * is `depth % 2 === 0 ? horizontal : vertical`, alternating with nesting depth,
  * so no HSplit/VSplit variant is ever stored.
  *
@@ -17,7 +17,7 @@
 /** A top-level dockable panel. Additive: register a new one in
  *  `registerPanels.ts` and extend this union.
  *
- *  `document` is the canvas/viewport itself — a first-class panel (as in
+ *  `document` is the canvas/viewport itself, a first-class panel (as in
  *  Graphite), so the whole window tiles and horizontal splitting (canvas |
  *  panels) is meaningful. It is a non-closable, non-poppable singleton kept
  *  present by {@link ensureDocument}. */
@@ -67,7 +67,7 @@ export function makeGroup(id: number, tabs: PanelType[], activeTabIndex = 0): Su
     return { kind: 'group', id, state: { tabs, activeTabIndex } };
 }
 
-/** The main window's default arrangement — Graphite's shape:
+/** The main window's default arrangement (Graphite's shape):
  *
  *  ```
  *  Row [ Document | Column[ Layers 0.6, Properties 0.4 ] ]
@@ -131,12 +131,12 @@ export function firstGroupId(node: Subdivision): number | null {
  * Panels that are fixed anchors. Today: the canvas.
  *
  * An anchor group renders no tab bar, cannot be grabbed, and must never receive
- * a docked tab — one landing there would be unreachable, because the body shows
+ * a docked tab: one landing there would be unreachable, because the body shows
  * only the active tab and there is no bar to switch back with.
  *
  * This lives here rather than being read off `PanelMeta.movable` because the
  * tree is loaded while constructing the workspace store, at module scope,
- * before `registerPanels` has run — asking the registry then throws. `tree.ts`
+ * before `registerPanels` has run; asking the registry then throws. `tree.ts`
  * has no imports and is always available. `panelTypes.test.ts` asserts this
  * agrees with every panel's declared `movable`, so the two cannot drift.
  */
@@ -151,7 +151,7 @@ export function isAnchorGroup(tabs: PanelType[]): boolean {
  * The first group a panel may legally be docked into, skipping anchor groups.
  *
  * `firstGroupId` alone is wrong for docking: in the default layout the root
- * row's first child is the canvas, and a tab inserted there is unreachable —
+ * row's first child is the canvas, and a tab inserted there is unreachable:
  * an anchor group renders no tab bar, and its body shows only the active tab,
  * so the canvas would simply be replaced.
  *
@@ -185,7 +185,7 @@ export function collectPanelTypes(node: Subdivision): PanelType[] {
     return node.children.flatMap((c) => collectPanelTypes(c.subdivision));
 }
 
-/** True when the tree contains no tabs at all — an unhittable empty workspace. */
+/** True when the tree contains no tabs at all, an unhittable empty workspace. */
 export function isEmptyLayout(node: Subdivision): boolean {
     return collectPanelTypes(node).length === 0;
 }
@@ -215,7 +215,7 @@ function containsGroup(node: Subdivision, id: number): boolean {
 
 /** Remove `tab` from the given group. Adjusts `activeTabIndex` so the same
  *  visible tab stays active where possible. Leaves the (possibly empty) group
- *  in place — callers `prune` afterwards. */
+ *  in place; callers `prune` afterwards. */
 export function removeTab(root: Subdivision, groupId: number, tab: PanelType): boolean {
     const group = findGroup(root, groupId);
     if (!group) return false;
@@ -227,7 +227,7 @@ export function removeTab(root: Subdivision, groupId: number, tab: PanelType): b
     return true;
 }
 
-/** Insert `tab` into the group (deduped — panels are singletons) and make it
+/** Insert `tab` into the group (deduped: panels are singletons) and make it
  *  active. `atIndex` clamps into range; omit to append. */
 export function insertTab(root: Subdivision, groupId: number, tab: PanelType, atIndex?: number): boolean {
     const group = findGroup(root, groupId);
@@ -356,8 +356,8 @@ export function insertSplitAdjacent(
  *  **The flatten is axis-preserving by construction.** When a child slot holds
  *  a `split` with exactly one child that is *itself* a `split`, the outer
  *  wrapper is redundant (a one-child split just renders its child full-size).
- *  We splice the *grandchildren* directly into this level — a shift of **two**
- *  depth levels — so their implicit axis (parity of depth) is unchanged and the
+ *  We splice the *grandchildren* directly into this level (a shift of **two**
+ *  depth levels), so their implicit axis (parity of depth) is unchanged and the
  *  panels do not visually re-orient. Promoting the inner split instead (a shift
  *  of one level) would rotate the subtree, which is exactly what we avoid.
  *  For the same reason we do NOT collapse a single *group*-in-`split`: it is not
@@ -419,7 +419,7 @@ export function renormalize(children: SplitChild[]): void {
 // ---------------------------------------------------------------------------
 
 /** Merge orphaned panels (from pop-out windows that can't be restored, or a
- *  closed pop-out) into the main root's first group as tabs. Lossless — no
+ *  closed pop-out) into the main root's first group as tabs. Lossless: no
  *  arrangement is preserved, but every panel returns. Deduped: a panel already
  *  present in main is skipped. */
 export function foldPanelsIntoMain(mainRoot: Subdivision, panels: PanelType[]): void {
@@ -489,8 +489,8 @@ function isSubdivision(v: unknown): v is Subdivision {
 }
 
 /**
- * Parse persisted layout JSON into a single, valid main-window root — the whole
- * validation gauntlet in one place.
+ * Parse persisted layout JSON into a single, valid main-window root (the whole
+ * validation gauntlet in one place).
  *
  * Pop-out windows can't be reopened without a user gesture, so any persisted
  * pop-out trees are **folded back into the main tree** here rather than

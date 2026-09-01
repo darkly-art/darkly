@@ -23,8 +23,8 @@
 
     // The footer buttons route through the action registry so their tooltips
     // can surface the bound hotkey (resolved via `tooltipForAction`) and so
-    // the behaviour — selection-aware "wrap or empty group", picker modals for
-    // the typed kinds — has one home in actions/index.ts.
+    // the behaviour (selection-aware "wrap or empty group", picker modals for
+    // the typed kinds) has one home in actions/index.ts.
     function pick(actionId: string) {
         menuOpen = false;
         actions.dispatch(actionId);
@@ -36,7 +36,7 @@
             && layer.modifiers.some((m: any) => m.kind === 'mask');
     }
 
-    // Effective editability of the active layer — mirrors the engine's
+    // Effective editability of the active layer: mirrors the engine's
     // `is_node_editable` (locked node OR any ancestor locked → not editable).
     // Used to grey out destructive footer actions so users don't get the
     // "drag the slider, nothing happens" feedback loop.

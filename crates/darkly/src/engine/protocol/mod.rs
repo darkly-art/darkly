@@ -1,9 +1,9 @@
-//! Async request/response protocol — the engine-side dispatch surface.
+//! Async request/response protocol: the engine-side dispatch surface.
 //!
 //! This is the platform-agnostic core half of every transport (in-process /
 //! Web Worker / Tauri): each backend deserializes a request to `(kind, payload,
 //! bytes)`, calls [`RequestRegistry::dispatch`], and serializes the [`Response`]
-//! back. There is **no central `match` on kind** — the registry is a registry,
+//! back. There is **no central `match` on kind**; the registry is a registry,
 //! not an enum, exactly like [`crate::gpu::veil`]. To add a request, drop one
 //! file in `handlers/` exporting `pub fn register() -> RequestRegistration`;
 //! `build.rs` discovers it (see [`build.rs`](../../../build.rs) `generate_registry`).
@@ -28,7 +28,7 @@ mod transport;
 pub use transport::{DrainOutcome, QueuedRequest, RequestOutcome, Transport};
 
 /// ParamDef-driven coercion of a JSON params object into `Vec<ParamValue>`.
-/// Platform-agnostic — the protocol's replacement for the old JS-`Reflect`
+/// Platform-agnostic: the protocol's replacement for the old JS-`Reflect`
 /// `js_to_param_values` in the wasm bridge. Under the protocol, curve params
 /// arrive as real JSON arrays (not JSON-encoded strings), which
 /// [`param_values_from_json`](crate::gpu::params::param_values_from_json)
@@ -38,7 +38,7 @@ pub use crate::gpu::params::param_values_from_json as params_from_json;
 /// A request's raw, un-coerced parameter object. It crosses `Deserialize`
 /// untouched so a param-bearing handler can pair it with the sibling field that
 /// names its schema (a void/filter type id) and run the `ParamDef`-driven
-/// coercion ([`DarklyEngine::coerce_void_params`]) — the one coercion a generic
+/// coercion ([`DarklyEngine::coerce_void_params`]), the one coercion a generic
 /// macro can't perform, because it can't know which sibling field selects the
 /// schema. `JsonValue` in the generated TS client.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -47,7 +47,7 @@ pub struct RawParams(pub Value);
 
 // On the wire `RawParams` is an arbitrary JSON object, so to the typed TS client
 // it is the `JsonValue` alias the generator emits in its preamble. Like
-// `LayerId`, it has no fields to derive `TS` from — it's a leaf reference, not a
+// `LayerId`, it has no fields to derive `TS` from; it's a leaf reference, not a
 // declared type (`output_path` stays `None`, so the collector inlines it).
 #[cfg(feature = "ts-export")]
 impl ts_rs::TS for RawParams {
@@ -63,7 +63,7 @@ impl ts_rs::TS for RawParams {
 
 /// A handler's successful result: a JSON value plus an optional binary
 /// side-channel. `bytes` is `None` for non-binary requests and `Some` (possibly
-/// empty) for binary ones — the `Some`/`None` distinction matters: a binary
+/// empty) for binary ones; the `Some`/`None` distinction matters: a binary
 /// request whose payload isn't ready yet (e.g. a preview readback in flight)
 /// returns `Some(empty)`, which must still surface a `bytes` field to the caller
 /// rather than collapsing to "no value". Repacked out-of-band by the transport
@@ -143,7 +143,7 @@ pub fn decode<T: serde::de::DeserializeOwned>(payload: Value) -> Result<T, Proto
     serde_json::from_value(payload).map_err(bad_payload)
 }
 
-/// Decode a `{ id: u64 }` payload to a [`LayerId`] — the single most common
+/// Decode a `{ id: u64 }` payload to a [`LayerId`]: the single most common
 /// handler shape.
 pub fn layer_id(payload: Value) -> Result<crate::layer::LayerId, ProtocolError> {
     #[derive(serde::Deserialize)]
@@ -155,8 +155,8 @@ pub fn layer_id(payload: Value) -> Result<crate::layer::LayerId, ProtocolError> 
 }
 
 /// Encode a node-graph mutation result. The engine returns the serialized graph
-/// JSON on success; handlers resolve with `{ graph }` (parsed) or `{ error }` —
-/// the brush-builder consumes both without throwing (matches the old
+/// JSON on success; handlers resolve with `{ graph }` (parsed) or `{ error }`,
+/// and the brush-builder consumes both without throwing (matches the old
 /// `graph_result` JsValue shape).
 pub fn graph_result(r: Result<String, String>) -> Result<Response, ProtocolError> {
     match r {
@@ -185,7 +185,7 @@ pub fn graph_node_result(r: Result<(String, String), String>) -> Result<Response
     }
 }
 
-/// Encode a `Result<(), String>` as either `null` (success) or `{ error }` —
+/// Encode a `Result<(), String>` as either `null` (success) or `{ error }`,
 /// the old `JsValue::NULL | from_str(e)` convention for brush compile/validate.
 pub fn ok_or_error(r: Result<(), String>) -> Response {
     match r {
@@ -194,7 +194,7 @@ pub fn ok_or_error(r: Result<(), String>) -> Response {
     }
 }
 
-/// Encode raw bytes onto the binary side-channel (JSON value `null`) — the
+/// Encode raw bytes onto the binary side-channel (JSON value `null`): the
 /// `#[handler(returns = bytes)]` target for engine methods that return
 /// `Vec<u8>` or `[u8; N]` (thumbnails, previews, picked colors).
 pub fn bytes_result<T: Into<Vec<u8>>>(bytes: T) -> Result<Response, ProtocolError> {
@@ -202,7 +202,7 @@ pub fn bytes_result<T: Into<Vec<u8>>>(bytes: T) -> Result<Response, ProtocolErro
 }
 
 // ---------------------------------------------------------------------------
-// Response conversion — natural engine return types → `Response`
+// Response conversion: natural engine return types → `Response`
 // ---------------------------------------------------------------------------
 //
 // The `#[handlers]` macro converts a method's return value with
@@ -215,7 +215,7 @@ pub fn bytes_result<T: Into<Vec<u8>>>(bytes: T) -> Result<Response, ProtocolErro
 // i.e. an empty response, with no special case.
 //
 // This keeps the engine methods returning their natural types (`()`, `LayerId`,
-// `Result<LayerId, String>`, …) — clean for direct Rust callers — with no
+// `Result<LayerId, String>`, …), clean for direct Rust callers, with no
 // wire-encoding newtypes in their signatures.
 
 /// Serialize path: any `T: Serialize`, including `()` → `null`. Reached via the
@@ -282,15 +282,15 @@ impl ResultResponseTag {
 /// escape-hatch `register()` sets it explicitly, as does `#[handler(send|post)]`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RequestMode {
-    /// Awaited — the call site reads the typed response (or its rejection).
+    /// Awaited: the call site reads the typed response (or its rejection).
     Send,
-    /// Fire-and-forget — pointer-frequency mutations; rejections are logged.
+    /// Fire-and-forget: pointer-frequency mutations; rejections are logged.
     Post,
 }
 
 /// Recursively collects the TypeScript declarations of a wire type and its
 /// transitive dependencies. Only types that *have* a declaration (ts-rs derived
-/// structs/enums — `output_path().is_some()`) emit a `decl`; primitives and
+/// structs/enums, per `output_path().is_some()`) emit a `decl`; primitives and
 /// the opaque/manual impls (`LayerId`, `JsonValue`) are inlined as references.
 /// Dedup is by `TypeId`, so a type shared across many requests is declared once.
 #[cfg(feature = "ts-export")]
@@ -363,7 +363,7 @@ pub struct TsMeta {
     pub req: Option<TsTyRef>,
     /// The response value type (`Void` for a `()`-returning `Post`).
     pub resp: TsTyRef,
-    /// The response also carries the binary side-channel — the generated `Resp`
+    /// The response also carries the binary side-channel: the generated `Resp`
     /// is intersected with `{ bytes: Uint8Array }`.
     pub bytes_out: bool,
 }
@@ -376,7 +376,7 @@ pub struct RequestRegistration {
     pub kind: &'static str,
     pub handle: fn(&mut DarklyEngine, Value, &[u8]) -> Result<Response, ProtocolError>,
     pub mode: RequestMode,
-    /// The method reads the binary side-channel — the generated method gains a
+    /// The method reads the binary side-channel: the generated method gains a
     /// `bytes: Uint8Array` argument.
     pub has_bytes_in: bool,
     #[cfg(feature = "ts-export")]
@@ -438,7 +438,7 @@ impl RequestRegistration {
         self
     }
 
-    /// Declare the response as a literal TS expression (codegen only) — the
+    /// Declare the response as a literal TS expression (codegen only): the
     /// composite shapes the engine's natural return type can't name.
     #[cfg(feature = "ts-export")]
     pub fn resp_literal(mut self, ts: &'static str) -> Self {
@@ -486,7 +486,7 @@ impl Default for RequestRegistry {
     }
 }
 
-// `macro_registrations()` — every `#[handler]`-tagged engine method's
+// `macro_registrations()`: every `#[handler]`-tagged engine method's
 // `RequestRegistration`, aggregated by `build.rs` (it scans `src/engine` for
 // the attribute and emits one `DarklyEngine::__darkly_handler_<name>()` call
 // per method). The `linkme` alternative doesn't compile on wasm32, so this
@@ -511,7 +511,7 @@ impl RequestRegistry {
         RequestRegistry { handlers: map }
     }
 
-    /// Every registered kind, sorted — feeds the generated TS `RequestKind`
+    /// Every registered kind, sorted: feeds the generated TS `RequestKind`
     /// union and the "every kind is reachable" test.
     pub fn all_kinds(&self) -> Vec<&'static str> {
         let mut kinds: Vec<&'static str> = self.handlers.keys().copied().collect();
@@ -519,7 +519,7 @@ impl RequestRegistry {
         kinds
     }
 
-    /// Every registration, sorted by kind — the codegen generator walks these
+    /// Every registration, sorted by kind; the codegen generator walks these
     /// for their [`TsMeta`] to emit the typed `EngineApi`.
     #[cfg(feature = "ts-export")]
     pub fn sorted_registrations(&self) -> Vec<&RequestRegistration> {

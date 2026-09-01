@@ -3,14 +3,14 @@
      * The brush explorer: a near-fullscreen modal for finding a brush.
      *
      * Two scroll-synced panes. On the left a rolodex of packs, which is both a
-     * minimap of where you are and a way to get somewhere — tap a card to jump,
+     * minimap of where you are and a way to get somewhere: tap a card to jump,
      * or fling it once there are more packs than fit. On the right every brush
      * in the library, grouped by pack, scrolling continuously from top to
      * bottom, with a search field. The point is that finding a brush never
      * requires first finding its pack: type, or scroll, or both.
      *
      * It takes the whole screen because picking a brush closes it, so the space
-     * costs nothing. It is *not* dismissed by an outside pointerdown — that is
+     * costs nothing. It is *not* dismissed by an outside pointerdown: that is
      * what made the old dropdown impossible to use with a pen, since resting a
      * hand closed it.
      *
@@ -18,8 +18,8 @@
      * platform on either side. What keeps them from oscillating is that only
      * one of them is ever *driven*: `driver` names the pane the user has their
      * hand on, taken from input events, and each frame the other pane is moved
-     * to match it. Nothing is derived from a `scroll` event — they only mark
-     * the frame loop as live — because a programmatic `scrollTop` write lands
+     * to match it. Nothing is derived from a `scroll` event (they only mark
+     * the frame loop as live), because a programmatic `scrollTop` write lands
      * synchronously while its `scroll` event does not, and anything computed
      * from the event describes a position the pane has already left.
      */
@@ -55,7 +55,7 @@
     let { open = $bindable(false) }: Props = $props();
 
     /** How many recents the explorer shows. `BRUSH_CAP` in `recents.svelte.ts`
-     *  stays 12 — it is sized for the radial widget, and this is a view. */
+     *  stays 12; it is sized for the radial widget, and this is a view. */
     const RECENTS_SHOWN = 5;
     const RECENTS_ICON = 'fa6-solid:clock-rotate-left';
     /** Card pitch used until the wheel has two cards to measure between. */
@@ -66,7 +66,7 @@
     let listEl: HTMLElement | undefined = $state();
     let wheelEl: HTMLElement | undefined = $state();
 
-    /** The pane the user is driving. Set from input events — a `pointerdown` or
+    /** The pane the user is driving. Set from input events: a `pointerdown` or
      *  a mouse wheel is unambiguously a hand, where a `scroll` event might be
      *  the echo of our own write to the other pane. */
     let driver: 'list' | 'wheel' = 'list';
@@ -103,7 +103,7 @@
     let focused = $state<number | null>(null);
     let curves = $state<CardCurve[]>([]);
     /** One band per pack currently on screen, in explorer-local coordinates.
-     *  Computed from the frame's own sample — see `packBands`. */
+     *  Computed from the frame's own sample (see `packBands`). */
     let bands = $state<PackBand[]>([]);
 
     /** Where the panes and the cards sit. Measured beside `geometry`, on the
@@ -128,7 +128,7 @@
      *
      *  Load-bearing: `measure` runs inside an effect, so if it *read* `geometry`
      *  to decide whether to write it, the write would invalidate the read and
-     *  the effect would re-run forever — Svelte kills the component with
+     *  the effect would re-run forever; Svelte kills the component with
      *  `effect_update_depth_exceeded`. Comparing against a non-reactive copy
      *  breaks that cycle, and skipping unchanged writes is what lets the
      *  measure/render loop settle.
@@ -151,7 +151,7 @@
     }
 
     /** Read both scrollports, the rendered sections, and where everything sits.
-     *  Reads the DOM only — never `geometry` — for the reason above.
+     *  Reads the DOM only (never `geometry`) for the reason above.
      *
      *  This is the *only* place the DOM is measured. The frame loop reads two
      *  scroll offsets and writes one, and computes everything else from what
@@ -173,7 +173,7 @@
         // column was two pixels by the sixth pack.
         //
         // A card's own rect is usable now only because the rolodex transform
-        // sits on `.body` one level in — a transformed element reports the box
+        // sits on `.body` one level in: a transformed element reports the box
         // it is drawn as, not the box it was laid out as.
         const base = explorerEl.getBoundingClientRect();
         const wheelPort = wheelEl.getBoundingClientRect();
@@ -216,7 +216,7 @@
             listViewport: listPort.height,
             // `scrollHeight` has no fractional accessor, so these two keep a
             // sub-pixel residue. They bound a clamp rather than placing an edge,
-            // the residue does not compound, and it never reaches a join —
+            // the residue does not compound, and it never reaches a join;
             // deriving them from the section extents instead would be worse for
             // the reasons `WheelGeometry` gives.
             listScrollMax: listEl.scrollHeight - listPort.height,
@@ -259,8 +259,8 @@
         ro.observe(listEl);
         ro.observe(wheelEl);
         for (const el of sectionElements()) ro.observe(el);
-        // And a card. Nothing else here resizes when only the cards do — a
-        // webfont arriving late is the realistic case — and a measured line
+        // And a card. Nothing else here resizes when only the cards do (a
+        // webfont arriving late is the realistic case), and a measured line
         // notices that where a single pitch survived it.
         const card = wheelEl.querySelector('.pack-card');
         if (card) ro.observe(card);
@@ -280,7 +280,7 @@
      * that depends on where they now are.
      *
      * The `scrollTop` write and the ribbon's `getBoundingClientRect` reads are
-     * in the same callback on purpose — the read flushes the write and observes
+     * in the same callback on purpose: the read flushes the write and observes
      * it, so the band is drawn to where the card *is* this frame rather than
      * where it was last one.
      */
@@ -308,7 +308,7 @@
         // so while a search narrows the group list its sections outlive the
         // elements by a frame, and an index past the end would leave `focused`,
         // the card it highlights and the ribbon's colour each resolving
-        // differently — the exact disagreement this loop exists to prevent.
+        // differently: the exact disagreement this loop exists to prevent.
         focused = frame.focused === null ? null : Math.min(frame.focused, groups.length - 1);
         curves = frame.curves;
         bands = packBands(frame, geometry, layout, groups);
@@ -334,7 +334,7 @@
     }
 
     /** A tap on a card takes you to that pack. The list is the driver for the
-     *  length of the animation — a tap is a command to move the list, and the
+     *  length of the animation: a tap is a command to move the list, and the
      *  wheel follows it frame by frame, so the card stays under the pointer and
      *  the projection stretches through the jump instead of teleporting at the
      *  end of it. */
@@ -460,7 +460,7 @@
     .explorer {
         display: grid;
         grid-template-columns: 232px minmax(0, 1fr);
-        /* The gutter is not empty space — it is where the projection is drawn,
+        /* The gutter is not empty space: it is where the projection is drawn,
          * so it is sized to give the ribbon a turn to make rather than to
          * separate the panes. */
         column-gap: 26px;
@@ -513,7 +513,7 @@
         gap: 12px;
     }
     /* A pack is named once, on its card in the wheel. Here it is only a
-     * colour, entering at the left edge — where that card is — and washing
+     * colour, entering at the left edge (where that card is) and washing
      * right across the brushes it holds. The two panes are one object seen
      * twice, so the colour has to arrive from the side the card is on rather
      * than sit in a heading that repeats what the card already says. */
@@ -531,7 +531,7 @@
          * painted; a `clip-path` is rasterised against its own geometry and
          * antialiased. The band arrives here as a path, so off 100% zoom the
          * section's snapped edge and the band's unsnapped one land on the same
-         * device column with different coverage — a sliver painted twice, or
+         * device column with different coverage: a sliver painted twice, or
          * one left bare, flipping between the two as the zoom moves the join
          * across the grid. That is the seam, and it is a disagreement about
          * *rasterisation*, not about position: the coordinate the two share is
@@ -539,7 +539,7 @@
          *
          * Clipping the section puts its edge in the same regime as the band's.
          * Two antialiased edges on one coordinate carry complementary coverage,
-         * which for surfaces at alpha `a` composites to `a − a²·t(1−t)` — under
+         * which for surfaces at alpha `a` composites to `a − a²·t(1−t)`: under
          * a percent of the tint, against the half-pixel of doubling or bare
          * background that the mismatch produced.
          *
@@ -559,7 +559,7 @@
      * `fixed` is what makes the light belong to the explorer instead of to the
      * section. The positioning area becomes the viewport, so the image does not
      * move when the list scrolls and the section slides across a stationary
-     * field — the effect stated once, by the surface itself, rather than
+     * field: the effect stated once, by the surface itself, rather than
      * maintained.
      *
      * The alternative is to counter-offset `background-position` by the scroll
@@ -573,14 +573,14 @@
      * `--field-x` / `--field-y` are the explorer's own top-left in viewport
      * coordinates, measured beside the rest of the layout, so nothing about the
      * field is on the frame loop at all. They are constant between resizes
-     * because a resize is the only thing that can move the box — `Modal`'s
+     * because a resize is the only thing that can move the box: `Modal`'s
      * `draggable` defaults off and the explorer does not set it. A draggable
      * explorer would have to remeasure on the drag.
      *
      * No border on the leading edge, so no rim there: that edge is where the
      * projection lands, and it is interior to the pack.
      *
-     * The body ramp cannot be held still the same way — there is no
+     * The body ramp cannot be held still the same way: there is no
      * `mask-attachment`, so a mask is always anchored to the box it masks. It
      * does not need to be: the ramp runs left to right and this pane scrolls up
      * and down, so only its x has to land, and `--section-left` puts the ramp's
@@ -593,7 +593,7 @@
         background-position: var(--field-x) var(--field-y);
         border-left-width: 0;
     }
-    /* Where the projection lands. It paints nothing itself — the section's own
+    /* Where the projection lands. It paints nothing itself: the section's own
      * fill is already at full strength here, and a second painting of it would
      * show as a seam down the one edge the whole design is trying to make
      * continuous. What it contributes is the width of that strip, and somewhere
@@ -612,7 +612,7 @@
         opacity: 0.75;
         /* Chroma, as on the card the section answers to. A pack's surface is a
          * tint the theme shows through, so what the icon actually sits on is
-         * the theme — and the vivid pair is the part of a palette that reads
+         * the theme, and the vivid pair is the part of a palette that reads
          * against a light background and a dark one alike. */
         color: var(--pack-chroma);
     }
@@ -625,7 +625,7 @@
         padding: 10px;
     }
     /* Space at both ends, so the first and last packs can reach the focus line
-     * like any other. The heights come from `FOCUS_LINE` itself — as
+     * like any other. The heights come from `FOCUS_LINE` itself, as
      * percentages, which the scrollport resolves against its own height with no
      * measurement involved, and which the sections are then measured relative
      * to, so the mapping picks the offset up for free. */

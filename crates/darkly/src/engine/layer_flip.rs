@@ -1,8 +1,8 @@
-//! Layer / selection flip (horizontal / vertical) — exact mirror.
+//! Layer / selection flip (horizontal / vertical): exact mirror.
 //!
 //! Mirrors the active node's pixels in place about a region centre, via the
 //! same exact ortho primitive as canvas flip/rotate (`gpu/ortho_transform`).
-//! With an active selection only the selected region flips — about the
+//! With an active selection only the selected region flips, about the
 //! selection's bounding-box centre, masked to the selection *shape* (Krita's
 //! `KisMirrorProcessingVisitor`); with none, the whole layer flips about its
 //! own extent centre. Horizontal/vertical only (no layer rotate), so the node
@@ -39,7 +39,7 @@ impl DarklyEngine {
 
         // Region to mirror + (for a selection) the mask cropped to it.
         let (region, mask_tex) = if self.has_selection() {
-            // Selection bbox (window-local) — recomputed from the cpu cache if
+            // Selection bbox (window-local), recomputed from the cpu cache if
             // the readback hasn't populated bounds yet, else deferred.
             let bounds = match self.selection_pixel_bounds() {
                 Some(b) => b,

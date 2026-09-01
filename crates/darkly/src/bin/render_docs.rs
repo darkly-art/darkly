@@ -1,4 +1,4 @@
-//! Writes an animated preview — a PNG frame sequence — for every previewable
+//! Writes an animated preview (a PNG frame sequence) for every previewable
 //! registry entry, plus a small JSON index of what it wrote.
 //!
 //! ```text
@@ -6,7 +6,7 @@
 //! ```
 //!
 //! `--stills --catalog <id>` writes one JPEG poster per entry instead, into this
-//! repository's own preview directory — the images the generated markdown tables
+//! repository's own preview directory: the images the generated markdown tables
 //! embed. That mode is run by hand when a catalog gains or loses an entry; the
 //! sequence mode above is what the release workflow runs.
 //!
@@ -15,7 +15,7 @@
 //! behind a GPU device and the `testing` feature it does not need.
 //!
 //! Everything except argument handling and reporting lives in
-//! [`darkly::docs_render`], which the integration tests call directly —
+//! [`darkly::docs_render`], which the integration tests call directly;
 //! coverage tooling runs test targets and never executes a `[[bin]]`.
 
 use std::process::ExitCode;
@@ -69,7 +69,7 @@ fn main() -> ExitCode {
                     entries.len()
                 );
             }
-            println!("{} — version {}", out.display(), manifest.version);
+            println!("{} - version {}", out.display(), manifest.version);
             ExitCode::SUCCESS
         }
         Err(e) => {

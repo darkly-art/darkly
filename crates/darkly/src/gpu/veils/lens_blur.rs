@@ -10,7 +10,7 @@ const PARAMS: &[ParamDef] = &[
     // ≈ 0.01 of sqrt(area) (≈ 10 px on 1024²).
     ParamDef::float("radius", 0.0, 1.0, 1.0 / 3.0)
         .with_label("Radius")
-        .with_description("Size of the defocus circle — how far out of focus the image sits."),
+        .with_description("Size of the defocus circle: how far out of focus the image sits."),
     ParamDef::float("threshold", 0.01, 1.0, 0.1)
         .with_label("Threshold")
         .with_description("How bright a pixel must be before it blooms into a bokeh highlight."),

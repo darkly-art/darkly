@@ -3,7 +3,7 @@
 //! Every engine-side push of an [`UndoAction`] funnels through here so that
 //! actions evicted from the stack (by `max_steps` overflow or by a fresh
 //! push clearing the redo history) have their [`UndoAction::on_evict`] hook
-//! called with the compositor — releasing any tombstoned GPU textures they
+//! called with the compositor, releasing any tombstoned GPU textures they
 //! own.
 
 use super::DarklyEngine;
@@ -17,7 +17,7 @@ impl DarklyEngine {
     ///
     /// Flushes any pending diff-based undo commit from a just-finished brush
     /// stroke first, so the on-stack action ordering matches the user's
-    /// temporal order — a "paint, then duplicate, then undo" sequence first
+    /// temporal order: a "paint, then duplicate, then undo" sequence first
     /// undoes the duplicate.
     pub(crate) fn push_undo(&mut self, action: Box<dyn UndoAction>) {
         self.flush_pending_undo_commit();
@@ -40,11 +40,11 @@ impl DarklyEngine {
     /// Run `op` for each id, collecting any returned undo actions into one
     /// [`CompoundAction`] and pushing the bundle as a single undo step. The
     /// closure does the per-id mutation directly (so per-id state can be
-    /// snapshotted between iterations — e.g. `position_in_parent` after a
+    /// snapshotted between iterations, e.g. `position_in_parent` after a
     /// prior id was detached) and returns `Some(action)` if the op produced
     /// any reversible work, `None` if it skipped that id.
     ///
-    /// No undo entry is pushed when every id was skipped — keeps the stack
+    /// No undo entry is pushed when every id was skipped, keeping the stack
     /// clean when, say, every requested removal hit a locked layer.
     pub(crate) fn batched_undo<F>(&mut self, ids: &[LayerId], mut op: F)
     where

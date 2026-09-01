@@ -48,11 +48,11 @@ fn solid_canvas(rgba: [u8; 4]) -> Vec<u8> {
 /// Flush boundaries are semantically load-bearing for watercolor: the
 /// pickup atlas is rebuilt once per flush, so a mark's buildup depends on
 /// how the dabs are grouped. Tests must therefore be able to say "these
-/// dabs in one flush" versus "one dab per flush" — hence groups rather
+/// dabs in one flush" versus "one dab per flush", hence groups rather
 /// than a flat dab list.
 struct FlushGroup<'a> {
     dabs: &'a [(f32, f32)],
-    /// Re-enter `begin_stroke` before this group — the stabilizer-rewind
+    /// Re-enter `begin_stroke` before this group: the stabilizer-rewind
     /// path. `begin_stroke` always runs before the first group; this only
     /// affects later ones.
     restart: bool,
@@ -72,7 +72,7 @@ fn restart_group(dabs: &[(f32, f32)]) -> FlushGroup<'_> {
     }
 }
 
-/// `n` groups of one dab each at the same spot — the shape that exposes
+/// `n` groups of one dab each at the same spot: the shape that exposes
 /// cross-flush pigment buildup.
 fn repeat_at(pos: (f32, f32), n: usize) -> Vec<[(f32, f32); 1]> {
     vec![[pos]; n]
@@ -222,7 +222,7 @@ fn render_flush_groups(
         if gi + 1 == groups.len() {
             runner.commit(&mut ctx);
         }
-        // Per-group submit — see the doc comment; without this the next
+        // Per-group submit: see the doc comment; without this the next
         // group's queue writes would land before this group's passes run.
         queue.submit([ctx.encoder.finish()]);
     }
@@ -245,7 +245,7 @@ fn pixel(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
 #[test]
 fn smooth_watercolor_deposits_blend_of_brush_and_pickup() {
     // Brush color is red; canvas is light blue. Watercolor's deposit
-    // (default 0.5) gives a load that mixes both — the centre pixel
+    // (default 0.5) gives a load that mixes both: the centre pixel
     // should have nonzero red AND retain some blue from the pickup.
     let rgba = render_dabs(
         "Smooth Watercolor",
@@ -256,7 +256,7 @@ fn smooth_watercolor_deposits_blend_of_brush_and_pickup() {
     let center = pixel(&rgba, 64, 64);
     // Some red got deposited (would be 100 with no brush touch). One dab
     // lays `deposit` of the way to the pigment, so the margin tracks that
-    // port's default — at 25% the centre reads ~127 against the canvas's
+    // port's default: at 25% the centre reads ~127 against the canvas's
     // 100. Widen the margin here if the default drops further; a failure
     // means "no red arrived", not "the number moved".
     assert!(
@@ -272,7 +272,7 @@ fn smooth_watercolor_deposits_blend_of_brush_and_pickup() {
          mix, got {center:?}"
     );
 
-    // Far corner — outside the dab footprint, must be unchanged.
+    // Far corner, outside the dab footprint, must be unchanged.
     let corner = pixel(&rgba, 10, 10);
     assert_eq!(
         corner,
@@ -284,7 +284,7 @@ fn smooth_watercolor_deposits_blend_of_brush_and_pickup() {
 #[test]
 fn rough_watercolor_renders_multiple_dabs_in_one_flush() {
     // Two perlin dabs at different positions in one flush. Both must
-    // land — verifies per-instance atlas-cell indexing through the
+    // land, verifying per-instance atlas-cell indexing through the
     // compiled composite shader.
     let rgba = render_dabs(
         "Rough Watercolor",
@@ -333,20 +333,20 @@ fn rough_watercolor_renders_multiple_dabs_in_one_flush() {
 
 /// Regression for the stabilizer rewind artifact: when the stroke engine
 /// re-enters `begin_stroke` mid-stroke (the path taken on every divergence
-/// boundary — see `engine/painting.rs::brush_stroke_to` rewind branch), the
+/// boundary; see `engine/painting.rs::brush_stroke_to` rewind branch), the
 /// watercolor scratch must be cleared. The checkpoint ring restores pixels
 /// inside its bbox; without a `begin_stroke` clear, pigment from the now-
 /// defunct dabs persists outside the bbox and bleeds onto the layer at
-/// commit time — visible as artifacts along the tops of curves.
+/// commit time, visible as artifacts along the tops of curves.
 ///
 /// This test reproduces that path without spinning up the full engine:
 /// render a dab at (40, 64), re-enter `begin_stroke`, render a different
 /// dab at (88, 64), commit. The (40, 64) position must remain unchanged
-/// from pre_stroke — its pigment must have been wiped by the second
+/// from pre_stroke; its pigment must have been wiped by the second
 /// `begin_stroke`.
 #[test]
 fn begin_stroke_clears_scratch_so_rewind_drops_defunct_pigment() {
-    // Small dab — at `size = 0.05` the dab radius is ~13 px (size *
+    // Small dab: at `size = 0.05` the dab radius is ~13 px (size *
     // DAB_REFERENCE_SIZE / 2 ≈ 12.8), so the two dab positions (40, 64)
     // and (88, 64) are well isolated and don't overlap.
     //
@@ -369,15 +369,15 @@ fn begin_stroke_clears_scratch_so_rewind_drops_defunct_pigment() {
     for (i, (got, want)) in defunct.iter().zip(expected.iter()).enumerate() {
         assert!(
             got.abs_diff(*want) <= 1,
-            "defunct dab pixel (40, 64) channel {i}: expected {want}, got {got} (full pixel {defunct:?}) — \
+            "defunct dab pixel (40, 64) channel {i}: expected {want}, got {got} (full pixel {defunct:?}); \
              the second begin_stroke must clear stale scratch pigment so the rewind path drops the defunct stroke",
         );
     }
 
-    // Sanity: the surviving dab at (88, 64) must still deposit red — the
+    // Sanity: the surviving dab at (88, 64) must still deposit red; the
     // clear must not have wiped the dab we just rendered.
     // Margin tracks the `deposit` default the same way the buildup test's
-    // does — the subject here is the clear, not the magnitude.
+    // does; the subject here is the clear, not the magnitude.
     let surviving = pixel(&rgba, 88, 64);
     assert!(
         surviving[0] > 115,
@@ -390,14 +390,14 @@ fn begin_stroke_clears_scratch_so_rewind_drops_defunct_pigment() {
 ///
 /// The watercolor pickup atlas samples the canvas under each dab to decide
 /// what colour to deposit. That sample used to come from the pre-stroke
-/// snapshot — a texture frozen when the stroke began — so the deposited
+/// snapshot (a texture frozen when the stroke began), so the deposited
 /// load was identical on the first pass and the twentieth. The mark
 /// converged after two or three passes and then stopped changing, well
 /// short of the brush colour, no matter how long the brush dwelled.
 ///
 /// Painting one dab per flush at a fixed spot, three flushes versus eight:
 /// with the pickup frozen, both land on the same colour (measured
-/// `(177, 75, 116)` vs `(177, 74, 114)` — identical red, and blue moving
+/// `(177, 75, 116)` vs `(177, 74, 114)`: identical red, and blue moving
 /// 2 LSB the *wrong* way). Reading the live canvas instead, the eight-pass
 /// mark is visibly further along toward red.
 #[test]
@@ -429,7 +429,7 @@ fn watercolor_pigment_builds_up_across_flushes() {
         64,
     );
 
-    // Margin 8 clears the 1–2 LSB of rounding headroom by ~4×.
+    // Margin 8 clears the 1-2 LSB of rounding headroom by ~4×.
     assert!(
         after_8[0] > after_3[0] + 8,
         "red must keep building past three passes: 3 flushes {after_3:?}, 8 flushes {after_8:?}",
@@ -494,7 +494,7 @@ fn watercolor_builds_up_on_transparent_canvas() {
 /// batched into `flush_dabs` calls.
 ///
 /// Flush boundaries fall on pen events, so a grouping-dependent mark bands
-/// at whatever spatial period the pen happened to report at — light patches
+/// at whatever spatial period the pen happened to report at: light patches
 /// close together in a slow stroke, far apart in a fast one, and neither
 /// under the artist's control. This is the regression test for that
 /// banding: a straight run of dabs rendered as 1, 6, 3 and 1 flushes must
@@ -518,14 +518,14 @@ fn watercolor_mark_is_invariant_to_flush_grouping() {
             &groups,
             &black,
         );
-        // Sample the stroke interior only — the caps taper by construction.
+        // Sample the stroke interior only, since the caps taper by construction.
         let profile: Vec<u8> = (25..105).map(|x| pixel(&rgba, x, 64)[0]).collect();
         let lo = *profile.iter().min().unwrap();
         let hi = *profile.iter().max().unwrap();
         assert!(
             hi - lo <= 4,
             "mark must be flat along a straight run, but with {k} dab(s) per flush it \
-             varies {lo}..{hi} — that spread is per-flush banding: {profile:?}",
+             varies {lo}..{hi}, which is per-flush banding: {profile:?}",
         );
         means.push(profile.iter().map(|&v| v as f32).sum::<f32>() / profile.len() as f32);
     }

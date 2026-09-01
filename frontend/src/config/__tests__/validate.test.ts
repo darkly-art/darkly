@@ -53,7 +53,7 @@ describe('validateOverrides', () => {
     it('a_hidden_pref_survives_validation', () => {
         // Regression: prefs marked `Hidden` were filtered out of the projected
         // schema, so `validateOverrides` saw them as unknown keys, dropped
-        // them, and the store wrote the cleaned set back — silently erasing
+        // them, and the store wrote the cleaned set back, silently erasing
         // the brush-builder pane state on every reload.
         const sections = schema(
             pref('ui.theme', 'enum'),

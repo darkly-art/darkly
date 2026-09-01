@@ -8,7 +8,7 @@
      * above and below the stack are what let the first and last cards reach the
      * focus line, and they are asymmetric because the line is not the middle.
      * They also give the wheel a scroll range of its own whenever there are two
-     * packs — one card of travel per pack, which is what makes it a minimap you
+     * packs: one card of travel per pack, which is what makes it a minimap you
      * can flick through rather than a second copy of the list's scrolling.
      *
      * Bounded, not circular. A wheel that wrapped could not be honestly synced
@@ -47,7 +47,7 @@
         paneLeft: number;
         /** Bound so the parent can drive and read this scrollport directly. */
         el: HTMLElement | undefined;
-        /** This pane moved — keep the frame loop awake. */
+        /** This pane moved; keep the frame loop awake. */
         onScroll: () => void;
         /** The user put a hand on this pane, so it is the one driving now. */
         onDrive: () => void;
@@ -111,7 +111,7 @@
         position: relative;
         /* The block padding is set inline from `wheelPad`, and every card
          * position the mapping computes is measured back off the DOM
-         * (`wheelLead`, `wheelScrollMax`) rather than assumed — the two must
+         * (`wheelLead`, `wheelScrollMax`) rather than assumed; the two must
          * agree or the sync silently stops moving. */
     }
     .pack-wheel::-webkit-scrollbar {

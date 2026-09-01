@@ -1,7 +1,7 @@
 /**
  * What "save" means for the brush the builder currently has open.
  *
- * Pure, so it is testable without a DOM — the same reason `grouping.ts` and
+ * Pure, so it is testable without a DOM: the same reason `grouping.ts` and
  * `placement.ts` sit beside their components rather than inside them.
  */
 import type { BrushInfo } from '../../engine/protocol_gen';
@@ -19,7 +19,7 @@ import type { BrushInfo } from '../../engine/protocol_gen';
  *   the next boot rebuilt it from YAML, so a modified builtin is saved as new;
  *   `can_edit` is the engine's own answer to who owns it.
  *
- * Looked up by name because `activeBrush` is a name — `brush_load` is the one
+ * Looked up by name because `activeBrush` is a name: `brush_load` is the one
  * name-keyed call in the library API. Display names are not guaranteed unique,
  * so a collision resolves to whichever the engine listed first; that ambiguity
  * is the API asymmetry, not something this function can fix.

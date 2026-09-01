@@ -3,7 +3,7 @@
  * Access API (Firefox, Safari) where there is no native save picker.
  *
  * The unified save flow (`saveDocument`) awaits `request()`, which resolves
- * once the user confirms or cancels — so `closeGuard.save()` can await the
+ * once the user confirms or cancels, so `closeGuard.save()` can await the
  * whole save before deciding whether to close the tab. The modal itself drives
  * produce + download via the shared `saveViaDownload`.
  */

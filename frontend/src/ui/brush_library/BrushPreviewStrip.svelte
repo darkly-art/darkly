@@ -9,7 +9,7 @@
         /** Library brush name to look up in the engine's baked PNG cache. */
         brushName: string;
         /** Iconify icon rendered in the dab slot in place of a baked dab
-         *  thumbnail — set for content-dependent brushes, whose still-dab
+         *  thumbnail: set for content-dependent brushes, whose still-dab
          *  bake renders blank because one stationary sample has no motion
          *  for a displacement to reveal (see `BrushInfo.icon`). When
          *  present the dab fetch never fires, so no dab bake is triggered.
@@ -28,12 +28,12 @@
      *  when bytes change or the unit unmounts. */
     let strokeUrl = $state('');
     let dabUrl = $state('');
-    /** Byte lengths that produced the current URLs — used to skip
+    /** Byte lengths that produced the current URLs: used to skip
      *  redundant Blob/URL churn on cache hits. */
     let lastStrokeLen = 0;
     let lastDabLen = 0;
 
-    /** rAF poll budget — both bakes fit comfortably inside 30 frames. */
+    /** rAF poll budget: both bakes fit comfortably inside 30 frames. */
     const POLL_FRAMES_PER_REQUEST = 30;
     let framesRemaining = 0;
     let rafHandle = 0;
@@ -117,7 +117,7 @@
 
 <!-- Dab + stroke read as a single image: shared rounded envelope, no
      internal gap or per-panel border. The row aspect is bound on the
-     parent — square dab plus 320:120 stroke at equal height gives
+     parent: square dab plus 320:120 stroke at equal height gives
      `(stroke_h + stroke_w) / stroke_h = 1 + 320/120 = 11/3`. -->
 <div class="thumbs">
     <div class="dab">

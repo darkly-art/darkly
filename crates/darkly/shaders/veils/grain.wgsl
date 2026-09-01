@@ -1,4 +1,4 @@
-// Grain veil — per-pixel noise with gradual evolution, applied via overlay blend.
+// Grain veil: per-pixel noise with gradual evolution, applied via overlay blend.
 //
 // Two-pass architecture:
 //   1. Evolve pass (fs_evolve): blends previous noise state toward fresh random
@@ -31,7 +31,7 @@ struct Params {
 @group(0) @binding(2) var<uniform> params: Params;
 @group(0) @binding(3) var t_noise_state: texture_2d<f32>;
 
-/// Integer hash — PCG-style. Fast, high quality, no visible patterns.
+/// Integer hash (PCG-style). Fast, high quality, no visible patterns.
 fn pcg(n: u32) -> u32 {
     var h = n * 747796405u + 2891336453u;
     h = ((h >> ((h >> 28u) + 4u)) ^ h) * 277803737u;
@@ -64,7 +64,7 @@ fn overlay_blend(base: vec3f, blend: vec3f) -> vec3f {
 }
 
 /// Evolve pass: randomly replace a fraction of pixels with fresh noise.
-/// Each pixel independently flips a coin — if the hash falls below `rate`,
+/// Each pixel independently flips a coin: if the hash falls below `rate`,
 /// the pixel gets new random noise; otherwise it keeps its previous value.
 /// This preserves full noise variance at all evolution rates (no averaging).
 /// Binding 0 (t_input) is bound to the previous noise state texture.

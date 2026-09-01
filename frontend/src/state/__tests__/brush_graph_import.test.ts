@@ -4,7 +4,7 @@ import { BrushGraphState, type BrushGraph } from '../brush_graph.svelte';
 
 // Regression: a null-on-success handler (`brush_graph_import_yaml`) crosses the
 // wasm boundary as a nullish value. The importer must read that as success and
-// never dereference it as an `{ error }` envelope — the crash was
+// never dereference it as an `{ error }` envelope: the crash was
 // `Cannot read properties of undefined (reading 'error')` when the boundary
 // delivered `undefined` instead of the declared `null`.
 

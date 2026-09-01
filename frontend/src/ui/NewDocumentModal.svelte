@@ -14,7 +14,7 @@
     let color = $state('#000000');
 
     // Reseed dimensions whenever the modal transitions to open. Reading
-    // `config.get` requires the WASM module to be initialised — the modal is
+    // `config.get` requires the WASM module to be initialised: the modal is
     // gated on a user click well after boot, so by the time the user can open
     // it, config has already loaded.
     let prevOpen = false;
@@ -32,7 +32,7 @@
         prevOpen = newDocument.open;
     });
 
-    // Clipboard peek — populated when the modal opens, surfaces the dimensions
+    // Clipboard peek: populated when the modal opens, surfaces the dimensions
     // and a thumbnail above the "From Clipboard" button so the user can see
     // what they're about to paste before committing. Silently empty when no
     // image is on the clipboard or permission is denied; the button still

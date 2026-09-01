@@ -1,4 +1,4 @@
-//! `<!-- darkly:catalog-table catalog=<id> -->` — one markdown row per entry of
+//! `<!-- darkly:catalog-table catalog=<id> -->`: one markdown row per entry of
 //! a catalog, with the entry's rendered still where it has one.
 //!
 //! Not veil-specific: `catalog` names anything [`crate::catalog::catalogs`]
@@ -7,7 +7,7 @@
 //!
 //! Every name and description here is a `&'static str` in the registration that
 //! owns it. Fixing a typo visible in a generated table means editing
-//! `crates/darkly/src/**` and re-running the sync — editing the markdown only
+//! `crates/darkly/src/**` and re-running the sync; editing the markdown only
 //! survives until the next run.
 
 use crate::catalog::catalogs;
@@ -16,7 +16,7 @@ use crate::docs_md::{FragmentCtx, FragmentError, FragmentRegistration, STILLS_DI
 /// Rendered width of a still in the table, in CSS pixels.
 ///
 /// The assets are [`PREVIEW_MAX_DIM`](crate::gpu::preview::PREVIEW_MAX_DIM)
-/// squares — 256 — which is the ceiling worth asking for: past it a browser is
+/// squares (256), which is the ceiling worth asking for: past it a browser is
 /// upscaling what the renderer wrote.
 const STILL_WIDTH: u32 = 200;
 
@@ -38,7 +38,7 @@ fn render(ctx: &FragmentCtx) -> Result<String, FragmentError> {
     let mut out = String::from("|  | Name | What it does |\n| :-: | --- | --- |\n");
     for entry in &catalog.entries {
         // An entry with no preview leaves the cell empty rather than the row
-        // out — it is still part of the catalog.
+        // out; it is still part of the catalog.
         let still = if entry.supports_preview {
             let path = ctx.link(&format!(
                 "{STILLS_DIR}/{}/{}.jpg",

@@ -51,7 +51,7 @@
 
     const axisLabel = (tag: string): string => AXIS_LABELS[tag] ?? tag;
 
-    /** Content a new text object is seeded with — shown selected so the first
+    /** Content a new text object is seeded with. Shown selected so the first
      *  keystroke replaces it. */
     const SEED_TEXT = 'text';
 
@@ -80,7 +80,7 @@
         onStyle({ font_family: family });
     }
 
-    /** The one text object the panel edits — a vector layer can own many, but
+    /** The one text object the panel edits; a vector layer can own many, but
      *  only the selected one is shown (the user picks it by clicking it on the
      *  canvas; the text tool tracks it in `textSession.editing`). */
     interface Block {
@@ -120,7 +120,7 @@
         };
     });
 
-    // The textarea is uncontrolled — its value is set imperatively. `lastSent`
+    // The textarea is uncontrolled: its value is set imperatively. `lastSent`
     // (by object id) lets us reseed only on an *external* change (undo/redo), not
     // a self-echo, so the caret survives.
     let textareaEl = $state<HTMLTextAreaElement | undefined>(undefined);
@@ -144,7 +144,7 @@
     }
 
     /** Which object to show: the selected (`editing`) one on this layer, else the
-     *  topmost — so a freshly-selected layer still shows something to edit. */
+     *  topmost, so a freshly-selected layer still shows something to edit. */
     function selectedObject(objs: any[]): any | null {
         const e = textTool?.editing ?? null;
         if (e && node && e.layerId === node.id) {
@@ -180,7 +180,7 @@
 
     // Seed the uncontrolled textarea on an *external* change (mount, undo/redo,
     // switching to another object) where the engine content differs from what we
-    // last sent. A self-echo leaves the field — and the caret — untouched.
+    // last sent. A self-echo leaves the field (and the caret) untouched.
     $effect(() => {
         if (!block || !textareaEl) return;
         if (shouldReseed(block.content, lastSent.get(block.objectId))) {
@@ -235,7 +235,7 @@
         if (fields.font_family !== undefined) block.font_family = fields.font_family;
         if (fields.size !== undefined) block.size = fields.size;
         // Variations merge (an untouched axis stays as it was), matching the
-        // engine-side merge — editing one slider never resets the others.
+        // engine-side merge; editing one slider never resets the others.
         if (fields.variations !== undefined)
             block.variations = { ...block.variations, ...fields.variations };
         if (fields.letter_spacing !== undefined) block.letter_spacing = fields.letter_spacing;

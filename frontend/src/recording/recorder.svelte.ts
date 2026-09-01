@@ -1,5 +1,5 @@
 /**
- * Process-recording service — the per-tab lifecycle around the engine's
+ * Process-recording service: the per-tab lifecycle around the engine's
  * passive capture and the encoder worker. For each open tab (when
  * `recording.enabled`): negotiate an encoder config against the document,
  * spawn the worker on the tab's OPFS scratch, arm the engine's capture via
@@ -65,7 +65,7 @@ function readConfig(): AppliedConfig {
 
 const scratchLocks = new Map<string, Promise<unknown>>();
 
-/** Run `fn` exclusively against a scratch dir. FIFO per key — an absorb
+/** Run `fn` exclusively against a scratch dir. FIFO per key: an absorb
  *  enqueued at open time is guaranteed to complete before the recorder's
  *  segment scan enqueued at attach time. */
 function withScratchLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -108,7 +108,7 @@ class TabRecorder {
     worker: Worker | null = null;
     workerReady = false;
     active = false;
-    /** Worker hit its retry limit — capture stays off until the user
+    /** Worker hit its retry limit: capture stays off until the user
      *  toggles the setting (which rebuilds the recorder). */
     sessionDisabled = false;
     negotiated: NegotiatedCodec | null = null;
@@ -144,7 +144,7 @@ class TabRecorder {
             fps: RECORDING_FPS,
         });
         if (!negotiated) {
-            console.warn('[recording] no supported encoder config — capture disabled');
+            console.warn('[recording] no supported encoder config: capture disabled');
             this.sessionDisabled = true;
             return;
         }
@@ -189,7 +189,7 @@ class TabRecorder {
         });
     }
 
-    /** Finalize the current segment and start a fresh one — a re-negotiation
+    /** Finalize the current segment and start a fresh one, a re-negotiation
      *  against the live document (resolution setting change, canvas
      *  aspect-ratio change). */
     async roll(cfg: AppliedConfig): Promise<void> {
@@ -203,8 +203,8 @@ class TabRecorder {
     async deactivate(engineAlive: boolean): Promise<void> {
         if (engineAlive && this.inst.engine && this.active) {
             // Record the final canvas state before capture stops. The last
-            // live-void frame — and any state reached after the last document
-            // revision bump — never triggered a capture, so without this the
+            // live-void frame (and any state reached after the last document
+            // revision bump) never triggered a capture, so without this the
             // recording would end on a stale frame. Clearing `active` first
             // hands the sole drain to `captureFinalFrame` (the render loop's
             // `pollFrame` now no-ops); it must run before disabling, which
@@ -291,7 +291,7 @@ class TabRecorder {
             case 'disabled':
                 console.warn('[recording] worker disabled:', msg.reason);
                 this.sessionDisabled = true;
-                toast.show('warning', 'Process recording stopped — encoding failed.');
+                toast.show('warning', 'Process recording stopped: encoding failed.');
                 void this.run(() => this.deactivate(true));
                 break;
         }
@@ -348,7 +348,7 @@ function postFrameToWorker(rec: TabRecorder, res: RecordingFramePoll): boolean {
     );
     if (!firstCaptureToastShown) {
         firstCaptureToastShown = true;
-        toast.show('info', 'Process recording is on — Settings → Recording');
+        toast.show('info', 'Process recording is on (see Settings → Recording)');
     }
     return true;
 }
@@ -409,7 +409,7 @@ class ProcessRecordingService {
         void rec.run(async () => {
             if (!cfg.enabled) {
                 if (rec.active) await rec.deactivate(true);
-                // An explicit toggle is a fresh user request — clear any
+                // An explicit toggle is a fresh user request; clear any
                 // per-session failure latch so re-enabling retries.
                 rec.sessionDisabled = false;
                 rec.applied = cfg;
@@ -445,7 +445,7 @@ class ProcessRecordingService {
      * worker transfer reject SharedArrayBuffer-backed views) and moved to
      * the worker with zero further copies.
      *
-     * Every response also carries the live canvas dims — the poll doubles
+     * Every response also carries the live canvas dims, and the poll doubles
      * as the resize signal: a canvas whose aspect ratio has diverged from
      * the negotiated base rolls a new segment at the new aspect (the
      * engine holds capture in the meantime, so no letterboxed frames are
@@ -483,7 +483,7 @@ class ProcessRecordingService {
 
     /**
      * Seed a tab's scratch from an opened `.darkly`'s embedded recording.
-     * Call as soon as the tab exists (before its engine finishes booting) —
+     * Call as soon as the tab exists (before its engine finishes booting), so
      * the FIFO scratch lock then orders this ahead of the recorder's
      * segment scan, so the new session appends after the absorbed segments.
      */
@@ -496,7 +496,7 @@ class ProcessRecordingService {
                     filter: (f) => f.name.startsWith(`${ZIP_DIR}/`),
                 });
             } catch {
-                return; // corrupt zip — the document loader surfaces the error
+                return; // corrupt zip: the document loader surfaces the error
             }
             for (const [name, bytes] of Object.entries(entries)) {
                 const leaf = name.slice(ZIP_DIR.length + 1);
@@ -507,7 +507,7 @@ class ProcessRecordingService {
     }
 
     /** Move a crashed tab's scratch onto a restored tab's fresh identity
-     *  (OPFS has no rename — copy + delete). Call right after the restored
+     *  (OPFS has no rename: copy + delete). Call right after the restored
      *  tab is opened, for the same ordering reason as `absorbDarkly`. */
     adoptScratch(
         crashed: { sessionId: string; recoveryId: string },
@@ -542,8 +542,8 @@ class ProcessRecordingService {
 
     /**
      * Boot sweep: remove scratch dirs owned by neither this session, a
-     * crashed session (kept — their tabs may still be restored), nor a
-     * live concurrent session — the exact orphan rule the recovery
+     * crashed session (kept, since their tabs may still be restored), nor a
+     * live concurrent session: the exact orphan rule the recovery
      * snapshot store applies in `collectRecovery`.
      */
     async gcOrphans(crashed: Set<string>, live: Set<string>): Promise<void> {
@@ -581,7 +581,7 @@ class ProcessRecordingService {
 
     /**
      * Flush the live segment and read the tab's recording as decoded
-     * segment metadata + chunk bytes, sorted by segment number — the
+     * segment metadata + chunk bytes, sorted by segment number: the
      * export pipeline's input. Segments whose meta or bin is missing or
      * unreadable are skipped (e.g. a crash before the first flush).
      */
@@ -614,7 +614,7 @@ class ProcessRecordingService {
                         out.push({ meta, bin });
                     }
                 } catch {
-                    // Torn meta — skip the segment, keep the rest.
+                    // Torn meta: skip the segment, keep the rest.
                 }
             }
             return out;
@@ -632,7 +632,7 @@ class ProcessRecordingService {
         if (rec) this.apply(rec);
     }
 
-    /** Flush the live segment so the scratch on disk is complete — used by
+    /** Flush the live segment so the scratch on disk is complete, used by
      *  the export flow before it reads the segments. */
     async flushFor(inst: DarklyInstance): Promise<void> {
         await this.tabs.get(inst)?.flush();

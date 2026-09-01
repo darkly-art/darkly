@@ -1,4 +1,4 @@
-//! Textured void — a sampled source image drawn through a stored transform.
+//! Textured void: a sampled source image drawn through a stored transform.
 //!
 //! The generic machinery behind every void whose pixels come from an image
 //! rather than from a formula: the camera and screenshare streams, the Blender
@@ -21,19 +21,19 @@
 //! texels. It carries a full mip chain so minification averages the texels a
 //! screen pixel actually covers instead of point-sampling four of them, which
 //! is what keeps a shrunk image from shimmering. Streaming sources skip the
-//! chain — regenerating it per frame costs more than it buys.
+//! chain; regenerating it per frame costs more than it buys.
 //!
 //! **Boundary.** The silhouette is the source rect carried through the stored
 //! transform, and the shader antialiases it analytically: alpha is scaled by the
 //! fraction of each fragment's footprint that falls inside the source, computed
 //! from the screen-space derivatives of the sampled UV. That is a
 //! one-destination-pixel edge whatever the scale, and it stays correct at every
-//! mip level, which is what a transparent border around the source cannot do —
+//! mip level, which is what a transparent border around the source cannot do:
 //! each reduction halves the border's width relative to its own level, so a
 //! minified image ends up clamping a nearly opaque edge texel across the canvas.
 //!
 //! **Alpha convention:** the aux texture stores **premultiplied** texels, so the
-//! sampler's linear filter interpolates correctly at alpha edges — filtering
+//! sampler's linear filter interpolates correctly at alpha edges: filtering
 //! straight alpha darkens color toward transparent-black neighbors (dark halos;
 //! docs/lessons-learned/compositing-lessons-learned.md #2). Every writer
 //! honors it: the live upload converts during the copy
@@ -43,16 +43,16 @@
 //! opaque, where premultiplication is the identity.
 //!
 //! Aspect handling is "cover": at the identity transform the source fills the
-//! layer and the short axis is cropped — the active-pixel rect overhangs the
+//! layer and the short axis is cropped; the active-pixel rect overhangs the
 //! canvas on the long axis (see `content_rect`). Out-of-frame samples return
 //! transparent. The gizmo wraps that overhanging content rect, not the canvas.
 //! Mirroring (the camera's selfie flip) is a negative scale in the gizmo
-//! affine, not a shader/uniform concern — the inverse-affine sample handles it.
+//! affine, not a shader/uniform concern; the inverse-affine sample handles it.
 //!
 //! Native: the upload path is unreachable because [`ExternalImageSource`] has no
 //! variants on non-wasm targets. The void can still be registered and its layer
 //! added, but it will render as the transparent placeholder until a frame is
-//! supplied — which only the browser bridge can do.
+//! supplied, which only the browser bridge can do.
 
 use crate::coord::CanvasRect;
 use crate::gpu::effect::{EffectCache, EffectPipeline};
@@ -65,33 +65,33 @@ use std::sync::Arc;
 /// How a source image is fitted to the canvas at the identity transform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentFit {
-    /// Fill the canvas, cropping the short axis — the content rect overhangs
+    /// Fill the canvas, cropping the short axis; the content rect overhangs
     /// the canvas on the long axis. Anchored to the canvas *window*, so it
     /// keeps filling the frame when the canvas is cropped. What a live camera
     /// or screen capture wants.
     Cover,
     /// Occupy the source's own pixel dimensions, anchored in the document
-    /// plane. Does not move when the canvas is cropped — a placed image stays
+    /// plane. Does not move when the canvas is cropped; a placed image stays
     /// where the user put it relative to the artwork, not to the window.
     Natural,
 }
 
 /// Static per-variant description of a video-stream void. One of these is
 /// declared `&'static` in each variant file (camera / screenshare) and threaded
-/// into the shared machinery — the variant files hold nothing else of substance.
+/// into the shared machinery; the variant files hold nothing else of substance.
 #[derive(Debug)]
 pub struct TexturedVoidConfig {
     pub type_id: &'static str,
     pub display_name: &'static str,
-    /// One-sentence summary shown as a tooltip in the Add Void picker —
+    /// One-sentence summary shown as a tooltip in the Add Void picker:
     /// include the terms users would search for.
     pub description: &'static str,
     pub icon: &'static str,
-    /// Param schema — looked up by *name* (`"freeze"`, `"frame_divisor"`) by the
+    /// Param schema: looked up by *name* (`"freeze"`, `"frame_divisor"`) by the
     /// shared code, so variants are decoupled from each other's param ordering.
     pub params: &'static [ParamDef],
     /// Where this kind's pixels come from. Drives external-input plumbing, the
-    /// animation clock, and mip-chain generation — all three follow from
+    /// animation clock, and mip-chain generation; all three follow from
     /// whether the source streams or is installed once.
     pub source: VoidSource,
     /// How the source is fitted to the canvas at the identity transform, and
@@ -105,7 +105,7 @@ pub struct TexturedVoidConfig {
 /// Build a [`VoidRegistration`] from a static config. Each variant's
 /// `register()` is one call: it passes its `&'static CONFIG` plus a `from_params`
 /// fn pointer that names that same static (so the constructed void carries its
-/// kind). `create_pipeline` is shared verbatim — the shader and layout are
+/// kind). `create_pipeline` is shared verbatim; the shader and layout are
 /// identical across kinds, so no per-variant pipeline wrapper is needed.
 pub fn registration(
     config: &'static TexturedVoidConfig,
@@ -128,7 +128,7 @@ pub fn registration(
     }
 }
 
-/// Construct a [`TexturedVoid`] for a given static config — the body behind
+/// Construct a [`TexturedVoid`] for a given static config: the body behind
 /// each variant's `from_params` fn pointer.
 pub fn build_void(
     config: &'static TexturedVoidConfig,
@@ -210,7 +210,7 @@ pub struct TexturedVoid {
     config: &'static TexturedVoidConfig,
     /// User transform (pan / scale / rotate) edited by the gizmo. The shader
     /// samples through its inverse. NOTE: `canvas_origin` deliberately does not
-    /// enter here — the gizmo edits this affine in the void's local frame,
+    /// enter here; the gizmo edits this affine in the void's local frame,
     /// which coincides with window-local (the frame `FragCoord.xy` is in), so
     /// `canvas_origin` cancels in the shader. It matters only at the reporting
     /// boundary (`void_transform_info` reports the bbox origin = canvas_origin
@@ -227,13 +227,13 @@ pub struct TexturedVoid {
     /// with the document by `from_params` / `update_params`. `freeze` and
     /// `frame_divisor` are modeled by the typed fields above and read from them;
     /// any *other* param a config declares (e.g. the Blender void's `url`) is
-    /// opaque passthrough — never interpreted here, but stored so `param_values`
+    /// opaque passthrough, never interpreted here, but stored so `param_values`
     /// echoes the user's edits back for save/load and the frontend reconciler.
     /// This keeps the shared machinery generic: a config can add a
     /// frontend-only param without a bespoke field.
     param_snapshot: Vec<ParamValue>,
     /// Current source dimensions. 1×1 until a
-    /// source arrives — matching the placeholder aux texture.
+    /// source arrives (matching the placeholder aux texture).
     src_w: u32,
     src_h: u32,
     /// Whether a real source has been installed. Tracked explicitly rather
@@ -278,7 +278,7 @@ impl TexturedVoid {
     ) -> Self {
         TexturedVoid {
             config,
-            // Transform is not a param — it lives on the layer and is applied
+            // Transform is not a param; it lives on the layer and is applied
             // via `set_transform`. New instances start at identity; the
             // compositor pushes the layer's stored transform (the seeded flip
             // for cameras, or any edit) after creation.
@@ -319,7 +319,7 @@ impl TexturedVoid {
     /// wrap exactly the pixels the shader samples.
     ///
     /// Before a source arrives there is no meaningful aspect to fit, so every
-    /// fit falls back to the canvas window — which is what keeps a
+    /// fit falls back to the canvas window, which is what keeps a
     /// freshly-added camera layer reporting the canvas as its bbox.
     fn content_rect(&self, canvas: CanvasRect) -> ContentRect {
         if !self.has_source {
@@ -391,7 +391,7 @@ impl TexturedVoid {
         self.src_w = w;
         self.src_h = h;
 
-        // Fresh sampler each rebuild — wgpu reuses internal handles so
+        // Fresh sampler each rebuild: wgpu reuses internal handles so
         // this is essentially free and avoids threading the compositor's
         // shared sampler through every call site.
         // ClampToEdge keeps a sample just past the image reading the edge texel
@@ -544,7 +544,7 @@ impl Void for TexturedVoid {
         // uses `needs_animation()` as the "keep the rAF loop alive" signal.
         // Without it, the void would only re-render on param changes, and live
         // frames would freeze on the first one we uploaded. When frozen, the
-        // last frame is held forever — no animation needed, so we stop keeping
+        // last frame is held forever; no animation needed, so we stop keeping
         // the rAF loop alive. The visibility half of the gate (don't animate a
         // hidden layer) is the engine's job; this method only knows about
         // kind-specific state.
@@ -553,7 +553,7 @@ impl Void for TexturedVoid {
 
     fn update_params(&mut self, queue: &wgpu::Queue, cache: &EffectCache, params: &[ParamValue]) {
         // In-place: update fields and rewrite the uniform buffer. We do NOT
-        // touch `cache.aux_textures` — that's where the live frame lives, and
+        // touch `cache.aux_textures`: that's where the live frame lives, and
         // toggling `freeze` (or any other param) must not wipe it. The bind
         // group continues to reference the same texture view, so the next
         // encode samples whatever was last uploaded.
@@ -571,7 +571,7 @@ impl Void for TexturedVoid {
         transform: &crate::transform::Transform,
     ) {
         // In-place, exactly like `update_params`: store the transform and
-        // rewrite the uniform. Never rebuild — that would drop the aux frame
+        // rewrite the uniform. Never rebuild: that would drop the aux frame
         // texture (the `from_params` rebuild bug documented on `update_params`).
         self.transform = *transform;
         cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
@@ -589,7 +589,7 @@ impl Void for TexturedVoid {
             return;
         }
         // The uniform is expressed in window-local coordinates and, for a
-        // `Cover` fit, derived from the canvas size — both change here, so
+        // `Cover` fit, derived from the canvas size; both change here, so
         // rewrite it in place. Without this the sampler keeps mapping the
         // source across the *old* window while the gizmo reports the new one.
         self.canvas = canvas;
@@ -601,7 +601,7 @@ impl Void for TexturedVoid {
         // Only streaming sources take frames at all; a one-shot image is
         // installed once through `set_source_pixels`. While frozen, refuse new
         // frames so the displayed image is whatever was in the source texture
-        // at the moment freeze was toggled on — the stream stays open on the JS
+        // at the moment freeze was toggled on; the stream stays open on the JS
         // side, so unfreezing resumes immediately. The visibility half of the
         // gate (don't upload to a hidden layer) is the engine's job at the
         // `upload_void_external_image` boundary.
@@ -630,7 +630,7 @@ impl Void for TexturedVoid {
         }
         self.resize_aux_texture(device, cache, width, height);
         // Bytes are Rgba8Unorm in the source texture's premultiplied-alpha
-        // convention — the save flow read back exactly these texels, and the
+        // convention: the save flow read back exactly these texels, and the
         // placement path premultiplies before calling.
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
@@ -720,7 +720,7 @@ impl Void for TexturedVoid {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            // The enum is uninhabited on native — this arm only exists so the
+            // The enum is uninhabited on native; this arm only exists so the
             // method body compiles. The match below is unreachable.
             let _ = (device, queue, cache);
             match source {}
@@ -738,7 +738,7 @@ impl Void for TexturedVoid {
     ) -> EffectCache {
         // Cache the canvas geometry; the uniform is window-local, so it has to
         // be rebuilt whenever the source resolution *or* the canvas changes.
-        // `create_cache` only learns the size — `set_canvas_rect` supplies the
+        // `create_cache` only learns the size; `set_canvas_rect` supplies the
         // origin as soon as the compositor knows it.
         self.canvas = CanvasRect::from_xywh(
             self.canvas.origin.x,
@@ -804,7 +804,7 @@ impl Void for TexturedVoid {
 }
 
 /// Build the shared render pipeline for a video-stream void. Identical across
-/// kinds (same shader, same layout) — each registered kind caches its own
+/// kinds (same shader, same layout); each registered kind caches its own
 /// `Arc<EffectPipeline>`, which is two identical pipelines in VRAM when both
 /// camera and screenshare are present. Expected, not a leak.
 fn create_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> EffectPipeline {
@@ -846,7 +846,7 @@ fn create_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> Effect
         immediate_size: 0,
     });
 
-    // Prepend the shared inverse-homography sampler (lib/projective.wgsl) —
+    // Prepend the shared inverse-homography sampler (lib/projective.wgsl);
     // the same `proj_local` the floating commit path uses, so voids get the
     // full perspective divide without a divergent affine-only copy.
     let src = concat!(
@@ -936,7 +936,7 @@ mod tests {
     #[test]
     fn param_round_trip() {
         // Default params round-trip through from_params → param_values. Order
-        // matches the schema: freeze, frame_divisor (mirror is gone — it's a
+        // matches the schema: freeze, frame_divisor (mirror is gone; it's a
         // gizmo negative scale now).
         let v = make_void();
         let out = v.param_values();
@@ -946,7 +946,7 @@ mod tests {
     }
 
     // A config with a passthrough `url` param on top of the shared two, standing
-    // in for the Blender void — exercises that params the machinery doesn't model
+    // in for the Blender void; exercises that params the machinery doesn't model
     // still round-trip.
     const URL_PARAMS: &[ParamDef] = &[
         ParamDef::boolean("freeze", false),
@@ -1050,7 +1050,7 @@ mod tests {
         assert_eq!(v.frame_divisor, 8);
         assert_eq!(v.param_values()[1], ParamValue::Int(8));
 
-        // Out-of-range values are clamped to >= 1 — divisor 0 would mean
+        // Out-of-range values are clamped to >= 1: divisor 0 would mean
         // "upload every 0th frame" which is undefined; the JS gate uses
         // `counter % divisor` so a zero divisor would panic on modulo.
         new_params[1] = ParamValue::Int(0);
@@ -1071,7 +1071,7 @@ mod tests {
     }
 
     /// Regression: toggling any param (notably `freeze`) must not wipe the
-    /// void's accumulated GPU state — earlier the compositor's
+    /// void's accumulated GPU state: earlier the compositor's
     /// `update_void_layer_params` rebuilt the void from `from_params` and
     /// re-allocated `EffectCache`, dropping the aux texture that holds the live
     /// frame. The user reported "clicking freeze disappears the whole layer"
@@ -1112,7 +1112,7 @@ mod tests {
 
     /// Regression (sibling of `update_params_preserves_source_dimensions`):
     /// `set_transform` is the gizmo's live-update path and must also mutate in
-    /// place — never rebuild from `from_params`, which would drop the aux frame
+    /// place; never rebuild from `from_params`, which would drop the aux frame
     /// texture and blank the layer mid-drag.
     #[test]
     fn set_transform_preserves_source_dimensions() {
@@ -1193,7 +1193,7 @@ mod tests {
     /// The gizmo bbox = cover-fit content rect, which OVERHANGS the canvas on
     /// the cropped axis (it should reflect the real source bounds, not the
     /// canvas). A 200×100 source on a 100×100 canvas covers by scaling ×1, so
-    /// the content is 200 wide — extending 50px past each side — and 100 tall.
+    /// the content is 200 wide (extending 50px past each side) and 100 tall.
     #[test]
     fn content_extent_overhangs_canvas() {
         let mut v = make_void();
@@ -1209,7 +1209,7 @@ mod tests {
     }
 
     /// A `Cover` void is anchored to the canvas *window*, so its plane-space
-    /// content rect shifts with `canvas_origin` after a crop — that is what
+    /// content rect shifts with `canvas_origin` after a crop; that is what
     /// "keeps filling the frame" means. Its window-local uniform, by contrast,
     /// is unchanged, because the origin cancels.
     #[test]

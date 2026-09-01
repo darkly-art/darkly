@@ -16,7 +16,7 @@ describe('brush pack actions', () => {
             const action = actions.all().find(a => a.id === id);
             expect(action, `${id} is registered`).toBeDefined();
             expect(action!.menuPath, `${id} has a menu path`).toBeDefined();
-            // Docs come from the Rust `actions` catalog — an action without
+            // Docs come from the Rust `actions` catalog: an action without
             // them would render a blank menu label.
             expect(action!.displayName, `${id} has a display name`).toBeTruthy();
             expect(action!.icon, `${id} has an icon`).toBeTruthy();

@@ -4,7 +4,7 @@ import type { Engine } from '../../engine/protocol';
 
 // No DOM / live MediaStream in the node test env, so we exercise the pure error
 // mapper directly and drive the external-stop path through the `handleTrackEnded`
-// test seam — the DOM-heavy `start()`/`tick()` paths aren't unit-testable here.
+// test seam: the DOM-heavy `start()`/`tick()` paths aren't unit-testable here.
 
 const engineStub = {} as Engine;
 
@@ -41,7 +41,7 @@ describe('MediaStreamSource external stop (track ended)', () => {
         expect(src.ended).toBe(true);
         expect(ids).toEqual([42]);
 
-        // Idempotent — a second end (or a `stop()` racing the listener) must
+        // Idempotent: a second end (or a `stop()` racing the listener) must
         // not re-notify, or the app would prune an already-pruned source.
         src.handleTrackEnded();
         expect(ids).toEqual([42]);
@@ -97,7 +97,7 @@ function primedSource(videoWidth = 4, videoHeight = 4) {
 
 describe('MediaStreamSource freeze suppresses uploads without closing', () => {
     // Regression: freezing a screenshare used to tear down the source (the
-    // reconciler called stop()), which ends a getDisplayMedia track for good —
+    // reconciler called stop()), which ends a getDisplayMedia track for good;
     // unfreeze then showed nothing until the user re-picked. Freeze must only
     // gate `tick()`; the stream stays open so unfreeze resumes instantly.
     it('uploads when live, skips when frozen, resumes when unfrozen', async () => {
@@ -112,7 +112,7 @@ describe('MediaStreamSource freeze suppresses uploads without closing', () => {
         src.setFrozen(true);
         src.tick(8);
         await flush();
-        expect(uploads.length).toBe(1); // suppressed — no new upload
+        expect(uploads.length).toBe(1); // suppressed: no new upload
 
         // Still alive (not torn down): unfreeze resumes uploads without any
         // re-acquire.
@@ -137,7 +137,7 @@ describe('MediaStreamSource caps upload resolution to the display target', () =>
     // Regression: a screenshare uploaded its native frame, and the
     // `copyExternalImageToTexture` cross-context fence stalled the render loop
     // (~26ms drains). The compositor only samples the void at canvas resolution,
-    // so the frame is downscaled to the cap during the off-thread decode —
+    // so the frame is downscaled to the cap during the off-thread decode,
     // preserving aspect so cover-fit is unaffected.
     it('downscales an oversized source to the cap, preserving aspect', async () => {
         const { src, uploads, optsSeen } = primedSource(3840, 2160);
@@ -160,7 +160,7 @@ describe('MediaStreamSource caps upload resolution to the display target', () =>
 
     it('treats a zero/unset cap as native', async () => {
         const { src, uploads } = primedSource(3840, 2160);
-        // Never called setMaxSourceDimension — default 0 means decode native.
+        // Never called setMaxSourceDimension: default 0 means decode native.
         src.tick(4);
         await flush();
         expect(uploads).toEqual([{ width: 3840, height: 2160 }]);

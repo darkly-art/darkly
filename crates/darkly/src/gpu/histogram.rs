@@ -1,16 +1,16 @@
 //! GPU-accelerated per-channel histogram.
 //!
 //! A compute shader bins a texture into eight 256-bin histograms (one per LUT
-//! filter channel — rgb-composite, red, green, blue, alpha, hue, saturation,
+//! filter channel: rgb-composite, red, green, blue, alpha, hue, saturation,
 //! lightness) using atomic adds, then reads back the 8×256 u32 result
-//! asynchronously — no blocking readback. Composite and Lightness both bin
+//! asynchronously, with no blocking readback. Composite and Lightness both bin
 //! CIELAB L*, R/G/B/A bin the raw gamma-encoded value (matching Krita's
 //! `KoBasicHistogramProducers`). Modeled on
 //! [`ContentBoundsPass`](super::content_bounds).
 //!
 //! Unlike content bounds (which reads a node's own persistent texture and can
-//! self-submit), the histogram samples a filter's *input* — a group accumulator
-//! that is only valid mid-composite — so [`dispatch`] records into the caller's
+//! self-submit), the histogram samples a filter's *input* (a group accumulator
+//! that is only valid mid-composite), so [`dispatch`] records into the caller's
 //! in-flight compose encoder rather than owning one.
 //!
 //! [`dispatch`]: HistogramPass::dispatch
@@ -34,7 +34,7 @@ pub struct HistogramPass {
 
     /// Cached 8×256 histogram per layer, channel-major.
     cached: HashMap<LayerId, Vec<u32>>,
-    /// Generation per layer — bumped on invalidation; stale results discarded.
+    /// Generation per layer, bumped on invalidation; stale results discarded.
     generation: HashMap<LayerId, u64>,
     /// In-flight dispatches awaiting buffer mapping.
     pending: Vec<PendingHistogram>,

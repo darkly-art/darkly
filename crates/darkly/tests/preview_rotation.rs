@@ -2,15 +2,15 @@
 //! actually rotates the **rendered mask** in the cursor preview pipeline.
 //!
 //! The previous version of this test asserted on
-//! `BrushCursorPreviewInfo.rotation_rad` — a CPU-side overlay rotation that
+//! `BrushCursorPreviewInfo.rotation_rad`, a CPU-side overlay rotation that
 //! only affected the cursor halo, not the painted dab. That port was removed
 //! because it produced "rotation that only the cursor sees, not the paint",
 //! which surprised users. Rotation now lives in the WGSL pipeline (sum of
 //! `circle.rotation` + `circle.rotation_input`, minus `view_rotation`), so
 //! the cursor preview and the stroke deposit always agree.
 //!
-//! This test renders an asymmetric superformula shape twice — once
-//! unrotated, once at 90° via `pen.drawing_angle` — and asserts that
+//! This test renders an asymmetric superformula shape twice (once
+//! unrotated, once at 90° via `pen.drawing_angle`) and asserts that
 //! mask pixels at on-axis sampling positions differ between the two
 //! renders. If `drawing_angle → rotation_input` were silently dropped,
 //! both renders would be identical.
@@ -82,7 +82,7 @@ fn build_graph_with_rotation_wire() -> Graph<BrushWireType> {
 
     let wires = [
         (pen.clone(), "position", term.clone(), "position"),
-        // Canonical stroke-follow wire — what users wire when they want
+        // Canonical stroke-follow wire: what users wire when they want
         // the dab to face the stroke direction.
         (
             pen.clone(),
@@ -168,7 +168,7 @@ fn render_at_angle(angle_rad: f32) -> Vec<u8> {
         dab_batch: DabBatch::default(),
     };
 
-    // Seed `drawing_angle` directly — `seed_sensors` writes the raw
+    // Seed `drawing_angle` directly: `seed_sensors` writes the raw
     // `info.drawing_angle` into the pen_input slot, which the wire then
     // feeds into `circle.rotation_input` via the compiled WGSL.
     let mut info = PaintInformation {
@@ -208,8 +208,8 @@ fn drawing_angle_rotates_preview_mask() {
     // sample taken at an axis-aligned offset will be inside the shape
     // in one render and outside in the other.
     //
-    // Sample a small disc of pixels to absorb the smoothstep edge band
-    // — single-pixel reads are too noisy on the AA boundary.
+    // Sample a small disc of pixels to absorb the smoothstep edge band;
+    // single-pixel reads are too noisy on the AA boundary.
     let half = PREVIEW_SIDE as i32 / 2;
     let probe_r = (PREVIEW_SIDE as i32 / 5).max(8);
     let probe_samples = [

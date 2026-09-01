@@ -1,18 +1,18 @@
 //! Schema metadata for darkly's preferences.
 //!
 //! Every preference lives in a section. Sections are auto-discovered from
-//! `config/sections/*.rs` via `build.rs` — the same pattern as veils, tools,
+//! `config/sections/*.rs` via `build.rs`, the same pattern as veils, tools,
 //! and brush nodes. Runtime storage is the three-layer [`super::Config`]
-//! (user → overlay → defaults). The schema declares only *type/range/widget*
-//! — it does not own values. Defaults come from the bundled YAML presets in
+//! (user → overlay → defaults). The schema declares only *type/range/widget*;
+//! it does not own values. Defaults come from the bundled YAML presets in
 //! `crates/darkly/presets/`.
 //!
 //! Storage type vs. widget: [`PrefKind`] describes what's stored;
 //! [`WidgetHint`] describes how the Settings modal renders it. They're
-//! orthogonal — `Bool` is always a toggle, but a `Str` might render as plain
+//! orthogonal: `Bool` is always a toggle, but a `Str` might render as plain
 //! text, a hotkey capture, a mouse-binding capture, or a color picker.
 
-/// A logical grouping of related preferences — purely a display affordance.
+/// A logical grouping of related preferences, purely a display affordance.
 /// Sections may be reorganized without renaming any pref keys; a key's
 /// section is metadata, not part of its identity.
 pub struct SchemaSection {

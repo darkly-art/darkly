@@ -29,14 +29,14 @@
      *  because it's the implicit global fallback, offered as "Anywhere". */
     const pickableSites = $derived(sites.all().filter(s => s.name !== 'keyboard'));
 
-    /** Persistent rows — read from config and re-evaluated on every
+    /** Persistent rows: read from config and re-evaluated on every
      *  store mutation via the `void config.get('')` reactivity tap. */
     const stored = $derived.by(() => {
         void config.get('');
         return readTriggers(action.id);
     });
 
-    /** Ephemeral rows — added by "+ Add trigger" but not yet captured into.
+    /** Ephemeral rows: added by "+ Add trigger" but not yet captured into.
      *  Lives in component state instead of config because
      *  `serializeTriggers` filters out empty-chord rows on write (to keep
      *  storage clean of ghost overrides). If we wrote a fresh empty row
@@ -128,7 +128,7 @@
 
     function onCapture(index: number, newChord: string) {
         if (!newChord) {
-            // Cleared via Backspace/Delete — drop the row entirely so the
+            // Cleared via Backspace/Delete: drop the row entirely so the
             // user doesn't end up with a ghost row that can't dispatch.
             removeTrigger(index);
             return;

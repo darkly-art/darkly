@@ -50,7 +50,7 @@ pub fn config_reset(key: &str) {
     config::reset(key);
 }
 
-/// Clear every user override **except** `app.baseSettings` — the picker
+/// Clear every user override **except** `app.baseSettings`: the picker
 /// choice survives a global reset.
 #[wasm_bindgen]
 pub fn config_reset_all() {
@@ -77,7 +77,7 @@ pub fn config_kind_is_int(key: &str) -> bool {
 
 /// Get the full preferences schema as JSON: one `Catalog` per settings
 /// section, each holding a single entry whose `params` are that section's
-/// prefs as `ParamInfo` — the same shape the effect panels consume. Sorted by
+/// prefs as `ParamInfo`, the same shape the effect panels consume. Sorted by
 /// section order.
 ///
 /// Carries every declared pref, including those marked `Hidden`, which arrive
@@ -90,7 +90,7 @@ pub fn config_schema() -> String {
 
 /// Render a binding's chord for one platform's modifier vocabulary.
 ///
-/// Takes the binding as written in the presets — the optional
+/// Takes the binding as written in the presets; the optional
 /// `site@scope@brush:` prefix is stripped here, since only the chord is
 /// user-facing. `is_mac` selects the Apple glyphs (`⌘⇧⌥⌃`) over the
 /// Windows/Linux names; only the browser knows which to use.

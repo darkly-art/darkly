@@ -5,7 +5,7 @@ import { isAnchorGroup, type PanelType } from '../tree';
 /**
  * The anchor rule is stated in `tree.ts` rather than read off `PanelMeta.movable`
  * because the workspace store loads the tree at module scope, before
- * `registerPanels` has run — asking the registry then throws with
+ * `registerPanels` has run; asking the registry then throws with
  * "No panel registered for type 'document'". This file is what keeps the two
  * statements of the same fact from drifting.
  */

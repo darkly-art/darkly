@@ -27,7 +27,7 @@ pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "vhs",
         display_name: "VHS",
-        description: "Analog VHS tape artifacts — scanlines, noise, and color bleed.",
+        description: "Analog VHS tape artifacts: scanlines, noise, and color bleed.",
         params: PARAMS,
         preview: Some(PreviewAnim::ONE_WAY),
         create_pipeline: create_vhs_pipeline,
@@ -140,7 +140,7 @@ impl Veil for Vhs {
     }
 
     /// Two seconds of the veil's own tape clock. The artefacts this veil is
-    /// made of are temporal — the wobble, the switching noise, the AC beat — so
+    /// made of are temporal (the wobble, the switching noise, the AC beat), so
     /// its preview runs time rather than any parameter. The clock runs forward
     /// and does not return to where it started, so the sequence does not loop;
     /// making it do so would mean a periodic time basis in the shader, which is

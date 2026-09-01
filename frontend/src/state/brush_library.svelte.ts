@@ -1,17 +1,17 @@
 /**
- * The painter's brushes and packs — reactive mirror, and durable store.
+ * The painter's brushes and packs: reactive mirror, and durable store.
  *
  * The engine is the authority on what the library *is*; this module is the
  * frontend's view of it plus the persistence the engine cannot do for itself.
  * Shipped brushes and packs are rebuilt from embedded YAML on every boot and
- * are **never written** — only what the painter creates or imports is stored.
+ * are **never written**: only what the painter creates or imports is stored.
  * The one thing a fresh install writes is the Favorites pack it seeds, which is
  * the painter's from the moment it exists (see `#seedFavorites`).
  *
  * One file per record, no index. The filename is the id and the id never
  * changes, so a rename rewrites one file in place, a delete removes one file,
- * and nothing can be orphaned or left disagreeing with an index — the
- * reasoning `storage/recovery.ts` states for crash snapshots.
+ * and nothing can be orphaned or left disagreeing with an index (the
+ * reasoning `storage/recovery.ts` states for crash snapshots).
  */
 import { app } from './app.svelte';
 import { jsonDir } from '../storage/jsonStore';
@@ -84,12 +84,12 @@ export class BrushLibraryStore {
 
     readonly #brushDir;
     readonly #packDir;
-    /** Ids the painter owns — the ones that get written back. A shipped
+    /** Ids the painter owns: the ones that get written back. A shipped
      *  brush or pack is regenerated from YAML each boot and must never be
      *  persisted, or deleting it from the shipped set would leave a copy. */
     #ownBrushes = new Set<string>();
     #ownPacks = new Set<string>();
-    /** Brush ids the engine had before hydration replayed anything — the
+    /** Brush ids the engine had before hydration replayed anything: the
      *  shipped set. Storing one would shadow the YAML it is rebuilt from. */
     #shipped = new Set<string>();
 
@@ -114,7 +114,7 @@ export class BrushLibraryStore {
         return this.packs.find(p => p.id === id);
     }
 
-    /** Packs the painter may export — every one, since exporting reads only. */
+    /** Packs the painter may export: every one, since exporting reads only. */
     get exportablePacks(): BrushPackInfo[] {
         return this.packs;
     }
@@ -130,7 +130,7 @@ export class BrushLibraryStore {
      * accreting `(2)` suffixes the way a re-import would.
      *
      * A record that fails to load is skipped with a warning rather than being
-     * fatal — one corrupt file must not cost the painter their library.
+     * fatal: one corrupt file must not cost the painter their library.
      */
     async hydrate(): Promise<void> {
         if (!app.engine) return;
@@ -212,7 +212,7 @@ export class BrushLibraryStore {
                 name: 'Favorites',
                 description: 'The brushes you reach for most.',
                 icon: 'fa6-solid:star',
-                // Gold, since a star is gold — seated to read on either theme.
+                // Gold, since a star is gold (seated to read on either theme).
                 palette: {
                     chroma: '#d9a92b',
                     refraction: '#d8bd5e',
@@ -251,7 +251,7 @@ export class BrushLibraryStore {
      * Persist a freshly-imported pack and every brush that arrived with it.
      *
      * An import can bring in brushes the library did not have, and those are
-     * the painter's now — without this the pack would come back on reload
+     * the painter's now, so without this the pack would come back on reload
      * naming brushes that did not.
      *
      * Brushes the import *reused* are already stored (if painter-owned) or
@@ -286,7 +286,7 @@ export class BrushLibraryStore {
         }
     }
 
-    /** Rewrite a brush's stored record after a rename. No pack is touched —
+    /** Rewrite a brush's stored record after a rename. No pack is touched:
      *  membership is id-keyed. */
     async renameBrush(id: string, name: string): Promise<void> {
         if (!app.engine) return;
@@ -316,7 +316,7 @@ export class BrushLibraryStore {
         await this.refresh();
     }
 
-    /** Write anything pending immediately — for `beforeunload`. */
+    /** Write anything pending immediately (for `beforeunload`). */
     async flush(): Promise<void> {
         await Promise.all([this.#brushDir.flush(), this.#packDir.flush()]);
     }

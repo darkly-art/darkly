@@ -60,7 +60,7 @@ describe('serializeTriggers', () => {
 
     it('writes empty strings for namespaces with no triggers', () => {
         // A user who only has keyboard triggers should reset the mouse
-        // namespace to an empty (explicit-unbound) override — not leave it
+        // namespace to an empty (explicit-unbound) override, not leave it
         // dangling at the prior value.
         expect(serializeTriggers([{ kind: 'kbd', binding: 'KeyZ' }])).toEqual({
             kbd: 'KeyZ',
@@ -104,7 +104,7 @@ describe('detectKind', () => {
     });
 
     it('classifies mouse chords by their terminal verb', () => {
-        // The chord namespace is distinguished only at the *terminal* —
+        // The chord namespace is distinguished only at the *terminal*:
         // everything else looks alike (`$mod+Shift+…` works for both).
         expect(detectKind('click')).toBe('mouse');
         expect(detectKind('alt+click')).toBe('mouse');
@@ -116,7 +116,7 @@ describe('detectKind', () => {
 
     it('treats empty chord as kbd (default for unbound rows)', () => {
         // An empty trigger row's kind is meaningful only when the user
-        // actually captures — defaulting to kbd matches the most common
+        // actually captures, so defaulting to kbd matches the most common
         // "Press a key…" prompt.
         expect(detectKind('')).toBe('kbd');
     });
@@ -125,7 +125,7 @@ describe('detectKind', () => {
 describe('namespace migration on kind change (round-trip)', () => {
     it('moves a trigger from hotkeys to mouseclicks when its chord becomes a mouse chord', () => {
         // Round-trip: read kbd-only list, change one trigger's kind to
-        // mouse, serialize — the trigger has migrated namespaces while
+        // mouse, serialize: the trigger has migrated namespaces while
         // its row-order position is preserved within each list.
         const before = parseTriggerStrings('KeyZ|KeyA', '');
         const after = [

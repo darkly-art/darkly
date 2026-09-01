@@ -1,4 +1,4 @@
-//! A brush pack — a named, iconed, four-colored group of brushes.
+//! A brush pack: a named, iconed, four-colored group of brushes.
 //!
 //! A brush may belong to any number of packs: adding one to a pack copies a
 //! reference, it does not move the brush. The pack is the sole authority on
@@ -12,7 +12,7 @@ use crate::brush::pack_icons::is_pack_icon;
 /// a painter's brushes are given a minted id when they are saved.
 ///
 /// Distinct from the brush *name*, which is the display value and may be
-/// changed freely — that is the whole point of having an id, since a pack's
+/// changed freely: that is the whole point of having an id, since a pack's
 /// member list and the recent-brushes list both hold ids and so survive a
 /// rename untouched.
 pub type BrushId = String;
@@ -38,7 +38,7 @@ pub enum PackMutability {
 
 /// The three colors a brush pack is recognized by.
 ///
-/// `chroma` and `refraction` are the vivid pair, spent sparingly — a rim, a
+/// `chroma` and `refraction` are the vivid pair, spent sparingly: a rim, a
 /// ribbon, a focused outline. `surface` is the body they are spent on, and is
 /// what the pack's own chip is mostly made of. A palette that inverts that
 /// ratio is a wall of flat color with nothing left to accent it with.
@@ -46,18 +46,18 @@ pub enum PackMutability {
 /// `surface` is an absolute, not a derivation of the theme: a pack whose body
 /// is pale is pale on a black UI and on a white one, which is what lets a pack
 /// read as wintery or deserty at all. Alpha on it is how a pack opts back
-/// *into* the theme, letting the background it sits on show through — and text
+/// *into* the theme, letting the background it sits on show through; text
 /// over a pack therefore sits on the *theme* rather than on the pack, which is
 /// why the palette carries no ink of its own to write with.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct PackPalette {
-    /// The pack's own hue at full vividness — the color you would name it by.
+    /// The pack's own hue at full vividness: the color you would name it by.
     pub chroma: String,
     /// The same light bent: a near neighbour in hue, equally vivid. Drawn with
     /// `chroma` as a gradient, never alone.
     pub refraction: String,
-    /// The body the glass sits on — light or dark, the pack's own choice, low in
+    /// The body the glass sits on: light or dark, the pack's own choice, low in
     /// saturation. Carries value, not color. Alpha here lets the background
     /// behind it show through.
     pub surface: String,
@@ -136,7 +136,7 @@ impl BrushPack {
     pub fn ensure_members_editable(&self) -> Result<(), String> {
         match self.mutability {
             PackMutability::Locked => Err(format!(
-                "brush pack '{}' is built in — its brushes cannot be changed",
+                "brush pack '{}' is built in: its brushes cannot be changed",
                 self.name
             )),
             PackMutability::Full => Ok(()),
@@ -169,7 +169,7 @@ impl BrushPack {
         self.members.iter().any(|m| m == brush)
     }
 
-    /// Add `brush` to the end of the member list. Idempotent — a brush already
+    /// Add `brush` to the end of the member list. Idempotent: a brush already
     /// present keeps its position, so re-adding it is not a reorder.
     pub fn add(&mut self, brush: BrushId) -> Result<(), String> {
         self.ensure_members_editable()?;
@@ -418,7 +418,7 @@ mod tests {
             assert!(validate_icon(bad).is_err(), "`{bad}` should be rejected");
         }
         assert!(validate_icon("fa6-solid:star").is_ok());
-        // An icon the renderer lacks is still shape-valid — it falls back at
+        // An icon the renderer lacks is still shape-valid: it falls back at
         // render time rather than being rejected at import.
         assert!(validate_icon("some-collection:nonexistent").is_ok());
     }

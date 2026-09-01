@@ -4,12 +4,12 @@ import { brushGraph } from '../state/brush_graph.svelte';
 /**
  * Optional multi-tab layer. Owns a collection of `DarklyInstance`s and
  * tracks which one is currently focused. Each instance is fully
- * self-contained — the shell does not subclass or wrap them; it merely
+ * self-contained: the shell does not subclass or wrap them; it merely
  * holds a list and tells the global `app` proxy which instance to resolve
  * to via [`setActiveInstance`].
  *
- * Embedded hosts that want a single Darkly instance never load this module
- * — the rest of the app works perfectly with just `DarklyInstance`.
+ * Embedded hosts that want a single Darkly instance never load this module,
+ * since the rest of the app works perfectly with just `DarklyInstance`.
  */
 class MultiTabShell {
     /** Open instances, in tab-strip order. */
@@ -22,8 +22,9 @@ class MultiTabShell {
      *  of the engine's document name: `setName` is the single write path
      *  (user rename, Save As, and the post-load sync in `actions/index.ts`
      *  all route through it), and `pendingName` seeds it before init. Reads
-     *  go through this reactive map so the tab strip re-renders on rename —
-     *  the engine's `document_name` is async and can't back a `$derived`. */
+     *  go through this reactive map so the tab strip re-renders on rename,
+     *  because the engine's `document_name` is async and can't back a
+     *  `$derived`. */
     private names = $state<Record<string, string>>({});
 
     private nextSerial = 1;
@@ -36,7 +37,7 @@ class MultiTabShell {
     /** Tab title for `id`. Reads the shell-side mirror (populated by
      *  `setName`), falling back to the pending name (set by `open(name?)`
      *  and applied to the engine post-init) or `"Untitled"` for instances
-     *  whose handles haven't bootstrapped. Synchronous — the engine's
+     *  whose handles haven't bootstrapped. Synchronous; the engine's
      *  `document_name` is async and can't be read inside a `$derived`. */
     nameOf(id: string): string {
         const cached = this.names[id];
@@ -47,7 +48,7 @@ class MultiTabShell {
     }
 
     /** Rename a tab. Persists into the engine via `set_document_name`
-     *  (queued — visible on the next render) and updates the shell-side
+     *  (queued, visible on the next render) and updates the shell-side
      *  mirror that `nameOf` reads. If the instance's handle hasn't booted
      *  yet, the name is stashed on `pendingName` for the init path to
      *  apply. */
@@ -63,13 +64,13 @@ class MultiTabShell {
     }
 
     /** Add a fresh, empty `DarklyInstance` to the strip and focus it. The
-     *  instance's WASM handle is allocated lazily — it's set up when the
+     *  instance's WASM handle is allocated lazily: it's set up when the
      *  per-tab `<CanvasView {instance}/>` mounts and bootstraps the canvas.
      *  This keeps tab open instant (no await) and matches Svelte's
      *  template-driven canvas creation.
      *
      *  `dims` overrides the global `canvas.width/height` config defaults
-     *  for this tab only — used by the Open flow when the source file
+     *  for this tab only; it's used by the Open flow when the source file
      *  has its own intrinsic dimensions (a `.png` opens as a new tab
      *  sized to the image; a `.darkly` ignores this and lets the
      *  loader's internal resize take over). */
@@ -97,7 +98,7 @@ class MultiTabShell {
 
     /** Move the tab with `id` to position `toIndex` in `instances`.
      *  No-op if the id isn't present, the index is out of range, or the
-     *  order wouldn't change. Active tab and names are unaffected — only
+     *  order wouldn't change. Active tab and names are unaffected: only
      *  the strip order changes. */
     reorder(id: string, toIndex: number): void {
         const fromIndex = this.instances.findIndex(i => i.id === id);

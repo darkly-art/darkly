@@ -11,7 +11,7 @@
     // node *non-destructively* as the user edits (`previewFilter`). Apply commits
     // it (one undo step); any close path restores the pixels.
 
-    // Scratch params edited in the dialog — seeded from the schema defaults each
+    // Scratch params edited in the dialog, seeded from the schema defaults each
     // time it opens, never touching the shared schema array.
     let scratch = $state<ParamInfo[]>([]);
 
@@ -30,7 +30,7 @@
             // Establish the preview session up front so the first edit is snappy.
             pushPreview();
         } else if (!filterModal.open && prevOpen && !committed) {
-            // Closed by any path other than Apply — discard the live preview.
+            // Closed by any path other than Apply: discard the live preview.
             app.engine?.api.cancelFilterPreview();
             app.requestFrame();
         }

@@ -3,12 +3,12 @@
  *
  * Ported from Krita's `libs/widgets/KisLevelsSlider.cpp` (author: the Krita
  * team, GPL-3.0). This is the behaviour that makes the widget feel right: gamma
- * is stored as an exponent (0.1–10) and its handle's on-screen position is
+ * is stored as an exponent (0.1-10) and its handle's on-screen position is
  * *always derived* from that exponent through a non-linear mapping, so dragging
  * the black/white bounds leaves gamma untouched while the gamma handle slides
  * proportionally between the new bounds.
  *
- * Original: https://invent.kde.org/graphics/krita — `KisLevelsSlider.cpp:550-583`.
+ * Original: https://invent.kde.org/graphics/krita, `KisLevelsSlider.cpp:550-583`.
  */
 
 /** Gamma exponent range (Krita's `KisInputLevelsSliderWithGamma`). */
@@ -85,7 +85,7 @@ export function clampInputWhite(white: number, black: number): number {
     return clamp(white, black + MIN_INPUT_GAP, 1);
 }
 
-/** Output handles may cross (allows inversion) — only clamp to `[0,1]`. */
+/** Output handles may cross (allows inversion); only clamp to `[0,1]`. */
 export function clampOutput(v: number): number {
     return clamp01(v);
 }

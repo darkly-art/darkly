@@ -2,7 +2,7 @@
 
 The pointer-to-pixel diagram in [`CONTRIBUTING.md`](../CONTRIBUTING.md) is the *paint* path.
 Most on-canvas feedback comes from two derived paths, and a lot of tool/UX bugs
-live here — invisible unless you know the model below.
+live here: invisible unless you know the model below.
 
 ## Cursor preview (the hover dab)
 
@@ -18,7 +18,7 @@ and returns a `BrushCursorPreviewInfo`, which the frontend draws as a
 
 Tools build primitives with `OverlayBuilder`
 ([`frontend/src/canvas/gpu_overlay.ts`](../frontend/src/canvas/gpu_overlay.ts))
-and call `setOverlay`, which **replaces the entire overlay set** — it is
+and call `setOverlay`, which **replaces the entire overlay set**; it is
 single-slot, not additive. Marching ants, gradient/transform handles, and the
 brush hover dab all share it; two features that each want an overlay must compose
 into one push.
@@ -41,11 +41,11 @@ into **two** WGSL fragment shaders on one `CompiledBrush`: `stroke_wgsl` and
   default returns the same body; `watercolor`/`smudge`/`liquify` override it to
   emit a neutral fill that samples no stroke-only bindings.
 - **The preview variant has no live stroke.** It drops `@group(2)` selection
-  (hard-codes `sel = 1.0`) and swaps every stroke-only binding — scratch,
-  selection, the frozen clone source snapshot — for a registry fallback (e.g. the
+  (hard-codes `sel = 1.0`) and swaps every stroke-only binding (scratch,
+  selection, the frozen clone source snapshot) for a registry fallback (e.g. the
   1×1 white `_fallback` tile); stroke-seeded uniforms read their unseeded defaults.
 
-**Gotcha:** a non-terminal node *cannot* render differently at hover — its single
+**Gotcha:** a non-terminal node *cannot* render differently at hover; its single
 body runs in both modes. A non-terminal that samples a stroke-only resource will,
 at hover, sample the fallback with default uniforms and produce a meaningless (or
 transparent) dab. Preview-specific behavior lives on the *terminal*; if upstream

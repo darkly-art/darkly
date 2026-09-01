@@ -175,7 +175,7 @@ describe('transform menu flips', () => {
         tool.flip('h');
         const after = lastPushedMatrix();
         expect(after.mode).toBe('Perspective');
-        // Source TL now lands where TR did, and vice versa — same quad, mirrored
+        // Source TL now lands where TR did, and vice versa: same quad, mirrored
         // content.
         expect(mat3Apply(after.data as Mat3, 0, 0)).toEqual(mat3Apply(before, 100, 0));
         expect(mat3Apply(after.data as Mat3, 100, 80)).toEqual(mat3Apply(before, 0, 80));

@@ -1,4 +1,4 @@
-//! Switch node — routes one of two inputs through to the output based on
+//! Switch node: routes one of two inputs through to the output based on
 //! a static `select` flag, or removes the wire entirely so downstream falls
 //! back to its own port default.
 //!
@@ -19,7 +19,7 @@
 //! chosen upstream directly into the downstream, drops the other side, and
 //! removes the switch node. Switches whose `select` is dynamically wired
 //! are left in place and rejected by [`SwitchEvaluator::compile_wgsl`] in
-//! v1 — a runtime WGSL `select(...)` fallback is a follow-up if anyone
+//! v1: a runtime WGSL `select(...)` fallback is a follow-up if anyone
 //! actually wires it dynamically.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
@@ -113,7 +113,7 @@ impl BrushNodeEvaluator for SwitchEvaluator {
     }
 
     fn compile_wgsl(&self, _cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
-        // Reaching this means `apply_to` left the switch in place — which
+        // Reaching this means `apply_to` left the switch in place, which
         // only happens when `select` is dynamically wired. v1 rejects.
         Err(
             "Switch.select must be a static value; dynamic wiring is not \
@@ -128,12 +128,12 @@ impl BrushNodeEvaluator for SwitchEvaluator {
 /// through to all downstreams (or drop the wire entirely if the chosen
 /// input is unconnected), then remove the Switch.
 ///
-/// Switches whose `select` port has an incoming connection are left alone
-/// — those are dynamic and handled (rejected, in v1) by
+/// Switches whose `select` port has an incoming connection are left alone;
+/// those are dynamic and handled (rejected, in v1) by
 /// [`SwitchEvaluator::compile_wgsl`].
 ///
 /// Called by [`crate::brush::compile_graph`] on a throwaway clone of the
-/// user's graph — the persisted graph is never mutated.
+/// user's graph: the persisted graph is never mutated.
 pub(crate) fn apply_to(graph: &mut Graph<BrushWireType>) {
     let switch_ids: Vec<_> = graph
         .nodes()
@@ -203,7 +203,7 @@ pub(crate) fn apply_to(graph: &mut Graph<BrushWireType>) {
         }
 
         // remove_node also drops any stray edges still touching the switch
-        // (e.g. anyone wiring `out_X` after we cleared it — shouldn't
+        // (e.g. anyone wiring `out_X` after we cleared it: shouldn't
         // happen, but cheap insurance).
         let _ = graph.remove_node(&switch_id);
     }
@@ -283,7 +283,7 @@ mod tests {
             .connect(pr(&switch_id, "out_vec4"), pr(&stamp, "color"))
             .unwrap();
 
-        // Flip select to 1 — `in_1_vec4` is unconnected so the wire is dropped.
+        // Flip select to 1: `in_1_vec4` is unconnected so the wire is dropped.
         graph
             .set_port_default(&switch_id, SELECT_PORT, 1.0)
             .unwrap();
@@ -388,7 +388,7 @@ mod tests {
     /// A wire into the `select` port keeps the switch in the graph so the
     /// WGSL compile can reject it. There's no other Bool-output node in the
     /// registry today (the switch is the first), so we synthesize the
-    /// connection directly — `apply_to` doesn't re-validate wire types.
+    /// connection directly: `apply_to` doesn't re-validate wire types.
     #[test]
     fn dynamic_select_leaves_switch_in_place() {
         let mut graph = Graph::<BrushWireType>::new();

@@ -1,4 +1,4 @@
-//! Settable-source ports + the `brush_settings.size` signal — brush-level guards.
+//! Settable-source ports + the `brush_settings.size` signal: brush-level guards.
 //!
 //! Covers the migration's user-visible invariants across every builtin: the
 //! base-size knob is exposed on the `brush_settings` node (never a terminal),
@@ -16,7 +16,7 @@ use darkly::nodegraph::{Graph, PortRef};
 
 /// Expected base size per builtin after the migration. The four non-default
 /// brushes are the ones whose base didn't come from the registration default
-/// (0.1) — liquify/blur via terminal registration defaults, charcoal/calligraphy
+/// (0.1): liquify/blur via terminal registration defaults, charcoal/calligraphy
 /// via a terminal `inputs.size` that had to be relocated. A wrong value here
 /// means a brush silently changed size.
 fn expected_base(name: &str) -> f32 {

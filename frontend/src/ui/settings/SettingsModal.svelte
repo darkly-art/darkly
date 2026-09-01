@@ -65,7 +65,7 @@
             downloadBlob(blob, `darkly-${stamp}.zip`);
         } catch (e) {
             console.error('[storage] export failed', e);
-            alert('Export failed — see console for details.');
+            alert('Export failed: see console for details.');
         } finally {
             exporting = false;
         }

@@ -10,11 +10,11 @@ import type { PackPalette } from '../engine/protocol_gen';
 export type { PackPalette };
 
 /** The roles, in order. The one place the set is enumerated on this side of the
- *  boundary — the mirror of `PackPalette::roles()` in `brush/pack.rs`. */
+ *  boundary (the mirror of `PackPalette::roles()` in `brush/pack.rs`). */
 export const PALETTE_ROLES = ['chroma', 'refraction', 'surface'] as const;
 
-/** The class marking an element as carrying a palette. Nothing styles it today —
- *  the three roles are used directly — but it is where anything *derived* from
+/** The class marking an element as carrying a palette. Nothing styles it today
+ *  (the three roles are used directly), but it is where anything *derived* from
  *  them has to be declared, because a custom property whose value contains
  *  `var()` is substituted on the element that declares it. A derived token on
  *  `:root` would freeze at whatever the root's roles are and ignore every
@@ -40,7 +40,7 @@ export function packPalette(node: HTMLElement, palette: PackPalette) {
 }
 
 /**
- * What a derived group wears — Recents, "In no pack".
+ * What a derived group wears: Recents, "In no pack".
  *
  * Custom-property *references*, not literals, so a group with no pack behind it
  * follows the active theme while an imported pack keeps the colours it shipped

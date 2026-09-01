@@ -1,7 +1,7 @@
 use crate::units::UnitType;
 use std::collections::BTreeMap;
 
-/// A `const`-constructible parameter value, used for schema-level defaults —
+/// A `const`-constructible parameter value, used for schema-level defaults:
 /// today, a [`ParamKind::List`]'s per-entry overrides. [`ParamValue`] owns
 /// `String`s and `Vec`s that can't be built in a `const`, so the schema carries
 /// this `'static`-friendly mirror and lifts it through
@@ -68,13 +68,13 @@ pub struct ParamDef {
     /// vocabulary as a registration's `description`.
     pub description: Option<&'static str>,
     /// Display unit. Renders a suffix and, for [`UnitType::Percent`] /
-    /// [`UnitType::Degrees`], converts on the way to the UI — so a parameter
+    /// [`UnitType::Degrees`], converts on the way to the UI, so a parameter
     /// already stored in display space declares [`UnitType::Raw`].
     pub unit: UnitType,
     pub kind: ParamKind,
 }
 
-/// The value-shaped half of a [`ParamDef`] — what this parameter stores, its
+/// The value-shaped half of a [`ParamDef`]: what this parameter stores, its
 /// range, and its default.
 #[derive(Clone, Debug)]
 pub enum ParamKind {
@@ -97,9 +97,9 @@ pub enum ParamKind {
     Curve {
         default: &'static [[f32; 2]],
     },
-    /// Levels adjustment — a black/gamma/white/output transfer, stored as
+    /// Levels adjustment, a black/gamma/white/output transfer, stored as
     /// `[inBlack, inWhite, gamma, outBlack, outWhite]` (all normalized `[0,1]`
-    /// except `gamma`, the raw `0.1–10` exponent). Baked into the same LUT as a
+    /// except `gamma`, the raw `0.1-10` exponent). Baked into the same LUT as a
     /// [`Curve`](ParamKind::Curve) by the shared LUT-filter scaffold.
     Levels {
         default: [f32; 5],
@@ -122,7 +122,7 @@ pub enum ParamKind {
         options: &'static [(&'static str, &'static str)],
         default: &'static str,
     },
-    /// RGB color picked as normalized sRGB `[0,1]` — stored *as picked*, with
+    /// RGB color picked as normalized sRGB `[0,1]`, stored *as picked*, with
     /// **no `srgbToLinear` conversion**. That conversion is for paint colors
     /// composited in linear space; filter/veil params operate on already-stored
     /// texel values (like the Curves LUT), so they carry the sRGB triple raw.
@@ -130,14 +130,14 @@ pub enum ParamKind {
     Color {
         default: [f32; 3],
     },
-    /// A 2D vector — direction + magnitude, edited via the draggable offset pad.
+    /// A 2D vector (direction + magnitude), edited via the draggable offset pad.
     /// `max` is the magnitude clamp (the pad's edge radius); values are stored
     /// with magnitude ≤ `max`.
     Vec2 {
         max: f32,
         default: [f32; 2],
     },
-    /// A dynamic list of homogeneous entries — each entry is a named group of
+    /// A dynamic list of homogeneous entries: each entry is a named group of
     /// values matching `item`. `max_len` caps the entry count (surfaced in the
     /// schema so the list editor never hardcodes an effect-specific limit).
     /// `default` supplies per-entry named overrides layered on top of `item`'s
@@ -262,7 +262,7 @@ impl ParamDef {
 ///
 /// **Known-benign collision:** `List(vec![])` serializes as `[]`, which
 /// deserializes back as `Curve(vec![])` (an empty `Vec<[f32;2]>` also matches
-/// `[]`, and `Curve` is tried first — reordering only moves the ambiguity).
+/// `[]`, and `Curve` is tried first; reordering only moves the ambiguity).
 /// The def-less document path (`layer_kinds/filter.rs`) hits this. It is
 /// behaviorally invisible because every consumer of a `List` param treats any
 /// non-`List` variant as the empty list (→ passthrough); pinned by
@@ -282,7 +282,7 @@ pub enum ParamValue {
     Levels([f32; 5]),
     /// RGB color, normalized sRGB `[0,1]` (see [`ParamDef::Color`]).
     Color([f32; 3]),
-    /// A 2D vector — 2 flat numbers (see [`ParamDef::Vec2`]).
+    /// A 2D vector, 2 flat numbers (see [`ParamDef::Vec2`]).
     Vec2([f32; 2]),
     /// A dynamic list of named-value entries. `BTreeMap` keeps serialization
     /// deterministic and `PartialEq` stable, which the compositor's
@@ -507,7 +507,7 @@ impl ParamDef {
 
 /// Returned by [`ParamDef::coerce_portable`] when the externally-typed
 /// scalar does not match the def's expected variant. Carries just the
-/// type labels — the caller adds parameter-name / node-type context.
+/// type labels; the caller adds parameter-name / node-type context.
 #[derive(Debug)]
 pub struct ParamTypeMismatch {
     pub expected: &'static str,
@@ -518,7 +518,7 @@ pub struct ParamTypeMismatch {
 /// JSON). Coerced into the concrete [`ParamValue`] via
 /// [`ParamDef::coerce_portable`] using the registration metadata.
 ///
-/// `#[serde(untagged)]` tries variants top-down — more-specific first
+/// `#[serde(untagged)]` tries variants top-down, more-specific first,
 /// so a YAML `true` doesn't slip into `Int(1)`, `42` lands in `Int`
 /// before `Float`, and the variant carrying its source typing through
 /// the round trip means `algorithm: 0` reads back as `0` (not `0.0`).
@@ -584,7 +584,7 @@ mod tests {
     /// documentation table ships with a blank cell and no properties panel
     /// falls back to a raw snake_case field name. Walks the catalogs rather
     /// than the registries directly, which is exactly the set that reaches
-    /// both the UI and the export — including the item schema inside a `List`,
+    /// both the UI and the export, including the item schema inside a `List`,
     /// where a blank cell is easiest to miss.
     #[test]
     fn every_param_has_a_label_and_description() {
@@ -619,7 +619,7 @@ mod tests {
             check(reg.type_id, reg.params);
             checked += reg.params.len();
         }
-        assert!(checked > 0, "no parameters found — the scan found nothing");
+        assert!(checked > 0, "no parameters found: the scan found nothing");
     }
 
     // A small list schema used across the List/Vec2/Color tests: one entry is a
@@ -648,8 +648,8 @@ mod tests {
     /// node was configured with `algorithm = Int(1)` (Perlin), but after
     /// `brush_load` (graph → JSON → graph) the variant became `Float(1.0)`,
     /// and `shape.rs`'s `match Some(ParamValue::Int(v))` silently fell
-    /// through to the default `0` (Sine). Port defaults — which are floats
-    /// natively — round-tripped fine, so the UI showed correct numbers
+    /// through to the default `0` (Sine). Port defaults (which are floats
+    /// natively) round-tripped fine, so the UI showed correct numbers
     /// while the GPU rendered the wrong silhouette. Fix was to reorder the
     /// `#[serde(untagged)]` variants so the more-specific `Bool` and `Int`
     /// are attempted before `Float`.
@@ -714,7 +714,7 @@ mod tests {
 
     /// Pinned benign collision: `List(vec![])` serializes as `[]`, which
     /// deserializes back as `Curve(vec![])` (empty vec matches Curve, tried
-    /// first). Behaviorally invisible — every List consumer treats a non-List
+    /// first). Behaviorally invisible: every List consumer treats a non-List
     /// as the empty list. This test documents the degradation so a future
     /// reorder that changes it is a deliberate, reviewed choice.
     #[test]

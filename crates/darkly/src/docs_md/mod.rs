@@ -1,6 +1,6 @@
 //! Marked regions in the repository's markdown, filled from the registries.
 //!
-//! Everything Darkly registers already describes itself — a veil carries its own
+//! Everything Darkly registers already describes itself: a veil carries its own
 //! display name and description, and the picker, `metadata.json` and the
 //! documentation site all read that rather than restating it. Markdown checked
 //! into this repository was the one consumer left restating it by hand, so a
@@ -24,7 +24,7 @@
 //! exporting `pub fn register()`, and nothing here is edited to admit it.
 //!
 //! Needs no GPU. Like [`crate::catalog`], every fragment builds from `&'static`
-//! registration data alone — which is what lets the check run in the ordinary
+//! registration data alone, which is what lets the check run in the ordinary
 //! test suite rather than behind a device.
 
 pub mod fragments;
@@ -67,7 +67,7 @@ pub struct FragmentRegistration {
 ///
 /// Deliberately not the repository root. A fragment's output is a pure function
 /// of the registries and these two fields, so `sync` in check mode answers the
-/// same way whether or not the assets it links to have been rendered yet — a
+/// same way whether or not the assets it links to have been rendered yet: a
 /// row pointing at a missing image is a visible, testable failure, where a row
 /// that silently omits itself is not.
 pub struct FragmentCtx<'a> {
@@ -219,7 +219,7 @@ fn open_marker(line: &str) -> Option<(&str, &str)> {
 /// Whether the walk is inside a fenced code block, and which fence opened it.
 ///
 /// A marker in a code block is an example, not a region. Documentation about
-/// this system has to be able to show the syntax it is documenting —
+/// this system has to be able to show the syntax it is documenting:
 /// `CONTRIBUTING.md` does, and without this it would rewrite its own
 /// explanation into a table of veils.
 #[derive(Default)]
@@ -234,7 +234,7 @@ impl Fence {
         let run = opener.map_or(0, |c| text.chars().take_while(|x| *x == c).count());
         match self.0 {
             // A closing fence repeats the opener at least as many times and
-            // carries no info string — ```rust closes nothing.
+            // carries no info string: ```rust closes nothing.
             Some((char, len)) => {
                 if opener == Some(char) && run >= len && text[run..].trim().is_empty() {
                     self.0 = None;
@@ -261,17 +261,17 @@ impl Fence {
 pub struct Rendered {
     pub text: String,
     /// How many regions were found. Zero means the file only *mentions* the
-    /// syntax — in a code fence, say — and nothing in it is generated.
+    /// syntax (in a code fence, say) and nothing in it is generated.
     pub regions: usize,
 }
 
 /// Re-render every region in `text`. `rel` is the markdown file's path relative
-/// to the repository root — used to place the file's directory in the context,
+/// to the repository root, used to place the file's directory in the context,
 /// and to name the file in errors.
 ///
 /// Everything outside a region is copied byte for byte. A file may hold any
 /// number of regions, including several of the same fragment with different
-/// arguments — one page listing two catalogs is a table each, not a conflict.
+/// arguments: one page listing two catalogs is a table each, not a conflict.
 pub fn render_text(rel: &Path, text: &str) -> Result<Rendered, SyncError> {
     let md_dir = rel.parent().unwrap_or(Path::new(""));
     let err = |line: usize, kind: SyncErrorKind| SyncError {
@@ -299,7 +299,7 @@ pub fn render_text(rel: &Path, text: &str) -> Result<Rendered, SyncError> {
         if let Some((id, arg_text)) = open_marker(line) {
             if let Some((outer, at)) = &open {
                 // A marker inside a region is content the region owns, and the
-                // region is about to be overwritten — so it cannot be one.
+                // region is about to be overwritten, so it cannot be one.
                 return Err(err(*at, SyncErrorKind::Unterminated(outer.clone())));
             }
             let Some(reg) = fragment(id) else {
@@ -440,7 +440,7 @@ pub enum Mode {
 pub struct Report {
     /// Files that were rewritten, or in [`Mode::Check`] would have been.
     pub changed: Vec<PathBuf>,
-    /// Files holding at least one region — what the run actually covered.
+    /// Files holding at least one region, what the run actually covered.
     pub generated: Vec<PathBuf>,
 }
 
@@ -555,7 +555,7 @@ mod tests {
     }
 
     /// The info string is part of the opening fence, not a second fence, and a
-    /// tilde fence is a fence — a file that mixes them must still come out
+    /// tilde fence is a fence: a file that mixes them must still come out
     /// unchanged.
     #[test]
     fn fences_close_only_on_their_own_terms() {
@@ -634,7 +634,7 @@ mod tests {
     }
 
     /// Links resolve against the file that carries them, not the repository
-    /// root — the whole reason a fragment is handed a directory.
+    /// root, the whole reason a fragment is handed a directory.
     #[test]
     fn links_are_relative_to_the_markdown_file() {
         let at_root = FragmentCtx {
@@ -673,7 +673,7 @@ mod tests {
     }
 
     /// `AGENTS.md` and `CLAUDE.md` are symlinks to `CONTRIBUTING.md`. One file,
-    /// one entry — otherwise a report names the same content three times and a
+    /// one entry; otherwise a report names the same content three times and a
     /// link out of the tree would be followed out of it.
     #[test]
     fn the_walk_reaches_a_linked_file_once_under_its_real_name() {

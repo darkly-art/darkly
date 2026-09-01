@@ -1,6 +1,6 @@
 // Canvas-window coordinate helpers.
 //
-// Darkly has one coordinate frame — canvas/plane space — in which layer
+// Darkly has one coordinate frame (canvas/plane space) in which layer
 // extents, paint positions, and selection regions all live. The visible
 // "canvas window" is a rectangle `(canvas_origin, canvas_size)` within that
 // plane (moved by crop / resize). The selection mask is a *window-sized* R8
@@ -10,7 +10,7 @@
 // One definition, reused by every shader that samples the selection mask
 // (paint_circle, gradient, brush composite, the brush node-graph codegen) and
 // by the layer compositor (window UV → plane position). Concatenated ahead of
-// each shader at module-creation time — WGSL has no `#include`.
+// each shader at module-creation time, since WGSL has no `#include`.
 
 // Plane position `p` → selection-mask UV. The mask is window-sized at
 // `origin`, so `(p - origin) / size` lands plane pixels on the right texels.
@@ -26,8 +26,8 @@ fn window_uv_to_plane(uv: vec2f, origin: vec2f, size: vec2f) -> vec2f {
 }
 
 // Sample a mask in its OWN plane-anchored space from a plane position. Outside
-// the mask footprint — and when `mask_size` is the zero "no footprint"
-// sentinel — it reveals (1.0), matching the white mask default. One definition
+// the mask footprint (and when `mask_size` is the zero "no footprint"
+// sentinel), it reveals (1.0), matching the white mask default. One definition
 // so the mask's bounds, not the sampler UV, decide where it has coverage;
 // shared by the window-UV bridge below (display path) and the destructive bake
 // (apply_mask), which already has a plane position in hand.
@@ -48,7 +48,7 @@ fn sample_mask_plane(
 // Sample a mask in its OWN plane-anchored space from a window UV: the two-hop
 // `window_uv → plane → mask-local` bridge shared by every de-fused mask pass
 // (apply_mask display path, the passthrough-group lerp). Reveal semantics are
-// `sample_mask_plane`'s — this only adds the window_uv → plane hop.
+// `sample_mask_plane`'s; this only adds the window_uv → plane hop.
 fn sample_mask_window(
     mask_tex: texture_2d<f32>,
     samp: sampler,

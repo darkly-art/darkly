@@ -8,7 +8,7 @@ import { placeSmartObjectFromBlob } from './place_smart_object';
 /** Switch to the transform tool after a paste so the freshly-floated layer is
  *  immediately draggable. When transform is already active we ask the
  *  CanvasView transition effect to reactivate it (rebind session + re-run
- *  onActivate, no deactivate) so it picks up the just-pasted floating — a plain
+ *  onActivate, no deactivate) so it picks up the just-pasted floating; a plain
  *  same-tool assignment would be a no-op and would never begin a fresh
  *  activation. See `planToolTransition` in tool_session.ts. */
 function enterTransformTool() {
@@ -32,7 +32,7 @@ export function registerClipboardActions(): void {
             const engine = app.engine;
             if (!engine || app.activeLayerId == null) return;
             // `copy_layer_rich` snapshots metadata up front and then drives
-            // the same async pixel readback that `copy` does — it's a
+            // the same async pixel readback that `copy` does: it's a
             // superset, so we don't need to call both.
             engine.api.copyLayerRich({ id: app.activeLayerId });
             app.onCopyResult(async (result) => {
@@ -51,7 +51,7 @@ export function registerClipboardActions(): void {
         handler: async () => {
             const engine = app.engine;
             if (!engine || app.activeLayerId == null) return;
-            // No `cut_layer_rich` yet — fall back to the pixels-only path
+            // No `cut_layer_rich` yet: fall back to the pixels-only path
             // for cut. Cross-tab paste of a cut layer still works (PNG
             // fallback restores the bitmap) but loses blend mode/opacity.
             // Worth a follow-up.
@@ -115,7 +115,7 @@ export function registerClipboardActions(): void {
                         app.requestFrame();
                         return;
                     }
-                    // Rich paste failed (malformed JSON, bad pixel data) —
+                    // Rich paste failed (malformed JSON, bad pixel data):
                     // fall through to the PNG path below.
                 }
             }
@@ -177,7 +177,7 @@ export function registerClipboardActions(): void {
         handler: async () => {
             const engine = app.engine;
             if (!engine || app.activeLayerId == null) return;
-            // Paste into the active target — a raster layer or, when a mask is
+            // Paste into the active target: a raster layer or, when a mask is
             // the active edit target, the mask. Both write through the engine's
             // shared paste path, which handles RGBA layers and R8 masks alike,
             // and both float first so the clip can be positioned before it

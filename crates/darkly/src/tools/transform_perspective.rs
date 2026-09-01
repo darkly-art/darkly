@@ -1,6 +1,6 @@
 use crate::tool::ToolRegistration;
 
-/// Perspective sub-mode of the transform tool — surfaced as its own toolbar
+/// Perspective sub-mode of the transform tool: surfaced as its own toolbar
 /// cluster member so it has a display name + entry point. The transform logic
 /// is entirely frontend (the shared gizmo enters perspective on activation);
 /// this registration exists only to name the tool across the WASM boundary.

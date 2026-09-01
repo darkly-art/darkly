@@ -2,14 +2,14 @@
  * JSON records in the Darkly directory.
  *
  * Two shapes, one write discipline:
- *   - `jsonFile` — a single document (`recents.json`).
- *   - `jsonDir`  — a directory of id-keyed records (`packs/`, `brushes/`).
+ *   - `jsonFile` - a single document (`recents.json`).
+ *   - `jsonDir`  - a directory of id-keyed records (`packs/`, `brushes/`).
  *
  * Writes are coalesced on a trailing edge, so a burst of mutations costs one
  * write, and serialized against each other per path, so two writes can never
  * interleave and leave a torn file. Both properties already existed in this
- * codebase — the coalescing in `config/store.svelte.ts`'s `#scheduleWrite` and
- * the serialization in `recording/recorder.svelte.ts`'s `withScratchLock` —
+ * codebase (the coalescing in `config/store.svelte.ts`'s `#scheduleWrite` and
+ * the serialization in `recording/recorder.svelte.ts`'s `withScratchLock`)
  * and are factored here rather than copied a third and fourth time.
  *
  * Everything under this directory rides `exportRootAsZip`, so a record written
@@ -27,7 +27,7 @@ const WRITE_DEBOUNCE_MS = 200;
  *  same file share the chain rather than racing. */
 const writeLocks = new Map<string, Promise<unknown>>();
 
-/** Run `fn` exclusively against `path`. FIFO — writes land in issue order. */
+/** Run `fn` exclusively against `path`. FIFO: writes land in issue order. */
 function withWriteLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
     const prev = writeLocks.get(path) ?? Promise.resolve();
     const next = prev.then(fn, fn);
@@ -97,7 +97,7 @@ async function flushAll<T>(
 
 export interface JsonFile<T> {
     /** Read the file. A missing file, malformed JSON, or a value that fails
-     *  `validate` all read as the fallback — never a throw. */
+     *  `validate` all read as the fallback, never a throw. */
     read(): Promise<T>;
     /** Queue a coalesced write. Fire-and-forget by design. */
     write(value: T): void;
@@ -109,8 +109,8 @@ export interface JsonFile<T> {
  * A single JSON file in the Darkly directory.
  *
  * `fallback` supplies the value for a file that is missing or unreadable, and
- * `validate` (when given) has the last word on whether what was read is usable
- * — a stored file may be arbitrarily old or hand-edited.
+ * `validate` (when given) has the last word on whether what was read is usable:
+ * a stored file may be arbitrarily old or hand-edited.
  */
 export function jsonFile<T>(
     path: string,
@@ -144,7 +144,7 @@ export function jsonFile<T>(
 
 export interface JsonDir<T> {
     /** Every record that parses, keyed by id. Records that fail to parse are
-     *  skipped with a warning — one corrupt file must not cost the caller the
+     *  skipped with a warning: one corrupt file must not cost the caller the
      *  whole directory. */
     readAll(): Promise<Map<string, T>>;
     /** Queue a coalesced write of one record. */

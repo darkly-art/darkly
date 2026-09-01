@@ -72,7 +72,7 @@ use std::collections::HashMap;
 // Internal helper types
 // ---------------------------------------------------------------------------
 
-/// Deferred transform setup — waiting for async content bounds from the compositor.
+/// Deferred transform setup: waiting for async content bounds from the compositor.
 /// `node_id` may refer to a raster layer or a mask filter; the format is
 /// derived from the node's [`PixelBuffer`].
 pub(crate) struct PendingTransform {
@@ -80,14 +80,14 @@ pub(crate) struct PendingTransform {
     pub plan: crate::document::PixelTransformPlan,
 }
 
-/// Deferred layer/selection flip — waiting for the selection CPU cache (the
+/// Deferred layer/selection flip: waiting for the selection CPU cache (the
 /// flip pivot is the selection bbox centre, read from that cache).
 pub(crate) struct PendingFlip {
     pub node_id: LayerId,
     pub xform: crate::gpu::ortho_transform::OrthoXform,
 }
 
-/// Deferred destructive filter — waiting for the selection CPU cache (the
+/// Deferred destructive filter: waiting for the selection CPU cache (the
 /// filter region is the selection bbox, read from that cache). Mirrors
 /// [`PendingFlip`].
 pub(crate) struct PendingFilter {
@@ -111,7 +111,7 @@ pub(crate) struct FilterPreview {
     pub mask: Option<wgpu::Texture>,
 }
 
-/// Deferred copy/cut — waiting for selection CPU cache to be populated.
+/// Deferred copy/cut: waiting for selection CPU cache to be populated.
 pub(crate) struct PendingCopy {
     pub layer_id: LayerId,
     pub is_cut: bool,
@@ -119,7 +119,7 @@ pub(crate) struct PendingCopy {
 
 /// Layer metadata snapshot captured at `copy_layer_rich` time. Combined with
 /// the async pixel readback to produce a `LayerClipboard`. CPU-side fields
-/// only — pixel data still flows through the existing readback pipeline.
+/// only: pixel data still flows through the existing readback pipeline.
 pub(crate) struct RichCopyMetadata {
     pub name: String,
     pub visible: bool,
@@ -127,7 +127,7 @@ pub(crate) struct RichCopyMetadata {
     pub opacity: f32,
     pub blend_mode: String,
     /// Snapshot of any mask filter on the source. Pixel data is NOT
-    /// captured in v1 — it requires a parallel readback that lands in v2.
+    /// captured in v1: it requires a parallel readback that lands in v2.
     pub mask: Option<RichCopyMask>,
 }
 
@@ -137,13 +137,13 @@ pub(crate) struct RichCopyMask {
     pub bounds: crate::coord::CanvasRect,
 }
 
-/// Deferred undo commit — waiting for async GPU diff rect result.
+/// Deferred undo commit: waiting for async GPU diff rect result.
 pub(crate) struct PendingUndoCommit {
     pub layer_id: LayerId,
     pub snapshot: crate::gpu::region_store::Snapshot,
 }
 
-/// Context for a pending async GPU readback — travels with the request and
+/// Context for a pending async GPU readback: travels with the request and
 /// is returned alongside the pixel data on completion.
 ///
 /// All variants carry a `node_id` (where applicable) that may refer to either
@@ -175,14 +175,14 @@ pub(crate) enum ReadbackContext {
         seed_canvas: crate::coord::CanvasPoint,
         tolerance: u8,
         mode: crate::document::SelectionMode,
-        /// See `FloodFill::extent` — same coordinate-frame snapshot.
+        /// Same coordinate-frame snapshot as `FloodFill::extent`.
         extent: crate::gpu::layer_readback::LayerReadbackExtent,
     },
     /// Readback of a node's pixels for "alpha to selection": the completion
     /// handler projects their opacity into the selection.
     AlphaToSelection {
         was_active: bool,
-        /// See `FloodFill::extent` — same coordinate-frame snapshot.
+        /// Same coordinate-frame snapshot as `FloodFill::extent`.
         extent: crate::gpu::layer_readback::LayerReadbackExtent,
     },
     /// Async readback of the selection GPU texture for CPU cache update.
@@ -201,14 +201,14 @@ pub(crate) enum ReadbackContext {
     /// When every blob lands, `poll_save_result` hands back a `SaveBundle`.
     SaveDocument {
         kind: save::SaveReadbackKind,
-        /// Source texture dimensions in pixels — readback rows come back
+        /// Source texture dimensions in pixels: readback rows come back
         /// `width × bpp` wide.
         width: u32,
         height: u32,
     },
     Thumbnail {
         node_id: LayerId,
-        /// Dimensions of the readback buffer in pixels — the source layout
+        /// Dimensions of the readback buffer in pixels: the source layout
         /// the downscale samples from. This is the layer texture's own
         /// extent at readback time, not the canvas extent (layers may be
         /// smaller or larger than canvas; see `request_thumbnail_readback`).
@@ -224,16 +224,16 @@ pub(crate) enum ReadbackContext {
     /// `width`/`height` are the source render dimensions (the layout of the
     /// readback bytes, always `BRUSH_STROKE_RENDER_SIZE`). The framer crops
     /// the painted region and resizes to the canonical `BRUSH_THUMBNAIL_SIZE`
-    /// before PNG-encoding — same shape as `BrushThumbnailForSave`.
+    /// before PNG-encoding: same shape as `BrushThumbnailForSave`.
     BrushStrokePreview {
         width: u32,
         height: u32,
         /// The field the stroke was rendered over. The framer finds the stroke
         /// by looking for pixels the backdrop did not put there, so it has to
-        /// travel with the request — the engine's theme may have moved on, and
+        /// travel with the request: the engine's theme may have moved on, and
         /// another brush's bake may be in flight alongside this one.
         backdrop: PreviewBackdrop,
-        /// Graph version at the time the render was issued — used to skip
+        /// Graph version at the time the render was issued, used to skip
         /// caching stale results if another render has superseded this one.
         graph_version: u64,
     },
@@ -291,7 +291,7 @@ pub(crate) enum ReadbackContext {
     /// compilations are dropped.
     ///
     /// `width` / `height` are the cursor_preview_mask dimensions at readback
-    /// time — used to walk the row-padded buffer the GPU returned.
+    /// time, used to walk the row-padded buffer the GPU returned.
     BrushCursorPreviewScale {
         topology_version: u64,
         width: u32,
@@ -303,7 +303,7 @@ pub(crate) enum ReadbackContext {
     ///
     /// `cell` is a clone of the [`crate::gpu::region_store::UndoRegionEntry::pixels`]
     /// produced by `commit_region` / `restore_region`. The other clone lives
-    /// on the entry — see [`crate::gpu::region_store::EntryPixels`].
+    /// on the entry (see [`crate::gpu::region_store::EntryPixels`]).
     UndoRegionReady {
         cell: std::rc::Rc<std::cell::RefCell<EntryPixels>>,
     },
@@ -341,14 +341,14 @@ pub(crate) struct PreviewJob {
     pub height: u32,
     pub fps: u32,
     pub frames: Vec<Option<Vec<u8>>>,
-    /// Carried so the completed sequence can be closed on the way out —
+    /// Carried so the completed sequence can be closed on the way out:
     /// `poll_preview` is where the frames first exist all at once, and only the
     /// declaration knows whether they hand back to their first.
     pub anim: crate::gpu::preview::PreviewAnim,
 }
 
 /// Cached thumbnail RGBA bytes per node id. Keyed uniformly across layers,
-/// groups, and filters — the node id is sufficient to disambiguate, so the
+/// groups, and filters: the node id is sufficient to disambiguate, so the
 /// previous separate `layer` and `mask` maps collapse into one.
 pub(crate) struct ThumbnailCache {
     bytes: HashMap<LayerId, Vec<u8>>,
@@ -373,10 +373,10 @@ impl ThumbnailCache {
 /// Logical channel an overlay primitive set belongs to. The engine keeps
 /// one primitive `Vec` per channel ([`DarklyEngine::overlays`]) and merges
 /// them in variant order before pushing to the compositor's single overlay
-/// slot — so the z-order is the declaration order here (`Selection` at the
+/// slot, so the z-order is the declaration order here (`Selection` at the
 /// bottom, `Tool` on top). Channels are replaced wholesale and
 /// independently: a `Tool` update every hover move leaves `CloneSource` and
-/// `Selection` intact. A new channel is purely additive — extend the enum
+/// `Selection` intact. A new channel is purely additive: extend the enum
 /// and `COUNT`/`ALL` follow; the merge never branches per variant.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum OverlayChannel {
@@ -384,7 +384,7 @@ pub enum OverlayChannel {
     /// changes. Bottom of the stack.
     Selection,
     /// Clone-brush source marker + "pick a source" hint. Persists across
-    /// strokes — only the clone cursor module clears it, decoupled from the
+    /// strokes: only the clone cursor module clears it, decoupled from the
     /// async dab that clobbers `Tool` every hover move.
     CloneSource,
     /// Transient active-tool overlay: the dab preview stamp, tool handles.
@@ -393,7 +393,7 @@ pub enum OverlayChannel {
 }
 
 impl OverlayChannel {
-    /// Number of channels — the length of [`DarklyEngine::overlays`].
+    /// Number of channels, the length of [`DarklyEngine::overlays`].
     pub const COUNT: usize = 3;
     /// Every channel in z-order (bottom to top). The merge iterates this.
     pub const ALL: [OverlayChannel; Self::COUNT] = [Self::Selection, Self::CloneSource, Self::Tool];
@@ -405,7 +405,7 @@ impl OverlayChannel {
 }
 
 // ---------------------------------------------------------------------------
-// DarklyEngine — platform-agnostic editor core.
+// DarklyEngine: platform-agnostic editor core.
 // ---------------------------------------------------------------------------
 
 pub struct DarklyEngine {
@@ -421,11 +421,11 @@ pub struct DarklyEngine {
     /// Session-level "isolate this node" flag. When set, the renderer shows
     /// only this node's contribution (e.g. an R8 mask is rendered grayscale,
     /// a layer is rendered without siblings/parents). Universal across node
-    /// kinds — works for any future filter / filter filter too.
+    /// kinds: works for any future filter / filter filter too.
     pub(crate) isolated_node: Option<LayerId>,
     pub(crate) view_transform: ViewTransform,
     /// Decomposed view inputs from which `view_transform` is derived. The
-    /// single source of truth for pan/zoom/rotation/screen — `set_view_transform`
+    /// single source of truth for pan/zoom/rotation/screen: `set_view_transform`
     /// writes them, and `rebuild_view_transform` re-derives the matrix from
     /// them (plus the current `doc.width/height`) on any canvas-dimension
     /// change. `rotation` here is also what the brush stack threads into
@@ -437,7 +437,7 @@ pub struct DarklyEngine {
     /// channel so a new channel is additive (no merge edit) and each
     /// channel is replaced wholesale independently of the others.
     pub(crate) overlays: [Vec<OverlayPrimitive>; OverlayChannel::COUNT],
-    /// Internal clipboard — holds typed content for copy/paste within Darkly.
+    /// Internal clipboard: holds typed content for copy/paste within Darkly.
     pub(crate) clipboard: Option<Clipboard>,
     /// Active paste compatibility session.
     pub(crate) floating: Option<FloatingContent>,
@@ -450,19 +450,19 @@ pub struct DarklyEngine {
     /// Pre-stroke scratch snapshot for the current stroke. Lazily populated
     /// on the first stroke_to of a stroke; consumed at end_stroke (moved into
     /// `pending_undo_commit`) or by a sync commit path (flood fill, clear,
-    /// fill_background — those take their own snapshots inline).
+    /// fill_background: those take their own snapshots inline).
     pub(crate) scratch_snapshot: Option<crate::gpu::region_store::Snapshot>,
     /// Selection-texture snapshot held between `save_selection_for_undo` and
     /// the matching `commit_selection_undo`. Some selection ops (magic wand,
     /// mask-to-selection) save before an async readback and commit on
-    /// completion — the snapshot lives across that boundary.
+    /// completion: the snapshot lives across that boundary.
     pub(crate) pending_selection_snapshot: Option<crate::gpu::region_store::Snapshot>,
 
     // --- Brush Engine ---
     pub(crate) brush_pipelines: BrushPipelines,
     /// Active brush stroke engine (only during a BrushStroke operation).
     pub(crate) brush_stroke_engine: Option<StrokeEngine>,
-    /// Shared tool session — a generic bag of per-tool state shared
+    /// Shared tool session: a generic bag of per-tool state shared
     /// across every engine in a `DarklySession`. The brush module stores
     /// its [`crate::brush::state::BrushState`] entry here; other tools
     /// that grow cross-engine state in future register theirs the same
@@ -494,7 +494,7 @@ pub struct DarklyEngine {
     /// Cached PNG bytes of the most recently-completed editor preview.
     /// `brush_stroke_preview()` returns this synchronously; it's refreshed
     /// asynchronously via `ReadbackContext::BrushStrokePreview`. The frontend
-    /// uses the bytes directly as a `Blob` URL — same shape as
+    /// uses the bytes directly as a `Blob` URL: same shape as
     /// `active_dab_preview_cache`. Always framed to `BRUSH_THUMBNAIL_SIZE`.
     pub(crate) brush_stroke_preview_cache: Option<Vec<u8>>,
     // `brush_graph_version` and `brush_topology_version` moved into the
@@ -508,7 +508,7 @@ pub struct DarklyEngine {
     // --- Active brush dab preview ---
     /// Cached PNG bytes of the most recently-completed active-dab
     /// preview, framed through the same `frame_dab_thumbnail` path used
-    /// for baked thumbnails — so this is byte-identical to a
+    /// for baked thumbnails, so this is byte-identical to a
     /// `brush_dab_thumbnail(active_name)` call when the active brush
     /// matches a preset. `brush_active_dab_preview()` returns this
     /// synchronously; it's refreshed asynchronously via
@@ -526,7 +526,7 @@ pub struct DarklyEngine {
     /// Topology version of the brush whose cursor-preview coverage scale
     /// we last requested a readback for. Compared against the current
     /// topology to skip re-issuing the readback when the brush hasn't
-    /// changed shape — the scale is a property of the graph topology,
+    /// changed shape: the scale is a property of the graph topology,
     /// not the cursor pose.
     pub(crate) last_requested_cursor_scale_topology_version: u64,
     /// Theme colors shared by the stroke preview, the dab preview, and
@@ -547,11 +547,11 @@ pub struct DarklyEngine {
     /// requests. Set when a request arrives with nothing in flight, so one
     /// `render_offscreen` serves a whole picker's worth of cards.
     pub(crate) preview_source_dirty: bool,
-    /// Whether that subject is the live composite rather than a cleared texture
-    /// — what the last mechanism to open asked for.
+    /// Whether that subject is the live composite rather than a cleared
+    /// texture: what the last mechanism to open asked for.
     pub(crate) preview_source_is_composite: bool,
-    /// The one preview being generated right now — see
-    /// [`preview::PREVIEW_FRAMES_PER_TICK`] for why generation is serialized.
+    /// The one preview being generated right now (see
+    /// [`preview::PREVIEW_FRAMES_PER_TICK`] for why generation is serialized).
     pub(crate) preview_active: Option<preview::ActivePreview>,
     /// In-flight + completed preview jobs, keyed by `(catalog, &'static str type
     /// id)`. Frame slots fill in asynchronously as `ReadbackContext::PreviewFrame`
@@ -583,7 +583,7 @@ pub struct DarklyEngine {
     /// Layer pinned by the clone set-source gesture, or `None` for
     /// same-layer clone. Session state like the anchor: persists across
     /// strokes and brush / tool switches, never serialized. Kept across
-    /// layer deletion too — `LayerId` is a generational slotmap key, so a
+    /// layer deletion too: `LayerId` is a generational slotmap key, so a
     /// stale pin can't alias a new layer, and undoing the deletion
     /// reinserts the same id (`EntityRemoveAction::undo`), reviving the
     /// pin. Stroke start validates it: a dead or group id falls back to
@@ -620,7 +620,7 @@ pub struct DarklyEngine {
 
     // --- Async readback ---
     pub(crate) readbacks: ReadbackScheduler<ReadbackContext>,
-    /// Completed copy result — picked up by the frontend on the next poll.
+    /// Completed copy result: picked up by the frontend on the next poll.
     pub(crate) pending_copy_result: Option<ClipboardExport>,
     /// Metadata snapshot captured at `copy_layer_rich` time. When the async
     /// pixel readback completes, this snapshot is combined with the pixels
@@ -630,11 +630,11 @@ pub struct DarklyEngine {
     /// the JSON-serialised `LayerClipboard` for transmission via the
     /// system clipboard's `web application/x-darkly-layer` custom MIME.
     pub(crate) pending_layer_clip: Option<String>,
-    /// Last picked color — returned immediately while async readback is in flight.
+    /// Last picked color: returned immediately while async readback is in flight.
     pub(crate) last_picked_color: [u8; 4],
-    /// Completed image-export result — drained by `poll_export_result()`.
+    /// Completed image-export result, drained by `poll_export_result()`.
     pub(crate) pending_export_result: Option<ExportImageResult>,
-    /// Active save job — populated by `start_save_document`, drained by
+    /// Active save job: populated by `start_save_document`, drained by
     /// `poll_save_result` once every pixel blob and the composite have
     /// landed. Only one save can be in flight per engine; a second
     /// `start_save_document` while this is `Some` errors with
@@ -650,7 +650,7 @@ pub struct DarklyEngine {
     pub(crate) thumbnail_version: u32,
 
     /// Set once a layer-grow request has been refused for hitting
-    /// `MAX_LAYER_DIM` — used to log the cap warning at most once per
+    /// `MAX_LAYER_DIM`, used to log the cap warning at most once per
     /// process lifetime.
     pub(crate) layer_growth_capped: bool,
 
@@ -659,7 +659,7 @@ pub struct DarklyEngine {
     pub(crate) brush_perf: BrushPerfCounters,
 
     /// Mid-stroke full re-render fallbacks during this stroke (the
-    /// per-engine counterpart to `brush_perf` — see [`BrushPerfCounters`]
+    /// per-engine counterpart to `brush_perf`; see [`BrushPerfCounters`]
     /// docs on why this isn't a field there). Bumped in `painting.rs`
     /// when the checkpoint ring's coverage invariant fails; surfaced
     /// via `test_stroke_full_rerender_events`.
@@ -668,7 +668,7 @@ pub struct DarklyEngine {
     /// Snapshot of `brush_perf` taken on the last `drain_brush_perf_delta`
     /// call. Subtracted from the current accumulator on each drain to
     /// produce a per-interval delta. Reset to default at `begin_stroke`
-    /// alongside `brush_perf`. Native bench harnesses only — production
+    /// alongside `brush_perf`. Native bench harnesses only: production
     /// never reads this.
     pub(crate) last_brush_perf: BrushPerfCounters,
 
@@ -857,7 +857,7 @@ impl DarklyEngine {
     }
 
     /// Cumulative canvas-space bbox of every dab the in-flight stroke has
-    /// recorded — the region the checkpoint ring saves and restores on a
+    /// recorded: the region the checkpoint ring saves and restores on a
     /// mid-stroke rewind. `None` when no stroke is in flight or no dab has
     /// been placed. Test-only.
     #[cfg(any(test, feature = "testing"))]
@@ -865,7 +865,7 @@ impl DarklyEngine {
         self.brush_stroke_engine.as_ref()?.save_points.full_bbox()
     }
 
-    /// Whether the frame loop would schedule another frame right now — the
+    /// Whether the frame loop would schedule another frame right now: the
     /// `needs_more` value `render` returns to JS. Test-only.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_frame_needs_more(&self) -> bool {
@@ -886,7 +886,7 @@ impl DarklyEngine {
         self.compositor.test_clear_needs_present();
     }
 
-    /// Current cursor-preview coverage scale uniform — the multiplier the
+    /// Current cursor-preview coverage scale uniform: the multiplier the
     /// overlay shader applies to KIND_MASKED_STAMP sampled coverage.
     /// Test-only.
     #[cfg(any(test, feature = "testing"))]
@@ -901,7 +901,7 @@ impl DarklyEngine {
     }
 
     /// Blocking readback of the document selection's R8 mask texture (window-
-    /// sized, one byte per pixel — 255 selected, 0 unselected). Test-only;
+    /// sized, one byte per pixel: 255 selected, 0 unselected). Test-only;
     /// lets selection-modify tests inspect mask values directly rather than
     /// inferring them through paint. Returns `None` before the selection state
     /// is allocated.
@@ -925,7 +925,7 @@ impl DarklyEngine {
 
     /// Test-only pointer to the document. Used by the load-refusal
     /// tests to assert that a failed `open_document` does NOT swap the
-    /// engine's doc out from under the caller — the original allocation
+    /// engine's doc out from under the caller: the original allocation
     /// must still be the live one. Equality on a raw `*const Document`
     /// is enough to spot the move (since `mem::replace` would replace
     /// the slotmap and its heap allocations).
@@ -997,7 +997,7 @@ impl DarklyEngine {
 
     /// Blocking readback of a node's GPU texture (raster layer or mask
     /// filter). For test assertions only. Format and extent come from the
-    /// texture's own metadata — callers don't need to know whether the id
+    /// texture's own metadata: callers don't need to know whether the id
     /// refers to a layer or a filter.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_layer(&self, node_id: LayerId) -> Vec<u8> {
@@ -1016,7 +1016,7 @@ impl DarklyEngine {
         )
     }
 
-    /// Canvas-space rect a node's texture occupies — the frame the buffers from
+    /// Canvas-space rect a node's texture occupies: the frame the buffers from
     /// [`Self::test_readback_layer`] / [`Self::test_readback_mask`] are laid out
     /// in. For test assertions only.
     ///
@@ -1036,7 +1036,7 @@ impl DarklyEngine {
     /// the void's source texture. For test assertions only: on native there is
     /// no webcam, so this is the only way to give a capture void a frame.
     ///
-    /// Mirrors the production upload path exactly — install the pixels, then
+    /// Mirrors the production upload path exactly: install the pixels, then
     /// sync the document's `VoidLayer::frame`. Skipping the second half would
     /// leave the GPU holding an image the document doesn't know about, and
     /// every consumer that asks the document whether a void owns pixels
@@ -1064,7 +1064,7 @@ impl DarklyEngine {
     /// `pixel_data_for` path the save flow uses (`queue_pixel_readback`). For
     /// test assertions only. Returns `None` when the void declares no
     /// persistent frame. This is the readback the camera void's aux texture
-    /// must support — it requires `COPY_SRC` on that texture.
+    /// must support: it requires `COPY_SRC` on that texture.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_void_frame(&self, layer_id: LayerId) -> Option<Vec<u8>> {
         let data = self.compositor.pixel_data_for(layer_id)?;
@@ -1118,8 +1118,8 @@ impl DarklyEngine {
 
     /// Blocking readback of the present pass output (composite cache run
     /// through the present shader into a canvas-sized RGBA8 target). For test
-    /// assertions about the present stage itself — premultiplied-alpha
-    /// handling, the transparency checker, OOB workspace background, etc. —
+    /// assertions about the present stage itself (premultiplied-alpha
+    /// handling, the transparency checker, OOB workspace background, etc.),
     /// which `test_readback_canvas` cannot cover because it reads the
     /// pre-present composite cache.
     #[cfg(any(test, feature = "testing"))]
@@ -1129,7 +1129,7 @@ impl DarklyEngine {
     }
 
     /// Blocking readback of the present pass through the **production** view
-    /// transform into a `viewport_w × viewport_h` target — what the surface
+    /// transform into a `viewport_w × viewport_h` target: what the surface
     /// would actually show. Unlike [`Self::test_readback_present`] (which forces
     /// an identity 1:1 transform) this exercises the real screen↔canvas mapping,
     /// so it can observe resize-induced squash/offset bugs that the
@@ -1180,7 +1180,7 @@ impl DarklyEngine {
 
     /// Test-only: the current selection marching-ants overlay primitives.
     /// These are `FLAG_CANVAS_SPACE` (plane-space) dashed lines, so their
-    /// `p0`/`p1` are plane coordinates — used to assert ant placement keeps
+    /// `p0`/`p1` are plane coordinates, used to assert ant placement keeps
     /// tracking the selection's plane bounds across a crop.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_selection_overlay(&self) -> Vec<crate::gpu::overlay::OverlayPrimitive> {
@@ -1197,7 +1197,7 @@ impl DarklyEngine {
     }
 
     /// Peek at the cached thumbnail bytes for any node id without queuing a
-    /// fresh readback. Test-only — production callers go through
+    /// fresh readback. Test-only: production callers go through
     /// [`node_thumbnail`] which intentionally also queues. The regression
     /// tests in `thumbnail_reactivity.rs` need a non-side-effecting peek so
     /// they can prove the auto-queue path populated the cache.
@@ -1221,7 +1221,7 @@ impl DarklyEngine {
     }
 
     /// Blocking readback of the raw stroke-preview **render canvas** for the
-    /// active brush — the buffer *before* `frame_stroke_thumbnail` crops it.
+    /// active brush: the buffer *before* `frame_stroke_thumbnail` crops it.
     /// Returns `(pixels, width, height)`. For test assertions only: lets a
     /// test confirm the neutralized preview stroke stays clear of the render
     /// border, i.e. no ink was clipped away before the changed-pixel crop
@@ -1240,7 +1240,7 @@ impl DarklyEngine {
     }
 
     /// Blocking readback of the raw dab-preview **render canvas** for the
-    /// active brush — the buffer *before* `frame_dab_thumbnail` crops it.
+    /// active brush: the buffer *before* `frame_dab_thumbnail` crops it.
     /// Returns `(pixels, width, height)`. Same purpose and path as
     /// [`Self::test_render_stroke_preview_canvas`], for the single-dab preview.
     #[cfg(any(test, feature = "testing"))]
@@ -1302,7 +1302,7 @@ impl DarklyEngine {
     }
 
     // -----------------------------------------------------------------
-    // BrushState accessors — keep call sites compact.
+    // BrushState accessors: keep call sites compact.
     // -----------------------------------------------------------------
     //
     // The brush's shared state lives in `tool_session` (generic) under
@@ -1322,7 +1322,7 @@ impl DarklyEngine {
             .clone()
     }
 
-    /// Version counter snapshot. Bumped on every brush-graph mutation —
+    /// Version counter snapshot. Bumped on every brush-graph mutation:
     /// drives editor-preview cache invalidation.
     pub fn brush_graph_version(&self) -> u64 {
         self.tool_session
@@ -1364,7 +1364,7 @@ impl DarklyEngine {
 
     /// Block until all pending async readbacks complete. For tests only.
     /// Uses `device.poll(Wait)` to ensure mapping callbacks fire, then
-    /// dispatches every completed readback through the shared handler —
+    /// dispatches every completed readback through the shared handler:
     /// same semantics as a real frame's `poll_pending`.
     ///
     /// Gated with the rest of the blocking-readback surface: `device.poll(Wait)`
@@ -1383,7 +1383,7 @@ impl DarklyEngine {
         }
     }
 
-    /// Block on the GPU device only — fire map callbacks — WITHOUT
+    /// Block on the GPU device only (fire map callbacks) WITHOUT
     /// polling or dispatching the readback scheduler. On native this
     /// stands in for the browser event loop that resolves buffer
     /// mappings on web. For tests that must verify another code path
@@ -1449,7 +1449,7 @@ mod tests {
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["type"], "pixelate");
         // Per the no-duplicate-display-name rule, only the type_id ships
-        // with the instance — display name is resolved by the UI via the
+        // with the instance: display name is resolved by the UI via the
         // veil_types() registry table.
         assert!(json.get("displayName").is_none());
         assert_eq!(json["visible"], true);

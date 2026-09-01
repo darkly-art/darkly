@@ -4,10 +4,10 @@
     import { closeGuard } from './closeGuard.svelte';
 
     /** Id of the tab currently being inline-renamed, or null when no edit
-     *  is in progress. Local state — only one rename can be active at a
+     *  is in progress. Local state: only one rename can be active at a
      *  time, so it doesn't need to live on the shell. */
     let editingId = $state<string | null>(null);
-    /** Working copy of the name while editing — committed on blur/Enter,
+    /** Working copy of the name while editing, committed on blur/Enter and
      *  discarded on Escape. */
     let editValue = $state('');
     /** Bound to the active <input> so we can focus + select it on demand. */
@@ -34,10 +34,10 @@
     /** Held true for a single paint while `shell.reorder` runs and inline
      *  transforms are cleared. Without it, every displaced tab's transform
      *  transitions from its shift value to 0 against a layout box that
-     *  also just moved — producing a visual back-and-forth jump. */
+     *  also just moved, producing a visual back-and-forth jump. */
     let committing = $state(false);
-    /** Pointerdown landed but threshold not crossed yet — may turn into
-     *  a drag or stay a plain click/dblclick. */
+    /** Pointerdown has landed but the threshold hasn't been crossed yet; it
+     *  may turn into a drag or stay a plain click/dblclick. */
     let pending: { id: string; index: number; startX: number; pointerId: number; target: HTMLElement } | null = null;
     const DRAG_THRESHOLD = 4;
     /** Matches `.tab-strip { gap: 0 }`. */
@@ -60,7 +60,7 @@
     function commitRename() {
         if (editingId === null) return;
         const trimmed = editValue.trim();
-        // Empty / whitespace-only names look broken in the strip — keep the
+        // Empty / whitespace-only names look broken in the strip: keep the
         // previous name silently rather than throwing or rejecting.
         if (trimmed.length > 0) shell.setName(editingId, trimmed);
         editingId = null;
@@ -131,7 +131,7 @@
             drag = null;
             suppressClickId = null;
             // Two rAFs so the `transition: none` frame is actually painted
-            // before transitions are re-enabled — a single rAF would batch
+            // before transitions are re-enabled; a single rAF would batch
             // both updates into the same paint and the glitch would return.
             requestAnimationFrame(() => {
                 requestAnimationFrame(() => {
@@ -143,7 +143,7 @@
 
     function onTabPointerCancel(_e: PointerEvent) {
         pending = null;
-        // Snap back without committing — touch cancellation, OS interrupt, etc.
+        // Snap back without committing: touch cancellation, OS interrupt, etc.
         if (drag) drag = null;
     }
 

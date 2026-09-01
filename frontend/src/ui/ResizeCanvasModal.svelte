@@ -224,7 +224,7 @@
         ctx.fillRect(cx2, cy, W - cx2, cy2 - cy); // right band
     });
 
-    // Refit when the stage resizes (but never mid-drag — the fit is held then).
+    // Refit when the stage resizes (but never mid-drag: the fit is held then).
     $effect(() => {
         void previewW;
         if (!dragging) refit();

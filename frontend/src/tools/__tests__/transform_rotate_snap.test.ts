@@ -6,13 +6,13 @@ import { affineToMat3, type Mat3 } from '../transform_projective';
 
 /**
  * Regression test: Shift-snapping while rotating floating content must snap the
- * content's ABSOLUTE orientation to 15° marks — not the rotation delta accrued
+ * content's ABSOLUTE orientation to 15° marks, not the rotation delta accrued
  * since the gesture began. Snapping the delta makes the snap grid depend on
  * where the drag started (and on whether Shift was held from the start), so
  * pressing Shift mid-rotation lands on offset angles instead of 0/15/30°.
  */
 
-// `Handle.Rotate` from basic.ts — a non-exported const enum (Rotate === 8).
+// `Handle.Rotate` from basic.ts: a non-exported const enum (Rotate === 8).
 const ROTATE_HANDLE = 8;
 const SNAP = Math.PI / 12; // 15°
 
@@ -75,7 +75,7 @@ describe('rotation snap is relative to absolute document alignment', () => {
         const free = orientation(basicMode.updateDrag(geo, drag, ex, ey, false));
         const snapped = orientation(basicMode.updateDrag(geo, drag, ex, ey, true));
 
-        // Snapped orientation is the absolute 15° mark nearest the free one —
+        // Snapped orientation is the absolute 15° mark nearest the free one,
         // NOT base + round(delta/snap)*snap, which the old code produced.
         expect(snapped).toBeCloseTo(Math.round(free / SNAP) * SNAP, 6);
     });

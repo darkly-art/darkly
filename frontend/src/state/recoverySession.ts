@@ -3,7 +3,7 @@
  *
  * Each page load is a "session" with a UUID. While running, a session
  * keeps a heartbeat (a timestamp in `localStorage`) refreshed on its own
- * lightweight timer — independent of the autosave cadence, so liveness is
+ * lightweight timer, independent of the autosave cadence, so liveness is
  * still tracked when autosave is off or its interval is long. On a clean
  * exit (`pagehide`) the session removes itself synchronously.
  *
@@ -25,7 +25,7 @@ import { storage as defaultStorage, type DarklyStorage } from '../storage';
 import { newId } from '../lib/id';
 
 const REGISTRY_KEY = 'darkly.recovery.sessions';
-/** Heartbeat cadence — how often a live session refreshes its timestamp. */
+/** Heartbeat cadence: how often a live session refreshes its timestamp. */
 export const HEARTBEAT_MS = 10_000;
 /** A heartbeat older than this marks the session crashed (≈3 missed beats). */
 export const STALE_MS = 30_000;
@@ -94,7 +94,7 @@ export function partitionSnapshots(
 
 /** Register `selfId` with a fresh heartbeat and drop already-claimed
  *  crashed sessions so they aren't re-offered next boot. Pure registry
- *  mutation — testable without timers. */
+ *  mutation, testable without timers. */
 export function claimAndRegister(
     ls: KeyValueStore,
     selfId: string,

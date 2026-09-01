@@ -43,16 +43,16 @@ Darkly's unique brushes live inside a node-based system. This enables infinite c
 
 ### Veils
 
-Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special layer that sits above the viewport, visible only to the artist. By shrouding your canvas behind a mysterious pane, they invite you to see something that maybe wasn't there before.
+Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special layer that shrouds your canvas in a mysterious way, inviting you to see something that maybe wasn't there before.
 
 ![veil-demo](https://github.com/user-attachments/assets/df05c881-4572-46a1-9a31-366236fabbd3)
 
-Veils are nondestructive. You can paint as usual, behind the veil, and when you disable it, you'll see the full-res result.
+Veils are nondestructive. You can paint as usual, behind the veil, and if you disable it, you'll see the full-res result.
 
 <!-- darkly:catalog-table catalog=veils -->
 |  | Name | What it does |
 | :-: | --- | --- |
-| <img src="docs/images/previews/veils/black_and_white.jpg" width="200" alt="Black and White"> | **Black and White** | Desaturate to black and white — six grayscale formulas or custom channel weights, with an optional color tint. |
+| <img src="docs/images/previews/veils/black_and_white.jpg" width="200" alt="Black and White"> | **Black and White** | Desaturate to black and white - six grayscale formulas or custom channel weights, with an optional color tint. |
 | <img src="docs/images/previews/veils/chromatic_aberration.jpg" width="200" alt="Chromatic Aberration"> | **Chromatic Aberration** | Split the color channels apart along their hue axes, like a misaligned lens. |
 | <img src="docs/images/previews/veils/frozen.jpg" width="200" alt="Frozen"> | **Frozen** | Frost the view behind a pane of refracting ice. |
 | <img src="docs/images/previews/veils/grain.jpg" width="200" alt="Grain"> | **Grain** | Film grain noise over the view, optionally animated. |
@@ -60,18 +60,18 @@ Veils are nondestructive. You can paint as usual, behind the veil, and when you 
 | <img src="docs/images/previews/veils/painting.jpg" width="200" alt="Painting"> | **Painting** | Smooth the view into painterly, brush-like daubs. |
 | <img src="docs/images/previews/veils/pixelate.jpg" width="200" alt="Pixelate"> | **Pixelate** | Downsample the view into a blocky pixel mosaic. |
 | <img src="docs/images/previews/veils/rainy_glass.jpg" width="200" alt="Rainy Glass"> | **Rainy Glass** | Raindrops run down a pane of glass over the view. |
-| <img src="docs/images/previews/veils/vhs.jpg" width="200" alt="VHS"> | **VHS** | Analog VHS tape artifacts — scanlines, noise, and color bleed. |
+| <img src="docs/images/previews/veils/vhs.jpg" width="200" alt="VHS"> | **VHS** | Analog VHS tape artifacts - scanlines, noise, and color bleed. |
 | <img src="docs/images/previews/veils/watercolor.jpg" width="200" alt="Watercolor"> | **Watercolor** | Bleed the view outward into soft watercolor washes. |
 <!-- /darkly:catalog-table -->
 
-Veils are a fun toy, but they have practical uses too:
+Veils are essentially fancy shaders, and they are fun toys. But they have practical uses too:
 
 - By hiding fine details, they can prevent **premature fixation on detail**, freeing you to focus on composition.
 - During the sketching / ideation phase, they can help with **blank page syndrome** and **destructive self-criticism** by giving you permission to be messy, and explore freely.
 - They can also help remedy **art fatigue** (losing eyes for a piece by staring at it for too long) by helping you see it through a fresh lens.
 
 > [!NOTE]
-> You can add unlimited veils, and stack them in any order; but adding too many can drain your battery because of the heavy load on your GPU.
+> Adding too many veils can drain your battery due to the heavy load on your GPU.
 
 ### Voids
 
@@ -126,7 +126,7 @@ For a feature to count, it must be:
 - [x] Clipboard copy / cut / paste
 - [ ] Documentation
 
-### Important — expected for serious work
+### Important: expected for serious work
 - [x] Generic transform tool
 - [x] Perspective transform
 - [x] Merge down
@@ -171,7 +171,7 @@ For a feature to count, it must be:
 - [x] Hotkey system + searchable cheatsheet
 - [x] Floating layers
 
-### Advanced & specialized — power-user, niche, and polish
+### Advanced & specialized: power-user, niche, and polish
 - [x] Veils
 - [x] Veil picker
 - [x] Void layers

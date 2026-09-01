@@ -47,7 +47,7 @@
     // and registers it here. Wire paths use the node's auto-layout
     // position + this port offset.
     //
-    // The same context exposes `coords` — the single source of truth for
+    // The same context exposes `coords`: the single source of truth for
     // screen<->graph coordinate conversion. Descendants never have to
     // know about `zoom` or `pan`; they ask the coord system instead.
 
@@ -129,7 +129,7 @@
         const key = `${nodeId}:${portName}:${dir}`;
         let offset = portOffsets.get(key);
         if (!offset) {
-            // onMount hasn't fired yet — measure directly from the DOM.
+            // onMount hasn't fired yet, so measure directly from the DOM.
             const dotEl = document.querySelector(
                 `[data-port-node="${nodeId}"][data-port-name="${portName}"][data-port-dir="${dir}"]`
             ) as HTMLElement | null;
@@ -377,7 +377,7 @@
         {#each brushGraph.nodeList as node (node.id)}
             <NodeWidget {node} />
         {/each}
-        <!-- Brush Bar lives in graph-space alongside the nodes — pans
+        <!-- Brush Bar lives in graph-space alongside the nodes: pans
              and zooms with them; the author drags it around like any
              other node. -->
         <BrushBarNode />

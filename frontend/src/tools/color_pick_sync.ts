@@ -7,7 +7,7 @@ import { config } from '../config/store.svelte';
 // `has_pending_color_pick` and, once it clears, read `last_picked_color` and
 // commit it. `pollInFlight` guards against overlapping per-frame poll chains.
 //
-// Module-local — only one pick can be in flight globally at a time. Both the
+// Module-local: only one pick can be in flight globally at a time. Both the
 // colorpicker tool and the modifier-held `sampleColor` action share this state
 // (they never coexist mid-pick: only one pointer down at a time).
 let waitingForPick = false;

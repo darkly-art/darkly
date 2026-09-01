@@ -8,12 +8,12 @@
         title?: string;
         size?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
         /** Where the dialog sits in the viewport. `top` is for dialogs the user
-         *  types into blind — a command palette lands under the pointer's
+         *  types into blind: a command palette lands under the pointer's
          *  resting height instead of jumping the eye to the centre. */
         align?: 'center' | 'top';
         /** Hide the default header row entirely. Caller provides its own chrome. */
         bare?: boolean;
-        /** Dim the backdrop (default). `false` keeps the canvas fully visible —
+        /** Dim the backdrop (default). `false` keeps the canvas fully visible
          *  for panels that live-preview onto it (e.g. the filter apply dialog). */
         dimmed?: boolean;
         /** Let the user reposition the dialog by dragging its header. Spawns
@@ -91,7 +91,7 @@
 
     function onWheel(e: WheelEvent) {
         // `showModal()` promotes the dialog to the top layer visually, but it
-        // stays a DOM descendant of whatever mounted it — so a wheel event
+        // stays a DOM descendant of whatever mounted it, so a wheel event
         // inside the modal still bubbles to ancestor handlers. The brush
         // builder's node canvas is the case that bites: its wheel handler
         // preventDefaults and pans, so the modal body never scrolls. Nothing
@@ -153,7 +153,7 @@
         padding: 0;
         max-height: 85vh;
         overflow: hidden;
-        /* Center in viewport — explicit so behaviour is identical across
+        /* Center in viewport, explicit so behaviour is identical across
          * browsers regardless of any residual UA stylesheet quirks. */
         position: fixed;
         inset: 0;

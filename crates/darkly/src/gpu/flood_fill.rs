@@ -8,7 +8,7 @@
 //! The fills here are layer-local: they consume and produce buffers in the
 //! texture's own frame. Translating a canvas-space seed into that frame, and
 //! the resulting mask back into window-local coordinates, belongs to
-//! [`crate::gpu::layer_readback`] — which is what magic wand and the
+//! [`crate::gpu::layer_readback`], which is what magic wand and the
 //! paint-bucket tool actually call.
 
 use std::collections::VecDeque;
@@ -20,12 +20,12 @@ use std::collections::VecDeque;
 /// operates on contiguous pixel data from a GPU readback.
 ///
 /// Algorithm notes (per CONTRIBUTING.md "Performance Principle"): the
-/// implementation is Smith/Heckbert scanline fill — `VecDeque<(y, start, end)>` holds whole
+/// implementation is Smith/Heckbert scanline fill: `VecDeque<(y, start, end)>` holds whole
 /// horizontal segments, not per-pixel work. Queue depth is bounded by the
 /// number of distinct segments in the fill region (O(perimeter)), not the
 /// pixel count. The `mask` is a flat `Vec<u8>` indexed directly; no HashMap.
 /// The prior "burned by" lesson was per-pixel HashMap dispatch inside a
-/// tile-based fill — this implementation specifically does not have that
+/// tile-based fill; this implementation specifically does not have that
 /// shape, so the scanline+VecDeque pair is the right primitive here.
 pub fn flood_fill_rgba(
     pixels: &[u8],
@@ -270,25 +270,25 @@ mod tests {
             }
         }
 
-        // Fill from (0,0) — should fill the 2×2 red area.
+        // Fill from (0,0): should fill the 2×2 red area.
         let mask = flood_fill_rgba(&pixels, 4, 4, 0, 0, 0);
         assert_eq!(mask[0], 255); // (0,0)
         assert_eq!(mask[1], 255); // (1,0)
         assert_eq!(mask[4], 255); // (0,1)
         assert_eq!(mask[5], 255); // (1,1)
-        assert_eq!(mask[2], 0); // (2,0) — transparent, not matching
-        assert_eq!(mask[8], 0); // (0,2) — transparent
+        assert_eq!(mask[2], 0); // (2,0): transparent, not matching
+        assert_eq!(mask[8], 0); // (0,2): transparent
 
-        // Fill from (3,3) — should fill all transparent pixels.
+        // Fill from (3,3): should fill all transparent pixels.
         let mask = flood_fill_rgba(&pixels, 4, 4, 3, 3, 0);
-        assert_eq!(mask[0], 0); // (0,0) — red, not matching
-        assert_eq!(mask[2], 255); // (2,0) — transparent
-        assert_eq!(mask[15], 255); // (3,3) — transparent
+        assert_eq!(mask[0], 0); // (0,0): red, not matching
+        assert_eq!(mask[2], 255); // (2,0): transparent
+        assert_eq!(mask[15], 255); // (3,3): transparent
     }
 
     /// REGRESSION: erasing a layer zeroes only alpha (straight-alpha storage),
     /// leaving ghost RGB behind. The fill similarity test must not let that
-    /// invisible color form fill boundaries — fully transparent pixels compare
+    /// invisible color form fill boundaries: fully transparent pixels compare
     /// by alpha alone.
     #[test]
     fn flood_fill_rgba_ignores_ghost_rgb_under_full_transparency() {

@@ -3,7 +3,7 @@
      * A pack's whole palette, at a glance.
      *
      * The card in miniature, so a painter recognises the same object in both
-     * places — the pack's surface under a wash of its vivid pair, in the
+     * places: the pack's surface under a wash of its vivid pair, in the
      * proportions the card spends them in, rather than a dot of one colour.
      *
      * Shared rather than modal-local on purpose: exporting is only the first
@@ -31,7 +31,7 @@
      * light is. Static, since a swatch does not scroll past anything.
      *
      * Surface beneath and light above, the same two layers the explorer's
-     * columns are built from — so a swatch shows a pack the way the pack will
+     * columns are built from, so a swatch shows a pack the way the pack will
      * actually look, alpha and all, instead of being the one place its surface
      * is treated as opaque. Mixing the light into the surface instead would
      * count a translucent surface twice and leave the chip darker than the card

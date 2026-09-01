@@ -52,7 +52,7 @@
     const voidLabel = $derived(app.displayName('voids', node.voidType));
 
     // Capture kind (camera / screenshare / Blender stream) for this void, or
-    // undefined for procedural voids — the single signal that gates every
+    // undefined for procedural voids: the single signal that gates every
     // stream-related affordance below.
     const captureKind = $derived(app.voidCaptureKind.get(node.voidType));
 
@@ -63,7 +63,7 @@
         captureKind ? app.streamSourceFor(node.id)?.error ?? null : null,
     );
 
-    // Connection status for the same source, or null when none exists — a
+    // Connection status for the same source, or null when none exists. A
     // never-connected void (e.g. loaded from a `.darkly`) shows no status row;
     // the Connect button already communicates that state. A change-driven
     // stream sends nothing while the scene is idle, so "Connected" is the only
@@ -79,7 +79,7 @@
     } as const;
 
     // True for a stream-backed void whose layer exists but isn't currently
-    // streaming — either loaded from a `.darkly` (showing the saved last frame)
+    // streaming, either loaded from a `.darkly` (showing the saved last frame)
     // or stopped externally (the browser's "Stop sharing" bar, a Blender
     // disconnect). The button lets the user explicitly (re)connect. The session
     // opt-in is cleared on external stop, so this re-appears then too.
@@ -105,7 +105,7 @@
 
     function resumeStream() {
         if (!captureKind) return;
-        // For camera / screenshare this is a user gesture — acquire + start
+        // For camera / screenshare this is a user gesture: acquire + start
         // in-gesture so getDisplayMedia's activation requirement holds. For a
         // Blender `stream` void there's no permission gate; `startStreamSource`
         // connects over localhost HTTP immediately.

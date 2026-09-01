@@ -32,7 +32,7 @@ const SECTIONS: SectionExtent[] = [
     { id: 'c', top: 500, height: 100 },
 ];
 
-/** Both panes scrollable, and *unpadded* — the shape the panes have before the
+/** Both panes scrollable, and *unpadded*: the shape the panes have before the
  *  component gives them room for their end items to reach the focus line. Used
  *  for the mapping's own arithmetic and for the clamped cases. */
 const G: WheelGeometry = {
@@ -54,9 +54,9 @@ const EMPTY: WheelGeometry = { ...G, sections: [], listScrollMax: 0, wheelScroll
  * Both panes spaced the way the component builds them, for a focus line down
  * the middle of each.
  *
- * List: 100 of lead, three sections, 100 of tail in a 200px port — 800 of
+ * List: 100 of lead, three sections, 100 of tail in a 200px port: 800 of
  * content, 600 of range. Wheel: 70 of pad either side of three 60px cards in a
- * 200px port — 320 of content, 120 of range. Sized so no clamp binds at either
+ * 200px port: 320 of content, 120 of range. Sized so no clamp binds at either
  * end, which is what lets the tests below assert exact positions.
  */
 const SPACED: WheelGeometry = {
@@ -107,7 +107,7 @@ describe('sectionAt', () => {
         // The sections do not tile the list: `.list` is a flex column with a
         // 12px gap, so between every pair is a band of content belonging to
         // neither. A coordinate there used to match nothing and fall out of the
-        // loop onto its "past the end" answer — the *last* section — so a focus
+        // loop onto its "past the end" answer (the *last* section), so a focus
         // line crossing any gap threw the wheel to its maximum for one frame
         // and the card stack flew upward. An easing animation samples ever
         // closer together as it settles, which is why it flashed just before
@@ -171,7 +171,7 @@ describe('the focus line', () => {
         // The invariant the two panes exist to maintain, and the one the user
         // stated: the pack across the middle of the list is the pack whose card
         // is across the middle of the wheel. A card therefore tracks its pack's
-        // *centre*, not its start — the whole pack's extent maps across the
+        // *centre*, not its start: the whole pack's extent maps across the
         // half-card either side of its card.
         for (let i = 0; i < SPACED.sections.length; i++) {
             const s = SPACED.sections[i];
@@ -195,7 +195,7 @@ describe('the focus line', () => {
 
     it('never lets the focused card drift more than half a card off it', () => {
         // A pack's whole extent maps onto the half-card either side of its own
-        // card, so the focused card is never further than that from the line —
+        // card, so the focused card is never further than that from the line,
         // and is therefore always the *nearest* card to it. There is no scroll
         // position at which the highlight is somewhere the eye is not.
         for (let y = 0; y <= listMax(SPACED); y += 7) {
@@ -274,7 +274,7 @@ describe('wheelToList', () => {
         expect(listToWheel(0, SHORT)).toBe(0);
         expect(listToWheel(listMax(SHORT), SHORT)).toBe(0);
         // Both ends share the one wheel position, so at most one of them can
-        // survive the trip back — and it is not the top.
+        // survive the trip back, and it is not the top.
         expect(wheelToList(0, SHORT)).not.toBeCloseTo(0, 5);
     });
 
@@ -292,7 +292,7 @@ describe('scrollTopForSection', () => {
         // The regression, and the oldest bug here: the jump target aligned a
         // section's *top* to the viewport while everything else in the mapping
         // read its centre. Tapping a pack therefore left the centre line inside
-        // whatever pack followed it — selecting the neighbour, scrolling the
+        // whatever pack followed it: selecting the neighbour, scrolling the
         // wheel to a card nobody touched, and dropping the tapped pack below
         // the middle of the screen.
         for (let i = 0; i < SPACED.sections.length; i++) {
@@ -402,7 +402,7 @@ describe('packBands', () => {
         cardLeft: 0,
         // The line these three cards are actually on. It agrees with
         // `wheelLead + i * cardAdvance` here, so the assertions below still
-        // describe a uniformly-laid-out wheel — the fixture that does *not*
+        // describe a uniformly-laid-out wheel; the fixture that does *not*
         // agree is `WOBBLY`, which is the point of it.
         cardTops: [70, 130, 190],
         width: 240,
@@ -441,8 +441,8 @@ describe('packBands', () => {
      *
      *  Its pitch is 51.6 and `cardAdvance` says 52, which is what a fractional
      *  card height looks like once `offsetTop` has rounded it: a line the
-     *  stated pitch is wrong about by 0.4px per card, and by 3.2px at the ninth
-     *  — the error growing with the index that made the seams read as broken
+     *  stated pitch is wrong about by 0.4px per card, and by 3.2px at the ninth,
+     *  the error growing with the index that made the seams read as broken
      *  further down the column than at the top of it. */
     const WOBBLY_TOPS = [70, 121.6, 173.2, 224.8, 276.4, 328, 379.6, 431.2, 482.8];
     const WOBBLY_G: WheelGeometry = {
@@ -462,14 +462,14 @@ describe('packBands', () => {
     it('leaves every card from the line the cards are measured on, not from a pitch', () => {
         // The regression. Card `i` used to be located at
         // `wheelLead + i * cardAdvance`, which multiplies whatever the pitch
-        // rounded away by the pack's index — so a band that left its first card
+        // rounded away by the pack's index, so a band that left its first card
         // cleanly was pixels off its ninth, and the join looked worse the
         // further down the column it was. Nothing here is uniform, and every
         // band still has to meet its own card.
         const frame = present({ listScrollTop: 0, wheelScrollTop: 0, driver: 'list' }, WOBBLY_G);
         const bands = packBands(frame, WOBBLY_G, WOBBLY_L, WOBBLY_PACKS);
-        // Every card, including the ninth — where the old expression was
-        // furthest out and the seam read as broken.
+        // Every card, including the ninth (where the old expression was
+        // furthest out and the seam read as broken).
         expect(bands).toHaveLength(WOBBLY_TOPS.length);
         for (const band of bands) {
             const i = WOBBLY_PACKS.findIndex(p => p.id === band.id);
@@ -484,7 +484,7 @@ describe('packBands', () => {
     it('reads neither the pitch nor the lead when locating a card', () => {
         // The property the measured line buys, stated directly: given the same
         // cards, the two numbers that used to place them cannot move a band.
-        // One `frame` for both calls — `cardAdvance` also feeds the curves, so
+        // One `frame` for both calls: `cardAdvance` also feeds the curves, so
         // re-deriving it per call would change the bands for reasons that have
         // nothing to do with where the cards are.
         const frame = present({ listScrollTop: 0, wheelScrollTop: 0, driver: 'list' }, WOBBLY_G);
@@ -510,7 +510,7 @@ describe('packBands', () => {
     it('leaves every card on the same vertical line, whatever its scale', () => {
         // Cards are scaled about their trailing edge, so that edge does not
         // move and a band can simply stop there. Tracking a scaled edge instead
-        // — which is what a centre-anchored card forces — left a gap beside
+        // (which is what a centre-anchored card forces) left a gap beside
         // every card but the focused one, widening with distance from the line.
         for (const y of [0, scrollTopForSection(1, SPACED), listMax(SPACED)]) {
             for (const band of at(y)) {
@@ -522,7 +522,7 @@ describe('packBands', () => {
     it('leaves a card without overlapping it', () => {
         // A card is tilted and scaled by the rolodex curve, so it paints as a
         // trapezoid inside a taller upright box. A band that overlapped that
-        // box — as it did when both ends were nudged under what they join —
+        // box (as it did when both ends were nudged under what they join)
         // shows around the corners of the shape actually drawn, reading as the
         // band sitting on top of the card instead of leaving it.
         for (const band of at(scrollTopForSection(1, SPACED))) {
@@ -534,7 +534,7 @@ describe('packBands', () => {
         // A pack's surface carries alpha, so anything painted twice is a
         // darker strip rather than the same colour again. The band used to
         // tuck a few pixels under the section to hide a subpixel seam, which
-        // drew that strip down every join except the derived packs' — they
+        // drew that strip down every join except the derived packs'; they
         // wear the theme's opaque greys, which hid it.
         for (const band of at(scrollTopForSection(1, SPACED))) {
             expect(band.ribbon.x1).toBe(L.sectionLeft);
@@ -604,7 +604,7 @@ describe('the projection ribbon', () => {
     });
 
     it('rims the band along both edges and nowhere else', () => {
-        // Two closed subpaths, one inside each edge — not one region with a
+        // Two closed subpaths, one inside each edge, not one region with a
         // hole, which is what a fill rule would have to resolve.
         const d = ribbonRimPath(R, 2);
         expect(d.match(/M /g)).toHaveLength(2);
@@ -622,7 +622,7 @@ describe('the projection ribbon', () => {
         // The card end and the section end are interior to the pack. A cap
         // across either would rule a line down the join the projection exists
         // to make continuous, so every vertical run in the rim is the rim's own
-        // thickness — where the fill's is the whole height it arrives at.
+        // thickness, where the fill's is the whole height it arrives at.
         const spans = (d: string) =>
             [...d.matchAll(/100 (-?[\d.]+) L 100 (-?[\d.]+)/g)].map(m =>
                 Math.abs(Number(m[2]) - Number(m[1])),
@@ -645,7 +645,7 @@ describe('the projection ribbon', () => {
 
     it('lets the core cross itself where the band is thinner than two rims', () => {
         // A pack nearly scrolled out arrives 1px tall, which is less than the
-        // rims take from either side. The core inverts rather than clamping —
+        // rims take from either side. The core inverts rather than clamping:
         // the rims have already closed over that end, and the ribbon's own clip
         // bounds whatever the crossing describes.
         const pinched = { x0: 0, top0: 40, bottom0: 80, x1: 100, top1: 100, bottom1: 101 };

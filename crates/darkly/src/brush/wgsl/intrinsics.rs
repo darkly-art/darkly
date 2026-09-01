@@ -2,7 +2,7 @@
 //!
 //! [`IntrinsicUniforms`] is a Rust `#[repr(C)]` mirror of the WGSL
 //! `IntrinsicUniforms` defined in `_prelude.wgsl`. The duplication is
-//! forced by the CPU↔WGSL boundary — bytemuck-packed bytes are written
+//! forced by the CPU↔WGSL boundary: bytemuck-packed bytes are written
 //! from the Rust side and read from the WGSL side, so the two structs
 //! **must** have byte-identical layouts. Treat this file and
 //! `_prelude.wgsl` as one logical unit and edit both together; the
@@ -10,7 +10,7 @@
 //! the brush pipeline will catch drift, but only at runtime.
 
 /// Stroke-constant intrinsic uniforms every compiled brush carries.
-/// Mirrors the WGSL `IntrinsicUniforms` defined in `_prelude.wgsl` —
+/// Mirrors the WGSL `IntrinsicUniforms` defined in `_prelude.wgsl`:
 /// every terminal packs this struct at the front of the uniform buffer
 /// (followed by node-contributed uniforms). Lives here (not on each
 /// terminal) so a layout change in one place can't drift from the rest.
@@ -30,7 +30,7 @@ pub struct IntrinsicUniforms {
     /// Active view rotation in radians (the `rotation` parameter passed to
     /// `ViewTransform::from_pan_zoom_rotate`). Subtracted from `theta` in the
     /// per-fragment skeleton so brush stamp orientation counteracts view
-    /// rotation — on-screen orientation stays put as the user rotates the
+    /// rotation, so on-screen orientation stays put as the user rotates the
     /// view. See `_prelude.wgsl` and `wgsl/mod.rs::assemble_shader`.
     pub view_rotation: f32,
     /// How many dabs land on a given texel as the brush passes over it
@@ -40,8 +40,8 @@ pub struct IntrinsicUniforms {
     ///
     /// A terminal accumulating a per-dab quantity divides by this to
     /// express its rate per *pass* instead of per dab. Without it a
-    /// "30% deposit" knob compounds once per dab — ten times over at the
-    /// default 10% spacing — so it reads as 87%, and its meaning shifts
+    /// "30% deposit" knob compounds once per dab (ten times over at the
+    /// default 10% spacing), so it reads as 87%, and its meaning shifts
     /// whenever spacing or pressure changes the overlap count. 1.0 when
     /// unset, which makes the normalisation a no-op.
     pub dabs_per_pass: f32,

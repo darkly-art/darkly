@@ -32,8 +32,8 @@ struct CheckpointSlot {
     tex_w: u32,
     tex_h: u32,
     /// Format the slot was allocated in. The ring snapshots the stroke
-    /// scratch, whose format is the terminal's business — color for most
-    /// brushes, a float displacement field for warp terminals — and
+    /// scratch, whose format is the terminal's business (color for most
+    /// brushes, a float displacement field for warp terminals), and
     /// `copy_texture_to_texture` requires the two to match.
     tex_format: wgpu::TextureFormat,
     /// Snapshots of the stroke's channels, parallel to
@@ -84,7 +84,7 @@ impl CheckpointSlot {
 
     /// Ensure the stroke-buffer snapshot is at least `w × h` and in
     /// `format`, plus one channel snapshot per entry in `extra_formats`.
-    /// Reallocate if needed — including on a format change, since a slot
+    /// Reallocate if needed, including on a format change, since a slot
     /// cached from a color stroke cannot receive a warp field. The whole
     /// set is reallocated together so a slot's snapshots always share
     /// dimensions.
@@ -96,7 +96,7 @@ impl CheckpointSlot {
         format: wgpu::TextureFormat,
         extra_formats: &[wgpu::TextureFormat],
     ) {
-        // Slots outlive strokes — `clear()` only flips `valid` — so a slot
+        // Slots outlive strokes (`clear()` only flips `valid`), so a slot
         // allocated for one terminal is reused by the next. Comparing the
         // formats, not just the count, is what stops a `paint` stroke's
         // empty slot (or a differently-typed channel set) being reused as
@@ -144,7 +144,7 @@ impl CheckpointSlot {
 
 /// Ring buffer of checkpoint textures for O(divergence_window / N) re-render.
 ///
-/// Two invariants — one for correctness, one for performance — together
+/// Two invariants (one for correctness, one for performance) together
 /// make full-stroke re-render fallback impossible by construction whenever
 /// the stabilizer's `max_divergence_window` bound holds.
 ///
@@ -204,7 +204,7 @@ impl CheckpointRing {
     ///    values. For each existing slot, compute the resulting max
     ///    consecutive gap if it were evicted; pick the slot that minimizes
     ///    that max gap. The slot with the lowest `vi` is *protected* while
-    ///    it is the sole anchor — i.e., while no other slot satisfies
+    ///    it is the sole anchor, i.e., while no other slot satisfies
     ///    `vi ≤ tip_vi − max_div_window`.
     ///
     /// Naively evicting the lowest `vi` slot (the prior policy) destroys
@@ -214,7 +214,7 @@ impl CheckpointRing {
     /// cluster keeps both invariants satisfiable for as long as the
     /// spacing and ring capacity admit.
     ///
-    /// Cost is O(n²) on the ring size — n is 8 — which is negligible
+    /// Cost is O(n²) on the ring size (n is 8), which is negligible
     /// compared with the GPU work each save triggers.
     fn pick_slot(&self, tip_vi: usize, max_div_window: usize, new_vi: usize) -> usize {
         // 1) any invalid slot wins immediately.
@@ -231,7 +231,7 @@ impl CheckpointRing {
         // `restore_before(div_idx)` returns the slot with the largest
         // `vi < div_idx`. The worst-case reachable `div_idx` is
         // `anchor_boundary`, so coverage requires `vi < anchor_boundary`.
-        // The anchor is "redundant" — and the lowest slot may be evicted —
+        // The anchor is "redundant" (and the lowest slot may be evicted)
         // only when the second-lowest slot already satisfies that strict
         // inequality. While `by_vi[1].vi >= anchor_boundary`, the anchor is
         // the sole carrier of coverage and must be protected.
@@ -272,7 +272,7 @@ impl CheckpointRing {
 
         // If anchor protection rejected every candidate (n=1 only), or some
         // future state we haven't anticipated, fall back to evicting the
-        // anchor — the post-save assertion will surface any real coverage
+        // anchor; the post-save assertion will surface any real coverage
         // loss in debug builds.
         best.map(|(i, _)| i).unwrap_or(anchor_slot)
     }
@@ -282,8 +282,8 @@ impl CheckpointRing {
     /// paired with the active layer's canvas extent (the stroke buffer is
     /// texture-aligned to the layer texture). `canvas_bbox` is the
     /// canvas-space rect to snapshot. `tip_vi` and `max_div_window` are the
-    /// stabilizer's current tip index and bound — used by the eviction
-    /// policy and the post-save coverage assertion.
+    /// stabilizer's current tip index and bound (used by the eviction
+    /// policy and the post-save coverage assertion).
     #[allow(clippy::too_many_arguments)]
     pub fn save(
         &mut self,
@@ -306,7 +306,7 @@ impl CheckpointRing {
         // been painted at this index", and restoring it is fully served by
         // the caller's reset to the terminal's baseline. Claiming the slot
         // anyway is what keeps the `vi = 0` anchor present when a stroke's
-        // first dab is an identity write (a stationary smudge, say) —
+        // first dab is an identity write (a stationary smudge, say);
         // without it every early divergence falls back to a full re-render.
         let region = stroke
             .canvas_to_layer_rect(canvas_bbox)
@@ -359,7 +359,7 @@ impl CheckpointRing {
                 },
             );
 
-            // Same region, same coordinates — the accumulators are layer-sized
+            // Same region, same coordinates: the accumulators are layer-sized
             // and grown in lockstep with the stroke buffer, so one rect
             // addresses all of them.
             for (src, dst) in extra.iter().zip(slot.extra.iter()) {
@@ -420,7 +420,7 @@ impl CheckpointRing {
     /// with the largest `vi < div_idx`, and the worst-case `div_idx` is
     /// `tip_vi − max_div`. At stroke start (when `tip_vi ≤ max_div`), the
     /// reachable divergence window includes `vi = 0` and no anchor below it
-    /// can exist — full re-render from `vi = 0` is bounded and intended.
+    /// can exist; full re-render from `vi = 0` is bounded and intended.
     pub fn has_anchor(&self, tip_vi: usize, max_div_window: usize) -> bool {
         if tip_vi <= max_div_window {
             return true;
@@ -453,18 +453,18 @@ impl CheckpointRing {
     /// Find and restore the best checkpoint before `div_vector_index`.
     ///
     /// Copies the checkpoint's bbox region back onto the stroke buffer.
-    /// **Does not clear outside the bbox** — the caller must establish the
+    /// **Does not clear outside the bbox**: the caller must establish the
     /// outside-bbox initial state before calling this (e.g. via
     /// `StrokeEngine::begin_stroke`, which delegates to the active
     /// terminal's lifecycle hook). For paint, that's a transparent clear;
     /// for a warp/smudge terminal, it's a copy of the pre-stroke layer; the
-    /// ring doesn't care which — it only restores the mutated region.
+    /// ring doesn't care which; it only restores the mutated region.
     ///
     /// Returns the checkpoint metadata for the caller to restore engine
     /// state.
     ///
     /// `stroke` pairs the stroke buffer with the active layer's *current*
-    /// canvas extent — used to translate the slot's canvas-coord bbox to
+    /// canvas extent, used to translate the slot's canvas-coord bbox to
     /// texture-local coords (which may differ from save time if the layer
     /// has grown in the meantime; the stroke buffer's contents are rebased
     /// by `StrokeBuffer::grow_preserving` to track the new frame, so this
@@ -481,7 +481,7 @@ impl CheckpointRing {
 
         // Copy checkpoint bbox region back to stroke buffer. The caller has
         // already reset outside-bbox pixels to the terminal's starting
-        // state, so only the mutated region needs restoring here — and a
+        // state, so only the mutated region needs restoring here, and a
         // checkpoint that snapshotted no texels (nothing had been painted
         // yet) is fully restored by that reset alone.
         if let Some((layer_rect, texture)) = stroke
@@ -581,7 +581,7 @@ impl CheckpointRing {
     /// `tip_vi`.
     ///
     /// **Coverage invariant.** The ring must hold at least one checkpoint
-    /// with `vi < div_idx` for every reachable divergence index — that's
+    /// with `vi < div_idx` for every reachable divergence index; that's
     /// what makes partial restore possible. The stabilizer's
     /// `max_divergence_window()` bounds how far back divergence can reach
     /// from the tip, so spacing-distance checkpoints near the tip cover

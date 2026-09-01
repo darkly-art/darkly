@@ -1,8 +1,8 @@
 //! A brush as the library holds it: identity, describing metadata, and the
 //! node graph that paints.
 //!
-//! The archive a brush travels in is a *pack* —
-//! [`crate::brush::pack_file`] — even when it holds exactly one brush. This
+//! The archive a brush travels in is a *pack*
+//! ([`crate::brush::pack_file`]), even when it holds exactly one brush. This
 //! module owns the record; that one owns the container.
 
 use serde::{Deserialize, Serialize};
@@ -12,7 +12,7 @@ use crate::brush::stabilizer::StabilizerConfig;
 use crate::brush::wire::BrushWireType;
 use crate::nodegraph::Graph;
 
-/// A brush's serialized form — one entry in a pack archive, and one record in
+/// A brush's serialized form: one entry in a pack archive, and one record in
 /// the painter's stored library.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BrushMetadata {
@@ -20,7 +20,7 @@ pub struct BrushMetadata {
     /// brushes are given a minted id when saved.
     ///
     /// Separate from `name` so a rename touches no pack member list and no
-    /// recent-brushes entry — both hold ids.
+    /// recent-brushes entry; both hold ids.
     pub id: BrushId,
     pub name: String,
     #[serde(default = "default_engine_version")]
@@ -37,7 +37,7 @@ pub struct BrushMetadata {
     pub stabilizer: StabilizerConfig,
 }
 
-/// A fully-loaded brush — the unit the library stores and a pack groups.
+/// A fully-loaded brush: the unit the library stores and a pack groups.
 #[derive(Clone, Debug)]
 pub struct Brush {
     pub metadata: BrushMetadata,
@@ -46,8 +46,8 @@ pub struct Brush {
     /// whose bake hasn't completed yet.
     ///
     /// Deliberately not part of a pack archive: a baked preview is a
-    /// theme-derived render cache — `BrushLibrary::clear_thumbnails` drops
-    /// every one on theme change — so one baked by the sender would be wrong
+    /// theme-derived render cache (`BrushLibrary::clear_thumbnails` drops
+    /// every one on theme change), so one baked by the sender would be wrong
     /// for the recipient, whose own bake is a frame away.
     pub thumbnail_png: Option<Vec<u8>>,
     /// Whether this brush ships with the app.

@@ -1,8 +1,8 @@
 /**
  * Hex ↔ color conversions.
  *
- * Darkly is display-referred: every color — the picker, `app.foreground`, paint
- * colors, fill/gradient, filter/veil params, and the stored texels — is the
+ * Darkly is display-referred: every color (the picker, `app.foreground`, paint
+ * colors, fill/gradient, filter/veil params, and the stored texels) is the
  * same raw sRGB value, and nothing rescales it. So these are plain byte
  * normalizations; there is deliberately no gamma/linear conversion anywhere in
  * the color path.
@@ -13,7 +13,7 @@ const HEX = /^#?([0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?)$/;
 
 /**
  * Parse `#rrggbb` or `#rrggbbaa` into a byte `Color`. Returns `null` on
- * anything else — callers that want a fallback must say so, because silently
+ * anything else; callers that want a fallback must say so, because silently
  * returning black makes a malformed value indistinguishable from a black one.
  * A 6-digit input is opaque.
  */
@@ -34,7 +34,7 @@ const hx = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16)
 
 /** A byte `Color` as `#rrggbbaa`, lowercase. Always 8 digits, so a round trip
  *  through {@link hexToColor} preserves alpha. This is the canonical storage
- *  form — what recents and pack colors are written as. */
+ *  form: what recents and pack colors are written as. */
 export function colorToHex(c: Color): string {
     return `#${hx(c.r)}${hx(c.g)}${hx(c.b)}${hx(c.a)}`;
 }
@@ -54,7 +54,7 @@ export function hexToRgb01(hex: string): [number, number, number] {
     return [c.r / 255, c.g / 255, c.b / 255];
 }
 
-/** Inverse of {@link hexToRgb01} — a normalized sRGB `[0,1]` triple to
+/** Inverse of {@link hexToRgb01}: a normalized sRGB `[0,1]` triple to
  *  `#rrggbb`. Components are clamped and rounded. */
 export function rgb01ToHex(rgb: [number, number, number]): string {
     const to255 = (c: number) => Math.max(0, Math.min(255, Math.round(c * 255)));

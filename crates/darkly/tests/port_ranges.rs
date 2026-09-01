@@ -1,4 +1,4 @@
-//! Author-declared slider ranges — per-instance `PortDef::min`/`max`.
+//! Author-declared slider ranges: per-instance `PortDef::min`/`max`.
 //!
 //! A brush author can re-range any input port for one brush, so a control
 //! whose registration range is a poor fit (a math node's hardcoded `0..1`
@@ -121,7 +121,7 @@ fn percent_port_range_round_trips_through_display_space() {
 /// The Twirl assertion is the real invariant of the conversion. Rotation is
 /// `(distance/size) × multiply.b × multiply_2.a`, so replacing the
 /// `subtract`-recentered `0..1` control with a bipolar one required halving
-/// `multiply.b`. The product of the two is what must be conserved — check
+/// `multiply.b`. The product of the two is what must be conserved: check
 /// it, not the two literals separately.
 #[test]
 fn hair_expresses_both_controls_without_helper_nodes() {

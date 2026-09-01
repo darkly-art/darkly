@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// The import pipeline hands decoded bytes to the personal library — spy on it.
+// The import pipeline hands decoded bytes to the personal library: spy on it.
 const { addSpy } = vi.hoisted(() => ({
     addSpy: vi.fn((_bytes: Uint8Array, _source: string) => Promise.resolve(['Roboto'])),
 }));

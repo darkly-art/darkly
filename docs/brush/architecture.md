@@ -1,4 +1,4 @@
-# Brush System — Runtime Architecture
+# Brush System: Runtime Architecture
 
 This is the runtime side of the brush system: what actually happens from the
 moment the user puts a stylus down to the moment the layer texture changes
@@ -12,7 +12,7 @@ on-screen. For *authoring* (how to add a node or build a preset), see
 > graph once: CPU nodes compute scalars, GPU nodes record render passes. All
 > dab passes land in a **stroke scratch** (an RGBA texture the same size as
 > the layer). At the end of each input event the scratch is pushed to the
-> layer by the active terminal via its **`commit`** lifecycle hook —
+> layer by the active terminal via its **`commit`** lifecycle hook:
 > `color_output` source-over blends it onto the pre-stroke snapshot, `liquify`
 > replaces the layer with the warped scratch, and future terminals do
 > whatever their semantics require. The engine never decides how the commit
@@ -80,7 +80,7 @@ Four pieces to keep in mind:
 ```
 
 The `begin_stroke` / `commit` pair is the generic mechanism. The engine owns
-no policy about what paint strokes vs warp strokes do — each terminal
+no policy about what paint strokes vs warp strokes do; each terminal
 declares its semantics in its own file, and `BrushGraphRunner` dispatches the
 hooks at the right moments.
 
@@ -88,12 +88,12 @@ hooks at the right moments.
 
 The engine always creates a pair of stroke-scoped textures at stroke start:
 
-- **`stroke_scratch_texture`** — the stroke's working surface. What it
+- **`stroke_scratch_texture`** - the stroke's working surface. What it
   *means* is up to the active terminal: paint terminals fill it with
   accumulated dab contributions, warp terminals fill it with a progressively-
   deformed copy of the layer, smudge / blur / future terminals do something
   else.
-- **`pre_stroke_texture`** — a snapshot of the layer at stroke start. Used
+- **`pre_stroke_texture`** - a snapshot of the layer at stroke start. Used
   both by the engine (as the rewind source) and by terminals that need the
   untouched canvas at commit time (e.g. `color_output` blends its scratch
   over this to avoid over-darkening overlaps).
@@ -101,18 +101,18 @@ The engine always creates a pair of stroke-scoped textures at stroke start:
 Three independent reasons every stroke needs this pair:
 
 1. **Alpha accumulation semantics.** Two overlapping paint dabs at full alpha
-   must not read-modify-write each other — that would produce a darker
+   must not read-modify-write each other; that would produce a darker
    overlap than a continuous stroke. Accumulating the *contributions* in a
    scratch and compositing once at commit time gets this right.
 2. **Rewind / divergence handling.** The stabilizer can retroactively move
    previously-seen samples. The stroke engine rewinds to a save point and
    re-renders forward. On full rewind the engine calls `runner.begin_stroke`
-   again, so each terminal re-initialises its scratch however it wants —
+   again, so each terminal re-initialises its scratch however it wants:
    clear, re-copy the layer, whatever.
 3. **Atomic commit per event.** The user only sees changes land when the
    active terminal's `commit` hook writes to the layer. That boundary lets
    commit apply blend modes (paint/erase), replace wholesale (warp), or
-   anything else — without the per-dab render path knowing anything about
+   anything else, without the per-dab render path knowing anything about
    it.
 
 For a deeper trace look at
@@ -127,7 +127,7 @@ job is to put something on the layer (stroke mode) or on the preview mask
 overriding `begin_stroke` / `commit` in addition to per-dab `evaluate_gpu`.
 
 Non-terminal nodes (`stamp`, `circle`, `user_input`, …) don't override the
-lifecycle hooks — their default impls are no-ops.
+lifecycle hooks; their default impls are no-ops.
 
 ### `color_output` (paint terminal)
 
@@ -138,7 +138,7 @@ lifecycle hooks — their default impls are no-ops.
      Porter-Duff math (why we need the copy: WebGPU can't read and write
      the same texture in one pass).
   2. Render into `stroke_scratch_view`, reading `canvas_copy` as bg. Manual
-     source-over in `composite.wgsl` — REPLACE blend at the hardware level.
+     source-over in `composite.wgsl`: REPLACE blend at the hardware level.
 - `commit`: source-over composite `stroke_scratch_texture` over
   `pre_stroke_texture`, write to `layer_view`. Applies `gpu.blend_mode`
   (paint / erase toggle).
@@ -154,7 +154,7 @@ It bails immediately in `render_mode == Preview` at every hook.
   motion * falloff * strength`) and writes the warped value back to the
   scratch. Each dab sees the cumulative warp from the prior dabs.
 - `commit`: `copy_texture_to_texture(stroke_scratch_texture → layer_texture)`.
-  Replace — the scratch already represents the finished image.
+  Replace: the scratch already represents the finished image.
 
 `gpu.blend_mode` is ignored; a warp isn't paint.
 
@@ -164,7 +164,7 @@ It bails immediately in `render_mode == Preview` at every hook.
   dab texture into `preview_mask_view`. Otherwise bails.
 - `begin_stroke` / `commit`: no-op (preview doesn't participate in strokes).
 
-Graphs without a `preview_output` have no hover preview — the overlay falls
+Graphs without a `preview_output` have no hover preview; the overlay falls
 back to the tool's generic cursor ring.
 
 ### One graph, two render modes
@@ -186,7 +186,7 @@ mode-agnostic and run identically in either pass.
 
 `BrushGpuContext` ([`gpu_context.rs`](../../crates/darkly/src/brush/gpu_context.rs))
 bundles everything `evaluate_gpu` needs. Every durable surface is exposed
-by its *real identity* — nodes pick what they need, the engine never
+by its *real identity*: nodes pick what they need, the engine never
 secretly swaps resources behind a single misleading name.
 
 | Field | Purpose |
@@ -204,7 +204,7 @@ secretly swaps resources behind a single misleading name.
 | `resource_handles` | Named texture handles for `image` nodes |
 | `blend_mode` | Engine-level paint/erase toggle.  Honoured by `color_output::commit`; ignored by warp terminals. |
 | `canvas_copy_origin` | Per-dab cache for `ensure_canvas_copy`. Reset to `None` in `place_dab` before each dab. |
-| `render_mode` | `Stroke` or `Preview` — terminals switch on this. |
+| `render_mode` | `Stroke` or `Preview`, terminals switch on this. |
 
 ### Uniform batching
 
@@ -212,7 +212,7 @@ Each pipeline owns a `DynamicUniformRing` (~256 slots). A dab's uniform block
 is written to the next slot; the dynamic offset is passed to `set_bind_group`.
 This means all dabs in a stroke segment go through **one** encoder and **one**
 `queue.submit()`, instead of per-dab submission. When any ring nears capacity
-the engine flushes mid-stroke (cheap — a few per 1000 dabs).
+the engine flushes mid-stroke (cheap: a few per 1000 dabs).
 
 ### `ensure_canvas_copy`
 
@@ -239,14 +239,14 @@ nearest), liquify reads with arbitrary UV displacement and needs bilinear.
 
 Per dab:
 
-1. `clear_slots()` — `None` every slot.
-2. `seed_sensors(&paint_info)` — direct writes to `pen_input` slots.
-3. `execute_cpu()` — walk steps, gather inputs by slot, dispatch to evaluator,
+1. `clear_slots()` - `None` every slot.
+2. `seed_sensors(&paint_info)` - direct writes to `pen_input` slots.
+3. `execute_cpu()` - walk steps, gather inputs by slot, dispatch to evaluator,
    write outputs.
-4. `execute_gpu(ctx)` — same walk for GPU nodes; each records render passes.
+4. `execute_gpu(ctx)` - same walk for GPU nodes; each records render passes.
 
 Evaluator dispatch is a `HashMap<type_id, Box<dyn BrushNodeEvaluator>>` lookup
-per step — ~5-15 steps per dab, so the HashMap cost is noise compared to the
+per step (~5-15 steps per dab), so the HashMap cost is noise compared to the
 render pass.
 
 ## Dab spacing
@@ -264,16 +264,16 @@ for node_type in &["procedural", "stamp", "liquify"] {
 Any terminal-ish node that wants its footprint to drive spacing must expose
 a `dab_size: Vec2` output **and** have its `type_id` listed here. Forgetting
 to list it means dabs get placed one per input event instead of at uniform
-intervals — strokes will look choppy.
+intervals; strokes will look choppy.
 
 ## Undo and save points
 
 Two cooperating structures:
 
-- **`StrokeBuffer::save_pre_stroke`** — a full snapshot of the layer taken at
+- **`StrokeBuffer::save_pre_stroke`** - a full snapshot of the layer taken at
   `begin_stroke`. Owned by the stroke buffer; the layer's original pixels can
   be read back from here during undo.
-- **`SavePoints`** — a per-dab log of bounding boxes + render-state
+- **`SavePoints`** - a per-dab log of bounding boxes + render-state
   checkpoints. Its `full_bbox()` gives the total damage rect for the stroke.
 
 At `end_stroke`, the damage rect is registered with the undo ring. Undo
@@ -296,13 +296,13 @@ engine calls `regenerate_brush_preview()`
    rotation).
 
 If the graph has no `preview_output`, the preview mask is cleared and the
-overlay draws nothing brush-shaped — the cursor just gets the tool's generic
+overlay draws nothing brush-shaped; the cursor just gets the tool's generic
 ring.
 
 ## Warp brushes (and other non-paint terminals)
 
-Terminals that transform the layer rather than depositing pigment —
-liquify, smudge, blur, displacement, future effects — fit the system
+Terminals that transform the layer rather than depositing pigment
+(liquify, smudge, blur, displacement, future effects) fit the system
 through the **same** `begin_stroke` / `evaluate_gpu` / `commit` lifecycle
 as paint, without any warp-specific code in the engine.
 
@@ -316,7 +316,7 @@ as paint, without any warp-specific code in the engine.
   warped value back into the scratch. Successive dabs compound because
   each one reads the scratch after the previous dab has mutated it.
 - `commit`: `copy_texture_to_texture(scratch → layer_texture)`. The layer
-  atomically becomes the warped image. No blend — the scratch already
+  atomically becomes the warped image. No blend: the scratch already
   holds the finished pixels.
 
 Stabilizer rewind works out of the box: on a full rewind the engine calls
@@ -335,7 +335,7 @@ pigment or a warped layer).
 3. Implement `begin_stroke` to initialise the scratch however the effect
    wants: clear, layer-copy, something else entirely.
 4. Implement `commit` to push the scratch onto the layer: source-over,
-   replace, destination-out, custom blend — whatever matches the effect.
+   replace, destination-out, custom blend, or whatever matches the effect.
 5. Register the evaluator in [`brush/mod.rs::default_evaluators`](../../crates/darkly/src/brush/mod.rs).
 6. Write a preset that wires `pen_input` to the new terminal, plus a
    `preview_output` subtree so hover feedback works.
@@ -346,7 +346,7 @@ No engine changes needed.
 
 - One `queue.submit` per stroke segment, not per dab (dynamic uniform ring).
 - `canvas_copy` cached per-dab (not per-node within a dab).
-- Dab pool returns RTs to a free list after each dab — zero allocation during
+- Dab pool returns RTs to a free list after each dab: zero allocation during
   a stroke.
 - Stabilizer divergence triggers partial re-render from the nearest save
   point, not full stroke re-render.

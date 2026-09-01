@@ -4,7 +4,7 @@
      *
      * Two verbs, and which are offered comes from `updateTarget`: saving over
      * the brush the graph came from, and saving as a new one. A brush that
-     * ships with the app offers only the second — see `saveTarget.ts`.
+     * ships with the app offers only the second (see `saveTarget.ts`).
      */
     import Modal from './Modal.svelte';
     import { app } from '../state/app.svelte';

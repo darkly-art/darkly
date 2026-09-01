@@ -3,8 +3,8 @@
 // texture with a single `textureSample` instead of re-evaluating the
 // ~80-hash domain-warped fBm kernel per fragment per overlapping dab.
 //
-// `shaders/lib/fbm2d.wgsl` — which owns the fBm math (`fbm_tile`,
-// `fbm_value_noise`, `fbm_seed_xform`, `fbm_pcg`) — is concatenated ahead of
+// `shaders/lib/fbm2d.wgsl`, which owns the fBm math (`fbm_tile`,
+// `fbm_value_noise`, `fbm_seed_xform`, `fbm_pcg`), is concatenated ahead of
 // this file at pipeline-build time (WGSL has no `#include`), exactly as the
 // void noise pass assembles its shader. The field is NOT reimplemented here;
 // this shader only maps each texel to a field coordinate and writes the
@@ -16,7 +16,7 @@ struct BakeParams {
     octaves: i32,
     gain: f32,
     warp: f32,
-    // Field units the tile spans across [0,1) uv — matches the node's
+    // Field units the tile spans across [0,1) uv, matching the node's
     // sample-time divide by FIELD_SPAN so baked feature size equals the live
     // path and the field repeats once per this many field units.
     field_span: f32,
@@ -60,7 +60,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let v = fbm_tile(coord, params.seed, params.octaves, params.gain, params.warp, period);
         return vec4<f32>(v, v, v, 1.0);
     }
-    // Three independent channels off consecutive seeds — identical seed math
+    // Three independent channels off consecutive seeds, using identical seed math
     // to the node's live chromatic path (`CHANNEL_SEED_OFFSETS = [0, 1, 2]`).
     let r = fbm_tile(coord, params.seed, params.octaves, params.gain, params.warp, period);
     let g = fbm_tile(coord, params.seed + 1u, params.octaves, params.gain, params.warp, period);

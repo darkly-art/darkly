@@ -4,7 +4,7 @@
  * The icon bundle is generated offline by scraping Iconify name literals out of
  * the source (`frontend/scripts/gen-icon-bundle.mjs`), so a name that appears
  * only in an imported pack's manifest is not in it and would render nothing.
- * Rust validates a pack icon's *shape* — `collection:name` — and deliberately
+ * Rust validates a pack icon's *shape* (`collection:name`) and deliberately
  * stops there: whether an icon renders is the renderer's question, and the
  * renderer's answer is to fall back rather than show a hole.
  */

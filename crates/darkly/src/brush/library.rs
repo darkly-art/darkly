@@ -1,4 +1,4 @@
-//! The brush library — every brush that exists, and every pack that groups
+//! The brush library: every brush that exists, and every pack that groups
 //! them.
 //!
 //! "Which brushes exist" and "which packs exist" are one logical concept, so
@@ -12,7 +12,7 @@
 //! [`with_mut`].
 //!
 //! It is not document, session or compositor state in the Document Authority
-//! sense — a pack belongs to no canvas, never rides a `.darkly` file, and is
+//! sense: a pack belongs to no canvas, never rides a `.darkly` file, and is
 //! not derivable from one. It is library state, and the library is exactly one
 //! thing.
 
@@ -29,20 +29,20 @@ use crate::brush::pack_file::PackFile;
 #[derive(Clone, Debug, serde::Serialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct BrushInfo {
-    /// Opaque identity — what pack member lists and recents hold.
+    /// Opaque identity: what pack member lists and recents hold.
     pub id: String,
     /// Display name, and the engine's public lookup key.
     pub name: String,
     pub author: String,
     pub description: String,
     pub tags: Vec<String>,
-    /// Iconify icon shown in place of the baked dab/stroke thumbnails —
+    /// Iconify icon shown in place of the baked dab/stroke thumbnails,
     /// present when the graph contains a content-dependent node whose
     /// preview bake renders blank (clone, blur, smudge, liquify). See
     /// [`crate::brush::graph_capabilities`].
     pub icon: Option<&'static str>,
     /// Whether the painter may rename or delete this brush, so the UI can grey
-    /// out affordances it would otherwise offer. A hint, not the authority —
+    /// out affordances it would otherwise offer. A hint, not the authority:
     /// same contract as [`BrushPackInfo::can_edit_members`].
     pub can_edit: bool,
 }
@@ -71,11 +71,11 @@ pub struct BrushPackInfo {
     pub description: String,
     pub icon: String,
     pub palette: PackPalette,
-    /// Member brush ids, in the pack's order. The authority on membership —
+    /// Member brush ids, in the pack's order. The authority on membership:
     /// nothing on [`BrushInfo`] repeats it.
     pub members: Vec<String>,
     /// What the painter may change, so the UI can grey out affordances it
-    /// would otherwise offer. A hint, not the authority — the engine rejects a
+    /// would otherwise offer. A hint, not the authority: the engine rejects a
     /// forbidden edit regardless of what the UI believed.
     pub can_edit_members: bool,
     pub can_edit_identity: bool,
@@ -110,15 +110,15 @@ pub struct LibrarySnapshot {
 
 /// Every brush and pack in the process.
 pub struct BrushLibrary {
-    /// Keyed by id. One keyspace, not two — a parallel name map would be the
+    /// Keyed by id. One keyspace, not two: a parallel name map would be the
     /// same fact in two places, and a linear name scan over a few dozen
     /// brushes is free.
     brushes: IndexMap<BrushId, Brush>,
     /// Insertion-ordered so shipped packs keep their declared order and the
     /// painter's own land after them.
     packs: IndexMap<PackId, BrushPack>,
-    /// In-memory dab thumbnails for the picker tiles. Not part of any archive
-    /// — purely a render cache, rebuilt on theme change alongside the stroke
+    /// In-memory dab thumbnails for the picker tiles. Not part of any archive;
+    /// purely a render cache, rebuilt on theme change alongside the stroke
     /// thumbnails on each [`Brush`].
     dab_thumbnails: HashMap<BrushId, Vec<u8>>,
 }
@@ -134,7 +134,7 @@ impl BrushLibrary {
 
     /// The shipped library: every built-in brush, then every built-in pack.
     ///
-    /// Panics if a shipped pack names a brush that does not exist — that is a
+    /// Panics if a shipped pack names a brush that does not exist; that is a
     /// typo in data we control, caught at startup rather than surfacing later
     /// as a pack that renders one brush short.
     pub fn builtin() -> Self {
@@ -164,7 +164,7 @@ impl BrushLibrary {
         infos
     }
 
-    /// Brushes and packs together — see [`LibrarySnapshot`].
+    /// Brushes and packs together; see [`LibrarySnapshot`].
     pub fn snapshot(&self) -> LibrarySnapshot {
         LibrarySnapshot {
             brushes: self.list(),
@@ -176,7 +176,7 @@ impl BrushLibrary {
         self.brushes.get(id)
     }
 
-    /// Look a brush up by its display name — the engine's public lookup key.
+    /// Look a brush up by its display name: the engine's public lookup key.
     pub fn by_name(&self, name: &str) -> Option<&Brush> {
         self.brushes.values().find(|b| b.name() == name)
     }
@@ -240,7 +240,7 @@ impl BrushLibrary {
     }
 
     /// Rename a brush. No pack and no recents entry is touched, because both
-    /// hold ids — that is what having an id is for.
+    /// hold ids, and that is what having an id is for.
     pub fn rename(&mut self, id: &str, new_name: &str) -> Result<(), String> {
         let new_name = new_name.trim();
         if new_name.is_empty() {
@@ -277,7 +277,7 @@ impl BrushLibrary {
     }
 
     /// Attach a freshly-baked stroke PNG. Used by the async bake completion
-    /// path — save returns immediately without a thumbnail, and this installs
+    /// path: save returns immediately without a thumbnail, and this installs
     /// the PNG once the readback lands on a later frame.
     pub fn set_thumbnail(&mut self, id: &str, png: Vec<u8>) -> bool {
         match self.brushes.get_mut(id) {
@@ -298,7 +298,7 @@ impl BrushLibrary {
     }
 
     /// Drop every baked stroke and dab thumbnail. Called on theme change so
-    /// the next picker refresh re-bakes against the new palette — without
+    /// the next picker refresh re-bakes against the new palette; without
     /// this, brushes stay frozen at whatever theme they were first viewed
     /// under.
     pub fn clear_thumbnails(&mut self) {
@@ -391,7 +391,7 @@ impl BrushLibrary {
         Ok(())
     }
 
-    /// Delete a pack. **Its brushes survive** — a pack is a grouping, not a
+    /// Delete a pack. **Its brushes survive**: a pack is a grouping, not a
     /// container, and a member that other packs also list is entirely
     /// unaffected. A brush left in no pack is a reachable, safe state.
     pub fn delete_pack(&mut self, id: &str) -> Result<(), String> {
@@ -435,14 +435,14 @@ impl BrushLibrary {
     /// Import a `.darkly-brush` archive as a new pack under `id`.
     ///
     /// The pack is **always** new, never merged into or replacing an existing
-    /// one — merging risks silently overwriting the painter's edits. Its name
-    /// is suffixed if it collides.
+    /// one, since merging risks silently overwriting the painter's edits. Its
+    /// name is suffixed if it collides.
     ///
     /// Per brush record: a brush whose id the library already has is
     /// **reused**, and the incoming copy discarded. Re-importing your own
     /// export therefore does not multiply your library, and a friend's pack
     /// containing a brush you already have does not overwrite the edits you
-    /// made to it. The tradeoff is deliberate — the sender's version of a
+    /// made to it. The tradeoff is deliberate: the sender's version of a
     /// shared brush loses to the recipient's.
     pub fn import_pack(&mut self, id: &str, bytes: &[u8]) -> Result<PackId, String> {
         if id.trim().is_empty() {
@@ -507,7 +507,7 @@ thread_local! {
 /// **Never call a `&mut self` engine method inside the closure.** The borrow
 /// is held for the closure's whole body, and a re-entrant `with`/`with_mut`
 /// panics at runtime rather than failing to compile. Clone what you need out
-/// and end the borrow first — `brush_load` does exactly that.
+/// and end the borrow first; `brush_load` does exactly that.
 pub fn with<R>(f: impl FnOnce(&BrushLibrary) -> R) -> R {
     LIBRARY.with(|lib| f(&lib.borrow()))
 }
@@ -518,7 +518,7 @@ pub fn with_mut<R>(f: impl FnOnce(&mut BrushLibrary) -> R) -> R {
     LIBRARY.with(|lib| f(&mut lib.borrow_mut()))
 }
 
-/// Restore the library to its shipped state. Tests only — the process-global
+/// Restore the library to its shipped state. Tests only: the process-global
 /// would otherwise carry one test's brushes into the next.
 #[cfg(any(test, feature = "testing"))]
 pub fn reset_for_test() {
@@ -567,7 +567,7 @@ mod tests {
 
     #[test]
     fn every_shipped_brush_is_in_a_shipped_pack() {
-        // Shipped brush YAMLs and shipped pack member lists must agree — this
+        // Shipped brush YAMLs and shipped pack member lists must agree; this
         // is what catches a typo in a member list, and what makes the brushes
         // catalog's derived grouping total.
         let lib = BrushLibrary::builtin();
@@ -903,7 +903,7 @@ mod tests {
         assert!(!snap.brushes.is_empty());
         assert!(!snap.packs.is_empty());
         // Every member id in the snapshot resolves to a brush in the same
-        // snapshot — the consistency one round trip buys.
+        // snapshot: the consistency one round trip buys.
         for pack in &snap.packs {
             for member in &pack.members {
                 assert!(

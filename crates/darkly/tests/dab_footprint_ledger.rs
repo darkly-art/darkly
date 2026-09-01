@@ -1,12 +1,12 @@
 //! The dab-footprint ledger: the save-point bbox a dab records must be the
-//! footprint its terminal published for the pass it actually issued — never a
+//! footprint its terminal published for the pass it actually issued, never a
 //! bbox recomputed from position and radius alongside it.
 //!
 //! Guards the failure class documented on `ExtentContribution`
 //! (`crates/darkly/src/brush/wgsl/extent.rs`): a CPU-side geometric envelope
 //! and the shader's real write footprint were maintained independently,
 //! disagreed by the compiled brush's extent inflation, and a mid-stroke rewind
-//! then cleared pixels outside the CPU bbox while restoring only into it —
+//! then cleared pixels outside the CPU bbox while restoring only into it,
 //! visibly truncating earlier dabs into a square as the user kept painting.
 //!
 //! `smudge` gives a reachable instance. Its `read_half` early-outs on a
@@ -75,7 +75,7 @@ fn painted_layer(engine: &mut DarklyEngine) -> LayerId {
 ///
 /// Before the fallback envelope was removed from `StrokeEngine::place_dab`,
 /// an unpublished footprint fell back to a `pos ± effective_diameter / 2`
-/// rect — a bbox recomputed from geometry, omitting the compiled brush's
+/// rect: a bbox recomputed from geometry, omitting the compiled brush's
 /// `brush_extent_factor`, for a dab that wrote no pixels at all.
 #[test]
 fn dab_that_writes_nothing_records_no_damage() {
@@ -92,7 +92,7 @@ fn dab_that_writes_nothing_records_no_damage() {
         "smudge's first dab is stationary and issues no pass, so it must \
          record an empty footprint; got {bbox:?}. A non-empty rect here means \
          the save-point bbox was recomputed from position and radius rather \
-         than taken from what the terminal published — the divergence that \
+         than taken from what the terminal published: the divergence that \
          lets a rewind clear pixels it cannot restore."
     );
 

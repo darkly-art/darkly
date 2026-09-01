@@ -3,7 +3,7 @@ import { withApi } from '../../engine/testApi';
 
 // Mock `app` and `config` before importing the tool so we never pull in the
 // real engine/wasm. The regression guard: the text tool must CREATE the object
-// itself on pointer-up — not merely stash a `placement` for a properties panel
+// itself on pointer-up, not merely stash a `placement` for a properties panel
 // to consume. The old design created text only inside a `$effect` in
 // `TextProperties.svelte`, so when that panel was tabbed behind another (thus
 // unmounted), the gesture was silently dropped. This test has NO panel mounted
@@ -86,7 +86,7 @@ describe('text tool creates the object itself (panel-independent)', () => {
         tool.onPointerMove(ev(), 220, 140);
         await tool.onPointerUp(ev());
         const engine = fakeApp.engine as ReturnType<typeof mockEngine>;
-        // Observable outcome — not another module's internal wire shape (no
+        // Observable outcome, not another module's internal wire shape (no
         // `anchor` assertion; that's `createTextFromPending`'s new-layer detail).
         expect(engine.send).toHaveBeenCalledWith(
             'add_text',

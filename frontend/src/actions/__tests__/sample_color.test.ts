@@ -22,7 +22,7 @@ const { engine, fakeApp, fakeConfig } = vi.hoisted(() => {
 });
 vi.mock('../../state/app.svelte', () => ({ app: fakeApp }));
 vi.mock('../../config/store.svelte', () => ({ config: fakeConfig }));
-// `onMove` calls screenToCanvas — stub it to return a known canvas point.
+// `onMove` calls screenToCanvas, so stub it to return a known canvas point.
 vi.mock('../../canvas/coordinates', () => ({
     screenToCanvas: vi.fn(() => ({ x: 50, y: 60 })),
 }));
@@ -67,7 +67,7 @@ describe('sampleColor action registration', () => {
 
 describe('sampleColor chord resolution (canvas@paint)', () => {
     it('resolves under the paint scope at site=canvas with chord=ctrl+drag', () => {
-        // Defensive integration — proves that the registered binding string
+        // Defensive integration: proves that the registered binding string
         // parses into a chord-index entry that the dispatcher would match
         // when a paint-group tool is active.
         const idx = buildChordIndex([
@@ -81,7 +81,7 @@ describe('sampleColor chord resolution (canvas@paint)', () => {
     });
 
     it('does NOT resolve when a non-paint tool is active', () => {
-        // `select` is the group on rect/ellipse/lasso/polygon select tools —
+        // `select` is the group on rect/ellipse/lasso/polygon select tools;
         // they have their own ctrl-modified gestures and must not steal
         // sampleColor's chord.
         const idx = buildChordIndex([

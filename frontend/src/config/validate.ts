@@ -3,7 +3,7 @@ import { sectionPrefs } from './store.svelte';
 
 /**
  * Per-action keys are accepted by prefix even though no schema entry
- * declares them — the action registry is their source of truth. We don't
+ * declares them; the action registry is their source of truth. We don't
  * validate against a specific action ID here (the action might not yet be
  * registered on early init); we just accept the namespace and require a
  * string value.

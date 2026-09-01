@@ -15,18 +15,18 @@ import type { ParamInfo, ParamValue } from '../../engine/protocol_gen';
 
 // The panel's own vocabulary for param *values*; the wire type is authoritative
 // and is re-exported rather than restated. (The hand-written union that used to
-// live here had already drifted — it omitted `string`, which the blender void's
+// live here had already drifted: it omitted `string`, which the blender void's
 // `url` param carries.)
 export type { ParamInfo };
 
 export type CurvePoints = [number, number][];
-/** `[inBlack, inWhite, gamma, outBlack, outWhite]` — a Levels transfer. */
+/** `[inBlack, inWhite, gamma, outBlack, outWhite]`: a Levels transfer. */
 export type LevelsValues = [number, number, number, number, number];
-/** Normalized sRGB `[r, g, b]` in `[0,1]` — a `ParamValue::Color`. */
+/** Normalized sRGB `[r, g, b]` in `[0,1]`: a `ParamValue::Color`. */
 export type ColorValue = [number, number, number];
-/** A 2D vector `[x, y]` — a `ParamValue::Vec2` (offset pad). */
+/** A 2D vector `[x, y]`: a `ParamValue::Vec2` (offset pad). */
 export type Vec2Value = [number, number];
-/** A dynamic list of named-value entries — a `ParamValue::List`. */
+/** A dynamic list of named-value entries: a `ParamValue::List`. */
 export type ListValue = Record<string, FilterParamValue>[];
 
 /** A concrete param value on the wire. */
@@ -39,7 +39,7 @@ export function isChannelParam(kind: string): boolean {
 
 /** Deep-clone a param value (curve pairs / levels arrays / list entries can't be
  *  `structuredClone`d through Svelte proxies, so copy by hand; scalars pass
- *  through). List entries are `{ name: value }` objects — cloned field-by-field
+ *  through). List entries are `{ name: value }` objects, cloned field-by-field
  *  so a modal's scratch copy never aliases back into the shared schema. */
 export function cloneParamValue<T extends FilterParamValue>(v: T): T {
     if (!Array.isArray(v)) return v;
@@ -56,7 +56,7 @@ export function cloneParamValue<T extends FilterParamValue>(v: T): T {
 
 /** True when a param has a meaningful neutral center to snap back to, and so
  *  earns a reset-to-default button: a 2D offset pad (recenters), or a numeric
- *  slider whose default sits in the *interior* of its range — a value you nudge
+ *  slider whose default sits in the *interior* of its range: a value you nudge
  *  away from in both directions, like scale's 1.0 between 0.9 and 1.1. Sliders
  *  whose default is a range endpoint (blur, which rests at 0) and deliberate
  *  picks (color) get none. */
@@ -75,7 +75,7 @@ export function paramIsResettable(param: ParamInfo): boolean {
     return false;
 }
 
-/** The item schema of a `list` param — one `ParamInfo` per entry field.
+/** The item schema of a `list` param: one `ParamInfo` per entry field.
  *  Empty for non-list params (whose `options` is enum labels, not a schema). */
 export function listItemSchema(param: ParamInfo): ParamInfo[] {
     if (param.kind !== 'list' || !Array.isArray(param.options)) return [];
@@ -99,7 +99,7 @@ export function seedScratchParams(params: ParamInfo[]): ParamInfo[] {
 }
 
 /** Build the `{ name: value }` map the engine's `updateFilterParams` /
- *  `applyFilter` expects — the effective value (`value ?? default`) per param. */
+ *  `applyFilter` expects: the effective value (`value ?? default`) per param. */
 export function filterParamMap(params: ParamInfo[]): Record<string, FilterParamValue> {
     const out: Record<string, FilterParamValue> = {};
     for (const p of params) out[p.name] = p.value ?? p.default;
@@ -114,8 +114,8 @@ export function colorizeActive(params: ParamInfo[]): boolean {
 }
 
 /**
- * Partition a filter's params into its per-channel tone params — each a channel
- * that gets its own entry in the channel selector — and its scalar params,
+ * Partition a filter's params into its per-channel tone params (each a channel
+ * that gets its own entry in the channel selector) and its scalar params,
  * preserving declaration order within each group. A filter with N channel params
  * (Curves and Levels both expose rgb/red/green/blue/alpha/hue/saturation/
  * lightness) surfaces one selector with N options and a single per-channel

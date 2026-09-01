@@ -10,7 +10,7 @@ const emptyGraph: BrushGraph = { nodes: {}, connections: [] };
  *  That difference is the whole subject of this file: recents is id-keyed
  *  (`recents.svelte.ts`) and the pruner in `BrushLibraryStore.refresh` retains
  *  against live ids, so anything recorded under a display name is dropped by
- *  the next refresh — which `hydrate` runs at boot. */
+ *  the next refresh, which `hydrate` runs at boot. */
 function fakeEngine() {
     return {
         api: {

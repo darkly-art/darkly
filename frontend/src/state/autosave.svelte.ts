@@ -3,7 +3,7 @@
  * tab (when dirty and idle) to OPFS for crash recovery, and it snapshots a
  * tab when you switch away from it so every open document is covered. The
  * snapshot bytes come from `produceDarklyBytes`, which keeps the tab's
- * render loop alive (via `onSaveResult`) until the readback lands — so even
+ * render loop alive (via `onSaveResult`) until the readback lands, so even
  * a backgrounded tab completes without the user looking at it.
  *
  * Snapshots reuse the exact `.darkly` save pipeline and are marked
@@ -18,7 +18,7 @@ import { writeSnapshot } from '../storage/recovery';
 import { sessionId } from './recoverySession';
 import type { DarklyInstance } from './app.svelte';
 
-/** Skip a switch-away snapshot if the tab was snapshotted this recently —
+/** Skip a switch-away snapshot if the tab was snapshotted this recently:
  *  rapid tab-flipping shouldn't trigger a composite hitch each time. */
 const SWITCH_DEBOUNCE_MS = 5_000;
 
@@ -45,7 +45,7 @@ export function snapshotEligible(opts: {
 
 class AutosaveScheduler {
     private timer: ReturnType<typeof setInterval> | null = null;
-    /** recoveryIds with a snapshot currently being produced — guards the
+    /** recoveryIds with a snapshot currently being produced: guards the
      *  single per-engine save slot against overlapping autosave ticks. */
     private inFlight = new Set<string>();
     /** recoveryId → last successful snapshot time (ms), for debouncing. */
@@ -68,7 +68,7 @@ class AutosaveScheduler {
             $effect(() => {
                 const cur = shell.active;
                 // Only snapshot a tab we switched AWAY from while it's still
-                // open — a *closed* tab's engine is freed (and closeGuard
+                // open; a *closed* tab's engine is freed (and closeGuard
                 // already cleared its snapshot).
                 if (prev && prev !== cur && shell.instances.includes(prev)) {
                     void this.snapshot(prev, SWITCH_DEBOUNCE_MS);
@@ -96,7 +96,7 @@ class AutosaveScheduler {
         this.timer = setInterval(() => this.tick(), seconds * 1000);
     }
 
-    /** Interval tick — snapshot the focused tab if it has unsaved work. */
+    /** Interval tick: snapshot the focused tab if it has unsaved work. */
     private tick(): void {
         const inst = shell.active;
         if (inst) void this.snapshot(inst);
@@ -106,7 +106,7 @@ class AutosaveScheduler {
      * Snapshot `inst` to OPFS if eligible. No-op when the tab is clean,
      * mid-stroke, already snapshotting, or (with `debounceMs`) snapshotted
      * very recently. Swallows `SaveError::InProgress` (a manual save holds
-     * the slot) and transient failures — the next tick retries.
+     * the slot) and transient failures; the next tick retries.
      */
     async snapshot(inst: DarklyInstance, debounceMs = 0): Promise<void> {
         const engine = inst.engine;
@@ -128,7 +128,7 @@ class AutosaveScheduler {
             await writeSnapshot(sessionId, inst.recoveryId, bytes);
             this.lastSnapshotAt.set(inst.recoveryId, Date.now());
         } catch {
-            // InProgress / transient — skip; the next tick retries.
+            // InProgress / transient: skip, the next tick retries.
         } finally {
             this.inFlight.delete(inst.recoveryId);
         }

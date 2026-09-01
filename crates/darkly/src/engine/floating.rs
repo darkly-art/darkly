@@ -1,4 +1,4 @@
-//! Floating content — paste-in-place and interactive transforms.
+//! Floating content: paste-in-place and interactive transforms.
 
 use darkly_macros::handlers;
 
@@ -138,7 +138,7 @@ impl DarklyEngine {
     /// (source_origin_x, source_origin_y, source_width, source_height,
     /// transform). The transform carries its own mode tag, so the gizmo's
     /// current mode is **derived from the document** (the stored `Transform`),
-    /// not session-local — a re-`adopt()` can't desync it.
+    /// not session-local, so a re-`adopt()` can't desync it.
     /// Returns None if no floating content is active.
     pub fn floating_info(&self) -> Option<(f32, f32, f32, f32, Transform)> {
         if let Some(session) = self.transform_session.as_ref() {
@@ -166,7 +166,7 @@ impl DarklyEngine {
     /// Return the layer the active floating content will commit to.
     /// Used by the frontend to distinguish "user switched away from the
     /// floating's layer" (dismiss) from "user activated the floating's
-    /// own target layer" (keep — paste-as-floating sets active to its
+    /// own target layer" (keep: paste-as-floating sets active to its
     /// auto-created target).
     #[handler]
     pub fn floating_target_layer(&self) -> Option<LayerId> {
@@ -186,7 +186,7 @@ impl DarklyEngine {
         // Auto-commit any existing floating content first.
         self.auto_commit_floating();
 
-        // Pull pixels from either clipboard variant — a normal copy produces a
+        // Pull pixels from either clipboard variant; a normal copy produces a
         // rich `Layer` clip, so reading only flat image clips here made
         // paste-in-place silently no-op after any copy.
         let (rgba, source_width, source_height, offset_x, offset_y) =
@@ -198,7 +198,7 @@ impl DarklyEngine {
 
         // Upload flat RGBA data to GPU for preview. The target node's format
         // is read off `compositor.node_texture(id).format` inside the
-        // compositor — the engine never speaks the word "mask" here, so this
+        // compositor; the engine never speaks the word "mask" here, so this
         // floats onto a raster layer or an R8 mask alike.
         self.compositor.set_floating_content(
             &self.gpu.device,
@@ -254,7 +254,7 @@ impl DarklyEngine {
         // preserved when the floating commits.
         let layer_bounds = crate::coord::CanvasRect::from_xywh(offset_x, offset_y, width, height);
 
-        // Create the target layer (no undo entry yet — pushed at commit).
+        // Create the target layer (no undo entry yet, pushed at commit).
         let new_id = self.doc.add_raster_layer(None);
         if let Some(Layer::Raster(r)) = self.doc.layer_mut(new_id) {
             r.common.name = "Pasted Layer".to_string();
@@ -270,7 +270,7 @@ impl DarklyEngine {
         // Position relative to the active node. `resolve_anchor_target` maps a
         // filter anchor (the active id while editing a mask) to its host, so
         // the pasted layer lands as the host's sibling rather than nested under
-        // it — the same anchor resolution the document's `add_*` helpers use.
+        // it, the same anchor resolution the document's `add_*` helpers use.
         let target = self.doc.resolve_anchor_target(active_layer_id);
         self.doc.move_layer(new_id, target);
 
@@ -899,7 +899,7 @@ impl DarklyEngine {
         };
 
         let layer_id = fc.target_layer;
-        // The target can become locked after `begin_transform` / paste — fall
+        // The target can become locked after `begin_transform` / paste; fall
         // back to cancel-equivalent behavior (drop float state, no write to
         // the layer). The float is already taken out of `self.floating` above.
         if !self.doc.is_node_editable(layer_id) {
@@ -917,7 +917,7 @@ impl DarklyEngine {
 
         // Compute tight affected rect = union(source bounds, transformed
         // bounds), in CANVAS coordinates. Intentionally NOT clamped to
-        // canvas — layer textures may extend past the canvas, and content
+        // canvas; layer textures may extend past the canvas, and content
         // dragged past the canvas edge must survive on the layer so it
         // reappears when moved back. We grow the target below to fit.
         let (min_x, min_y, max_x, max_y) = fc.transformed_bounds();
@@ -935,14 +935,14 @@ impl DarklyEngine {
 
         // Grow the target (or its host, for mask filters) so the layer
         // texture can hold any portion of the affected rect that lies
-        // outside its current bounds — including pixels past the canvas
+        // outside its current bounds, including pixels past the canvas
         // edge. Best-effort: if growth is refused (cap, or target is
         // neither raster nor filter with a raster host), commit falls
         // back to the pre-grow extent and the texture-side clip below
         // still keeps the commit consistent.
         let grew = self.grow_node_to_fit(layer_id, affected_canvas).is_some();
 
-        // Path A — paste onto a layer auto-created for this paste.
+        // Path A: paste onto a layer auto-created for this paste.
         // The layer is empty by construction, so a single EntityAddAction
         // captures the whole paste as one undo step (no GpuRegionAction).
         let FloatingMode::Paste { created_layer_id } = fc.mode;
@@ -992,7 +992,7 @@ impl DarklyEngine {
         };
 
         // The live target was never destructively touched during the
-        // floating session — `setup_transform` only copied source pixels
+        // floating session; `setup_transform` only copied source pixels
         // out, and the per-frame preview ran into a dedicated preview
         // texture. So `save_region` here captures the genuine pre-
         // transform state for undo, no un-clear dance required. The
@@ -1156,7 +1156,7 @@ impl DarklyEngine {
         let FloatingMode::Paste { created_layer_id } = fc.mode;
         if let Some(id) = created_layer_id {
             // Paste auto-created a target layer; drop it silently. No undo
-            // entry to maintain — `EntityAddAction` is only pushed on commit.
+            // entry to maintain; `EntityAddAction` is only pushed on commit.
             self.doc.detach_for_undo(id);
             self.compositor.dispose_layer(id);
             self.compositor.mark_dirty();

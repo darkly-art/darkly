@@ -12,7 +12,7 @@ use crate::gpu::params::{ParamDef, ParamValue};
 impl DarklyEngine {
     // --- Veils ---
 
-    /// Wire entry for `add_veil` — coerces JSON `params` against the veil
+    /// Wire entry for `add_veil`: coerces JSON `params` against the veil
     /// type's schema, then [`Self::add_veil_layer`].
     #[handler]
     pub fn add_veil(&mut self, veil_type: String, params: RawParams) {
@@ -20,7 +20,7 @@ impl DarklyEngine {
         self.add_veil_layer(&veil_type, &pv);
     }
 
-    /// Wire entry for `update_veil` — resolves the slot's veil type, coerces
+    /// Wire entry for `update_veil`: resolves the slot's veil type, coerces
     /// `params` against its schema, then [`Self::update_veil_layer`]. A stale
     /// index is a silent no-op.
     #[handler]

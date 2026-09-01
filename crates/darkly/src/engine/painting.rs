@@ -33,14 +33,14 @@ impl DarklyEngine {
     }
 
     /// Read the global prediction horizon (ms of look-ahead) from config.
-    /// `0` = off. Prediction is a global editor preference, not per-brush —
+    /// `0` = off. Prediction is a global editor preference, not per-brush:
     /// see `config/sections/input.rs`.
     fn prediction_horizon_ms(&self) -> f32 {
         crate::config::get_f64("input.predictionHorizon") as f32
     }
 
     /// Build the `SpacingConfig` for the active brush graph. Reads brush_settings
-    /// port defaults — the same source the editor preview reads — so a real
+    /// port defaults (the same source the editor preview reads), so a real
     /// stroke and its preview stamp at the same intervals.
     fn active_spacing_config(&self) -> SpacingConfig {
         use crate::brush::state::BrushState;
@@ -51,8 +51,8 @@ impl DarklyEngine {
         crate::brush::nodes::brush_settings::spacing_config(&brush.graph)
     }
 
-    /// Read the active brush's base size from its `brush_settings.size` knob —
-    /// the same out-of-band source the editor preview uses, so a real stroke and
+    /// Read the active brush's base size from its `brush_settings.size` knob
+    /// (the same out-of-band source the editor preview uses), so a real stroke and
     /// its preview render dabs at the same size.
     fn active_base_size(&self) -> f32 {
         use crate::brush::state::BrushState;
@@ -64,7 +64,7 @@ impl DarklyEngine {
     }
 
     /// Read the active brush's stamp turn rate from its
-    /// `brush_settings.stamp_angle_rate` knob — radians per brush diameter of
+    /// `brush_settings.stamp_angle_rate` knob: radians per brush diameter of
     /// travel, read out-of-band at stroke start like spacing and base size.
     fn active_stamp_angle_rate(&self) -> f32 {
         use crate::brush::state::BrushState;
@@ -76,8 +76,8 @@ impl DarklyEngine {
     }
 
     /// Flush any pending diff-based undo commit. Called before overwriting the
-    /// scratch texture (e.g. at the start of a new stroke). Uses Poll (not Wait)
-    /// — if the diff hasn't completed yet, falls back to a full-canvas rect.
+    /// scratch texture (e.g. at the start of a new stroke). Uses Poll (not Wait);
+    /// if the diff hasn't completed yet, it falls back to a full-canvas rect.
     pub(crate) fn flush_pending_undo_commit(&mut self) {
         if !self.diff_rect.is_pending() {
             return;
@@ -90,9 +90,9 @@ impl DarklyEngine {
         let _ = self.gpu.device.poll(wgpu::PollType::Poll);
         let rect = match self.diff_rect.poll(&self.gpu.device) {
             Some(Some(rect)) => rect,
-            Some(None) => return, // Textures identical — no commit needed.
-            // Diff not ready — fall back to the full saved area. (NOT
-            // `scratch_dimensions()` — those diverge from `snapshot.saved`
+            Some(None) => return, // Textures identical, no commit needed.
+            // Diff not ready, fall back to the full saved area. (NOT
+            // `scratch_dimensions()`, which diverges from `snapshot.saved`
             // after a mid-stroke `grow_scratch_preserving`.)
             None => commit.snapshot.saved,
         };
@@ -144,7 +144,7 @@ impl DarklyEngine {
         let format = tex.format();
         let target = GpuPaintTarget::from_node(tex, self.doc.canvas_rect());
 
-        // Save then mutate in one command buffer — wgpu executes recorded
+        // Save then mutate in one command buffer: wgpu executes recorded
         // commands in order, so the snapshot captures pre-mutation pixels.
         let mut encoder = crate::gpu::paint_target::PaintCommandEncoder::new(
             &self.gpu.device,
@@ -178,7 +178,7 @@ impl DarklyEngine {
     }
 
     /// Snapshot+commit a node region into an `UndoRegionEntry` without pushing
-    /// or marking dirty — for callers that batch many entries into one compound
+    /// or marking dirty, for callers that batch many entries into one compound
     /// action (canvas transform, image rescale) and run the GPU permute
     /// separately. Returns `None` if the node has no texture.
     pub(crate) fn snapshot_region_entry(
@@ -323,7 +323,7 @@ impl DarklyEngine {
     /// Set the clone-brush source anchor from a plane / canvas-pixel
     /// position (the set-source gesture), pinning the layer that was
     /// active at the gesture (`None` means same-layer clone). Persists as
-    /// session state until overwritten — surviving strokes and brush /
+    /// session state until overwritten, surviving strokes and brush /
     /// tool switches so the source stays put while the user paints.
     /// Rounded to whole pixels (the snapshot is sampled at pixel
     /// resolution).
@@ -336,8 +336,8 @@ impl DarklyEngine {
         self.clone_source_layer = layer;
     }
 
-    /// `true` when the active brush graph contains a `clone_source` node
-    /// — i.e. it needs a set-source anchor before it can paint. The
+    /// `true` when the active brush graph contains a `clone_source` node,
+    /// i.e. it needs a set-source anchor before it can paint. The
     /// frontend polls this to arm the set-source gesture and show the
     /// "set a source" hint. A structural graph check (no compile): the
     /// `clone_source` node is exactly what sets `CompiledBrush::samples_source`.
@@ -356,7 +356,7 @@ impl DarklyEngine {
     }
 
     /// Structural read of one of the active brush's `clone_source` port
-    /// defaults — no compile, just the graph under the session read lock.
+    /// defaults: no compile, just the graph under the session read lock.
     /// `None` when there is no `clone_source` node (or no such port).
     /// Shared by the mode / merged queries below so they resolve the node
     /// identically.
@@ -378,8 +378,8 @@ impl DarklyEngine {
     /// *aligned* (the source tracks the cursor) or when there is no
     /// `clone_source` node. The frontend reads this to track the on-canvas
     /// source marker correctly during a stroke. Reads the exposed `mode`
-    /// port default — the same value `mode_is_anchored` bakes into the
-    /// emitted WGSL, sharing
+    /// port default (the same value `mode_is_anchored` bakes into the
+    /// emitted WGSL), sharing
     /// [`crate::brush::nodes::clone_source::mode_default_is_anchored`], so
     /// the marker and the shader can't disagree on the mode.
     #[handler]
@@ -390,7 +390,7 @@ impl DarklyEngine {
     }
 
     /// `true` when the active brush's `clone_source` node has "Sample
-    /// Merged" on — the stroke-start snapshot then freezes the root
+    /// Merged" on: the stroke-start snapshot then freezes the root
     /// composite instead of a layer. Engine-internal (stroke start reads
     /// it); shares the toggle threshold with the emitted port default via
     /// [`crate::brush::nodes::clone_source::merged_default_is_on`].
@@ -401,7 +401,7 @@ impl DarklyEngine {
     }
 
     // --- Stroke lifecycle ---
-    // The active node id directly identifies the paint target — for a mask
+    // The active node id directly identifies the paint target: for a mask
     // filter id, paint goes to the mask's R8 PixelBuffer; for a raster id,
     // paint goes to the RGBA layer texture. No sidecar redirect.
     //
@@ -415,7 +415,7 @@ impl DarklyEngine {
     pub fn begin_stroke(&mut self, id: LayerId) -> Result<(), String> {
         if !self.doc.is_node_editable(id) || !self.is_node_paintable(id) {
             // Leave `active_stroke_layer` cleared so every queued stroke_to
-            // for this gesture no-ops uniformly — matches the "node missing"
+            // for this gesture no-ops uniformly; this matches the "node missing"
             // path and avoids partial-stroke state.
             self.active_stroke_layer = None;
             return Err(self.paint_refusal_reason(id));
@@ -435,7 +435,7 @@ impl DarklyEngine {
 
     /// True when paint operations have somewhere to land. Raster layers and
     /// mask filters carry a CPU-authoritative pixel buffer; groups and
-    /// voids don't, so paint there would either be a no-op or — for voids —
+    /// voids don't, so paint there would either be a no-op or, for voids,
     /// scribble onto a procedural texture that the compositor immediately
     /// regenerates from params on the next dirty tick. Funnel every stroke
     /// entry point through this predicate so the rejection is uniform.
@@ -460,7 +460,7 @@ impl DarklyEngine {
         if !self.doc.is_node_editable(layer_id) {
             format!("\"{name}\" is locked")
         } else {
-            format!("\"{name}\" can't be painted on — right-click it and choose Rasterize")
+            format!("\"{name}\" can't be painted on; right-click it and choose Rasterize")
         }
     }
 
@@ -620,7 +620,7 @@ impl DarklyEngine {
 
     /// Grow the layer texture if the next dab at canvas `(x, y)` would land
     /// outside its current bounds. Triggered only when the dab CENTER falls
-    /// outside the layer's canvas extent — strokes within the layer don't
+    /// outside the layer's canvas extent; strokes within the layer don't
     /// extend it (matching Krita's behavior of growing only when paint
     /// actually escapes the layer's recorded bounds; dab footprints that
     /// cross a layer edge are GPU-clipped).
@@ -646,7 +646,7 @@ impl DarklyEngine {
 
         // Trigger: dab center outside current extent. Doesn't grow when the
         // user paints inside the canvas with a brush whose footprint
-        // happens to cross the canvas edge — those edge pixels would clip
+        // happens to cross the canvas edge; those edge pixels would clip
         // anyway with the canvas-aligned layer, matching pre-P2 behavior.
         let cx = x.floor() as i32;
         let cy = y.floor() as i32;
@@ -668,7 +668,7 @@ impl DarklyEngine {
             (HALF as u32) * 2,
         );
 
-        // Grow the stroke target itself — raster grows the raster, a mask
+        // Grow the stroke target itself: raster grows the raster, a mask
         // stroke grows the mask (no host coupling).
         let new_extent = match self.grow_node_to_fit(layer_id, needed) {
             Some(e) => e,
@@ -697,7 +697,7 @@ impl DarklyEngine {
 
         // The brush engine's bbox metadata (`save_points`, `checkpoint_ring`)
         // is in canvas coords (Storage Frame Rule). Canvas coords are stable
-        // across layer growth, so no metadata patch is needed — only the GPU
+        // across layer growth, so no metadata patch is needed; only the GPU
         // textures got rebased above, and the metadata translates to the new
         // layer-local frame on demand at the wgpu boundary.
 
@@ -716,8 +716,8 @@ impl DarklyEngine {
             });
             // After grow_scratch_preserving, the new scratch holds valid
             // pre-stroke state over the full new extent: the old extent's
-            // snapshot rebased to the new frame, and the format default —
-            // transparent for a raster layer, white for an R8 mask —
+            // snapshot rebased to the new frame, and the format default
+            // (transparent for a raster layer, white for an R8 mask)
             // everywhere else. The newly-grown pixels didn't exist before the
             // grow, so that default IS their pre-stroke value. Widen `saved`
             // to cover the full new canvas extent so a diff_rect that spills
@@ -736,7 +736,7 @@ impl DarklyEngine {
     }
 
     /// Grow whichever pixel-bearing node `node_id` names to cover `needed`,
-    /// each growing **itself** — no host coupling.
+    /// each growing **itself**: no host coupling.
     ///
     /// - A raster layer grows its own bounds + texture ([`Self::grow_layer`]).
     /// - A filter (e.g. a mask) grows its own bounds + texture
@@ -759,12 +759,12 @@ impl DarklyEngine {
 
     /// Grow a filter's own pixel buffer (doc `PixelBuffer.bounds` + GPU
     /// texture) to cover `needed`, honoring `MAX_LAYER_DIM`. Document-led, the
-    /// filter analogue of [`Self::grow_layer`] — the filter grows itself,
+    /// filter analogue of [`Self::grow_layer`]: the filter grows itself,
     /// fully decoupled from its host. Returns `Some(new_extent)` when grown.
     ///
     /// Growth is document-led (doc bounds and GPU texture move together), so
     /// the stroke's region undo restores painted pixels with the same
-    /// constant-extent path raster grow uses — no separate bounds-undo op.
+    /// constant-extent path raster grow uses, with no separate bounds-undo op.
     pub(crate) fn grow_filter(
         &mut self,
         mod_id: LayerId,
@@ -795,7 +795,7 @@ impl DarklyEngine {
             return None;
         }
 
-        // Doc first — the filter's `PixelBuffer` is the source of truth.
+        // Doc first: the filter's `PixelBuffer` is the source of truth.
         self.doc
             .find_filter_mut(mod_id)
             .and_then(|m| m.pixels_mut())?
@@ -850,7 +850,7 @@ impl DarklyEngine {
             return None;
         }
 
-        // Doc first — the layer's `PixelBuffer` is the source of truth.
+        // Doc first: the layer's `PixelBuffer` is the source of truth.
         let isolated = self.host_renders_isolated(layer_id);
         let (opacity, blend_mode_gpu) = match self.doc.layer_mut(layer_id) {
             Some(crate::layer::Layer::Raster(r)) => {
@@ -863,7 +863,7 @@ impl DarklyEngine {
         // Encoder discipline: the resize must run in its own encoder,
         // submitted before any subsequent dab dispatch can start a new
         // encoder against the new texture. `gpu.encode` already does
-        // one-encoder-per-call. A mask is no longer grown in lockstep — it
+        // one-encoder-per-call. A mask is no longer grown in lockstep; it
         // owns its bounds and grows itself (`grow_filter`); the mask-apply
         // pass samples it in its own space, so a divergent mask renders
         // correctly without any shared-UV coupling.
@@ -910,14 +910,14 @@ impl DarklyEngine {
         canvas_w: u32,
         canvas_h: u32,
     ) {
-        // True on the lazy-init path below — the terminal's `begin_stroke`
+        // True on the lazy-init path below: the terminal's `begin_stroke`
         // hook must run once before the first dab to initialise the scratch.
         let mut need_begin_stroke = false;
 
         // Lazy-init: compile the active brush graph + create stroke buffer.
         if self.brush_stroke_engine.is_none() {
             need_begin_stroke = true;
-            // Brief read guard around the compile — drop before any GPU
+            // Brief read guard around the compile, dropped before any GPU
             // work so other engines (multi-tab) can take the lock.
             let runner = {
                 use crate::brush::state::BrushState;
@@ -944,7 +944,7 @@ impl DarklyEngine {
                 return;
             }
             let clone_source_anchor = self.clone_source_anchor.map(|p| [p.x as f32, p.y as f32]);
-            // "Sample Merged" toggle — a structural port-default read
+            // "Sample Merged" toggle: a structural port-default read
             // under the same session lock `clone_source_anchored` uses,
             // not a compile.
             let sample_merged = samples_source && self.clone_sample_merged();
@@ -1000,7 +1000,7 @@ impl DarklyEngine {
 
             // Create the stroke buffer and save the pre-stroke snapshot.
             // Inline dispatch (vs `self.paint_target(...)`) so the borrow of
-            // `self.compositor.node_textures[id]` is at the field level —
+            // `self.compositor.node_textures[id]` is at the field level,
             // letting `&self.gpu`, `&self.dab_pool`, etc. be borrowed
             // alongside it without conflict.
             let layer_tex = self.compositor.node_texture(layer_id);
@@ -1010,7 +1010,7 @@ impl DarklyEngine {
                 // canvas this means dabs landing on off-canvas pixels are
                 // saved/restored correctly on undo.
                 let layer_extent = layer_tex.layer_extent();
-                // The terminal decides what its scratch holds — colour for
+                // The terminal decides what its scratch holds: colour for
                 // most brushes, a displacement field for liquify.
                 let scratch_format = self
                     .brush_stroke_engine
@@ -1040,7 +1040,7 @@ impl DarklyEngine {
                 // would feed back mid-stroke; safe against per-frame
                 // procedural sources and mid-stroke disposal; deterministic
                 // under stabilizer divergence rewind). Same-layer keeps
-                // the pre-stroke snapshot as the source — self-clone
+                // the pre-stroke snapshot as the source: self-clone
                 // freeze semantics unchanged.
                 if samples_source {
                     let canvas_rect = self.doc.canvas_rect();
@@ -1064,7 +1064,7 @@ impl DarklyEngine {
                         // pin or a group (which has no `node_textures`
                         // entry) falls back to the painted layer, matching
                         // Krita's saved-node fallback. Cloning *from* a
-                        // group's composite is a known gap — it would need
+                        // group's composite is a known gap: it would need
                         // a group-cache snapshot like merged's.
                         self.clone_source_layer
                             .filter(|&sid| sid != layer_id && self.doc.parent_of(sid).is_some())
@@ -1084,7 +1084,7 @@ impl DarklyEngine {
                 }
                 // Scratch initialisation is now the terminal's responsibility
                 // (via `runner.begin_stroke`). Deferred until we have the
-                // engine + buffer in hand a few lines below — see the
+                // engine + buffer in hand a few lines below: see the
                 // `begin_stroke` call guarded by `first_event`.
                 self.stroke_buffer = Some(stroke_buffer);
             }
@@ -1102,10 +1102,10 @@ impl DarklyEngine {
             ..Default::default()
         };
 
-        // Get the paint target (layer or mask) — encapsulates format and
+        // Get the paint target (layer or mask): encapsulates format and
         // brush-side commit dispatch so the brush stack stays format-agnostic.
         // Inline dispatch (vs `self.paint_target(...)`) for borrow-checker
-        // reasons — the BrushGpuContext construction below needs &mut
+        // reasons: the BrushGpuContext construction below needs &mut
         // self.dab_pool alongside this borrow.
         let layer_tex = match self.compositor.node_texture(layer_id) {
             Some(t) => t,
@@ -1129,7 +1129,7 @@ impl DarklyEngine {
         if let Some(ref mut stroke_buffer) = stroke_buffer {
             // Refresh the clone source frame every pen event: the frozen
             // snapshot's rect when one exists (cross-layer / merged),
-            // else the paint target's *current* extent — which re-reads
+            // else the paint target's *current* extent, which re-reads
             // mid-stroke layer growth, so same-layer clone keeps tracking
             // `grow_preserving`'s re-anchored snapshot.
             engine.set_clone_source_frame(
@@ -1201,7 +1201,7 @@ impl DarklyEngine {
                         canvas_height: canvas_h,
                         canvas_origin: [self.doc.canvas_origin.x, self.doc.canvas_origin.y],
                         // blend_mode applies at commit (paint vs. erase).
-                        // Per-dab passes hard-code source-over — the
+                        // Per-dab passes hard-code source-over: the
                         // scratch is a coverage accumulator, and only the
                         // commit composite reads this value.
                         blend_mode: self.brush_blend_mode,
@@ -1220,7 +1220,7 @@ impl DarklyEngine {
                 }};
             }
 
-            // First event of the stroke — let the terminal set up its scratch.
+            // First event of the stroke: let the terminal set up its scratch.
             if need_begin_stroke {
                 let mut gpu_ctx = make_gpu_ctx!("brush-begin-stroke");
                 engine.begin_stroke(&mut gpu_ctx);
@@ -1228,7 +1228,7 @@ impl DarklyEngine {
             }
 
             if let Some(div_idx) = div_idx {
-                // Divergence — try checkpoint-based partial re-render.
+                // Divergence: try checkpoint-based partial re-render.
                 // The terminal's `begin_stroke` establishes outside-bbox
                 // state for whichever path we take below; the checkpoint
                 // ring no longer clears on its own.
@@ -1255,25 +1255,25 @@ impl DarklyEngine {
                 self.brush_perf.submits = self.brush_perf.submits.saturating_add(1);
 
                 let start_vi = if let Some(cp) = restore {
-                    // Restored from checkpoint — truncate and resume.
+                    // Restored from checkpoint: truncate and resume.
                     engine.save_points.truncate(cp.save_point_index + 1);
                     engine.restore_render_state(&cp.render_state);
-                    // Only invalidate from the divergence point onward —
+                    // Only invalidate from the divergence point onward:
                     // checkpoints between the restore point and div_idx
                     // are still valid (the stroke buffer content there
                     // didn't change, only positions >= div_idx diverged).
                     self.checkpoint_ring.invalidate_from(div_idx);
                     cp.vector_index + 1
                 } else {
-                    // No checkpoint before divergence — full re-render.
+                    // No checkpoint before divergence: full re-render.
                     //
                     // Two cases here. If the ring had valid slots but none
                     // satisfied `vi < div_idx`, the coverage invariant has
                     // failed (the architectural defect the ring's eviction
                     // policy is designed to prevent). If the ring was
-                    // empty, this is initialization — the first divergence
+                    // empty, this is initialization (the first divergence
                     // event of the stroke, before any checkpoint has been
-                    // saved — which is structurally unavoidable and cheap
+                    // saved), which is structurally unavoidable and cheap
                     // (`tip_vi` is small, so the re-render is short).
                     // Only the former is a "mid-stroke full re-render
                     // fallback" worth counting.
@@ -1342,7 +1342,7 @@ impl DarklyEngine {
                     self.brush_perf += gpu_ctx.submit_final();
                 }
             } else {
-                // No divergence — render tail only.
+                // No divergence: render tail only.
                 let mut gpu_ctx = make_gpu_ctx!("brush-dab");
                 engine.render_from_stabilized_tail(&mut gpu_ctx);
                 self.brush_perf += gpu_ctx.submit_final();
@@ -1391,7 +1391,7 @@ impl DarklyEngine {
                 self.brush_perf += gpu_ctx.submit_final();
             }
         } else {
-            // Fallback: no stroke buffer — render directly to the paint
+            // Fallback: no stroke buffer, render directly to the paint
             // target (shouldn't happen in practice). Skips the lifecycle
             // hooks since there's no scratch to clear or commit. Inline
             // dispatch so the borrow of `self.compositor.X[id]` is at the
@@ -1415,7 +1415,7 @@ impl DarklyEngine {
                     blend_mode: self.brush_blend_mode,
                     view_rotation: self.view_params.rotation,
                     perf: BrushPerfCounters::default(),
-                    // No stroke buffer in this defensive fallback — `move_to`
+                    // No stroke buffer in this defensive fallback: `move_to`
                     // only updates stabilizer state and never reaches into
                     // scratch. Anything that does would panic, which is the
                     // correct signal that the fallback was reached.
@@ -1535,13 +1535,13 @@ impl DarklyEngine {
         // 4. Commit undo. The lazy save in `gpu_stroke_to` snapshotted the
         //    layer texture's extent; the fill can only modify pixels inside
         //    that texture (the readback and the stamp are both bounded by it),
-        //    so the layer extent is the region to commit — never the canvas
+        //    so the layer extent is the region to commit, never the canvas
         //    rect, which may reach past the layer when the window is resized.
         let snap = match self.scratch_snapshot.take() {
             Some(s) => s,
             // No snapshot means the lazy save never ran (stroke_to was
-            // never called for this op) — extremely unusual; bail rather
-            // than fabricate an empty snapshot.
+            // never called for this op), which is extremely unusual; bail
+            // rather than fabricate an empty snapshot.
             None => {
                 self.compositor.mark_node_pixels_dirty(layer_id);
                 return;
@@ -1573,12 +1573,12 @@ impl DarklyEngine {
     #[handler]
     pub fn end_stroke(&mut self) {
         if let Some(layer_id) = self.active_stroke_layer.take() {
-            // Per-stroke thumbnail refresh — the node texture (raster or mask
+            // Per-stroke thumbnail refresh: the node texture (raster or mask
             // filter) now holds the cumulative pixels of every dab/op since
             // begin_stroke. Live mid-stroke updates are intentionally skipped.
             self.compositor.mark_node_pixels_dirty(layer_id);
 
-            // If a flood fill is pending, defer undo commit — complete_flood_fill
+            // If a flood fill is pending, defer undo commit: complete_flood_fill
             // will handle it when the readback arrives.
             if self
                 .readbacks
@@ -1663,7 +1663,7 @@ impl DarklyEngine {
     /// Resolve the active paint target for a layer.
     ///
     /// Resolve the GPU paint target for a node id. Format-driven dispatch
-    /// (R8 mask vs RGBA layer) lives behind the unified node-texture pool —
+    /// (R8 mask vs RGBA layer) lives behind the unified node-texture pool:
     /// callers don't branch on the kind. Returns `None` for groups, unknown
     /// ids, or any node without a `PixelBuffer`.
     pub(crate) fn paint_target(&self, node_id: LayerId) -> Option<GpuPaintTarget<'_>> {

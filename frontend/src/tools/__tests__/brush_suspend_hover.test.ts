@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 // Regression for the in-flight hover race: `pushHoverOverlay` awaits an
 // engine round-trip before drawing, so a hover started just before a
 // modifier cursor engaged could land its `set_overlay` (and its
-// `toolCursor = 'none'`) *after* the engage-time clear — resurrecting a
+// `toolCursor = 'none'`) *after* the engage-time clear, resurrecting a
 // ghost dab and stomping the engaged cursor. `brushTool.suspendHover` must
 // bump the hover generation so the pending push bails on resume.
 

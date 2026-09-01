@@ -1,18 +1,18 @@
-//! Every built-in brush's assembled WGSL must survive naga — both shader
+//! Every built-in brush's assembled WGSL must survive naga: both shader
 //! variants, not just the one a stroke exercises.
 //!
 //! `builtin_brushes_compile` only checks that *assembly* succeeds; it never
 //! looks at the text. So a terminal that samples a stroke-only `@group(3)`
 //! binding without overriding `compile_cursor_preview_body` emits an
 //! undeclared identifier into `cursor_preview_wgsl`, assembles fine, and then
-//! fails when the preview pipeline is built — at first hover, in the browser,
+//! fails when the preview pipeline is built, at first hover, in the browser,
 //! far from the edit that caused it. `docs/brush-preview-and-overlays.md`
 //! documents the rule; this is what enforces it.
 //!
 //! Deliberately *not* here: a table of committed hashes per brush. Shader
 //! text is assembled from a shared skeleton, so an edit to `_prelude.wgsl`
 //! moves every brush at once and the only available response is "regenerate
-//! and paste" — a change detector with no signal in it. What matters is that
+//! and paste": a change detector with no signal in it. What matters is that
 //! the emitted WGSL is *valid*, which naga answers directly.
 
 use darkly::brush::{builtin_brushes, compile_graph};

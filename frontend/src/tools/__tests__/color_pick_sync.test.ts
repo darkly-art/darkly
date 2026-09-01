@@ -113,7 +113,7 @@ describe('pollPick', () => {
     });
 
     it('is a no-op when no pick is in flight', async () => {
-        // Fresh state — no startPick has been called this test.
+        // Fresh state: no startPick has been called this test.
         engine._pending = false;
         const before = { ...fakeApp.foreground };
         pollPick();

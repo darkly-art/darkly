@@ -3,7 +3,7 @@
 //! Produced by `frontend/src/lib/strokeRecorder.ts` when the dev frontend
 //! is loaded with `?_RECORD_STROKES=1`. Consumed by the
 //! `stroke_replay_bench` binary to drive deterministic real-time replays
-//! of real tablet input through a headless engine — primarily for
+//! of real tablet input through a headless engine, primarily for
 //! characterising stabilizer perf under workloads a synthetic diagonal
 //! stroke can't reach.
 //!
@@ -115,11 +115,11 @@ impl RecordedEvent {
 }
 
 /// Per-event timing produced by [`replay`]. CPU wall-clock around a
-/// single `engine.stroke_to` dispatch — the harness's perf signal.
+/// single `engine.stroke_to` dispatch: the harness's perf signal.
 ///
 /// The 6-slot GPU timestamp queries that bracketed the compute path
-/// (`sync_in` / `shader` / `sync_out`) went away with `paint_compute`
-/// — the fragment-instanced `paint` terminal has no buffer round-trip
+/// (`sync_in` / `shader` / `sync_out`) went away with `paint_compute`:
+/// the fragment-instanced `paint` terminal has no buffer round-trip
 /// to instrument. CPU bracket (`cpu_us` and `submit_us`) is the
 /// surviving signal; the union-bbox + dabs-per-flush vectors carry
 /// the workload shape.
@@ -140,7 +140,7 @@ pub struct EventTiming {
     /// Number of `queue.submit()` calls during the event.
     pub submits: u32,
     /// Number of dab flushes during the event. One flush per
-    /// `flush_dabs` call on a terminal — for `paint` this is one
+    /// `flush_dabs` call on a terminal: for `paint` this is one
     /// instanced render pass per rendering phase.
     pub dab_flushes: u32,
     /// Dabs that flowed through any dab terminal during the event.
@@ -155,7 +155,7 @@ pub struct EventTiming {
 }
 
 /// Pacing knob for [`replay`]. The engine's stabilizer reads `time_ms`
-/// from each `StrokeOp` payload, not the wall-clock — both pacings drive
+/// from each `StrokeOp` payload, not the wall-clock; both pacings drive
 /// the engine identically. The choice only changes whether the harness
 /// reproduces the original real-time experience or runs as fast as
 /// possible (useful for tests and headless perf sweeps).

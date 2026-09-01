@@ -1,4 +1,4 @@
-//! Chromatic aberration veil — the whole-canvas post-process surface of the CA
+//! Chromatic aberration veil: the whole-canvas post-process surface of the CA
 //! effect. Directional reuse: the effect definition (schema, uniform packing,
 //! GPU layout) is owned by the filter module
 //! ([`crate::gpu::filters::chromatic_aberration`]); this veil imports it so the
@@ -132,7 +132,7 @@ impl Veil for ChromaticAberration {
 }
 
 fn create_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> EffectPipeline {
-    // Prepend the shared aberration lib — same pattern the filter uses.
+    // Prepend the shared aberration lib, same pattern the filter uses.
     let shader = format!(
         "{}\n{}",
         include_str!("../../../shaders/lib/aberration.wgsl"),

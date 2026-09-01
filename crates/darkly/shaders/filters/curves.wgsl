@@ -1,21 +1,21 @@
-// Per-channel tone-curve adjustment — Krita's "Color Adjustment Curves" model
+// Per-channel tone-curve adjustment: Krita's "Color Adjustment Curves" model
 // (plugins/filters/colorsfilters, KisMultiChannelFilter). Channels, in order:
 //
 //   RGB (composite), Red, Green, Blue, Alpha, Hue, Saturation, Lightness
 //
 // The curves are baked on the CPU (`gpu/filters/curves.rs`) into a 256×2 RGBA8
 // LUT read at integer index `round(c*255)` (no sampler):
-//   row 0 (.rgba) — per-component color curves. `.rgb[i] = rgb(channel(i))`
+//   row 0 (.rgba) - per-component color curves. `.rgb[i] = rgb(channel(i))`
 //                   (the per-channel curve first, then the composite "RGB"
 //                   curve on top, per Krita's transform order); `.a[i] = alpha(i)`,
 //                   with the composite curve NOT applied to alpha.
-//   row 1 (.rgb)  — `.r = hue(i)`, `.g = saturation(i)`, `.b = lightness(i)`.
+//   row 1 (.rgb)  - `.r = hue(i)`, `.g = saturation(i)`, `.b = lightness(i)`.
 //
 // The color-component stage is bit-exact for identity curves (LUT[i]==i), so it
 // always runs. The Hue/Saturation (HSV) and Lightness (CIELAB L*) stages need a
 // color-space round trip that is only ~identity in float, so each is gated by a
-// `_active` flag (set when its curve is non-identity) — exactly as Krita skips
-// null transforms — keeping an all-identity Curves layer a byte-for-byte no-op.
+// `_active` flag (set when its curve is non-identity), exactly as Krita skips
+// null transforms, keeping an all-identity Curves layer a byte-for-byte no-op.
 
 @group(0) @binding(0) var t_src: texture_2d<f32>;
 @group(0) @binding(1) var t_lut: texture_2d<f32>;

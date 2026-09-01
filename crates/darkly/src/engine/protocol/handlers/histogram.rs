@@ -1,4 +1,4 @@
-//! Per-channel input histogram for the Levels editor — an async compute
+//! Per-channel input histogram for the Levels editor: an async compute
 //! readback mirroring [`color_pick`](super::color_pick).
 //!
 //! `request_histogram` selects the target filter (or clears it with `id < 0`);
@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::engine::protocol::{decode, RequestRegistration, Response};
 use crate::layer::LayerId;
 
-/// `{ id }` — the filter layer to histogram (`id < 0` clears the target).
+/// `{ id }`: the filter layer to histogram (`id < 0` clears the target).
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct HistogramReq {
@@ -29,7 +29,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
         .post()
         .req::<HistogramReq>(),
         // Fire-and-forget: bin a *node's own* texture (the destructive Levels
-        // modal — no filter arm to intercept). `id < 0` clears. The result reads
+        // modal: no filter arm to intercept). `id < 0` clears. The result reads
         // back through `histogram_result` under the same id.
         RequestRegistration::new("request_node_histogram", |engine, payload, _b| {
             let r: HistogramReq = decode(payload)?;

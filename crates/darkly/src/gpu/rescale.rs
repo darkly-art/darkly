@@ -28,7 +28,7 @@ struct Params {
 }
 
 /// Number of mip levels a `width × height` texture supports, i.e.
-/// `floor(log2(max(w, h))) + 1` — level 0 plus one per halving down to 1×1.
+/// `floor(log2(max(w, h))) + 1`: level 0 plus one per halving down to 1×1.
 pub fn levels_for(width: u32, height: u32) -> u32 {
     32 - width.max(height).max(1).leading_zeros()
 }
@@ -58,7 +58,7 @@ impl RescalePass {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        // Sampled with textureLoad — no hardware filtering.
+                        // Sampled with textureLoad, no hardware filtering.
                         sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
@@ -232,7 +232,7 @@ impl RescalePass {
     /// `premul_io` selects the alpha convention. `false` is the straight-alpha
     /// layer/mask path (premultiply on load, un-premultiply on store); `true`
     /// means source and destination are both premultiplied and texels average
-    /// as-is. Ignored when `is_r8` — single-channel masks never round-trip.
+    /// as-is. Ignored when `is_r8`, since single-channel masks never round-trip.
     #[allow(clippy::too_many_arguments)]
     pub fn halve_into(
         &self,
@@ -386,7 +386,7 @@ mod tests {
 
     /// Allocate a mipped RGBA texture, upload `level0`, generate the chain,
     /// and read `level` back. Reading a non-zero mip needs a bounce through a
-    /// fresh single-level texture — `readback_texture` always copies mip 0.
+    /// fresh single-level texture: `readback_texture` always copies mip 0.
     fn chain_level(
         width: u32,
         height: u32,
@@ -495,7 +495,7 @@ mod tests {
         assert_eq!(levels_for(0, 0), 1);
     }
 
-    /// A uniform image must survive halving exactly — any premultiply /
+    /// A uniform image must survive halving exactly, since any premultiply /
     /// un-premultiply asymmetry in the chain shows up here first.
     #[test]
     fn two_by_two_solid_halves_to_one_texel() {
@@ -561,7 +561,7 @@ mod tests {
         for (c, (&got, &want)) in straight[..4].iter().zip(expect.iter()).enumerate() {
             assert!(
                 (i32::from(got) - want).abs() <= 1,
-                "channel {c}: got {got}, want {want} — with premul_io off the \
+                "channel {c}: got {got}, want {want}; with premul_io off the \
                  averaged colour is divided back out by the averaged alpha",
             );
         }

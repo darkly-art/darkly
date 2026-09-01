@@ -1,4 +1,4 @@
-//! Noise void — domain-warped fractional Brownian motion.
+//! Noise void: domain-warped fractional Brownian motion.
 //!
 //! The cloudy / marbled / lightning-like procedural field described in the
 //! README as the "de-facto Void". Pure-GPU: the shader generates the layer's
@@ -38,7 +38,7 @@ const NOISE3D_DIM: u32 = 64;
 pub const TYPE_ID: &str = "noise";
 
 const PARAMS: &[ParamDef] = &[
-    // Seed indexes the procedural field — every integer produces a different
+    // Seed indexes the procedural field: every integer produces a different
     // noise pattern, so a randomize button (or just typing a number) gives
     // the "infinite combinations of entropy" the README promises.
     ParamDef::int("seed", 0, i32::MAX, 42)
@@ -50,7 +50,7 @@ const PARAMS: &[ParamDef] = &[
         .with_label("Detail")
         .with_description("How many layers of ever-finer noise are stacked up."),
     // Feature size in canvas pixels. Higher = larger blobs; lower =
-    // grainier. The default is tuned for 1k–2k canvases producing visible
+    // grainier. The default is tuned for 1k-2k canvases producing visible
     // cloud structure without going either flat or noisy. Converted to
     // a frequency multiplier (1 / size) at uniform-write time.
     ParamDef::float("size", 20.0, 2000.0, 200.0)
@@ -72,7 +72,7 @@ const PARAMS: &[ParamDef] = &[
         .with_description(
             "Pushes the midtones down, deepening the field beneath the bright peaks.",
         ),
-    // Time slider — z-coordinate into the 3D noise volume. Each value
+    // Time slider: z-coordinate into the 3D noise volume. Each value
     // produces a different cross-section of the same FBM field; scrub to
     // explore variations of the current seed without changing pattern
     // identity. Range chosen so the full slider covers many full noise-cell
@@ -88,12 +88,12 @@ pub fn register() -> VoidRegistration {
     VoidRegistration {
         type_id: TYPE_ID,
         display_name: "Noise",
-        description: "Procedural fractal noise — clouds, grain and organic texture from a seed.",
+        description: "Procedural fractal noise: clouds, grain and organic texture from a seed.",
         params: PARAMS,
         icon: "tabler:galaxy",
         preview: Some(PreviewAnim::LOOPING),
         supports_live_transform: true,
-        // Purely procedural — no external capture, identity seed transform.
+        // Purely procedural: no external capture, identity seed transform.
         source: VoidSource::Procedural,
         default_transform: |_, _| crate::transform::Transform::identity(),
         create_pipeline,
@@ -116,7 +116,7 @@ struct NoiseUniforms {
     canvas_scale: f32,
     _pad0: f32,
     // Inverse of the user transform's homography (packed rows [m, _], see
-    // gpu::transform::pack_inv_rows) — applied to the canvas-space sampling
+    // gpu::transform::pack_inv_rows), applied to the canvas-space sampling
     // coordinate so the field pans / scales / rotates / warps with the gizmo.
     // Affine carries inv_row2 = [0,0,1,_], collapsing the perspective divide.
     inv_row0: [f32; 4],
@@ -256,7 +256,7 @@ impl Void for Noise {
 
     /// The field drifts forward through the noise volume and rewinds. `time` is
     /// an ordinary parameter rather than the animation trait's clock, so the
-    /// whole sweep is a value that can be written and re-written — which is what
+    /// whole sweep is a value that can be written and re-written, which is what
     /// lets it return to where it started and close the loop.
     fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
         self.time = 6.0 * swing(t);
@@ -290,7 +290,7 @@ impl Void for Noise {
             Some(ParamValue::Float(v)) => *v,
             _ => self.time,
         };
-        // Full write — `canvas_scale` is cached on the struct, so rebuilding
+        // Full write: `canvas_scale` is cached on the struct, so rebuilding
         // the whole uniform can't clobber it.
         cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
         self.dirty.mark();
@@ -385,7 +385,7 @@ impl Void for Noise {
         //   binding 0: uniform buffer
         //   binding 1: 3D noise texture
         //   binding 2: noise sampler
-        // Duplicated to keep the [BindGroup; 2] cache shape — voids don't
+        // Duplicated to keep the [BindGroup; 2] cache shape: voids don't
         // ping-pong but the cache layout is shared with veils.
         let fbm_bg = |label: &str| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -536,7 +536,7 @@ fn create_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> Effec
         immediate_size: 0,
     });
 
-    // WGSL has no native #include — concatenate the shared helpers ahead of
+    // WGSL has no native #include, so concatenate the shared helpers ahead of
     // this void's shader: the inverse-homography sampler (so the field warps
     // with perspective, sharing one impl with the floating path) and the FBM
     // primitive. A future warp veil will assemble the same way.
@@ -592,8 +592,8 @@ fn create_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> Effec
 /// `Rgba8Unorm` texture format; each channel is an independent
 /// pseudo-random byte so callers that read different channels get
 /// decorrelated noise (currently only `.x` is read, but the others are
-/// reserved for future use). The seed makes per-instance volumes distinct
-/// — if two voids have the same `seed` param they share an identical
+/// reserved for future use). The seed makes per-instance volumes distinct:
+/// if two voids have the same `seed` param they share an identical
 /// volume layout, which is the user-visible determinism contract.
 fn seed_noise_volume(dim: u32, seed: u32) -> Vec<u8> {
     let count = (dim * dim * dim) as usize;

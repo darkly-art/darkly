@@ -2,8 +2,8 @@
 //!
 //! Split out from `EffectPreview.svelte` so the polling/conversion logic is
 //! unit-testable without mounting a Svelte component (and driving rAF/canvas).
-//! Previews are rendered by the engine — effects that read a source over the
-//! *current canvas*, the rest from scratch — and are **not** cached: each time
+//! Previews are rendered by the engine (effects that read a source over the
+//! *current canvas*, the rest from scratch) and are **not** cached: each time
 //! the picker opens, frames are regenerated, so the preview always reflects the
 //! live document.
 //!
@@ -58,7 +58,7 @@ export function showsPreview(entry: { supportsPreview?: boolean }): boolean {
 
 /** Poll the engine for one variant of `catalog`/`type`'s preview. Returns
  *  converted frames once that generation completes, or `null` while it's still
- *  rendering. No caching — the caller polls until frames arrive, then stops on
+ *  rendering. No caching: the caller polls until frames arrive, then stops on
  *  its own. */
 export async function pollPreview(
     engine: Engine,

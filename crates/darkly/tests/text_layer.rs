@@ -14,8 +14,8 @@ use darkly::gpu::test_utils::test_device;
 use darkly::layer::{TextAlign, TextLayout, TextProps, TextStyle};
 use darkly::transform::Transform;
 
-/// A genuine variable font (Cantarell-VF, CFF2, `wght` 100–800 axis) used as a
-/// non-fallback fixture — registering it proves upload, and embedding it proves
+/// A genuine variable font (Cantarell-VF, CFF2, `wght` 100-800 axis) used as a
+/// non-fallback fixture: registering it proves upload, and embedding it proves
 /// the `.darkly` round-trip. OFL 1.1, © the Cantarell Authors.
 const CANTARELL_VF: &[u8] = include_bytes!("fixtures/fonts/Cantarell-VF.otf");
 
@@ -77,7 +77,7 @@ fn text_layer_realizes_glyph_coverage_then_undo_redo() {
     assert!(!engine.has_layer(id), "undo removes the text layer");
 
     // Redo restores the layer and it re-realizes (text object survived the
-    // undo/redo round-trip — content stability is covered by the layer-kind
+    // undo/redo round-trip; content stability is covered by the layer-kind
     // serialize test).
     engine.redo();
     assert!(engine.has_layer(id), "redo restores the text layer");
@@ -194,7 +194,7 @@ fn object_transform_moves_and_coalesces_undo() {
         engine.has_layer(id),
         "the add is a separate, still-present step"
     );
-    // The next undo removes the layer — proving the transforms were one step.
+    // The next undo removes the layer, proving the transforms were one step.
     engine.undo();
     assert!(!engine.has_layer(id), "second undo removes the layer");
 }
@@ -214,7 +214,7 @@ fn distinct_ops_do_not_over_coalesce() {
     let _ = engine.test_readback_canvas();
     let thin = covered_pixels(&engine.test_readback_layer(id));
 
-    // Content edit, then a transform on the SAME object — different ops, so two
+    // Content edit, then a transform on the SAME object: different ops, so two
     // distinct undo steps despite sharing one `Property::VectorObjects` kind.
     engine.set_text_content(id, obj, "WWWWWWWW".into());
     engine.set_vector_object_transform(
@@ -223,13 +223,13 @@ fn distinct_ops_do_not_over_coalesce() {
         Transform::from_affine([1.5, 0.0, 0.0, 0.0, 1.5, 0.0]),
     );
 
-    // First undo reverts only the transform — the wide content remains.
+    // First undo reverts only the transform; the wide content remains.
     engine.undo();
     let _ = engine.test_readback_canvas();
     let after_one = covered_pixels(&engine.test_readback_layer(id));
     assert!(
         after_one > thin,
-        "one undo keeps the content edit ({after_one} > {thin}) — ops did not merge"
+        "one undo keeps the content edit ({after_one} > {thin}); ops did not merge"
     );
     // Second undo reverts the content edit too, back to the placed "i".
     engine.undo();
@@ -328,7 +328,7 @@ fn set_text_box_converts_point_text_and_coalesces_undo() {
         [255, 255, 255, 255],
         None,
     );
-    // Born as point text — no box.
+    // Born as point text, no box.
     assert_eq!(
         engine.text_objects(id)[0].box_size,
         None,
@@ -408,7 +408,7 @@ fn add_text_object_rejects_a_non_vector_layer() {
 }
 
 /// Registering a real second font's bytes grows the picker list and makes the
-/// family resolvable for shaping — the shared contract all three ingestion
+/// family resolvable for shaping: the shared contract all three ingestion
 /// paths (upload, Google, embedded) converge on.
 #[test]
 fn register_font_adds_family() {
@@ -442,7 +442,7 @@ fn register_font_adds_family() {
 }
 
 /// Dedup regression: two text objects sharing one font family must emit a
-/// **single** `fonts/*` blob and one `manifest.fonts` entry — not one per
+/// **single** `fonts/*` blob and one `manifest.fonts` entry, not one per
 /// object. Fails against a naive per-object embed.
 #[test]
 fn same_font_embedded_once() {

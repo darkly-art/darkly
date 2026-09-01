@@ -6,7 +6,7 @@
  * door, and the asymmetry would read as a half-built feature.
  *
  * A `.darkly-brush` is a zip, so it would be indistinguishable from a `.darkly`
- * document to `detectKind` — which is magic-byte-only by design. It never has
+ * document to `detectKind`, which is magic-byte-only by design. It never has
  * to be: the unified Open flow only sees what its picker accepts, and
  * `.darkly-brush` is in neither `OPEN_TYPES` nor `OPEN_ACCEPT`. Pack import has
  * its own affordance with its own `accept`, so the two flows never meet.
@@ -55,7 +55,7 @@ export async function exportPack(id: string): Promise<void> {
     }
 }
 
-/** Open a one-shot file input for a pack. The input is never mounted — the
+/** Open a one-shot file input for a pack. The input is never mounted: the
  *  same shape the font browser's upload affordance uses, minus the markup. */
 function promptForPack() {
     const input = document.createElement('input');

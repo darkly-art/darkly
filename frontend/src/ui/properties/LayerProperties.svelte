@@ -6,12 +6,12 @@
         node: { id: number; opacity: number; blendMode: string; editable?: boolean };
     } = $props();
 
-    // Mirror the engine's `is_node_editable` predicate — when false, both
+    // Mirror the engine's `is_node_editable` predicate: when false, both
     // setters no-op, so the controls would be drag-but-nothing-happens.
     // Disabling here keeps the UI honest about what's settable.
     let editable = $derived(node.editable !== false);
 
-    // Blend modes come from the Rust BlendModeRegistry — the dropdown
+    // Blend modes come from the Rust BlendModeRegistry: the dropdown
     // (and its category-based <optgroup>s) is built entirely from that table,
     // which arrives in registry order (GPU value, i.e. the conventional
     // Photoshop / Krita ordering) as the `blendModes` catalog.

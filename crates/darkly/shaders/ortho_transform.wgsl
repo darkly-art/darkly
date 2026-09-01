@@ -1,19 +1,19 @@
 // Orthogonal (90°-multiple) transform of a texture: exact pixel permutation.
 //
 // Flips and 90° rotations relabel texels without resampling, so every fetch is
-// a `textureLoad` at an integer source index — no sampler, no filtering, no
+// a `textureLoad` at an integer source index: no sampler, no filtering, no
 // premultiply. Output is bit-identical to the input up to the permutation,
 // which is the whole point (cf. rescale.wgsl, which *does* resample).
 //
 // Two entry points share the same inverse index map:
-//   fs_remap         — whole-surface transform; dest may be a rotated (swapped)
+//   fs_remap         - whole-surface transform; dest may be a rotated (swapped)
 //                      size. dest texel ← src[inv_map(dest)]. Used by canvas
 //                      flip/rotate (per node) and the selection mask.
-//   fs_mirror_masked — in-place H/V mirror of a region about its own centre,
+//   fs_mirror_masked - in-place H/V mirror of a region about its own centre,
 //                      gated by an R8 mask: selected texels take the mirror,
 //                      unselected texels pass through unchanged. Used by layer/
 //                      selection flip so a non-rectangular selection clips
-//                      correctly. (Mirror only — dest size == src size.)
+//                      correctly. (Mirror only; dest size == src size.)
 //
 // xform codes (match the Rust `OrthoXform` discriminants):
 //   0 FlipH   1 FlipV   2 Rot180   3 Rot90Cw   4 Rot90Ccw

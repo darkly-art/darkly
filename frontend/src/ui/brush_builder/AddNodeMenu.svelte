@@ -32,7 +32,7 @@
      *  close to the right edge to fit a right-side submenu. */
     let submenuSide = $state<'right' | 'left'>('right');
 
-    /** Display order for categories — workflow-ordered (signal sources first,
+    /** Display order for categories: workflow-ordered (signal sources first,
      *  terminal output last), with 'other' as a fallback bucket. */
     const CATEGORY_ORDER = [
         'input',
@@ -54,7 +54,7 @@
         other: 'Other',
     };
 
-    /** Visible node types — drop the 'internal' category (preview_terminal). */
+    /** Visible node types: drop the 'internal' category (preview_terminal). */
     const visibleTypes = $derived(
         brushGraph.nodeTypes.filter((nt) => nt.category !== 'internal'),
     );
@@ -111,7 +111,7 @@
             tick().then(() => {
                 // Focus before clamping so a keystroke that arrives in the
                 // same frame as Shift+A lands in the search box. The popup
-                // is opacity:0, not visibility:hidden — that distinction
+                // is opacity:0, not visibility:hidden; that distinction
                 // matters because visibility:hidden elements can't receive
                 // focus per the HTML spec, but opacity:0 ones can.
                 searchEl?.focus();
@@ -310,7 +310,7 @@
     .menu-body {
         flex: 1;
         min-height: 0;
-        /* No overflow in browse mode — `overflow-y: auto` would force
+        /* No overflow in browse mode: `overflow-y: auto` would force
          * `overflow-x: auto` too (per spec, since visible can't pair with
          * a non-visible value), which would clip the absolutely-positioned
          * submenus that hang out at `left: 100%`. */

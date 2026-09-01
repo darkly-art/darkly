@@ -1,4 +1,4 @@
-//! Brightness/Contrast filter — the classic two-slider adjustment, using
+//! Brightness/Contrast filter: the classic two-slider adjustment, using
 //! GIMP's mapping (Michael Natterer,
 //! `gimp/app/operations/gimpoperationbrightnesscontrast.c`,
 //! <https://gitlab.gnome.org/GNOME/gimp/-/blob/master/app/operations/gimpoperationbrightnesscontrast.c>):
@@ -7,7 +7,7 @@
 //! - contrast `c ∈ −1..1` as a slant through mid-gray: `(v − 0.5)·tan((c+1)·π/4) + 0.5`
 //!
 //! Applied per RGB channel, alpha untouched. Like HSV this is the no-aux
-//! [`ParamFilter`] specialization (`[src, uniform]`) — the transform lives in
+//! [`ParamFilter`] specialization (`[src, uniform]`): the transform lives in
 //! [`brightness_contrast.wgsl`](../../../shaders/filters/brightness_contrast.wgsl);
 //! this module declares the param schema and packs the two sliders
 //! (−100..100, Darkly's convention) into shader-ready `brightness`/`slant`.
@@ -37,11 +37,11 @@ fn float_param(params: &[ParamValue], idx: usize) -> f32 {
 }
 
 /// Pack the two sliders into the shader's `Params` uniform layout (32 bytes):
-/// `[brightness, slant, pad×6]`. The shader-ready values are precomputed here —
+/// `[brightness, slant, pad×6]`. The shader-ready values are precomputed here:
 /// `brightness = slider/100/2` (GIMP halves it) and `slant = tan((c+1)·π/4)`.
 ///
 /// `contrast == 0.0` maps to `slant = 1.0` *exactly* rather than through `tan`,
-/// whose π/4 result is only approximately 1 — the shader's identity fast path
+/// whose π/4 result is only approximately 1; the shader's identity fast path
 /// (and bit-exact no-op guarantee) gates on `slant == 1.0`. The `tan` itself
 /// runs in f64 (as GIMP's does): the f32 nearest to π/2 lands *above* the true
 /// value, so an f32 `tan` at contrast +100 would flip to a huge negative slant.
@@ -56,7 +56,7 @@ fn pack_uniform(params: &[ParamValue]) -> [u32; 8] {
     [brightness.to_bits(), slant.to_bits(), 0, 0, 0, 0, 0, 0]
 }
 
-/// Allocate (once) and refresh the params uniform — the [`ParamFilter`]
+/// Allocate (once) and refresh the params uniform: the [`ParamFilter`]
 /// `prepare` half for the no-aux brightness/contrast filter.
 fn bc_prepare(
     device: &wgpu::Device,
@@ -88,13 +88,13 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
         include_str!("../../../shaders/filters/brightness_contrast.wgsl"),
         "fs_bc",
         "fs_bc_masked",
-        false, // no aux texture — packed uniform only
+        false, // no aux texture, packed uniform only
         SrcSampling::Load,
         bc_prepare,
     ))
 }
 
-/// Both sliders swing up, down and back, concurrently — so the preview shows
+/// Both sliders swing up, down and back, concurrently, so the preview shows
 /// the two controls interacting rather than one at a time. Contrast leads with
 /// a wider positive swing because it reads more slowly than brightness at the
 /// same magnitude, and a narrower negative one because flattening reads faster

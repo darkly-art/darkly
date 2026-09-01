@@ -1,16 +1,16 @@
-// Chromatic aberration — shared per-pixel math for all three effect surfaces
+// Chromatic aberration: shared per-pixel math for all three effect surfaces
 // (destructive filter, filter layer, and veil). Works in UV space using the
 // bound texture's own dimensions, so it prepends onto shaders whose binding
 // layouts differ: the filter binds `src` at 0, the veil binds `t_input` at 0.
-// It never names a global binding — every texture/sampler comes in as a fn
+// It never names a global binding; every texture/sampler comes in as a fn
 // param (the same technique `lib/canvas.wgsl`'s `sample_mask_window` uses).
 // No entry points → tests/shader_compile.rs validates it as a preamble.
 //
 // The blur's golden-angle spiral tap distribution follows the same
 // sunflower/Fibonacci construction as veils/lens_blur.wgsl.
 
-// Array size must match `MAX_ABERRATIONS` in gpu/filters/chromatic_aberration.rs
-// — the standard Rust↔WGSL uniform-layout contract.
+// Array size must match `MAX_ABERRATIONS` in gpu/filters/chromatic_aberration.rs,
+// the standard Rust↔WGSL uniform-layout contract.
 const CA_MAX: u32 = 16u;
 const CA_EPS: f32 = 1e-4;
 // Golden angle ≈ 137.508° ≈ 2.39996 rad.
@@ -19,7 +19,7 @@ const CA_GA_SIN: f32 = 0.6754904;
 
 // One aberration entry. Layout mirrors `GpuAberration` (48 B): a vec2 offset,
 // two scalars, then a vec3 `axis` at offset 16 (aligned) with `k1`, then `k2`
-// (+ trailing pad). `axis` is the entry color's hue direction — the red axis
+// (+ trailing pad). `axis` is the entry color's hue direction: the red axis
 // rotated about the gray diagonal so the color's hue lands on it (see the CPU
 // packing in gpu/filters/chromatic_aberration.rs); `k1`/`k2` split the entry's
 // strength between an achromatic full-pixel shift and a chromatic axis shift.
@@ -51,7 +51,7 @@ fn aberration_sample_uv(tex: texture_2d<f32>, samp: sampler, uv: vec2f) -> vec4f
 
 // Blurred sample around `uv`: a golden-angle spiral disk of radius `blur_px`.
 // Taps are premultiplied (`rgb·a`) before averaging and un-premultiplied by the
-// accumulated alpha at the end — layer textures are straight-alpha, so a
+// accumulated alpha at the end; layer textures are straight-alpha, so a
 // transparent tap's undefined RGB must not bleed into edges. Below ~0.25 px it
 // collapses to a single tap; otherwise the tap count scales with the radius so
 // large radii don't band.
@@ -65,7 +65,7 @@ fn aberration_blurred(
     if (blur_px < 0.25) {
         return aberration_sample_uv(tex, samp, uv);
     }
-    // ≈ 8 taps per px, clamped — the schema caps blur at 6 px (≤ 48 taps).
+    // ≈ 8 taps per px, clamped: the schema caps blur at 6 px (≤ 48 taps).
     let taps = clamp(i32(ceil(blur_px * 8.0)), 8, 64);
     var dir = vec2f(1.0, 0.0);
     var acc_rgb = vec3f(0.0);
@@ -89,16 +89,16 @@ fn aberration_blurred(
 // position is `center + (uv − center)·scale + offset` (offset px → UV via
 // `dims`), and `d_p` is that displaced sample's premultiplied delta from the
 // base. The delta splits two ways: `k1` shifts the whole pixel (the achromatic
-// share — a white entry has k1=1, moving everything), and `k2·axis·dot(axis,d_p)`
+// share, a white entry has k1=1, moving everything), and `k2·axis·dot(axis,d_p)`
 // shifts only the component along the entry's hue axis (a primary entry has
 // k2=1 and an exact channel axis, giving a classic channel split). Alpha tracks
-// the *coverage* change of the displaced sample (`s.a − base.a`) — not the color
-// delta — so a pure hue shift inside a solid region leaves opacity untouched,
+// the *coverage* change of the displaced sample (`s.a − base.a`), not the color
+// delta, so a pure hue shift inside a solid region leaves opacity untouched,
 // while content crossing an alpha edge still gains/loses coverage.
 //
 // Identity (offset 0, scale 1, blur 0) ⇒ d_p = 0 ⇒ bit-exact passthrough for any
 // entry colors; a flat image is unchanged except at gradients/edges where the
-// displaced sample differs — the physical CA signature.
+// displaced sample differs: the physical CA signature.
 fn aberration_apply(
     tex: texture_2d<f32>,
     samp: sampler,
@@ -133,7 +133,7 @@ fn aberration_apply(
     // a premultiplied channel below zero; clamp before un-premultiplying.
     out_p = max(out_p, vec3f(0.0));
     // Representability floor: a channel that survives while another departs off
-    // an alpha edge must stay visible — alpha can't drop below the largest
+    // an alpha edge must stay visible: alpha can't drop below the largest
     // premultiplied channel (opaque yellow losing its red stays opaque green).
     var out_a = clamp(acc_a, 0.0, 1.0);
     out_a = max(out_a, min(max(out_p.r, max(out_p.g, out_p.b)), 1.0));

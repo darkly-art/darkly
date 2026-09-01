@@ -1,4 +1,4 @@
-//! Filter nodes — typed effects attached to a host layer or group.
+//! Filter nodes: typed effects attached to a host layer or group.
 //!
 //! A filter is a node in its own right (its own id, its own `NodeCommon`)
 //! that sits on a host's `filters` list, separate from the regular layer
@@ -23,7 +23,7 @@ use crate::format::error::LoadError;
 use crate::layer::{LayerId, NodeCommon, PixelBuffer};
 
 /// What each filter module returns from its `register()` function.
-/// Mirrors `VeilRegistration` / `ToolRegistration` / `FilterRegistration` —
+/// Mirrors `VeilRegistration` / `ToolRegistration` / `FilterRegistration`,
 /// auto-discovered by `build.rs` via the directory scan.
 pub struct FilterEntityRegistration {
     pub type_id: &'static str,
@@ -40,7 +40,7 @@ pub struct FilterEntityRegistration {
     /// freshly-allocated slotmap key.
     pub deserialize: fn(body: &serde_json::Value, id: LayerId) -> Result<Filter, LoadError>,
     /// Rewrite every cross-reference inside this filter from
-    /// manifest-old id to fresh slotmap id. Non-optional — same
+    /// manifest-old id to fresh slotmap id. Non-optional, same
     /// rationale as
     /// [`crate::document::layer_kind::LayerKindRegistration::remap_ids`].
     pub remap_ids: fn(&mut Filter, &IdMap),
@@ -59,7 +59,7 @@ impl FilterEntityRegistration {
     }
 }
 
-/// The layer-filter catalog — every registered kind, sorted by `type_id`.
+/// The layer-filter catalog: every registered kind, sorted by `type_id`.
 pub fn catalog() -> crate::catalog::Catalog {
     crate::catalog::Catalog::new(
         CATALOG_ID,
@@ -73,7 +73,7 @@ pub fn catalog() -> crate::catalog::Catalog {
     .with_description("Typed effects attached to a single host layer or group.")
 }
 
-/// Auto-discovered filter registry — owns the per-kind registration records
+/// Auto-discovered filter registry: owns the per-kind registration records
 /// and hands out `&'static FilterEntityRegistration` references for the dispatch
 /// surface (`Filter::kind`) and the UI.
 pub struct FilterRegistry {
@@ -152,7 +152,7 @@ impl Filter {
         }
     }
 
-    /// Registration record for this filter's kind — owns `type_id` (wire
+    /// Registration record for this filter's kind: owns `type_id` (wire
     /// format) and `display_name` (UI). The match dispatch references each
     /// kind module's own `TYPE_ID` constant, so the identity string is
     /// declared exactly once per kind.
@@ -160,7 +160,7 @@ impl Filter {
         self.kind.kind_reg()
     }
 
-    /// Convenience for the wire format / save file — just the stable `type_id`.
+    /// Convenience for the wire format / save file: just the stable `type_id`.
     pub fn type_id(&self) -> &'static str {
         self.kind_reg().type_id
     }
@@ -197,7 +197,7 @@ impl FilterKind {
     }
 
     /// Registration record for this kind. Pulled from the filter registry
-    /// keyed by each kind module's own `TYPE_ID` constant — no parallel
+    /// keyed by each kind module's own `TYPE_ID` constant, with no parallel
     /// string literals.
     pub fn kind_reg(&self) -> &'static FilterEntityRegistration {
         use super::filters::{mask, selection};

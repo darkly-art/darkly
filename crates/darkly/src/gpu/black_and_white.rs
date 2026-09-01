@@ -1,4 +1,4 @@
-//! Black and White — the shared core behind the `black_and_white` veil
+//! Black and White: the shared core behind the `black_and_white` veil
 //! (`gpu/veils/black_and_white.rs`) and filter
 //! (`gpu/filters/black_and_white.rs`). One identity, one param schema, one
 //! uniform layout, one WGSL transform
@@ -17,13 +17,13 @@ use crate::gpu::preview::{swing, PreviewAnim};
 
 pub const TYPE_ID: &str = "black_and_white";
 pub const DISPLAY_NAME: &str = "Black and White";
-pub const DESCRIPTION: &str = "Desaturate to black and white — six grayscale \
+pub const DESCRIPTION: &str = "Desaturate to black and white: six grayscale \
 formulas or custom channel weights, with an optional color tint.";
 
 /// One schema for both surfaces. The weights only take effect in the
 /// `Custom Weights` mode (their defaults are the BT.601 luma coefficients);
 /// the tint applies in every mode. A `static` rather than a `const` so both
-/// registrations hold the same address — pinned by the identity test below.
+/// registrations hold the same address, pinned by the identity test below.
 pub static PARAMS: &[ParamDef] = &[
     ParamDef::enumeration(
         "mode",
@@ -58,7 +58,7 @@ pub static PARAMS: &[ParamDef] = &[
 ];
 
 /// One preview for both surfaces, beside the schema they share. A `static` for
-/// the same reason `PARAMS` is one — both registrations hold the same address,
+/// the same reason `PARAMS` is one: both registrations hold the same address,
 /// which is what makes the sharing structural rather than two copies that
 /// happen to agree today.
 ///
@@ -66,7 +66,7 @@ pub static PARAMS: &[ParamDef] = &[
 /// opposite of what most entries want and is the whole reason `still_at` is
 /// per-entry. Everywhere else the sweep animates *the* control the effect is
 /// named for, so the peak is the effect at its most legible. Here the effect is
-/// already fully applied at rest — the grey is the point — and the sweep
+/// already fully applied at rest (the grey is the point) and the sweep
 /// animates the *tint*, a secondary control. A still taken at the peak would
 /// show a saturated colour wash, which is the one thing a black-and-white
 /// preview must not look like.
@@ -78,13 +78,13 @@ pub static PREVIEW: PreviewAnim = PreviewAnim::LOOPING.with_still_at(0.0);
 ///
 /// The hue runs *monotonically* through the wheel rather than swinging out and
 /// back, because the wheel is circular: a swinging hue would spend its peak
-/// strength at 360°, which is 0°, which is red — so the one frame that stands
+/// strength at 360°, which is 0°, which is red, so the one frame that stands
 /// for the whole effect would be a full-strength red wash. Running the hue
 /// forward puts the peak at 180° instead, and 360° ≡ 0° means the sequence still
 /// closes on the colour it opened with.
 ///
 /// The filter reads this off its registration and the veil calls it from
-/// [`Veil::preview_at`](crate::gpu::veil::Veil::preview_at) — the two surfaces
+/// [`Veil::preview_at`](crate::gpu::veil::Veil::preview_at): the two surfaces
 /// share the motion the same way they share the schema.
 pub fn preview_params(t: f32) -> Vec<ParamValue> {
     let mut params: Vec<ParamValue> = PARAMS.iter().map(ParamDef::default_value).collect();
@@ -97,7 +97,7 @@ pub fn preview_params(t: f32) -> Vec<ParamValue> {
 /// prepended to each surface's wrapper shader at pipeline build time.
 pub const SHADER_LIB: &str = include_str!("../../shaders/lib/black_and_white.wgsl");
 
-/// Positional float lookup with schema-default fallback — params arrive
+/// Positional float lookup with schema-default fallback; params arrive
 /// positionally, like every pack in `gpu/filters/`.
 fn float_param(params: &[ParamValue], idx: usize) -> f32 {
     if let Some(ParamValue::Float(v)) = params.get(idx) {
@@ -111,7 +111,7 @@ fn float_param(params: &[ParamValue], idx: usize) -> f32 {
 
 /// Pack the shared schema into the shader's 32-byte `BwParams` uniform:
 /// `[mode: u32, red_w, green_w, blue_w, tint_r, tint_g, tint_b,
-/// tint_strength]` — floats stored as bit patterns beside the u32 (the same
+/// tint_strength]`: floats stored as bit patterns beside the u32 (the same
 /// packing `gpu/filters/hsv.rs` uses). Missing or mistyped entries fall back
 /// to the schema defaults.
 ///
@@ -147,7 +147,7 @@ pub fn pack_uniform(params: &[ParamValue]) -> [u32; 8] {
     ]
 }
 
-/// Hue (degrees) → fully saturated, full-value RGB — the s = v = 1 slice of
+/// Hue (degrees) → fully saturated, full-value RGB: the s = v = 1 slice of
 /// `hsv_to_rgb` in `shaders/lib/colorspace.wgsl`, ported to Rust so the tint
 /// costs nothing per pixel.
 fn hue_to_rgb(h_deg: f32) -> [f32; 3] {
@@ -191,7 +191,7 @@ mod tests {
         assert_eq!(u[0], 5, "mode Max");
     }
 
-    /// An empty (or partial) param vec packs the schema defaults — callers
+    /// An empty (or partial) param vec packs the schema defaults; callers
     /// like `apply_filter_typed` pass positional prefixes.
     #[test]
     fn missing_params_fall_back_to_defaults() {
@@ -251,7 +251,7 @@ mod tests {
     }
 
     /// The veil and filter registries expose the *same* black-and-white:
-    /// identical schema const (by pointer — compile-level DRY), identical
+    /// identical schema const (by pointer, compile-level DRY), identical
     /// display name, and a description containing "desaturate" so the
     /// command-palette substring search finds it under its old name.
     #[test]

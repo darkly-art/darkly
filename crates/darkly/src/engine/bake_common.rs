@@ -8,14 +8,14 @@
 //! Any function here that takes a `LayerId` and writes its texture must
 //! call [`crate::gpu::compositor::Compositor::mark_node_pixels_dirty`] on
 //! that id before returning. See the docs on that method for the full
-//! rationale — short version: the mark is the write-site's job so callers
-//! can't forget and produce thumbnail-less layers.
+//! rationale (short version: the mark is the write-site's job so callers
+//! can't forget and produce thumbnail-less layers).
 
 use super::DarklyEngine;
 use crate::layer::{LayerId, LayerNode};
 
 impl DarklyEngine {
-    /// Every pixel-bearing node id under `root` — raster layers, mask
+    /// Every pixel-bearing node id under `root`: raster layers, mask
     /// filters, and any other filters that own a GPU texture in the
     /// compositor's `node_textures` pool.
     ///
@@ -35,8 +35,8 @@ impl DarklyEngine {
         match node {
             LayerNode::Layer(layer) => {
                 // The layer answers for itself whether its texture is
-                // irreplaceable. A derived one — a procedural void's render, a
-                // vector layer's rasterization — is cheaper to rebuild than to
+                // irreplaceable. A derived one (a procedural void's render, a
+                // vector layer's rasterization) is cheaper to rebuild than to
                 // retain; a void holding an externally-sourced image is not.
                 if layer.owns_disposable_texture() {
                     out.push(id);
@@ -70,12 +70,12 @@ impl DarklyEngine {
     }
 
     /// GPU-side copy of every pixel from one node's texture into another's.
-    /// Both nodes must already have textures of the same format and extent
-    /// — typically because the destination was just allocated with the
+    /// Both nodes must already have textures of the same format and extent,
+    /// typically because the destination was just allocated with the
     /// source's bounds. Submits a single `copy_texture_to_texture`.
     ///
     /// Marks `dst_id` thumbnail-dirty before returning per the write-site
-    /// invariant — callers don't need to do it.
+    /// invariant: callers don't need to do it.
     pub(crate) fn clone_node_pixels(&mut self, src_id: LayerId, dst_id: LayerId) {
         let extent = match self.compositor.node_texture(src_id) {
             Some(t) => t.canvas_extent(),

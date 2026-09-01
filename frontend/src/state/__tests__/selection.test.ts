@@ -119,7 +119,7 @@ describe('shift-click (extendSelectionTo)', () => {
     it('handles the reverse direction (target above anchor)', () => {
         inst.selectLayer(3);
         inst.extendSelectionTo(1);
-        // Range from 3 down to 1 in tree order — same set, just clicked backwards.
+        // Range from 3 down to 1 in tree order: same set, just clicked backwards.
         expect([...inst.selectedLayerIds].sort((a, b) => a - b)).toEqual([1, 2, 3]);
         expect(inst.activeLayerId).toBe(1);
     });

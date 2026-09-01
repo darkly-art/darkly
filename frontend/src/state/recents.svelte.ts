@@ -28,7 +28,7 @@ interface RecentsFile {
 
 const EMPTY = (): RecentsFile => ({ brushes: [], colors: [] });
 
-/** A stored file is arbitrary JSON — possibly hand-edited, possibly from an
+/** A stored file is arbitrary JSON, possibly hand-edited, possibly from an
  *  older shape. Anything that is not a list of strings reads as empty rather
  *  than propagating a bad value into the UI. */
 function strings(v: unknown): string[] {
@@ -49,7 +49,7 @@ export interface RecentList {
      *  already at the front, which is what makes calling this per pointer
      *  event free. */
     use(value: string): void;
-    /** Drop entries that no longer resolve — a brush that has been deleted.
+    /** Drop entries that no longer resolve: a brush that has been deleted.
      *  Rewrites only if something was actually dropped. */
     retain(keep: (value: string) => boolean): void;
 }
@@ -57,10 +57,10 @@ export interface RecentList {
 export interface Recents {
     brushes: RecentList;
     colors: RecentList;
-    /** Read `recents.json` into memory. Idempotent — the first call does the
+    /** Read `recents.json` into memory. Idempotent: the first call does the
      *  read and every later one awaits the same promise. */
     load(): Promise<void>;
-    /** Write anything pending immediately — for `beforeunload`. */
+    /** Write anything pending immediately (for `beforeunload`). */
     flush(): Promise<void>;
 }
 

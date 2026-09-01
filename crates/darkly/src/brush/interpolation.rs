@@ -10,7 +10,7 @@ use super::paint_info::PaintInformation;
 
 /// Linearly interpolate all fields of two `PaintInformation` samples.
 ///
-/// `t` is 0.0–1.0: 0 returns `a`, 1 returns `b`.
+/// `t` is 0.0-1.0: 0 returns `a`, 1 returns `b`.
 pub fn lerp_paint_info(a: &PaintInformation, b: &PaintInformation, t: f32) -> PaintInformation {
     PaintInformation {
         pos: lerp2(a.pos, b.pos, t),
@@ -24,11 +24,11 @@ pub fn lerp_paint_info(a: &PaintInformation, b: &PaintInformation, t: f32) -> Pa
         distance: lerp(a.distance, b.distance, t),
         drawing_angle: lerp_angle(a.drawing_angle, b.drawing_angle, t),
         // Motion is filled by `StrokeEngine::place_dab` from the previous-dab
-        // delta — interpolators have no view of dab order, so they leave it zero.
+        // delta; interpolators have no view of dab order, so they leave it zero.
         motion: [0.0, 0.0],
         tilt_magnitude: lerp(a.tilt_magnitude, b.tilt_magnitude, t),
         tilt_direction: lerp_angle(a.tilt_direction, b.tilt_direction, t),
-        // Index is not meaningful for interpolated points — use b's index.
+        // Index is not meaningful for interpolated points, so use b's index.
         index: b.index,
         // Fade lerps with distance.
         fade: lerp(a.fade, b.fade, t),
@@ -69,7 +69,7 @@ fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
 
 // ── Catmull-Rom spline interpolation ──────────────────────────────────
 
-/// Evaluate a Catmull-Rom spline at parameter `t` (0–1) for a scalar value.
+/// Evaluate a Catmull-Rom spline at parameter `t` (0-1) for a scalar value.
 ///
 /// Interpolates between `p1` and `p2` using `p0` and `p3` as outer
 /// control points for tangent estimation.
@@ -108,7 +108,7 @@ fn catmull_rom_angle(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
 
 /// Interpolate all fields of `PaintInformation` along a Catmull-Rom spline.
 ///
-/// Interpolates between `p1` and `p2` at parameter `t` (0–1), using
+/// Interpolates between `p1` and `p2` at parameter `t` (0-1), using
 /// `p0` and `p3` as outer control points.  Clamps pressure and
 /// tilt_magnitude to [0, 1] to prevent overshoot.
 pub fn catmull_rom_paint_info(
@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn angle_wrapping() {
         use std::f32::consts::PI;
-        // From near 2π to near 0 — should go the short way.
+        // From near 2π to near 0, it should go the short way.
         let result = lerp_angle(PI * 1.9, PI * 0.1, 0.5);
         // Midpoint should be near 0/2π, not near π.
         assert!(result.abs() < 0.5 || (result - std::f32::consts::TAU).abs() < 0.5);
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn catmull_rom_collinear_matches_lerp() {
-        // Four collinear points — CR should produce the same result as lerp
+        // Four collinear points, so CR should produce the same result as lerp
         // between p1 and p2 (within floating-point tolerance).
         let p0 = pt(0.0, 0.0);
         let p1 = pt(10.0, 10.0);
@@ -400,7 +400,7 @@ mod tests {
     fn catmull_rom_right_angle_produces_curve() {
         // A right-angle turn: (0,0) → (10,0) → (10,10).
         // With CR, the midpoint (t=0.5) should NOT be on the straight line
-        // from (10,0) to (10,10) — it should curve inward.
+        // from (10,0) to (10,10); it should curve inward.
         let p0 = pt(0.0, 0.0);
         let p1 = pt(10.0, 0.0);
         let p2 = pt(10.0, 10.0);
@@ -440,7 +440,7 @@ mod tests {
         let p2 = pt_full(20.0, 0.0, 1.0);
         let p3 = pt_full(30.0, 0.0, 1.0);
 
-        // Sample at many t values — pressure should always be in [0, 1].
+        // Sample at many t values; pressure should always be in [0, 1].
         for i in 0..=20 {
             let t = i as f32 / 20.0;
             let result = catmull_rom_paint_info(&p0, &p1, &p2, &p3, t);
@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     fn catmull_rom_duplicate_endpoint_no_nan() {
-        // Duplicate endpoints (p0=p1, p3=p2) — should not produce NaN.
+        // Duplicate endpoints (p0=p1, p3=p2): should not produce NaN.
         let p1 = pt(10.0, 20.0);
         let p2 = pt(30.0, 40.0);
 

@@ -32,12 +32,12 @@
     // Open the first tab synchronously before children render. Sidebars and
     // ToolOptionsBar read `app.<x>` (the active-instance proxy) during their
     // initial template evaluation, so `activeInstance` must be set before
-    // they mount — `onMount` would be too late and the proxy would resolve
+    // they mount; `onMount` would be too late and the proxy would resolve
     // to `null`, throwing on any method call.
     if (shell.instances.length === 0) shell.open();
 
     // Browser-level "you have unsaved changes" prompt on reload / tab
-    // close / navigation away. Browsers ignore custom messages — setting
+    // close / navigation away. Browsers ignore custom messages: setting
     // `returnValue` to any non-empty string triggers their native prompt.
     function onBeforeUnload(e: BeforeUnloadEvent) {
         // Land any write still inside its coalescing window, so a brush

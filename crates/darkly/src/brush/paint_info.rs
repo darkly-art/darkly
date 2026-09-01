@@ -2,13 +2,13 @@
 //!
 //! `PaintInformation` captures everything the tablet reports for a single
 //! sample.  `StrokeRecord` accumulates these as raw vectors for the
-//! duration of a stroke — enabling re-rendering with different parameters.
+//! duration of a stroke, enabling re-rendering with different parameters.
 
 use serde::{Deserialize, Serialize};
 
 /// All sensor data for a single pen sample.
 ///
-/// Modelled after Krita's `KisPaintInformation` — every field the tablet
+/// Modelled after Krita's `KisPaintInformation`: every field the tablet
 /// can provide, plus derived values computed by the stroke engine.
 ///
 /// All values are normalised to 0-1 unless noted otherwise.
@@ -33,17 +33,17 @@ pub struct PaintInformation {
     // ── Derived values (computed by stroke engine) ──────────────────
     /// Pen speed in pixels/second, normalised to 0-1 via a reference max.
     pub speed: f32,
-    /// Cumulative distance travelled in pixels (not normalised — used for
+    /// Cumulative distance travelled in pixels (not normalised; used for
     /// spacing calculations, normalised on demand by sensor nodes).
     pub distance: f32,
     /// Drawing angle in radians (0 = right). `derive_sensors` computes the
     /// directed angle of pen travel; for dabs emitted through
     /// `StrokeEngine::place_dab` that value is then replaced by the stamp
-    /// orientation — the stroke's undirected axis, approached no faster than
+    /// orientation: the stroke's undirected axis, approached no faster than
     /// the brush's turn rate. Paths with no stroke engine behind them (the
     /// hover preview) keep the raw directed value.
     pub drawing_angle: f32,
-    /// Per-dab motion vector in canvas pixels — the position delta from the
+    /// Per-dab motion vector in canvas pixels: the position delta from the
     /// previous *emitted dab* into this one. Populated by the stroke engine
     /// at dab-emission time (`StrokeEngine::place_dab`); interpolators and
     /// `derive_sensors` leave it zero because at their layer there is no
@@ -63,14 +63,14 @@ pub struct PaintInformation {
     pub fade: f32,
 }
 
-/// Speed normalization cutoff — `speed_px_per_sec / MAX_SPEED_PX_PER_SEC`
+/// Speed normalization cutoff: `speed_px_per_sec / MAX_SPEED_PX_PER_SEC`
 /// clamped to [0, 1] gives the `speed` sensor value.
 pub const MAX_SPEED_PX_PER_SEC: f32 = 4000.0;
 
 impl PaintInformation {
     /// Synthetic pen input for dry-run previews.
     /// Full pressure so pressure-driven sensors show the brush at its
-    /// fully-engaged tip — the silhouette the user expects when previewing
+    /// fully-engaged tip: the silhouette the user expects when previewing
     /// "what this brush looks like."
     pub fn cursor_preview_dummy() -> Self {
         Self {
@@ -85,13 +85,13 @@ impl PaintInformation {
     /// regardless of which path is driving it.
     ///
     /// Tilt-derived sensors (`tilt_magnitude`, `tilt_direction`) always
-    /// fill — they depend only on this sample.
+    /// fill; they depend only on this sample.
     ///
     /// Segment-derived sensors (`drawing_angle`, `distance`, `speed`) fill
     /// only when `prev` is present. `segment_length` is the arc length
-    /// between prev and this sample — use the chord length for straight
+    /// between prev and this sample: use the chord length for straight
     /// paths (preview) or the Catmull-Rom arc length for smoothed strokes.
-    /// `motion` is NOT filled here — it's a per-dab quantity owned by
+    /// `motion` is NOT filled here; it's a per-dab quantity owned by
     /// `StrokeEngine::place_dab`.
     pub fn derive_sensors(&mut self, prev: Option<&Self>, segment_length: f32) {
         self.tilt_magnitude = (self.x_tilt * self.x_tilt + self.y_tilt * self.y_tilt)
@@ -132,7 +132,7 @@ impl PaintInformation {
 ///
 /// Stores raw pre-smoothing events so the stroke can be replayed with
 /// different smoothing, dynamics, or brush parameters.  Discarded on
-/// the next user action (Darkly is raster — layer pixels are truth).
+/// the next user action (Darkly is raster; layer pixels are truth).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct StrokeRecord {
     /// Raw pen events in chronological order (pre-smoothing).

@@ -1,16 +1,16 @@
 // Icon-bundle generator. Scans the frontend source AND the Rust crate for
 // Iconify icon-name string literals ("prefix:name") and emits
-// src/icons/bundle.generated.ts — a module that registers exactly those icons
+// src/icons/bundle.generated.ts: a module that registers exactly those icons
 // (and only those) for OFFLINE rendering. No central hand-maintained list:
 // adding an icon anywhere in the source is purely additive, the same way
 // build.rs auto-discovers Rust modules.
 //
 // This module exposes two entry points so generation is owned by the build,
 // not a fragile manual pre-step:
-//   - `iconBundlePlugin()` — a Vite plugin that regenerates on buildStart (dev
+//   - `iconBundlePlugin()` - a Vite plugin that regenerates on buildStart (dev
 //     AND prod) and re-runs whenever a scanned source file changes during
 //     `vite dev`, so editing an icon name updates the bundle live (HMR).
-//   - the CLI (`node scripts/gen-icon-bundle.mjs`, i.e. `npm run gen:icons`) —
+//   - the CLI (`node scripts/gen-icon-bundle.mjs`, i.e. `npm run gen:icons`) -
 //     for one-off regeneration and the `pretest` hook (Vitest doesn't run the
 //     plugin's buildStart).
 //
@@ -18,7 +18,7 @@
 // it. There is no bespoke-SVG escape hatch: every icon Darkly names comes from a
 // published set, which is what lets any consumer of Darkly's metadata resolve an
 // icon name without this repo's help. The
-// generator THROWS if a referenced name is absent from its collection — the
+// generator THROWS if a referenced name is absent from its collection: the
 // hard typo safety net that replaces Font Awesome's silent fallback. (A typo'd
 // *prefix* isn't a known set, so it's skipped here and caught instead by the
 // dev-runtime warning in Icon.svelte + the markup test in iconBundle.test.ts.)
@@ -34,7 +34,7 @@ const SRC = path.join(FRONTEND, 'src');
 const JSON_DIR = path.join(FRONTEND, 'node_modules', '@iconify', 'json', 'json');
 const OUT = path.join(SRC, 'icons', 'bundle.generated.ts');
 // The Rust crate also names icons (settings-section tabs, brush-node icon
-// pickers) that cross the WASM boundary and render in the UI — scan it too.
+// pickers) that cross the WASM boundary and render in the UI; scan it too.
 const CRATE_SRC = path.join(FRONTEND, '..', 'crates', 'darkly', 'src');
 const ROOTS = [SRC, CRATE_SRC];
 const SCAN_RE = /\.(ts|svelte|rs)$/;
@@ -59,15 +59,15 @@ function walk(dir, acc = []) {
 
 // Icons ship as inline SVGs forced to a 1em square (see Icon.svelte +
 // ToolCluster's `.tool svg` rule). An icon's on-screen size is therefore how
-// much of its viewBox the artwork covers — and icon sets bake in wildly
+// much of its viewBox the artwork covers, and icon sets bake in wildly
 // different margins (Font Awesome solids touch all four edges; Boxicons/Lucide
-// dashed marquees sit inside a 4–12% margin). The result: select-tool icons
+// dashed marquees sit inside a 4-12% margin). The result: select-tool icons
 // render visibly smaller than the fill/eyedropper tools beside them.
 //
 // We normalize optical size by shrink-wrapping every icon's viewBox to its
 // inked bounds at BUILD time. The measurement rasterizes each icon and reads
 // the alpha bounding box (exact for curves and strokes, no geometry math); the
-// SHIPPED icon stays a vector — only its `viewBox`/`left/top/width/height` are
+// SHIPPED icon stays a vector: only its `viewBox`/`left/top/width/height` are
 // rewritten to hug the artwork. resvg is a devDependency; nothing renders at
 // runtime. Bodies are identical across runs, so results are memoized to keep
 // dev/HMR regeneration cheap.
@@ -85,7 +85,7 @@ function tightBox(body, left, top, width, height) {
     const ppu = MEASURE_PX / Math.max(width, height); // pixels per viewBox unit
     const pxW = Math.round(width * ppu);
     const pxH = Math.round(height * ppu);
-    // currentColor has no resolution context here — pin it opaque so both
+    // currentColor has no resolution context here; pin it opaque so both
     // fills and strokes register in the alpha channel we scan.
     const painted = body.replaceAll('currentColor', '#000');
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${left} ${top} ${width} ${height}" width="${pxW}" height="${pxH}">${painted}</svg>`;
@@ -105,7 +105,7 @@ function tightBox(body, left, top, width, height) {
     }
     let box;
     if (maxX < 0) {
-        box = [left, top, width, height]; // nothing inked — leave as-is
+        box = [left, top, width, height]; // nothing inked; leave as-is
     } else {
         // Grow the pixel box by 1px each side so anti-aliased stroke edges are
         // never clipped, then clamp to the render and map px → viewBox units.
@@ -169,26 +169,26 @@ function renderBundle() {
         if (!subset) throw new Error(`[gen-icons] failed to read collection "${prefix}"`);
         if (subset.not_found?.length) {
             throw new Error(
-                `[gen-icons] unknown icon(s) in "${prefix}": ${subset.not_found.join(', ')} — fix the name or pick a valid id`,
+                `[gen-icons] unknown icon(s) in "${prefix}": ${subset.not_found.join(', ')}, fix the name or pick a valid id`,
             );
         }
         collections.push(tightenCollection(subset));
     }
 
-    const banner = `// AUTO-GENERATED by scripts/gen-icon-bundle.mjs — DO NOT EDIT BY HAND.
+    const banner = `// AUTO-GENERATED by scripts/gen-icon-bundle.mjs: DO NOT EDIT BY HAND.
 // Regenerated automatically by the icon-bundle Vite plugin (dev + build) and by
 // \`npm run gen:icons\`. Derived from the Iconify icon-name string literals found
 // in the source, registered for offline rendering.
 // ${total} icon(s) across ${collections.length} collection(s).
 `;
-    // NB: the `.js` extension is load-bearing — it routes through the package's
+    // NB: the `.js` extension is load-bearing: it routes through the package's
     // `./*` catch-all export to the real file. The bare `./dist/offline-functions`
     // subpath is declared in the package's exports map but points at a path that
     // doesn't ship, so it fails to resolve.
     let out = `${banner}/* eslint-disable */\n// @ts-nocheck\nimport { addCollection } from '@iconify/svelte/dist/offline-functions.js';\n\n`;
     for (const data of collections) out += `addCollection(${JSON.stringify(data)});\n`;
 
-    // The full set of names that resolve offline — the source of truth for the
+    // The full set of names that resolve offline: the source of truth for the
     // curated icon picker (e.g. custom brush-bar entries). Sorted for stable diffs.
     const bundledNames = [...byPrefix.entries()]
         .flatMap(([prefix, set]) => [...set].map((n) => `${prefix}:${n}`))
@@ -228,7 +228,7 @@ export function iconBundlePlugin() {
         buildStart() {
             try {
                 const r = generateIconBundle();
-                logger.info(`[icons] ${r.changed ? 'generated' : 'up to date'} — ${r.total} icon(s), ${r.collections} collection(s)`);
+                logger.info(`[icons] ${r.changed ? 'generated' : 'up to date'}: ${r.total} icon(s), ${r.collections} collection(s)`);
             } catch (e) {
                 // Fail the production build; in dev, log and let the watcher
                 // recover once the offending name is fixed.
@@ -237,13 +237,13 @@ export function iconBundlePlugin() {
             }
         },
         configureServer(server) {
-            // The Rust crate lives outside Vite's root — watch it explicitly.
+            // The Rust crate lives outside Vite's root; watch it explicitly.
             server.watcher.add(CRATE_SRC);
             const onChange = (file) => {
                 if (!isScanned(file)) return;
                 try {
                     const r = generateIconBundle();
-                    if (r.changed) logger.info(`[icons] regenerated — ${r.total} icon(s), ${r.collections} collection(s)`);
+                    if (r.changed) logger.info(`[icons] regenerated: ${r.total} icon(s), ${r.collections} collection(s)`);
                 } catch (e) {
                     logger.error(`[icons] ${e.message}`);
                     server.ws.send({ type: 'error', err: { message: e.message, stack: '', plugin: 'darkly-icon-bundle' } });
@@ -259,5 +259,5 @@ export function iconBundlePlugin() {
 // CLI entry: `node scripts/gen-icon-bundle.mjs` / `npm run gen:icons`.
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     const r = generateIconBundle();
-    console.log(`[gen-icons] ${r.changed ? 'wrote' : 'unchanged'} ${r.path} — ${r.total} icon(s), ${r.collections} collection(s)`);
+    console.log(`[gen-icons] ${r.changed ? 'wrote' : 'unchanged'} ${r.path}: ${r.total} icon(s), ${r.collections} collection(s)`);
 }

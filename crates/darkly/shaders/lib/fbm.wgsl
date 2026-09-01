@@ -1,4 +1,4 @@
-// 3D fractional Brownian motion — time-as-Z extension of the 2D core.
+// 3D fractional Brownian motion: time-as-Z extension of the 2D core.
 //
 // Sampling at `(x, y, t)` instead of `(x, y)` and advancing `t` gives a field
 // that is continuous in both space and time: features smoothly appear, morph,
@@ -16,12 +16,12 @@
 // fbm_warp3 × 5 octaves), the savings dominate the shader cost.
 //
 // Consumers must bind:
-//   @group(0) @binding(1) — a 3D Rgba8Unorm noise texture, FBM_NOISE3D_DIM
+//   @group(0) @binding(1) - a 3D Rgba8Unorm noise texture, FBM_NOISE3D_DIM
 //                           per side, filled with PCG-hashed random bytes.
-//   @group(0) @binding(2) — a filtering sampler with Repeat addressing.
+//   @group(0) @binding(2) - a filtering sampler with Repeat addressing.
 //
 // Credit: texture-sampled noise primitive is inspired by nimitz's "Watery"
-// (https://www.shadertoy.com/view/MssSRS) — `noise(p) = texture(channel,
+// (https://www.shadertoy.com/view/MssSRS): `noise(p) = texture(channel,
 // p*.01).x`, replacing per-pixel hash computation with a single
 // hardware-filtered fetch. Watery itself is licensed CC BY-NC-SA 3.0; we
 // re-implement the *technique* (a 3D noise volume sampled by the FBM octave
@@ -35,7 +35,7 @@
 const FBM_NOISE3D_DIM: f32 = 64.0;
 
 /// 3D value noise sampled at floating-point `p`. Trilinear blend done by
-/// hardware texture filtering — see comment above.
+/// hardware texture filtering (see comment above).
 ///
 /// The seed shifts the texture-space sample position. With Repeat
 /// addressing every offset is valid; the PCG fold ensures adjacent seeds
@@ -72,7 +72,7 @@ fn fbm3(p: vec3f, seed: u32, octaves: i32, lacunarity: f32, gain: f32) -> f32 {
     return sum / norm;
 }
 
-/// 3D domain warp offset — same Quilez warp as `fbm_warp_offset`, but the
+/// 3D domain warp offset: same Quilez warp as `fbm_warp_offset`, but the
 /// underlying FBM is sampled in 3D so the displacement field itself evolves
 /// continuously as `p.z` advances. Returns a 2D offset; the warp is a
 /// planar displacement (we don't displace `z`, which would warp time).

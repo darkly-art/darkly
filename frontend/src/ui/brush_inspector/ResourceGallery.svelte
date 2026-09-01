@@ -36,7 +36,7 @@
 <section class="gallery">
     <h3>Embedded resources ({resources.length})</h3>
     {#if resources.length === 0}
-        <p class="empty">No embedded resources. (5.0 presets only — 2.2 stores resources externally.)</p>
+        <p class="empty">No embedded resources. (5.0 presets only; 2.2 stores resources externally.)</p>
     {/if}
     <div class="grid">
         {#each resources as resource, idx (resource.md5sum + idx)}

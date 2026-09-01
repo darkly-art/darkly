@@ -77,7 +77,7 @@ pub struct PortDef<W: WireKind> {
     pub min: f32,
     /// Slider max when the port is disconnected (UI metadata only).
     pub max: f32,
-    /// The authored value used when this input port is disconnected — the
+    /// The authored value used when this input port is disconnected: the
     /// full typed value (scalar slider value, enum-dropdown index, texture
     /// name, curve points, color). Wired inputs ignore it and take the
     /// upstream expression. For output ports it stays the neutral scalar
@@ -85,14 +85,14 @@ pub struct PortDef<W: WireKind> {
     /// numeric inputs carry [`InputValue::Scalar`].
     #[serde(default)]
     pub value: InputValue,
-    /// Enum-dropdown labels, in index order — non-empty only for
+    /// Enum-dropdown labels, in index order, non-empty only for
     /// [`WireKind`]-`Enum` inputs (shape's `algorithm`, noise/image `space`,
     /// random's `mode`). Empty for every other input kind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enum_options: Vec<String>,
     /// Whether an upstream wire may drive this input per-dab. Computed from
     /// `wire_type.is_wirable()` at construction and carried as data so the
-    /// frontend reads it directly rather than re-deriving the rule — the
+    /// frontend reads it directly rather than re-deriving the rule; the
     /// single source of truth is [`WireKind::is_wirable`]. Every port built
     /// from a registration (`PortDef::input`/`output`, and the clones in
     /// `add_node` / portable import) sets it correctly; serde round-trips it.
@@ -101,7 +101,7 @@ pub struct PortDef<W: WireKind> {
     /// Whether a user may *expose* this input as a brush-bar control.
     /// Computed from `wire_type.is_user_exposable()` at construction and
     /// carried as data so the frontend gates its expose affordance directly
-    /// off one value rather than re-deriving the type rule — the single
+    /// off one value rather than re-deriving the type rule; the single
     /// source of truth is [`WireKind::is_user_exposable`]. Orthogonal to
     /// `wirable`: an enum is exposable but not wirable; a wired scalar is
     /// wirable but (while connected) not user-scrubbable. `expose_port`
@@ -112,7 +112,7 @@ pub struct PortDef<W: WireKind> {
     /// Quantization step. `0.0` (the default) means continuous; any positive
     /// value snaps the slider, scrub, and typed-value commits to multiples of
     /// `step` from `min`. Used when the wire takes a value but only certain
-    /// quantized values produce well-defined behavior — e.g. the shape
+    /// quantized values produce well-defined behavior, e.g. the shape
     /// node's `frequency`, where only integer values yield a seam-free
     /// closed silhouette. Frontend honors the snap; the engine should still
     /// defend by quantizing inputs in the node evaluator (a wired-in float
@@ -138,7 +138,7 @@ pub struct PortDef<W: WireKind> {
     /// render: the cursor-following dab overlay, the editor stroke
     /// preview, and the library thumbnail bake. The brush WGSL
     /// compiler clones the graph, drops incoming wires on flagged
-    /// ports, and replaces `default` with this constant — so all
+    /// ports, and replaces `default` with this constant, so all
     /// previews read as a showcase of the brush regardless of the
     /// user's working scrub. Real strokes still honour the
     /// configured value.
@@ -160,8 +160,8 @@ pub struct PortDef<W: WireKind> {
     /// preview cache and version counter should not bump on its scrub.
     ///
     /// Used by ports whose value the preview *pipeline* (not the
-    /// shader) ignores. Canonical example: `pen_input.stabilize` —
-    /// the editor preview's stroke engine is hard-wired to use
+    /// shader) ignores. Canonical example: `pen_input.stabilize`.
+    /// The editor preview's stroke engine is hard-wired to use
     /// `PassThrough` as the stabilizer (the path is pre-cooked), so
     /// the live `stabilize` value never reaches it. Marking this
     /// declaratively avoids re-rendering a full stroke every ~100 ms
@@ -176,12 +176,12 @@ pub struct PortDef<W: WireKind> {
     /// Conditional visibility: the port is only shown in the UI when the
     /// value of the named param is one of the listed integer values. The
     /// param is referenced by its registration name (e.g. `"algorithm"`)
-    /// and is expected to be an `Int`/`Enum` param — those are the only
+    /// and is expected to be an `Int`/`Enum` param, since those are the only
     /// types where dispatch on a discrete value makes sense.
     ///
     /// When `None` (the default), the port is always visible. When set,
     /// the frontend hides the port row whenever the named param's current
-    /// value is outside the allowed list. This is purely a UI affordance —
+    /// value is outside the allowed list. This is purely a UI affordance:
     /// the engine still accepts and reads the port's value normally; it
     /// just stops showing the user a control they wouldn't act on.
     /// Used by the Shape node to hide algorithm-specific knobs (Perlin's
@@ -193,7 +193,7 @@ pub struct PortDef<W: WireKind> {
     /// slot-read time from source range to dest range (affine transform).
     /// When either side is `None`, the value passes through raw.
     ///
-    /// Distinct from `min`/`max`, which are slider/UI hints — `with_range`
+    /// Distinct from `min`/`max`, which are slider/UI hints; `with_range`
     /// stays "UI hint only, not enforced", and `with_natural_range` is the
     /// separate, explicit opt-in for wire-boundary range mapping. Most
     /// ports declare both with the same numbers; the two diverge for
@@ -206,7 +206,7 @@ pub struct PortDef<W: WireKind> {
     ///
     /// By default `crate::brush::reset_exposed_scrubs` resets every
     /// exposed input back to its registration default before rendering
-    /// the dab thumbnail — the icon represents brush shape/texture, not
+    /// the dab thumbnail: the icon represents brush shape/texture, not
     /// the user's working size/opacity/flow knobs. That policy is wrong
     /// for orientation knobs (rotation): a calligraphy nib at
     /// 45° *is* a different-looking brush, and the icon should reflect
@@ -217,8 +217,8 @@ pub struct PortDef<W: WireKind> {
     /// thumbnail re-renders, not just the editor preview.
     #[serde(default)]
     pub persist_in_thumbnail: bool,
-    /// This output port emits a *spatial, per-fragment image* — a coverage
-    /// mask or colour field that varies across the dab — so a node carrying it
+    /// This output port emits a *spatial, per-fragment image* (a coverage
+    /// mask or colour field that varies across the dab), so a node carrying it
     /// is worth a preview thumbnail (`circle.mask`, `image.color`,
     /// `noise.color`, `stamp.dab`). Declared per port rather than inferred
     /// from `wire_type`, because wire type can't tell a spatial field from a
@@ -235,7 +235,7 @@ pub struct PortDef<W: WireKind> {
     /// on `dir == Input`; ignored on outputs (which are sources anyway).
     ///
     /// The editor shows the source handle only while the input is not
-    /// itself wire-driven — a driven port's value is the driver's, so it
+    /// itself wire-driven: a driven port's value is the driver's, so it
     /// should be tapped there instead. Consumers that resolve "which port a
     /// wire leaves from" must ask [`PortDef::is_source`], never
     /// `dir == Output`, or a settable-source is treated as a second-class
@@ -299,7 +299,7 @@ impl<W: WireKind> PortDef<W> {
         }
     }
 
-    /// `true` if a wire may leave this port — every output, plus a
+    /// `true` if a wire may leave this port: every output, plus a
     /// settable-source input (see [`PortDef::source`]). The single predicate
     /// every wire-source resolution must use instead of `dir == Output`.
     pub fn is_source(&self) -> bool {
@@ -308,7 +308,7 @@ impl<W: WireKind> PortDef<W> {
 
     /// Declare the slider/preset range and default value for this port.
     ///
-    /// `(min, max)` is a **UI hint** — bounds for slider widgets and preset
+    /// `(min, max)` is a **UI hint**: bounds for slider widgets and preset
     /// editors.  It is **not enforced at evaluation**: `EvalContext::input_f32`
     /// returns whatever value flowed through the wire (including out-of-range
     /// values from upstream sensors, math nodes, or hand-edited graph data).
@@ -330,7 +330,7 @@ impl<W: WireKind> PortDef<W> {
         self
     }
 
-    /// Set this input's authored value directly — the general form behind
+    /// Set this input's authored value directly: the general form behind
     /// [`Self::with_range`]. Use for the non-scalar input kinds: an
     /// [`InputValue::Int`] enum index, an [`InputValue::String`] texture
     /// name, [`InputValue::Curve`] points, an [`InputValue::Bool`] flag.
@@ -354,7 +354,7 @@ impl<W: WireKind> PortDef<W> {
     /// source and dest ports **both** declare a natural range, the runner
     /// remaps the scalar value at slot-read time (affine transform from
     /// source range to dest range). When either side is `None`, the wire
-    /// passes the value through raw — preserving math-node passthrough and
+    /// passes the value through raw, preserving math-node passthrough and
     /// over-drag-slider passthrough (e.g. `stamp.size`).
     ///
     /// Independent of [`PortDef::with_range`], which is a UI/slider hint
@@ -367,7 +367,7 @@ impl<W: WireKind> PortDef<W> {
 
     /// Quantize the port's slider to multiples of `step` from `min`. Pass
     /// `1.0` for an integer-valued port. See [`PortDef::step`] for the full
-    /// contract — the engine still needs to defend against non-snapped
+    /// contract; the engine still needs to defend against non-snapped
     /// values arriving via wires.
     pub fn with_step(mut self, step: f32) -> Self {
         self.step = step;
@@ -434,7 +434,7 @@ impl<W: WireKind> PortDef<W> {
         self
     }
 
-    /// Mark this exposed port as part of the brush's identity — its
+    /// Mark this exposed port as part of the brush's identity: its
     /// user-set value persists into the dab thumbnail, and scrubs of
     /// it rebake the thumbnail. See [`PortDef::persist_in_thumbnail`]
     /// for the contract. Use for orientation knobs (rotation)
@@ -469,7 +469,7 @@ pub struct NodeInstance<W: WireKind> {
     /// References the `type_id` from the `NodeRegistration`.
     pub type_id: String,
     /// Port definitions (copied from registration on creation). This is the
-    /// node's single, unified input/output list — the per-instance authored
+    /// node's single, unified input/output list: the per-instance authored
     /// value of every input lives on its [`PortDef::value`].
     pub ports: Vec<PortDef<W>>,
     /// Free-form author annotation on this node instance. Empty means none.
@@ -510,7 +510,7 @@ pub enum GraphError {
     /// The input can't be surfaced as a brush-bar control because its wire
     /// type has no editing widget (`Curve`, `String`, …). Makes "exposable"
     /// a structural invariant the expose path enforces, mirroring how
-    /// `InputNotWirable` guards `connect` — a control the bar can't render
+    /// `InputNotWirable` guards `connect`: a control the bar can't render
     /// can never be exposed in the first place.
     PortNotExposable {
         node: NodeId,
@@ -530,7 +530,7 @@ pub enum GraphError {
     /// (`min > max`), or non-finite. Every consumer of `PortDef::min`/`max`
     /// normalizes with `(v - min) / (max - min)` and clamps with
     /// `min(max, max(min, v))`, both of which break silently outside an
-    /// ascending finite range — so the invariant is enforced at the setter
+    /// ascending finite range, so the invariant is enforced at the setter
     /// rather than defended against at each reader. The offending values are
     /// not carried: `GraphError` is `Eq`, and `f32` is not.
     InvalidRange {
@@ -542,7 +542,7 @@ pub enum GraphError {
 /// Accept only the byte shape Iconify names use (`prefix:name`):
 /// letters, digits, hyphens, and the `:` separator (spaces tolerated for
 /// legacy values). Keeping the value within this alphabet means the stored
-/// string is an inert token — the frontend hands it to `<Icon name={...}>`,
+/// string is an inert token: the frontend hands it to `<Icon name={...}>`,
 /// which resolves it against the offline bundle and renders nothing for an
 /// unknown name, so a hostile value can never become markup.
 fn is_safe_icon_byte(b: u8) -> bool {
@@ -626,7 +626,7 @@ impl std::error::Error for FindTerminalError {}
 /// brush bar renders the entry.
 ///
 /// Lives in `Graph::exposed_ports` rather than on `PortDef` per instance
-/// because the brush bar is a single user-facing surface — centralizing
+/// because the brush bar is a single user-facing surface: centralizing
 /// "what the user sees" in one ordered dict makes display order natural
 /// (map iteration order is the brush-bar order) and gives the
 /// brush-author editor one canonical place to read and write.
@@ -656,7 +656,7 @@ pub struct Graph<W: WireKind> {
     nodes: HashMap<NodeId, NodeInstance<W>>,
     pub connections: Vec<Connection>,
     /// Ordered set of exposed-port entries. Insertion order is the
-    /// brush-bar display order — `IndexMap` preserves it through every
+    /// brush-bar display order: `IndexMap` preserves it through every
     /// mutation and JSON/YAML round-trip. Keys come from
     /// [`exposed_port_key`].
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
@@ -688,7 +688,7 @@ impl<W: WireKind> Graph<W> {
 
     /// Add a node and return its assigned id. Any input port whose
     /// registration `PortDef` declares `.exposed()` is auto-appended to
-    /// `exposed_ports` with empty meta — preserves the "size etc. are
+    /// `exposed_ports` with empty meta, preserving the "size etc. are
     /// exposed by default" affordance.
     pub fn add_node(&mut self, type_id: impl Into<String>, ports: Vec<PortDef<W>>) -> NodeId {
         let type_id = type_id.into();
@@ -722,7 +722,7 @@ impl<W: WireKind> Graph<W> {
     /// Determinism: the node map is the source of truth for "which ids are
     /// taken." When a file is imported, same-kind disambiguation follows the
     /// order `add_node` is called, which is the `BTreeMap`-key order of the
-    /// source file (lexicographic) — the lexicographically-first same-kind
+    /// source file (lexicographic): the lexicographically-first same-kind
     /// key normalizes to the bare `type_id`.
     fn unique_id_for(&self, type_id: &str) -> NodeId {
         let base = NodeId(type_id.to_string());
@@ -770,7 +770,7 @@ impl<W: WireKind> Graph<W> {
                 node: id.clone(),
                 port: port_name.to_string(),
             })?;
-        // Only controls the brush bar can render may be exposed — enforce it
+        // Only controls the brush bar can render may be exposed: enforce it
         // here so an un-renderable entry can never reach the read builder.
         if !port.exposable {
             return Err(GraphError::PortNotExposable {
@@ -783,7 +783,7 @@ impl<W: WireKind> Graph<W> {
         Ok(())
     }
 
-    /// Drop a brush-bar entry by `(node, port)`. Idempotent — missing
+    /// Drop a brush-bar entry by `(node, port)`. Idempotent: missing
     /// entries are not an error.
     pub fn unexpose_port(&mut self, id: &NodeId, port_name: &str) {
         let key = exposed_port_key(id, port_name);
@@ -798,7 +798,7 @@ impl<W: WireKind> Graph<W> {
 
     /// Overwrite all three meta fields on a brush-bar entry in one call.
     /// The icon field is restricted to FontAwesome-friendly characters
-    /// (`[a-zA-Z0-9- ]*`) — keeps the value safe to bind directly into
+    /// (`[a-zA-Z0-9- ]*`): keeps the value safe to bind directly into
     /// an HTML `class=` attribute on the frontend without further
     /// sanitization. Out-of-shape icon strings are rejected loudly so
     /// the caller learns about the constraint rather than seeing the
@@ -855,7 +855,7 @@ impl<W: WireKind> Graph<W> {
         }
 
         // Wirability check: a compile-time input (enum, string, curve) can
-        // never accept a per-dab wire. Type-owned — asks the wire type, not
+        // never accept a per-dab wire. Type-owned: asks the wire type, not
         // a consumer-side classifier.
         if !to_def.is_wirable() {
             return Err(GraphError::InputNotWirable {
@@ -951,7 +951,7 @@ impl<W: WireKind> Graph<W> {
         }
     }
 
-    /// Update an input port's authored value on a node instance — the value
+    /// Update an input port's authored value on a node instance: the value
     /// used when the port is disconnected. The general form; see
     /// [`Self::set_port_default`] for the scalar convenience wrapper the hot
     /// slider path uses.
@@ -987,7 +987,7 @@ impl<W: WireKind> Graph<W> {
         Ok(())
     }
 
-    /// Scalar convenience wrapper over [`Self::set_port_value`] — the hot
+    /// Scalar convenience wrapper over [`Self::set_port_value`]: the hot
     /// path for slider scrubs and numeric port defaults. Wraps the `f32` in
     /// [`InputValue::Scalar`].
     pub fn set_port_default(
@@ -1005,14 +1005,14 @@ impl<W: WireKind> Graph<W> {
     /// one sets *where the knob sits*, this one sets *how far it travels*.
     ///
     /// Both the brush bar and the node editor already read the instance
-    /// `PortDef::min`/`max`, so an override lands in every view at once —
+    /// `PortDef::min`/`max`, so an override lands in every view at once,
     /// which is why the range lives here rather than alongside the
     /// brush-bar-only metadata in [`Graph::exposed_ports`]. A math node
     /// whose registration declares `0..1` can therefore be given a bipolar
     /// `-1..1` control by the brush author without a helper node in the
     /// graph to recenter it.
     ///
-    /// `min`/`max` are UI bounds only — nothing clamps the authored value to
+    /// `min`/`max` are UI bounds only: nothing clamps the authored value to
     /// them (see [`PortDef::min`]), so an existing out-of-range value
     /// survives the override untouched until the user next scrubs.
     pub fn set_port_range(
@@ -1183,7 +1183,7 @@ mod tests {
 
     /// A settable-source input resolves as a wire *source* (its `is_source()`
     /// is honoured by `connect`'s from-side), while still being a settable
-    /// input on the same node — the two never interfere.
+    /// input on the same node: the two never interfere.
     #[test]
     fn settable_source_is_both_wire_source_and_settable_input() {
         let mut g = Graph::<TestWireKind>::new();
@@ -1211,7 +1211,7 @@ mod tests {
     }
 
     /// Driving a settable-source input (wiring *into* it) retires any wires
-    /// that were tapping it as a source — its value is now the driver's.
+    /// that were tapping it as a source: its value is now the driver's.
     #[test]
     fn driving_a_settable_source_drops_its_outgoing_wires() {
         let mut g = Graph::<TestWireKind>::new();
@@ -1516,7 +1516,7 @@ mod tests {
         let back: PortDef<TestWireKind> = serde_json::from_str(&json).unwrap();
         assert_eq!(back.natural_range, Some((0.0, 1024.0)));
 
-        // Default builder leaves natural_range unset — opt-in only.
+        // Default builder leaves natural_range unset: opt-in only.
         let bare = PortDef::input("x", TestWireKind::Scalar);
         assert_eq!(bare.natural_range, None);
     }
@@ -1560,7 +1560,7 @@ mod tests {
         assert!(!g.is_port_exposed(&id, "val"));
         g.expose_port(&id, "val").unwrap();
         assert!(g.is_port_exposed(&id, "val"));
-        // Idempotent — double-expose doesn't add a duplicate.
+        // Idempotent: double-expose doesn't add a duplicate.
         g.expose_port(&id, "val").unwrap();
         assert_eq!(g.exposed_ports.len(), 1);
         g.unexpose_port(&id, "val");
@@ -1591,7 +1591,7 @@ mod tests {
     #[test]
     fn add_node_does_not_auto_expose_non_exposable_port() {
         // Even a registration that flags a non-exposable input `.exposed()`
-        // must not seed a brush-bar entry — the exposability invariant holds
+        // must not seed a brush-bar entry: the exposability invariant holds
         // by construction, not just at the interactive expose call.
         let mut g = Graph::<TestWireKind>::new();
         let mut d = PortDef::input("d", TestWireKind::Data);
@@ -1614,7 +1614,7 @@ mod tests {
         let id = g.add_node("node", vec![a, b]);
         assert!(!g.is_port_exposed(&id, "a"));
         assert!(g.is_port_exposed(&id, "b"));
-        // Empty meta — falls back to registration at render time.
+        // Empty meta: falls back to registration at render time.
         let key = exposed_port_key(&id, "b");
         assert_eq!(g.exposed_ports[&key], ExposedPortMeta::default());
     }
@@ -1662,12 +1662,12 @@ mod tests {
         g.expose_port(&id, "val").unwrap();
         let key = exposed_port_key(&id, "val");
 
-        // Safe icon class — accepted.
+        // Safe icon class: accepted.
         g.set_exposed_port_meta(&key, "Label".into(), "Desc".into(), "fa6-solid:sun".into())
             .unwrap();
         assert_eq!(g.exposed_ports[&key].icon, "fa6-solid:sun");
 
-        // Unsafe icon (contains `<`) — rejected; previous value retained.
+        // Unsafe icon (contains `<`): rejected; previous value retained.
         let err = g
             .set_exposed_port_meta(
                 &key,
@@ -1702,7 +1702,7 @@ mod tests {
 
     #[test]
     fn set_port_range_leaves_the_authored_value_alone() {
-        // Bounds are UI hints, not enforcement — narrowing the range around
+        // Bounds are UI hints, not enforcement: narrowing the range around
         // an out-of-band value must not silently rewrite it.
         let mut g = Graph::<TestWireKind>::new();
         let id = g.add_node("node", vec![scalar_in("val")]);

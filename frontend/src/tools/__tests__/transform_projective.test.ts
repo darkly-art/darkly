@@ -9,7 +9,7 @@ import {
 
 /**
  * Mirror of Rust `mat3::tests::homography_contract`. Both sides build the SAME
- * rect→quad homography and transform the SAME corners — this pins the row-major
+ * rect→quad homography and transform the SAME corners; this pins the row-major
  * `Mat3` layout so the JS gizmo and the Rust record can't silently diverge
  * across the WASM boundary. If you change one, change the other identically.
  */

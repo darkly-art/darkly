@@ -4,12 +4,12 @@
  * The bug lived in the *worker's own* dispatch/teardown ordering: it launched
  * the `segment-<n>.json` write fire-and-forget, then posted `'closed'` /
  * `'flushed'` and (on close) tore the worker down before the write's first
- * `await` resumed — guillotining it. So the test must drive the *real*
+ * `await` resumed, guillotining it. So the test must drive the *real*
  * `worker.ts`; a fake worker that already awaits the write would pass before
  * and after the fix and prove nothing.
  *
  * The real worker needs `self`, `navigator.storage`, and `VideoEncoder`,
- * none of which exist in the Vitest node environment — so we stub them with
+ * none of which exist in the Vitest node environment, so we stub them with
  * an in-memory OPFS fake whose sync-access-handle acquisition awaits a
  * microtask (mirroring real OPFS async), making the fire-and-forget ordering
  * observable: at the moment `'closed'`/`'flushed'` is posted we snapshot the
@@ -63,7 +63,7 @@ class FakeDir {
     files = new Map<string, FakeFile>();
 
     // No `await` before the child is created, so the handle exists
-    // synchronously at call time — only `createSyncAccessHandle` is async.
+    // synchronously at call time; only `createSyncAccessHandle` is async.
     async getDirectoryHandle(name: string): Promise<FakeDir> {
         let d = this.dirs.get(name);
         if (!d) {
@@ -91,7 +91,7 @@ class FakeVideoEncoder {
         this.state = 'configured';
     }
     encode(_frame: unknown, _opts?: unknown): void {}
-    // Emits no chunks — frame plumbing isn't under test, segment-finalize
+    // Emits no chunks: frame plumbing isn't under test, segment-finalize
     // ordering is.
     async flush(): Promise<void> {}
     close(): void {
@@ -107,7 +107,7 @@ interface Harness {
     onmessage: (e: { data: unknown }) => void;
     posted: Array<{ type: string }>;
     /** `segment-0.json` bytes captured at the instant `'closed'`/`'flushed'`
-     *  was posted — null if the file wasn't written yet. */
+     *  was posted; null if the file wasn't written yet. */
     snapshotAt: Record<string, Uint8Array | null>;
     root: FakeDir;
 }
@@ -179,7 +179,7 @@ afterEach(async () => {
     vi.unstubAllGlobals();
 });
 
-describe('encoder worker — segment metadata persistence', () => {
+describe('encoder worker: segment metadata persistence', () => {
     it('close (roll) persists segment-<n>.json before posting "closed"', async () => {
         const h = await loadWorker();
         h.onmessage({ data: initMsg() });

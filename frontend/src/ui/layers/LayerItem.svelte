@@ -18,18 +18,18 @@
     let { layer, depth = 0, onupdate }: {
         layer: {
             type: string; id: number; name: string; visible: boolean; locked?: boolean;
-            // Mirrors `Document::is_node_editable` — false when this node OR
+            // Mirrors `Document::is_node_editable`: false when this node OR
             // any ancestor is locked. `locked` is the node's own flag (drives
             // the icon); `editable` is the effective form (drives interaction
             // gates: rename, drag, mask/layer menu mutations).
             editable?: boolean;
-            // Whether paint lands on this layer — false for kinds whose pixels
+            // Whether paint lands on this layer: false for kinds whose pixels
             // are generated (void, filter, vector). Mirrors
             // `DarklyEngine::is_node_paintable`; drives the Rasterize offer.
             paintable?: boolean;
             // Per-kind capability flags from the layer's registration (see
             // LayerKindRegistration). The panel reads these instead of
-            // branching on `type` — a new layer kind declares its own and the
+            // branching on `type`; a new layer kind declares its own and the
             // UI follows with no edit here.
             canHaveMask?: boolean;
             canRename?: boolean;
@@ -68,7 +68,7 @@
     let dupLabel = $derived(isMulti ? `Duplicate ${selectionSize} Layers` : 'Duplicate Layer');
     let mergeLabel = $derived(isMulti ? `Merge ${selectionSize} Layers` : 'Merge Down');
     // The mask is the active edit target whenever the active node id IS the
-    // mask modifier id — no session redirect.
+    // mask modifier id (no session redirect).
     let isEditingMask = $derived(
         maskModifier !== null && app.activeLayerId === maskModifier.id,
     );
@@ -110,11 +110,11 @@
 
     let canAddMask = $derived(Boolean(layer.canHaveMask) && !hasMask && editable);
 
-    // Drives both the menu entry and its click handler — see `flattenOffer`.
+    // Drives both the menu entry and its click handler (see `flattenOffer`).
     let flattenLabel = $derived(flattenOffer({ paintable, hasMask }));
 
     // Chord dispatch is owned by `use:bindingSite` on each preview
-    // element below — `bindingSite` intercepts modifier+click in capture
+    // element below: `bindingSite` intercepts modifier+click in capture
     // phase and dispatches against its named site. These onclick handlers
     // are the no-chord fallback (plain click → select / toggle visibility).
     function toggleVisibility(e: MouseEvent) {
@@ -130,7 +130,7 @@
     }
 
     function onLayerClick(e: MouseEvent) {
-        // The layer-item body has no chord bindings — modifier+click is
+        // The layer-item body has no chord bindings; modifier+click is
         // reserved for the previews. Plain / ctrl / shift dispatch is
         // shared with LayerGroup via app.handleLayerRowClick.
         app.handleLayerRowClick(layer.id, e);
@@ -161,7 +161,7 @@
         e.preventDefault();
         e.stopPropagation();
         // If the right-clicked row is already in the multi-selection,
-        // keep the selection intact — the menu acts on the whole set.
+        // keep the selection intact, since the menu acts on the whole set.
         // If it's not in the selection, replace the selection with just
         // this row (Photoshop / GIMP behavior). This way the menu and
         // every action it dispatches operate on a selection that
@@ -215,7 +215,7 @@
         return items;
     });
 
-    // Structural menu items dispatch WITHOUT `ctx.layerId` — the action
+    // Structural menu items dispatch WITHOUT `ctx.layerId`: the action
     // handler reads `app.selectedLayerIds` (the right-click handler above
     // guarantees the clicked row is in the selection). This is what
     // makes "Delete 3 Layers" actually delete 3 layers; the v1 attempt
@@ -363,8 +363,8 @@
         let ids: number[];
         try { ids = JSON.parse(payload) as number[]; } catch { return; }
         if (!Array.isArray(ids) || ids.length === 0) return;
-        // Dropping the dragged set onto one of its own members is a no-op
-        // — the engine would reject it as self-referential anyway.
+        // Dropping the dragged set onto one of its own members is a no-op;
+        // the engine would reject it as self-referential anyway.
         if (ids.includes(layer.id)) return;
 
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();

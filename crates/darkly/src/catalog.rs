@@ -1,8 +1,8 @@
 //! The one shape every registry of typed variants projects into.
 //!
 //! Filters, veils, voids, blend modes, tools, layer kinds and layer filters all
-//! answer the same questions — what is this variant called, what does it look
-//! like, what does it do, what can you set on it — and each used to answer them
+//! answer the same questions: what is this variant called, what does it look
+//! like, what does it do, what can you set on it; each used to answer them
 //! through its own flat `*TypeInfo` struct and its own engine query. This module
 //! replaces all of them with [`Catalog`] and [`CatalogEntry`].
 //!
@@ -15,7 +15,7 @@
 use crate::engine::types::ParamInfo;
 use crate::gpu::void::VoidSource;
 
-/// One browsable entry in a registry of typed variants — the single shape the
+/// One browsable entry in a registry of typed variants: the single shape the
 /// UI pickers, the settings surface and the metadata export all consume.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,7 +34,7 @@ pub struct CatalogEntry {
     pub hotkey_action: Option<&'static str>,
     pub params: Vec<ParamInfo>,
     /// Whether this variant declares a
-    /// [`PreviewAnim`](crate::gpu::preview::PreviewAnim) — the one fact behind
+    /// [`PreviewAnim`](crate::gpu::preview::PreviewAnim), the one fact behind
     /// "a rendered preview of it exists". False for the registries whose entries
     /// are affordances rather than images.
     ///
@@ -113,7 +113,7 @@ impl CatalogEntry {
     }
 }
 
-/// A named group of entries — "filters", "veils", "settings.canvas", …
+/// A named group of entries: "filters", "veils", "settings.canvas", …
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -156,8 +156,8 @@ impl Catalog {
         }
     }
 
-    /// Declare that entries in this catalog may share a glyph — see
-    /// [`Catalog::icons_identify_entries`].
+    /// Declare that entries in this catalog may share a glyph (see
+    /// [`Catalog::icons_identify_entries`]).
     pub fn with_shared_icons(mut self) -> Self {
         self.icons_identify_entries = false;
         self
@@ -183,13 +183,13 @@ include!(concat!(env!("OUT_DIR"), "/catalog_sources_gen.rs"));
 
 /// Every settings section, projected into the same shape as a registry.
 ///
-/// One catalog per section, one entry per section, one [`ParamInfo`] per pref —
+/// One catalog per section, one entry per section, one [`ParamInfo`] per pref,
 /// so a consumer that can render a filter's parameter table can render the
 /// settings surface with no second code path. Ids are prefixed `settings.`,
 /// which cannot collide with a registry catalog id because none contains a dot.
 ///
 /// Every declared pref is projected, including those declaring
-/// [`WidgetHint::Hidden`] — panel visibility and friends, which ride the same
+/// [`WidgetHint::Hidden`], panel visibility and friends, which ride the same
 /// persistence pipe as real settings without being settings. They carry
 /// `widget: "hidden"` and it is the renderer that skips them.
 ///
@@ -214,7 +214,7 @@ pub fn settings_catalogs() -> Vec<Catalog> {
             };
             let mut catalog = Catalog::new(
                 // `id` must be `'static`; sections are `'static` data, so lean
-                // on the same leak-free trick the registries do — the section's
+                // on the same leak-free trick the registries do: the section's
                 // own id with a compile-time-known prefix, built once.
                 settings_catalog_id(section.id),
                 section.display_name,
@@ -258,9 +258,9 @@ mod tests {
     /// and so does every entry in it.
     ///
     /// `icon`, `category` and `hotkey_action` are deliberately *not* asserted.
-    /// `None` on those is a declared value rather than a missing one — veils
+    /// `None` on those is a declared value rather than a missing one: veils
     /// render a live preview instead of an icon, raster layers always show a
-    /// thumbnail, and only tools bind a hotkey — which is the whole reason they
+    /// thumbnail, and only tools bind a hotkey, which is the whole reason they
     /// are `Option` rather than `&'static str`. Demanding them back would be a
     /// rule the data does not have. Malformed icons are caught by
     /// [`icons_are_wellformed_and_unique_within_a_catalog`] instead.
@@ -305,8 +305,8 @@ mod tests {
     /// Generalizes the per-registry uniqueness check `gpu/filter.rs` used to
     /// carry: a copy-pasted `register()` that kept the donor's glyph shows up
     /// as two entries in one catalog claiming the same icon. Catalogs whose
-    /// glyphs are not identifying opt out of the uniqueness half — see
-    /// [`Catalog::icons_identify_entries`] — but not the wellformedness half.
+    /// glyphs are not identifying opt out of the uniqueness half (see
+    /// [`Catalog::icons_identify_entries`]), but not the wellformedness half.
     #[test]
     fn icons_are_wellformed_and_unique_within_a_catalog() {
         for cat in catalogs() {
@@ -341,7 +341,7 @@ mod tests {
 
     /// Settings project on the same footing as a registry: one catalog per
     /// section, `settings.`-prefixed so it cannot collide with a registry id,
-    /// and carrying *every* declared pref — hidden ones marked as such rather
+    /// and carrying *every* declared pref, hidden ones marked as such rather
     /// than dropped.
     ///
     /// The projection is the schema the frontend validates stored prefs
@@ -372,8 +372,8 @@ mod tests {
         );
         assert_eq!(
             exported, declared,
-            "settings export must carry every declared pref, including hidden ones \
-             — a pref absent from the schema is dropped by `validateOverrides` and \
+            "settings export must carry every declared pref, including hidden ones: \
+             a pref absent from the schema is dropped by `validateOverrides` and \
              erased from the user's settings file on reload"
         );
 
@@ -440,7 +440,7 @@ mod tests {
             );
         }
 
-        // Entry order is part of the contract — a caller that renders a catalog
+        // Entry order is part of the contract: a caller that renders a catalog
         // twice must get the same table both times.
         for cat in &cats {
             let rebuilt = catalogs();

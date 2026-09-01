@@ -48,7 +48,7 @@
      * The rolodex tilt lives one level in, on `.body`, for exactly that reason.
      * A transformed element reports its *transformed* rect, so a card that
      * carried its own curve could only be measured through `offsetTop`, which
-     * rounds to whole CSS px — and off 100% zoom that rounding is what walks
+     * rounds to whole CSS px, and off 100% zoom that rounding is what walks
      * every band away from the card it leaves, further with every pack down the
      * column. The split is what lets `cardTops` be measured at all. */
     .pack-card {
@@ -81,13 +81,13 @@
         border-radius: var(--radius-md) 0 0 var(--radius-md);
         /* The curve is applied per card from `cardCurve`, anchored to the
          * trailing edge. Cards recede toward the ends of the column but their
-         * right edges stay on one vertical line — which is what the projection
+         * right edges stay on one vertical line, which is what the projection
          * leaves from, so it can meet every card at a fixed x instead of
          * chasing an edge that moves with the scale. Anchoring the origin here
          * is why that is true rather than approximately true.
          *
          * The transform and that origin are both `cardTransform`'s, bound
-         * together from `wheel.ts` — `cardEdge` reproduces this exact list by
+         * together from `wheel.ts`; `cardEdge` reproduces this exact list by
          * hand, and it is only safe to do that while the two cannot be edited
          * apart. */
         will-change: transform, opacity;
@@ -96,8 +96,8 @@
     /* Where this card samples the field.
      *
      * The field belongs to the explorer, not to this card: sized to the
-     * explorer and offset by where the card currently is inside it — the
-     * wheel's own offset plus the card's position in the column — so it
+     * explorer and offset by where the card currently is inside it (the
+     * wheel's own offset plus the card's position in the column), so it
      * resolves to the same place on screen as the ribbon and the section
      * painting the identical declaration. Scrolling slides the cards under a
      * light that stays put, and a pack's three columns are one continuous
@@ -110,7 +110,7 @@
      * A card cannot hold the field still the way a section does
      * (`background-attachment: fixed`, `BrushExplorer.svelte`). A transformed
      * element is the containing block for its own fixed background, and the
-     * rolodex curve above transforms every card — so `fixed` here re-anchors
+     * rolodex curve above transforms every card, so `fixed` here re-anchors
      * the image to the card, which is precisely the "paint travels with the
      * card" that the offset exists to avoid. Worse, the image is sized to the
      * explorer and offset by the explorer's viewport origin, so it lands
@@ -137,7 +137,7 @@
         filter: brightness(1.15);
     }
     /* The focused card wears no ring. It is already the only card at full
-     * colour and full scale, and the projection leaves from its edge — a
+     * colour and full scale, and the projection leaves from its edge; a
      * border would draw a line exactly where the strands have to run
      * uninterrupted into the list. `aria-current` carries the fact instead. */
 
@@ -147,11 +147,11 @@
      *
      * This is the pack's own colour on the pack's own surface with nothing
      * neutral in between, which a saturated pair can carry and a tinted
-     * near-white cannot — the vivid pair reads against a light theme and a dark
+     * near-white cannot; the vivid pair reads against a light theme and a dark
      * one alike, so the card needs no colour picked for one of them.
      *
      * A box of its own because `background-clip: text` claims the element's
-     * background, and the card's is spoken for twice over — surface beneath and
+     * background, and the card's is spoken for twice over: surface beneath and
      * beam above. Here there is nothing else to spend it on. */
     .face {
         display: flex;
@@ -182,7 +182,7 @@
         text-overflow: ellipsis;
         white-space: nowrap;
     }
-    /* The same gradient, held back — a count is a footnote on the label, and any
+    /* The same gradient, held back: a count is a footnote on the label, and any
      * separate grey would fight whatever colour the pack brought.
      *
      * Held back by weight rather than by opacity: the colour here is painted by

@@ -6,7 +6,7 @@ import { DarklyInstance } from '../app.svelte';
 // just-opened tab) used to free the WASM handle while leaving `instance.engine`
 // non-null. The self-rescheduling `requestFrame` rAF loop would then call
 // `engine.render` on the freed handle, and the wasm-bindgen wrapper throws
-// "Attempt to use a moved value" — an uncaught error surfacing as
+// "Attempt to use a moved value": an uncaught error surfacing as
 // `DarklyHandle.render → Engine.render → app.svelte.ts`'s rAF callback.
 //
 // `dispose()` must null the engine reference so the loop's `if (!engine) return`
@@ -26,7 +26,7 @@ describe('closing a tab mid-frame does not render on a freed handle', () => {
 
     it('a rAF queued before dispose() renders nothing and does not throw', () => {
         // Model the wasm-bindgen "moved value" throw: once the handle is freed,
-        // any later `render` throws — exactly what the real `DarklyHandle` does.
+        // any later `render` throws, exactly what the real `DarklyHandle` does.
         let freed = false;
         const render = vi.fn(() => {
             if (freed) throw new Error('Attempt to use a moved value');
@@ -47,7 +47,7 @@ describe('closing a tab mid-frame does not render on a freed handle', () => {
             },
         } as unknown as Engine;
 
-        // A frame is in flight — the open-success path calls requestFrame(), and
+        // A frame is in flight: the open-success path calls requestFrame(), and
         // the loop self-reschedules, so one is essentially always queued.
         inst.requestFrame();
         expect(rafCb).toBeInstanceOf(Function);

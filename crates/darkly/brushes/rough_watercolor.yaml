@@ -1,5 +1,5 @@
 name: Rough Watercolor
-description: The same bleeding pigment over a rougher paper — granulated, with a broken edge.
+description: The same bleeding pigment over a rougher paper (granulated, with a broken edge).
 nodes:
   pen_input:
     type: pen_input

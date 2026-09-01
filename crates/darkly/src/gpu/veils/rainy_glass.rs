@@ -63,7 +63,7 @@ pub fn register() -> VeilRegistration {
 }
 
 /// GPU uniforms for the rainy glass shader.
-/// All f32 fields — no vec2/vec4 members, so Rust repr(C) and WGSL
+/// All f32 fields, no vec2/vec4 members, so Rust repr(C) and WGSL
 /// layouts match without padding.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]

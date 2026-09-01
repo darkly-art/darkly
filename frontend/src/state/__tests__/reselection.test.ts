@@ -242,7 +242,7 @@ describe('collapsed groups', () => {
 });
 
 describe('isolation target', () => {
-    // R9 — the isolated node dies while a different, still-live layer is
+    // R9: the isolated node dies while a different, still-live layer is
     // active, so the selection branch never runs and only the dedicated check
     // can clear the stale target.
     it('clears the isolation target when the isolated node leaves the tree', async () => {
@@ -299,7 +299,7 @@ describe('adopting restored rows (undo of a delete)', () => {
         expect([...inst.selectedLayerIds].sort()).toEqual([2, 3]);
     });
 
-    // A5 — only the topmost restored row, not its descendants
+    // A5: only the topmost restored row, not its descendants
     it('selects only the group when an undone delete restores a whole subtree', async () => {
         treeRef.current = [layer(9)];
         await inst.refreshLayerTree();
@@ -329,7 +329,7 @@ describe('adopting restored rows (undo of a delete)', () => {
         expect(inst.activeLayerId).toBe(900);
     });
 
-    // A3 — undo of an *add* removes a row, so the neighbour fallback applies
+    // A3: undo of an *add* removes a row, so the neighbour fallback applies
     it('falls back to the neighbour when an undo removes rows instead', async () => {
         treeRef.current = [layer(3), layer(2), layer(1)];
         await inst.refreshLayerTree();
@@ -341,7 +341,7 @@ describe('adopting restored rows (undo of a delete)', () => {
         expect(inst.activeLayerId).toBe(1);
     });
 
-    // A4 — nothing changed, nothing to adopt
+    // A4, nothing changed, nothing to adopt
     it('leaves the selection alone when the tree is unchanged', async () => {
         treeRef.current = [layer(2), layer(1)];
         await inst.refreshLayerTree();
@@ -352,7 +352,7 @@ describe('adopting restored rows (undo of a delete)', () => {
         expect(inst.activeLayerId).toBe(1);
     });
 
-    // R15 — an ordinary refresh must never seize the selection
+    // R15: an ordinary refresh must never seize the selection
     it('does not adopt appeared rows on an unflagged refresh', async () => {
         treeRef.current = [layer(1)];
         await inst.refreshLayerTree();

@@ -1,11 +1,11 @@
 /**
- * Panel-type registry — the type-owned dispatch that keeps the docking system
+ * Panel-type registry: the type-owned dispatch that keeps the docking system
  * ignorant of *which* panel it's rendering. Each panel registers its component
  * and meta once; consumers (`PanelGroupView`, the pop-out gate) call
  * `resolvePanel(type)` and read meta fields, never `switch`ing on the type.
  *
  * Adding a future top-level panel (overview, history, …) is one `registerPanel`
- * call in `registerPanels.ts` plus one entry in `PanelType` — no consumer edits.
+ * call in `registerPanels.ts` plus one entry in `PanelType` (no consumer edits).
  */
 
 import type { Component } from 'svelte';
@@ -23,7 +23,7 @@ export interface PanelMeta {
     poppable: boolean;
     /** Whether this panel can be dragged/tiled at all. A non-movable panel (the
      *  canvas) is a fixed *anchor*: it renders with no tab bar, can't be grabbed,
-     *  and can't be tabbed into — other panels dock *around* its edges only. */
+     *  and can't be tabbed into; other panels dock *around* its edges only. */
     movable: boolean;
 }
 

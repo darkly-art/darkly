@@ -2,7 +2,7 @@
  * Reactive UI theme state.
  *
  * Owns the `dark` | `light` choice, applies it to the document body, and
- * keeps WASM in sync with the colors used for baking preset thumbnails —
+ * keeps WASM in sync with the colors used for baking preset thumbnails,
  * so the brush picker grid looks consistent regardless of the paint color
  * the user is currently painting with.
  *
@@ -61,7 +61,7 @@ function readCanvasBg(): Float32Array | null {
             ]);
     }
 
-    // rgb()/rgba() — getComputedStyle on hex-defined custom props in some
+    // rgb()/rgba(): getComputedStyle on hex-defined custom props in some
     // browsers returns them already normalized to this form.
     const rgb = raw.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.%]+))?\s*\)$/i);
     if (rgb) {
@@ -99,7 +99,7 @@ class ThemeState {
     }
 
     /** Push the current theme's preview colors to WASM.
-     *  Safe to call before `app.engine` is ready — no-op in that case. */
+     *  Safe to call before `app.engine` is ready (no-op in that case). */
     pushToWasm() {
         if (!app.engine) return;
         const colors = PREVIEW_COLORS[this.current];

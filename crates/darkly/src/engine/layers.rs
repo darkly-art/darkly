@@ -69,7 +69,7 @@ fn brush_rgba(fill: &Option<peniko::Brush>) -> [u8; 4] {
     }
 }
 
-/// One text object's content, style, and fill color — the data the
+/// One text object's content, style, and fill color: the data the
 /// text-properties panel binds each editor block to. Carries no geometry:
 /// the panel edits off-canvas, so shaping/bounds are never needed.
 pub struct TextObjectEntry {
@@ -88,8 +88,8 @@ pub struct TextObjectEntry {
     pub italic: bool,
     pub align: crate::layer::TextAlign,
     pub color: [u8; 4],
-    /// `Some((w, h))` for area text, `None` for point text — lets the panel
-    /// tell which mode an object is in.
+    /// `Some((w, h))` for area text, `None` for point text, which lets the
+    /// panel tell which mode an object is in.
     pub box_size: Option<(f32, f32)>,
 }
 
@@ -120,16 +120,16 @@ impl DarklyEngine {
     // arguments (`RawParams`, `Option<LayerId>`) and forward to the typed
     // primitives above/below. The param-bearing ones own the single coercion
     // seam (`coerce_void_params`), pairing a raw params object with the sibling
-    // field that names its schema — the one thing generic request routing can't
+    // field that names its schema, the one thing generic request routing can't
     // do for itself. Direct Rust callers (and tests) use the typed primitives.
 
-    /// Wire entry for `add_raster` — see [`Self::add_raster_layer`].
+    /// Wire entry for `add_raster`: see [`Self::add_raster_layer`].
     #[handler]
     pub fn add_raster(&mut self, anchor: Option<LayerId>) -> LayerId {
         self.add_raster_layer(anchor)
     }
 
-    /// Wire entry for `add_void` — coerces `params` against the void type's
+    /// Wire entry for `add_void`: coerces `params` against the void type's
     /// schema, then [`Self::add_void_layer`].
     #[handler]
     pub fn add_void(
@@ -142,7 +142,7 @@ impl DarklyEngine {
         self.add_void_layer(&void_type, pv, anchor)
     }
 
-    /// Wire entry for `add_filter` — coerces `params` against the filter type's
+    /// Wire entry for `add_filter`: coerces `params` against the filter type's
     /// schema (defaults fill any omitted values), then [`Self::add_filter_layer`].
     #[handler]
     pub fn add_filter(
@@ -155,7 +155,7 @@ impl DarklyEngine {
         self.add_filter_layer(&pipeline, pv, anchor)
     }
 
-    /// Wire entry for `set_void_params` — resolves the layer's void type,
+    /// Wire entry for `set_void_params`: resolves the layer's void type,
     /// coerces `params` against its schema, then [`Self::update_void_params`].
     /// A non-void (or stale) id is a silent no-op.
     #[handler]
@@ -167,7 +167,7 @@ impl DarklyEngine {
         self.update_void_params(id, pv);
     }
 
-    /// Wire entry for `set_filter_params` — resolves the layer's filter type,
+    /// Wire entry for `set_filter_params`: resolves the layer's filter type,
     /// coerces `params` against its schema, then [`Self::update_filter_params`].
     /// A non-filter (or stale) id is a silent no-op. The exact analog of
     /// [`Self::set_void_params`].
@@ -190,7 +190,7 @@ impl DarklyEngine {
     /// Register a font blob (uploaded `.ttf`/`.otf` or a decoded Google import)
     /// into this engine's font collection. Returns the family names it
     /// contributed so the frontend library can index them. A thin passthrough to
-    /// [`crate::text::FontRegistry::register_font`] — the bytes are content-hashed
+    /// [`crate::text::FontRegistry::register_font`]: the bytes are content-hashed
     /// and cached there so the families round-trip through `.darkly` save/load.
     pub fn register_font(&mut self, bytes: Vec<u8>) -> Vec<String> {
         self.fonts.register_font(bytes)
@@ -225,8 +225,8 @@ impl DarklyEngine {
     /// Hit-test a plane-space point against the objects of a vector layer,
     /// returning the topmost object covering it (objects draw bottom-to-top, so
     /// the iteration is reversed). The query point is mapped into each object's
-    /// local frame by the inverse of `layer_transform * obj.transform` — the
-    /// same composition `build_scene` draws through — so the test is tight even
+    /// local frame by the inverse of `layer_transform * obj.transform`, the
+    /// same composition `build_scene` draws through, so the test is tight even
     /// for rotated/scaled text. `None` for a miss, a locked/hidden layer, or a
     /// non-vector id. `(x, y)` are PLANE coordinates (see
     /// `docs/coordinate-systems.md`).
@@ -262,7 +262,7 @@ impl DarklyEngine {
 
     /// Add a vector layer seeded with one text object, placed so the text's
     /// top-left baseline origin sits at canvas `(x, y)`, filled with `color`
-    /// (RGBA, 0–255). Returns the new layer id and the stamped object id. One
+    /// (RGBA, 0-255). Returns the new layer id and the stamped object id. One
     /// undo step.
     pub fn add_text_layer(
         &mut self,
@@ -294,7 +294,7 @@ impl DarklyEngine {
     /// sits at canvas `(x, y)`, filled with `color`. The vector layer owns an
     /// ordered list of objects, so this is the natural "another text box on the
     /// same layer" path. One undo step (the object list before/after, via
-    /// [`Property::VectorObjects`] — the same undo kind [`Self::edit_vector_object`]
+    /// [`Property::VectorObjects`], the same undo kind [`Self::edit_vector_object`]
     /// records). Returns the stamped object id, or `None` for a non-vector id.
     pub fn add_text_object(
         &mut self,
@@ -331,8 +331,8 @@ impl DarklyEngine {
     }
 
     /// Ensure the compositor's GPU state for a vector layer exists and rebuild
-    /// its `vello::Scene` from the document's authoritative objects. Idempotent
-    /// — safe after any object/style/transform change, on load, and on
+    /// its `vello::Scene` from the document's authoritative objects. Idempotent:
+    /// safe after any object/style/transform change, on load, and on
     /// undo/redo (`sync_compositor_layers` calls it for every vector layer).
     pub(crate) fn sync_vector_layer(&mut self, id: LayerId) {
         self.compositor
@@ -362,8 +362,8 @@ impl DarklyEngine {
 
     /// Update one or more style fields (and/or fill color) of one text object on
     /// a vector layer. `None` arguments leave that field unchanged. `variations`
-    /// and `features` are **merged** into the object's maps — passing one axis
-    /// keeps the rest — so the panel can edit a single slider without clobbering
+    /// and `features` are **merged** into the object's maps (passing one axis
+    /// keeps the rest), so the panel can edit a single slider without clobbering
     /// the others. Box/layout is *not* here: it stays owned by
     /// [`Self::set_text_box`] on its own undo lane (there is no second mutation
     /// path for it).
@@ -434,7 +434,7 @@ impl DarklyEngine {
 
     /// The single chokepoint for editing one object on a vector layer in place.
     /// Clones the object list, mutates the object matched by `object`, swaps the
-    /// list back, and records the whole swap as one undo step — coalesced on
+    /// list back, and records the whole swap as one undo step, coalesced on
     /// `(object, op)` so a typing run, a style-slider drag, or a gizmo drag each
     /// collapse to one step, but switching object or op kind starts a new one
     /// (see [`crate::undo::PropertyAction::new_coalescing`]). Re-realizes the
@@ -469,7 +469,7 @@ impl DarklyEngine {
     }
 
     /// List every text object on a vector layer with its content, style, and
-    /// fill color (RGBA 0–255) — what the text-properties panel binds one
+    /// fill color (RGBA 0-255): what the text-properties panel binds one
     /// editor block to per object. Empty for a non-vector layer or one with no
     /// text objects. Carries no geometry: the panel edits off-canvas, so
     /// shaping/bounds are never needed.
@@ -502,7 +502,7 @@ impl DarklyEngine {
 
     /// Read one object's gizmo geometry: its local bbox size plus the full
     /// canvas affine `G = layer_transform * obj.transform`, reordered into the
-    /// frontend's row-major `Affine2D`. The gizmo's origin is `(0, 0)` — the
+    /// frontend's row-major `Affine2D`. The gizmo's origin is `(0, 0)`: the
     /// placement is folded into `G`, so `toCanvas(local) = G·local` draws the
     /// box tight around the object. `None` if the id pair doesn't resolve.
     pub fn vector_object_info(
@@ -602,7 +602,7 @@ impl DarklyEngine {
 
     /// Create a new group and move every id in `ids` into it, preserving
     /// their relative panel order. The group ends up at the panel-topmost
-    /// selected layer's slot — its parent, its position — so the act
+    /// selected layer's slot (its parent, its position), so the act
     /// "wraps" the selection in place. Cross-parent selections are
     /// supported; sources from other groups get pulled into the new group.
     ///
@@ -624,7 +624,7 @@ impl DarklyEngine {
             if !self.doc.is_node_editable(id) {
                 continue;
             }
-            // Drop any id whose ancestor is also in the batch — moving
+            // Drop any id whose ancestor is also in the batch: moving
             // the ancestor brings the descendant along; processing both
             // would yank the descendant out of its group.
             if ids
@@ -640,7 +640,7 @@ impl DarklyEngine {
         }
 
         // Sort by panel order so the last entry is the panel-topmost
-        // editable source — its slot is where the new group will live.
+        // editable source; its slot is where the new group will live.
         let order = self.doc.all_node_ids_in_order();
         let order_idx = |id: LayerId| order.iter().position(|&x| x == id).unwrap_or(usize::MAX);
         editable.sort_by_key(|&id| order_idx(id));
@@ -648,7 +648,7 @@ impl DarklyEngine {
         let topmost_parent = self.doc.parent_of(topmost);
         let topmost_pos = self.doc.position_in_parent(topmost).unwrap_or(0);
 
-        // Create the group at the top of root — a stable spot that
+        // Create the group at the top of root: a stable spot that
         // can't accidentally land it inside one of the sources (which
         // would happen if we anchored on a Group-typed `topmost`, since
         // `add_group(Some(group))` resolves to `IntoGroupTop(group)`).
@@ -684,7 +684,7 @@ impl DarklyEngine {
         // Reposition the group at the topmost's original slot. The
         // topmost has already been detached (it was the last source
         // moved into the group), so its parent's children Vec is short
-        // one entry — `topmost_pos` now points at whatever was just
+        // one entry; `topmost_pos` now points at whatever was just
         // above topmost in panel order. Inserting the group there
         // lands it exactly where topmost used to be.
         let group_pre_move_parent = self.doc.parent_of(group_id);
@@ -714,7 +714,7 @@ impl DarklyEngine {
     }
 
     /// Add a new void (procedural) layer. `params` is matched against the
-    /// void type's `ParamDef` schema by index — callers that don't have a
+    /// void type's `ParamDef` schema by index; callers that don't have a
     /// hand-rolled slice should use the type's defaults via
     /// `void_param_defs(type).iter().map(ParamDef::default_value)`.
     ///
@@ -733,7 +733,7 @@ impl DarklyEngine {
     /// [`Self::add_void_layer`] with an explicit initial transform, overriding
     /// the kind's registered seed. Placement uses it: a smart object's opening
     /// transform is derived from the source image's dimensions, which the
-    /// registration — a plain `fn(u32, u32)` over the canvas size — cannot see.
+    /// registration (a plain `fn(u32, u32)` over the canvas size) cannot see.
     pub fn add_void_layer_with_transform(
         &mut self,
         void_type: &str,
@@ -766,7 +766,7 @@ impl DarklyEngine {
             anchor,
         );
         // Build the trait object here (engine), then hand it to the
-        // compositor — the compositor stops caring about `(type_id,
+        // compositor; the compositor stops caring about `(type_id,
         // params)` as a pair, owning only the constructed `Box<dyn Void>`.
         let format = self.compositor.canvas_content_format();
         let void = self.compositor.void_registry_mut().create_void(
@@ -780,7 +780,7 @@ impl DarklyEngine {
         // A fresh void instance starts at identity, so push the seeded
         // transform down now rather than waiting for the next frame's
         // doc→compositor sync. Otherwise the layer renders untransformed for
-        // one frame — and never gets corrected at all on paths that composite
+        // one frame, and never gets corrected at all on paths that composite
         // without going through `render()`.
         self.compositor
             .update_void_layer_transform(&self.gpu.queue, id, &initial_transform);
@@ -793,12 +793,12 @@ impl DarklyEngine {
         Some(id)
     }
 
-    /// Add a new filter layer — a non-destructive transform of the composite
+    /// Add a new filter layer: a non-destructive transform of the composite
     /// below it. `pipeline` names a registered filter type (e.g. `"invert"`);
     /// `params` is matched against that type's schema by index (empty for
     /// parameter-free filters).
     ///
-    /// Returns `None` if `pipeline` is not a registered filter type — surfaced
+    /// Returns `None` if `pipeline` is not a registered filter type, surfaced
     /// rather than silently falling back, the same as [`Self::add_void_layer`].
     /// Unlike a void layer there is no per-instance GPU resource to build: the
     /// filter pipeline is shared and resolved lazily in `compose_filter_arm`.
@@ -873,7 +873,7 @@ impl DarklyEngine {
     }
 
     /// Replace a filter layer's parameter values. Coalesces with prior
-    /// `FilterParams` edits on the same layer so a curve drag is one undo step —
+    /// `FilterParams` edits on the same layer so a curve drag is one undo step,
     /// the exact analog of [`Self::update_void_params`]. The compositor rebuilds
     /// any param-derived GPU resources (the curves LUT) lazily on the next
     /// `sync_projection_states`, keyed by the param fingerprint.
@@ -905,7 +905,7 @@ impl DarklyEngine {
     /// transform gizmo's output). Mirrors [`Self::update_void_params`]:
     /// reads the layer's CURRENT transform as the undo `old_value` before
     /// writing, so a whole gizmo drag coalesces into one undo step that
-    /// restores the true pre-drag state — never identity.
+    /// restores the true pre-drag state, never identity.
     #[handler]
     pub fn update_void_transform(&mut self, id: LayerId, transform: crate::transform::Transform) {
         if !self.doc.is_node_editable(id) {
@@ -933,7 +933,7 @@ impl DarklyEngine {
     /// its active pixels. Returns `(origin_x, origin_y, w, h, transform)` in
     /// PLANE space. The bbox is the void's
     /// [`crate::gpu::void::Void::content_extent`], which already answers in
-    /// plane space — canvas-filling for most voids, the cover-fit rect for a
+    /// plane space: canvas-filling for most voids, the cover-fit rect for a
     /// stream (extending beyond the canvas), the source's natural rect for a
     /// placed image. Falls back to the canvas rect if the void instance isn't
     /// realized yet. `None` if `layer_id` isn't a void.
@@ -959,7 +959,7 @@ impl DarklyEngine {
         ))
     }
 
-    /// How the user may transform a layer — `live` / `destructive` / `none`.
+    /// How the user may transform a layer: `live` / `destructive` / `none`.
     /// Resolves the void's static capability through the compositor-owned
     /// registry. Returned as a stable string for the WASM boundary.
     #[handler]
@@ -1002,7 +1002,7 @@ impl DarklyEngine {
         // composited output ignores this layer entirely, so the canvas blit
         // upstream of us plus this GPU copy plus the void's encode pass plus
         // the compositor recomposite would all be pure waste. The
-        // authoritative answer lives in the doc — `effective_visible` walks
+        // authoritative answer lives in the doc: `effective_visible` walks
         // ancestors. The JS-side `CameraSource.tick()` also short-circuits
         // on visibility, but this guard is the canonical correctness one:
         // any future caller (tests, a different frontend, IPC) gets the
@@ -1024,7 +1024,7 @@ impl DarklyEngine {
     /// nothing changed (compares before writing). Called after every
     /// external-image upload and once at document open after a successful
     /// `restore_void_pixels` so saves and reloads stay consistent.
-    /// Place `rgba` as a smart object — a layer that holds the image at its
+    /// Place `rgba` as a smart object: a layer that holds the image at its
     /// native resolution and displays it through a stored transform, so
     /// resizing it is a change to that transform rather than a resample of the
     /// pixels. Returns the new layer's id, or `None` if the dimensions are
@@ -1127,7 +1127,7 @@ impl DarklyEngine {
     }
 
     pub fn has_layer(&self, layer_id: LayerId) -> bool {
-        // "Has" means linked into the tree — not just sitting orphaned in the
+        // "Has" means linked into the tree, not just sitting orphaned in the
         // document's slotmap waiting on an undo reattach. Detached-for-undo
         // layers must report `false` so callers (and the layer panel) treat
         // them as gone until reattach.
@@ -1139,7 +1139,7 @@ impl DarklyEngine {
     pub fn layer_bounds(&self, layer_id: LayerId) -> Option<crate::coord::CanvasRect> {
         match self.doc.layer(layer_id)? {
             Layer::Raster(r) => Some(r.pixels.bounds),
-            // Voids, filter, and vector layers store no pixels — their "bounds"
+            // Voids, filter, and vector layers store no pixels; their "bounds"
             // concept is the canvas itself, which callers can ask for directly
             // via `canvas_dimensions`.
             Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) => None,
@@ -1147,7 +1147,7 @@ impl DarklyEngine {
     }
 
     /// Returns the pixel-space bounds of any pixel-bearing node id (raster
-    /// layer or mask filter). Generalization of [`Self::layer_bounds`] —
+    /// layer or mask filter). Generalization of [`Self::layer_bounds`]:
     /// when callers hold a node id without knowing its kind, this resolves
     /// against the document's unified `pixels()` accessor. Returns `None`
     /// for groups (no pixel buffer) or unknown ids.
@@ -1170,7 +1170,7 @@ impl DarklyEngine {
             return Err("Layer is locked".into());
         }
         // A modifier is a selectable row, so the delete hotkey forwards its id
-        // here — but it hangs off a host rather than occupying a slot in the
+        // here, but it hangs off a host rather than occupying a slot in the
         // tree, so it never counts toward the last-layer floor.
         if !self.doc.is_filter(id) && self.doc.node_count() <= 1 {
             return Err("Cannot delete the last layer".into());
@@ -1204,7 +1204,7 @@ impl DarklyEngine {
         }
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        // Collect tombstones before detaching — `detach_for_undo` severs
+        // Collect tombstones before detaching: `detach_for_undo` severs
         // the parent links `collect_pixel_node_ids` walks to enumerate
         // the subtree.
         let tombstones = self.collect_pixel_node_ids(id);
@@ -1239,7 +1239,7 @@ impl DarklyEngine {
                 continue;
             }
             // Drop any id that's a descendant of another id already in
-            // the batch — removing the ancestor takes the subtree with it.
+            // the batch: removing the ancestor takes the subtree with it.
             // A modifier whose host is also in the batch is covered the same
             // way: the host's removal takes its filters along.
             if ids
@@ -1257,7 +1257,7 @@ impl DarklyEngine {
             self.compositor.mark_dirty();
             return Ok(skipped_locked);
         }
-        // Only tree nodes count against the floor — removing every modifier in
+        // Only tree nodes count against the floor; removing every modifier in
         // the document still leaves its layers behind.
         if node_removals > 0 && self.doc.node_count().saturating_sub(node_removals) == 0 {
             return Err("Cannot delete the last layer".into());
@@ -1405,7 +1405,7 @@ impl DarklyEngine {
             return;
         }
         // Unknown blend-mode strings keep the existing mode rather than
-        // silently snapping to Normal — the UI should only ever pass a
+        // silently snapping to Normal; the UI should only ever pass a
         // registered id, so an unknown one is a bug worth surfacing.
         let blend_mode = match crate::gpu::blend_mode::registry().get(type_id) {
             Some(reg) => reg,
@@ -1416,7 +1416,7 @@ impl DarklyEngine {
             None => return,
         };
         // Picking a blend mode on a passthrough group implicitly switches it
-        // to isolated — passthrough ignores the group's blend mode, so the
+        // to isolated; passthrough ignores the group's blend mode, so the
         // user's choice would have no visible effect otherwise.
         let was_passthrough = matches!(
             self.doc.find_node(id),
@@ -1460,7 +1460,7 @@ impl DarklyEngine {
         }
     }
 
-    /// Set the `visible` flag on any node — layer, group, or filter.
+    /// Set the `visible` flag on any node: layer, group, or filter.
     /// Works uniformly across kinds because they all carry [`NodeCommon`].
     #[handler]
     pub fn set_layer_visible(&mut self, id: LayerId, visible: bool) {
@@ -1482,7 +1482,7 @@ impl DarklyEngine {
         }
     }
 
-    /// Set the `locked` flag on any node — layer, group, or filter.
+    /// Set the `locked` flag on any node: layer, group, or filter.
     #[handler]
     pub fn set_node_locked(&mut self, id: LayerId, locked: bool) {
         if !self.resolve_transform_conflict() {
@@ -1511,7 +1511,7 @@ impl DarklyEngine {
     /// when `id` is a mask filter, the host's blend pass renders the
     /// mask channel as grayscale.
     ///
-    /// Pure session state — no document mutation. The eye-icon column on
+    /// Pure session state: no document mutation. The eye-icon column on
     /// every layer is independent: toggling visibility while isolated
     /// modifies that layer's `visible` field, and clearing isolation
     /// preserves whatever the user set.
@@ -1525,7 +1525,7 @@ impl DarklyEngine {
         }
         self.isolated_node = id;
         // Mirror to the compositor so the render walk can filter off-path
-        // subtrees, then resync host uniforms — the `isolated` flag on a
+        // subtrees, then resync host uniforms: the `isolated` flag on a
         // host flips depending on whether one of its filters is the new
         // target.
         self.compositor.set_isolated_node(id);
@@ -1544,7 +1544,7 @@ impl DarklyEngine {
         self.compositor.test_isolated_node()
     }
 
-    /// True when the host's `isolated` blend uniform should fire — i.e. the
+    /// True when the host's `isolated` blend uniform should fire, i.e. the
     /// current isolation target is one of `host_id`'s filters (the user
     /// asked to see the mask channel as grayscale on canvas). Isolating the
     /// host itself doesn't trigger this; the host renders normally and the
@@ -1603,7 +1603,7 @@ impl DarklyEngine {
         self.doc.dirty = true;
     }
 
-    /// Rename the document. Not undoable — renaming is a metadata change
+    /// Rename the document. Not undoable: renaming is a metadata change
     /// users expect to be free-standing, matching every other editor's
     /// "title bar rename" affordance. The save flow picks the new name
     /// up from `doc.name` the next time `start_save_document` runs.
@@ -1777,7 +1777,7 @@ mod tests {
         // …empty space hits nothing.
         assert_eq!(engine.hit_test_vector_object(layer, 480.0, 240.0), None);
 
-        // A third object stacked directly over `a` — drawn last, so it wins the
+        // A third object stacked directly over `a`, drawn last, so it wins the
         // overlap (topmost-first via reverse iteration).
         let c = push_text(&mut engine, layer, "Ag", 10.0, 10.0);
         assert_eq!(engine.hit_test_vector_object(layer, 14.0, 22.0), Some(c));

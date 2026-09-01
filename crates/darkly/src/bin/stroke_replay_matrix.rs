@@ -1,4 +1,4 @@
-//! Matrix bench — replays a single recorded stroke through a headless
+//! Matrix bench: replays a single recorded stroke through a headless
 //! engine across a (dab radius × canvas resolution) grid and emits one
 //! row of timings per cell. Brush, stabilization, and the axes are all
 //! hardcoded near the top of this file so the matrix lives in one place;
@@ -49,7 +49,7 @@ const DAB_RADII_PX: &[f32] = &[1.0, 10.0, 100.0, 250.0, 500.0, 1000.0, 2000.0];
 
 const RESOLUTIONS: &[(u32, u32)] = &[(1280, 720), (1920, 1080), (2560, 1440), (3840, 2160)];
 
-/// Built-in brush names — must match the strings in
+/// Built-in brush names: must match the strings in
 /// `builtin_brushes::ink_pen()` and `builtin_brushes::smooth_watercolor()`.
 /// `Topology::brush_name` picks the right one for the cell.
 const BRUSH_NAME_INK_PEN: &str = "Ink Pen";
@@ -67,26 +67,26 @@ const STABILIZE: f32 = 1.0;
 /// Which terminal topology the bench's brush graph uses for each cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Topology {
-    /// Ink Pen brush through the `paint` terminal —
+    /// Ink Pen brush through the `paint` terminal:
     /// `pen → paint_color → circle (disc) → stamp → paint`.
     /// Single instanced render pass per phase.
     Paint,
-    /// Wet Media (`Smooth Watercolor`) — `pen → paint_color → circle
+    /// Wet Media (`Smooth Watercolor`): `pen → paint_color → circle
     /// (sine) → watercolor`. Two-pass per phase (pickup atlas
     /// + composite), composite shader is per-brush compiled.
     Watercolor,
-    /// Rough Ink — `pen + 3×random → circle(perlin) → stamp →
+    /// Rough Ink: `pen + 3×random → circle(perlin) → stamp →
     /// paint`. The original demo brush for the compiled
     /// framework; same terminal as Paint but a more elaborate upstream
     /// graph (per-dab random nodes drive the perlin silhouette).
     RoughInk,
-    /// Smudge — `pen → circle → smudge`. Per-dab fragment
+    /// Smudge: `pen → circle → smudge`. Per-dab fragment
     /// pass with a `copy_texture_to_texture` barrier between dabs so
     /// each dab reads the prior dab's writeback. Stresses the per-dab
     /// serialization path; expected dab counts per event are tens
     /// rather than hundreds.
     Smudge,
-    /// Liquify — `pen → liquify`. Per-dab warp pass with the
+    /// Liquify: `pen → liquify`. Per-dab warp pass with the
     /// same barrier shape as smudge; useful for measuring how the
     /// per-dab regime scales with displacement padding (larger read
     /// footprint vs. smudge).
@@ -164,7 +164,7 @@ fn parse_args() -> Args {
                 let v = argv.next().expect("--topology requires a value");
                 topology = Topology::parse(&v).unwrap_or_else(|| {
                     panic!(
-                        "unknown topology `{v}` — expected `paint`, `watercolor`, or `rough-ink`"
+                        "unknown topology `{v}`, expected `paint`, `watercolor`, or `rough-ink`"
                     )
                 });
             }
@@ -428,13 +428,13 @@ fn write_markdown(
         fs::create_dir_all(parent)?;
     }
     let mut file = fs::File::create(path)?;
-    writeln!(file, "# stroke_replay_matrix — `{}`", topology.slug())?;
+    writeln!(file, "# stroke_replay_matrix: `{}`", topology.slug())?;
     writeln!(file)?;
     writeln!(
         file,
         "Brush: `{}` topology `{}` (terminal: `{}`, stabilize=`{STABILIZE}`). \
          Recording: {} events spanning {:.0} ms recorded at {}×{}. Replay pacing: \
-         real-time. `behind_by_ms = wall_total - stroke_duration` — positive \
+         real-time. `behind_by_ms = wall_total - stroke_duration`: positive \
          means the engine fell behind the recorded cadence. \
          `max_event_behind_ms` is the worst single-event lateness \
          (`cpu_ms - inter_event_gap_ms`, clamped at zero, max across events).",
@@ -450,11 +450,11 @@ fn write_markdown(
     writeln!(
         file,
         "Markdown carries the slim view; the sibling TSV has p95/max for every column. \
-         `submit` is host wall-clock around `queue.submit()` — high values indicate \
+         `submit` is host wall-clock around `queue.submit()`: high values indicate \
          back-pressure. `dispatches/ev`, `dabs/ev`, `bbox/ev` are per-event averages \
          of the workload the engine fed the GPU. The 6-slot GPU-timestamp columns \
          (`gpu_shader` / `gpu_sync_in` / `gpu_sync_out`) that the older matrices \
-         carried are gone — they instrumented the compute-path buffer round-trip, \
+         carried are gone; they instrumented the compute-path buffer round-trip, \
          which the `paint` terminal no longer pays."
     )?;
     writeln!(file)?;

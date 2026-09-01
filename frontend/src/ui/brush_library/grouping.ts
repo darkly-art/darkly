@@ -1,7 +1,7 @@
 /**
  * How the brush picker lays brushes out under their packs.
  *
- * Pure, so it is testable without a DOM — the same reason `placement.ts` sits
+ * Pure, so it is testable without a DOM: the same reason `placement.ts` sits
  * beside the component rather than inside it.
  *
  * A brush may be in any number of packs and renders under each of them: packs
@@ -31,7 +31,7 @@ export interface BrushGroup {
      * pack").
      *
      * Carried here so a consumer never has to look a pack up by group id and
-     * branch on whether it found one — that is the consumer-side classification
+     * branch on whether it found one: that is the consumer-side classification
      * the Modularity Principle bans, and it is what the permission booleans on
      * `BrushPackInfo` exist to make unnecessary. A card reads
      * `group.pack?.can_edit_members` and never sees an id.
@@ -52,7 +52,7 @@ export const RECENTS_LABEL = 'Recent';
  * Group `filtered` by pack, in the packs' own order, then append the brushes
  * no pack holds.
  *
- * A pack with no visible members yields no group at all — which is what keeps
+ * A pack with no visible members yields no group at all, which is what keeps
  * an empty Favorites from rendering as a broken-looking empty heading, and
  * what hides packs the current search excludes entirely.
  *
@@ -89,7 +89,7 @@ export function groupByPack(
     }
 
     // The complement of the one membership relation, computed rather than
-    // stored — a brush does not depend on a pack to exist.
+    // stored: a brush does not depend on a pack to exist.
     const loose = filtered.filter(b => !grouped.has(b.id));
     if (loose.length > 0) {
         out.push({
@@ -107,8 +107,8 @@ export function groupByPack(
 /**
  * Prepend a Recents group of at most `limit` brushes, newest first.
  *
- * `recentIds` is newest-first and id-keyed. Ids that no longer resolve — a
- * deleted brush, or one the current search excludes — are skipped rather than
+ * `recentIds` is newest-first and id-keyed. Ids that no longer resolve (a
+ * deleted brush, or one the current search excludes) are skipped rather than
  * placeheld, and nothing resolving yields no group at all, the same rule
  * `groupByPack` applies to an empty pack. That is what keeps an empty Recents
  * from rendering as a broken heading on a first run.
@@ -159,7 +159,7 @@ export function packNamesByBrush(packs: BrushPackInfo[]): Map<string, string[]> 
     return map;
 }
 
-/** Whitespace-tokenized substring match — `"soft round"` matches "Soft Round"
+/** Whitespace-tokenized substring match: `"soft round"` matches "Soft Round"
  *  but `"soft xxx"` does not. Searches name, the packs a brush is in, and its
  *  tags, so a brush is findable by any facet. */
 export function matchesQuery(

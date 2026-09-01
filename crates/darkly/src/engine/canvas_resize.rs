@@ -4,7 +4,7 @@
 //! Content, layer extents, and the undo stack stay put in the plane; only the
 //! window moves, so undo is exact and document-only. See the
 //! `Document::canvas_origin` doc for the coordinate model. (Content-*scaling*
-//! resize is a planned follow-up — it needs lossy per-node pixel-snapshot
+//! resize is a planned follow-up: it needs lossy per-node pixel-snapshot
 //! undo, distinct from this document-only path.)
 
 use darkly_macros::handlers;
@@ -22,7 +22,7 @@ pub const MAX_CANVAS_DIM: u32 = 8192;
 impl DarklyEngine {
     /// Resize / move the canvas window.
     ///
-    /// The canvas window as a plane-space rect — `(canvas_origin, width,
+    /// The canvas window as a plane-space rect: `(canvas_origin, width,
     /// height)`. Single public read of the document's canvas window (the WASM
     /// `canvas_rect()` query and tests read through this).
     pub fn canvas_rect(&self) -> CanvasRect {
@@ -30,11 +30,11 @@ impl DarklyEngine {
     }
 
     /// Moves/crops the canvas window: content, layer extents, and the undo
-    /// stack stay put in the plane — only the window moves, so undo is exact
+    /// stack stay put in the plane; only the window moves, so undo is exact
     /// and document-only. No-ops on a zero/over-limit target or a no-op move.
     ///
-    /// (Content-*scaling* resize — resampling every layer about the window
-    /// origin — is a planned follow-up; it needs lossy per-node pixel-snapshot
+    /// (Content-*scaling* resize, resampling every layer about the window
+    /// origin, is a planned follow-up; it needs lossy per-node pixel-snapshot
     /// undo, distinct from this document-only path.)
     pub fn resize_canvas(&mut self, new_rect: CanvasRect) {
         self.auto_commit_floating();
@@ -83,7 +83,7 @@ impl DarklyEngine {
         self.resize_canvas(local.to_canvas(self.doc.canvas_origin));
     }
 
-    /// Push the document's canvas rect onto the compositor — recreates the
+    /// Push the document's canvas rect onto the compositor: recreates the
     /// window-sized GPU resources and re-realizes the selection mask. Shared by
     /// the resize op and the undo-reconcile hook.
     pub(crate) fn apply_canvas_rect_to_compositor(&mut self) {
@@ -98,7 +98,7 @@ impl DarklyEngine {
         // The present view matrix bakes in the canvas dimensions (both the
         // sampling-normalization and the canvas center). `set_canvas_rect`
         // reallocated the composite cache at the new size but left the cached
-        // matrix encoding the old dims — re-derive it from the unchanged view
+        // matrix encoding the old dims; re-derive it from the unchanged view
         // params + the new dims so the next present isn't stretched/offset.
         self.rebuild_view_transform();
 
@@ -106,7 +106,7 @@ impl DarklyEngine {
         // (preserving its plane pixels), but the doc-side window-local caches
         // are now stale: `pixel_bounds` / `cpu_cache` were measured against the
         // OLD window, and the marching ants were emitted for it. Drop them and
-        // kick a readback to repopulate against the new window — which also
+        // kick a readback to repopulate against the new window, which also
         // regenerates the ants. Async, so a transform/copy issued before it
         // lands defers through the existing pending-op mechanism.
         if self.has_selection() {

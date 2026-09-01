@@ -1,7 +1,7 @@
 //! GPU paint target: a texture you can paint on via GPU render passes.
 //!
 //! Works for both RGBA8 layer textures and R8 mask textures.
-//! Each operation is a self-contained render pass — no persistent state between calls.
+//! Each operation is a self-contained render pass, with no persistent state between calls.
 
 use crate::coord::CanvasRect;
 use crate::gpu::atlas::{CanvasFrame, LayerTexture};
@@ -103,7 +103,7 @@ impl<'a> PaintCommandEncoder<'a> {
     }
 }
 
-/// A GPU texture you can paint on. Lightweight handle — no owned GPU state.
+/// A GPU texture you can paint on. Lightweight handle (no owned GPU state).
 ///
 /// All coordinate-bearing fields are private. Callers go through the typed
 /// accessors ([`canvas_extent`], [`layer_extent`], [`canvas_size`]) so the
@@ -130,7 +130,7 @@ pub struct GpuPaintTarget<'a> {
     /// Canvas-space offset of pixel (0, 0). Exposed via [`canvas_extent`](Self::canvas_extent).
     offset_x: i32,
     offset_y: i32,
-    /// Document canvas size — used for fragment-stage selection UV.
+    /// Document canvas size: used for fragment-stage selection UV.
     /// Exposed via [`canvas_size`](Self::canvas_size).
     canvas_width: u32,
     canvas_height: u32,
@@ -145,7 +145,7 @@ pub struct GpuPaintTarget<'a> {
 impl<'a> GpuPaintTarget<'a> {
     /// Wrap any node texture as a paint target. The texture's own format
     /// drives all downstream pipeline dispatch (R8 mask vs RGBA layer).
-    /// Replaces `from_layer` / `from_mask` — callers no longer dispatch on
+    /// Replaces `from_layer` / `from_mask`: callers no longer dispatch on
     /// node kind, only on the texture they hand in.
     pub fn from_node(tex: &'a LayerTexture, canvas: CanvasRect) -> Self {
         let extent = tex.canvas_extent();
@@ -221,7 +221,7 @@ impl<'a> GpuPaintTarget<'a> {
         self.format
     }
 
-    /// Texture-local extent — always at origin (0, 0).
+    /// Texture-local extent: always at origin (0, 0).
     pub fn layer_extent(&self) -> crate::coord::LayerRect {
         crate::coord::LayerRect::from_xywh(0, 0, self.width, self.height)
     }
@@ -231,14 +231,14 @@ impl<'a> GpuPaintTarget<'a> {
         CanvasRect::from_xywh(self.offset_x, self.offset_y, self.width, self.height)
     }
 
-    /// Document canvas dimensions in pixels — used to compute fragment-stage
+    /// Document canvas dimensions in pixels: used to compute fragment-stage
     /// selection UV. Distinct from the target's own extent: paste-extent
     /// and grown layers occupy a `canvas_extent` different from `canvas_size`.
     pub fn canvas_size(&self) -> (u32, u32) {
         (self.canvas_width, self.canvas_height)
     }
 
-    /// Plane-space offset of the canvas window — the anchor of the
+    /// Plane-space offset of the canvas window: the anchor of the
     /// window-sized selection mask. Fed to shaders so a plane position maps to
     /// selection UV via `(p - canvas_origin) / canvas_size`.
     pub fn canvas_origin(&self) -> (i32, i32) {
@@ -300,7 +300,7 @@ impl<'a> GpuPaintTarget<'a> {
     }
 
     /// Fill a canvas-space rect with a solid color via alpha-over blending.
-    /// `rect` is in canvas pixel coordinates — origin may be negative on
+    /// `rect` is in canvas pixel coordinates; origin may be negative on
     /// paste-extent layers.
     pub fn fill_rect(
         &self,
@@ -360,7 +360,7 @@ impl<'a> GpuPaintTarget<'a> {
     }
 
     /// Erase pixels within a selection mask. Full-canvas erase modulated by the
-    /// selection texture — used for clear_selection_contents.
+    /// selection texture: used for clear_selection_contents.
     pub fn erase_with_selection(
         &self,
         encoder: &mut PaintCommandEncoder<'_>,
@@ -378,7 +378,7 @@ impl<'a> GpuPaintTarget<'a> {
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
             canvas_origin: [self.canvas_origin_x as f32, self.canvas_origin_y as f32],
             center: [0.0, 0.0],
-            radius: 0.0, // solid fill — coverage from selection only
+            radius: 0.0, // solid fill: coverage from selection only
             softness: 0.0,
             color: [1.0, 1.0, 1.0, 1.0], // full erase strength
             mask_offset: [0.0, 0.0],
@@ -397,13 +397,13 @@ impl<'a> GpuPaintTarget<'a> {
 
     /// Multiply ALL channels of the target by a mask texture.
     ///
-    /// `dst.rgba *= mask_sample` — produces premultiplied output. Use this when
+    /// `dst.rgba *= mask_sample`: produces premultiplied output. Use this when
     /// the result will be sampled with bilinear filtering (e.g. transform sources),
     /// where premultiplied data is required for correct interpolation at alpha
     /// edges (see docs/lessons-learned/compositing-lessons-learned.md §2).
     ///
     /// **Do not use for straight-alpha destinations** (layer textures, clipboard
-    /// staging). Use `multiply_alpha_by_mask` instead — it preserves RGB and only
+    /// staging). Use `multiply_alpha_by_mask` instead; it preserves RGB and only
     /// scales the alpha channel, which is correct for straight-alpha storage.
     pub fn multiply_by_mask(
         &self,
@@ -444,7 +444,7 @@ impl<'a> GpuPaintTarget<'a> {
 
     /// Multiply ALL channels of the target by `(1 - mask)`.
     ///
-    /// `dst.rgba *= (1 - mask_sample)` — produces premultiplied output.
+    /// `dst.rgba *= (1 - mask_sample)`: produces premultiplied output.
     /// Same caveat as `multiply_by_mask`: do not use for straight-alpha
     /// destinations. Use `multiply_alpha_by_inverse_mask` instead.
     pub fn multiply_by_inverse_mask(
@@ -529,7 +529,7 @@ impl<'a> GpuPaintTarget<'a> {
     /// The destructive-bake sibling of [`multiply_alpha_by_mask`], which assumes
     /// the bound texture is a canvas-window-sized selection mask. A mask *filter*
     /// texture lives in its own extent (`mask_frame`), so it must be addressed
-    /// there and revealed outside its bounds — exactly the display path's
+    /// there and revealed outside its bounds, exactly matching the display path's
     /// `sample_mask_plane` semantics. Used by `apply_mask` so the baked result
     /// matches the live composite.
     ///
@@ -609,7 +609,7 @@ impl<'a> GpuPaintTarget<'a> {
     }
 
     /// Clear a canvas-space rect to transparent (RGBA) or full reveal (R8).
-    /// `rect` is in canvas pixel coordinates — origin may be negative on
+    /// `rect` is in canvas pixel coordinates; origin may be negative on
     /// paste-extent layers.
     pub fn clear_rect(
         &self,
@@ -721,7 +721,7 @@ impl<'a> GpuPaintTarget<'a> {
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
             canvas_origin: [self.canvas_origin_x as f32, self.canvas_origin_y as f32],
             center: [0.0, 0.0],
-            radius: 0.0, // solid fill — no SDF
+            radius: 0.0, // solid fill: no SDF
             softness: 0.0,
             color: color_to_float(color, 1.0),
             mask_offset: [0.0, 0.0],
@@ -835,7 +835,7 @@ pub struct PaintPipelines {
     alpha_mask_multiply_rgba: wgpu::RenderPipeline,
     alpha_inverse_mask_multiply_rgba: wgpu::RenderPipeline,
     /// Destructive mask bake: `dst.a *= mask` with the mask sampled in its own
-    /// plane-anchored frame (footprint-aware reveal). RGBA-only — `apply_mask`
+    /// plane-anchored frame (footprint-aware reveal). RGBA-only; `apply_mask`
     /// guards on raster hosts, so R8 targets never take this path.
     alpha_mask_multiply_in_frame_rgba: wgpu::RenderPipeline,
 
@@ -844,7 +844,7 @@ pub struct PaintPipelines {
     gradient_uniform_buf: wgpu::Buffer,
     gradient_uniform_bind_group: wgpu::BindGroup,
 
-    /// 1×1 white selection texture — binds when no selection is active.
+    /// 1×1 white selection texture, binds when no selection is active.
     pub(crate) default_selection_bind_group: wgpu::BindGroup,
     pub(crate) selection_bind_group_layout: wgpu::BindGroupLayout,
 }
@@ -1252,7 +1252,7 @@ impl PaintPipelines {
     /// Upload flat R8 pixel data as a temporary GPU texture and return a
     /// selection-slot bind group for it.
     ///
-    /// Used by flood fill (fill mask) and selection upload — both need to turn
+    /// Used by flood fill (fill mask) and selection upload: both need to turn
     /// a `Vec<u8>` of R8 data into a bind group the paint shader can sample.
     pub fn upload_r8_bind_group(
         &self,
@@ -1373,7 +1373,7 @@ impl PaintPipelines {
 
     fn alpha_mask_multiply_pipeline(&self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
         match format {
-            // R8 has only one channel — alpha-only and all-channel are equivalent.
+            // R8 has only one channel, so alpha-only and all-channel are equivalent.
             wgpu::TextureFormat::R8Unorm => &self.mask_multiply_r8,
             _ => &self.alpha_mask_multiply_rgba,
         }

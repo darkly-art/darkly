@@ -27,7 +27,7 @@
 
 <!-- The panel is the binding site for `layerPanel`-scoped hotkeys (e.g.
      Photoshop / GIMP `Delete`). `mouse: false` keeps individual layer
-     thumbnails' own chord dispatch separate — only keyboard scope here. -->
+     thumbnails' own chord dispatch separate: only keyboard scope here. -->
 <div class="panel" use:bindingSite={{
     name: 'layerPanel',
     ctx: () => ({ layerId: app.activeLayerId ?? undefined }),

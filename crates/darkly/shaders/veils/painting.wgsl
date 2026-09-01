@@ -1,6 +1,6 @@
 // Based on https://www.shadertoy.com/view/mlffWf by p4vv37
 
-// Generalized Kuwahara filter — painterly/oil-painting post-processing veil.
+// Generalized Kuwahara filter: painterly/oil-painting post-processing veil.
 // Based on work by Acerola, ported from Shadertoy GLSL to WGSL.
 //   https://www.youtube.com/watch?v=LDhN-JK3U9g
 //   https://github.com/GarrettGunnell/Post-Processing/tree/main/Assets/Kuwahara%20Filter
@@ -8,7 +8,7 @@
 // We specialize on the 4 axis-aligned (cardinal) sectors. The reference
 // implementation computes 8 sectors per sample (cardinal + 45°-rotated
 // diagonals) but blends only the first 4, so the diagonal weights and
-// accumulators were pure waste — this version drops them.
+// accumulators were pure waste; this version drops them.
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
@@ -43,7 +43,7 @@ struct Params {
 
     let zeta = 2.0 * inv_r;
     // eta = 0 for the generalized polynomial weights (zeroCross term omitted),
-    // so the polynomial inputs reduce to plain `zeta` — hoisted out of the loop.
+    // so the polynomial inputs reduce to plain `zeta`, hoisted out of the loop.
 
     // Per-sector accumulators for the 4 cardinal sectors:
     // mean (rgb + weight sum in w) and squared mean (rgb).
@@ -59,7 +59,7 @@ struct Params {
     for (var y = -kernel_radius; y <= kernel_radius; y++) {
         for (var x = -kernel_radius; x <= kernel_radius; x++) {
             let v = vec2f(f32(x), f32(y)) * inv_r;
-            // Rgba8Unorm already guarantees [0,1] — no clamp needed.
+            // Rgba8Unorm already guarantees [0,1], so no clamp needed.
             let c = textureSampleLevel(t_input, t_sampler, uv + vec2f(f32(x), f32(y)) * texel, 0.0).rgb;
 
             // Polynomial weights for the 4 axis-aligned sectors.

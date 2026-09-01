@@ -253,7 +253,7 @@ describe('loadOrDefault', () => {
         // injected into main.
         const raw = persist(split(group(0, ['layers'])), split(group(1, ['properties'])));
         const { root, nextGroupId } = loadOrDefault(raw);
-        // Only what was persisted, plus the injected Document — a stored
+        // Only what was persisted, plus the injected Document: a stored
         // layout is not topped up with the default panel set.
         expect(collectPanelTypes(root).sort()).toEqual(['document', 'layers', 'properties']);
         // Ids renumbered contiguously; nextGroupId past the max.

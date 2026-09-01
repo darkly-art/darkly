@@ -1,7 +1,7 @@
 //! Picker previews: one generic start/poll request pair over every previewable
 //! catalog and both preview variants.
 //!
-//! The `catalog` field carries a catalog id — the same `"veils"` / `"voids"` /
+//! The `catalog` field carries a catalog id: the same `"veils"` / `"voids"` /
 //! `"filters"` vocabulary `catalogs()` publishes and the frontend's pickers
 //! already hold. There is no translation table here and nothing to add when a
 //! catalog becomes previewable: the engine looks the id up in the generated
@@ -13,7 +13,7 @@ use serde_json::json;
 use crate::engine::protocol::{decode, RequestRegistration, Response};
 use crate::gpu::preview::PreviewVariant;
 
-/// `{ catalog, type, variant }` — which catalog, which entry's type id, and
+/// `{ catalog, type, variant }`: which catalog, which entry's type id, and
 /// which of its two previews.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -41,7 +41,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
             };
             // Frames are concatenated into the single bytes side-channel;
             // the JS edge slices them back out using width*height*4 stride.
-            // `fps` comes from the entry's own `PreviewAnim` — the one
+            // `fps` comes from the entry's own `PreviewAnim`: the one
             // authority on how fast its preview plays.
             let frame_count = frames.len();
             let mut bytes = Vec::new();

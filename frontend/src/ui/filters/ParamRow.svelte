@@ -16,7 +16,7 @@
 
     // A single generic scalar/atom param row (label + control). Shared by the
     // filter params editor and each list entry's fields. Mutates `param.value`
-    // in place and reports via `oninput` (mid-drag) / `onchange` (commit) — the
+    // in place and reports via `oninput` (mid-drag) / `onchange` (commit), the
     // same contract the channel editors use.
     type Props = {
         param: ParamInfo;
@@ -35,7 +35,7 @@
         oninput?.();
     }
     // A reset-to-default button for params with a neutral center (the offset pad
-    // and the scale slider) — see `paramIsResettable`. Always shown for those so
+    // and the scale slider; see `paramIsResettable`). Always shown for those so
     // it's discoverable even at the default; a no-op click when already there.
     const showReset = $derived(!disabled && paramIsResettable(param));
     function resetToDefault() {

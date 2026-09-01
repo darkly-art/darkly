@@ -1,4 +1,4 @@
-//! Liquify terminal — per-dab displacement-field warp with a per-brush
+//! Liquify terminal: per-dab displacement-field warp with a per-brush
 //! compiled WGSL shader.
 //!
 //! Rides the shared [read-mirror terminal](crate::brush::read_mirror_terminal)
@@ -10,7 +10,7 @@
 //! Unlike its read-mirror siblings, liquify's scratch holds a
 //! [warp field](crate::brush::warp_field) rather than colour. Per dab the
 //! fragment shader advects the accumulated displacement and adds this
-//! dab's own — it never touches a pixel. The picture is produced once, at
+//! dab's own; it never touches a pixel. The picture is produced once, at
 //! commit, by sampling the pre-stroke snapshot through the finished
 //! field.
 //!
@@ -19,7 +19,7 @@
 //! earlier dabs displaced: the `field(p + nv)` term reads the previous
 //! field at the displaced location and carries it along, which composes
 //! the two maps exactly. What it does *not* do is resample the picture
-//! each time — at 4 px spacing under a 77 px brush that was ~38 chained
+//! each time: at 4 px spacing under a 77 px brush that was ~38 chained
 //! bilinear filters per swipe, and a chain of bilinear filters is a
 //! low-pass cascade. Detail is now independent of dab count.
 //!
@@ -32,7 +32,7 @@
 //! (`scratch.rs`), so a dab clipped at the layer edge can address stale
 //! texels. The helper clamps to the texture, not to the valid rect.
 //!
-//! Displacement magnitude is `strength × |pen.motion|` — the cursor's
+//! Displacement magnitude is `strength × |pen.motion|`: the cursor's
 //! per-dab travel scaled by strength. So:
 //!   * `strength = 1` locks pixels to the cursor (per-dab push =
 //!     per-dab cursor motion);
@@ -49,12 +49,12 @@
 //! carried. Total displacement over a drag does not depend on spacing:
 //! per dab it is `strength × |motion| = strength × spacing`, and a drag
 //! of length `L` places `L / spacing` dabs, so the total is
-//! `strength × L` — spacing cancels. It only sets how finely the warp is
+//! `strength × L`: spacing cancels. It only sets how finely the warp is
 //! discretised.
 //!
 //! That is a property of accumulating a *field*. Under the per-dab image
 //! warp this replaced, spacing also cancelled geometrically, but each dab
-//! cost a resample — so the dab count could not be traded for performance
+//! cost a resample, so the dab count could not be traded for performance
 //! without trading away detail, and the spacing was pinned flat at 4 px.
 //! Pinned spacing makes cost `O(radius²)` per unit of travel: dab count
 //! stays constant while each dab's mirror copy and fragment pass grow
@@ -66,7 +66,7 @@
 //! (+8 %, visibly stepped) at 32 px. Spacing up to ~0.1 × radius is
 //! faithful; beyond that the discretisation starts showing.
 //!
-//! GIMP's warp tool reaches the same place — `step = effect_size ×
+//! GIMP's warp tool reaches the same place: `step = effect_size ×
 //! stroke_spacing / 100` (`app/tools/gimpwarptool.c:432`), spacing
 //! proportional to brush size, at a comparable default density.
 //!
@@ -74,7 +74,7 @@
 //!
 //! User-facing slider: `0 = hard` (uniform displacement across the
 //! disc, square edge) ↔ `1 = soft` (sharp peak at the brush centre,
-//! near-zero past the half-radius — only the cursor itself drags
+//! near-zero past the half-radius; only the cursor itself drags
 //! pixels). Internally the falloff helper takes the *opposite*
 //! convention (`0 = spike → 1 = square`), and the WGSL body inverts
 //! the slider value before passing it in. The mapping the user sees:
@@ -96,8 +96,8 @@ use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 // ── Constants ───────────────────────────────────────────────────────────
 
-/// Dab spacing for the Liquify brush, as a fraction of dab **diameter**
-/// — the value `brushes/liquify.yaml` sets on `brush_settings.spacing`.
+/// Dab spacing for the Liquify brush, as a fraction of dab **diameter**:
+/// the value `brushes/liquify.yaml` sets on `brush_settings.spacing`.
 ///
 /// 0.05 of diameter is 0.1 of radius, the density the module doc's
 /// measurements put at the edge of faithful: at that spacing the warp is
@@ -110,12 +110,12 @@ use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 /// is what justifies the number. Keep the two in step.
 pub const LIQUIFY_SPACING_RATIO: f32 = 0.05;
 
-/// Per-dab strength below which the dab is dropped — the dab's
+/// Per-dab strength below which the dab is dropped, since the dab's
 /// displacement collapses to zero, so advecting the field by it and
 /// adding it back is an identity write.
 const STRENGTH_EPSILON: f32 = 1.0e-4;
 
-/// Brush radius below which the dab is dropped — sub-pixel discs warp
+/// Brush radius below which the dab is dropped, since sub-pixel discs warp
 /// nothing visible.
 const MIN_RADIUS_PX: f32 = 1.0;
 
@@ -132,7 +132,7 @@ pub fn register() -> BrushNodeRegistration {
         evaluator: || Box::new(LiquifyEvaluator),
         // A transparent clear *is* a zero field: no displacement
         // anywhere, so the first resolve reproduces the pre-stroke image
-        // exactly. Seeding from pre-stroke would be meaningless — the
+        // exactly. Seeding from pre-stroke would be meaningless: the
         // scratch holds offsets, not colour.
         lifecycle: crate::brush::node::Lifecycle::ClearScratchToTransparent,
         scratch_format: crate::brush::warp_field::FIELD_FORMAT,
@@ -217,13 +217,13 @@ impl ReadMirrorTerminal for LiquifyEvaluator {
         let motion = ctx.input("motion").as_vec2();
         let motion_mag = (motion[0] * motion[0] + motion[1] * motion[1]).sqrt();
 
-        // Three early-outs — skip stationary or sub-pixel dabs whose warp
+        // Three early-outs: skip stationary or sub-pixel dabs whose warp
         // would be a no-op.
         if radius < MIN_RADIUS_PX || strength < STRENGTH_EPSILON || distance < MIN_DISTANCE_PX {
             return None;
         }
 
-        // Symmetric read region — disc inflated by `displacement` per axis
+        // Symmetric read region: disc inflated by `displacement` per axis
         // so the warped sample at
         // `target_pos - motion × strength × falloff(d)` always lies
         // inside the mirror snapshot (the bilinear sampler reaches into
@@ -241,7 +241,7 @@ impl ReadMirrorTerminal for LiquifyEvaluator {
     ) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
 
-        // `mask` defaults to 1.0 when unwired — uniform warp inside the
+        // `mask` defaults to 1.0 when unwired: uniform warp inside the
         // disc.
         let mask_expr = if cctx.input_is_wired("mask") {
             cctx.input("mask").as_f32()
@@ -252,7 +252,7 @@ impl ReadMirrorTerminal for LiquifyEvaluator {
         let softness_expr = cctx.input("softness").as_f32();
         let motion_expr = cctx.input("motion").as_vec2();
 
-        // Per-node falloff fn — suffixed by node id so two liquify
+        // Per-node falloff fn: suffixed by node id so two liquify
         // terminals (hypothetical) in the same brush don't collide.
         let falloff_fn = cctx.ident("liquify_falloff");
         wgsl.decls = format!(
@@ -284,7 +284,7 @@ impl ReadMirrorTerminal for LiquifyEvaluator {
         // `local_dist >= 1.0` so the warp stays outside the disc alone.
         // The falloff helper takes `0 = spike` / `1 = square`. The
         // user-facing slider is labelled "Softness" with the opposite
-        // intuition — `1 = soft / feathery`, `0 = hard / sharp`. Invert
+        // intuition: `1 = soft / feathery`, `0 = hard / sharp`. Invert
         // before passing to the helper so the slider matches the label.
         //
         // `sel` and `warp_mask` scale the *displacement*, never the
@@ -294,7 +294,7 @@ impl ReadMirrorTerminal for LiquifyEvaluator {
         // one sample of the source, and a masked-out fragment simply
         // contributes a zero offset (leaving the accumulated field
         // untouched).
-        // Pixels are pushed straight along the per-dab motion vector — the
+        // Pixels are pushed straight along the per-dab motion vector: the
         // signed direction *and* magnitude of where the cursor actually went.
         let offset_expr = "-motion_vec * strength * f * sel * warp_mask";
         wgsl.body = format!(
@@ -312,7 +312,7 @@ impl ReadMirrorTerminal for LiquifyEvaluator {
         Ok(wgsl)
     }
 
-    /// Preview body — emit the falloff disc so scrubbing the softness
+    /// Preview body emits the falloff disc so scrubbing the softness
     /// slider visibly reshapes the cursor (a side-effect of reusing the
     /// same `falloff_fn` the stroke decls emit). The stroke body's
     /// `scratch_mirror` bindings are omitted in preview mode.

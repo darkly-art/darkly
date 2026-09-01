@@ -1,13 +1,13 @@
 //! Authored value carried by a disconnected brush-graph input.
 //!
 //! Every brush-node input is a [`crate::nodegraph::PortDef`]. When the input
-//! is unwired, the value the user authored lives here — a scalar slider
+//! is unwired, the value the user authored lives here: a scalar slider
 //! value, an enum-dropdown index, a texture name, curve control points, a
 //! color. Wired inputs ignore this and take the upstream expression instead
 //! (see [`crate::brush::wgsl::InputBinding`]).
 //!
 //! `InputValue` is deliberately **separate** from
-//! [`crate::gpu::params::ParamValue`] — that type is the filter/veil effect
+//! [`crate::gpu::params::ParamValue`]: that type is the filter/veil effect
 //! system's value vocabulary and is untouched by the brush graph. The two
 //! only meet at the serialization boundary, where [`crate::gpu::params::PortableValue`]
 //! (a pure DTO) is reused for both, and [`InputValue::from_portable`] coerces
@@ -29,7 +29,7 @@ use crate::gpu::params::{ParamTypeMismatch, PortableValue};
 /// discipline as [`crate::gpu::params::ParamValue`]: a JSON `true`/`false`
 /// only matches `Bool`; a whole JSON number matches `Int` before `Scalar`; a
 /// fractional number falls through to `Scalar`. The array shapes are disjoint
-/// by nesting/length — `Curve` is an array of `[x, y]` *pairs*, `Vec2` is 2
+/// by nesting/length: `Curve` is an array of `[x, y]` *pairs*, `Vec2` is 2
 /// flat numbers, `Vec4` is 4.
 ///
 /// There is no separate `Enum` variant: an enum-dropdown index is an `Int`,
@@ -58,7 +58,7 @@ impl Default for InputValue {
 impl InputValue {
     /// Bridge to the runtime [`ScalarValue`] for the scalar-family cases.
     /// Non-wirable shapes (`String`, `Curve`) can never reach the runtime
-    /// slot table — the connect guard rejects wiring them — so they collapse
+    /// slot table (the connect guard rejects wiring them), so they collapse
     /// to the neutral scalar default.
     pub fn as_scalar_value(&self) -> ScalarValue {
         match self {
@@ -122,9 +122,9 @@ impl InputValue {
 
     /// Coerce an externally-typed portable value (parsed from YAML/JSON) into
     /// the concrete `InputValue` the port expects, given the port's wire type.
-    /// The brush-side analog of [`crate::gpu::params::ParamDef::coerce_portable`]
-    /// — same hard type-mismatch discipline so a curve in an enum slot fails
-    /// loudly rather than silently defaulting.
+    /// The brush-side analog of [`crate::gpu::params::ParamDef::coerce_portable`],
+    /// with the same hard type-mismatch discipline so a curve in an enum slot
+    /// fails loudly rather than silently defaulting.
     pub fn from_portable(
         wire_type: crate::brush::wire::BrushWireType,
         v: PortableValue,

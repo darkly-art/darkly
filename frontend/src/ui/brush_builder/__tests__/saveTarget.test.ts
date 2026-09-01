@@ -32,7 +32,7 @@ describe('updateTarget', () => {
 
     it('decides on can_edit, never on the id', () => {
         // The gate is the engine's answer, not a guess from what the id looks
-        // like — a painter-owned brush may carry any id at all.
+        // like: a painter-owned brush may carry any id at all.
         expect(updateTarget('Ink Pen', [brush('ink_pen', 'Ink Pen', true)])?.id).toBe('ink_pen');
     });
 });

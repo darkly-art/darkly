@@ -1,7 +1,7 @@
 /**
  * How the pack wheel's position relates to the brush list's.
  *
- * Pure — no DOM, no `$state`, no reactive imports — so it is testable in
+ * Pure (no DOM, no `$state`, no reactive imports), so it is testable in
  * Vitest's node environment. Same reason `grouping.ts` sits beside its
  * component rather than inside it.
  *
@@ -12,10 +12,10 @@
  * `[i·cardAdvance, (i+1)·cardAdvance)`. A uniform wheel that still points at
  * the right place.
  *
- * **Everything anchors on the focus line** — the middle of each pane,
+ * **Everything anchors on the focus line**: the middle of each pane,
  * {@link FOCUS_LINE}. The whole model is one sentence: *the pack across the
  * middle of the list is the pack whose card is across the middle of the wheel.*
- * Mixing anchors is how the two panes come to disagree — highlight the section
+ * Mixing anchors is how the two panes come to disagree: highlight the section
  * under one coordinate while scrolling the wheel to another and the highlighted
  * card sits somewhere the wheel never scrolled to, which is what a jump target
  * aligned to the viewport top did for as long as this file existed.
@@ -23,7 +23,7 @@
  * A card therefore tracks its pack's **centre**: the pack's whole extent maps
  * onto the half-card either side of its own card, so the card is centred when
  * the pack is, and hands over to its neighbour half a card either way. That
- * bound — half a card, never more — is what keeps the highlighted card the
+ * bound (half a card, never more) is what keeps the highlighted card the
  * nearest one to the line at every scroll position.
  */
 import type { PackPalette } from '../../lib/packPalette';
@@ -35,7 +35,7 @@ export interface SectionExtent {
     id: string;
     /** Distance from the top of the scroll content to this section's top, px. */
     top: number;
-    /** Height, px. Always > 0 — `groupByPack` drops empty groups, so a zero
+    /** Height, px. Always > 0: `groupByPack` drops empty groups, so a zero
      *  here is a measurement fault, and these functions clamp rather than
      *  divide by it. */
     height: number;
@@ -46,7 +46,7 @@ export interface WheelGeometry {
     cardAdvance: number;
     /**
      * Distance from the top of the wheel's scroll content to the first card's
-     * top, px — the wheel's leading pad.
+     * top, px: the wheel's leading pad.
      *
      * The pad is half a viewport minus half a card, which is what lets the
      * *first* and *last* cards reach the centre. Without it the wheel can only
@@ -80,7 +80,7 @@ export interface WheelGeometry {
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /**
- * One CSS `LayoutUnit` — 1/64 px, the quantum the engine lays out in. No
+ * One CSS `LayoutUnit`: 1/64 px, the quantum the engine lays out in. No
  * difference smaller than this describes anything that could be drawn
  * differently.
  */
@@ -92,7 +92,7 @@ const LAYOUT_EPSILON = 1 / 64;
  *
  * Exists because these numbers are measured fractionally. An exact comparison
  * would call a sub-pixel reflow a change, write it, and keep the frame loop
- * awake over differences no pixel can show — where whole-px metrics used to
+ * awake over differences no pixel can show, where whole-px metrics used to
  * absorb that chatter by rounding it away.
  */
 export function sameGeometry(a: WheelGeometry, b: WheelGeometry | null): boolean {
@@ -136,7 +136,7 @@ export const FOCUS_LINE = 0.5;
  * in the coordinates of the box both panes sit in.
  *
  * The wheel compresses: a card is one uniform height whatever the size of the
- * pack behind it. The ribbon is that compression made visible — it leaves the
+ * pack behind it. The ribbon is that compression made visible: it leaves the
  * card at card height and arrives at the section at section height, so a big
  * pack fans out and a small one pinches in, and scrolling reshapes it
  * continuously as the focus moves.
@@ -154,12 +154,12 @@ export interface Ribbon {
 
 /**
  * Where the panes sit and how wide a card is, in the coordinates of the box
- * that holds them both — with the two exceptions at the end, which are what
+ * that holds them both, with the two exceptions at the end, which are what
  * place that box in the viewport.
  *
  * Layout, not position: every field here changes only when something resizes,
  * so it is measured on the resize observer and never in the frame loop. That is
- * what lets a band be *computed* rather than read back — the alternative,
+ * what lets a band be *computed* rather than read back: the alternative,
  * asking the DOM for each card's and section's rectangle every frame, both
  * forces a synchronous layout and returns the card transforms from the frame
  * before, since those are applied after the loop yields.
@@ -173,7 +173,7 @@ export interface PaneLayout {
     listBottom: number;
     /** The vertical line every card's trailing edge sits on. One number for
      *  every card at every scale, because the rolodex curve is anchored there
-     *  (`transform-origin: right center`) — a card recedes by shrinking away
+     *  (`transform-origin: right center`); a card recedes by shrinking away
      *  from this edge, never across it. */
     cardRight: number;
     /** Where a section's leading edge is. */
@@ -181,14 +181,14 @@ export interface PaneLayout {
     /** A card's own height, which is the advance less the gap between cards. */
     cardHeight: number;
     /**
-     * Each card's own top, in the wheel's scroll-content coordinates —
+     * Each card's own top, in the wheel's scroll-content coordinates:
      * **measured per card, never extrapolated from a pitch.**
      *
      * `cardAdvance` is the right model for the *mapping*, where the wheel
      * really is uniform by design. It is the wrong one for locating a painted
      * box. Layout is uniform in fractional CSS px, but paint snaps each box to
      * the device-pixel grid on its own, so off 100% zoom the painted pitch is
-     * not uniform at all — 52, 51, 52, 52, 51 — and no single number describes
+     * not uniform at all (52, 51, 52, 52, 51), and no single number describes
      * it however precisely it is measured. Worse, locating card `i` at
      * `i · cardAdvance` multiplies whatever error the pitch carries by the
      * card's index, so a band that leaves its first card cleanly is pixels away
@@ -197,15 +197,15 @@ export interface PaneLayout {
      */
     cardTops: number[];
     /** Where a card's leading edge is. Cards share one column, so one number
-     *  serves them all — the counterpart of `sectionLeft`. */
+     *  serves them all: the counterpart of `sectionLeft`. */
     cardLeft: number;
     /** The explorer's own box. The field is sized to this in both axes, so
-     *  every surface that samples it is sampling the same image — which is what
+     *  every surface that samples it is sampling the same image, which is what
      *  an angled beam needs, since it varies across x as well as y. */
     width: number;
     height: number;
     /**
-     * The explorer's top-left in *viewport* coordinates — where the field is
+     * The explorer's top-left in *viewport* coordinates: where the field is
      * anchored, as `width` and `height` are how large it is.
      *
      * Every other number here is explorer-local, because that is the frame the
@@ -224,7 +224,7 @@ export interface PaneLayout {
  *
  * There is one of these per pack *on screen*, not one for the focused pack. A
  * single band would have to change hands whenever the focus did, and the two
- * cards it would move between are a whole card apart at that moment — every
+ * cards it would move between are a whole card apart at that moment: every
  * pack boundary would flick it across that gap. Drawing them all makes that
  * transition unrepresentable: a pack leaving has its band shrink to nothing as
  * its last row goes, while the next one's grows from nothing.
@@ -233,7 +233,7 @@ export interface PackBand {
     /** The group's id, as a list key. */
     id: string;
     ribbon: Ribbon;
-    /** The pack's palette, and the fade its own card is under — so a band sinks
+    /** The pack's palette, and the fade its own card is under, so a band sinks
      *  into the modal's black exactly as the card it leaves does. The band is
      *  the middle of the pack, so it is filled and rimmed like the card and
      *  the section either side of it. */
@@ -245,8 +245,8 @@ export interface PackBand {
  * How thick the pack's rim of light is, px.
  *
  * Lives here rather than in the stylesheet because the three columns carve the
- * rim two different ways — the card and the section as a border width, the band
- * as a clip-path computed from this file — and one number reaching CSS through
+ * rim two different ways (the card and the section as a border width, the band
+ * as a clip-path computed from this file), and one number reaching CSS through
  * `--pack-rim-width` is one number, where a token beside the palette and a
  * constant here would be the same number written twice.
  */
@@ -267,7 +267,7 @@ interface RibbonLevel {
  * Both curves share the same control abscissa, so the two edges bend in step and
  * the strip keeps an even thickness through the turn.
  *
- * Always wound the same way — left to right along `upper`, back along `lower` —
+ * Always wound the same way (left to right along `upper`, back along `lower`)
  * so that two strips in one path still fill where they overlap under the nonzero
  * rule. A band pinched thinner than twice the rim is the case that needs it.
  */
@@ -288,7 +288,7 @@ function ribbonStrip(r: Ribbon, upper: RibbonLevel, lower: RibbonLevel): string 
     );
 }
 
-/** The whole ribbon — the strip from its top edge to its bottom one. What the
+/** The whole ribbon: the strip from its top edge to its bottom one. What the
  *  band's surface fills. */
 export function ribbonPath(r: Ribbon): string {
     return ribbonStrip(r, { edge: 'top', offset: 0 }, { edge: 'bottom', offset: 0 });
@@ -298,7 +298,7 @@ export function ribbonPath(r: Ribbon): string {
  * The ribbon's rim: a strip inside its top edge and another inside its bottom,
  * as one path. What the band's *light* is clipped to.
  *
- * The two vertical ends carry no rim, because they are interior to the pack —
+ * The two vertical ends carry no rim, because they are interior to the pack:
  * the ribbon is the middle of a shape that begins at the card and finishes at
  * the section, and a cap at either end would rule a line straight down the join
  * the whole design exists to make continuous. The card and the section suppress
@@ -320,7 +320,7 @@ export function ribbonRimPath(r: Ribbon, width = PACK_RIM): string {
  * border. The card and the section state the same two strengths as one mask,
  * whose partial alpha inside the ring is what a box can express and a curve
  * cannot; a clip-path is all or nothing, so the two strengths have to become
- * two regions. Disjoint ones — the core begins exactly where the rim ends — so
+ * two regions. Disjoint ones: the core begins exactly where the rim ends, so
  * that neither is painted over the other.
  *
  * Where the band is pinched thinner than two rims the core inverts and collapses
@@ -378,13 +378,13 @@ export function sectionAt(
     // not cover: the list is a flex column with a gap, so between every pair is
     // a band belonging to neither, and the trailing spacer is one more. A
     // containment test matches nothing there and has to fall out of the loop
-    // onto some answer — which was "the last section", throwing the wheel to
+    // onto some answer, which was "the last section", throwing the wheel to
     // its far end for as long as the focus line was in a 12px gap.
     for (let i = sections.length - 1; i >= 0; i--) {
         const s = sections[i];
         if (y >= s.top) {
             // Clamped, so a gap reads as the end of the section above it and
-            // the next reads as its own start — the same wheel position, which
+            // the next reads as its own start, the same wheel position, which
             // is what makes crossing one cost no movement at all.
             return { index: i, fraction: s.height > 0 ? clamp((y - s.top) / s.height, 0, 1) : 0 };
         }
@@ -435,7 +435,7 @@ export function listToWheel(listScrollTop: number, g: WheelGeometry): number {
     // is on the line at `fraction = 0.5` and hands over to its neighbour half a
     // card either way. Dropping the term instead ties the card to the pack's
     // start, which puts the wheel on a *boundary between* two cards whenever a
-    // pack starts — the state a tap produces.
+    // pack starts: the state a tap produces.
     const centre = cardCentre(at.index + at.fraction - 0.5, g);
     return clamp(centre - g.wheelViewport * FOCUS_LINE, 0, wheelMax(g));
 }
@@ -464,7 +464,7 @@ export function wheelToList(wheelScrollTop: number, g: WheelGeometry): number {
  * **Centred, not aligned to the viewport top.** This was the oldest bug in the
  * explorer. Everything else anchors on the centre, and a jump that put the
  * section's top at the top of the viewport left the line half a viewport
- * lower — inside the *next* pack, for any pack shorter than the viewport. So
+ * lower, inside the *next* pack, for any pack shorter than the viewport. So
  * tapping a card selected its neighbour, scrolled the wheel to a card nobody
  * had touched, and drew the projection to that one. Landing the section's *top*
  * on the line instead fixes the selection but drops the pack below the middle
@@ -496,7 +496,7 @@ export function focusedSection(listScrollTop: number, g: WheelGeometry): number 
  * The card at the centre is the one the list is showing, so it alone is at full
  * strength; the rest recede. `opacity` is how they recede, and against the
  * picker's black slab that reads as sinking into the background rather than
- * merely going faint — which is the point, since a column of saturated pack
+ * merely going faint, which is the point, since a column of saturated pack
  * colours at equal weight has no focus at all. The falloff is superlinear so
  * the neighbours stay legible while the far ends genuinely go dark.
  */
@@ -519,12 +519,12 @@ export interface CardCurve {
 }
 
 /** A card with nothing applied to it. What a card renders as while the
- *  geometry has not caught up with a group list that just changed — flat and
+ *  geometry has not caught up with a group list that just changed: flat and
  *  full strength, rather than collapsed to a scale of zero. */
 export const FLAT_CURVE: CardCurve = { t: 0, rotateX: 0, scale: 1, opacity: 1, paneY: 0 };
 
 /**
- * How far the eye sits from the rolodex, px — the card's own `perspective()`.
+ * How far the eye sits from the rolodex, px: the card's own `perspective()`.
  *
  * Here rather than in the card's stylesheet because the band has to leave from
  * the card's *painted* edge, and cannot work out where that is without it.
@@ -557,7 +557,7 @@ export function cardTransform(curve: CardCurve): { transform: string; origin: st
  * `scale` and `rotateX` describe the card before the perspective divide, and
  * that divide is not symmetric: the edge turning toward the eye is magnified
  * and the one turning away is shrunk. So a card paints shorter than
- * `cardHeight * scale` and off-centre about its own middle — and a band leaving
+ * `cardHeight * scale` and off-centre about its own middle; a band leaving
  * from half that height overshoots the shape drawn at both ends, by a couple of
  * pixels that a flat opaque card hid and a tinted one with a lit rim does not.
  */
@@ -567,8 +567,8 @@ export function cardEdge(curve: CardCurve, cardHeight: number): { top: number; b
     const cos = Math.cos(radians);
     const sin = Math.sin(radians);
     // `rotateX` sends local y to (y·cos, z = y·sin) and the perspective divides
-    // by `1 - z/p`. That denominator cannot approach zero here — `y` is half a
-    // card and `p` is hundreds of pixels — so there is no degenerate case.
+    // by `1 - z/p`. That denominator cannot approach zero here (`y` is half a
+    // card and `p` is hundreds of pixels), so there is no degenerate case.
     const project = (y: number) => (y * cos) / (1 - (y * sin) / CARD_PERSPECTIVE);
     return { top: project(-half), bottom: project(half) };
 }
@@ -615,7 +615,7 @@ export interface Frame {
  * This exists to make a timing bug unspeakable rather than to add behaviour:
  * every part of it was already computed by the functions above, but each was
  * called at a different moment, from a different source, on a different
- * schedule — the wheel's position from the list's `scroll` event, the card
+ * schedule: the wheel's position from the list's `scroll` event, the card
  * transforms from the wheel's own `scroll` event a frame later, the highlight
  * from a third read. A programmatic `scrollTop` write lands synchronously while
  * the `scroll` event it provokes does not, so the transforms described where
@@ -647,12 +647,12 @@ export function present(sample: Sample, g: WheelGeometry): Frame {
  *
  * Computed, not measured. Both ends therefore describe where their pane will be
  * once this frame is painted, rather than where the DOM says it was before the
- * frame's `scrollTop` write — and the card end matches the card's *painted*
+ * frame's `scrollTop` write, and the card end matches the card's *painted*
  * edge, projected by its own curve, instead of the upright box a tilted card
  * still reports.
  *
  * **Both ends abut; neither overlaps.** A pack's surface carries alpha, so it
- * may be painted over any pixel once and only once — two of them stacked is not
+ * may be painted over any pixel once and only once: two of them stacked is not
  * the same colour twice, it is a darker colour, and an overlap is a strip of
  * that darker colour down the very join the projection exists to make
  * invisible. A band used to run a few pixels under its section to buy immunity
@@ -668,7 +668,7 @@ export function present(sample: Sample, g: WheelGeometry): Frame {
  * its last row leaves while the next grows from nothing.
  */
 /** Card `i`'s measured top, falling back to the uniform pitch only when the
- *  line is short — which happens for the frame between a pack being added and
+ *  line is short, which happens for the frame between a pack being added and
  *  the resize observer measuring it, and never once the two agree. */
 function cardTop(l: PaneLayout, g: WheelGeometry, i: number): number {
     return l.cardTops[i] ?? g.wheelLead + i * g.cardAdvance;
@@ -690,7 +690,7 @@ export function packBands(
 
         // The card's *own* box, not the slot it occupies. A slot is the card
         // plus the gap to the next one, so its centre sits half a gap below the
-        // card's — enough to ride visibly low against every card in the column.
+        // card's, enough to ride visibly low against every card in the column.
         // The mapping is free to think in slots, since a uniform offset there
         // is invisible; a band drawn against a card is not.
         //
@@ -701,7 +701,7 @@ export function packBands(
         //
         // The card's top comes from `cardTops`, which is measured. Reading it
         // from the pitch instead would put card `i` off by `i` times whatever
-        // the pitch rounded away — see `PaneLayout.cardTops`.
+        // the pitch rounded away (see `PaneLayout.cardTops`).
         const centre =
             l.wheelTop + cardTop(l, g, i) + l.cardHeight / 2 - frame.wheelScrollTop;
         const edge = cardEdge(frame.curves[i], l.cardHeight);

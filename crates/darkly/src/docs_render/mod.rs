@@ -2,14 +2,14 @@
 //!
 //! Sixteen blend modes have no icon anywhere, and ten veils deliberately have
 //! none either because their picker renders a live thumbnail instead. For all
-//! four effect catalogs the image *is* the documentation — and for most of them
+//! four effect catalogs the image *is* the documentation, and for most of them
 //! a still is not enough, because what a control does only becomes legible when
 //! it moves. This module renders that motion headlessly against a fixed subject
 //! and writes it out as PNG frame sequences plus a small index.
 //!
 //! **This module renders nothing of its own.** A preview's motion belongs to
-//! the entry that has it — `Veil::preview_at`, `Void::preview_at`, a filter
-//! registration's `preview_at` — and the driver that runs it is
+//! the entry that has it (`Veil::preview_at`, `Void::preview_at`, a filter
+//! registration's `preview_at`), and the driver that runs it is
 //! [`crate::gpu::preview`], the same one the editor's pickers go through. What
 //! is left here is what only a headless documentation run needs: one fixed
 //! subject instead of the user's canvas, a blocking capture sink instead of an
@@ -53,7 +53,7 @@ use subject::{blend_source_rgba, subject_rgba, DOCS_SUBJECT_DIM};
 /// The preview target always resamples its source into its own preview-sized
 /// texture. Feeding it the subject at twice the output edge puts that resample
 /// at the 2:1 ratio its shader was written for, where the four taps land on
-/// input texel centres and tile the 2 × 2 block exactly — an area average rather
+/// input texel centres and tile the 2 × 2 block exactly, an area average rather
 /// than the softening a 1:1 pass would apply to the very edges the blur,
 /// pixelate, painting and aberration previews are read by.
 const SUBJECT_SCALE: u32 = 2;
@@ -75,7 +75,7 @@ pub fn blend_opacity_at(t: f32) -> f32 {
 #[derive(Debug)]
 pub enum DocsRenderError {
     /// A catalog holds previewable entries but no renderer knows how to draw
-    /// them — what a new previewable registry looks like from here.
+    /// them: what a new previewable registry looks like from here.
     NoRenderer {
         catalog: String,
         type_id: String,
@@ -143,13 +143,13 @@ pub struct Asset {
     pub fps: u32,
     #[serde(rename = "loop")]
     pub loops: bool,
-    /// Index of the poster frame — the one a consumer shows when it is not
+    /// Index of the poster frame, the one a consumer shows when it is not
     /// playing the sequence, and the same frame the editor's picker renders for
     /// [`PreviewVariant::Still`]. `{still:03}.png` in `dir`.
     pub still: u32,
 }
 
-/// A thin index of what was written — not a second copy of the metadata export.
+/// A thin index of what was written, not a second copy of the metadata export.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Manifest {
     /// The same value the metadata export stamps, and the only thing that lets
@@ -180,9 +180,9 @@ impl Rendered {
     /// Turn what a renderer produced into what a consumer receives.
     ///
     /// The three renderers differ in how they get their pixels and in nothing
-    /// else, so the two facts that depend on *how the frames were asked for* —
-    /// whether a one-way sequence needs its hand-back dissolved in, and where
-    /// the poster sits — are settled once, here.
+    /// else, so the two facts that depend on *how the frames were asked for*
+    /// (whether a one-way sequence needs its hand-back dissolved in, and where
+    /// the poster sits) are settled once, here.
     fn assemble(
         variant: PreviewVariant,
         anim: PreviewAnim,
@@ -215,7 +215,7 @@ impl Rendered {
 ///
 /// Every `DarklyEngine` construction splices sixteen WGSL arms into the
 /// composite shader and compiles it, which on a software rasterizer is real CPU
-/// time — and blend modes differ from one another only by an in-place property
+/// time, and blend modes differ from one another only by an in-place property
 /// write, so one document serves the whole catalog. The offscreen catalogs need
 /// no document at all.
 pub struct Gpu {
@@ -234,7 +234,7 @@ pub struct Gpu {
     brush: Option<(BrushPipelines, BrushStrokePreviewRenderer)>,
 }
 
-/// The theme every documentation brush stroke is rendered in — a white stroke
+/// The theme every documentation brush stroke is rendered in, a white stroke
 /// on black, which is also the engine's own default (`preview_theme_fg` /
 /// `preview_theme_bg`). Named here rather than read off an engine so a headless
 /// run depends on nothing ambient, and stated once so the staged backdrop's
@@ -242,7 +242,7 @@ pub struct Gpu {
 const DOCS_STROKE_FG: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const DOCS_STROKE_BG: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
-/// The subject with a second, differently-oriented field stacked over it — the
+/// The subject with a second, differently-oriented field stacked over it, the
 /// layer whose blend mode and opacity the preview drives.
 struct BlendDoc {
     engine: DarklyEngine,
@@ -286,7 +286,7 @@ impl Gpu {
         self.blend_doc.as_mut().unwrap()
     }
 
-    /// Fill the preview target with the fixed subject — the documentation run's
+    /// Fill the preview target with the fixed subject, the documentation run's
     /// one substitution for the editor's live canvas. Built once and reloaded
     /// per entry, because a mechanism that generates its own content wants the
     /// source cleared rather than loaded.
@@ -346,7 +346,7 @@ impl Gpu {
     /// Render one entry through the shared driver with the blocking sink.
     ///
     /// The whole of what this module contributes: a subject, a `readback_texture`
-    /// instead of a `ReadbackScheduler`, and no per-tick budget — the binary
+    /// instead of a `ReadbackScheduler`, and no per-tick budget: the binary
     /// wants every frame now.
     fn render_offscreen(
         &mut self,
@@ -408,7 +408,7 @@ impl Gpu {
     }
 
     /// Render one blend mode through a real document, driving the top layer's
-    /// opacity — the one thing a consumer without a document cannot do, which is
+    /// opacity, the one thing a consumer without a document cannot do, which is
     /// why this catalog has no offscreen mechanism.
     fn render_blend_mode(
         &mut self,
@@ -424,7 +424,7 @@ impl Gpu {
         let doc = self.blend_doc();
         doc.engine.set_blend_mode(doc.top, type_id);
 
-        // The timeline this catalog is driven over — the whole of it, or the one
+        // The timeline this catalog is driven over, the whole of it, or the one
         // moment the entry nominates as standing for it.
         let timeline: Vec<f32> = match variant {
             PreviewVariant::Still => vec![anim.still_at],
@@ -436,7 +436,7 @@ impl Gpu {
             frames.push(doc.engine.test_readback_canvas());
         }
         // The document is reused across every mode, and a mode only ever writes
-        // the frames it renders — so leaving the last frame's opacity behind
+        // the frames it renders, so leaving the last frame's opacity behind
         // would leak into the next entry's first frame.
         doc.engine.set_opacity(doc.top, 1.0);
         Ok(Rendered::assemble(
@@ -448,14 +448,14 @@ impl Gpu {
         ))
     }
 
-    /// Render one brush's preview stroke — the same synthetic S-curve, through
+    /// Render one brush's preview stroke, the same synthetic S-curve, through
     /// the same stroke engine and the same framer the editor's picker uses, so
     /// the documentation and the picker show one image of a brush rather than
     /// two.
     ///
     /// A brush is a stroke driven through the brush engine rather than an effect
     /// over one image, so like a blend mode it has no `src → out` mechanism to
-    /// open — it is a second caller of the same `PreviewAnim`, not a second
+    /// open; it is a second caller of the same `PreviewAnim`, not a second
     /// preview system.
     fn render_brush_stroke(
         &mut self,
@@ -530,7 +530,7 @@ impl Gpu {
             DOCS_STROKE_BG,
         );
         // A brush stroke is one frame either way, so both variants and the
-        // closing pass are no-ops here — routed through the shared assembly
+        // closing pass are no-ops here, routed through the shared assembly
         // anyway so no arm of this module is the one that decides for itself
         // what a declaration means.
         Ok(Rendered::assemble(variant, anim, vec![framed], tw, th))
@@ -544,7 +544,7 @@ impl Gpu {
 /// A catalog with an offscreen mechanism goes through the shared driver; the
 /// two catalogs without go through a document and through the brush engine
 /// respectively. A catalog with none of the three is
-/// [`DocsRenderError::NoRenderer`] — what a new previewable registry that has
+/// [`DocsRenderError::NoRenderer`]: what a new previewable registry that has
 /// not declared a mechanism looks like from here.
 pub fn render_entry(
     gpu: &mut Gpu,
@@ -575,7 +575,7 @@ pub fn render_entry(
 /// Test-only, and gated for the same reason `PreviewTarget::source_texture` is:
 /// nothing in a run reads the source back, and `CONTRIBUTING.md` §No Blocking
 /// GPU Readbacks keeps readback surface behind the gate. A value-pinned assertion
-/// about what a filter *did* has to compare against what it was *given* — the
+/// about what a filter *did* has to compare against what it was *given*: the
 /// 2:1 area average of the subject, not the subject itself.
 #[cfg(any(test, feature = "testing"))]
 pub fn test_source_pixels(gpu: &mut Gpu) -> Vec<u8> {
@@ -612,7 +612,7 @@ fn write_frames(dir: &Path, frames: &[Vec<u8>], w: u32, h: u32) -> Result<(), Do
 ///
 /// The stills are photographs of the documentation subject with an effect on
 /// them, embedded in markdown at a fraction of their rendered size and committed
-/// to this repository — which is the case JPEG is for. As PNG the same images
+/// to this repository, which is the case JPEG is for. As PNG the same images
 /// are several hundred kilobytes each, and a repository pays that on every
 /// re-render forever. The frames themselves stay lossless; this is the last step
 /// before a reader sees them.
@@ -641,7 +641,7 @@ fn write_jpeg(path: &Path, pixels: &[u8], w: u32, h: u32) -> Result<(), DocsRend
     Ok(())
 }
 
-/// Write one catalog's poster frames as JPEG — what markdown in this repository
+/// Write one catalog's poster frames as JPEG: what markdown in this repository
 /// embeds, since a table cannot play a video.
 ///
 /// One frame per entry, not a sequence: [`PreviewVariant::Still`] renders at the
@@ -677,8 +677,8 @@ pub fn render_stills(out: &Path, catalog_id: &str) -> Result<Vec<PathBuf>, DocsR
 /// Render every previewable catalog entry into `out` and write the index
 /// beside them.
 ///
-/// Directory names are the catalog and entry ids themselves — no id literal
-/// appears in the layout — so the asset directory and the metadata artifact
+/// Directory names are the catalog and entry ids themselves; no id literal
+/// appears in the layout, so the asset directory and the metadata artifact
 /// cannot disagree about what a thing is called.
 pub fn render_all(out: &Path) -> Result<Manifest, DocsRenderError> {
     let mut gpu = Gpu::new();
@@ -731,7 +731,7 @@ pub fn render_all(out: &Path) -> Result<Manifest, DocsRenderError> {
 // ---------------------------------------------------------------------------
 
 pub const USAGE: &str = "\
-render_docs — render previews for the registry entries that declare one
+render_docs - render previews for the registry entries that declare one
 
 USAGE:
     render_docs --out <dir>
@@ -741,7 +741,7 @@ OPTIONS:
     --out <dir>      Where to write. Frame sequences and assets.json by
                      default; with --stills, defaults to this repository's own
                      preview directory.
-    --stills         Write one JPEG poster per entry instead of a sequence —
+    --stills         Write one JPEG poster per entry instead of a sequence:
                      what markdown in this repository embeds.
     --catalog <id>   Which catalog to render stills for. Required by --stills.
     --help           Print this message
@@ -751,16 +751,16 @@ OPTIONS:
 pub enum Command {
     /// `--help` was asked for; there is no work to do.
     Help,
-    /// Every previewable entry, as PNG frame sequences plus an index — the
+    /// Every previewable entry, as PNG frame sequences plus an index, the
     /// release artifact.
     Frames { out: PathBuf },
-    /// One catalog's poster frames, as JPEG — what this repository's markdown
+    /// One catalog's poster frames, as JPEG: what this repository's markdown
     /// embeds.
     Stills { out: PathBuf, catalog: String },
 }
 
 /// Parse the command line. This lives here rather than in the binary because
-/// coverage tooling runs test targets and never executes a `[[bin]]` — anything
+/// coverage tooling runs test targets and never executes a `[[bin]]`: anything
 /// left inside `fn main` is untestable by construction.
 pub fn parse_args(argv: impl Iterator<Item = String>) -> Result<Command, DocsRenderError> {
     let mut out: Option<PathBuf> = None;

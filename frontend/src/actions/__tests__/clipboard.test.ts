@@ -89,7 +89,7 @@ describe('copy/cut send the layer id under the `id` field (not `layer_id`)', () 
 
 // Regression: paste-in-place special-cased a mask target onto the committed
 // verb, so pasting into a mask entered no transform session and overwrote the
-// mask the instant the key was pressed — no preview, no reposition, no cancel.
+// mask the instant the key was pressed: no preview, no reposition, no cancel.
 // The target's kind must not divert the routing: with transform-after-paste on,
 // every target floats, and the transform tool is what commits it.
 describe('paste-in-place routing', () => {

@@ -1,17 +1,17 @@
 /**
  * Shared base for a void's per-frame "external image → GPU texture" lifecycle.
  *
- * A void whose frames come from outside the engine — a webcam / screenshare
- * (`MediaStreamSource`), or a Blender HTTP feed (`HttpStreamSource`) — needs the
- * same per-`tick()` machinery: honor the visible / frozen / frame-divisor /
+ * A void whose frames come from outside the engine, such as a webcam /
+ * screenshare (`MediaStreamSource`) or a Blender HTTP feed (`HttpStreamSource`),
+ * needs the same per-`tick()` machinery: honor the visible / frozen / frame-divisor /
  * has-new-frame gate, ask for the current decodable frame, decode it off-thread
  * into a finalized `ImageBitmap` (downscaling to the display cap), and hand it to
  * `copy_external_image_to_texture` via the WASM bridge. Only *where the frame
  * comes from* differs, so that's all a subclass supplies.
  *
  * Why an `ImageBitmap` and not a 2D canvas? `copyExternalImageToTexture` from a
- * 2D `OffscreenCanvas` forces a cross-context GPU fence — the canvas lives in the
- * browser's compositor/GL context, the texture in the WebGPU device — which
+ * 2D `OffscreenCanvas` forces a cross-context GPU fence (the canvas lives in the
+ * browser's compositor/GL context, the texture in the WebGPU device), which
  * stalls the render loop ~one frame per upload, independent of resolution. A
  * finalized `ImageBitmap` copies without that fence, `createImageBitmap` decodes
  * off the main thread (moving that work off the critical path), and downscales to
@@ -19,13 +19,13 @@
  * source accepted by every WebGPU implementation.
  *
  * Subclasses implement:
- *  - `presentFrame()` — the current decodable frame (+ its source dims, if known,
+ *  - `presentFrame()` - the current decodable frame (+ its source dims, if known,
  *    for the resolution cap, + `createImageBitmap` options), or `null` if none.
- *  - `hasFrameReady()` — the sink-side gate: is there a frame worth decoding this
+ *  - `hasFrameReady()` - the sink-side gate: is there a frame worth decoding this
  *    tick? A live camera is always "ready"; a static HTTP stream only when a new
  *    frame has actually arrived (so a still scene drives zero decode + GPU work).
- *  - `afterUpload()` — post-upload hook (e.g. clear the "new frame" flag).
- *  - `stop()` — tear down and mark permanently dead.
+ *  - `afterUpload()` - post-upload hook (e.g. clear the "new frame" flag).
+ *  - `stop()` - tear down and mark permanently dead.
  */
 
 import type { Engine } from '../engine/protocol';
@@ -62,13 +62,13 @@ export abstract class FrameSource {
     protected readonly engine: Engine;
     /** Invoked when the feed ends *externally* (the user clicks the browser's
      *  "Stop sharing" bar, unplugs the webcam, or the HTTP stream closes). The
-     *  app uses it to stop the source — kept in the map so its error/status
-     *  stay visible — and re-show the "Connect"/"Resume" affordance. */
+     *  app uses it to stop the source (kept in the map so its error/status
+     *  stay visible) and re-show the "Connect"/"Resume" affordance. */
     protected readonly onEnded: ((layerId: number) => void) | null;
 
     /** Invoked on every `status` transition. Class-instance field mutation is
      *  invisible to Svelte's `$state` Map, so the app uses this to reassign
-     *  the map and trigger a re-render — mirroring `onEnded`. */
+     *  the map and trigger a re-render, mirroring `onEnded`. */
     protected readonly onStatusChange: ((layerId: number) => void) | null;
 
     /** True once the feed has ended externally. Observable so the properties
@@ -100,7 +100,7 @@ export abstract class FrameSource {
     /** Record a failure that happened outside the source's own machinery
      *  (media acquisition is app-owned: the permission prompt runs before
      *  `start` is ever called). Sets the user-facing error and lands the
-     *  status, without flipping `ended` — the feed never began. */
+     *  status, without flipping `ended`; the feed never began. */
     markFailed(message: string): void {
         this.error = message;
         this.setStatus('disconnected');
@@ -117,7 +117,7 @@ export abstract class FrameSource {
     protected frameDivisor = 4;
 
     /** Effective visibility (self + every ancestor). When false, `tick()`
-     *  short-circuits — no decode, no bridge call, no GPU work. Rust independently
+     *  short-circuits: no decode, no bridge call, no GPU work. Rust independently
      *  gates `wants_external_input`; this is the JS-local skip. */
     protected visible = true;
 
@@ -127,7 +127,7 @@ export abstract class FrameSource {
     protected frozen = false;
 
     /** True while a `createImageBitmap` decode is in flight, so a slow decode
-     *  can't pile up a backlog faster than the GPU drains it — the loop
+     *  can't pile up a backlog faster than the GPU drains it; the loop
      *  self-throttles to the decode rate. */
     protected decoding = false;
 
@@ -137,7 +137,7 @@ export abstract class FrameSource {
      *  frame would otherwise be absent from the recording. */
     private firstFrameUploaded = false;
 
-    /** Longest edge (px) the decoded bitmap — and the GPU upload — may reach; the
+    /** Longest edge (px) the decoded bitmap (and the GPU upload) may reach; the
      *  source is downscaled to fit, preserving aspect. Pushed in as the
      *  document-canvas long edge: the compositor renders the void cover-fit into a
      *  canvas-resolution target, so finer source detail is wasted bandwidth. `0`
@@ -159,7 +159,7 @@ export abstract class FrameSource {
     }
 
     /** Push the current frame into the void's input texture. Cheap when nothing
-     *  is ready (no-op) — safe to call every animation frame.
+     *  is ready (no-op), safe to call every animation frame.
      *
      *  `frameCount` is the compositor's canonical master tick (see
      *  `DarklyHandle.frame_count`). Using it directly keeps the divisor gate
@@ -242,7 +242,7 @@ export abstract class FrameSource {
     }
 
     /** Update the upload throttle. Called by the reconciler on `frame_divisor`
-     *  change. No counter to reset — the gate is a pure function of the shared
+     *  change. No counter to reset; the gate is a pure function of the shared
      *  master counter and the current divisor. */
     setFrameDivisor(n: number): void {
         this.frameDivisor = Math.max(1, Math.floor(n));

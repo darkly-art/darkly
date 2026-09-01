@@ -2,18 +2,18 @@
 //!
 //! Manages shared scratch textures (pre-operation snapshot, in-flight workspace
 //! for save+modify+commit) and produces per-action [`UndoRegionEntry`] values
-//! that own their own pixel data — no shared ring buffer.
+//! that own their own pixel data: no shared ring buffer.
 //!
 //! # Lifetime model
 //!
 //! Each undo entry owns its pixels via [`EntryPixels`]:
 //!
-//! - **`Pending { staging }`** — VRAM-resident. The `wgpu::Buffer` that backs
+//! - **`Pending { staging }`** - VRAM-resident. The `wgpu::Buffer` that backs
 //!   the async readback. Holds until either (a) the readback completes and the
 //!   entry transitions to `Ready`, dropping the buffer, or (b) a restore
 //!   happens first, in which case the buffer feeds `copy_buffer_to_texture`
 //!   directly (GPU-to-GPU, no readback wait).
-//! - **`Ready(Vec<u8>)`** — DRAM-resident, unpadded row layout. The steady
+//! - **`Ready(Vec<u8>)`** - DRAM-resident, unpadded row layout. The steady
 //!   state for most actions, since most commits' readbacks finish before any
 //!   restore is requested.
 //!
@@ -27,13 +27,13 @@
 //! [`CanvasFrame`] for the source/target texture. Translation to texture-local
 //! coordinates happens internally, immediately before each `copy_texture_*`
 //! call. The scratch is texture-aligned (scratch[(x, y)] holds the pre-op
-//! snapshot of source[(x, y)]) but the *metadata* — `Snapshot.saved` and
-//! `UndoRegionEntry.canvas_rect` — is in canvas coords so it remains valid
+//! snapshot of source[(x, y)]) but the *metadata* (`Snapshot.saved` and
+//! `UndoRegionEntry.canvas_rect`) is in canvas coords so it remains valid
 //! across mid-stroke layer growth (the Storage Frame Rule).
 //!
 //! [`save_region`](Self::save_region) returns a [`Snapshot`] token. The token
 //! is required by [`commit_region`](Self::commit_region) and
-//! [`restore_from_scratch`](Self::restore_from_scratch) — you can't commit
+//! [`restore_from_scratch`](Self::restore_from_scratch): you can't commit
 //! without saving first. Commits validate (in debug) that the commit rect is
 //! contained in the snapshot's saved rect.
 
@@ -61,34 +61,34 @@ const COPY_ROW_ALIGNMENT: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
 /// Per-entry pixel storage, hybrid VRAM/DRAM.
 ///
-/// Single-threaded — the engine drives commits, restores, and readback
+/// Single-threaded: the engine drives commits, restores, and readback
 /// completion from the same thread, so `Rc<RefCell<…>>` rather than
 /// `Arc<Mutex<…>>`. WASM is single-threaded by construction; native tests
 /// run with `--test-threads=1`.
 pub enum EntryPixels {
     /// Async readback in flight. Holds the committed pixels in two
-    /// sibling buffers — WebGPU disallows combining `MAP_READ` and
+    /// sibling buffers: WebGPU disallows combining `MAP_READ` and
     /// `COPY_SRC` on a single buffer, so the readback and restore paths
     /// need separate VRAM. Both get filled from the same scratch in the
     /// commit encoder, so their contents are byte-identical.
     Pending {
-        /// MAP_READ | COPY_DST — drives the async readback that flips the
+        /// MAP_READ | COPY_DST, drives the async readback that flips the
         /// entry to `Ready`.
         readback: wgpu::Buffer,
-        /// COPY_DST | COPY_SRC — source for the GPU-to-GPU restore path
+        /// COPY_DST | COPY_SRC, source for the GPU-to-GPU restore path
         /// when a restore arrives before the readback completes. Both
         /// buffers drop together when the entry transitions to `Ready`.
         staging: wgpu::Buffer,
     },
     /// Readback completed, pixels live on the host heap (WASM linear memory
     /// in production, native DRAM in tests). The buffer layout is
-    /// `unpadded_row_bytes * height` — restoring re-pads into a temp upload
+    /// `unpadded_row_bytes * height`, restoring re-pads into a temp upload
     /// buffer because `copy_buffer_to_texture` requires
     /// `COPY_BYTES_PER_ROW_ALIGNMENT` rows.
     Ready(Vec<u8>),
 }
 
-/// Metadata + owned pixels for a single undo region. No longer `Clone` —
+/// Metadata + owned pixels for a single undo region. No longer `Clone`:
 /// each action owns exactly one entry, and the `Rc<RefCell<…>>` would
 /// duplicate the pixel-ownership relationship if cloned.
 pub struct UndoRegionEntry {
@@ -101,7 +101,7 @@ pub struct UndoRegionEntry {
     /// Bytes per row without padding (`width * bpp`).
     pub unpadded_row_bytes: u32,
     /// VRAM-equivalent byte cost of this entry (padded rows × height). Used
-    /// for the [`crate::undo::UndoStack`] memory cap — treated as an upper
+    /// for the [`crate::undo::UndoStack`] memory cap, treated as an upper
     /// bound even when the entry has transitioned to `Ready` (whose unpadded
     /// `Vec` may be slightly smaller). Conservative is correct here.
     pub byte_size: u64,
@@ -116,7 +116,7 @@ pub struct UndoRegionEntry {
 ///
 /// Holds only the in-flight workspace textures (one RGBA8, one R8) used as
 /// pre-op snapshots and commit intermediaries. Each undo entry owns its own
-/// pixel data — there is no shared ring buffer. Storage lifetime equals
+/// pixel data, there is no shared ring buffer. Storage lifetime equals
 /// action lifetime, so eviction happens at the policy layer
 /// ([`crate::undo::UndoStack`]) rather than down here.
 pub struct RegionScratch {
@@ -128,8 +128,8 @@ pub struct RegionScratch {
 }
 
 /// Preserved-content copy request for a scratch reallocation. Carries the
-/// encoder plus the *live* copy geometry — `copy_w × copy_h` sized by the old
-/// layer extent, not the full old capacity — so a grow copies exactly the
+/// encoder plus the *live* copy geometry (`copy_w × copy_h` sized by the old
+/// layer extent, not the full old capacity), so a grow copies exactly the
 /// pre-stroke pixels worth keeping and leaves the rest at the format default.
 struct ScratchCopy<'a> {
     encoder: &'a mut wgpu::CommandEncoder,
@@ -166,7 +166,7 @@ impl RegionScratch {
 
     /// Grow scratch textures so they can fit a rect of at least `(w, h)`.
     /// No-op if the current scratch is already large enough. Reallocation
-    /// is rare in practice — only happens when a save rect exceeds canvas
+    /// is rare in practice: only happens when a save rect exceeds canvas
     /// bounds (paste-extent layer transform, oversized stroke, etc.).
     ///
     /// Call this once before encoding `save_region` for any rect that
@@ -189,7 +189,7 @@ impl RegionScratch {
     /// > After the call, the scratch holds valid pre-stroke state over the
     /// > **entire new extent**: the old extent's snapshot rebased to the new
     /// > frame, and the format default (transparent for RGBA, **white** for an
-    /// > R8 mask — see [`scratch_default_clear`](Self::scratch_default_clear))
+    /// > R8 mask, see [`scratch_default_clear`](Self::scratch_default_clear))
     /// > everywhere else.
     ///
     /// The scratch is texture-aligned to the layer (see
@@ -200,17 +200,17 @@ impl RegionScratch {
     /// `new_extent.origin`, so that content must move to
     /// `old_extent.origin - new_extent.origin` in the new frame.
     ///
-    /// **Contract:** `new_extent ⊇ old_extent` — asserted in debug; in release,
+    /// **Contract:** `new_extent ⊇ old_extent`, asserted in debug; in release,
     /// the offset and copy dims saturate/clamp so a violating caller degrades to
     /// a clipped copy (that caller's undo may already be wrong) rather than a
     /// poisoned command buffer. Callers pass `old_extent` equal to the current
     /// layer extent, whose format matches the in-flight snapshot; the sibling
     /// scratch (R8 when painting RGBA, and vice versa) is wholly stale, and the
-    /// grow knowingly copies its stale bytes — harmless, since any future
+    /// grow knowingly copies its stale bytes, which is harmless since any future
     /// `save_region` overwrites the sibling before any commit reads it.
     ///
     /// Every actual growth reallocates: equal extents are the only true no-op.
-    /// A within-capacity right/down grow reallocs too — clearing sub-rect bands
+    /// A within-capacity right/down grow reallocs too: clearing sub-rect bands
     /// in place would need a scissored draw (a render-pass `LoadOp::Clear` hits
     /// the whole attachment and `clear_texture` zeroes, wrong for R8's white
     /// default), i.e. new pipeline machinery here; one occasionally-redundant
@@ -227,7 +227,7 @@ impl RegionScratch {
             "grow_scratch_preserving: new extent {new_extent:?} must contain old extent {old_extent:?}",
         );
         // With containment, equal extents are the only case where nothing is
-        // newly live — the sole true no-op. Any other difference means the new
+        // newly live, the sole true no-op. Any other difference means the new
         // extent has area that must be cleared to the format default, which only
         // a realloc's whole-texture clear provides.
         if new_extent == old_extent {
@@ -257,9 +257,9 @@ impl RegionScratch {
     }
 
     /// Reallocate both scratch textures (RGBA8 + R8) to `(new_w, new_h)`.
-    /// When `copy` is `Some(ScratchCopy { .. })`, the preserved region — sized
+    /// When `copy` is `Some(ScratchCopy { .. })`, the preserved region, sized
     /// by the caller's `copy_w × copy_h` (the *live old extent*, not the full
-    /// capacity) — is copied from the old scratch origin into the new textures
+    /// capacity), is copied from the old scratch origin into the new textures
     /// at `(dst_offset_x, dst_offset_y)` before the old textures are dropped.
     /// `(scratch_width, scratch_height)` is updated to `(new_w, new_h)`
     /// regardless of copy.
@@ -454,24 +454,24 @@ impl RegionScratch {
     /// The caller is responsible for submitting the request to its
     /// [`crate::gpu::readback::ReadbackScheduler`] paired with a context
     /// that, on completion, assigns the extracted pixels into
-    /// `entry.pixels`'s `RefCell` — flipping the entry to `Ready` and
+    /// `entry.pixels`'s `RefCell`, flipping the entry to `Ready` and
     /// dropping the staging buffer.
     ///
     /// # Lifetime contract for the staging buffers
     ///
     /// Two VRAM buffers are allocated:
-    /// - **`readback`** (`MAP_READ | COPY_DST`) — fed straight from scratch
+    /// - **`readback`** (`MAP_READ | COPY_DST`) - fed straight from scratch
     ///   in this encoder, then handed to the scheduler. When `map_async`
     ///   resolves, the readback completion handler flips
     ///   `entry.pixels` to `Ready(vec)`, dropping both buffers.
-    /// - **`staging`** (`COPY_DST | COPY_SRC`) — also fed from scratch in
+    /// - **`staging`** (`COPY_DST | COPY_SRC`) - also fed from scratch in
     ///   this encoder, kept alive in `entry.pixels` so a restore-while-
     ///   pending can feed `copy_buffer_to_texture` GPU-to-GPU.
     ///
     /// WebGPU forbids combining `MAP_READ` and `COPY_SRC` on a single
     /// buffer, which is why the split exists. The cost is one extra
     /// `copy_texture_to_buffer` per commit and one extra `byte_size` of
-    /// VRAM per *pending* entry — both transient (the readback resolves
+    /// VRAM per *pending* entry, both transient (the readback resolves
     /// in 1-3 frames in production).
     ///
     /// `wgpu::Buffer` is Arc-backed; the readback request holds its own
@@ -526,7 +526,7 @@ impl RegionScratch {
 
         // Scratch is texture-aligned to the source (see `save_region`): the
         // snapshot of pixels at layer-space `(x, y)` lives at scratch `(x, y)`.
-        // Two writes — one per buffer. WebGPU doesn't let a single buffer be
+        // Two writes: one per buffer. WebGPU doesn't let a single buffer be
         // both MAP_READ and COPY_SRC, so the readback and the in-flight
         // GPU-to-GPU restore each need their own.
         encoder.copy_texture_to_buffer(
@@ -614,13 +614,13 @@ impl RegionScratch {
     /// the inverse operation can put it back. Pairs with
     /// [`upload_region`](Self::upload_region); a caller that needs to realloc
     /// the target texture (image rescale changes a node's extent) can do so
-    /// *between* the two calls — capture reads the old extent, upload writes
+    /// *between* the two calls: capture reads the old extent, upload writes
     /// the new. For constant-extent restores pass `capture_rect ==
     /// entry.canvas_rect`; the pair then behaves like the old `restore_region`.
     ///
     /// The capture commands must be encoded (and, across an extent change,
     /// submitted) before the upload overwrites / the realloc replaces the
-    /// target — same encoder preserves order for the constant-extent case.
+    /// target, same encoder preserves order for the constant-extent case.
     pub fn capture_region(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -703,8 +703,8 @@ impl RegionScratch {
         (forward, request)
     }
 
-    /// Upload `entry`'s saved pixels back into `target` at `entry.canvas_rect`
-    /// — the second half of an undo restore. The `Ready` branch allocates a
+    /// Upload `entry`'s saved pixels back into `target` at `entry.canvas_rect`,
+    /// the second half of an undo restore. The `Ready` branch allocates a
     /// one-shot mapped-at-creation upload buffer so the copy stays in the
     /// encoder's command stream (`queue.write_texture` would re-order to the
     /// start of the next submit and stomp a same-encoder forward capture).
@@ -764,7 +764,7 @@ impl RegionScratch {
                 // upload buffer. `copy_buffer_to_texture` requires
                 // bytes_per_row to be COPY_BYTES_PER_ROW_ALIGNMENT-aligned;
                 // the `Ready` storage drops the padding for efficiency, so
-                // we add it back here. The buffer is short-lived — the
+                // we add it back here. The buffer is short-lived: the
                 // encoder's submit takes the Arc-backed ref until the GPU
                 // is done with it; the Rust handle drops at the end of
                 // this scope.
@@ -813,7 +813,7 @@ impl RegionScratch {
     /// without going through the per-entry buffer. Used by `cancel_floating()`
     /// to undo the source region clear.
     ///
-    /// `canvas_rect` must be contained in `snapshot.saved` — the scratch only
+    /// `canvas_rect` must be contained in `snapshot.saved`: the scratch only
     /// holds the snapshot at that footprint; reading outside it would pull in
     /// uninitialised pixels from a prior op.
     pub fn restore_from_scratch(
@@ -942,7 +942,7 @@ impl RegionScratch {
     /// The pre-stroke value a freshly-grown region of a scratch texture holds,
     /// mirroring the live texture's default fill: R8 masks default to white
     /// (255 = reveal), everything else to transparent/zero. Getting this wrong
-    /// for an R8 mask corrupts undo — the grown region would restore to black.
+    /// for an R8 mask corrupts undo: the grown region would restore to black.
     fn scratch_default_clear(format: wgpu::TextureFormat) -> wgpu::Color {
         match format {
             wgpu::TextureFormat::R8Unorm => wgpu::Color::WHITE,

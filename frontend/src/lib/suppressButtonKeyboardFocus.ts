@@ -2,7 +2,7 @@
  * Stop <button> elements from holding keyboard focus.
  *
  * Why: a focused button hijacks Space (activates it) and Tab (cycles to the
- * next button) — both of which are bound as canvas hotkeys. We want those
+ * next button), both of which are bound as canvas hotkeys. We want those
  * keys to always reach the global tinykeys handler regardless of what the
  * user last clicked.
  *
@@ -20,7 +20,7 @@ export function suppressButtonKeyboardFocus() {
         const btn = t?.closest('button, [role="button"]');
         if (!btn) return;
         // Draggable rows (e.g. layer/group rows with role="button") rely on
-        // the default mousedown action to initiate native HTML5 drag —
+        // the default mousedown action to initiate native HTML5 drag;
         // preventDefault here would silently cancel the drag.
         if (btn.getAttribute('draggable') === 'true') return;
         e.preventDefault();

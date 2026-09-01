@@ -1,4 +1,4 @@
-//! The `.darkly-brush` archive — a brush pack, on disk and over the wire.
+//! The `.darkly-brush` archive: a brush pack, on disk and over the wire.
 //!
 //! There is one brush format and it is the pack. Exporting a single brush
 //! produces a pack containing one brush, so there is one magic-byte case, one
@@ -8,8 +8,8 @@
 //!
 //! Layout:
 //! ```text
-//! pack.json                  — manifest: pack identity + the entry list
-//! brushes/<brushId>.json     — one brush record per member, in member order
+//! pack.json                  - manifest: pack identity + the entry list
+//! brushes/<brushId>.json     - one brush record per member, in member order
 //! ```
 //!
 //! Entry paths are keyed by brush id, which is opaque and filename-safe by
@@ -27,7 +27,7 @@ pub const FORMAT_TAG: &str = "darkly-brush";
 
 /// Archive schema version.
 ///
-/// A discriminator, not a migration hook — the same policy `CONFIG_VERSION`
+/// A discriminator, not a migration hook: the same policy `CONFIG_VERSION`
 /// states. Pre-release, a mismatch is rejected outright rather than upgraded.
 pub const PACK_VERSION: u32 = 1;
 
@@ -77,7 +77,7 @@ pub struct PackFile {
 impl PackFile {
     /// Build an archive payload from a pack and the brushes it names.
     ///
-    /// `brushes` must already be in member order — the library resolves member
+    /// `brushes` must already be in member order: the library resolves member
     /// ids to records, and a member it cannot resolve is simply absent.
     pub fn new(pack: &BrushPack, brushes: Vec<BrushMetadata>) -> Self {
         PackFile {
@@ -142,7 +142,7 @@ impl PackFile {
 
         let manifest_bytes = entries
             .get(MANIFEST_PATH)
-            .ok_or_else(|| format!("missing {MANIFEST_PATH} — not a brush pack"))?;
+            .ok_or_else(|| format!("missing {MANIFEST_PATH}: not a brush pack"))?;
         let manifest: PackManifest = serde_json::from_slice(manifest_bytes)
             .map_err(|e| format!("invalid {MANIFEST_PATH}: {e}"))?;
 
@@ -164,7 +164,7 @@ impl PackFile {
         let mut brushes = Vec::with_capacity(manifest.brushes.len());
         for path in &manifest.brushes {
             // A manifest naming an entry the archive does not hold is a
-            // truncated file — reject it rather than import half a pack.
+            // truncated file: reject it rather than import half a pack.
             let record = entries
                 .get(path)
                 .ok_or_else(|| format!("brush pack names '{path}', which the archive lacks"))?;
@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn pack_of_one_round_trips() {
-        // Exporting a single brush is a pack of one — the whole reason there
+        // Exporting a single brush is a pack of one: the whole reason there
         // is only one format.
         let mut p = pack();
         p.members = vec!["a".into()];

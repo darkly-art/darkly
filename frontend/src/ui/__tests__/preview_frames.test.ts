@@ -10,7 +10,7 @@ import { withApi } from '../../engine/testApi';
 
 // vitest's default node environment has no DOM globals. The conversion only
 // uses `ImageData` as a plain RGBA frame container, so a minimal stand-in is
-// enough — avoids pulling in jsdom.
+// enough to avoid pulling in jsdom.
 class FakeImageData {
     data: Uint8ClampedArray;
     width: number;
@@ -83,7 +83,7 @@ describe('pollPreview', () => {
 
     it('sends { catalog, type, variant } for every catalog', async () => {
         const { engine, send } = fakeEngine(rawPreview(1));
-        // Catalog ids, not a second vocabulary — the same strings the pickers
+        // Catalog ids, not a second vocabulary: the same strings the pickers
         // already hold and `catalogs()` publishes.
         for (const catalog of ['veils', 'voids', 'filters']) {
             await pollPreview(engine, catalog, 'noise', 'still');
@@ -119,7 +119,7 @@ describe('pollPreview', () => {
         const { engine, send } = fakeEngine(rawPreview(2));
         await pollPreview(engine, 'voids', 'noise', 'animated');
         await pollPreview(engine, 'voids', 'noise', 'animated');
-        // Unlike a cached path, every call hits the engine — the preview tracks
+        // Unlike a cached path, every call hits the engine: the preview tracks
         // the live document, so results are never memoised.
         expect(send).toHaveBeenCalledTimes(2);
     });
@@ -131,7 +131,7 @@ describe('showsPreview', () => {
     // first arm of `EffectPreview`'s chain, whatever the catalog.
     it('is true only when the entry declares supportsPreview', () => {
         // A filter, a veil and a void entry are the same shape to this
-        // predicate — that is the point of generalising it.
+        // predicate; that is the point of generalising it.
         expect(showsPreview({ supportsPreview: true })).toBe(true);
         expect(showsPreview({ supportsPreview: false })).toBe(false);
         // Missing flag is treated as no preview, which is what sends the card

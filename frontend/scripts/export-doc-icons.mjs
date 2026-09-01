@@ -7,11 +7,11 @@
  * entry's icon is `fa6-solid:paintbrush`; turning that into artwork means owning
  * an icon toolchain and pinning the same icon-set versions this build used.
  * Resolving here follows the standing rule for this effort: where a consumer
- * would otherwise have to re-derive something, the producer stores it — and it
+ * would otherwise have to re-derive something, the producer stores it, and it
  * keeps the artifact's promise that reading it needs no particular renderer.
  *
  * It lives beside `gen-icon-bundle.mjs`, which does the same resolution for the
- * app's offline icon bundle — its throw-on-missing typo net is mirrored here —
+ * app's offline icon bundle (its throw-on-missing typo net is mirrored here),
  * and, being in `frontend/`, resolves `@iconify/json` and `@iconify/utils` from
  * the deps that already declare them. What that generator also does and this
  * deliberately does not is the resvg optical shrink-wrap: that matters for icons
@@ -61,7 +61,7 @@ function main() {
     const names = iconNames(metadata);
 
     if (!fs.existsSync(JSON_DIR)) {
-        throw new Error(`@iconify/json is not installed — run \`npm ci\` in ${FRONTEND}`);
+        throw new Error(`@iconify/json is not installed: run \`npm ci\` in ${FRONTEND}`);
     }
     const loaded = new Map();
     const icons = {};
@@ -99,7 +99,7 @@ function main() {
     fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
     fs.writeFileSync(outPath, `${JSON.stringify(icons, null, 0)}\n`);
     console.log(
-        `${outPath} — ${names.length} icon(s) across ${new Set(names.map((n) => n.split(':')[0])).size} set(s)`,
+        `${outPath}: ${names.length} icon(s) across ${new Set(names.map((n) => n.split(':')[0])).size} set(s)`,
     );
 }
 

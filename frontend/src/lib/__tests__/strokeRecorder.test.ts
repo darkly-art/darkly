@@ -7,7 +7,7 @@ const { downloadFile } = vi.hoisted(() => ({ downloadFile: vi.fn() }));
 
 vi.mock('../downloadFile', () => ({ downloadFile }));
 // strokeRecorder imports `app` from `state/app.svelte` for the dimensions
-// helper. The recorder methods themselves never touch `app` — `app.engine`
+// helper. The recorder methods themselves never touch `app`; `app.engine`
 // is consulted only by `currentCanvasDimensions`, which the tests don't
 // exercise. Stub it so the import resolves without pulling in Svelte runes.
 vi.mock('../../state/app.svelte', () => ({ app: { engine: null, docW: 0, docH: 0 } }));
@@ -34,7 +34,7 @@ function makeEvent(overrides: Partial<RecordedEventParams> = {}): RecordedEventP
 
 function setUrlSearch(search: string): void {
     // Vitest's node env exposes a writable `globalThis.location` shim with
-    // an empty `search`. Just mutate it — defineProperty would complain
+    // an empty `search`. Just mutate it: defineProperty would complain
     // about non-configurable descriptors on some Node versions.
     (globalThis as any).location = { search };
 }

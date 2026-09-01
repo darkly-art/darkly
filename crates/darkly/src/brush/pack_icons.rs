@@ -4,14 +4,14 @@
 //! bundle generator (`frontend/scripts/gen-icon-bundle.mjs`, which scans this
 //! crate alongside the TypeScript and Svelte sources) picks them up. An
 //! Iconify name that never appears as a literal in this repository is not in
-//! the bundle, and the renderer has no network client to fall back on — it
+//! the bundle, and the renderer has no network client to fall back on; it
 //! would draw nothing at all.
 //!
 //! Shipped packs must name one of these, which a test in
 //! [`crate::brush::packs`] enforces. The pack editor offers exactly this list,
 //! so a painter cannot pick an icon that will not render either.
 
-/// `(iconify name, display label)` — the shape the icon-picker widget already
+/// `(iconify name, display label)`: the shape the icon-picker widget already
 /// consumes, so exposing this list needs no second representation.
 pub const PACK_ICONS: &[(&str, &str)] = &[
     ("mdi:brush", "Brush"),
@@ -40,8 +40,9 @@ pub const PACK_ICONS: &[(&str, &str)] = &[
     ("fa6-solid:folder", "Folder"),
 ];
 
-/// Drawn in place of an icon the renderer does not have — a pack that arrived
-/// in an archive may name anything at all. Must itself be in [`PACK_ICONS`].
+/// Drawn in place of an icon the renderer does not have, since a pack that
+/// arrived in an archive may name anything at all. Must itself be in
+/// [`PACK_ICONS`].
 pub const PACK_ICON_FALLBACK: &str = "fa6-solid:folder";
 
 /// Whether `name` is an icon a pack may wear.

@@ -1,5 +1,5 @@
 /**
- * Perspective transform mode — a true projective (vanishing-point) warp driven
+ * Perspective transform mode: a true projective (vanishing-point) warp driven
  * by dragging the four corners independently. Like `basic`, it is consumer-
  * agnostic: it operates on a `GizmoGeometry` bbox and returns a 3×3 homography
  * the gizmo hands back to whatever binding is wired to it.

@@ -12,7 +12,7 @@
     // and freeze. Reading the reactive `menu` ties it to each menu open,
     // re-resolving the active mode (the checkmark) every time.
     //
-    // Mode switches first, then the flips — the same grouping Krita's transform
+    // Mode switches first, then the flips: the same grouping Krita's transform
     // tool uses (`kis_tool_transform.cc::popupActionsMenu`).
     let items = $derived.by<ContextMenuItem[]>(() => {
         void menu;

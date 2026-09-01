@@ -32,7 +32,7 @@ function pack(id: string, name: string, members: string[]): BrushPackInfo {
     } as BrushPackInfo;
 }
 
-/** Identity resolver — icon renderability is the renderer's business and has
+/** Identity resolver: icon renderability is the renderer's business and has
  *  its own test. */
 const asIs = (icon: string) => icon;
 const FALLBACK = 'fa6-solid:folder';
@@ -139,7 +139,7 @@ describe('keyboard cell indexing', () => {
         expect(cells).toHaveLength(3);
         expect(filtered).toHaveLength(2);
 
-        // The last cell is the Favorites copy of Ink Pen — under the old flat
+        // The last cell is the Favorites copy of Ink Pen: under the old flat
         // indexing, index 2 did not exist at all.
         expect(cells[2].id).toBe('ink_pen');
     });
@@ -162,7 +162,7 @@ describe('search', () => {
     });
 
     it('matches_on_pack_name', () => {
-        // Searching "wet" should find the brushes in Wet Media — the facet
+        // Searching "wet" should find the brushes in Wet Media, the facet
         // that moved from the deleted `category` field onto the pack.
         expect(matchesQuery(brush('rw', 'Rough Watercolor'), 'wet', names)).toBe(true);
         expect(matchesQuery(brush('other', 'Other'), 'wet', names)).toBe(false);

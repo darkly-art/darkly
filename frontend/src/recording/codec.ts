@@ -1,7 +1,7 @@
 /**
  * Encoder negotiation for process recording. Fits the document to the
- * configured long edge, then probes a codec ladder — H.264 first (broad
- * hardware encode support, MP4-native), VP9 as fallback — stepping the
+ * configured long edge, then probes a codec ladder: H.264 first (broad
+ * hardware encode support, MP4-native), VP9 as fallback, stepping the
  * resolution down when a config is rejected. Every Darkly-capable browser
  * ships WebCodecs (`VideoEncoder` is a strictly lower bar than WebGPU), so
  * only per-config rejection needs handling, not feature absence.
@@ -9,7 +9,7 @@
  * `isConfigSupported` is injectable so the ladder is unit-testable in node.
  */
 
-/** The outcome of a successful negotiation — everything the encoder worker
+/** The outcome of a successful negotiation: everything the encoder worker
  *  and the engine's capture target need to agree on. */
 export interface NegotiatedCodec {
     codec: string;
@@ -28,7 +28,7 @@ export type IsConfigSupported = (
 const FALLBACK_LONG_EDGES = [1920, 1280, 854, 640];
 
 /** Encoder frame alignment per axis. Widths are floored to whole 16×16
- *  macroblocks so H.264 never emits a horizontal SPS crop rectangle —
+ *  macroblocks so H.264 never emits a horizontal SPS crop rectangle;
  *  some hardware decoders (Intel iHD/VAAPI) mis-decode horizontally
  *  cropped streams to black. Heights only need the 4:2:0 even
  *  requirement: the resulting bottom crop is the same pattern every
@@ -58,7 +58,7 @@ export function fitToLongEdge(
     };
 }
 
-/** Bitrate policy: 0.07 bits per pixel per frame, clamped to 1–12 Mbps
+/** Bitrate policy: 0.07 bits per pixel per frame, clamped to 1-12 Mbps
  *  (~4 Mbps at 1080p30). Probed as part of the codec config so a rejection
  *  steps the ladder like any other constraint. */
 export function bitrateFor(width: number, height: number, fps: number): number {
@@ -112,7 +112,7 @@ export async function negotiateCodec(opts: {
                     return { codec, width, height, bitrate, fps: opts.fps };
                 }
             } catch {
-                // A throwing probe counts as a rejection — step the ladder.
+                // A throwing probe counts as a rejection: step the ladder.
             }
         }
     }

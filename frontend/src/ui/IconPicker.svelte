@@ -4,7 +4,7 @@
      *
      * `BUNDLED_ICON_NAMES` is what `scripts/gen-icon-bundle.mjs` scraped out of
      * this repository's sources, so everything offered here renders by
-     * construction — there is nothing to validate and no engine call to make.
+     * construction: there is nothing to validate and no engine call to make.
      * Adding a choice is one string literal somewhere plus `npm run gen:icons`.
      */
     import Icon from '../icons/Icon.svelte';

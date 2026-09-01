@@ -1,12 +1,12 @@
 name: Docs artifact
 
 # Publishes the documentation artifact for a release: the hand-written manual
-# under `docs/manual/`, `metadata.json` — the projection of every registry
-# Darkly has — and a rendered preview for every entry that declares one. They go
-# in one tarball under one `version`, so a consumer can never pair prose from one
-# build with metadata, or a preview, from another.
+# under `docs/manual/`, `metadata.json` (the projection of every registry
+# Darkly has), and a rendered preview for every entry that declares one. They
+# go in one tarball under one `version`, so a consumer can never pair prose
+# from one build with metadata, or a preview, from another.
 #
-# The consumer is pull-based and is not named here on purpose — this repo is
+# The consumer is pull-based and is not named here on purpose: this repo is
 # public and knows nothing about who reads the artifact. Whoever wants it
 # resolves this asset off the release and unpacks it.
 #
@@ -14,17 +14,17 @@ name: Docs artifact
 # consumer, or the public repo acquires an invisible dependency on private code.
 # Anything needing a component is a generated page on the consumer side.
 #
-# Two exports, not one. `export-docs` is GPU-free by construction — it builds
-# from `&'static` registration data alone — while `render-docs` needs a device
+# Two exports, not one. `export-docs` is GPU-free by construction (it builds
+# from `&'static` registration data alone) while `render-docs` needs a device
 # and the `testing` feature, and runs here on the same Mesa software rasterizer
-# `ci.yml` already tests against. They travel in one tarball under one `version`
-# for the same reason the prose does: an entry's row and its preview must come
-# from the same build.
+# `ci.yml` already tests against. They travel in one tarball under one
+# `version` for the same reason the prose does: an entry's row and its preview
+# must come from the same build.
 #
 # Frames never leave this job. `render-docs` writes 1 599 PNGs and 75 MB, which
-# ffmpeg turns into a poster and a looping H.264 per entry — under 2 MB — before
-# anything is packed. That is the same shape as the icon step: resolve it here so
-# no consumer needs the toolchain.
+# ffmpeg turns into a poster and a looping H.264 per entry (under 2 MB) before
+# anything is packed. That is the same shape as the icon step: resolve it here
+# so no consumer needs the toolchain.
 on:
   push:
     tags: ['v*']
@@ -43,14 +43,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      # Full checkout (with .git) so build.rs's `git describe --tags` resolves —
+      # Full checkout (with .git) so build.rs's `git describe --tags` resolves:
       # that string is what stamps `version`, and a shallow checkout breaks it.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       # fontconfig for native font enumeration via fontique; lavapipe because
-      # `render-docs` below wants a Vulkan device and a runner has no GPU —
-      # the same software rasterizer the test suite runs on; ffmpeg to encode.
+      # `render-docs` below wants a Vulkan device and a runner has no GPU (the
+      # same software rasterizer the test suite runs on); ffmpeg to encode.
       - name: Install fontconfig, Mesa lavapipe and ffmpeg
         run: |
           sudo apt-get update
@@ -88,7 +88,7 @@ jobs:
 
       # Which release this ends up on: the pushed tag, or the one a manual run
       # names. A dispatch with no tag names nothing and stops after the upload
-      # below — a real dry run of the export that touches no release.
+      # below: a real dry run of the export that touches no release.
       - name: Resolve target release
         env:
           INPUT_TAG: ${{ inputs.tag }}
@@ -113,7 +113,7 @@ jobs:
           path: ${{ env.ARTIFACT }}
 
       # The release object for a tag is produced outside this repo, so this job
-      # may run before or after it exists — create-if-missing plus --clobber
+      # may run before or after it exists; create-if-missing plus --clobber
       # makes either order work, and makes a re-run idempotent.
       - name: Attach to the release
         if: env.TARGET != ''

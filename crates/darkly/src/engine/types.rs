@@ -1,24 +1,24 @@
-//! FFI/serialization types — serde-serializable for any WASM bridge.
+//! FFI/serialization types: serde-serializable for any WASM bridge.
 
 use crate::gpu::params::{ParamDef, ParamKind, ParamValue};
 use crate::units::UnitType;
 
 /// Cached, synchronously-consumable snapshot of engine state that the frontend
 /// mirrors. Returned by `render` each frame (a downhill projection of the one
-/// borrow render already holds — no extra query, no per-frame poll) so
+/// borrow render already holds, with no extra query or per-frame poll) so
 /// synchronous UI consumers (`$derived`, menu `enabled()`, `beforeunload`) read
 /// a local mirror instead of awaiting the engine.
 ///
 /// This is a single struct *by design*: every field here exists for the same
-/// reason — frontend mirroring — so they ride together rather than as a
+/// reason (frontend mirroring), so they ride together rather than as a
 /// proliferating handful of return scalars. Mixes document state (`dirty`,
 /// `has_selection`) with compositor/session signals (`frame_count`,
 /// `thumbnail_version`); the unifying purpose is "values the UI caches," not a
-/// document/compositor distinction — hence the name. Grow it as the UI needs
+/// document/compositor distinction, hence the name. Grow it as the UI needs
 /// more; adding a field requires no new per-value plumbing on either side.
 ///
 /// `frame_count` is `f64` (not `u64`) so it crosses the wasm boundary as a JS
-/// `number`, not a `BigInt` — values up to 2^53 round-trip exactly.
+/// `number`, not a `BigInt`: values up to 2^53 round-trip exactly.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineState {
@@ -35,13 +35,13 @@ pub struct EngineState {
 }
 
 /// Per-instance view of a tree node. `type` (variant tag) and `blendMode` are
-/// stable registry `type_id`s — display labels are looked up by the UI through
+/// stable registry `type_id`s; display labels are looked up by the UI through
 /// the matching `*_types()` table, never carried alongside as a redundant copy.
 ///
 /// `canHaveMask` / `canRename` / `hasThumbnail` / `icon` / `kindName` are
 /// per-kind capability flags sourced from the layer's
 /// [`crate::document::LayerKindRegistration`]. The frontend reads these instead
-/// of branching on `type` — a new layer kind declares its capabilities in its
+/// of branching on `type`: a new layer kind declares its capabilities in its
 /// own registration and the UI follows with no consumer-side edit.
 #[derive(serde::Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -53,13 +53,13 @@ pub enum LayerInfo {
         name: String,
         visible: bool,
         locked: bool,
-        /// Effective editability — `false` when this node *or any ancestor*
+        /// Effective editability: `false` when this node *or any ancestor*
         /// carries `locked = true`. Mirrors `Document::is_node_editable`;
         /// the UI consumes this directly to grey out controls so the
         /// inheritance rule lives in one place (the document predicate)
         /// rather than being recomputed by every Svelte component.
         editable: bool,
-        /// Whether paint ops have somewhere to land on this node — mirrors
+        /// Whether paint ops have somewhere to land on this node, mirroring
         /// `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
         /// generated (void, filter, vector) and for groups; the panel reads it
         /// to offer "Rasterize" instead of branching on `type`.
@@ -79,7 +79,7 @@ pub enum LayerInfo {
         /// Pixel-space bounds of the layer's GPU texture in canvas coords.
         bounds: crate::coord::CanvasRect,
     },
-    /// Void (procedural-content) layer. Carries no pixel buffer — its
+    /// Void (procedural-content) layer. Carries no pixel buffer: its
     /// content is generated from `voidType` + `params` each frame.
     #[serde(rename_all = "camelCase")]
     Void {
@@ -88,7 +88,7 @@ pub enum LayerInfo {
         visible: bool,
         locked: bool,
         editable: bool,
-        /// Whether paint ops have somewhere to land on this node — mirrors
+        /// Whether paint ops have somewhere to land on this node, mirroring
         /// `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
         /// generated (void, filter, vector) and for groups; the panel reads it
         /// to offer "Rasterize" instead of branching on `type`.
@@ -104,7 +104,7 @@ pub enum LayerInfo {
         opacity: f32,
         blend_mode: &'static str,
         modifiers: Vec<ModifierInfo>,
-        /// Stable `type_id` from the void registry — UI resolves to a
+        /// Stable `type_id` from the void registry; UI resolves to a
         /// display label via `void_types()`.
         void_type: String,
         /// Param schema + current values, in the order the void's
@@ -112,7 +112,7 @@ pub enum LayerInfo {
         params: Vec<ParamInfo>,
     },
     /// Filter (non-destructive procedural-transform) layer. Carries no pixel
-    /// buffer — it transforms the composite of everything below it each frame.
+    /// buffer: it transforms the composite of everything below it each frame.
     #[serde(rename_all = "camelCase")]
     Filter {
         id: f64,
@@ -120,7 +120,7 @@ pub enum LayerInfo {
         visible: bool,
         locked: bool,
         editable: bool,
-        /// Whether paint ops have somewhere to land on this node — mirrors
+        /// Whether paint ops have somewhere to land on this node, mirroring
         /// `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
         /// generated (void, filter, vector) and for groups; the panel reads it
         /// to offer "Rasterize" instead of branching on `type`.
@@ -133,7 +133,7 @@ pub enum LayerInfo {
         opacity: f32,
         blend_mode: &'static str,
         modifiers: Vec<ModifierInfo>,
-        /// Stable filter `type_id` (e.g. `"invert"`) — UI resolves to a
+        /// Stable filter `type_id` (e.g. `"invert"`); UI resolves to a
         /// display label via `filter_types()`.
         pipeline: String,
         /// Param schema + current values, in the order the filter's `ParamDef`
@@ -142,7 +142,7 @@ pub enum LayerInfo {
         /// uses.
         params: Vec<ParamInfo>,
     },
-    /// Vector-object layer (text today). Carries no pixel buffer — the texture
+    /// Vector-object layer (text today). Carries no pixel buffer: the texture
     /// is realized from its `objects`.
     #[serde(rename_all = "camelCase")]
     Vector {
@@ -151,7 +151,7 @@ pub enum LayerInfo {
         visible: bool,
         locked: bool,
         editable: bool,
-        /// Whether paint ops have somewhere to land on this node — mirrors
+        /// Whether paint ops have somewhere to land on this node, mirroring
         /// `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
         /// generated (void, filter, vector) and for groups; the panel reads it
         /// to offer "Rasterize" instead of branching on `type`.
@@ -172,7 +172,7 @@ pub enum LayerInfo {
         visible: bool,
         locked: bool,
         editable: bool,
-        /// Whether paint ops have somewhere to land on this node — mirrors
+        /// Whether paint ops have somewhere to land on this node, mirroring
         /// `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
         /// generated (void, filter, vector) and for groups; the panel reads it
         /// to offer "Rasterize" instead of branching on `type`.
@@ -206,13 +206,13 @@ pub struct ModifierInfo {
     pub locked: bool,
     /// Whether this modifier participates in transforms with its host.
     pub linked_to_host: bool,
-    /// See [`LayerInfo::Raster::editable`] — a modifier is editable when
+    /// See [`LayerInfo::Raster::editable`]: a modifier is editable when
     /// neither it nor its host (nor any ancestor of the host) is locked.
     pub editable: bool,
 }
 
 /// Per-instance view of a veil in the chain. `type` is the registry `type_id`;
-/// resolve to a display label via `veil_types()` — never duplicate it here.
+/// resolve to a display label via `veil_types()`; never duplicate it here.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -224,7 +224,7 @@ pub struct VeilInfo {
     pub params: Vec<ParamInfo>,
 }
 
-/// Range and default rendered for reading — each number converted into its
+/// Range and default rendered for reading: each number converted into its
 /// display unit and suffixed. Carried alongside the raw numbers so a consumer
 /// that only wants to *show* the schema needs no unit table of its own.
 #[derive(serde::Serialize)]
@@ -238,7 +238,7 @@ pub struct ParamDisplay {
     pub unit: &'static str,
 }
 
-/// Format a display-space number without trailing zeros — `180.0` reads
+/// Format a display-space number without trailing zeros: `180.0` reads
 /// `"180"`, `0.25` stays `"0.25"`.
 fn fmt_display(value: f32, unit: UnitType) -> String {
     let v = unit.to_display(value);
@@ -322,8 +322,8 @@ impl ParamInfo {
                 // constant.
                 Some(*max_len as f64),
                 // The item schema rides the same kind-discriminated `options`
-                // channel Enum/Icon use — here a `Vec<ParamInfo>` of the item
-                // defs so the list editor can render each entry's fields.
+                // channel Enum/Icon use (here a `Vec<ParamInfo>` of the item
+                // defs) so the list editor can render each entry's fields.
                 Some(serde_json::json!(item
                     .iter()
                     .map(|d| ParamInfo::from_def(d, None))
@@ -332,7 +332,7 @@ impl ParamInfo {
         };
 
         let default = def.default_value();
-        // Only a scalar range renders — a curve or a list has no single number
+        // Only a scalar range renders: a curve or a list has no single number
         // to show, and `Vec2`'s `max` is a magnitude rather than a bound.
         let scalar_default = match &default {
             ParamValue::Float(f) => Some(*f),
@@ -372,7 +372,7 @@ impl ParamInfo {
     /// panels consume one type rather than two near-identical ones.
     ///
     /// `name` is the pref's dot-path key, and `default` comes from the
-    /// editor-agnostic defaults layer — the schema declares type and range, not
+    /// editor-agnostic defaults layer: the schema declares type and range, not
     /// values, so the value has to be read from where it actually lives.
     pub fn from_pref(pref: &crate::config::schema::Pref) -> Self {
         use crate::config::schema::{PrefKind, WidgetHint};
@@ -479,7 +479,7 @@ pub enum StrokeOp {
         rotation: f32,
         tangential_pressure: f32,
         time_ms: f64,
-        /// Foreground color as raw sRGB RGBA floats (0-1), as picked — the
+        /// Foreground color as raw sRGB RGBA floats (0-1), as picked; the
         /// compositor is display-referred, so no gamma conversion is applied.
         cr: f32,
         cg: f32,
@@ -488,7 +488,7 @@ pub enum StrokeOp {
     },
 }
 
-/// Data returned to the WASM bridge on copy/cut — always RGBA pixels regardless
+/// Data returned to the WASM bridge on copy/cut: always RGBA pixels regardless
 /// of the internal clipboard variant.
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]

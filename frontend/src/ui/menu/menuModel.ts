@@ -2,12 +2,12 @@ import { parseMenuSegment, type Action } from '../../actions/registry';
 
 /**
  * A menu is a tree of entries rendered by `MenuItems.svelte`. An entry is one
- * of: an action row, a submenu (with its own entries — rendered as a hover
+ * of: an action row, a submenu (with its own entries, rendered as a hover
  * flyout), a named widget slot (e.g. the theme switcher, which isn't an
  * action), or a separator.
  *
  * `label` / `icon` on an action entry override the action's own displayName /
- * (no) icon for that placement — used to surface the command palette as a
+ * (no) icon for that placement: used to surface the command palette as a
  * prominent "Find" item without renaming the action everywhere else.
  */
 export type MenuEntry =
@@ -94,7 +94,7 @@ export function buildTopMenus(regs: Action[]): TopMenu[] {
  * The hamburger's root entry list: a prominent "Find" (command palette) item
  * up top, the top-level menus as submenu flyouts, then a courtesy block that
  * duplicates the globally-useful commands at the root for one-click access
- * (deliberate duplication — those live in their submenus too). The theme
+ * (deliberate duplication; those live in their submenus too). The theme
  * switcher is intentionally NOT duplicated here; it lives in the View menu.
  */
 export function buildHamburgerEntries(regs: Action[]): MenuEntry[] {

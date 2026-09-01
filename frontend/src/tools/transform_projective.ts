@@ -1,11 +1,11 @@
 /**
- * Projective (3×3 homography) helpers for the transform gizmo — the
+ * Projective (3×3 homography) helpers for the transform gizmo: the
  * perspective generalization of `transform_affine.ts`.
  *
  * CONTRACT: row-major `[m00, m01, m02, m10, m11, m12, m20, m21, m22]`,
  * transforming `(x, y)` → `((m00·x + m01·y + m02)/w, (m10·x + m11·y + m12)/w)`
  * with `w = m20·x + m21·y + m22`. This is a hand-kept mirror of the Rust
- * helpers in `crates/darkly/src/transform/mat3.rs` — the two cannot share one
+ * helpers in `crates/darkly/src/transform/mat3.rs`: the two cannot share one
  * implementation (the gizmo computes interactively in JS and ships the baked
  * homography over the WASM boundary), so the layout is pinned by
  * `transform_projective.test.ts` here and `mat3::tests::homography_contract`
@@ -32,7 +32,7 @@ export function mat3ToAffine(m: Mat3): Affine2D {
     return [m[0], m[1], m[2], m[3], m[4], m[5]];
 }
 
-/** `a · b` — apply `b` first, then `a`. */
+/** `a · b`: apply `b` first, then `a`. */
 export function mat3Multiply(a: Mat3, b: Mat3): Mat3 {
     const out = new Array(9) as Mat3;
     for (let r = 0; r < 3; r++) {
@@ -107,7 +107,7 @@ export function homographyFromCorners(
 
     let trafo: Mat3;
     if (Math.abs(dx3) < 1e-12 && Math.abs(dy3) < 1e-12) {
-        // Affine (parallelogram) — no perspective term.
+        // Affine (parallelogram): no perspective term.
         trafo = [tx2 - tx1, tx3 - tx1, tx1, ty2 - ty1, ty3 - ty1, ty1, 0, 0, 1];
     } else {
         const det2 = dx1 * dy2 - dy1 * dx2;

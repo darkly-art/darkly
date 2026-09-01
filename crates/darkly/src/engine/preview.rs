@@ -1,6 +1,6 @@
 //! Picker previews: the editor's consumer of [`crate::gpu::preview`].
 //!
-//! One entry point per verb — enqueue, step, take — over every previewable
+//! One entry point per verb (enqueue, step, take) over every previewable
 //! catalog. Which catalog a request names is looked up in the generated
 //! `preview_mechanisms()` table, so a new previewable catalog is reachable here
 //! without this file being edited.
@@ -9,7 +9,7 @@
 //! [`DarklyEngine::pump_previews`] runs one sequence at a time and encodes at
 //! most [`PREVIEW_FRAMES_PER_TICK`] frames per engine tick. Every frame in
 //! flight is an unpooled `MAP_READ` staging buffer, so bounding the tick
-//! bounds the memory — opening a picker with seventeen animated cards would
+//! bounds the memory: opening a picker with seventeen animated cards would
 //! otherwise put the whole sequence's staging buffers in flight at once.
 //!
 //! Capture is asynchronous throughout (`CONTRIBUTING.md` §No Blocking GPU
@@ -34,14 +34,14 @@ pub(crate) type PreviewKey = (&'static str, &'static str, PreviewVariant);
 
 /// Frames encoded per engine tick, across all pending previews. Bounds both
 /// in-flight readback memory (this many `MAP_READ` staging buffers) and the GPU
-/// work one tick can add. Ten cards of 48 frames drain in 60 ticks — about a
-/// second at 60 Hz — and each card completes in order, so a picker fills
+/// work one tick can add. Ten cards of 48 frames drain in 60 ticks (about a
+/// second at 60 Hz), and each card completes in order, so a picker fills
 /// top-down rather than everything appearing at once.
 pub const PREVIEW_FRAMES_PER_TICK: u32 = 8;
 
 /// The preview being generated right now. The sequence itself is not stored:
 /// it borrows a registry off the compositor, so it is re-opened each tick and
-/// seeked to `cursor` — free, because `preview_at` is absolute and a resumed
+/// seeked to `cursor`, free because `preview_at` is absolute and a resumed
 /// sequence reaches the state an uninterrupted one would have.
 pub(crate) struct ActivePreview {
     pub key: PreviewKey,
@@ -56,7 +56,7 @@ fn mechanism(catalog: &str) -> Option<(&'static str, &'static dyn PreviewMechani
 }
 
 impl DarklyEngine {
-    /// Queue one of the two previews of `catalog`/`type_id` — the effect applied
+    /// Queue one of the two previews of `catalog`/`type_id`: the effect applied
     /// to the **current canvas** for the kinds that read one, generated from
     /// scratch for the kinds that don't.
     ///
@@ -66,7 +66,7 @@ impl DarklyEngine {
     ///
     /// Enqueues only; frames are produced by [`Self::pump_previews`] and
     /// retrieved with [`Self::poll_preview`]. An unknown catalog or type, or one
-    /// declaring no preview, is a silent no-op — the request carries an
+    /// declaring no preview, is a silent no-op: the request carries an
     /// arbitrary wire string, and there is nothing to render.
     ///
     /// Fully isolated from the live document: the effect instance is built fresh
@@ -90,7 +90,7 @@ impl DarklyEngine {
         if self.previews.contains_key(&key) || queued || active {
             return;
         }
-        // A burst of requests — a picker opening — shares one composite. The
+        // A burst of requests (a picker opening) shares one composite. The
         // flag is what makes `render_offscreen` cost once per burst rather than
         // once per card.
         if self.preview_queue.is_empty() && self.preview_active.is_none() {
@@ -209,7 +209,7 @@ impl DarklyEngine {
     /// evaporated.
     ///
     /// The composite does not change between the cards of one picker batch, so
-    /// one full-canvas `render_offscreen` serves all of them — which matters
+    /// one full-canvas `render_offscreen` serves all of them, which matters
     /// most for the stills, where the batch is every card at once.
     fn open_next(&mut self) -> bool {
         let Some(key) = self.preview_queue.pop_front() else {
@@ -248,7 +248,7 @@ impl DarklyEngine {
     /// for a mechanism that reads one, a cleared texture for one that generates
     /// its own content.
     ///
-    /// Reloads only when the target does not already hold what is wanted —
+    /// Reloads only when the target does not already hold what is wanted,
     /// which for a burst of same-kind requests is once, and for a burst that
     /// mixes kinds is once per switch.
     fn load_subject(&mut self, reads_source: bool) {
@@ -290,7 +290,7 @@ impl DarklyEngine {
     /// Takes rather than clones: the frontend copies each frame into an
     /// `ImageData` of its own, so retaining them here would keep every picker
     /// session's frames alive for the life of the engine. Re-opening the picker
-    /// regenerates, which is correct anyway — the canvas has moved on.
+    /// regenerates, which is correct anyway: the canvas has moved on.
     pub fn poll_preview(
         &mut self,
         catalog: &str,
@@ -311,8 +311,8 @@ impl DarklyEngine {
             .map(|f| f.expect("all filled"))
             .collect();
         // The picker wraps its cursor modulo the frame count, so a one-way
-        // sequence jumped on every repeat. Closed here rather than there — and
-        // by the same function the documentation render goes through — because
+        // sequence jumped on every repeat. Closed here rather than there (and
+        // by the same function the documentation render goes through) because
         // this is where the whole sequence first exists at once.
         Some((job.width, job.height, job.fps, close_loop(job.anim, frames)))
     }

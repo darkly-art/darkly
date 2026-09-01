@@ -8,7 +8,7 @@ import { rustActionDocs } from './rust_action_docs';
 
 // Populate the real registry once. `registerActions` is idempotent enough for
 // our purposes (re-registering overwrites by id), and tool actions are absent
-// here because `tools/index` isn't imported — that's fine, we only assert on
+// here because `tools/index` isn't imported: that's fine, we only assert on
 // the menu/palette actions this feature owns. Documentation comes from the Rust
 // tables, standing in for the `actions` catalog the editor is handed at init.
 beforeAll(() => {
@@ -140,7 +140,7 @@ describe('menu action registrations', () => {
 
     it('makes every layer kind the new-layer menu can add reachable from the palette', () => {
         // Searching the palette for a layer kind used to come up empty for
-        // veils, voids and filter layers — those existed only as local state
+        // veils, voids and filter layers; those existed only as local state
         // inside the layer panel's dropdown.
         const hit = (query: string) => filterPalette(actions.all(), query).map(r => r.id);
         expect(hit('veil')).toContain('newVeil');
@@ -164,7 +164,7 @@ describe('menu action registrations', () => {
     });
 
     it('leaves save actions always enabled (download fallback works everywhere)', () => {
-        // Save no longer gates on the File System Access API — browsers without
+        // Save no longer gates on the File System Access API: browsers without
         // it (Firefox/Safari) fall back to a download, so there's no `enabled`
         // gate at all.
         for (const id of ['saveDocument', 'saveDocumentAs']) {
@@ -206,7 +206,7 @@ describe('menu action registrations', () => {
     it('parseMenuSegment splits the title from the optional order suffix', () => {
         expect(parseMenuSegment('Help')).toEqual({ title: 'Help' });
         expect(parseMenuSegment('Help:10')).toEqual({ title: 'Help', order: 10 });
-        // Non-numeric suffix is not an order — treat the whole thing as a title.
+        // Non-numeric suffix is not an order, so treat the whole thing as a title.
         expect(parseMenuSegment('A:B')).toEqual({ title: 'A:B' });
     });
 

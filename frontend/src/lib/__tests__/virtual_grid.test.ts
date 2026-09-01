@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { virtualGridWindow, type GridMetrics } from '../virtual_grid';
 
-// A 150px-min tile, 74px tall, 8px gap — the font browser's real footprint.
+// A 150px-min tile, 74px tall, 8px gap: the font browser's real footprint.
 const BASE: GridMetrics = {
     count: 1000,
     containerWidth: 640,

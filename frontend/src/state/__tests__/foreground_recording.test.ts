@@ -71,7 +71,7 @@ describe('recording what was actually used', () => {
         app.engine = fakeEngine(false);
         await state.loadBrush('Nonexistent', 'nonexistent');
 
-        // The failed load left the front alone — a brush that never loaded
+        // The failed load left the front alone; a brush that never loaded
         // was never used.
         expect(state.error).not.toBeNull();
         expect(recentBrushes.items).not.toContain('nonexistent');

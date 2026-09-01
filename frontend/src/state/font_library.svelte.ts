@@ -1,9 +1,9 @@
 /**
- * Personal font library — the frontend source of truth for every non-fallback
+ * Personal font library: the frontend source of truth for every non-fallback
  * font (uploaded, Google-imported, or pulled out of an opened `.darkly`).
  *
  * Fonts live in an IndexedDB store keyed by content hash so they survive reload
- * and are shared across every document you open — complementary to `.darkly`
+ * and are shared across every document you open, complementary to `.darkly`
  * embedding (which makes a single file portable). The library **replays itself
  * into every engine handle**: `registerIntoHandle` is called by the editor
  * bootstrap for each new tab, and `add` pushes a freshly-acquired font into all
@@ -33,7 +33,7 @@ const DB_NAME = 'darkly-fonts';
 const DB_VERSION = 1;
 const STORE = 'fonts';
 
-/** Stable 64-bit FNV-1a content hash, hex-encoded — the same algorithm the Rust
+/** Stable 64-bit FNV-1a content hash, hex-encoded: the same algorithm the Rust
  *  `text::content_hash` uses, so a font addresses identically on both sides. */
 export function contentHash(bytes: Uint8Array): string {
     let h = 0xcbf29ce484222325n;
@@ -67,13 +67,13 @@ function idbRequest<T>(req: IDBRequest<T>): Promise<T> {
     });
 }
 
-/** Every live engine handle across all open tabs — the replay targets. */
+/** Every live engine handle across all open tabs: the replay targets. */
 function liveEngines(): Engine[] {
     return shell.instances.map((i) => i.engine).filter((e): e is Engine => e !== null);
 }
 
 class FontLibrary {
-    /** Every family the library provides, deduped and sorted — the reactive
+    /** Every family the library provides, deduped and sorted: the reactive
      *  source the font pickers bind to. Excludes the binary-resident fallback,
      *  which the engine surfaces through `list_fonts` separately. */
     families = $state<string[]>([]);
@@ -82,7 +82,7 @@ class FontLibrary {
     private records = new Map<string, FontRecord>();
     private loaded = false;
 
-    /** Load the persisted library into memory on startup. Idempotent — a second
+    /** Load the persisted library into memory on startup. Idempotent: a second
      *  call is a no-op once the first has populated the mirror. Does not touch
      *  engine handles; each handle pulls the library in via `registerIntoHandle`
      *  at its own creation. */
@@ -109,7 +109,7 @@ class FontLibrary {
     /** Register a font blob into the library: content-hash it, register into
      *  every live handle, and persist. Returns the family names the blob
      *  contributed (empty if no engine accepted it). A font whose bytes are
-     *  already known is a no-op beyond returning its families — the content hash
+     *  already known is a no-op beyond returning its families: the content hash
      *  dedups, so re-adding costs nothing. */
     async add(bytes: Uint8Array, source: FontSource): Promise<string[]> {
         const hash = contentHash(bytes);
@@ -117,7 +117,7 @@ class FontLibrary {
         if (existing) return existing.families;
 
         // Register into every open tab; the first non-empty response names the
-        // families (identical across handles — same bytes, same collection).
+        // families (identical across handles, same bytes, same collection).
         let families: string[] = [];
         for (const engine of liveEngines()) {
             const res = await engine.api.registerFont(bytes).catch(() => null);
@@ -158,7 +158,7 @@ class FontLibrary {
     /** Absorb the fonts embedded in an opened `.darkly` into the library so
      *  they persist and become reusable across documents. The engine already
      *  registered them into the opening handle during `open_document`; this
-     *  makes them survive reload and reach future tabs. Best-effort — a
+     *  makes them survive reload and reach future tabs. Best-effort: a
      *  malformed archive or missing blob is skipped, never surfaced as an error.
      */
     async absorbDarkly(zipBytes: Uint8Array): Promise<void> {
@@ -194,7 +194,7 @@ class FontLibrary {
 
     /** Register a record's families as browser `FontFace`s so the UI can preview
      *  them in their own typeface (the engine's collection is separate from the
-     *  document's CSS). Browser-only + best-effort — a no-op under vitest/node. */
+     *  document's CSS). Browser-only + best-effort: a no-op under vitest/node. */
     private injectBrowserFont(rec: FontRecord): void {
         if (typeof document === 'undefined' || !('fonts' in document)) return;
         for (const family of rec.families) {
@@ -204,7 +204,7 @@ class FontLibrary {
                     .then((f) => document.fonts.add(f))
                     .catch(() => {});
             } catch {
-                /* FontFace unavailable — previews degrade to the fallback face. */
+                /* FontFace unavailable: previews degrade to the fallback face. */
             }
         }
     }

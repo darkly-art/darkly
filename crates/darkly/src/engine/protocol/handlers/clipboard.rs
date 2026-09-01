@@ -22,7 +22,7 @@ pub struct PasteResultResp {
     pub id: i64,
 }
 
-/// `{ json, active_layer_id }` — a serialized rich-layer clipboard payload.
+/// `{ json, active_layer_id }`: a serialized rich-layer clipboard payload.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct PasteLayerRichReq {
@@ -30,7 +30,7 @@ pub struct PasteLayerRichReq {
     pub active_layer_id: i64,
 }
 
-/// `{ width, height, offset_x, offset_y, active_layer_id }` — a raw RGBA paste;
+/// `{ width, height, offset_x, offset_y, active_layer_id }`: a raw RGBA paste;
 /// the pixels ride the binary side-channel.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -42,7 +42,7 @@ pub struct PasteImageReq {
     pub active_layer_id: i64,
 }
 
-/// `{ active_layer_id }` — paste the clipboard at its original position.
+/// `{ active_layer_id }`: paste the clipboard at its original position.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct PasteInPlaceReq {

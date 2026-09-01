@@ -1,4 +1,4 @@
-//! Mask filter — multiplies a host's alpha by an R8 alpha texture.
+//! Mask filter: multiplies a host's alpha by an R8 alpha texture.
 //!
 //! Per the Modularity Principle in [CONTRIBUTING.md], the entire mask kind
 //! lives in this file: data struct, construction, wire format, and the `register()`
@@ -37,7 +37,7 @@ impl MaskFilter {
 
 /// Stable wire-format identifier. Owned by this module so dispatch sites
 /// (notably `Filter::kind`) reference the same constant the registration
-/// uses — no parallel string literal anywhere.
+/// uses, with no parallel string literal anywhere.
 pub const TYPE_ID: &str = "mask";
 
 pub(crate) fn transform_membership(
@@ -143,7 +143,7 @@ fn deserialize(body: &serde_json::Value, id: LayerId) -> Result<Filter, LoadErro
 }
 
 fn remap_ids(_modifier: &mut Filter, _id_map: &IdMap) {
-    // Mask filters carry no cross-references — the host pointer is the
+    // Mask filters carry no cross-references; the host pointer is the
     // document's `parent` map, populated separately by the loader from
     // the host's `filters: Vec<u64>` list.
 }

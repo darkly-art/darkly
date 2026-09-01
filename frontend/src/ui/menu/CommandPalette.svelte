@@ -115,8 +115,8 @@
 </Modal>
 
 <style>
-    /* The dialog chrome — surface, scrim, Escape, backdrop dismissal, key and
-     * wheel containment — is `Modal`'s. What's left here is the palette. */
+    /* The dialog chrome (surface, scrim, Escape, backdrop dismissal, key and
+     * wheel containment) is `Modal`'s. What's left here is the palette. */
     .palette-input {
         /* Pinned while the results scroll under it. The modal body is the
          * scrollport (the dialog's height is its content's, so there is no

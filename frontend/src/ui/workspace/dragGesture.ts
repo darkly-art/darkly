@@ -3,7 +3,7 @@
  * window physically holds the pointer hit-tests *its own* panels and feeds the
  * result in as a {@link HitTarget}. Because a `HitTarget` carries its own
  * `workspaceId`, within-window and cross-window drags flow through one code
- * path — a target in a different workspace simply yields a cross-window
+ * path: a target in a different workspace simply yields a cross-window
  * `move-tab`/`dock` commit.
  *
  * The reducer owns the 5px click-vs-drag threshold (so a plain click still just
@@ -34,7 +34,7 @@ export type HitTarget =
 
 /** The current drop intent, painted as a hint by the reporting window. */
 export type DragMode =
-    | { kind: 'idle' } // below threshold — this is a click, not a drag
+    | { kind: 'idle' } // below threshold: this is a click, not a drag
     | { kind: 'none' } // dragging but over no valid target
     | { kind: 'reorder'; workspaceId: number; groupId: number; insertionIndex: number }
     | { kind: 'move-tab'; workspaceId: number; groupId: number; insertionIndex: number }
@@ -118,7 +118,7 @@ export function reduceDrag(state: DragState, ev: DragInput): { state: DragState;
     }
 
     // ev.type === 'up'
-    if (!state.dragging) return { state, commit: null }; // a click — tab already activated on down
+    if (!state.dragging) return { state, commit: null }; // a click: tab already activated on down
     return { state, commit: commitFor(state) };
 }
 

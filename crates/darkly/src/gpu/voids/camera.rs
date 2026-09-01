@@ -1,4 +1,4 @@
-//! Camera void — live webcam as a layer.
+//! Camera void: live webcam as a layer.
 //!
 //! A thin config over the shared [`crate::gpu::textured_void`] machinery.
 //! Everything about the "live video stream → texture" pipeline lives there;
@@ -12,7 +12,7 @@ use crate::gpu::void::{CaptureKind, ParamDef, VoidRegistration, VoidSource};
 
 pub const TYPE_ID: &str = "camera";
 
-// Scale / rotation / pan / mirror are NOT params — they're the generic
+// Scale / rotation / pan / mirror are NOT params: they're the generic
 // [`crate::transform::Transform`] on the void layer, edited by the on-canvas
 // gizmo (the Transform tool). Mirroring is a negative scale in that affine, and
 // the camera seeds a horizontal flip at creation (see CONFIG.default_transform).
@@ -21,14 +21,14 @@ const PARAMS: &[ParamDef] = &[
     // Freeze the layer on its last received frame. When on, the void stops
     // accepting external image uploads (`wants_external_input` returns false)
     // so the GPU holds the last frame, and the JS-side `MediaStreamSource`
-    // suppresses uploads — but keeps the stream open so toggling back off
+    // suppresses uploads, but keeps the stream open so toggling back off
     // resumes the live feed instantly (no re-prompt).
     ParamDef::boolean("freeze", false)
         .with_label("Freeze")
         .with_description("Holds the last captured frame instead of following the live feed."),
     // How many rAF frames to skip between webcam → GPU uploads. 1 = upload
     // every frame (live 60fps), 4 = upload every 4th frame (~15fps at 60Hz
-    // rAF, the default). Higher values trade smoothness for GPU/CPU savings —
+    // rAF, the default). Higher values trade smoothness for GPU/CPU savings:
     // each skipped tick avoids a JS `drawImage` blit, a
     // `copy_external_image_to_texture`, the void's canvas-resolution fragment
     // shader, and the full compositor re-encode that an upload would trigger.
@@ -40,7 +40,7 @@ const PARAMS: &[ParamDef] = &[
         .with_description("Capture one frame in this many, to lighten the load."),
 ];
 
-/// Horizontal flip about the canvas center — the selfie view every video-call
+/// Horizontal flip about the canvas center: the selfie view every video-call
 /// app shows, because the webcam points at the user and they expect their
 /// reflection, not a backwards view. It's just the affine the shader already
 /// samples through (no extra shader/uniform work), it round-trips through

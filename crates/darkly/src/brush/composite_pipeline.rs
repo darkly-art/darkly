@@ -1,4 +1,4 @@
-//! Brush commit composite pipeline — the scratch → layer blit with
+//! Brush commit composite pipeline: the scratch → layer blit with
 //! shader-side Porter-Duff source-over against a canvas-copy
 //! background.
 //!
@@ -7,7 +7,7 @@
 //! routes through [`BrushPaintTargetExt::commit_brush_dab`], which
 //! calls this pipeline.
 //!
-//! Owns two render pipelines — one targeting `Rgba8Unorm` (raster
+//! Owns two render pipelines: one targeting `Rgba8Unorm` (raster
 //! layer destinations) and one targeting `R8Unorm` (mask
 //! destinations). Same WGSL; the GPU writes only `.r` to R8 targets.
 //! Per the type-owned-dispatch principle, the format branch lives in
@@ -21,8 +21,8 @@ use crate::brush::pipeline::{
 
 /// `BrushPipelines::new` harvests this alongside `nodes::registrations()`
 /// so the central registry has a single uniform input. The composite
-/// pipeline isn't tied to any one node — every terminal's `commit` hook
-/// uses it — so it lives here instead of inside `nodes/`.
+/// pipeline isn't tied to any one node (every terminal's `commit` hook
+/// uses it), so it lives here instead of inside `nodes/`.
 pub fn composite_pipeline_registration() -> BrushPipelineRegistration {
     BrushPipelineRegistration {
         id: "composite",
@@ -77,7 +77,7 @@ impl CompositePipeline {
                 label: Some("brush-composite-layout"),
                 // group(1) is the scratch foreground; the scratch's
                 // write bind group is rebuilt against `canvas_copy_bgl`
-                // after the dab_pool removal — the shape is identical
+                // after the dab_pool removal, the shape is identical
                 // (`texture_2d<f32> + sampler`).
                 bind_group_layouts: &[
                     Some(ctx.uniform_bgl),

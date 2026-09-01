@@ -4,7 +4,7 @@
 //! drop semantics.
 //!
 //! These construct a real `DarklyEngine` via headless `GpuContext` and drive
-//! the recorder through `render(t)` + `test_flush_readbacks()` — the same
+//! the recorder through `render(t)` + `test_flush_readbacks()`, the same
 //! frame loop production uses, minus the surface present.
 //! Run with: `cargo test -p darkly --test process_recording -- --test-threads=1`
 
@@ -20,7 +20,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
     DarklyEngine::new(gpu, width, height)
 }
 
-/// Paint a short brush stroke at (x, y) WITHOUT rendering — the tests
+/// Paint a short brush stroke at (x, y) WITHOUT rendering: the tests
 /// control the `render(t)` clock themselves.
 fn stroke_at(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32) {
     engine.begin_stroke(layer_id).unwrap();
@@ -98,7 +98,7 @@ fn throttle_defers_second_capture_until_trailing_fires() {
     let first = poll_frame_within(&mut engine, 0.0, 16);
     assert!(first.is_some(), "first change must capture immediately");
 
-    // Second mutation at t=0.5 lands inside the 2.0s window — no frame yet,
+    // Second mutation at t=0.5 lands inside the 2.0s window, so no frame yet,
     // only a trailing capture armed.
     stroke_at(&mut engine, layer, 48.0, 48.0);
     step(&mut engine, 0.5);
@@ -156,7 +156,7 @@ fn forced_capture_fires_without_revision_change() {
 #[test]
 fn forced_capture_bypasses_the_throttle_window() {
     // Milestones (first frame, disconnect, stop) are explicit and rare, so a
-    // forced capture must fire immediately even inside the throttle window —
+    // forced capture must fire immediately even inside the throttle window;
     // otherwise a "final on stop" capture would be deferred up to
     // `min_interval` and missed by the bounded stop-time drain.
     let mut engine = test_engine(64, 64);
@@ -167,7 +167,7 @@ fn forced_capture_bypasses_the_throttle_window() {
     stroke_at(&mut engine, layer, 32.0, 32.0);
     poll_frame_within(&mut engine, 0.0, 16).expect("first capture");
 
-    // A forced request at t=0.5 — deep inside the window — must not wait for
+    // A forced request at t=0.5 (deep inside the window) must not wait for
     // the window to close (a revision change here would only arm a trailing
     // capture).
     engine.request_recording_capture();
@@ -227,8 +227,8 @@ fn no_capture_while_stroke_active() {
     let layer = engine.add_raster_layer(None);
     engine.set_recording_params(true, 0.0, 64, 64, 64, 64);
 
-    // Pending revision change (the layer add), but a stroke is in flight —
-    // the tick must hold off.
+    // Pending revision change (the layer add), but a stroke is in flight,
+    // so the tick must hold off.
     engine.begin_stroke(layer).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x: 32.0,
@@ -266,7 +266,7 @@ fn disable_clears_completed_queue() {
     stroke_at(&mut engine, layer, 32.0, 32.0);
 
     // Queue several undrained frames, then disable capture. Frames encoded
-    // for the old parameters must not survive into the next activation —
+    // for the old parameters must not survive into the next activation:
     // the frontend would hand them to an encoder configured for different
     // dimensions.
     let mut t = 0.0;
@@ -309,7 +309,7 @@ fn full_queue_skips_capture_without_consuming_revision() {
     step(&mut engine, t);
     step(&mut engine, t);
 
-    // Exactly 4 frames are queued — the bound held.
+    // Exactly 4 frames are queued: the bound held.
     let mut drained = 0;
     while engine.poll_recording_frame().is_some() {
         drained += 1;
@@ -336,7 +336,7 @@ fn ar_change_gates_capture_until_reconfigured() {
     poll_frame_within(&mut engine, 0.0, 16).expect("frame after paint stroke");
 
     // Resize to a different aspect ratio: the revision bump must NOT be
-    // captured — a frame at the stale aspect would bake letterbox bars into
+    // captured; a frame at the stale aspect would bake letterbox bars into
     // the recording.
     let mut rect = engine.canvas_rect();
     rect.width = 256;

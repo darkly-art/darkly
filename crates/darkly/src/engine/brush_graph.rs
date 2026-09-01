@@ -26,23 +26,23 @@ enum ChangeKind {
     /// flags, non-exposed port defaults, brush load/reset/clear. Bumps
     /// both `brush_graph_version` and `brush_topology_version`.
     Topology,
-    /// Exposed-port scrub on a port marked `persist_in_thumbnail` — its
+    /// Exposed-port scrub on a port marked `persist_in_thumbnail`: its
     /// value bleeds through to the dab thumbnail render, so both
     /// version counters need to bump to invalidate both preview caches.
     /// Used for orientation knobs like `circle.rotation`.
     ThumbnailRelevantScrub,
     /// User-facing exposed-port scrub on a port the editor preview
     /// pipeline actually reads (size, opacity, hardness, …). Bumps only
-    /// `brush_graph_version` — the dab thumbnail render neutralises
+    /// `brush_graph_version`: the dab thumbnail render neutralises
     /// scrubs via `reset_exposed_scrubs`, so its cache stays valid.
     ScrubOnly,
     /// Exposed-port scrub on a port the editor preview pipeline
     /// ignores. Two declaration mechanisms route here:
-    /// - `PortDef::preview_value` — caller-side
+    /// - `PortDef::preview_value`: caller-side
     ///   `Graph::apply_preview_overrides` replaces the scrubbed value
     ///   with a preview-mode constant before rendering (used by
     ///   `brush_settings.size`, `blur.strength`).
-    /// - `PortDef::preview_irrelevant_scrub` — the preview pipeline
+    /// - `PortDef::preview_irrelevant_scrub`: the preview pipeline
     ///   structurally ignores the port (used by `pen_input.stabilize`,
     ///   which the synthetic-stroke preview's hard-wired `PassThrough`
     ///   never reads).
@@ -57,7 +57,7 @@ impl DarklyEngine {
     /// Return metadata for all registered brush node types.
     ///
     /// Returns the bare nodegraph registration (ports, params, display
-    /// info) — the wrapper's pipeline metadata is engine-internal and the
+    /// info); the wrapper's pipeline metadata is engine-internal and the
     /// frontend doesn't see it.
     #[handler]
     pub fn brush_node_types(&self) -> Vec<crate::nodegraph::NodeRegistration<BrushWireType>> {
@@ -70,7 +70,7 @@ impl DarklyEngine {
     }
 
     /// Capabilities the active brush graph derives from its nodes'
-    /// registrations — erase support (brush-tool options bar shows or
+    /// registrations: erase support (brush-tool options bar shows or
     /// hides the erase toggle) and the preview fallback icon (live
     /// brush-preview strips show it instead of the baked thumbnails).
     /// One walk via [`crate::brush::graph_capabilities`].
@@ -86,7 +86,7 @@ impl DarklyEngine {
 
     // `active_brush_graph()` and `brush_graph_version()` /
     // `brush_topology_version()` live on `super::DarklyEngine` (see
-    // `engine/mod.rs`) — they pull from the shared brush session under
+    // `engine/mod.rs`); they pull from the shared brush session under
     // a read lock. Same public API, different storage.
 
     /// Validate a brush graph from JSON without setting it as active.
@@ -162,7 +162,7 @@ impl DarklyEngine {
 
     /// Capture every input port's current default into the shared brush
     /// state's `defaults` map. Called whenever the active graph is
-    /// replaced as a whole — brush load, reset, save — so that "reset to
+    /// replaced as a whole (brush load, reset, save) so that "reset to
     /// default" returns to the loaded/saved baseline rather than the
     /// node-type registration value. Not called on individual port edits;
     /// that's the whole point.
@@ -189,7 +189,7 @@ impl DarklyEngine {
 
     /// Re-render the brush preview into the overlay's preview mask using
     /// fully-synthetic pen inputs. Fired on graph/param changes where no
-    /// real pen data is available — clears any hover history so the next
+    /// real pen data is available, clearing any hover history so the next
     /// hover starts fresh (no bogus direction carried across a brush
     /// swap, etc.).
     pub fn regenerate_brush_cursor_preview(&mut self) {
@@ -210,8 +210,8 @@ impl DarklyEngine {
     /// Re-render the brush preview using live hover data.
     ///
     /// Pre-fills `pen`'s segment-derived sensors (drawing_angle, motion,
-    /// distance, speed) using the previous hover pose — the same helper
-    /// the stroke engine uses — so a compiled graph wiring any sensor
+    /// distance, speed) using the previous hover pose (the same helper
+    /// the stroke engine uses), so a compiled graph wiring any sensor
     /// into any input sees the same values the upcoming stroke would.
     ///
     /// The rest of `pen` (pos, pressure, tilts, rotation,
@@ -223,7 +223,7 @@ impl DarklyEngine {
         mut pen: crate::brush::paint_info::PaintInformation,
     ) {
         // Chord length between the previous and current hover positions.
-        // Chord rather than Catmull-Rom arc length — there is no spline
+        // Chord rather than Catmull-Rom arc length: there is no spline
         // through a single sample.
         let segment_length = match &self.last_cursor_preview_pose {
             Some(prev) => {
@@ -238,7 +238,7 @@ impl DarklyEngine {
         self.regenerate_brush_cursor_preview_with_pen_internal(pen);
     }
 
-    /// Shared render body — no pose tracking, no sensor derivation.
+    /// Shared render body: no pose tracking, no sensor derivation.
     /// `pen` must already be fully populated by the caller.
     pub(crate) fn regenerate_brush_cursor_preview_with_pen_internal(
         &mut self,
@@ -268,7 +268,7 @@ impl DarklyEngine {
             }
         };
 
-        // Always dispatch `render_preview` — individual terminals decide
+        // Always dispatch `render_preview`: individual terminals decide
         // whether they produce output this frame. A graph with no
         // compiled-terminal hook fires nothing and `brush_cursor_preview_info`
         // stays None; the four compiled terminals each fire their
@@ -310,7 +310,7 @@ impl DarklyEngine {
             view_rotation: self.view_params.rotation,
             perf: BrushPerfCounters::default(),
             // The preview pipeline doesn't touch the stroke scratch / paint
-            // target — the terminal's `render_preview` writes to the
+            // target: the terminal's `render_preview` writes to the
             // preview mask through `mask_overlay` instead. No
             // `StrokeResources` is supplied; any accidental scratch /
             // paint-target access will see `None` and either early-out or
@@ -417,12 +417,12 @@ impl DarklyEngine {
     /// - [`ChangeKind::ScrubOnly`] bumps only the graph version. The dab
     ///   thumbnail render neutralises exposed-port scrubs via
     ///   [`crate::brush::reset_exposed_scrubs`], so a scrub change can't
-    ///   change its rendered output — no point invalidating its cache.
+    ///   change its rendered output, so there's no point invalidating its cache.
     /// - [`ChangeKind::PreviewIrrelevantScrub`] bumps neither. The
     ///   scrubbed port is overridden by
     ///   [`crate::nodegraph::Graph::apply_preview_overrides`] before
     ///   every editor-preview render, so its rendered output is
-    ///   independent of the user's port value — invalidating the cache
+    ///   independent of the user's port value, so invalidating the cache
     ///   would just cause a wasted full-stroke re-render.
     ///
     /// Returns Ok on success or an error string.
@@ -433,7 +433,7 @@ impl DarklyEngine {
             crate::brush::compile_graph(&brush.graph)?;
         }
 
-        // Bump version counters per the change classification — see the
+        // Bump version counters per the change classification; see the
         // `ChangeKind` doc above for the full rule. PreviewIrrelevantScrub
         // bumps nothing: the rendered preview output can't have changed.
         match kind {
@@ -444,7 +444,7 @@ impl DarklyEngine {
             ChangeKind::PreviewIrrelevantScrub => {}
         }
 
-        // Refresh the brush preview overlay now that the graph is compiled —
+        // Refresh the brush preview overlay now that the graph is compiled:
         // size, rotation, and tip changes all land here.
         self.regenerate_brush_cursor_preview();
 
@@ -475,30 +475,30 @@ impl DarklyEngine {
 
     /// Render a full-stroke brush editor preview and return the most recent
     /// cached PNG bytes synchronously. The pixels update on a later frame
-    /// once the async readback completes — same shape as
-    /// `brush_active_dab_preview`. Always framed to `BRUSH_THUMBNAIL_SIZE`;
+    /// once the async readback completes (same shape as
+    /// `brush_active_dab_preview`). Always framed to `BRUSH_THUMBNAIL_SIZE`;
     /// the frontend scales the result via CSS to whatever display size it
     /// needs.
     ///
     /// Uses the theme colors stored via `set_preview_theme`, not the user's
-    /// active paint color — keeps the editor preview visually consistent
+    /// active paint color, keeping the editor preview visually consistent
     /// with the brush picker's brush thumbnails.
     #[handler(returns = bytes)]
     pub fn brush_stroke_preview(&mut self) -> Vec<u8> {
-        // Guard against painting while a real stroke is in flight — the
+        // Guard against painting while a real stroke is in flight: the
         // preview shares `dab_pool` and `brush_pipelines` with the engine,
         // and running mid-stroke would step on acquired handles and
         // uniform rings.
         let in_stroke = self.brush_stroke_engine.is_some();
 
         // Caller's frontend treats an empty Vec as "no fresh bytes
-        // available" and skips the image update — preserving whatever was
+        // available" and skips the image update, preserving whatever was
         // last shown. A zero-filled buffer would *also* parse cleanly and
         // render as a transparent image, wiping the visible preview.
         let cached = self.brush_stroke_preview_cache.clone();
 
         // Skip work when nothing has changed and the cache is good. Also
-        // skip if a real stroke is in progress — return the most recent
+        // skip if a real stroke is in progress; return the most recent
         // cached bytes so the UI stays responsive without clobbering the
         // stroke's GPU state.
         let current_graph_version = self.brush_graph_version();
@@ -509,7 +509,7 @@ impl DarklyEngine {
             return cached.unwrap_or_default();
         }
 
-        // Don't queue a second readback on top of an in-flight one — it
+        // Don't queue a second readback on top of an in-flight one; it
         // would race with whichever lands first and the stale result
         // could overwrite the fresh one.
         let already_pending = self
@@ -533,7 +533,7 @@ impl DarklyEngine {
         cached.unwrap_or_default()
     }
 
-    /// Invalidate any cached editor preview — call when the theme colors
+    /// Invalidate any cached editor preview: call when the theme colors
     /// change so the next `brush_stroke_preview` request re-renders with
     /// the new palette instead of returning the stale cached pixels.
     /// Also drops the active-dab preview cache so the BrushBar trigger
@@ -550,33 +550,33 @@ impl DarklyEngine {
 
     /// Render a single-dab preview of the active brush and return the
     /// most recent cached PNG bytes synchronously. Pixels update on a
-    /// later frame once the async readback completes — same shape as
-    /// `brush_stroke_preview` and `layer_thumbnail`. Used by the
+    /// later frame once the async readback completes (same shape as
+    /// `brush_stroke_preview` and `layer_thumbnail`). Used by the
     /// BrushBar trigger button and the picker's active-brush strip.
     ///
     /// Renders at the same fixed `BRUSH_DAB_RENDER_SIZE` the baked
     /// thumbnail path uses, and runs the result through the same
-    /// `frame_dab_thumbnail` framer — so the bytes returned here are
+    /// `frame_dab_thumbnail` framer, so the bytes returned here are
     /// byte-identical to a `brush_dab_thumbnail(active_name)` call.
     /// The frontend scales the resulting PNG via CSS to whatever
     /// display size it needs.
     #[handler(returns = bytes)]
     pub fn brush_active_dab_preview(&mut self) -> Vec<u8> {
-        // Guard against painting while a real stroke is in flight — the
+        // Guard against painting while a real stroke is in flight: the
         // preview shares `dab_pool` and `brush_pipelines` with the engine,
         // and running mid-stroke would step on acquired handles and
         // uniform rings.
         let in_stroke = self.brush_stroke_engine.is_some();
 
         // See `brush_stroke_preview` for why we return an empty Vec rather
-        // than a zero-filled one when no cache is available — frontends
+        // than a zero-filled one when no cache is available: frontends
         // treat empty as "no fresh bytes" and preserve the last successful
         // render, while a zero buffer would parse as a transparent image
         // and visibly wipe whatever was on screen.
         let cached = self.active_dab_preview_cache.clone();
 
         // Skip work when nothing has changed and the cache is good. Also
-        // skip while a real stroke is in progress — return the most recent
+        // skip while a real stroke is in progress; return the most recent
         // cached bytes so the UI stays responsive without clobbering the
         // stroke's GPU state.
         let current_topology = self.brush_topology_version();
@@ -607,7 +607,7 @@ impl DarklyEngine {
 
     /// Per-node preview thumbnail. Returns the most recent cached PNG bytes
     /// synchronously; pixels update on a later frame once the async GPU
-    /// render + readback completes — same shape as `brush_active_dab_preview`.
+    /// render + readback completes (same shape as `brush_active_dab_preview`).
     /// The caller (brush-builder NodePreview component) treats an empty Vec as
     /// "no fresh bytes" and preserves the last successful render.
     ///
@@ -618,7 +618,7 @@ impl DarklyEngine {
     /// empty.
     #[handler(returns = bytes)]
     pub fn brush_node_preview(&mut self, node_id: &str) -> Vec<u8> {
-        // Guard against painting while a real stroke is in flight — the
+        // Guard against painting while a real stroke is in flight: the
         // preview shares GPU state with the engine (see
         // `brush_active_dab_preview`).
         let in_stroke = self.brush_stroke_engine.is_some();
@@ -630,7 +630,7 @@ impl DarklyEngine {
             .get(node_id)
             .is_some_and(|(v, _)| *v == current_topology);
 
-        // Nothing to do when the cache is current, or a stroke is in flight —
+        // Nothing to do when the cache is current, or a stroke is in flight;
         // return the most recent bytes without clobbering GPU state.
         if in_stroke || fresh {
             return cached_bytes.unwrap_or_default();
@@ -699,7 +699,7 @@ impl DarklyEngine {
         // Encode the readback manually (not via `gpu.encode`) so the
         // borrow of `self.brush_stroke_preview_renderer` that produced
         // `texture` coexists with borrows of `self.gpu` and
-        // `self.readbacks` — they're disjoint fields of `self`.
+        // `self.readbacks`; they're disjoint fields of `self`.
         let mut encoder = self
             .gpu
             .device
@@ -721,7 +721,7 @@ impl DarklyEngine {
     /// S-curve at the proportional inset, and kick off a stroke-preview render
     /// + readback tagged with the context built from the render dims.
     ///
-    /// Shared by the live editor preview and both library thumbnail bakes —
+    /// Shared by the live editor preview and both library thumbnail bakes:
     /// the only things that differ across those three are which graph feeds in
     /// and which [`ReadbackContext`] variant tags the result, which is why the
     /// context is produced by the caller from the render dimensions.
@@ -730,7 +730,7 @@ impl DarklyEngine {
     /// the tile-shape thumbnail, the save bake, and the editor preview all
     /// show brush *identity*, not the momentary scrub value the user happened
     /// to have. Per-node knowledge of what to neutralize lives on the port
-    /// registrations — this pipeline never introspects node types.
+    /// registrations: this pipeline never introspects node types.
     /// The backdrop travels with the request rather than being read off the
     /// engine when the readback lands: two brushes can have bakes in flight at
     /// once, and the framer must measure each against the field its own stroke
@@ -765,7 +765,7 @@ impl DarklyEngine {
     /// synthesize a centered single dab, and kick off a dab-preview render +
     /// readback tagged with the context built from the render dims.
     ///
-    /// Shared by the baked dab thumbnail and the active-dab preview — they
+    /// Shared by the baked dab thumbnail and the active-dab preview: they
     /// differ only in the graph and the [`ReadbackContext`] variant. The dab
     /// thumbnail represents brush identity (shape, texture, dynamics), so
     /// user-facing scrubs that vary across instances shouldn't bias it.
@@ -807,7 +807,7 @@ impl DarklyEngine {
     /// Apply `mutation` to a clone of the active graph, compile the
     /// clone to validate, then commit it as the new active graph and
     /// run the post-mutation pipeline. On any failure the active
-    /// graph is unchanged — this is what makes the mutators atomic.
+    /// graph is unchanged, which is what makes the mutators atomic.
     /// Returns the updated graph JSON on success.
     fn try_mutate<F>(&mut self, kind: ChangeKind, mutation: F) -> Result<String, String>
     where
@@ -826,7 +826,7 @@ impl DarklyEngine {
     {
         let mut candidate = self.active_brush_graph();
         let value = mutation(&mut candidate)?;
-        // Validate by compiling — surfaces e.g. missing-WGSL upstream
+        // Validate by compiling: surfaces e.g. missing-WGSL upstream
         // nodes before we commit anything visible.
         crate::brush::compile_graph(&candidate)?;
         self.tool_session
@@ -836,7 +836,7 @@ impl DarklyEngine {
             .graph = candidate;
         // compile_active recompiles (slightly redundant with the
         // validation above) but it owns the version-bump + preview
-        // regen rules — keep them in one place.
+        // regen rules; keep them in one place.
         self.compile_active(kind)?;
         Ok((self.active_graph_json(), value))
     }
@@ -912,7 +912,7 @@ impl DarklyEngine {
     }
 
     /// Set an input's authored value on a node and compile. One setter for
-    /// every input kind — the scalar default of a wirable port, an enum
+    /// every input kind: the scalar default of a wirable port, an enum
     /// index, a texture name, curve points. Replaces the former split
     /// `set_param` (by index) / `set_port_default` (by name) pair.
     pub fn brush_graph_set_input(
@@ -929,7 +929,7 @@ impl DarklyEngine {
 
     /// Compute auto-layout positions for the active brush graph.
     /// `sizes` maps `NodeId` → `[width, height]` measured from the DOM.
-    /// Returns the layout map directly — positions are a UI-only concern
+    /// Returns the layout map directly: positions are a UI-only concern
     /// and are not stored on the graph.
     pub fn brush_graph_auto_layout(
         &self,
@@ -945,7 +945,7 @@ impl DarklyEngine {
 
     /// Upload an RGBA8 image and associate it with a resource name.
     ///
-    /// Image-stamp brushes are unsupported — `stamp` only accepts
+    /// Image-stamp brushes are unsupported: `stamp` only accepts
     /// AlphaMask application, which compiles inline without sampling
     /// an RGBA tip texture. The entry point remains so the frontend's
     /// upload UI doesn't fault on a missing symbol; it returns an
@@ -957,7 +957,7 @@ impl DarklyEngine {
         _height: u32,
         _rgba: &[u8],
     ) -> Result<(), String> {
-        Err("image-stamp brushes are unsupported — stamp accepts \
+        Err("image-stamp brushes are unsupported: stamp accepts \
              AlphaMask only"
             .to_string())
     }
@@ -970,7 +970,7 @@ impl DarklyEngine {
 
     /// Return info about every brush-bar entry in the active brush graph,
     /// in the dict's insertion order (which is the user-facing display
-    /// order — the brush-bar node lets the author drag-reorder).
+    /// order, since the brush-bar node lets the author drag-reorder).
     ///
     /// Entries that reference a node/port no longer present, or whose
     /// target port has an incoming connection (the user can't scrub a
@@ -1150,7 +1150,7 @@ impl DarklyEngine {
 
     /// Add a brush-bar entry. Idempotent. Bumps the topology version so
     /// the frontend treats the change as structural and clears the active
-    /// preset name. No recompile — exposure doesn't affect render output.
+    /// preset name. No recompile: exposure doesn't affect render output.
     #[handler(returns = graph)]
     pub fn brush_graph_expose_port(
         &mut self,
@@ -1192,13 +1192,13 @@ impl DarklyEngine {
     /// Override an input port's slider bounds on one node instance.
     ///
     /// `display_min`/`display_max` arrive in **display space**, the same
-    /// contract [`Self::brush_set_exposed_port`] uses for its value — so the
+    /// contract [`Self::brush_set_exposed_port`] uses for its value, so the
     /// caller hands back the numbers it was shown in
     /// [`ExposedValue::Scalar`]'s `min`/`max` and needs no unit logic of its
     /// own. Storage is raw port space, matching the brush yaml.
     ///
     /// Bounds are UI-only, so nothing recompiles and the stored port value is
-    /// untouched — but the override is authored brush state that survives
+    /// untouched, but the override is authored brush state that survives
     /// save/load, so this bumps the topology version like the other
     /// graph-authoring handlers. Both the brush bar and the node editor read
     /// the instance `PortDef::min`/`max`, so one call re-ranges the control in
@@ -1231,7 +1231,7 @@ impl DarklyEngine {
 
     /// The display unit an input port's numbers are expressed in on the
     /// wire, preferring the registration's declaration over the instance
-    /// copy — the same precedence [`Self::brush_exposed_ports`] applies when
+    /// copy; the same precedence [`Self::brush_exposed_ports`] applies when
     /// it converts values out.
     fn exposed_port_unit_type(&self, node_id: &NodeId, port_name: &str) -> UnitType {
         let tool = self.tool_session.read();
@@ -1270,7 +1270,7 @@ impl DarklyEngine {
     }
 
     /// Overwrite the meta (label / description / icon) on a brush-bar
-    /// entry — single batched call so the brush-bar modal hits the engine
+    /// entry: single batched call so the brush-bar modal hits the engine
     /// once. Icon validation lives in `Graph::set_exposed_port_meta`.
     #[handler(returns = graph)]
     pub fn brush_graph_set_exposed_port_meta(
@@ -1329,7 +1329,7 @@ pub enum ExposedValue {
         min: f32,
         /// Display-space maximum.
         max: f32,
-        /// Display-space default — what double-click reset returns to.
+        /// Display-space default: what double-click reset returns to.
         /// Sourced from the node-type registration, not the loaded brush.
         default: f32,
         /// Unit type for formatting and conversion.
@@ -1342,7 +1342,7 @@ pub enum ExposedValue {
         /// Current value.
         value: bool,
     },
-    /// Enum dropdown — a compile-time branch selector (shape's
+    /// Enum dropdown: a compile-time branch selector (shape's
     /// `algorithm`, noise/image `space`, random's `mode`). The frontend
     /// renders a `<select>` of `options` and writes the chosen index
     /// back through the ordinary `set_input` path (enum values are just
@@ -1359,12 +1359,12 @@ pub enum ExposedValue {
     // Color { value: [f32; 4] },
 }
 
-/// Info about an exposed port — sent to the frontend for the BrushBar.
+/// Info about an exposed port: sent to the frontend for the BrushBar.
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct ExposedPortInfo {
-    /// `"<node_id>.<port_name>"` — the same string used to address the
+    /// `"<node_id>.<port_name>"`: the same string used to address the
     /// entry in `Graph::exposed_ports`. Frontend passes it back to
     /// `set_exposed_port_meta` / `reorder_exposed_port` without having
     /// to reconstruct the format.

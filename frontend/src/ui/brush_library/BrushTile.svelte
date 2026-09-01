@@ -22,7 +22,7 @@
 
 <style>
     /* Tiles are the theme's own neutrals. The pack's identity is already under
-     * them — the section they sit on is filled with its surface — and the grid
+     * them (the section they sit on is filled with its surface), and the grid
      * is the largest area in the picker, so it is the last place that should be
      * spending colour. The one vivid mark is the outline on the loaded brush.
      *
@@ -34,8 +34,8 @@
         gap: 6px;
         padding: 8px;
         /* Buttons shrink-to-fit their content by default; fill the
-         * (definite) grid track instead, so the preview strip — and
-         * any percentage inside it — has a real width to resolve
+         * (definite) grid track instead, so the preview strip (and
+         * any percentage inside it) has a real width to resolve
          * against even when its content has no intrinsic size (the
          * icon fallback is just a 1em svg). */
         width: 100%;
@@ -46,7 +46,7 @@
         cursor: pointer;
         text-align: left;
         transition: background 0.1s, outline-color 0.1s;
-        /* Backstop for the grid `minmax(0, 1fr)` columns — children
+        /* Backstop for the grid `minmax(0, 1fr)` columns: children
          * (especially imgs) can't blow the tile out horizontally. */
         min-width: 0;
     }
@@ -55,7 +55,7 @@
         color: var(--text);
     }
     /* The loaded brush: the lightest slab of the three, ringed in one pixel of
-     * the pack's chroma — a strand, the same as every other place chroma is
+     * the pack's chroma: a strand, the same as every other place chroma is
      * spent, and all it takes to be findable in a grid. */
     .brush-tile.active {
         background: var(--thumb-bg);

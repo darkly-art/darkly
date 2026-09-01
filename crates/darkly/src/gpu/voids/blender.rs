@@ -1,4 +1,4 @@
-//! Blender void — a live Blender view as a layer.
+//! Blender void: a live Blender view as a layer.
 //!
 //! Sibling of the camera and screenshare voids: a thin config over the shared
 //! [`crate::gpu::textured_void`] machinery. Frames arrive not from a browser
@@ -13,7 +13,7 @@
 //! The `url` param is the one addition over the other stream voids: it's a
 //! document-persisted value the **frontend** reads to know where to connect. The
 //! Rust void looks its params up by name (`freeze`, `frame_divisor`) and never
-//! reads `url` — it exists purely as frontend-facing document state.
+//! reads `url`; it exists purely as frontend-facing document state.
 
 use crate::gpu::textured_void::ContentFit;
 use crate::gpu::textured_void::{self, TexturedVoidConfig};
@@ -38,7 +38,7 @@ const PARAMS: &[ParamDef] = &[
     ParamDef::int("frame_divisor", 1, 60, 4)
         .with_label("Frame Skip")
         .with_description("Take one frame in this many, to lighten the load."),
-    // Where the frontend `fetch`es the frame stream. Not read by the Rust void —
+    // Where the frontend `fetch`es the frame stream. Not read by the Rust void;
     // `TexturedVoid` resolves params by name and ignores this one; it's
     // document-persisted purely so the frontend knows where to connect and so
     // the endpoint round-trips through save/load.

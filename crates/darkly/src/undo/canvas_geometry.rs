@@ -6,8 +6,8 @@
 //! plus every node's `PixelBuffer.bounds`, and carry per-node GPU pixel
 //! snapshots that the engine's `apply_undo` restores across the node texture
 //! extent change (see `engine/rendering.rs`). They differ only in *how* the
-//! GPU pixels were produced (bilinear resample vs. exact permutation) — which
-//! is the compositor's concern, not the undo stack's — so one action serves
+//! GPU pixels were produced (bilinear resample vs. exact permutation), which
+//! is the compositor's concern, not the undo stack's, so one action serves
 //! both. A folded selection entry lets an op with an active selection undo in
 //! a single step.
 //!
@@ -131,7 +131,7 @@ impl UndoAction for CanvasGeometryAction {
 
     fn on_evict(&mut self, _compositor: &mut Compositor) {
         // Storage is action-owned (per-entry buffers / heap), released when the
-        // action drops. Override exists to document the contract — same as
+        // action drops. Override exists to document the contract, same as
         // `GpuRegionAction::on_evict`.
     }
 }

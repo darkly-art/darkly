@@ -1,5 +1,5 @@
 // Lens blur post-processing veil.
-// Golden-angle spiral disk blur with exponential brightness accumulation —
+// Golden-angle spiral disk blur with exponential brightness accumulation;
 // bright pixels form characteristic circular bokeh highlights.
 // Based on Shadertoy bokeh techniques by Dave Hoskins et al.
 //   https://www.shadertoy.com/playlist/fXlGDN
@@ -76,8 +76,8 @@ const GA_SIN: f32 = 0.6755;
     }
 
     // Invert the exponential and normalize via the alpha channel.
-    // Alpha input is 1.0, so each sample contributes exp(1/threshold) to acc.a —
-    // dividing rgb by alpha gives the smooth-maximum average, matching the
+    // Alpha input is 1.0, so each sample contributes exp(1/threshold) to acc.a,
+    // so dividing rgb by alpha gives the smooth-maximum average, matching the
     // original Shadertoy's `O = log(O) - 5.; O /= O.a;` formulation.
     let result = log(acc) - 5.0;
     return vec4f(result.rgb / result.a, 1.0);

@@ -38,13 +38,13 @@ export interface DarklyStorage {
 
 /**
  * Shape that the desktop host (Electron preload) must inject as
- * `window.electronAPI.storage`. The contract is intentionally minimal —
+ * `window.electronAPI.storage`. The contract is intentionally minimal:
  * just byte-level I/O, listing, and removal. Higher-level helpers
  * (JSON, text, zip export) live on the renderer side, built on these.
  *
  * The preload bridge in the private deploy repo must satisfy this shape
  * exactly. The companion test at __tests__/node.test.ts exercises the
- * NodeFsStorage adapter against an in-memory mock of this bridge — if
+ * NodeFsStorage adapter against an in-memory mock of this bridge; if
  * the shape ever drifts on either side, the test breaks on the public
  * side and the corresponding test in the private repo breaks on the
  * host side.

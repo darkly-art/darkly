@@ -11,7 +11,7 @@ use crate::brush::pack::PackPalette;
 /// preview so brushes look identical in the picker grid.
 pub const BRUSH_THUMBNAIL_SIZE: (u32, u32) = (320, 120);
 
-/// Render canvas for stroke previews. Generously oversized — not derived
+/// Render canvas for stroke previews. Generously oversized, not derived
 /// from any per-brush geometry. `apply_preview_overrides` neutralizes the
 /// preview-time size to a known cap (round base radius ≤ ~26 px), but a
 /// broad-nib tip can stretch that footprint ~10× via anisotropy (see
@@ -24,7 +24,7 @@ pub(crate) const BRUSH_STROKE_RENDER_SIZE: (u32, u32) = (1024, 768);
 
 /// Fraction of the smaller render-canvas edge reserved as a margin on every
 /// side when laying the synthetic S-curve. Proportional (not a hardcoded
-/// pixel count) so the clearance scales with the canvas — at
+/// pixel count) so the clearance scales with the canvas: at
 /// `BRUSH_STROKE_RENDER_SIZE` this yields ≳ 300 px, enough for a worst-case
 /// anisotropic nib at the preview-time radius cap to stay clear of the
 /// border. The changed-pixel crop, not this value, decides the framed size.
@@ -32,11 +32,11 @@ pub(crate) const BRUSH_STROKE_PATH_INSET_FRACTION: f32 = 0.4;
 
 /// Canonical brush size dab previews render at, independent of the brush's
 /// own `brush_settings.size` (and independent of whether the subgraph even has
-/// a `brush_settings` node — per-node previews don't). Chosen so the rasterized
+/// a `brush_settings` node, since per-node previews don't). Chosen so the rasterized
 /// tip is large enough that the crop-and-downscale to `DAB_THUMBNAIL_OUTPUT_SIZE`
 /// preserves real detail instead of upscaling a ~50 px dab. At
 /// `radius = size * DAB_REFERENCE_SIZE * 0.5` this is ≈ 77 px, so a round dab
-/// crops to ≈ 185 px — comfortably above the output size. `BRUSH_DAB_RENDER_SIZE`
+/// crops to ≈ 185 px, comfortably above the output size. `BRUSH_DAB_RENDER_SIZE`
 /// is sized to keep the worst-case anisotropic nib clear of the border at this
 /// radius.
 pub(crate) const DAB_PREVIEW_BASE_SIZE: f32 = 0.3;
@@ -56,7 +56,7 @@ impl DarklyEngine {
     /// Every brush and every pack, in one round trip.
     ///
     /// One call rather than two so the halves cannot disagree across a
-    /// concurrent mutation — a member id naming a brush the caller has not
+    /// concurrent mutation: a member id naming a brush the caller has not
     /// been told about is the inconsistency this rules out.
     #[handler]
     pub fn library_list(&self) -> LibrarySnapshot {
@@ -111,14 +111,14 @@ impl DarklyEngine {
             lib.insert(Brush::from_metadata(metadata));
             Ok::<(), String>(())
         })?;
-        // Saving establishes a new "brush baseline" — what the user just
+        // Saving establishes a new "brush baseline": what the user just
         // saved IS what reset-to-default should now return to.
         self.snapshot_brush_defaults();
 
         // Kick off the thumbnail bake. Uses theme colors (not the active
         // fg) so the picker grid looks consistent across brushes. The shared
         // helper applies preview overrides so the saved brush thumbnails are
-        // size-invariant — the picker grid should show brush identity, not a
+        // size-invariant: the picker grid should show brush identity, not a
         // snapshot of whatever scrub value the user happened to have when
         // saving.
         self.request_stroke_preview_readback(
@@ -152,7 +152,7 @@ impl DarklyEngine {
         serde_yaml_ng::to_string(&portable).map_err(|e| format!("YAML serialize error: {e}"))
     }
 
-    /// Rename a brush. Touches no pack and no recents entry — both hold ids.
+    /// Rename a brush. Touches no pack and no recents entry: both hold ids.
     #[handler]
     pub fn brush_rename(&mut self, id: &str, name: &str) -> Result<(), String> {
         library::with_mut(|lib| lib.rename(id, name))
@@ -251,7 +251,7 @@ impl DarklyEngine {
         if let Some(png) = cached {
             return png;
         }
-        // A bake for this brush is already pending — don't queue another;
+        // A bake for this brush is already pending: don't queue another;
         // racing readbacks would step on each other's library entry.
         let already_pending = self
             .readbacks
@@ -297,8 +297,8 @@ impl DarklyEngine {
             return Vec::new();
         }
         // The shared helper resets every exposed scrub (size, opacity,
-        // hardness, …) to its registration default before rendering — same
-        // treatment the active-dab preview applies. Keeping the two paths on
+        // hardness, …) to its registration default before rendering (same
+        // treatment the active-dab preview applies). Keeping the two paths on
         // one helper means `brush_dab_thumbnail(active_name)` and
         // `brush_active_dab_preview()` produce byte-identical PNGs, so the
         // picker tile and the BrushBar trigger always agree.

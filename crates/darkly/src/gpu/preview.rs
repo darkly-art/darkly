@@ -3,13 +3,13 @@
 //!
 //! A preview is a short sequence of thumbnail frames of one effect, shown in
 //! the editor's pickers and written to disk as documentation. An entry declares
-//! *that* it has one — a [`PreviewAnim`] on its registration — and *how it
+//! *that* it has one (a [`PreviewAnim`] on its registration) and *how it
 //! moves* as code: `Veil::preview_at` / `Void::preview_at` for the per-instance
 //! kinds, a `fn(f32) -> Vec<ParamValue>` on the registration for filters, whose
 //! effect object is shared and holds no parameters.
 //!
 //! **The convention every `preview_at` body follows**: take `t`, set fields,
-//! sync the GPU resources those fields feed — in that order, once. Repetition
+//! sync the GPU resources those fields feed, in that order, once. Repetition
 //! across bodies is extracted into plain helpers here ([`swing`],
 //! [`swing_signed`]) that a body calls and stays in control of.
 //!
@@ -43,8 +43,8 @@ pub const PREVIEW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// Which of an entry's two previews is wanted.
 ///
-/// A picker shows every card at once, so it asks for [`Still`](Self::Still)
-/// — seventeen cards moving at once is noise, and seventeen sequences is
+/// A picker shows every card at once, so it asks for [`Still`](Self::Still):
+/// seventeen cards moving at once is noise, and seventeen sequences is
 /// forty-eight times the work. [`Animated`](Self::Animated) is what a card asks
 /// for when the pointer is over it, and it is the only thing that ever costs a
 /// full sequence.
@@ -57,7 +57,7 @@ pub const PREVIEW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum PreviewVariant {
-    /// One frame — the moment of the motion that stands for it.
+    /// One frame: the moment of the motion that stands for it.
     Still,
     /// The whole sequence.
     Animated,
@@ -66,7 +66,7 @@ pub enum PreviewVariant {
 /// That an entry has a preview, how it plays back, and which moment of it
 /// stands for the whole.
 ///
-/// The motion itself is a method, not data — this says only how long it runs,
+/// The motion itself is a method, not data; this says only how long it runs,
 /// how it ends, and where to freeze it. `loops` is declared rather than derived
 /// for exactly that reason: the only thing that knows whether the last frame
 /// hands back to the first is the body that wrote the motion.
@@ -78,20 +78,20 @@ pub struct PreviewAnim {
     pub fps: u32,
     /// Whether the last frame hands back to the first without a visible jump.
     pub loops: bool,
-    /// Where on the timeline the [`PreviewVariant::Still`] is taken — the one
+    /// Where on the timeline the [`PreviewVariant::Still`] is taken: the one
     /// frame a picker card shows before anyone hovers it, and the poster frame
     /// of the documentation asset.
     ///
     /// The default `0.5` is the peak of [`swing`], which is where a sweep is
     /// furthest from its resting value and so most legible as a single image.
     /// An entry whose motion peaks elsewhere overrides it with
-    /// [`with_still_at`](Self::with_still_at) — a sweep resting at `t = 0` would
-    /// otherwise pick the frame that looks like no effect at all.
+    /// [`with_still_at`](Self::with_still_at), because a sweep resting at `t = 0`
+    /// would otherwise pick the frame that looks like no effect at all.
     ///
     /// **Must land on a frame**: `still_at * frames` has to be a whole number.
     /// A [`Still`](PreviewVariant::Still) renders at `still_at` itself while
     /// [`still_frame`](Self::still_frame) indexes the animation, so a value
-    /// between two frames renders a picture the sequence never contains — and
+    /// between two frames renders a picture the sequence never contains, and
     /// the hover hand-off it exists to hide becomes a visible jump.
     pub still_at: f32,
 }
@@ -107,7 +107,7 @@ impl PreviewAnim {
         still_at: 0.5,
     };
 
-    /// The same length, for motion that runs one way and does not return — a
+    /// The same length, for motion that runs one way and does not return: a
     /// clock integrated forward, a counter that only counts up.
     pub const ONE_WAY: Self = Self {
         frames: ANIMATED_FRAMES,
@@ -118,7 +118,7 @@ impl PreviewAnim {
 
     /// A single frame at the entry's own parameters, for an entry with nothing
     /// to sweep. Both variants render the same image, so hovering such a card
-    /// changes nothing — which is the honest thing for an effect that has one
+    /// changes nothing, which is the honest thing for an effect that has one
     /// state.
     pub const STILL: Self = Self {
         frames: 1,
@@ -128,7 +128,7 @@ impl PreviewAnim {
     };
 
     /// Take the still somewhere other than the middle. For a sweep that runs
-    /// signed — out one way, back, out the other — where the middle is the
+    /// signed (out one way, back, out the other), where the middle is the
     /// resting value and the quarter point is the extreme.
     pub const fn with_still_at(self, still_at: f32) -> Self {
         Self { still_at, ..self }
@@ -142,7 +142,7 @@ impl PreviewAnim {
     }
 
     /// Frames a consumer ends up holding, which is not always the frames that
-    /// were rendered — closing a one-way loop spends the head of the sequence on
+    /// were rendered: closing a one-way loop spends the head of the sequence on
     /// its tail rather than appending to it.
     pub fn emitted_frames(&self) -> u32 {
         let frames = self.frames.max(1);
@@ -154,7 +154,7 @@ impl PreviewAnim {
     }
 
     /// Whether the frames a consumer receives hand back to their first without a
-    /// visible jump — which is [`loops`](Self::loops) *or* closing having made
+    /// visible jump, which is [`loops`](Self::loops) *or* closing having made
     /// it so, and is what a consumer should play on repeat.
     ///
     /// Distinct from `loops`, which stays a statement about the motion: only the
@@ -181,7 +181,7 @@ impl PreviewAnim {
 }
 
 /// Normalized timeline position of frame `i` of `frames`. Frame `frames` itself
-/// is `t == 1.0` — the frame *after* the last, which is where a looping
+/// is `t == 1.0`, the frame *after* the last, which is where a looping
 /// sequence hands back to frame 0.
 pub fn frame_t(i: u32, frames: u32) -> f32 {
     i as f32 / frames.max(1) as f32
@@ -190,7 +190,7 @@ pub fn frame_t(i: u32, frames: u32) -> f32 {
 /// A smooth out-and-back sweep: `0` at `t = 0`, `1` at `t = 0.5`, back to `0`
 /// at `t = 1`, at rest at both ends.
 ///
-/// The shape a control sweep wants — the ends match a render at the resting
+/// The shape a control sweep wants: the ends match a render at the resting
 /// value, so the sequence closes and the frames either side of the wrap agree.
 pub fn swing(t: f32) -> f32 {
     0.5 - 0.5 * (t * std::f32::consts::TAU).cos()
@@ -207,8 +207,8 @@ pub fn swing_signed(t: f32) -> f32 {
 /// `width × height` image.
 ///
 /// Each axis is divided by its own extent, so a field described this way is one
-/// continuous image evaluated at whatever resolution — and whatever aspect
-/// ratio — is asked for.
+/// continuous image evaluated at whatever resolution (and whatever aspect
+/// ratio) is asked for.
 pub fn pixel_centre(x: u32, y: u32, width: u32, height: u32) -> (f32, f32) {
     (
         (x as f32 + 0.5) / width.max(1) as f32,
@@ -246,9 +246,9 @@ pub fn field_rgba(width: u32, height: u32, field: impl Fn(f32, f32) -> [f32; 4])
 ///
 /// Such a node transports the destination rather than writing to it, so over a
 /// flat preview backdrop it produces that same flat backdrop and renders
-/// nothing. Both halves answer that one problem — a still dab has no motion for
+/// nothing. Both halves answer that one problem: a still dab has no motion for
 /// a displacement to reveal at all, so it shows the glyph, while a stroke gets
-/// something to transport — which is why a node declares them together or not
+/// something to transport, which is why a node declares them together or not
 /// at all.
 ///
 /// Declared by the node, because whether a node reads what is already there is
@@ -266,12 +266,12 @@ pub struct PreviewStaging {
 }
 
 /// What is painted under a preview stroke, as a field in normalized coordinates
-/// sampled at pixel centres — the same framing [`field_rgba`] gives the
+/// sampled at pixel centres, the same framing [`field_rgba`] gives the
 /// documentation subject, for the same reason.
 ///
 /// [`Stripes`](Self::Stripes) is the only staging that exists;
-/// [`Flat`](Self::Flat) means "none". A second field — a checkerboard, a
-/// gradient — slots in beside them without any consumer changing, which is what
+/// [`Flat`](Self::Flat) means "none". A second field (a checkerboard, a
+/// gradient) slots in beside them without any consumer changing, which is what
 /// this is an enum rather than a bool for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -281,14 +281,14 @@ pub enum PreviewBackdrop {
     Flat,
     /// Alternating vertical bands between two mid-tones drawn from the theme,
     /// so a displacement, a smear or a blur has a boundary to act on wherever
-    /// the stroke passes — following Krita's
+    /// the stroke passes, following Krita's
     /// `KisPresetLivePreviewView::paintBackground`
     /// (`libs/ui/widgets/kis_preset_live_preview_view.cpp:120-154`), which
     /// stripes the background for its `colorsmudge`, `deformbrush` and `filter`
     /// engines for exactly this reason.
     ///
     /// A multi-octave noise field was built and measured against this and
-    /// **rejected**. On the numbers it wins — it responds to a displacement
+    /// **rejected**. On the numbers it wins: it responds to a displacement
     /// everywhere rather than only where one crosses a band edge, which at the
     /// few-pixel displacements a liquify stroke produces is the difference
     /// between a handful of the dab's pixels changing and half of them. On the
@@ -304,7 +304,7 @@ pub enum PreviewBackdrop {
     ///   flat tones state the boundary and nothing else, so what the stroke did
     ///   to that boundary is the only structure in the frame.
     ///
-    /// A single period does leave blur reading poorly — Krita's own comment
+    /// A single period does leave blur reading poorly; Krita's own comment
     /// concedes its stripes "may or may not show things depending on the
     /// filter…but it is better than nothing". `blur.strength`'s
     /// `preview_value` is the answer to that, and it is a smaller intervention
@@ -320,7 +320,7 @@ impl PreviewBackdrop {
 
     /// Color at normalized position `(u, v)` for a theme running from `bg` to
     /// `fg`. Both stripe tones are held between the poles so a brush that *does*
-    /// deposit still contrasts against either band — Krita paints `80,80,80` and
+    /// deposit still contrasts against either band; Krita paints `80,80,80` and
     /// `140,140,140` under a stroke forced to white, and these are the same two
     /// tones expressed in whichever direction the theme runs.
     pub fn sample(self, u: f32, _v: f32, fg: [f32; 4], bg: [f32; 4]) -> [f32; 4] {
@@ -343,7 +343,7 @@ impl PreviewBackdrop {
     /// Write this backdrop into `view` / `texture`, which must be the same
     /// `Rgba8Unorm` render target.
     ///
-    /// [`Flat`](Self::Flat) is a plain clear — the fast path every depositing
+    /// [`Flat`](Self::Flat) is a plain clear: the fast path every depositing
     /// brush and every dab preview takes; [`Stripes`](Self::Stripes) builds the
     /// field on the CPU and uploads it. The queue write is ordered before the
     /// submission that carries `encoder`, so either variant is in place by the
@@ -400,12 +400,12 @@ impl PreviewBackdrop {
     }
 
     /// Offset, in normalized canvas units, at which a copy of this backdrop
-    /// reads as *distinct from* the backdrop — what a node that transports
+    /// reads as *distinct from* the backdrop, which is what a node that transports
     /// pixels from elsewhere (clone) needs its source anchor set to.
     ///
     /// Owned here because only the field that defines the period can say what
-    /// offset escapes it. [`Stripes`](Self::Stripes) repeats every *two* bands —
-    /// one of each tone — so the offset is one band, which is half that period
+    /// offset escapes it. [`Stripes`](Self::Stripes) repeats every *two* bands
+    /// (one of each tone), so the offset is one band, which is half that period
     /// and lands the copied bands exactly out of phase with the ones underneath.
     /// A vertical component would be useless (the field is constant in `v`), and
     /// an offset of a whole period would be the identity.
@@ -436,7 +436,7 @@ pub fn fit_preview_dims(w: u32, h: u32) -> (u32, u32) {
 // The target every preview is rendered into
 // ---------------------------------------------------------------------------
 
-/// Preview-sized texture pair. View 0 is what the effect reads — the downscaled
+/// Preview-sized texture pair. View 0 is what the effect reads: the downscaled
 /// source, or a cleared texture for an effect that generates its own content;
 /// view 1 is what it writes and what the capture reads back.
 struct PreviewTextures {
@@ -447,12 +447,12 @@ struct PreviewTextures {
 }
 
 /// Two preview-sized textures, a sampler, and the soft downscale that fills the
-/// source — everything a preview needs that is not the effect itself.
+/// source, everything a preview needs that is not the effect itself.
 ///
 /// One instance is reusable across entries and across consumers: it lazily
 /// allocates its sampler and pipeline and reallocates its textures only when
 /// the preview dimensions change. Which *subject* it holds is an input, not a
-/// fork — the editor loads its own composite, the documentation renderer loads
+/// fork: the editor loads its own composite, the documentation renderer loads
 /// a fixed synthetic field, and nothing downstream can tell.
 pub struct PreviewTarget {
     textures: Option<PreviewTextures>,
@@ -524,7 +524,7 @@ impl PreviewTarget {
     }
 
     /// Aspect-fit `src_w × src_h` and clear the source texture. For mechanisms
-    /// that generate their own content and never sample view 0 — the clear is
+    /// that generate their own content and never sample view 0, the clear is
     /// what keeps it a defined value rather than whatever the previous entry
     /// left there.
     pub fn clear_source(
@@ -566,7 +566,7 @@ impl PreviewTarget {
         &self.views()[1]
     }
 
-    /// The texture holding the most recently encoded frame — readback source.
+    /// The texture holding the most recently encoded frame, the readback source.
     pub fn output_texture(&self) -> &wgpu::Texture {
         &self
             .textures
@@ -657,8 +657,8 @@ fn make_textures(device: &wgpu::Device, width: u32, height: u32) -> PreviewTextu
 ///
 /// This is the one hand-written per-catalog list in the design, and it cannot
 /// be generated: a session must be opened against a *concretely typed*
-/// registry, so the alternatives are a downcast through `Any` — which
-/// `AGENTS.md` §Type-owned dispatch forbids — or a named field. **Growth rule:**
+/// registry, so the alternatives are a downcast through `Any` (which
+/// `AGENTS.md` §Type-owned dispatch forbids) or a named field. **Growth rule:**
 /// a new previewable catalog costs one field here and one line each in
 /// `Compositor::preview_registries` and `docs_render::Gpu`; a new
 /// non-previewable catalog costs nothing.
@@ -680,7 +680,7 @@ pub struct PreviewEntry {
 /// implementation per previewable catalog, in that catalog's own module.
 pub trait PreviewMechanism {
     /// `None` for an id this catalog does not know or one that declares no
-    /// preview — the single question both consumers ask before doing any work.
+    /// preview, the single question both consumers ask before doing any work.
     /// Answerable without a device.
     fn resolve(&self, type_id: &str) -> Option<PreviewEntry>;
 
@@ -693,7 +693,7 @@ pub trait PreviewMechanism {
     /// session owns the concrete effect instance for the rest of the sequence,
     /// which is what lets a mechanism drive its own instance without anyone
     /// recovering a concrete type from a trait object. `None` on an unknown
-    /// `type_id` — an unknown entry is a no-op, never a panic.
+    /// `type_id`; an unknown entry is a no-op, never a panic.
     fn open<'a>(
         &self,
         regs: PreviewRegistries<'a>,
@@ -740,7 +740,7 @@ pub struct PreviewSequence<'a> {
 }
 
 impl<'a> PreviewSequence<'a> {
-    /// `None` when `mech` does not know `type_id` or it declares no preview —
+    /// `None` when `mech` does not know `type_id` or it declares no preview,
     /// how an unknown entry becomes a no-op rather than a panic. Does not touch
     /// the target: loading or clearing the source is the caller's, because only
     /// the caller knows what the source *is*.
@@ -822,23 +822,23 @@ impl<'a> PreviewSequence<'a> {
 
 /// Make a one-way sequence hand back to its own first frame.
 ///
-/// Three veils — grain, rainy glass, VHS — declare [`PreviewAnim::ONE_WAY`]:
+/// Three veils (grain, rainy glass, VHS) declare [`PreviewAnim::ONE_WAY`]:
 /// their motion is a clock integrated forward, so the last frame does not lead
 /// back to the first, and the bodies that wrote them are right not to fake that
 /// by making the effect itself periodic. But **both** consumers play a sequence
-/// on repeat — the picker wraps its cursor modulo the frame count, a
-/// documentation page loops the video — so both of them showed the same jump,
+/// on repeat (the picker wraps its cursor modulo the frame count, a
+/// documentation page loops the video), so both of them showed the same jump,
 /// and neither is the place to fix it. This is.
 ///
 /// The frames the head occupied are what pays for it: the sequence is cut to
 /// `[X, N)` and the frames `[0, X)` are dissolved in over its last `X`, so the
 /// last frame *is* the frame before the one it now opens on and the wrap is an
-/// ordinary step. Nothing is reversed — rain has a direction, which is what
-/// rules out ping-ponging it — and nothing is appended, which would cost bytes
+/// ordinary step. Nothing is reversed (rain has a direction, which is what
+/// rules out ping-ponging it), and nothing is appended, which would cost bytes
 /// in the artifact and generation time in the picker.
 ///
 /// A sequence that already loops, or is too short to spend `X` frames on the
-/// hand-back, is returned untouched — including every still, whose one frame is
+/// hand-back, is returned untouched, including every still, whose one frame is
 /// the case that must never be dissolved with itself.
 pub fn close_loop(anim: PreviewAnim, mut frames: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
     let close = LOOP_CLOSE_FRAMES as usize;
@@ -849,7 +849,7 @@ pub fn close_loop(anim: PreviewAnim, mut frames: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
     let head: Vec<Vec<u8>> = frames.drain(..close).collect();
     let tail_start = frames.len() - close;
     for (k, from_head) in head.into_iter().enumerate() {
-        // 0 at the first blended frame, 1 at the last — so the tail arrives at
+        // 0 at the first blended frame, 1 at the last, so the tail arrives at
         // the head exactly, rather than one step short of it.
         let a = k as f32 / (close - 1) as f32;
         let onto = &mut frames[tail_start + k];
@@ -892,7 +892,7 @@ mod tests {
         assert_eq!(closed.len() as u32, anim.emitted_frames());
         // Opens on the frame after the head that was spent.
         assert_eq!(closed[0], vec![LOOP_CLOSE_FRAMES as u8; 4]);
-        // And ends on the one before it — the last blend is the head outright.
+        // And ends on the one before it, since the last blend is the head outright.
         assert_eq!(
             *closed.last().unwrap(),
             vec![LOOP_CLOSE_FRAMES as u8 - 1; 4]
@@ -912,7 +912,7 @@ mod tests {
     }
 
     /// The still is an index into what a consumer holds, and it never lands in
-    /// the dissolved tail — where the picture is a blend of two moments and so
+    /// the dissolved tail, where the picture is a blend of two moments and so
     /// is not the frame a `Still` render at `still_at` would produce.
     #[test]
     fn the_still_indexes_the_emitted_sequence_outside_the_dissolve() {
@@ -933,7 +933,7 @@ mod tests {
     }
 
     /// Both sweeps rest at their ends and reach their extremes where the
-    /// bodies that call them expect — the property every `preview_at` written
+    /// bodies that call them expect: the property every `preview_at` written
     /// against them relies on for its sequence to close.
     #[test]
     fn the_sweeps_rest_at_their_ends_and_peak_where_they_say() {
@@ -946,7 +946,7 @@ mod tests {
         assert!(near(swing_signed(0.75), -1.0));
         assert!(near(swing_signed(1.0), 0.0));
 
-        // Monotone across the rising half — without this a sweep could step
+        // Monotone across the rising half; without this a sweep could step
         // and still satisfy every "the frames differ" assertion downstream.
         for i in 0..(ANIMATED_FRAMES / 2) {
             let (a, b) = (

@@ -2,7 +2,7 @@ import { ToolBase, type ToolDescriptor } from './registry';
 import type { DarklyInstance } from '../state/app.svelte';
 import { beginPaintStroke } from './paint_stroke';
 
-/** Fill-tool session state — an app-global user preference. Persists within the
+/** Fill-tool session state: an app-global user preference. Persists within the
  *  session; resets on reload. */
 class FillSession {
     /** Color-distance threshold for the flood fill (0 = exact match, 255 = anything). */

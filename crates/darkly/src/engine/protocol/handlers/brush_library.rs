@@ -1,7 +1,7 @@
 //! Brush-pack export. The rest of the brush library (list / save / load /
 //! import / packs / thumbnails) is `#[handler]`-generated on
 //! `engine/brush_library.rs`; `pack_export` stays hand-written because it's a
-//! *fallible* binary response (`Result<Vec<u8>, String>`) — the
+//! *fallible* binary response (`Result<Vec<u8>, String>`): the
 //! `returns = bytes` mode is infallible, and the engine error must reject
 //! rather than ride the side-channel.
 
@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::engine::protocol::{decode, ProtocolError, RequestRegistration, Response};
 
-/// `{ id }` — the pack to export as a `.darkly-brush` archive.
+/// `{ id }`: the pack to export as a `.darkly-brush` archive.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct PackExportReq {

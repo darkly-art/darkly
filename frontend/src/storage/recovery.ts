@@ -7,7 +7,7 @@
  * the snapshot filename encodes both the owning browser session and the
  * tab's stable recovery id, and the human-facing document name is read
  * straight from the zip's `manifest.json`. A single write per snapshot
- * means there is nothing to keep in sync and nothing to leave torn — the
+ * means there is nothing to keep in sync and nothing to leave torn: the
  * exact failure this feature exists to survive. A snapshot that fails to
  * unzip / open is simply skipped by the caller (offered for discard).
  *
@@ -52,7 +52,7 @@ function parseSnapshotName(filename: string): { sessionId: string; recoveryId: s
 }
 
 /** Extract a single entry's bytes from a `.darkly` zip, or null if the zip
- *  is corrupt or the entry is missing. Pure (fflate) — node-safe for tests. */
+ *  is corrupt or the entry is missing. Pure (fflate), node-safe for tests. */
 export function extractZipEntry(zipBytes: Uint8Array, entry: string): Uint8Array | null {
     try {
         const files = unzipSync(zipBytes, { filter: (f) => f.name === entry });
@@ -117,7 +117,7 @@ export async function removeSnapshot(
 /**
  * Every snapshot currently on disk, with its document name resolved from
  * the zip. Corrupt / unreadable snapshots are dropped (a snapshot we can't
- * open isn't recoverable). One-time startup scan — reading each zip to
+ * open isn't recoverable). One-time startup scan: reading each zip to
  * pull the manifest name is cheap at recovery scale.
  */
 export async function listSnapshots(

@@ -30,12 +30,12 @@ struct Uniforms {
 }
 @group(0) @binding(3) var<uniform> uniforms: Uniforms;
 
-// Mask texture in a separate bind group — avoids rebuilding group 0 on mask change.
+// Mask texture in a separate bind group, avoiding rebuilding group 0 on mask change.
 // When no mask is present, a 1x1 white fallback texture is bound (mask_alpha=1.0).
 @group(1) @binding(0) var t_mask: texture_2d<f32>;
 
 // Shared canvas-window geometry (group 2): canvas dimensions + the plane-space
-// offset of the canvas window. Document-owned and single-sourced — one buffer
+// offset of the canvas window. Document-owned and single-sourced: one buffer
 // updated whenever the canvas is resized/cropped, bound to every composite draw.
 // Lives outside the per-layer `Uniforms` so it can never go stale per layer
 // (the bug that produced the post-resize anisotropic squash).
@@ -45,7 +45,7 @@ struct CanvasUniform {
 }
 @group(2) @binding(0) var<uniform> canvas: CanvasUniform;
 
-// Color Burn — Krita KoCompositeOpFunctions.h:329–361.
+// Color Burn: Krita KoCompositeOpFunctions.h:329-361.
 // d=1 is a stable point; s=0 forces full burn. NaN/Inf are masked rather
 // than relying on IEEE behavior (WGSL doesn't guarantee it across backends).
 fn pd_color_burn(s: vec3f, d: vec3f) -> vec3f {
@@ -57,7 +57,7 @@ fn pd_color_burn(s: vec3f, d: vec3f) -> vec3f {
     return out;
 }
 
-// Color Dodge — Krita KoCompositeOpFunctions.h:376–403.
+// Color Dodge: Krita KoCompositeOpFunctions.h:376-403.
 // s=1 lights up only where the destination has signal.
 fn pd_color_dodge(s: vec3f, d: vec3f) -> vec3f {
     let safe_denom = max(vec3f(1.0) - s, vec3f(1e-7));
@@ -68,14 +68,14 @@ fn pd_color_dodge(s: vec3f, d: vec3f) -> vec3f {
     return out;
 }
 
-// Soft Light — Photoshop variant (Krita KoCompositeOpFunctions.h:513–529).
+// Soft Light, Photoshop variant (Krita KoCompositeOpFunctions.h:513-529).
 fn pd_soft_light(s: vec3f, d: vec3f) -> vec3f {
     let lighten = d + (2.0 * s - vec3f(1.0)) * (sqrt(d) - d);
     let darken = d - (vec3f(1.0) - 2.0 * s) * d * (vec3f(1.0) - d);
     return select(darken, lighten, s > vec3f(0.5));
 }
 
-// HSL helpers — PDF 11.3.5.3 / W3C Compositing-1, matching Krita's HSY model
+// HSL helpers: PDF 11.3.5.3 / W3C Compositing-1, matching Krita's HSY model
 // (luma weights from KoColorSpaceMaths.h:912).
 fn pd_lum(c: vec3f) -> f32 {
     return dot(c, vec3f(0.299, 0.587, 0.114));
@@ -119,7 +119,7 @@ fn pd_set_sat(c: vec3f, s: f32) -> vec3f {
 fn blend(fg: vec4f, bg: vec4f, mode: u32) -> vec4f {
     // Blend modes operate on straight-alpha colors (PDF/SVG spec).
     //
-    // The `case` arms are generated at runtime from the blend-mode registry —
+    // The `case` arms are generated at runtime from the blend-mode registry:
     // each `crates/darkly/src/gpu/blend_modes/<name>.rs` declares its own WGSL
     // math, and `gpu::blend_mode::build_composite_source` splices them in
     // before this shader is compiled. Edit a blend mode's `.rs` file, not the

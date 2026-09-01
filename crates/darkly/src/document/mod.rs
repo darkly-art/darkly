@@ -93,7 +93,7 @@ pub struct Document {
     /// default filename in the Save As picker, and serialized at the top
     /// of `manifest.json`. Defaults to `"Untitled"` for fresh documents.
     ///
-    /// Single source of truth — there is no JS-side parallel name map
+    /// Single source of truth: there is no JS-side parallel name map
     /// (the engine's `document_name()` query backs the tab title).
     pub name: String,
     pub width: u32,
@@ -101,7 +101,7 @@ pub struct Document {
 
     /// Offset of the **canvas window** within the fixed canvas/plane space.
     ///
-    /// There is one coordinate frame — canvas/plane space — in which layer
+    /// There is one coordinate frame (canvas/plane space) in which layer
     /// extents, undo rects, and selection regions all live (and may be
     /// negative, e.g. paste). The canvas *window* is the visible/exported
     /// rectangle `(canvas_origin, width, height)` within that plane.
@@ -111,11 +111,11 @@ pub struct Document {
     pub canvas_origin: CanvasPoint,
 
     /// Sticky "has unsaved changes" bit. Set at the [`UndoStack::push`]
-    /// chokepoint — any new undoable mutation flips it true. Cleared
+    /// chokepoint: any new undoable mutation flips it true. Cleared
     /// only by a successful save (`poll_save_result`) or a load
     /// (`open_document` installs a fresh staging doc with `dirty = false`).
     /// Not undoable on purpose: an undo back to the original state
-    /// shouldn't pretend the work was never done. Not serialized — the
+    /// shouldn't pretend the work was never done. Not serialized: the
     /// flag describes editor session state, not file content.
     pub dirty: bool,
 
@@ -124,7 +124,7 @@ pub struct Document {
     /// undo/redo application (which deliberately leave `dirty` alone).
     /// Observers that need "did the document change since I last looked?"
     /// (e.g. the process recorder) sample and compare it. Not serialized,
-    /// not undoable — it describes session history, not file content.
+    /// not undoable: it describes session history, not file content.
     ///
     /// [`UndoStack::push`]: crate::undo::UndoStack::push
     pub revision: u64,
@@ -138,14 +138,14 @@ pub struct Document {
     /// - For a tree node: its tree parent (a group). Root has no entry.
     /// - For a filter: its host node. Selection has no entry.
     ///
-    /// Entities present in `entities` but absent from `parent` are *orphans* —
+    /// Entities present in `entities` but absent from `parent` are *orphans*:
     /// either the root itself, the selection filter, or a subtree that has
     /// been detached for undo and is waiting to be reattached.
     pub parent: SecondaryMap<LayerId, LayerId>,
 
     /// The implicit root group's id. Allocated in [`Document::new`]; replaces
     /// the old well-known `ROOT_ID = 0` constant. The root group itself is
-    /// never exposed to the UI — only its children are.
+    /// never exposed to the UI; only its children are.
     pub root: LayerId,
 
     /// Global selection filter id, if allocated. The filter itself lives
@@ -162,7 +162,7 @@ pub struct Document {
     /// after heavy churn.
     ///
     /// One uniform mechanism across every kind that lays down a layer or
-    /// filter — raster, group, mask, void (per void-type), and any future
+    /// filter: raster, group, mask, void (per void-type), and any future
     /// kind. The base label is the caller's responsibility: hardcoded for
     /// fixed kinds (`"Layer"`, `"Group"`, `"Mask"`), registry-resolved for
     /// dynamic ones (the void's display name, e.g. `"Noise"`).
@@ -219,7 +219,7 @@ impl Document {
     }
 
     // ---------------------------------------------------------------
-    // Lookup — every method is O(1) (tree walks happen only in the
+    // Lookup: every method is O(1) (tree walks happen only in the
     // explicitly-named whole-tree queries: `flat_layers`, `all_*`,
     // `node_count`).
     // ---------------------------------------------------------------
@@ -240,7 +240,7 @@ impl Document {
         self.entities.get_mut(id).and_then(Entity::as_modifier_mut)
     }
 
-    /// Canvas-space pixel bounds of any pixel-bearing node — a raster layer or
+    /// Canvas-space pixel bounds of any pixel-bearing node: a raster layer or
     /// a mask/selection filter. `None` for nodes that have no pixels (groups,
     /// void layers) or unknown ids. Lets callers treat "things with pixels"
     /// uniformly without branching on layer vs filter or on layer kind.
@@ -301,7 +301,7 @@ impl Document {
     ///
     /// `false` when the node itself or any ancestor (host for a filter;
     /// parent group for a layer/group, walked to the root) carries
-    /// `locked = true`. Mirrors Krita's `KisBaseNode::isEditable` — locks
+    /// `locked = true`. Mirrors Krita's `KisBaseNode::isEditable`; locks
     /// cascade down the tree so locking a group also protects its contents.
     ///
     /// Unknown ids return `true`; the caller's existing "node not found"
@@ -324,7 +324,7 @@ impl Document {
         }
     }
 
-    /// Pixel-buffer accessor that works for any pixel-bearing entity — raster
+    /// Pixel-buffer accessor that works for any pixel-bearing entity: raster
     /// layers and pixel-storing filters (today: masks, selection). Returns
     /// `None` for groups, pure-effect filters, or unknown ids.
     pub fn pixel_buffer(&self, id: LayerId) -> Option<&PixelBuffer> {
@@ -365,7 +365,7 @@ impl Document {
     /// circuits invisible subtrees ([`crate::gpu::compositor::Compositor`]
     /// line ~2665), so this is the corresponding read-side helper for
     /// callers (engine, frontend) that need the same answer without walking
-    /// the tree themselves — e.g. deciding whether to keep a camera void's
+    /// the tree themselves, e.g. deciding whether to keep a camera void's
     /// MediaStream uploading frames when a parent group hid it.
     pub fn effective_visible(&self, id: LayerId) -> bool {
         let mut current = id;
@@ -399,7 +399,7 @@ impl Document {
     }
 
     /// First mask filter on a host, if any. Replaces the old
-    /// `host.filters().mask()` pattern — that helper used to live on
+    /// `host.filters().mask()` pattern; that helper used to live on
     /// `ModifierList`, but with id-references it needs the document to
     /// resolve.
     pub fn mask_filter_id(&self, host_id: LayerId) -> Option<LayerId> {
@@ -436,7 +436,7 @@ impl Document {
     }
 
     // ---------------------------------------------------------------
-    // Whole-tree queries — these enumerate the world by definition,
+    // Whole-tree queries: these enumerate the world by definition,
     // so they're O(N). They walk from `root` and so naturally exclude
     // any orphans parked in the slotmap awaiting undo reattach.
     // ---------------------------------------------------------------
@@ -457,8 +457,8 @@ impl Document {
                 Some(LayerNode::Group(child)) if !child.common.visible => {}
                 Some(LayerNode::Group(_)) => {
                     // Passthrough groups: children composited directly into
-                    // parent. Normal groups: TODO — needs isolated compositing
-                    // buffer. For now, flatten children in both modes.
+                    // parent. Normal groups need an isolated compositing
+                    // buffer (TODO). For now, flatten children in both modes.
                     self.flatten_into(child_id, out);
                 }
                 None => {}
@@ -467,7 +467,7 @@ impl Document {
     }
 
     /// All raster layers in the tree, regardless of visibility. Used for GPU
-    /// sync — we keep GPU textures in sync even for hidden layers.
+    /// sync: we keep GPU textures in sync even for hidden layers.
     pub fn all_raster_layers(&self) -> Vec<&RasterLayer> {
         let mut out = Vec::new();
         self.collect_raster_layers(self.root, &mut out);
@@ -490,7 +490,7 @@ impl Document {
     /// Every content layer (raster + void) in the tree, regardless of
     /// visibility. Both kinds share the standard blend pipeline and live
     /// in the unified compositor `layer_cache`, so the GPU sync path only
-    /// needs to know "this is a layer the compositor manages" — kind
+    /// needs to know "this is a layer the compositor manages"; kind
     /// dispatch happens once, inside the compositor's `ensure_layer`.
     pub fn all_content_layers(&self) -> Vec<&Layer> {
         let mut out = Vec::new();
@@ -505,7 +505,7 @@ impl Document {
         for &child_id in &g.children {
             match self.find_node(child_id) {
                 // Filter layers transform the group accumulator rather than
-                // contributing a texture — they are realized by the
+                // contributing a texture; they are realized by the
                 // compositor's filter arm, not the standard blend walk.
                 Some(LayerNode::Layer(l)) if l.is_blend_content() => out.push(l),
                 Some(LayerNode::Group(_)) => self.collect_content_layers(child_id, out),
@@ -533,7 +533,7 @@ impl Document {
     }
 
     /// Host ids of every node that composites in place (a passthrough group or
-    /// a filter layer) *and* carries a visible mask — the set the compositor
+    /// a filter layer) *and* carries a visible mask: the set the compositor
     /// must keep a snapshot+lerp buffer for. Kind-agnostic: it asks each node
     /// [`LayerNode::composites_in_place`] rather than enumerating which kinds
     /// qualify, so a new in-place kind is picked up with no edit here.
@@ -630,7 +630,7 @@ impl Document {
     /// mixes layers and groups, including cross-parent selections.
     ///
     /// Iteration is bottom-of-stack first within each parent's
-    /// `children` Vec — so for a panel that displays "top of stack first,"
+    /// `children` Vec, so for a panel that displays "top of stack first,"
     /// the last entry in this Vec for a given selection is the
     /// **panel-topmost** member. `merge_layers` uses this to locate the
     /// topmost selected layer across arbitrary parents.
@@ -653,7 +653,7 @@ impl Document {
     }
 
     // ---------------------------------------------------------------
-    // Mutation — every entry point that adds, removes, or reparents an
+    // Mutation: every entry point that adds, removes, or reparents an
     // entity goes through here so the slotmap, the parent map, and the
     // children/filter Vecs stay consistent.
     // ---------------------------------------------------------------
@@ -673,7 +673,7 @@ impl Document {
         id
     }
 
-    /// Add a new vector-object layer. Carries no pixel buffer — the compositor
+    /// Add a new vector-object layer. Carries no pixel buffer: the compositor
     /// realizes a texture from its `objects` (text/paths) on the next frame and
     /// re-realizes only when the objects/style/transform change. Starts empty;
     /// the engine seeds the first object (e.g. a text block) atomically.
@@ -687,13 +687,13 @@ impl Document {
         id
     }
 
-    /// Add a new void (procedural) layer. Carries no pixel buffer — the
+    /// Add a new void (procedural) layer. Carries no pixel buffer: the
     /// compositor regenerates content each frame from `void_type` + `params`.
     /// Caller is responsible for ensuring `void_type` is a registered void
     /// kind and `params` matches its schema; the engine wrapper does that.
     ///
     /// `display_label` is the registry's `display_name` for the void type
-    /// (e.g. `"Noise"`) — used as the default layer name so the panel shows
+    /// (e.g. `"Noise"`), used as the default layer name so the panel shows
     /// `"Noise 1"`, `"Noise 2"`, … rather than a generic `"Void N"`. The
     /// label is the doc's only knowledge of the registry; the registry
     /// itself lives on the compositor (GPU-coupled) so it can't be
@@ -722,13 +722,13 @@ impl Document {
         id
     }
 
-    /// Add a new filter layer — a non-destructive procedural transform that
+    /// Add a new filter layer: a non-destructive procedural transform that
     /// filters the composite of everything below it. Carries no pixel buffer;
     /// the compositor runs the shared filter pipeline named by `pipeline` over
     /// the running group accumulator each frame.
     ///
     /// `display_label` is the registry's display name for the filter type
-    /// (e.g. `"Invert Colors"`) — used as the default layer name. The caller
+    /// (e.g. `"Invert Colors"`), used as the default layer name. The caller
     /// (engine wrapper) is responsible for validating `pipeline` against the
     /// [`FilterPipelineRegistry`](crate::gpu::filter::FilterPipelineRegistry);
     /// that registry is GPU-coupled and lives on the compositor, so it can't be
@@ -752,7 +752,7 @@ impl Document {
     }
 
     /// Iterate every void layer in the tree, regardless of visibility. Used
-    /// for GPU sync — same shape as [`Self::all_raster_layers`].
+    /// for GPU sync: same shape as [`Self::all_raster_layers`].
     pub fn all_void_layers(&self) -> Vec<&VoidLayer> {
         let mut out = Vec::new();
         self.collect_void_layers(self.root, &mut out);
@@ -773,7 +773,7 @@ impl Document {
     }
 
     /// Iterate every vector layer in the tree, regardless of visibility. Used
-    /// for GPU sync — same shape as [`Self::all_void_layers`].
+    /// for GPU sync: same shape as [`Self::all_void_layers`].
     pub fn all_vector_layers(&self) -> Vec<&VectorLayer> {
         let mut out = Vec::new();
         self.collect_vector_layers(self.root, &mut out);
@@ -837,7 +837,7 @@ impl Document {
     /// owns and grows its bounds independently (see [`Self::host_default_bounds`]).
     /// Returns `None` if the host id is unknown.
     ///
-    /// Note: only one mask per host is enforced at the UI layer, not here —
+    /// Note: only one mask per host is enforced at the UI layer, not here;
     /// the model supports N. Callers that want the singleton invariant should
     /// check [`Document::has_mask`] before adding.
     pub fn add_mask_filter(&mut self, host_id: LayerId) -> Option<LayerId> {
@@ -866,7 +866,7 @@ impl Document {
     }
 
     /// Allocate the global selection filter if not already present, sized
-    /// to the canvas. Idempotent — returns the filter id either way.
+    /// to the canvas. Idempotent: returns the filter id either way.
     pub fn ensure_selection_filter(&mut self) -> LayerId {
         if let Some(id) = self.selection {
             return id;
@@ -889,7 +889,7 @@ impl Document {
         }
         self.selection = Some(id);
         // Per the plan, the selection lives "at the document root rather than
-        // on a host's `filters` list" — so no entry in `parent`.
+        // on a host's `filters` list", so no entry in `parent`.
         id
     }
 
@@ -899,7 +899,7 @@ impl Document {
     }
 
     /// True when the selection filter is allocated AND its `common.visible`
-    /// flag is set — equivalent to today's `gpu_selection.active`.
+    /// flag is set, equivalent to today's `gpu_selection.active`.
     pub fn selection_active(&self) -> bool {
         self.selection
             .and_then(|id| self.find_filter(id))
@@ -907,7 +907,7 @@ impl Document {
     }
 
     /// Move a tree node to a new position. Filters have no position in the
-    /// tree — they hang off a host — so a filter id is refused rather than
+    /// tree (they hang off a host), so a filter id is refused rather than
     /// smuggled into some group's children.
     pub fn move_layer(&mut self, layer_id: LayerId, target: MoveTarget) {
         if self.is_filter(layer_id) {
@@ -919,7 +919,7 @@ impl Document {
         self.attach_at_target(layer_id, target);
     }
 
-    /// Detach an entity — tree node or filter — from its parent, leaving it
+    /// Detach an entity (tree node or filter) from its parent, leaving it
     /// parked in `entities` so its id stays stable across undo/redo. Returns
     /// the id on success. Reattach with [`Document::reinsert_entity`]; if the
     /// undo entry is later discarded, call [`Document::remove_entity`] to
@@ -943,7 +943,7 @@ impl Document {
         self.link(id, parent_id, Some(position));
     }
 
-    /// Permanently remove an entity — tree node or filter — from `entities`,
+    /// Permanently remove an entity (tree node or filter) from `entities`,
     /// along with everything beneath it (descendant nodes, and all filters on
     /// every node in the subtree). Call [`Document::detach_for_undo`] instead
     /// when the caller wants an id-stable detach for undo.
@@ -962,7 +962,7 @@ impl Document {
     }
 
     // ---------------------------------------------------------------
-    // Internal helpers — every mutation path funnels through these so
+    // Internal helpers: every mutation path funnels through these so
     // the slotmap / parent map / children Vec stay in sync.
     // ---------------------------------------------------------------
 
@@ -975,8 +975,8 @@ impl Document {
         }
     }
 
-    /// Link `child` under `parent`, into the list its kind belongs in — a
-    /// filter joins `parent`'s modifiers, a tree node joins its children — at
+    /// Link `child` under `parent`, into the list its kind belongs in: a
+    /// filter joins `parent`'s modifiers, a tree node joins its children, at
     /// `position` (clamped) or at the end. No-op when `parent` can't hold the
     /// child, so a leaf layer never acquires tree children.
     fn link(&mut self, child: LayerId, parent: LayerId, position: Option<usize>) {
@@ -1113,7 +1113,7 @@ impl Document {
     /// Creation-default bounds for a fresh mask on `host_id`: the full canvas,
     /// for every host kind. A mask owns its bounds independently of its host
     /// (it grows itself via `grow_filter`); the host's extent is only a
-    /// historical seed, not a runtime dependency — mirroring Krita's
+    /// historical seed, not a runtime dependency, mirroring Krita's
     /// parent-extent *fallback* (a default bbox, not a coupling). The
     /// mask-apply pass samples the mask in its own space, so the default size
     /// is just "cover the visible canvas".
@@ -1176,7 +1176,7 @@ mod tests {
     fn mask_on_filter_layer_resolves_without_colliding_with_the_effect() {
         // A mask added to a filter layer must land in the filter's polymorphic
         // `filters` list, resolve via `mask_filter`, and leave the procedural
-        // effect (`pipeline`/`params`) untouched — the no-collision property
+        // effect (`pipeline`/`params`) untouched: the no-collision property
         // that makes filter layers carry masks like any other host. Pins it so
         // a future change to the `filters` Vec can't silently break it.
         let mut doc = Document::new(64, 64);
@@ -1196,7 +1196,7 @@ mod tests {
             node.filters().contains(&mask_id),
             "mask id must be in the filter layer's filters list",
         );
-        // The procedural effect is untouched — `compose_filter_arm` builds it
+        // The procedural effect is untouched; `compose_filter_arm` builds it
         // from `pipeline`/`params`, never from `filters`.
         match node {
             LayerNode::Layer(Layer::Filter(f)) => {
@@ -1350,9 +1350,9 @@ mod tests {
 
     #[test]
     fn stale_id_returns_none() {
-        // After purging a layer, looking it up by its old id MUST return None
-        // — slotmap's generational keys make this safe even after another
-        // layer is allocated into the same slot.
+        // After purging a layer, looking it up by its old id MUST return
+        // None; slotmap's generational keys make this safe even after
+        // another layer is allocated into the same slot.
         let mut doc = Document::new(256, 256);
         let stale = doc.add_raster_layer(None);
         doc.remove_entity(stale);
@@ -1410,7 +1410,7 @@ mod tests {
 
     #[test]
     fn purge_subtree_frees_descendants() {
-        // remove_node must actually purge from `entities` — not just unlink.
+        // remove_node must actually purge from `entities`, not just unlink.
         let mut doc = Document::new(256, 256);
         let g = doc.add_group(None);
         let l = doc.add_raster_layer(Some(g));
@@ -1574,7 +1574,7 @@ mod tests {
     }
 
     /// Moving a filter id through the node-move path must not smuggle it into
-    /// a `children` list — a mask has no position in the tree.
+    /// a `children` list; a mask has no position in the tree.
     #[test]
     fn move_layer_refuses_to_relocate_a_filter() {
         let mut doc = Document::new(256, 256);
@@ -1594,7 +1594,7 @@ mod tests {
     }
 
     /// `remove_entity` frees descendants as well as the entity itself, for both
-    /// kinds — the node path used to purge the subtree while the filter path
+    /// kinds: the node path used to purge the subtree while the filter path
     /// only dropped the entity.
     #[test]
     fn remove_entity_purges_a_subtree_and_a_filter_alike() {

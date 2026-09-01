@@ -1,6 +1,6 @@
 // Drag lifecycle for value scrubs: preview locally while the pointer moves,
 // commit once when it's released. Kept free of DOM so it can be unit-tested
-// headlessly (vitest runs in node — no `window`), and free of app state so the
+// headlessly (vitest runs in node, no `window`), and free of app state so the
 // caller decides what a preview and a commit mean.
 //
 // The intermediate values of a scrub are transient session state. Sending each
@@ -15,7 +15,7 @@ export interface ScrubDragOptions {
     onPreview: (value: number) => void;
     /** Called at most once, with the last previewed value. */
     onCommit: (value: number) => void;
-    /** Called exactly once when the drag finishes, however it finishes — the
+    /** Called exactly once when the drag finishes, however it finishes: the
      *  hook for releasing whatever the caller acquired at pointerdown. */
     onFinish?: () => void;
 }
@@ -30,7 +30,7 @@ export interface ScrubDrag {
 
 /**
  * Start a scrub drag. Nothing is committed until {@link ScrubDrag.end}, and a
- * drag that never moved commits nothing — seed it with an immediate `move` if
+ * drag that never moved commits nothing; seed it with an immediate `move` if
  * the gesture should take effect from the pointerdown position (a slider track
  * that jumps to the click).
  *

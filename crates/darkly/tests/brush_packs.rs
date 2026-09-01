@@ -1,6 +1,6 @@
 //! End-to-end coverage for brush packs through a real `DarklyEngine`.
 //!
-//! The library is process-global, so each test resets it first — otherwise one
+//! The library is process-global, so each test resets it first; otherwise one
 //! test's packs leak into the next within this binary.
 
 use darkly::brush::library;
@@ -177,7 +177,7 @@ fn a_painter_pack_is_created_edited_and_deleted() {
     engine
         .pack_edit("mine", "Renamed", "d2", "mdi:brush", restyled.clone())
         .unwrap();
-    // The whole palette crosses the boundary and comes back — the roles are not
+    // The whole palette crosses the boundary and comes back: the roles are not
     // a thing the wire layer can quietly drop half of.
     assert_eq!(
         engine

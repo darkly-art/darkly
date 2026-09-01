@@ -1,5 +1,5 @@
 name: Rough Ink
-description: An ink nib whose edge is reshaped at random every dab — line work that looks bitten rather than printed.
+description: An ink nib whose edge is reshaped at random every dab, producing line work that looks bitten rather than printed.
 nodes:
   brush_settings:
     type: brush_settings

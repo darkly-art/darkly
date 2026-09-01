@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // jsdom isn't available in this project, so we stub the few browser globals the
 // save flow touches (`showSaveFilePicker`) and mock the modules that reach for
 // the GPU / OPFS (`exportComposite`, `downloadBlob`, recovery). That's enough
-// to pin the behaviour that matters — including the regression that Firefox
+// to pin the behaviour that matters, including the regression that Firefox
 // (no File System Access API) can now save at all.
 
 vi.mock('../exportComposite', () => ({
@@ -144,7 +144,7 @@ describe('saveViaDownload (Firefox/Safari download path)', () => {
 
 describe('regression: save works without the File System Access API', () => {
     it('hasFilePicker is false in this (Firefox-like) environment', () => {
-        // The node test env has no `showSaveFilePicker` — exactly Firefox/Safari.
+        // The node test env has no `showSaveFilePicker`: exactly Firefox/Safari.
         expect(hasFilePicker).toBe(false);
     });
 

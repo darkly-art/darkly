@@ -1,7 +1,7 @@
 use crate::coord::{CanvasPoint, CanvasRect, LayerPoint, LayerRect};
 
 /// GPU-side texture storage for a single raster layer.
-/// One Rgba8Unorm texture per layer, sized to the layer's pixel bounds —
+/// One Rgba8Unorm texture per layer, sized to the layer's pixel bounds,
 /// which default to canvas dimensions but may be larger when content
 /// extends past the canvas (e.g. paste of an oversized image).
 ///
@@ -41,7 +41,7 @@ pub struct LayerTexture {
 }
 
 impl LayerTexture {
-    /// RGBA layer texture — default fill is 0 (transparent), which is the GPU's init value.
+    /// RGBA layer texture: default fill is 0 (transparent), which is the GPU's init value.
     pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
         Self::with_format(
             device,
@@ -65,7 +65,7 @@ impl LayerTexture {
 
     /// RGBA layer texture with `STORAGE_BINDING` for renderers that write the
     /// texture as a storage image (Vello's `render_to_texture` requires it).
-    /// Only vector layers ask for this — it is not a global flag, so ordinary
+    /// Only vector layers ask for this; it is not a global flag, so ordinary
     /// raster/void textures stay free of the storage-binding surface.
     pub fn with_bounds_storage(device: &wgpu::Device, bounds: CanvasRect) -> Self {
         let mut t = Self::with_format(
@@ -82,7 +82,7 @@ impl LayerTexture {
         t
     }
 
-    /// R8Unorm mask texture — default fill is 255 (white = reveal all).
+    /// R8Unorm mask texture: default fill is 255 (white = reveal all).
     pub fn new_mask(device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32) -> Self {
         Self::with_format(
             device,
@@ -200,7 +200,7 @@ impl LayerTexture {
         self.format
     }
 
-    /// Texture-local extent — always at origin `(0, 0)` with the texture's
+    /// Texture-local extent: always at origin `(0, 0)` with the texture's
     /// pixel dimensions. Use this when iterating over the texture in its own
     /// coordinate frame or when handing dimensions to wgpu (which speaks in
     /// texture pixels, not canvas pixels).
@@ -256,7 +256,7 @@ impl LayerTexture {
         self.canvas_extent().intersect(r)
     }
 
-    /// Borrow this texture as a `CanvasFrame` — a thin (texture, canvas
+    /// Borrow this texture as a `CanvasFrame`: a thin (texture, canvas
     /// extent) value passed to the GPU adapter boundary helpers.
     pub fn canvas_frame(&self) -> CanvasFrame<'_> {
         CanvasFrame {

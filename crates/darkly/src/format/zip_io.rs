@@ -5,7 +5,7 @@
 //! brush-pack archive is written through it.
 //!
 //! `.darkly` *document* saves remain a JS-side write (via `fflate`) to keep
-//! slow encoders off the WASM main thread — [`assemble_zip`] exists only so
+//! slow encoders off the WASM main thread; [`assemble_zip`] exists only so
 //! Rust-side tests can drive the full save→file→reload loop without crossing
 //! the WASM/JS boundary, and is gated behind the `testing` feature
 //! accordingly. A pack is a handful of small JSONs, so writing one in Rust
@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn write_entries_round_trips_through_unzip_entries() {
         // The shared writer and the production reader must agree, under either
-        // compression method — the parameter exists precisely because both are
+        // compression method: the parameter exists precisely because both are
         // in use.
         for method in [
             zip::CompressionMethod::Stored,

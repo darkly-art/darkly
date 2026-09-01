@@ -1,4 +1,4 @@
-// Video-stream void — sample an external image (webcam / screenshare frame)
+// Video-stream void: sample an external image (webcam / screenshare frame)
 // with a user transform.
 //
 // Bind group 0:
@@ -7,15 +7,15 @@
 //   2: Sampler (linear clamp-to-edge)
 //
 // Alpha convention: the source texture stores PREMULTIPLIED texels so the
-// linear filter interpolates correctly at alpha edges — filtering straight
+// linear filter interpolates correctly at alpha edges; filtering straight
 // alpha darkens color toward transparent-black neighbors (dark halos;
 // docs/lessons-learned/compositing-lessons-learned.md #2). The fragment
 // un-premultiplies after sampling, returning the straight alpha the
 // compositor expects. 8-bit premultiplied storage quantizes color at very
-// low alpha — inherent to the approach, imperceptible next to halos.
+// low alpha (inherent to the approach, imperceptible next to halos).
 //
 // MUST stay in lockstep with the CPU mirror `TexturedVoid::src_uv` in
-// textured_void.rs — the tests pin them together. The inverse-homography
+// textured_void.rs; the tests pin them together. The inverse-homography
 // sample is the shared `proj_local` (lib/projective.wgsl), concatenated ahead
 // of this file at pipeline build. Coordinate flow per fragment (all
 // window-local pixels; the gizmo edits the transform in the content rect's
@@ -30,7 +30,7 @@
 // the fragment's footprint in source space that falls inside [0, 1]², measured
 // from the screen-space derivatives of `src_uv`. That is a one-destination-pixel
 // edge at every scale, and it is independent of which mip level the hardware
-// picked — the alternative, ringing the source with transparent texels and
+// picked. The alternative, ringing the source with transparent texels and
 // letting the filter fade out against them, breaks under minification, because
 // each reduction halves the ring's width relative to the level it lives in
 // until clamp-to-edge is projecting a nearly opaque edge across the canvas.
@@ -38,7 +38,7 @@
 // Cover-fit is baked into the content rect (origin + size), computed CPU-side
 // in `TexturedVoid::content_rect`; at the identity transform the source
 // exactly fills that rect, which overhangs the canvas on the cropped axis.
-// Mirroring is no longer a shader concern — it's expressed as a negative scale
+// Mirroring is no longer a shader concern: it's expressed as a negative scale
 // in the gizmo transform, which the inverse above samples through for free.
 
 struct VertexOutput {
@@ -80,7 +80,7 @@ struct Params {
     // Coverage of the image rect over this fragment's footprint, per axis: the
     // overlap between the footprint interval and [0, 1], as a fraction of the
     // footprint. 1 well inside, 0 well outside, and the exact partial area in
-    // between — which is what antialiases the silhouette of a rotated or scaled
+    // between, which is what antialiases the silhouette of a rotated or scaled
     // layer. A boolean in/out test would round that partial coverage to 0 or 1
     // and stair-step every non-axis-aligned edge; leaving the sampler to fade
     // out against padding would fail under minification (see the header).
