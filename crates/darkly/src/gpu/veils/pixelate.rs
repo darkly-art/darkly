@@ -18,6 +18,7 @@ pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "pixelate",
         display_name: "Pixelate",
+        addable: true,
         description: "Downsample the view into a blocky pixel mosaic.",
         params: PARAMS,
         // Half-way rather than at the peak: `swing(0.25)` is exactly 0.5, so the

@@ -25,6 +25,7 @@ pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "rainy_glass",
         display_name: "Rainy Glass",
+        addable: true,
         description: "Raindrops run down a pane of glass over the view.",
         params: PARAMS,
         preview: Some(PreviewAnim::ONE_WAY),

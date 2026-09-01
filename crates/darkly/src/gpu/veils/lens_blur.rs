@@ -20,6 +20,7 @@ pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "lens_blur",
         display_name: "Lens Blur",
+        addable: true,
         description: "Defocus the view with a soft camera-lens blur.",
         params: PARAMS,
         preview: Some(PreviewAnim::LOOPING),

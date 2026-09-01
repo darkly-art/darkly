@@ -2,6 +2,12 @@ use crate::action::{ActionCategory, ActionDef};
 
 const ACTIONS: &[ActionDef] = &[
     ActionDef {
+        id: "addLayer",
+        display_name: "Add Layer…",
+        description: "Open the add-layer picker — normal, filter, veil, void or group.",
+        icon: "fa6-solid:plus",
+    },
+    ActionDef {
         id: "newLayer",
         display_name: "New Layer",
         description: "Add a new layer above the active one.",

@@ -23,6 +23,7 @@ pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "frozen",
         display_name: "Frozen",
+        addable: true,
         description: "Frost the view behind a pane of refracting ice.",
         params: PARAMS,
         // Just short of the sweep's peak — `swing(0.4375)` is 0.96, so the

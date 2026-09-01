@@ -45,7 +45,16 @@ const GA_SIN: f32 = 0.6755;
 
     let inv_t = 1.0 / max(params.threshold, 0.001);
 
-    var acc = vec4f(0.0);
+    var acc = vec3f(0.0);
+    // The normalizer the colour is divided by. It was previously read out of
+    // `acc.a`, which only worked because every input alpha was 1.0; accumulating
+    // the same constant weight per sample frees alpha to carry real coverage.
+    var norm = 0.0;
+    // Coverage is a linear mean, not the colour's smooth-maximum: weighting
+    // alpha exponentially would let opaque samples dominate and inflate
+    // coverage across a transparent edge.
+    var alpha_sum = 0.0;
+    var taps = 0.0;
     var i = 1.0;
 
     // ~128 iterations: i starts at 1 and grows as i += 1/i (≈ sqrt(2n)),
@@ -70,15 +79,17 @@ const GA_SIN: f32 = 0.6755;
 
         // Exponential accumulation: bright samples dominate,
         // producing the characteristic bokeh highlight shapes.
-        acc += exp(s * inv_t);
+        acc += exp(s.rgb * inv_t);
+        norm += exp(inv_t);
+        alpha_sum += s.a;
+        taps += 1.0;
 
         i += 1.0 / i;
     }
 
-    // Invert the exponential and normalize via the alpha channel.
-    // Alpha input is 1.0, so each sample contributes exp(1/threshold) to acc.a —
-    // dividing rgb by alpha gives the smooth-maximum average, matching the
-    // original Shadertoy's `O = log(O) - 5.; O /= O.a;` formulation.
-    let result = log(acc) - 5.0;
-    return vec4f(result.rgb / result.a, 1.0);
+    // Invert the exponential and normalize, matching the original Shadertoy's
+    // `O = log(O) - 5.; O /= O.a;` formulation.
+    let rgb = (log(acc) - 5.0) / (log(norm) - 5.0);
+    let a = select(0.0, alpha_sum / taps, taps > 0.0);
+    return vec4f(rgb, a);
 }

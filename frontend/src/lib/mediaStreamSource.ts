@@ -24,8 +24,8 @@
 import type { Engine } from '../engine/protocol';
 import { FrameSource, type CaptureKind, type PresentedFrame } from './frameSource';
 
-// Re-export so existing importers (`app.svelte.ts`, `VoidPickerModal.svelte`)
-// keep resolving `CaptureKind` here; the type's home is `frameSource.ts`.
+// Re-export so importers (`app.svelte.ts`, the void add-source) keep resolving
+// `CaptureKind` here; the type's home is `frameSource.ts`.
 export type { CaptureKind };
 
 export class MediaStreamSource extends FrameSource {

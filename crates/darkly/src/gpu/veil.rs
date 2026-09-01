@@ -114,6 +114,12 @@ pub struct VeilRegistration {
     pub preview: Option<PreviewAnim>,
     pub create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
     pub from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Veil>,
+    /// May the user add this veil from the add-layer modal? `false` where the
+    /// same `type_id` is also registered as a filter and that registration owns
+    /// the add path, so the picker offers the effect once rather than twice.
+    /// A non-addable veil still loads, renders and animates — this gates the
+    /// picker and nothing else.
+    pub addable: bool,
 }
 
 /// Id of the catalog this registry projects into.
@@ -126,6 +132,7 @@ impl VeilRegistration {
             .with_description(self.description)
             .with_params(self.params)
             .with_supports_preview(self.preview.is_some())
+            .with_addable(self.addable)
     }
 }
 

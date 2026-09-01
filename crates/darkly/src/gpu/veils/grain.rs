@@ -20,6 +20,7 @@ pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "grain",
         display_name: "Grain",
+        addable: true,
         description: "Film grain noise over the view, optionally animated.",
         params: PARAMS,
         preview: Some(PreviewAnim::ONE_WAY),

@@ -7,7 +7,7 @@ import { resizeCanvas } from '../state/resizeCanvas.svelte';
 import { imageRescale } from '../state/imageRescale.svelte';
 import { selectionModify } from '../state/selectionModify.svelte';
 import { filterModal } from '../state/filterModal.svelte';
-import { layerPicker } from '../state/layerPicker.svelte';
+import { addLayerModal } from '../state/addLayerModal.svelte';
 import type { ParamInfo } from '../ui/filters/filterParams';
 import { exportTimelapse } from '../state/exportTimelapse.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
@@ -30,18 +30,6 @@ import { about } from '../state/about.svelte';
 import { commandPalette } from '../state/commandPalette.svelte';
 import { openCheatsheet } from '../ui/cheatsheet';
 import { links, openExternal } from '../links';
-
-/** The commands that add something to the layer stack, in the order the
- *  layer panel's new-layer dropdown lists them. The dropdown renders straight
- *  from these registrations, so a new layer kind needs an action and nothing
- *  else — its label, icon and behaviour come along for free. */
-export const NEW_LAYER_ACTION_IDS = [
-    'newLayer',
-    'newFilterLayer',
-    'newVeil',
-    'newVoid',
-    'newGroup',
-];
 
 /** Walk the layer tree to find a node by id. The layer tree is the
  *  JSON shape produced by `app.refreshLayerTree`, with `children` on
@@ -577,6 +565,12 @@ export function registerActions() {
 
     // -- Layers --
     actions.register({
+        id: 'addLayer',
+        menuPath: ['Layer:8'],
+        handler: () => { addLayerModal.show(); },
+    });
+
+    actions.register({
         id: 'newLayer',
         menuPath: ['Layer:10'],
         handler: async () => {
@@ -591,19 +585,19 @@ export function registerActions() {
     actions.register({
         id: 'newFilterLayer',
         menuPath: ['Layer:12'],
-        handler: () => { layerPicker.kind = 'filter'; },
+        handler: () => { addLayerModal.show('Filters'); },
     });
 
     actions.register({
         id: 'newVeil',
         menuPath: ['Layer:14'],
-        handler: () => { layerPicker.kind = 'veil'; },
+        handler: () => { addLayerModal.show('Veils'); },
     });
 
     actions.register({
         id: 'newVoid',
         menuPath: ['Layer:16'],
-        handler: () => { layerPicker.kind = 'void'; },
+        handler: () => { addLayerModal.show('Voids'); },
     });
 
     actions.register({
