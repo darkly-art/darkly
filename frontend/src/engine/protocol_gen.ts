@@ -198,9 +198,9 @@ export type BrushNodePreviewReq = { node_id: string, };
 
 export type PortDir = "Input" | "Output";
 
-export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
-
 export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -519,13 +519,13 @@ supportsPreview: boolean,
  */
 source: VoidSource | null, };
 
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
 export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
 /**
  * The unit suffix alone, for a column header. Empty for unitless values.
  */
 unit: string, };
-
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
 export type ParamInfo = { kind: string, name: string, 
 /**
@@ -544,9 +544,9 @@ widget: string, unit: UnitType, min: number | null, max: number | null, default:
  */
 options: JsonValue | null, display: ParamDisplay, };
 
-export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
-
 export type CaptureKind = "camera" | "display" | "stream";
+
+export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
 
 export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
 /**
@@ -602,17 +602,6 @@ export type HistogramReq = { id: number, };
 export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 
 export type LayerTransformCapabilityReq = { id: number, };
-
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
-/**
- * Whether this modifier participates in transforms with its host.
- */
-linkedToHost: boolean, 
-/**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
 
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
@@ -701,20 +690,18 @@ paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: bool
  */
 paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
 
-export type LibrarySnapshot = { brushes: Array<BrushInfo>, packs: Array<BrushPackInfo>, };
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * Whether this modifier participates in transforms with its host.
+ */
+linkedToHost: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
 
-export type BrushPackInfo = { id: string, name: string, description: string, icon: string, palette: PackPalette, 
-/**
- * Member brush ids, in the pack's order. The authority on membership —
- * nothing on [`BrushInfo`] repeats it.
- */
-members: Array<string>, 
-/**
- * What the painter may change, so the UI can grey out affordances it
- * would otherwise offer. A hint, not the authority — the engine rejects a
- * forbidden edit regardless of what the UI believed.
- */
-can_edit_members: boolean, can_edit_identity: boolean, };
+export type LibrarySnapshot = { brushes: Array<BrushInfo>, packs: Array<BrushPackInfo>, };
 
 export type PackPalette = { 
 /**
@@ -731,12 +718,20 @@ refraction: string,
  * saturation. Carries value, not color. Alpha here lets the background
  * behind it show through.
  */
-surface: string, 
+surface: string, };
+
+export type BrushPackInfo = { id: string, name: string, description: string, icon: string, palette: PackPalette, 
 /**
- * Text and icons on `surface` — muted in saturation, far enough from
- * `surface` in value to read, in whichever direction that is.
+ * Member brush ids, in the pack's order. The authority on membership —
+ * nothing on [`BrushInfo`] repeats it.
  */
-ink: string, };
+members: Array<string>, 
+/**
+ * What the painter may change, so the UI can grey out affordances it
+ * would otherwise offer. A hint, not the authority — the engine rejects a
+ * forbidden edit regardless of what the UI believed.
+ */
+can_edit_members: boolean, can_edit_identity: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 

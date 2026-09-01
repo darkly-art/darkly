@@ -45,7 +45,7 @@
             style:clip-path="path('{ribbonPath(band.ribbon)}')"
             style:--band-rim="path('{ribbonRimPath(band.ribbon)}')"
             style:--band-core="path('{ribbonCorePath(band.ribbon)}')"
-            style:opacity={band.opacity}
+            style:--band-fade={band.opacity}
         ></div>
     {/each}
 </div>
@@ -68,6 +68,32 @@
         position: absolute;
         inset: 0;
         background-position: 0 0;
+        /* The pack's fade, carried along the band's length rather than over the
+         * whole of it.
+         *
+         * A band is the middle of a pack, so it has to agree with a *different*
+         * neighbour at each end: its card, which recedes and dims with the
+         * rolodex, and its section, which does neither. One opacity for the
+         * whole band can only match one of them. It matched the card, so every
+         * band arrived at its section carrying the card's fade — a step in
+         * alpha down the join, of a size that varied with how far that pack's
+         * card sat from the focus line. Which reads as a seam that is somehow
+         * different for every pack.
+         *
+         * So the fade runs from the card's own opacity where the band leaves it
+         * to full where it arrives, and both ends match what they touch. The
+         * band still sinks into the black with its card; it just stops taking
+         * the section with it.
+         *
+         * A mask rather than `opacity` because the two ends need different
+         * values. The band's box *is* the explorer's, so `--section-left` is
+         * where the arrival end sits — the same number the section is measured
+         * at. */
+        mask-image: linear-gradient(
+            to right,
+            rgb(0 0 0 / var(--band-fade, 1)) var(--card-right, 0px),
+            rgb(0 0 0 / 1) var(--section-left, 0px)
+        );
     }
     /* The band's rim, which is a path and not a border — its edges are curves,
      * so there is no box whose padding could describe them. `ribbonRimPath` is

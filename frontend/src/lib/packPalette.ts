@@ -11,10 +11,10 @@ export type { PackPalette };
 
 /** The roles, in order. The one place the set is enumerated on this side of the
  *  boundary — the mirror of `PackPalette::roles()` in `brush/pack.rs`. */
-export const PALETTE_ROLES = ['chroma', 'refraction', 'surface', 'ink'] as const;
+export const PALETTE_ROLES = ['chroma', 'refraction', 'surface'] as const;
 
 /** The class marking an element as carrying a palette. Nothing styles it today —
- *  the four roles are used directly — but it is where anything *derived* from
+ *  the three roles are used directly — but it is where anything *derived* from
  *  them has to be declared, because a custom property whose value contains
  *  `var()` is substituted on the element that declares it. A derived token on
  *  `:root` would freeze at whatever the root's roles are and ignore every
@@ -51,5 +51,4 @@ export const NEUTRAL_PALETTE: PackPalette = {
     chroma: 'var(--text-dim)',
     refraction: 'var(--text-muted)',
     surface: 'var(--bg-hover)',
-    ink: 'var(--text)',
 };

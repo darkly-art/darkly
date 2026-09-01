@@ -5,5 +5,4 @@ palette:
   chroma: "#2f7fe0"
   refraction: "#2fd0c0"
   surface: "#1f63c41a"
-  ink: "#c3dae9"
 members: [rough_watercolor, smooth_watercolor]

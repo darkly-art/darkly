@@ -17,8 +17,8 @@
 
 /* A brush pack's palette, as everything drawn from it.
 
-   The four absolutes (`--pack-chroma`, `--pack-refraction`, `--pack-surface`,
-   `--pack-ink`) arrive from `use:packPalette`, which also adds this class.
+   The three absolutes (`--pack-chroma`, `--pack-refraction`, `--pack-surface`)
+   arrive from `use:packPalette`, which also adds this class.
    Declared on the same element as the absolutes on purpose: a custom property
    containing `var()` is substituted where it is declared, so a copy of this on
    `:root` would freeze at the neutral palette and never follow an override. */

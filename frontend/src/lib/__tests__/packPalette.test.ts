@@ -27,7 +27,6 @@ const PACK: PackPalette = {
     chroma: '#2f7fe0',
     refraction: '#2fd0c0',
     surface: '#0c1a26',
-    ink: '#c3dae9',
 };
 
 describe('the pack palette action', () => {
@@ -44,7 +43,6 @@ describe('the pack palette action', () => {
             '--pack-chroma': '#2f7fe0',
             '--pack-refraction': '#2fd0c0',
             '--pack-surface': '#0c1a26',
-            '--pack-ink': '#c3dae9',
         });
     });
 
@@ -70,7 +68,7 @@ describe('the pack palette action', () => {
         const { props, node } = fakeNode();
         packPalette(node, NEUTRAL_PALETTE);
         expect(props.get('--pack-surface')).toBe('var(--bg-hover)');
-        expect(props.get('--pack-ink')).toBe('var(--text)');
+        expect(props.get('--pack-chroma')).toBe('var(--text-dim)');
     });
 
     it('enumerates exactly the roles a palette has', () => {

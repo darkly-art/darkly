@@ -8,7 +8,7 @@ import type { PackPalette } from '../../lib/packPalette';
  *  tests are about, so there is one fixture rather than four literals a dozen
  *  times over. */
 const PALETTE: PackPalette = {
-    chroma: '#2f7fe0', refraction: '#2fd0c0', surface: '#0c1a26', ink: '#c3dae9',
+    chroma: '#2f7fe0', refraction: '#2fd0c0', surface: '#0c1a26',
 };
 
 /** In-memory storage. */
@@ -343,7 +343,7 @@ describe('brush library persistence', () => {
             'packs/old.json',
             new TextEncoder().encode(JSON.stringify({
                 id: 'old', name: 'Old', description: '', icon: 'mdi:brush',
-                palette: { chroma: '#2f7fe0', refraction: '#2fd0c0', surface: '#0c1a26' },
+                palette: { chroma: '#2f7fe0', refraction: '#2fd0c0' },
                 members: [],
             })),
         );

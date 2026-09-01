@@ -9,7 +9,7 @@
     import Icon from '../../icons/Icon.svelte';
     import { packPalette } from '../../lib/packPalette';
     import type { BrushGroup } from '../brush_library/grouping';
-    import { CARD_PERSPECTIVE, type CardCurve } from './wheel';
+    import { cardTransform, type CardCurve } from './wheel';
 
     interface Props {
         group: BrushGroup;
@@ -20,50 +20,76 @@
         onSelect: () => void;
     }
     let { group, active, curve, onSelect }: Props = $props();
+    const rolodex = $derived(cardTransform(curve));
 </script>
 
-<button
-    class="pack-card pack-lit pack-rim"
-    aria-current={active}
-    onclick={onSelect}
-    use:packPalette={group.palette}
-    style:--card-pane-y="{curve.paneY}px"
-    style:transform="perspective({CARD_PERSPECTIVE}px) rotateX({curve.rotateX}deg) scale({curve.scale})"
-    style:opacity={curve.opacity}
-    title={group.pack?.description || group.label}
->
-    <span class="face">
-        <Icon name={group.icon} class="card-icon" />
-        <span class="label">{group.label}</span>
-        <span class="count">{group.brushes.length}</span>
+<button class="pack-card" aria-current={active} onclick={onSelect} title={group.pack?.description || group.label}>
+    <span
+        class="body pack-lit pack-rim"
+        use:packPalette={group.palette}
+        style:--card-pane-y="{curve.paneY}px"
+        style:transform={rolodex.transform}
+        style:transform-origin={rolodex.origin}
+        style:opacity={curve.opacity}
+    >
+        <span class="face">
+            <Icon name={group.icon} class="card-icon" />
+            <span class="label">{group.label}</span>
+            <span class="count">{group.brushes.length}</span>
+        </span>
     </span>
 </button>
 
 <style>
-    /* The left end of the pack: `surface` filling it, and the vivid pair spent
-     * on the light that catches its edge and on the name written across it. */
+    /* The card's *slot*: an upright box that paints nothing and is never
+     * transformed, so its bounding rect is the fractional layout box the band
+     * needs to leave from.
+     *
+     * The rolodex tilt lives one level in, on `.body`, for exactly that reason.
+     * A transformed element reports its *transformed* rect, so a card that
+     * carried its own curve could only be measured through `offsetTop`, which
+     * rounds to whole CSS px — and off 100% zoom that rounding is what walks
+     * every band away from the card it leaves, further with every pack down the
+     * column. The split is what lets `cardTops` be measured at all. */
     .pack-card {
         display: flex;
-        align-items: center;
         width: 100%;
-        padding: 10px 12px;
+        padding: 0;
         font-family: inherit;
         font-size: 12px;
         text-align: left;
         border: none;
+        background: none;
+        cursor: pointer;
+    }
+    /* The left end of the pack: `surface` filling it, and the vivid pair spent
+     * on the light that catches its edge and on the name written across it.
+     *
+     * `flex: 1 1 auto` with an explicit `min-width: 0`, not the `flex: 1`
+     * shorthand: that would set `flex-basis: 0`, sizing the body from free
+     * space rather than from what it holds, which is not the box it replaces. */
+    .body {
+        display: flex;
+        align-items: center;
+        flex: 1 1 auto;
+        min-width: 0;
+        padding: 10px 12px;
 
         /* Square where the projection leaves. A rounded corner there would cut
          * the colour away from the band at exactly the join, which is the one
          * edge that has to be flat for the two to meet. */
         border-radius: var(--radius-md) 0 0 var(--radius-md);
-        cursor: pointer;
         /* The curve is applied per card from `cardCurve`, anchored to the
          * trailing edge. Cards recede toward the ends of the column but their
          * right edges stay on one vertical line — which is what the projection
          * leaves from, so it can meet every card at a fixed x instead of
          * chasing an edge that moves with the scale. Anchoring the origin here
-         * is why that is true rather than approximately true. */
-        transform-origin: right center;
+         * is why that is true rather than approximately true.
+         *
+         * The transform and that origin are both `cardTransform`'s, bound
+         * together from `wheel.ts` — `cardEdge` reproduces this exact list by
+         * hand, and it is only safe to do that while the two cannot be edited
+         * apart. */
         will-change: transform, opacity;
         transition: filter var(--transition-fast);
     }
@@ -98,7 +124,7 @@
      *
      * No border on the trailing edge, so no rim there: that edge is where the
      * projection leaves, and it is interior to the pack. */
-    .pack-card::before {
+    .body::before {
         --pack-field-offset:
             calc(-1 * var(--pane-left, 0px))
             calc(-1 * (var(--pane-top, 0px) + var(--card-pane-y, 0px)));
@@ -107,7 +133,7 @@
     }
     /* A lift rather than a second colour: every surface here is the pack's own,
      * and brightening keeps it that way whatever the pack brought. */
-    .pack-card:hover {
+    .pack-card:hover .body {
         filter: brightness(1.15);
     }
     /* The focused card wears no ring. It is already the only card at full

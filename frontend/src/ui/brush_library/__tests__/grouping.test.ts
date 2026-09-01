@@ -25,7 +25,6 @@ function pack(id: string, name: string, members: string[]): BrushPackInfo {
             chroma: '#2f7fe0',
             refraction: '#2fd0c0',
             surface: '#0c1a26',
-            ink: '#c3dae9',
         },
         members,
         can_edit_members: true,

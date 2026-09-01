@@ -3,8 +3,8 @@
      * A pack's whole palette, at a glance.
      *
      * The card in miniature, so a painter recognises the same object in both
-     * places — all four roles in the proportions the card spends them in,
-     * rather than a dot of one colour out of four.
+     * places — the pack's surface under a wash of its vivid pair, in the
+     * proportions the card spends them in, rather than a dot of one colour.
      *
      * Shared rather than modal-local on purpose: exporting is only the first
      * chooser to need it, and a create/edit dialog will want the same chip.

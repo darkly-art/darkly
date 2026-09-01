@@ -207,7 +207,7 @@ mod tests {
                 "p",
                 "Pack",
                 "mdi:brush",
-                crate::brush::pack::PackPalette::new("#2f7fe0", "#2fd0c0", "#0c1a26", "#c3dae9"),
+                crate::brush::pack::PackPalette::new("#2f7fe0", "#2fd0c0", "#0c1a26"),
             );
             pack.members = vec![id.clone()];
 

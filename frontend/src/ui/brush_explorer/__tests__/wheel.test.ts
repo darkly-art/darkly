@@ -14,6 +14,7 @@ import {
     ribbonCorePath,
     ribbonPath,
     ribbonRimPath,
+    sameGeometry,
     visibleSpan,
     present,
     packBands,
@@ -399,6 +400,11 @@ describe('packBands', () => {
         sectionLeft: 140,
         cardHeight: 52,
         cardLeft: 0,
+        // The line these three cards are actually on. It agrees with
+        // `wheelLead + i * cardAdvance` here, so the assertions below still
+        // describe a uniformly-laid-out wheel — the fixture that does *not*
+        // agree is `WOBBLY`, which is the point of it.
+        cardTops: [70, 130, 190],
         width: 240,
         height: 200,
         viewportLeft: 0,
@@ -410,7 +416,6 @@ describe('packBands', () => {
             chroma: `#${s.id}c`,
             refraction: `#${s.id}r`,
             surface: `#${s.id}s`,
-            ink: `#${s.id}i`,
         },
     }));
     const at = (listScrollTop: number) =>
@@ -431,6 +436,63 @@ describe('packBands', () => {
         const centreY = top + L.cardHeight / 2;
         return { centreY, top: centreY + edge.top, bottom: centreY + edge.bottom };
     };
+
+    /** A wheel whose cards are *not* where a uniform pitch would put them.
+     *
+     *  Its pitch is 51.6 and `cardAdvance` says 52, which is what a fractional
+     *  card height looks like once `offsetTop` has rounded it: a line the
+     *  stated pitch is wrong about by 0.4px per card, and by 3.2px at the ninth
+     *  — the error growing with the index that made the seams read as broken
+     *  further down the column than at the top of it. */
+    const WOBBLY_TOPS = [70, 121.6, 173.2, 224.8, 276.4, 328, 379.6, 431.2, 482.8];
+    const WOBBLY_G: WheelGeometry = {
+        ...SPACED,
+        cardAdvance: 52,
+        wheelLead: 70,
+        listScrollMax: 2000,
+        wheelScrollMax: 400,
+        sections: WOBBLY_TOPS.map((_, i) => ({ id: `p${i}`, top: i * 60, height: 60 })),
+    };
+    /** Tall enough that every one of the nine cards is inside the pane, so the
+     *  assertion reaches the index where the old error was largest instead of
+     *  being clipped away before it. */
+    const WOBBLY_L: PaneLayout = { ...L, wheelBottom: 560, listBottom: 560, cardTops: WOBBLY_TOPS };
+    const WOBBLY_PACKS = WOBBLY_G.sections.map(s => ({ id: s.id, palette: PACKS[0].palette }));
+
+    it('leaves every card from the line the cards are measured on, not from a pitch', () => {
+        // The regression. Card `i` used to be located at
+        // `wheelLead + i * cardAdvance`, which multiplies whatever the pitch
+        // rounded away by the pack's index — so a band that left its first card
+        // cleanly was pixels off its ninth, and the join looked worse the
+        // further down the column it was. Nothing here is uniform, and every
+        // band still has to meet its own card.
+        const frame = present({ listScrollTop: 0, wheelScrollTop: 0, driver: 'list' }, WOBBLY_G);
+        const bands = packBands(frame, WOBBLY_G, WOBBLY_L, WOBBLY_PACKS);
+        // Every card, including the ninth — where the old expression was
+        // furthest out and the seam read as broken.
+        expect(bands).toHaveLength(WOBBLY_TOPS.length);
+        for (const band of bands) {
+            const i = WOBBLY_PACKS.findIndex(p => p.id === band.id);
+            const centre =
+                WOBBLY_L.wheelTop + WOBBLY_TOPS[i] + L.cardHeight / 2 - frame.wheelScrollTop;
+            const edge = cardEdge(frame.curves[i], L.cardHeight);
+            expect(band.ribbon.top0).toBeCloseTo(centre + edge.top, 6);
+            expect(band.ribbon.bottom0).toBeCloseTo(centre + edge.bottom, 6);
+        }
+    });
+
+    it('reads neither the pitch nor the lead when locating a card', () => {
+        // The property the measured line buys, stated directly: given the same
+        // cards, the two numbers that used to place them cannot move a band.
+        // One `frame` for both calls — `cardAdvance` also feeds the curves, so
+        // re-deriving it per call would change the bands for reasons that have
+        // nothing to do with where the cards are.
+        const frame = present({ listScrollTop: 0, wheelScrollTop: 0, driver: 'list' }, WOBBLY_G);
+        const wrong = { ...WOBBLY_G, cardAdvance: 999, wheelLead: -400 };
+        expect(packBands(frame, wrong, WOBBLY_L, WOBBLY_PACKS)).toEqual(
+            packBands(frame, WOBBLY_G, WOBBLY_L, WOBBLY_PACKS),
+        );
+    });
 
     it('leaves the card at its own centre, not its slot centre', () => {
         // The regression: a card's *slot* is its height plus the gap to the
@@ -646,5 +708,28 @@ describe('cardCurve', () => {
                 expect(Math.abs(c.t)).toBeLessThanOrEqual(1);
             }
         }
+    });
+});
+
+describe('sameGeometry', () => {
+    it('holds a layout still through changes no layout could express', () => {
+        // Fractional metrics chatter where whole-px ones rounded the noise
+        // away. Below one LayoutUnit there is nothing to redraw, and treating
+        // it as a change keeps the measure/render loop awake for nothing.
+        expect(sameGeometry(SPACED, SPACED)).toBe(true);
+        expect(sameGeometry({ ...SPACED, cardAdvance: 60 + 1 / 128 }, SPACED)).toBe(true);
+        expect(sameGeometry({ ...SPACED, cardAdvance: 60 + 1 / 32 }, SPACED)).toBe(false);
+    });
+
+    it('notices a section moving, resizing, or changing identity', () => {
+        const moved = SPACED.sections.map((s, i) => (i === 1 ? { ...s, top: s.top + 1 } : s));
+        const renamed = SPACED.sections.map((s, i) => (i === 1 ? { ...s, id: 'z' } : s));
+        expect(sameGeometry({ ...SPACED, sections: moved }, SPACED)).toBe(false);
+        expect(sameGeometry({ ...SPACED, sections: renamed }, SPACED)).toBe(false);
+        expect(sameGeometry({ ...SPACED, sections: SPACED.sections.slice(1) }, SPACED)).toBe(false);
+    });
+
+    it('is never the same as nothing measured yet', () => {
+        expect(sameGeometry(SPACED, null)).toBe(false);
     });
 });

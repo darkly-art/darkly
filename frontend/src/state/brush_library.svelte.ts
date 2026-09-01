@@ -54,7 +54,7 @@ function validPalette(raw: unknown): PackPalette | null {
     const o = raw as Partial<PackPalette> | null;
     if (!o) return null;
     for (const role of PALETTE_ROLES) if (typeof o[role] !== 'string') return null;
-    return { chroma: o.chroma!, refraction: o.refraction!, surface: o.surface!, ink: o.ink! };
+    return { chroma: o.chroma!, refraction: o.refraction!, surface: o.surface! };
 }
 
 function validPack(raw: unknown): StoredPack | null {
@@ -217,7 +217,6 @@ export class BrushLibraryStore {
                     chroma: '#d9a92b',
                     refraction: '#d8bd5e',
                     surface: '#1e1a10',
-                    ink: '#e3d6b2',
                 },
             });
         } catch (e) {

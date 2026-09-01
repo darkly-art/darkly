@@ -199,7 +199,7 @@ mod tests {
             "p1",
             "Watercolors",
             "mdi:water",
-            PackPalette::new("#2f7fe0", "#2fd0c0", "#0c1a26", "#c3dae9"),
+            PackPalette::new("#2f7fe0", "#2fd0c0", "#0c1a26"),
         );
         p.description = "Wet pigment that pools and blends.".into();
         p.members = vec!["a".into(), "b".into()];
@@ -225,7 +225,7 @@ mod tests {
         // Every role survives the archive, not just the two that used to exist.
         assert_eq!(
             back.palette,
-            PackPalette::new("#2f7fe0", "#2fd0c0", "#0c1a26", "#c3dae9")
+            PackPalette::new("#2f7fe0", "#2fd0c0", "#0c1a26")
         );
 
         // Member order is the pack's own data and must survive.
@@ -291,8 +291,7 @@ mod tests {
     /// rejection cases below each fail for the reason they name.
     fn palette_json() -> serde_json::Value {
         serde_json::json!({
-            "chroma": "#2f7fe0", "refraction": "#2fd0c0",
-            "surface": "#0c1a26", "ink": "#c3dae9",
+            "chroma": "#2f7fe0", "refraction": "#2fd0c0", "surface": "#0c1a26",
         })
     }
 
@@ -341,7 +340,7 @@ mod tests {
         let bytes = archive_with_manifest(serde_json::json!({
             "format": FORMAT_TAG, "version": PACK_VERSION, "name": "Bad",
             "icon": "mdi:water", "palette": { "chroma": "not-a-color",
-                "refraction": "#2fd0c0", "surface": "#0c1a26", "ink": "#c3dae9" },
+                "refraction": "#2fd0c0", "surface": "#0c1a26" },
             "brushes": [],
         }));
         assert!(PackFile::from_bytes(&bytes).is_err());
@@ -364,12 +363,12 @@ mod tests {
         let bytes = archive_with_manifest(serde_json::json!({
             "format": FORMAT_TAG, "version": PACK_VERSION, "name": "Partial",
             "icon": "mdi:water",
-            "palette": { "chroma": "#2f7fe0", "refraction": "#2fd0c0", "surface": "#0c1a26" },
+            "palette": { "chroma": "#2f7fe0", "refraction": "#2fd0c0" },
             "brushes": [],
         }));
         let err = PackFile::from_bytes(&bytes).unwrap_err();
         assert!(
-            err.contains("ink"),
+            err.contains("surface"),
             "error should name the missing role: {err}"
         );
     }

@@ -36,17 +36,19 @@ pub enum PackMutability {
     Full,
 }
 
-/// The four colors a brush pack is recognized by.
+/// The three colors a brush pack is recognized by.
 ///
 /// `chroma` and `refraction` are the vivid pair, spent sparingly — a rim, a
-/// ribbon, a focused outline. `surface` and `ink` are the muted pair, spent
-/// freely — they are what the pack's own chip is made of. A palette that inverts
-/// that ratio is a wall of flat color with nothing left to accent it with.
+/// ribbon, a focused outline. `surface` is the body they are spent on, and is
+/// what the pack's own chip is mostly made of. A palette that inverts that
+/// ratio is a wall of flat color with nothing left to accent it with.
 ///
-/// `surface` and `ink` are absolutes, not derivations of the theme: a pack whose
-/// body is pale is pale on a black UI and on a white one, which is what lets a
-/// pack read as wintery or deserty at all. Alpha on `surface` is how a pack opts
-/// back *into* the theme, letting the background it sits on show through.
+/// `surface` is an absolute, not a derivation of the theme: a pack whose body
+/// is pale is pale on a black UI and on a white one, which is what lets a pack
+/// read as wintery or deserty at all. Alpha on it is how a pack opts back
+/// *into* the theme, letting the background it sits on show through — and text
+/// over a pack therefore sits on the *theme* rather than on the pack, which is
+/// why the palette carries no ink of its own to write with.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct PackPalette {
@@ -59,9 +61,6 @@ pub struct PackPalette {
     /// saturation. Carries value, not color. Alpha here lets the background
     /// behind it show through.
     pub surface: String,
-    /// Text and icons on `surface` — muted in saturation, far enough from
-    /// `surface` in value to read, in whichever direction that is.
-    pub ink: String,
 }
 
 impl PackPalette {
@@ -69,24 +68,21 @@ impl PackPalette {
         chroma: impl Into<String>,
         refraction: impl Into<String>,
         surface: impl Into<String>,
-        ink: impl Into<String>,
     ) -> Self {
         PackPalette {
             chroma: chroma.into(),
             refraction: refraction.into(),
             surface: surface.into(),
-            ink: ink.into(),
         }
     }
 
     /// Every role as `(name, value)`. The one place a role is enumerated, so
     /// validation, error messages and any future consumer are additive.
-    pub fn roles(&self) -> [(&'static str, &str); 4] {
+    pub fn roles(&self) -> [(&'static str, &str); 3] {
         [
             ("chroma", &self.chroma),
             ("refraction", &self.refraction),
             ("surface", &self.surface),
-            ("ink", &self.ink),
         ]
     }
 
@@ -283,7 +279,7 @@ mod tests {
     use super::*;
 
     fn palette() -> PackPalette {
-        PackPalette::new("#2f7fe0", "#2fd0c0", "#0c1a26", "#c3dae9")
+        PackPalette::new("#2f7fe0", "#2fd0c0", "#0c1a26")
     }
 
     fn pack(mutability: PackMutability) -> BrushPack {
@@ -390,7 +386,7 @@ mod tests {
 
     #[test]
     fn every_palette_role_is_shape_validated() {
-        // Driven off `roles()` rather than four literals, so a fifth role is
+        // Driven off `roles()` rather than three literals, so a fourth role is
         // covered the moment it is declared there.
         assert!(palette().validate().is_ok());
         for (i, (role, _)) in palette().roles().iter().enumerate() {
@@ -398,8 +394,7 @@ mod tests {
             match i {
                 0 => p.chroma = "nope".into(),
                 1 => p.refraction = "nope".into(),
-                2 => p.surface = "nope".into(),
-                _ => p.ink = "nope".into(),
+                _ => p.surface = "nope".into(),
             }
             let err = p
                 .validate()

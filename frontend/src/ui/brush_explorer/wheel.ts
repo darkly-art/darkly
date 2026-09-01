@@ -80,6 +80,42 @@ export interface WheelGeometry {
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /**
+ * One CSS `LayoutUnit` — 1/64 px, the quantum the engine lays out in. No
+ * difference smaller than this describes anything that could be drawn
+ * differently.
+ */
+const LAYOUT_EPSILON = 1 / 64;
+
+/**
+ * Whether two geometries describe the same layout, to within what a layout can
+ * express.
+ *
+ * Exists because these numbers are measured fractionally. An exact comparison
+ * would call a sub-pixel reflow a change, write it, and keep the frame loop
+ * awake over differences no pixel can show — where whole-px metrics used to
+ * absorb that chatter by rounding it away.
+ */
+export function sameGeometry(a: WheelGeometry, b: WheelGeometry | null): boolean {
+    if (!b) return false;
+    const near = (x: number, y: number) => Math.abs(x - y) < LAYOUT_EPSILON;
+    return (
+        near(a.cardAdvance, b.cardAdvance) &&
+        near(a.wheelLead, b.wheelLead) &&
+        near(a.wheelViewport, b.wheelViewport) &&
+        near(a.listViewport, b.listViewport) &&
+        near(a.listScrollMax, b.listScrollMax) &&
+        near(a.wheelScrollMax, b.wheelScrollMax) &&
+        a.sections.length === b.sections.length &&
+        a.sections.every(
+            (s, i) =>
+                s.id === b.sections[i].id &&
+                near(s.top, b.sections[i].top) &&
+                near(s.height, b.sections[i].height),
+        )
+    );
+}
+
+/**
  * Where the focus line sits, as a fraction of each pane's height.
  *
  * The middle, and the same for both panes, because that is the relation being
@@ -144,6 +180,22 @@ export interface PaneLayout {
     sectionLeft: number;
     /** A card's own height, which is the advance less the gap between cards. */
     cardHeight: number;
+    /**
+     * Each card's own top, in the wheel's scroll-content coordinates —
+     * **measured per card, never extrapolated from a pitch.**
+     *
+     * `cardAdvance` is the right model for the *mapping*, where the wheel
+     * really is uniform by design. It is the wrong one for locating a painted
+     * box. Layout is uniform in fractional CSS px, but paint snaps each box to
+     * the device-pixel grid on its own, so off 100% zoom the painted pitch is
+     * not uniform at all — 52, 51, 52, 52, 51 — and no single number describes
+     * it however precisely it is measured. Worse, locating card `i` at
+     * `i · cardAdvance` multiplies whatever error the pitch carries by the
+     * card's index, so a band that leaves its first card cleanly is pixels away
+     * from its sixth. Measuring the line costs one rect per card on a resize
+     * and makes both problems unrepresentable.
+     */
+    cardTops: number[];
     /** Where a card's leading edge is. Cards share one column, so one number
      *  serves them all — the counterpart of `sectionLeft`. */
     cardLeft: number;
@@ -478,7 +530,26 @@ export const FLAT_CURVE: CardCurve = { t: 0, rotateX: 0, scale: 1, opacity: 1, p
  * the card's *painted* edge, and cannot work out where that is without it.
  * `PackCard` reads it back for the transform, so the two cannot disagree.
  */
-export const CARD_PERSPECTIVE = 420;
+const CARD_PERSPECTIVE = 420;
+
+/**
+ * The rolodex curve as CSS, and the origin it is taken about.
+ *
+ * Stated here rather than in the card's markup because {@link cardEdge} is a
+ * hand-worked copy of what the compositor does with this exact transform list,
+ * and a copy is only safe while the two cannot be edited apart. The origin
+ * travels with it for the same reason and is the easier one to lose: `cardEdge`
+ * projects about the card's centre and the band leaves from a fixed abscissa,
+ * and *both* of those are true only because the origin is the trailing edge.
+ * Moving it would leave every band drawn from a line no card is on, with
+ * nothing in this file mentioning the property that did it.
+ */
+export function cardTransform(curve: CardCurve): { transform: string; origin: string } {
+    return {
+        transform: `perspective(${CARD_PERSPECTIVE}px) rotateX(${curve.rotateX}deg) scale(${curve.scale})`,
+        origin: 'right center',
+    };
+}
 
 /**
  * A card's trailing edge as it is actually drawn, as offsets from its centre.
@@ -596,6 +667,13 @@ export function present(sample: Sample, g: WheelGeometry): Frame {
  * which is what makes the set of bands change continuously: one shrinks away as
  * its last row leaves while the next grows from nothing.
  */
+/** Card `i`'s measured top, falling back to the uniform pitch only when the
+ *  line is short — which happens for the frame between a pack being added and
+ *  the resize observer measuring it, and never once the two agree. */
+function cardTop(l: PaneLayout, g: WheelGeometry, i: number): number {
+    return l.cardTops[i] ?? g.wheelLead + i * g.cardAdvance;
+}
+
 export function packBands(
     frame: Frame,
     g: WheelGeometry,
@@ -620,8 +698,12 @@ export function packBands(
         // alone would put it: the two agree only on the focused card, and
         // everywhere else the band would leave from a line the card is not
         // drawing.
+        //
+        // The card's top comes from `cardTops`, which is measured. Reading it
+        // from the pitch instead would put card `i` off by `i` times whatever
+        // the pitch rounded away — see `PaneLayout.cardTops`.
         const centre =
-            l.wheelTop + g.wheelLead + i * g.cardAdvance + l.cardHeight / 2 - frame.wheelScrollTop;
+            l.wheelTop + cardTop(l, g, i) + l.cardHeight / 2 - frame.wheelScrollTop;
         const edge = cardEdge(frame.curves[i], l.cardHeight);
         const leaves = visibleSpan(
             centre + edge.top,

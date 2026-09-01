@@ -534,7 +534,7 @@ mod tests {
     /// A shape-valid palette, for the pack tests that do not care which colors
     /// a pack wears. One fixture rather than four literals at every call site.
     fn palette() -> PackPalette {
-        PackPalette::new("#2f7fe0", "#2fd0c0", "#0c1a26", "#c3dae9")
+        PackPalette::new("#2f7fe0", "#2fd0c0", "#0c1a26")
     }
 
     fn brush_named(id: &str, name: &str) -> Brush {
@@ -756,7 +756,7 @@ mod tests {
                 "Two",
                 "",
                 "mdi:brush",
-                &PackPalette::new("not-a-color", "#2fd0c0", "#0c1a26", "#c3dae9"),
+                &PackPalette::new("not-a-color", "#2fd0c0", "#0c1a26"),
             )
             .is_err());
     }
@@ -776,7 +776,7 @@ mod tests {
             .edit_pack("p2", "One", "", "mdi:brush", &palette())
             .is_err());
 
-        let restyled = PackPalette::new("#c2521f", "#e0912b", "#e8ddc8", "#4a3826");
+        let restyled = PackPalette::new("#c2521f", "#e0912b", "#e8ddc8");
         lib.edit_pack("p2", "Renamed", "d", "mdi:water", &restyled)
             .unwrap();
         let p = lib.pack("p2").unwrap();

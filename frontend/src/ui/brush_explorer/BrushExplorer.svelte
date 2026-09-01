@@ -40,6 +40,7 @@
         PACK_RIM,
         packBands,
         present,
+        sameGeometry,
         scrollTopForSection,
         type CardCurve,
         type PackBand,
@@ -116,21 +117,27 @@
         sectionLeft: 0,
         cardHeight: 0,
         cardLeft: 0,
+        cardTops: [],
         width: 0,
         height: 0,
         viewportLeft: 0,
         viewportTop: 0,
     });
 
-    /** Identity of the last geometry written, as a plain (non-reactive) local.
+    /** The last geometry written, as a plain (non-reactive) local.
      *
      *  Load-bearing: `measure` runs inside an effect, so if it *read* `geometry`
      *  to decide whether to write it, the write would invalidate the read and
      *  the effect would re-run forever — Svelte kills the component with
-     *  `effect_update_depth_exceeded`. Comparing against a non-reactive key
-     *  breaks that cycle, and skipping identical writes is what lets the
-     *  measure/render loop settle. */
-    let geometryKey = '';
+     *  `effect_update_depth_exceeded`. Comparing against a non-reactive copy
+     *  breaks that cycle, and skipping unchanged writes is what lets the
+     *  measure/render loop settle.
+     *
+     *  Compared within a tolerance rather than exactly, because the metrics are
+     *  now fractional: whole-px rounding used to absorb sub-pixel reflow chatter
+     *  for free, and without a tolerance that chatter would keep the loop awake.
+     *  See `sameGeometry`. */
+    let lastGeometry: WheelGeometry | null = null;
 
     /** Every rendered group section, in document order.
      *
@@ -154,58 +161,83 @@
     function measure() {
         if (!listEl || !wheelEl || !explorerEl) return;
 
-        // The card pitch comes from the stylesheet rather than being repeated
-        // here. With fewer than two cards the wheel has no scroll range, so any
-        // plausible value behaves identically.
-        const cards = wheelEl.querySelectorAll<HTMLElement>('.pack-card');
-        const cardAdvance =
-            cards.length >= 2 ? cards[1].offsetTop - cards[0].offsetTop : FALLBACK_ADVANCE;
-
-        const els = sectionElements();
-        const sections: SectionExtent[] = els.map((el, i) => ({
-            id: groups[i]?.id ?? String(i),
-            top: el.offsetTop,
-            height: el.offsetHeight,
-        }));
-
-        const next: WheelGeometry = {
-            cardAdvance: cardAdvance > 0 ? cardAdvance : FALLBACK_ADVANCE,
-            wheelLead: cards.length > 0 ? cards[0].offsetTop : 0,
-            wheelViewport: wheelEl.clientHeight,
-            listViewport: listEl.clientHeight,
-            listScrollMax: listEl.scrollHeight - listEl.clientHeight,
-            wheelScrollMax: wheelEl.scrollHeight - wheelEl.clientHeight,
-            sections,
-        };
-        const key = `${next.cardAdvance}|${next.wheelLead}|${next.wheelViewport}|${next.listViewport}`
-            + `|${next.listScrollMax}|${next.wheelScrollMax}|`
-            + sections.map(s => `${s.id}:${s.top}:${s.height}`).join(',');
-        if (key !== geometryKey) {
-            geometryKey = key;
-            geometry = next;
-        }
-
-        // Positions of the boxes themselves, relative to the explorer. A card's
-        // `offsetLeft`/`offsetHeight` are layout, so unlike its bounding rect
-        // they describe the card the rolodex curve is applied *to* rather than
-        // the tilted box it currently occupies.
+        // Everything here is read through `getBoundingClientRect`, and nothing
+        // through the `offset*` family.
+        //
+        // The two are not interchangeable. Layout is computed in fractional CSS
+        // px; `offsetTop` and friends round that to whole ones. At 100% zoom on
+        // an integer-DPR display the two agree, which is why mixing them shipped
+        // looking correct. Off 100% they do not, and the differences do not stay
+        // small: they used to reach the bands through a *pitch* that card `i`'s
+        // position was `i` multiples of, so a third of a pixel at the top of the
+        // column was two pixels by the sixth pack.
+        //
+        // A card's own rect is usable now only because the rolodex transform
+        // sits on `.body` one level in — a transformed element reports the box
+        // it is drawn as, not the box it was laid out as.
         const base = explorerEl.getBoundingClientRect();
         const wheelPort = wheelEl.getBoundingClientRect();
         const listPort = listEl.getBoundingClientRect();
-        const card = cards[0];
+
+        const cards = [...wheelEl.querySelectorAll<HTMLElement>('.pack-card')];
+        // In the wheel's scroll-content coordinates, which is the frame
+        // `wheelScrollTop` is subtracted in.
+        const wheelScrolled = wheelEl.scrollTop;
+        const cardTops = cards.map(
+            el => el.getBoundingClientRect().top - wheelPort.top + wheelScrolled,
+        );
+        const first = cards[0]?.getBoundingClientRect();
+
+        // Over the whole measured line rather than one adjacent pair: the
+        // mapping wants the pitch the column actually keeps, and the endpoints
+        // are a better estimator of it than any two neighbours. With fewer than
+        // two cards the wheel has no scroll range, so any plausible value
+        // behaves identically.
+        const spanned =
+            cards.length >= 2
+                ? (cardTops[cards.length - 1] - cardTops[0]) / (cards.length - 1)
+                : FALLBACK_ADVANCE;
+
+        const els = sectionElements();
+        const listScrolled = listEl.scrollTop;
+        const sections: SectionExtent[] = els.map((el, i) => {
+            const r = el.getBoundingClientRect();
+            return {
+                id: groups[i]?.id ?? String(i),
+                top: r.top - listPort.top + listScrolled,
+                height: r.height,
+            };
+        });
+
+        const next: WheelGeometry = {
+            cardAdvance: spanned > 0 ? spanned : FALLBACK_ADVANCE,
+            wheelLead: cardTops[0] ?? 0,
+            wheelViewport: wheelPort.height,
+            listViewport: listPort.height,
+            // `scrollHeight` has no fractional accessor, so these two keep a
+            // sub-pixel residue. They bound a clamp rather than placing an edge,
+            // the residue does not compound, and it never reaches a join —
+            // deriving them from the section extents instead would be worse for
+            // the reasons `WheelGeometry` gives.
+            listScrollMax: listEl.scrollHeight - listPort.height,
+            wheelScrollMax: wheelEl.scrollHeight - wheelPort.height,
+            sections,
+        };
+        if (!sameGeometry(next, lastGeometry)) {
+            lastGeometry = next;
+            geometry = next;
+        }
+
         layout = {
             wheelTop: wheelPort.top - base.top,
             wheelBottom: wheelPort.bottom - base.top,
             listTop: listPort.top - base.top,
             listBottom: listPort.bottom - base.top,
-            cardRight: card
-                ? wheelPort.left - base.left + card.offsetLeft + card.offsetWidth
-                : wheelPort.right - base.left,
-            sectionLeft: listPort.left - base.left + (els[0]?.offsetLeft ?? 0),
-            cardHeight: card?.offsetHeight ?? next.cardAdvance,
-            cardLeft: card
-                ? wheelPort.left - base.left + card.offsetLeft
-                : wheelPort.left - base.left,
+            cardRight: first ? first.right - base.left : wheelPort.right - base.left,
+            sectionLeft: (els[0]?.getBoundingClientRect().left ?? listPort.left) - base.left,
+            cardHeight: first?.height ?? next.cardAdvance,
+            cardLeft: first ? first.left - base.left : wheelPort.left - base.left,
+            cardTops,
             width: base.width,
             height: base.height,
             viewportLeft: base.left,
@@ -227,6 +259,11 @@
         ro.observe(listEl);
         ro.observe(wheelEl);
         for (const el of sectionElements()) ro.observe(el);
+        // And a card. Nothing else here resizes when only the cards do — a
+        // webfont arriving late is the realistic case — and a measured line
+        // notices that where a single pitch survived it.
+        const card = wheelEl.querySelector('.pack-card');
+        if (card) ro.observe(card);
         return () => ro.disconnect();
     });
 
@@ -349,6 +386,7 @@
         style:--field-y="{layout.viewportTop}px"
         style:--pack-rim-width="{PACK_RIM}px"
         style:--section-left="{layout.sectionLeft}px"
+        style:--card-right="{layout.cardRight}px"
     >
         <PackProjection {bands} />
 
@@ -486,6 +524,34 @@
          * flush and the field runs straight through, so a rounded corner there
          * would cut a notch out of a continuous surface. */
         border-radius: 0 10px 10px 0;
+
+        /* What makes the join with the band resolve, and the whole of it.
+         *
+         * A box background is snapped to whole device pixels before it is
+         * painted; a `clip-path` is rasterised against its own geometry and
+         * antialiased. The band arrives here as a path, so off 100% zoom the
+         * section's snapped edge and the band's unsnapped one land on the same
+         * device column with different coverage — a sliver painted twice, or
+         * one left bare, flipping between the two as the zoom moves the join
+         * across the grid. That is the seam, and it is a disagreement about
+         * *rasterisation*, not about position: the coordinate the two share is
+         * already exact.
+         *
+         * Clipping the section puts its edge in the same regime as the band's.
+         * Two antialiased edges on one coordinate carry complementary coverage,
+         * which for surfaces at alpha `a` composites to `a − a²·t(1−t)` — under
+         * a percent of the tint, against the half-pixel of doubling or bare
+         * background that the mismatch produced.
+         *
+         * The card end has always resolved this way and has never shown the
+         * seam, which is the evidence for this being the mechanism: a card is a
+         * *transformed* element, so the compositor already antialiases its edge
+         * against its geometry rather than snapping it. This gives the section
+         * the same property by the means available to an untransformed box.
+         *
+         * The clip covers the pseudo-elements too, so the surface, the beam and
+         * the rim all arrive at the join the same way. */
+        clip-path: inset(0 round 0 10px 10px 0);
     }
     /* Where this section samples the field: the same one the card and the
      * ribbon paint, anchored to the viewport rather than to this box.
