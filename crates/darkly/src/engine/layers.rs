@@ -2,14 +2,15 @@
 
 use darkly_macros::handlers;
 
+use super::types::{node_to_layer_info, LayerTree};
 use super::DarklyEngine;
-use crate::document::MoveTarget;
+use crate::document::{MoveTarget, TreeSlot};
 use crate::engine::protocol::{params_from_json, RawParams};
 use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::property::Property;
 use crate::undo::{
     CompoundAction, EntityAddAction, EntityRemoveAction, LayerMoveAction, PropertyAction,
-    UndoAction,
+    ScreenSpaceBoundaryAction, UndoAction,
 };
 
 /// Convert Darkly's row-major `[a, b, tx, c, d, ty]` affine (point map
@@ -107,9 +108,8 @@ impl DarklyEngine {
             .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id, bounds);
         self.compositor.mark_dirty();
 
-        let parent = self.doc.parent_of(id);
-        let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
+        let slot = self.doc.slot_of(id).unwrap_or_default();
+        self.push_undo(Box::new(EntityAddAction::new(id, slot)));
 
         id
     }
@@ -284,9 +284,8 @@ impl DarklyEngine {
         self.sync_vector_layer(id);
         self.compositor.mark_dirty();
 
-        let parent = self.doc.parent_of(id);
-        let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
+        let slot = self.doc.slot_of(id).unwrap_or_default();
+        self.push_undo(Box::new(EntityAddAction::new(id, slot)));
         (id, object_id)
     }
 
@@ -593,9 +592,8 @@ impl DarklyEngine {
     pub fn add_group(&mut self, anchor: Option<LayerId>) -> LayerId {
         let id = self.doc.add_group(anchor);
 
-        let parent = self.doc.parent_of(id);
-        let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
+        let slot = self.doc.slot_of(id).unwrap_or_default();
+        self.push_undo(Box::new(EntityAddAction::new(id, slot)));
 
         id
     }
@@ -654,15 +652,10 @@ impl DarklyEngine {
         // `add_group(Some(group))` resolves to `IntoGroupTop(group)`).
         // We'll move the group to the topmost's slot at the end.
         let group_id = self.doc.add_group(None);
-        let group_initial_parent = self.doc.parent_of(group_id);
-        let group_initial_pos = self.doc.position_in_parent(group_id).unwrap_or(0);
+        let group_initial_slot = self.doc.slot_of(group_id).unwrap_or_default();
 
         let mut actions: Vec<Box<dyn UndoAction>> = Vec::with_capacity(editable.len() + 2);
-        actions.push(Box::new(EntityAddAction::new(
-            group_id,
-            group_initial_parent,
-            group_initial_pos,
-        )));
+        actions.push(Box::new(EntityAddAction::new(group_id, group_initial_slot)));
 
         // Move sources into the group, preserving bottom-first ordering
         // (so panel order top-first reads as the original layout). The
@@ -687,24 +680,26 @@ impl DarklyEngine {
         // one entry — `topmost_pos` now points at whatever was just
         // above topmost in panel order. Inserting the group there
         // lands it exactly where topmost used to be.
-        let group_pre_move_parent = self.doc.parent_of(group_id);
-        let group_pre_move_pos = self.doc.position_in_parent(group_id).unwrap_or(0);
+        let group_pre_move_slot = self.doc.slot_of(group_id).unwrap_or_default();
         self.doc.detach_for_undo(group_id);
         let clamped_pos = topmost_pos.min(match topmost_parent {
             Some(p) => self.doc.children_of(p).len(),
             None => self.doc.children_of(self.doc.root_id()).len(),
         });
-        self.doc
-            .reinsert_entity(group_id, topmost_parent, clamped_pos);
-        let group_final_parent = self.doc.parent_of(group_id);
-        let group_final_pos = self.doc.position_in_parent(group_id).unwrap_or(0);
-        if (group_pre_move_parent, group_pre_move_pos) != (group_final_parent, group_final_pos) {
+        self.doc.reinsert_entity(
+            group_id,
+            TreeSlot {
+                parent: topmost_parent,
+                position: clamped_pos,
+                screen_space: false,
+            },
+        );
+        let group_final_slot = self.doc.slot_of(group_id).unwrap_or_default();
+        if group_pre_move_slot != group_final_slot {
             actions.push(Box::new(LayerMoveAction::new(
                 group_id,
-                group_pre_move_parent,
-                group_pre_move_pos,
-                group_final_parent,
-                group_final_pos,
+                group_pre_move_slot,
+                group_final_slot,
             )));
         }
 
@@ -786,9 +781,8 @@ impl DarklyEngine {
             .update_void_layer_transform(&self.gpu.queue, id, &initial_transform);
         self.compositor.mark_dirty();
 
-        let parent = self.doc.parent_of(id);
-        let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
+        let slot = self.doc.slot_of(id).unwrap_or_default();
+        self.push_undo(Box::new(EntityAddAction::new(id, slot)));
 
         Some(id)
     }
@@ -817,9 +811,8 @@ impl DarklyEngine {
             .add_filter_layer(pipeline.to_string(), display_label, params, anchor);
         self.compositor.mark_dirty();
 
-        let parent = self.doc.parent_of(id);
-        let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
+        let slot = self.doc.slot_of(id).unwrap_or_default();
+        self.push_undo(Box::new(EntityAddAction::new(id, slot)));
 
         Some(id)
     }
@@ -1199,16 +1192,13 @@ impl DarklyEngine {
         if self.doc.is_filter(id) {
             return self.detach_modifier_for_remove(id);
         }
-        let parent = self.doc.parent_of(id);
-        let pos = self.doc.position_in_parent(id).unwrap_or(0);
+        let slot = self.doc.slot_of(id).unwrap_or_default();
         // Collect tombstones before detaching — `detach_for_undo` severs
         // the parent links `collect_pixel_node_ids` walks to enumerate
         // the subtree.
         let tombstones = self.collect_pixel_node_ids(id);
         self.doc.detach_for_undo(id)?;
-        Some(Box::new(EntityRemoveAction::new(
-            id, parent, pos, tombstones,
-        )))
+        Some(Box::new(EntityRemoveAction::new(id, slot, tombstones)))
     }
 
     /// Remove every id in `ids` in a single undo step. Locked layers and
@@ -1288,14 +1278,10 @@ impl DarklyEngine {
         if !self.doc.is_node_editable(layer_id) {
             return None;
         }
-        let old_parent = self.doc.parent_of(layer_id);
-        let old_pos = self.doc.position_in_parent(layer_id)?;
+        let old = self.doc.slot_of(layer_id)?;
         self.doc.move_layer(layer_id, target);
-        let new_parent = self.doc.parent_of(layer_id);
-        let new_pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
-        Some(Box::new(LayerMoveAction::new(
-            layer_id, old_parent, old_pos, new_parent, new_pos,
-        )))
+        let new = self.doc.slot_of(layer_id).unwrap_or_default();
+        Some(Box::new(LayerMoveAction::new(layer_id, old, new)))
     }
 
     /// Move every id in `ids` to land contiguously at `target`, preserving
@@ -1716,6 +1702,50 @@ impl DarklyEngine {
             Property::Passthrough(old),
             Property::Passthrough(passthrough),
         )));
+    }
+
+    /// The root's children, top-first, with the viewport divider's position.
+    #[handler]
+    pub fn layer_tree(&self) -> LayerTree {
+        LayerTree {
+            layers: self
+                .doc
+                .children_of(self.doc.root_id())
+                .iter()
+                .rev()
+                .filter_map(|id| {
+                    node_to_layer_info(
+                        &self.doc,
+                        self.compositor.void_registry(),
+                        self.compositor.effect_registry(),
+                        *id,
+                    )
+                })
+                .collect(),
+            screen_space_count: self.doc.screen_space_run().len(),
+        }
+    }
+
+    /// Move the viewport divider: `count` is how many of the root's topmost
+    /// children become viewport-only.
+    ///
+    /// The request is clamped to what the tree can actually support, so a drag
+    /// that overshoots a raster stops at it rather than being rejected — the
+    /// panel clamps for responsiveness, this clamps for correctness, and they
+    /// agree because both ask the document the same question.
+    #[handler]
+    pub fn set_screen_space_boundary(&mut self, count: usize) {
+        let clamped = self.doc.clamp_screen_space_count(count);
+        let old = self.doc.screen_space_count;
+        if clamped == old {
+            return;
+        }
+        self.doc.screen_space_count = clamped;
+        self.push_undo(Box::new(ScreenSpaceBoundaryAction::new(old, clamped)));
+        // Members leaving the run rejoin the canvas composite and members
+        // entering it stop being part of the image, so both sides are stale.
+        self.compositor.mark_dirty();
+        self.compositor.screen_run_mut().mark_needs_present();
     }
 }
 

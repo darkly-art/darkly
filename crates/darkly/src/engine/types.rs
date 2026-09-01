@@ -67,6 +67,11 @@ pub enum LayerInfo {
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
+        /// May this node sit above the viewport divider? Root children only —
+        /// `false` everywhere else, since the boundary partitions the root's
+        /// children and nothing deeper. The panel reads it to clamp the
+        /// divider drag; the engine clamps authoritatively when it lands.
+        screen_space_eligible: bool,
         icon: &'static str,
         kind_name: &'static str,
         opacity: f32,
@@ -96,6 +101,11 @@ pub enum LayerInfo {
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
+        /// May this node sit above the viewport divider? Root children only —
+        /// `false` everywhere else, since the boundary partitions the root's
+        /// children and nothing deeper. The panel reads it to clamp the
+        /// divider drag; the engine clamps authoritatively when it lands.
+        screen_space_eligible: bool,
         /// Iconify icon for this void kind (e.g. `"tabler:galaxy"`), resolved
         /// per-subtype from the void's registration. The layer panel renders
         /// it as the void layer's thumbnail.
@@ -128,6 +138,11 @@ pub enum LayerInfo {
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
+        /// May this node sit above the viewport divider? Root children only —
+        /// `false` everywhere else, since the boundary partitions the root's
+        /// children and nothing deeper. The panel reads it to clamp the
+        /// divider drag; the engine clamps authoritatively when it lands.
+        screen_space_eligible: bool,
         icon: &'static str,
         kind_name: &'static str,
         opacity: f32,
@@ -159,6 +174,11 @@ pub enum LayerInfo {
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
+        /// May this node sit above the viewport divider? Root children only —
+        /// `false` everywhere else, since the boundary partitions the root's
+        /// children and nothing deeper. The panel reads it to clamp the
+        /// divider drag; the engine clamps authoritatively when it lands.
+        screen_space_eligible: bool,
         icon: &'static str,
         kind_name: &'static str,
         opacity: f32,
@@ -180,6 +200,11 @@ pub enum LayerInfo {
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
+        /// May this node sit above the viewport divider? Root children only —
+        /// `false` everywhere else, since the boundary partitions the root's
+        /// children and nothing deeper. The panel reads it to clamp the
+        /// divider drag; the engine clamps authoritatively when it lands.
+        screen_space_eligible: bool,
         icon: &'static str,
         kind_name: &'static str,
         collapsed: bool,
@@ -189,6 +214,23 @@ pub enum LayerInfo {
         modifiers: Vec<ModifierInfo>,
         children: Vec<LayerInfo>,
     },
+}
+
+/// The root's children plus where the viewport divider sits among them.
+///
+/// One response rather than two calls, because the panel cannot draw either
+/// without the other: the rows are meaningless without the line, and the line's
+/// position is an index into the rows.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct LayerTree {
+    /// Root children, top-first — panel order.
+    pub layers: Vec<LayerInfo>,
+    /// How many of `layers`' *leading* entries render in screen space. The
+    /// list is top-first and the run is the top of the stack, so the run is
+    /// the prefix here even though it is the suffix in the document.
+    pub screen_space_count: usize,
 }
 
 /// Serializable view of a single modifier attached to a host. Carries enough
@@ -209,19 +251,6 @@ pub struct ModifierInfo {
     /// See [`LayerInfo::Raster::editable`] — a modifier is editable when
     /// neither it nor its host (nor any ancestor of the host) is locked.
     pub editable: bool,
-}
-
-/// Per-instance view of a veil in the chain. `type` is the registry `type_id`;
-/// resolve to a display label via `veil_types()` — never duplicate it here.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-pub struct VeilInfo {
-    #[serde(rename = "type")]
-    pub type_id: String,
-    pub visible: bool,
-    pub index: usize,
-    pub params: Vec<ParamInfo>,
 }
 
 /// Range and default rendered for reading — each number converted into its
@@ -523,6 +552,7 @@ pub(crate) fn node_to_layer_info(
                 can_have_mask: kind.can_have_mask,
                 can_rename: kind.can_rename,
                 has_thumbnail: kind.has_thumbnail,
+                screen_space_eligible: doc.screen_space_eligible(node_id),
                 icon: kind.icon,
                 kind_name: kind.display_name,
                 opacity: r.blend.opacity,
@@ -552,6 +582,7 @@ pub(crate) fn node_to_layer_info(
                     can_have_mask: kind.can_have_mask,
                     can_rename: kind.can_rename,
                     has_thumbnail: kind.has_thumbnail,
+                    screen_space_eligible: doc.screen_space_eligible(node_id),
                     icon: if subtype_icon.is_empty() {
                         kind.icon
                     } else {
@@ -587,6 +618,7 @@ pub(crate) fn node_to_layer_info(
                     can_have_mask: kind.can_have_mask,
                     can_rename: kind.can_rename,
                     has_thumbnail: kind.has_thumbnail,
+                    screen_space_eligible: doc.screen_space_eligible(node_id),
                     icon: if pipeline_icon.is_empty() {
                         kind.icon
                     } else {
@@ -614,6 +646,7 @@ pub(crate) fn node_to_layer_info(
                 can_have_mask: kind.can_have_mask,
                 can_rename: kind.can_rename,
                 has_thumbnail: kind.has_thumbnail,
+                screen_space_eligible: doc.screen_space_eligible(node_id),
                 icon: kind.icon,
                 kind_name: kind.display_name,
                 opacity: v.blend.opacity,
@@ -635,6 +668,7 @@ pub(crate) fn node_to_layer_info(
             can_have_mask: kind.can_have_mask,
             can_rename: kind.can_rename,
             has_thumbnail: kind.has_thumbnail,
+            screen_space_eligible: doc.screen_space_eligible(node_id),
             icon: kind.icon,
             kind_name: kind.display_name,
             collapsed: g.collapsed,

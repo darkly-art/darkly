@@ -774,9 +774,7 @@ impl DarklyEngine {
             return;
         }
         self.gpu.resize(width, height);
-        self.compositor
-            .effect_chain_mut()
-            .resize(&self.gpu.device, &self.gpu.queue, width, height);
+        self.compositor.resize_screen_run(width, height);
         self.compositor.mark_needs_present();
     }
 

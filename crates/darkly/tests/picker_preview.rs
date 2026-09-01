@@ -658,13 +658,12 @@ fn an_unknown_catalog_or_type_is_a_no_op() {
 /// Generating a preview of any catalog leaves the document exactly as it was.
 ///
 /// The isolation the whole offscreen path exists for: a preview builds its own
-/// instance against its own textures, so the live veil chain, layer stack and
-/// active layer are never touched.
+/// instance against its own textures, so the live layer stack and active layer
+/// are never touched.
 #[test]
 fn preview_generation_never_mutates_the_document() {
     let mut engine = headless_engine(128, 128);
-    let before_layers = engine.layer_tree().len();
-    let before_veils = engine.veil_list().len();
+    let before_layers = engine.layer_tree().layers.len();
 
     for (catalog, type_id) in [
         ("effects", "black_and_white"),
@@ -673,14 +672,9 @@ fn preview_generation_never_mutates_the_document() {
     ] {
         preview(&mut engine, catalog, type_id, PreviewVariant::Animated);
         assert_eq!(
-            engine.layer_tree().len(),
+            engine.layer_tree().layers.len(),
             before_layers,
             "`{catalog}/{type_id}` changed the layer tree"
-        );
-        assert_eq!(
-            engine.veil_list().len(),
-            before_veils,
-            "`{catalog}/{type_id}` changed the veil chain"
         );
     }
 }

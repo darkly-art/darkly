@@ -1439,7 +1439,7 @@ fn layer_info_carries_paste_extent_bounds_through_serde() {
     let pasted_id = engine.paste_image(pw, ph, &rgba, -50, -50, None);
 
     // Walk the engine's layer tree and find the pasted layer's info.
-    let tree = engine.layer_tree();
+    let tree = engine.layer_tree().layers;
     let mut found_bounds: Option<CanvasRect> = None;
     for info in &tree {
         if let LayerInfo::Raster { id, bounds, .. } = info {
@@ -3335,7 +3335,7 @@ fn set_blend_mode_on_passthrough_group_disables_passthrough() {
     engine.set_group_passthrough(group_id, true);
 
     let group_view = |e: &DarklyEngine| -> (bool, &'static str) {
-        for node in e.layer_tree() {
+        for node in e.layer_tree().layers {
             if let LayerInfo::Group {
                 id,
                 passthrough,
@@ -3843,6 +3843,7 @@ fn paste_while_editing_mask_places_layer_at_top_level() {
 
     let in_tree = engine
         .layer_tree()
+        .layers
         .iter()
         .any(|n| matches!(n, LayerInfo::Raster { id, .. } if *id == pasted.to_ffi() as f64));
     assert!(
@@ -5732,7 +5733,7 @@ fn locked_layer_rejects_modifications() {
     engine.set_layer_name(layer_id, "should-be-ignored");
     engine.set_opacity(layer_id, 1.0);
     engine.set_blend_mode(layer_id, "multiply");
-    let tree = engine.layer_tree();
+    let tree = engine.layer_tree().layers;
     let info = tree
         .iter()
         .find_map(|n| match n {
@@ -6061,7 +6062,7 @@ fn delete_dedupes_ancestor_descendant() {
     engine.move_layer(child, MoveTarget::IntoGroupTop(group));
 
     let group_in_root = |e: &DarklyEngine| -> bool {
-        e.layer_tree().iter().any(|n| {
+        e.layer_tree().layers.iter().any(|n| {
             matches!(
                 n,
                 LayerInfo::Group { id, .. } if *id == group.to_ffi() as f64
@@ -6111,7 +6112,7 @@ fn multi_move_preserves_relative_order() {
     // expected post-move order inside the group has l3 above l1
     // (matching their original relative panel order, where l3 sat
     // above l1).
-    let tree = engine.layer_tree();
+    let tree = engine.layer_tree().layers;
     let group_info = tree
         .iter()
         .find(|n| {
@@ -6181,7 +6182,7 @@ fn group_layers_wraps_selection_at_topmost_slot() {
 
     let group_id = engine.group_layers(vec![l1, l2, l3]).expect("group ok");
 
-    let tree = engine.layer_tree();
+    let tree = engine.layer_tree().layers;
     let group_f = group_id.to_ffi() as f64;
     let group_info = tree
         .iter()
@@ -6229,7 +6230,7 @@ fn group_layers_cross_parent() {
         .group_layers(vec![inside, root_top])
         .expect("cross-parent group ok");
 
-    let tree = engine.layer_tree();
+    let tree = engine.layer_tree().layers;
     let new_group = tree
         .iter()
         .find(|n| matches!(n, LayerInfo::Group { id, .. } if *id == group_id.to_ffi() as f64))
@@ -6282,7 +6283,7 @@ fn group_layers_dedupes_ancestor_descendant() {
 
     let new_group = engine.group_layers(vec![outer, inside]).expect("group ok");
 
-    let tree = engine.layer_tree();
+    let tree = engine.layer_tree().layers;
     let new_info = tree
         .iter()
         .find(|n| matches!(n, LayerInfo::Group { id, .. } if *id == new_group.to_ffi() as f64))
@@ -6314,7 +6315,7 @@ fn group_layers_one_undo_step_restores_tree() {
     let group_id = engine.group_layers(vec![l1, l2]).expect("group ok");
 
     let group_in_tree = |e: &DarklyEngine| -> bool {
-        e.layer_tree().iter().any(|n| {
+        e.layer_tree().layers.iter().any(|n| {
             matches!(
                 n,
                 LayerInfo::Group { id, .. } if *id == group_id.to_ffi() as f64
@@ -6322,7 +6323,7 @@ fn group_layers_one_undo_step_restores_tree() {
         })
     };
     let layer_at_root = |e: &DarklyEngine, id: LayerId| -> bool {
-        e.layer_tree().iter().any(|n| match n {
+        e.layer_tree().layers.iter().any(|n| match n {
             LayerInfo::Raster { id: x, .. } => *x == id.to_ffi() as f64,
             _ => false,
         })
@@ -6355,7 +6356,7 @@ fn group_layers_skips_locked() {
         .expect("group ok with one editable");
 
     use darkly::engine::types::LayerInfo;
-    let tree = engine.layer_tree();
+    let tree = engine.layer_tree().layers;
     // l1 stays at root (still locked, untouched).
     let l1_at_root = tree.iter().any(|n| match n {
         LayerInfo::Raster { id, .. } => *id == l1.to_ffi() as f64,
@@ -6409,6 +6410,7 @@ fn multi_duplicate_each_lands_above_its_source() {
     // sequence we want to assert on.
     let mut tree_ids: Vec<f64> = engine
         .layer_tree()
+        .layers
         .iter()
         .map(|n| match n {
             LayerInfo::Raster { id, .. } => *id,
@@ -6464,6 +6466,7 @@ fn projected_mask_link(engine: &DarklyEngine, host: LayerId) -> bool {
 
     engine
         .layer_tree()
+        .layers
         .into_iter()
         .find_map(|node| match node {
             LayerInfo::Raster { id, modifiers, .. } if id == host.to_ffi() as f64 => modifiers

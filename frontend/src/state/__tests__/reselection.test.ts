@@ -21,7 +21,10 @@ function instanceServing(treeRef: { current: any[] }) {
     const inst = new DarklyInstance();
     inst.requestFrame = vi.fn();
     const api = {
-        layerTree: () => Promise.resolve(treeRef.current),
+        // The response is an envelope: rows plus where the viewport divider
+        // sits among them. These tests are about the rows.
+        layerTree: () =>
+            Promise.resolve({ layers: treeRef.current, screenSpaceCount: 0 }),
         setIsolatedNode: vi.fn().mockResolvedValue(null),
         setGroupCollapsed: vi.fn(),
     };

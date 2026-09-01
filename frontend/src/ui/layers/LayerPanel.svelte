@@ -3,12 +3,11 @@
     import LayerItem from './LayerItem.svelte';
     import LayerGroup from './LayerGroup.svelte';
     import LayerFooter from './LayerFooter.svelte';
-    import VeilFolder from '../veils/VeilFolder.svelte';
+    import SpaceDivider from './SpaceDivider.svelte';
     import { bindingSite } from '../../actions/binding_site';
 
     function refresh() {
         app.refreshLayerTree();
-        app.refreshVeilList();
         app.requestFrame();
     }
 
@@ -39,9 +38,7 @@
 
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="layer-list" ondragover={onDragOver} ondrop={onDrop}>
-        {#if app.veilList.length > 0}
-            <VeilFolder onupdate={refresh} />
-        {/if}
+        <SpaceDivider onupdate={refresh} />
 
         {#each app.layerTree as node (node.id)}
             {#if node.type === 'group'}
@@ -51,7 +48,7 @@
             {/if}
         {/each}
 
-        {#if app.layerTree.length === 0 && app.veilList.length === 0}
+        {#if app.layerTree.length === 0}
             <div class="empty-message">No layers</div>
         {/if}
     </div>
@@ -75,6 +72,7 @@
     }
 
     .layer-list {
+        position: relative;
         flex: 1;
         overflow-y: auto;
         min-height: 0;

@@ -9,8 +9,14 @@
 use darkly_macros::handlers;
 
 use super::DarklyEngine;
+use crate::document::TreeSlot;
 use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::{BakeLayersAction, BakeSourceSlot};
+
+/// Refusal shared by both merge paths. Phrased in the divider's vocabulary
+/// ("viewport only") rather than the compositor's, so it reads as the same
+/// concept the layer panel labels.
+const VIEWPORT_ONLY_REFUSAL: &str = "Viewport-only effects can't be merged — they aren't part of the image. Drag it below the viewport line first.";
 
 #[handlers]
 impl DarklyEngine {
@@ -38,6 +44,13 @@ impl DarklyEngine {
         // reject it before the arithmetic rather than indexing the wrong list.
         if self.doc.is_filter(source_id) {
             return Err("Layer not in tree".into());
+        }
+        // A viewport-only effect is not part of the image, so there is nothing
+        // coherent to merge it into. Refused rather than skipped: "merge these
+        // two things" with one of them absent is not a meaningful outcome, and
+        // silently eating the effect would be worse than saying no.
+        if self.doc.renders_in_screen_space(source_id) {
+            return Err(VIEWPORT_ONLY_REFUSAL.into());
         }
         let parent = self.doc.parent_of(source_id);
         let pos = self
@@ -104,19 +117,15 @@ impl DarklyEngine {
         source_tombstones.extend(self.collect_pixel_node_ids(source_id));
 
         // Record the source/target slots so undo can put them back where
-        // they were. Positions are captured BEFORE detach.
-        let source_pos = self.doc.position_in_parent(source_id).unwrap_or(0);
-        let target_pos = self.doc.position_in_parent(target_id).unwrap_or(0);
+        // they were. Captured BEFORE detach.
         let sources = vec![
             BakeSourceSlot {
                 id: target_id,
-                parent,
-                position: target_pos,
+                slot: self.doc.slot_of(target_id).unwrap_or_default(),
             },
             BakeSourceSlot {
                 id: source_id,
-                parent,
-                position: source_pos,
+                slot: self.doc.slot_of(source_id).unwrap_or_default(),
             },
         ];
 
@@ -132,19 +141,23 @@ impl DarklyEngine {
         // Reposition the result to the target's old position. Simplest:
         // detach then re-insert.
         self.doc.detach_for_undo(result_id);
-        self.doc
-            .reinsert_entity(result_id, parent, target_pos_before);
+        self.doc.reinsert_entity(
+            result_id,
+            TreeSlot {
+                parent,
+                position: target_pos_before,
+                screen_space: false,
+            },
+        );
 
-        let result_parent = self.doc.parent_of(result_id);
-        let result_position = self.doc.position_in_parent(result_id).unwrap_or(0);
+        let result_slot = self.doc.slot_of(result_id).unwrap_or_default();
 
         self.compositor.mark_dirty();
         self.push_undo(Box::new(BakeLayersAction::new(
             sources,
             source_tombstones,
             result_id,
-            result_parent,
-            result_position,
+            result_slot,
             vec![result_id],
         )));
 
@@ -190,6 +203,9 @@ impl DarklyEngine {
             if !self.doc.is_node_editable(id) {
                 return Err("A selected layer is locked".into());
             }
+            if self.doc.renders_in_screen_space(id) {
+                return Err(VIEWPORT_ONLY_REFUSAL.into());
+            }
         }
 
         // Sort by panel display order so the bake walks bottom-to-top and
@@ -214,20 +230,18 @@ impl DarklyEngine {
                 t.blend().blend_mode,
             )
         };
-        let topmost_parent = self.doc.parent_of(topmost_id);
-        let topmost_pos = self
+        let topmost_slot = self
             .doc
-            .position_in_parent(topmost_id)
+            .slot_of(topmost_id)
             .ok_or("Topmost source not in tree")?;
 
-        // Record each source's prior (parent, position) for undo reinsert.
-        // Captured BEFORE any detach so positions reflect the live tree.
+        // Record each source's prior slot for undo reinsert. Captured BEFORE
+        // any detach so positions reflect the live tree.
         let sources: Vec<BakeSourceSlot> = unique
             .iter()
             .map(|&id| BakeSourceSlot {
                 id,
-                parent: self.doc.parent_of(id),
-                position: self.doc.position_in_parent(id).unwrap_or(0),
+                slot: self.doc.slot_of(id).unwrap_or_default(),
             })
             .collect();
 
@@ -278,19 +292,16 @@ impl DarklyEngine {
         // Reposition the result at the topmost's original slot. Detach +
         // reinsert is the simplest exact-slot landing.
         self.doc.detach_for_undo(result_id);
-        self.doc
-            .reinsert_entity(result_id, topmost_parent, topmost_pos);
+        self.doc.reinsert_entity(result_id, topmost_slot);
 
-        let result_parent = self.doc.parent_of(result_id);
-        let result_position = self.doc.position_in_parent(result_id).unwrap_or(0);
+        let result_slot = self.doc.slot_of(result_id).unwrap_or_default();
 
         self.compositor.mark_dirty();
         self.push_undo(Box::new(BakeLayersAction::new(
             sources,
             source_tombstones,
             result_id,
-            result_parent,
-            result_position,
+            result_slot,
             vec![result_id],
         )));
 

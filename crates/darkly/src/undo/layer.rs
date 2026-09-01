@@ -1,6 +1,6 @@
 use super::tombstones::Tombstones;
 use super::UndoAction;
-use crate::document::Document;
+use crate::document::{Document, TreeSlot};
 use crate::gpu::compositor::Compositor;
 use crate::layer::LayerId;
 use std::collections::{HashMap, HashSet};
@@ -16,17 +16,12 @@ use std::collections::{HashMap, HashSet};
 /// operation from here. Adding a new entity kind needs no new action.
 pub struct EntityAddAction {
     layer_id: LayerId,
-    parent: Option<LayerId>,
-    position: usize,
+    slot: TreeSlot,
 }
 
 impl EntityAddAction {
-    pub fn new(layer_id: LayerId, parent: Option<LayerId>, position: usize) -> Self {
-        EntityAddAction {
-            layer_id,
-            parent,
-            position,
-        }
+    pub fn new(layer_id: LayerId, slot: TreeSlot) -> Self {
+        EntityAddAction { layer_id, slot }
     }
 }
 
@@ -37,7 +32,7 @@ impl UndoAction for EntityAddAction {
     }
 
     fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        doc.reinsert_entity(self.layer_id, self.parent, self.position);
+        doc.reinsert_entity(self.layer_id, self.slot);
         HashMap::new()
     }
 }
@@ -57,8 +52,7 @@ impl UndoAction for EntityAddAction {
 /// empty tombstone set.
 pub struct EntityRemoveAction {
     layer_id: LayerId,
-    parent: Option<LayerId>,
-    position: usize,
+    slot: TreeSlot,
     /// Pixel-bearing node ids inside the removed subtree. Detached on the
     /// applied side; disposed by [`UndoAction::on_evict`] only when the
     /// action is evicted while still applied.
@@ -69,16 +63,10 @@ pub struct EntityRemoveAction {
 }
 
 impl EntityRemoveAction {
-    pub fn new(
-        layer_id: LayerId,
-        parent: Option<LayerId>,
-        position: usize,
-        tombstones: Vec<LayerId>,
-    ) -> Self {
+    pub fn new(layer_id: LayerId, slot: TreeSlot, tombstones: Vec<LayerId>) -> Self {
         EntityRemoveAction {
             layer_id,
-            parent,
-            position,
+            slot,
             tombstones: Tombstones::new(tombstones, /* detached_when_applied: */ true),
             applied: true,
         }
@@ -87,7 +75,7 @@ impl EntityRemoveAction {
 
 impl UndoAction for EntityRemoveAction {
     fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        doc.reinsert_entity(self.layer_id, self.parent, self.position);
+        doc.reinsert_entity(self.layer_id, self.slot);
         self.applied = false;
         HashMap::new()
     }
@@ -109,41 +97,27 @@ impl UndoAction for EntityRemoveAction {
 /// Stores the old and new positions. Undo moves back to old, redo moves to new.
 pub struct LayerMoveAction {
     layer_id: LayerId,
-    old_parent: Option<LayerId>,
-    old_position: usize,
-    new_parent: Option<LayerId>,
-    new_position: usize,
+    old: TreeSlot,
+    new: TreeSlot,
 }
 
 impl LayerMoveAction {
-    pub fn new(
-        layer_id: LayerId,
-        old_parent: Option<LayerId>,
-        old_position: usize,
-        new_parent: Option<LayerId>,
-        new_position: usize,
-    ) -> Self {
-        LayerMoveAction {
-            layer_id,
-            old_parent,
-            old_position,
-            new_parent,
-            new_position,
-        }
+    pub fn new(layer_id: LayerId, old: TreeSlot, new: TreeSlot) -> Self {
+        LayerMoveAction { layer_id, old, new }
     }
 }
 
 impl UndoAction for LayerMoveAction {
     fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
         if doc.detach_for_undo(self.layer_id).is_some() {
-            doc.reinsert_entity(self.layer_id, self.old_parent, self.old_position);
+            doc.reinsert_entity(self.layer_id, self.old);
         }
         HashMap::new()
     }
 
     fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
         if doc.detach_for_undo(self.layer_id).is_some() {
-            doc.reinsert_entity(self.layer_id, self.new_parent, self.new_position);
+            doc.reinsert_entity(self.layer_id, self.new);
         }
         HashMap::new()
     }
@@ -160,8 +134,7 @@ impl UndoAction for LayerMoveAction {
 /// and must not be touched.
 pub struct DuplicateAction {
     root_new_id: LayerId,
-    parent: Option<LayerId>,
-    position: usize,
+    slot: TreeSlot,
     /// Every pixel-bearing node id (raster + mask) inside the duplicated
     /// subtree. Disposed by [`UndoAction::on_evict`] only when the dup is
     /// in the detached (undone) state.
@@ -172,16 +145,10 @@ pub struct DuplicateAction {
 }
 
 impl DuplicateAction {
-    pub fn new(
-        root_new_id: LayerId,
-        parent: Option<LayerId>,
-        position: usize,
-        tombstones: Vec<LayerId>,
-    ) -> Self {
+    pub fn new(root_new_id: LayerId, slot: TreeSlot, tombstones: Vec<LayerId>) -> Self {
         DuplicateAction {
             root_new_id,
-            parent,
-            position,
+            slot,
             tombstones: Tombstones::new(tombstones, /* detached_when_applied: */ false),
             applied: true,
         }
@@ -196,7 +163,7 @@ impl UndoAction for DuplicateAction {
     }
 
     fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        doc.reinsert_entity(self.root_new_id, self.parent, self.position);
+        doc.reinsert_entity(self.root_new_id, self.slot);
         self.applied = true;
         HashMap::new()
     }
@@ -211,8 +178,7 @@ impl UndoAction for DuplicateAction {
 #[derive(Clone, Copy, Debug)]
 pub struct BakeSourceSlot {
     pub id: LayerId,
-    pub parent: Option<LayerId>,
-    pub position: usize,
+    pub slot: TreeSlot,
 }
 
 /// Undo action for merge-down and flatten-image. Both ops consume a set of
@@ -233,8 +199,7 @@ pub struct BakeLayersAction {
     source_tombstones: Tombstones,
 
     pub result_id: LayerId,
-    pub result_parent: Option<LayerId>,
-    pub result_position: usize,
+    pub result_slot: TreeSlot,
     /// The baked result's pixel-bearing node ids — typically just
     /// `[result_id]`. Disposed at evict time **only if the action was
     /// undone** (result currently detached).
@@ -251,8 +216,7 @@ impl BakeLayersAction {
         sources: Vec<BakeSourceSlot>,
         source_tombstones: Vec<LayerId>,
         result_id: LayerId,
-        result_parent: Option<LayerId>,
-        result_position: usize,
+        result_slot: TreeSlot,
         result_tombstones: Vec<LayerId>,
     ) -> Self {
         BakeLayersAction {
@@ -262,8 +226,7 @@ impl BakeLayersAction {
                 /* detached_when_applied: */ true,
             ),
             result_id,
-            result_parent,
-            result_position,
+            result_slot,
             result_tombstones: Tombstones::new(
                 result_tombstones,
                 /* detached_when_applied: */ false,
@@ -274,8 +237,11 @@ impl BakeLayersAction {
 
     /// Source ids in bottom-to-top order — the order needed for compose.
     pub fn source_ids_bottom_to_top(&self) -> Vec<LayerId> {
-        let mut ids: Vec<(usize, LayerId)> =
-            self.sources.iter().map(|s| (s.position, s.id)).collect();
+        let mut ids: Vec<(usize, LayerId)> = self
+            .sources
+            .iter()
+            .map(|s| (s.slot.position, s.id))
+            .collect();
         ids.sort_by_key(|(p, _)| *p);
         ids.into_iter().map(|(_, id)| id).collect()
     }
@@ -292,9 +258,9 @@ impl UndoAction for BakeLayersAction {
         // Reinsert sources in ascending position order — earlier slots first
         // so later positions remain valid as the tree grows back.
         let mut sources_sorted = self.sources.clone();
-        sources_sorted.sort_by_key(|s| s.position);
-        for slot in sources_sorted {
-            doc.reinsert_entity(slot.id, slot.parent, slot.position);
+        sources_sorted.sort_by_key(|s| s.slot.position);
+        for source in sources_sorted {
+            doc.reinsert_entity(source.id, source.slot);
         }
         self.applied = false;
         HashMap::new()
@@ -303,10 +269,10 @@ impl UndoAction for BakeLayersAction {
     fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
         // Detach sources first so their slots are gone before the result
         // claims its insertion position.
-        for slot in &self.sources {
-            doc.detach_for_undo(slot.id);
+        for source in &self.sources {
+            doc.detach_for_undo(source.id);
         }
-        doc.reinsert_entity(self.result_id, self.result_parent, self.result_position);
+        doc.reinsert_entity(self.result_id, self.result_slot);
         self.applied = true;
         HashMap::new()
     }

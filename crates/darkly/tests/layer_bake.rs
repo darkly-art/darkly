@@ -74,6 +74,7 @@ fn group_at_root(engine: &DarklyEngine, group_id: LayerId) -> bool {
     let target = group_id.to_ffi() as f64;
     engine
         .layer_tree()
+        .layers
         .iter()
         .any(|info| matches!(info, LayerInfo::Group { id, .. } if *id == target))
 }
@@ -451,6 +452,7 @@ fn merge_layers_same_parent_inherits_topmost_props() {
     // Result inherits the topmost's name + opacity.
     let info = engine
         .layer_tree()
+        .layers
         .into_iter()
         .find(|n| match n {
             LayerInfo::Raster { id, .. } => *id == result.to_ffi() as f64,
@@ -497,6 +499,7 @@ fn merge_layers_cross_parent_lands_at_topmost() {
     // matches an id in the selection).
     let info = engine
         .layer_tree()
+        .layers
         .into_iter()
         .find(|n| match n {
             LayerInfo::Raster { id, .. } => *id == result.to_ffi() as f64,
@@ -581,4 +584,81 @@ fn merge_layers_needs_two_sources() {
 
     let r2 = engine.merge_layers(vec![l1, l1]);
     assert!(r2.is_err(), "duplicate-id merge must error (dedupes to 1)");
+}
+
+// ---------------------------------------------------------------------------
+// The viewport divider. Flatten and merge both consume the nodes they operate
+// on, so a run member reaching either one would be destroyed without ever
+// having been part of the image it is supposedly being baked into. They handle
+// that differently on purpose: Flatten Image legitimately means "flatten the
+// document content", while "merge these two things" with one of them absent is
+// not a meaningful outcome.
+// ---------------------------------------------------------------------------
+
+/// Add an effect layer at the top of the stack.
+fn effect_layer(engine: &mut DarklyEngine, pipeline: &str) -> LayerId {
+    let defaults: Vec<_> = engine
+        .filter_param_defs(pipeline)
+        .iter()
+        .map(darkly::gpu::params::ParamDef::default_value)
+        .collect();
+    engine
+        .add_filter_layer(pipeline, defaults, None)
+        .expect("effect layer is addable")
+}
+
+/// Flatten Image leaves the run alone. Without the boundary-aware source list
+/// this fails by the effect **disappearing** — detached as a flatten source and
+/// never baked, because the walk that would have baked it skips the run.
+#[test]
+fn flatten_image_leaves_the_screen_space_run_in_the_tree() {
+    let mut engine = test_engine(64, 64);
+    let lower = engine.add_raster_layer(None);
+    paint_dot(&mut engine, lower, 32.0, 32.0, [1.0, 0.0, 0.0]);
+    let upper = engine.add_raster_layer(None);
+    paint_dot(&mut engine, upper, 40.0, 32.0, [0.0, 0.0, 1.0]);
+    let viewport_effect = effect_layer(&mut engine, "invert");
+    engine.set_screen_space_boundary(1);
+
+    let result = engine.flatten_image().expect("flatten succeeds");
+
+    assert!(
+        engine.has_layer(viewport_effect),
+        "a viewport-only effect is not document content and must survive Flatten"
+    );
+    assert!(engine.has_layer(result), "the baked result exists");
+    assert!(
+        !engine.has_layer(lower),
+        "canvas-space sources are consumed"
+    );
+    assert!(!engine.has_layer(upper));
+}
+
+/// Merge Down refuses rather than silently eating the effect.
+#[test]
+fn merge_down_refuses_a_screen_space_source() {
+    let mut engine = test_engine(64, 64);
+    let lower = engine.add_raster_layer(None);
+    paint_dot(&mut engine, lower, 32.0, 32.0, [1.0, 0.0, 0.0]);
+    let viewport_effect = effect_layer(&mut engine, "invert");
+    engine.set_screen_space_boundary(1);
+
+    let result = engine.merge_down(viewport_effect);
+    assert!(result.is_err(), "a viewport-only source must refuse");
+    assert!(engine.has_layer(viewport_effect), "and must survive");
+    assert!(engine.has_layer(lower));
+}
+
+/// …and so does `merge_layers`, for the same reason.
+#[test]
+fn merge_layers_refuses_a_screen_space_source() {
+    let mut engine = test_engine(64, 64);
+    let keep = engine.add_raster_layer(None);
+    let viewport_effect = effect_layer(&mut engine, "invert");
+    engine.set_screen_space_boundary(1);
+
+    let result = engine.merge_layers(vec![keep, viewport_effect]);
+    assert!(result.is_err(), "a viewport-only source must refuse");
+    assert!(engine.has_layer(viewport_effect));
+    assert!(engine.has_layer(keep));
 }

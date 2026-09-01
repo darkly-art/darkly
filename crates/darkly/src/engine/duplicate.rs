@@ -82,17 +82,11 @@ impl DarklyEngine {
         // (the `IntoGroupTop` semantic on group anchors).
         self.doc
             .move_layer(root_new_id, MoveTarget::After(source_id));
-        let parent = self.doc.parent_of(root_new_id);
-        let position = self.doc.position_in_parent(root_new_id).unwrap_or(0);
+        let slot = self.doc.slot_of(root_new_id).unwrap_or_default();
         let tombstones = self.collect_pixel_node_ids(root_new_id);
         Some((
             root_new_id,
-            Box::new(DuplicateAction::new(
-                root_new_id,
-                parent,
-                position,
-                tombstones,
-            )),
+            Box::new(DuplicateAction::new(root_new_id, slot, tombstones)),
         ))
     }
 

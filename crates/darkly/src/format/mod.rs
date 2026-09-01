@@ -23,7 +23,7 @@ mod tests;
 pub use error::LoadError;
 pub use manifest::{
     texture_format_from_str, texture_format_to_str, Manifest, ManifestCanvas, ManifestEntry,
-    ManifestPixelRef, ManifestRequires, ManifestVeil, ManifestWriter, SaveBlob, SaveBundle,
-    CONTAINER_VERSION, FORMAT_TAG,
+    ManifestPixelRef, ManifestRequires, ManifestWriter, SaveBlob, SaveBundle, CONTAINER_VERSION,
+    FORMAT_TAG,
 };
 pub use registry_io::{deserialize_instance, serialize_instance, InstancePayload};

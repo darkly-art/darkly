@@ -22,7 +22,7 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         id: "newVeil",
         display_name: "New Veil",
-        description: "Add a veil — a post-process effect (rainy glass, VHS, grain, …) over the whole canvas.",
+        description: "Add an effect layer from the Veils set — the distorting and animated ones (rainy glass, VHS, grain, …).",
         icon: "material-symbols:curtains-rounded",
     },
     ActionDef {

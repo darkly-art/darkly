@@ -36,7 +36,7 @@ beforeEach(async () => {
     inst.requestFrame = vi.fn();
     inst.engine = {
         api: {
-            layerTree: () => Promise.resolve(tree),
+            layerTree: () => Promise.resolve({ layers: tree, screenSpaceCount: 0 }),
             removeLayer,
             removeLayers,
             setIsolatedNode: vi.fn().mockResolvedValue(null),

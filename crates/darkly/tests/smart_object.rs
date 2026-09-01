@@ -107,7 +107,7 @@ fn void_layer_ids(engine: &DarklyEngine) -> Vec<LayerId> {
             _ => {}
         }
     }
-    walk(&json, &mut out);
+    walk(&json["layers"], &mut out);
     out
 }
 

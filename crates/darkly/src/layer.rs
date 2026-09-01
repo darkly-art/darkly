@@ -5,6 +5,7 @@ use peniko::Brush;
 use serde::{Deserialize, Serialize};
 
 use crate::coord::CanvasRect;
+use crate::document::Document;
 use crate::gpu::blend_mode::{self, BlendModeRegistration};
 use crate::gpu::params::ParamValue;
 
@@ -714,6 +715,42 @@ impl LayerNode {
             LayerNode::Group(g) => g.passthrough,
             LayerNode::Layer(Layer::Filter(_)) => true,
             LayerNode::Layer(_) => false,
+        }
+    }
+
+    /// Whether this node may sit above the screen-space boundary — whether it
+    /// can be realized after the view transform, on the presented image, rather
+    /// than inside the canvas-space tree walk.
+    ///
+    /// A structural question only: visibility is never consulted, because
+    /// toggling an eye must not change what a document exports. A node carrying
+    /// a mask answers `false` whatever its kind — mask textures are canvas-space
+    /// R8 at the full canvas rect and are sampled in plane coordinates, so
+    /// applying one to a view-transformed image mixes coordinate frames. Mask
+    /// *presence* is what disqualifies, not mask visibility, for the same reason
+    /// visibility is ignored.
+    ///
+    /// An empty passthrough group answers `true` vacuously; it composites
+    /// nothing in either space, so the answer is harmless either way.
+    pub fn supports_screen_space(&self, doc: &Document) -> bool {
+        if doc.has_mask(self.id()) {
+            return false;
+        }
+        match self {
+            // An effect runs its pipeline over whatever image it is handed,
+            // which is exactly what makes it realizable in both spaces.
+            LayerNode::Layer(Layer::Filter(_)) => true,
+            LayerNode::Layer(_) => false,
+            // An isolated group owns a canvas-space accumulator that has no
+            // screen-space counterpart. A passthrough group has no image of its
+            // own, so it is eligible exactly when everything it inlines is.
+            LayerNode::Group(g) => {
+                g.passthrough
+                    && g.children.iter().all(|c| {
+                        doc.find_node(*c)
+                            .is_some_and(|n| n.supports_screen_space(doc))
+                    })
+            }
         }
     }
 

@@ -52,7 +52,7 @@ fn drain_rich_copy(engine: &mut DarklyEngine) -> String {
 /// Returns `(name, opacity, blend_mode_type_id, modifier_count)`.
 fn raster_props(engine: &DarklyEngine, id: LayerId) -> (String, f32, String, usize) {
     let id_f = id.to_ffi() as f64;
-    let tree = engine.layer_tree();
+    let tree = engine.layer_tree().layers;
     for info in tree {
         if let LayerInfo::Raster {
             id: lid,

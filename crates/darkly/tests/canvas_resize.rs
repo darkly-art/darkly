@@ -747,3 +747,127 @@ fn dropped_present_keeps_requesting_frames() {
         "a pending present must keep the frame loop alive so the dropped frame reschedules"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Effect-instance invalidation. An instance's bind groups point at the pair it
+// was prepared against — a group accumulator in canvas space, the run's
+// ping-pong in screen space. Both are replaced under it: the canvas rect
+// recreates every accumulator, and a viewport resize recreates the run's
+// textures, which `set_canvas_rect` never touches. A missed invalidation leaves
+// a bind group pointing at a freed texture.
+// ---------------------------------------------------------------------------
+
+/// Add an effect layer at the top of the stack.
+fn effect_layer(engine: &mut DarklyEngine, pipeline: &str) -> LayerId {
+    let defaults: Vec<_> = engine
+        .filter_param_defs(pipeline)
+        .iter()
+        .map(darkly::gpu::params::ParamDef::default_value)
+        .collect();
+    engine
+        .add_filter_layer(pipeline, defaults, None)
+        .expect("effect layer is addable")
+}
+
+fn fill(engine: &mut DarklyEngine, layer_id: LayerId, r: u8, g: u8, b: u8) {
+    engine.begin_stroke(layer_id).unwrap();
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r,
+        g,
+        b,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+}
+
+fn rgba_at(pixels: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
+    let i = ((y * w + x) * 4) as usize;
+    [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+}
+
+/// A canvas-space effect layer keeps working after the canvas rect moves.
+#[test]
+fn effect_layer_survives_canvas_resize() {
+    let mut engine = test_engine(16, 16);
+    let red = engine.add_raster_layer(None);
+    fill(&mut engine, red, 255, 0, 0);
+    let _inv = effect_layer(&mut engine, "invert");
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+    assert_eq!(
+        rgba_at(&engine.test_readback_canvas(), 16, 8, 8),
+        [0, 255, 255, 255],
+        "baseline: the effect inverts before the resize"
+    );
+
+    engine.resize_canvas(CanvasRect::new(CanvasPoint::new(0, 0), 32, 32));
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    assert_eq!(
+        rgba_at(&engine.test_readback_canvas(), 32, 4, 4),
+        [0, 255, 255, 255],
+        "the effect must still invert against the recreated accumulators"
+    );
+}
+
+/// Moving an effect across the divider re-prepares it against the other
+/// space's pair — the second invalidation trigger, and the one no canvas-rect
+/// change can stand in for.
+#[test]
+fn effect_layer_survives_crossing_the_divider() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+    let red = engine.add_raster_layer(None);
+    fill(&mut engine, red, 255, 0, 0);
+    let _inv = effect_layer(&mut engine, "invert");
+
+    engine.set_screen_space_boundary(1);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+    let screen = engine.test_readback_screen_run(cw, ch);
+    assert_eq!(
+        rgba_at(&screen, cw, 8, 8),
+        [0, 255, 255, 255],
+        "prepared against the run's pair"
+    );
+
+    engine.set_screen_space_boundary(0);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+    assert_eq!(
+        rgba_at(&engine.test_readback_canvas(), cw, 8, 8),
+        [0, 255, 255, 255],
+        "and re-prepared against the accumulator on the way back"
+    );
+}
+
+/// A viewport resize replaces the run's textures. `set_canvas_rect` does not
+/// touch them, so this is the one invalidation trigger the canvas-rect path
+/// cannot cover.
+#[test]
+fn screen_space_effect_survives_viewport_resize() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+    let red = engine.add_raster_layer(None);
+    fill(&mut engine, red, 255, 0, 0);
+    let _inv = effect_layer(&mut engine, "invert");
+    engine.set_screen_space_boundary(1);
+
+    let first = engine.test_readback_screen_run(cw, ch);
+    assert_eq!(rgba_at(&first, cw, 8, 8), [0, 255, 255, 255]);
+
+    // A second read at a different size forces the run's textures to be
+    // recreated between the two.
+    let grown = engine.test_readback_screen_run(cw * 2, ch * 2);
+    assert_eq!(
+        rgba_at(&grown, cw * 2, 8, 8),
+        [0, 255, 255, 255],
+        "the instance must be rebuilt against the resized run textures"
+    );
+}

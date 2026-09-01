@@ -30,19 +30,14 @@ fn defaults_of(params: &[ParamDef]) -> Vec<ParamValue> {
 }
 
 /// Headless `DarklyEngine` plus the per-test viewport bookkeeping. The
-/// veil chain sizes off the viewport, which is 0×0 in headless mode by
-/// default — kitchen-sink populates a chain, so we seed the size
+/// screen-space run sizes off the viewport, which is 0×0 in headless mode by
+/// default — kitchen-sink puts effects above the divider, so we seed the size
 /// manually like the engine/save inline tests do.
 fn kitchen_sink_engine(width: u32, height: u32) -> crate::engine::DarklyEngine {
     let (device, queue) = test_device();
     let gpu = GpuContext::new_headless(device, queue);
     let mut engine = crate::engine::DarklyEngine::new(gpu, width, height);
-    engine.compositor.effect_chain_mut().resize(
-        &engine.gpu.device,
-        &engine.gpu.queue,
-        width,
-        height,
-    );
+    engine.compositor.resize_screen_run(width, height);
     engine
 }
 
@@ -464,18 +459,26 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
     // eagerly at engine init.
     engine.select_all();
 
-    // One of every veil — keep params at default, leave visibility on.
-    let veil_types: Vec<(&'static str, &'static [ParamDef])> = engine
+    // One effect layer of every registered effect, at default params. They go
+    // in as ordinary layers; the run below then puts some of them above the
+    // divider, so the round-trip covers both spaces.
+    let effect_types: Vec<(&'static str, &'static [ParamDef])> = engine
         .compositor
         .effect_registry()
         .registrations()
         .into_iter()
         .map(|reg| (reg.type_id, reg.params))
         .collect();
-    for (type_id, schema) in veil_types {
+    let effect_count = effect_types.len();
+    for (type_id, schema) in effect_types {
         let defaults = defaults_of(schema);
-        engine.add_veil_layer(type_id, &defaults);
+        engine
+            .add_filter_layer(type_id, defaults, None)
+            .expect("registered effect is addable");
     }
+    // Half of them viewport-only, so `screen_space_count` is a value the
+    // round-trip has to carry rather than a default that survives by accident.
+    engine.set_screen_space_boundary(effect_count / 2);
 
     // One of every void type — adds a void layer at root for each
     // registered void kind, with schema defaults. Closes the kitchen-sink
@@ -1053,7 +1056,7 @@ fn synth_minimal_manifest() -> Manifest {
         }],
         modifiers: Vec::new(),
         selection_id: None,
-        veils: Vec::new(),
+        screen_space_count: 0,
         fonts: Vec::new(),
     }
 }
@@ -1125,19 +1128,19 @@ fn refuse_missing_requires() {
 }
 
 #[test]
-fn refuse_unknown_veil() {
+fn refuse_unknown_effect() {
     let mut engine = kitchen_sink_engine(4, 4);
     let prior = engine.document_ptr_for_test();
     let mut manifest = synth_minimal_manifest();
-    manifest.requires.veil = vec!["future_lens_flare".to_string()];
+    manifest.requires.effect = vec!["future_lens_flare".to_string()];
     let bytes = synth_zip_from_manifest(&manifest);
 
     let err = engine.open_document(&bytes).expect_err("must refuse");
     match err {
         LoadError::UnsupportedFeatures { missing } => {
             assert!(
-                missing.iter().any(|m| m == "veil/future_lens_flare"),
-                "diagnostic should name veil/future_lens_flare, got {missing:?}"
+                missing.iter().any(|m| m == "effect/future_lens_flare"),
+                "diagnostic should name effect/future_lens_flare, got {missing:?}"
             );
         }
         other => panic!("expected UnsupportedFeatures, got {other:?}"),
@@ -1265,7 +1268,10 @@ fn open_document_leaves_engine_untouched_on_refuse() {
     let prior_name = engine.doc.name.clone();
 
     let mut manifest = synth_minimal_manifest();
-    manifest.requires.veil.push("future_lens_flare".to_string());
+    manifest
+        .requires
+        .effect
+        .push("future_lens_flare".to_string());
     let bytes = synth_zip_from_manifest(&manifest);
     let _err = engine.open_document(&bytes).expect_err("must refuse");
 

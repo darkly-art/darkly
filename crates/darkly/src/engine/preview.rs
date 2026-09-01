@@ -69,7 +69,7 @@ impl DarklyEngine {
     /// arbitrary wire string, and there is nothing to render.
     ///
     /// Fully isolated from the live document: the effect instance is built fresh
-    /// against the preview target's own textures, so the user's veil chain,
+    /// against the preview target's own textures, so the user's layer stack,
     /// layer stack and compositor surface are never touched.
     pub fn start_preview(&mut self, catalog: &str, type_id: &str, variant: PreviewVariant) {
         let Some((catalog, mech)) = mechanism(catalog) else {

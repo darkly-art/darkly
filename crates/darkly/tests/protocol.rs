@@ -46,7 +46,7 @@ fn add_raster_dispatch_adds_a_layer_and_returns_id() {
     let reg = RequestRegistry::new();
     let mut engine = test_engine(64, 64);
 
-    let before = engine.layer_tree().len();
+    let before = engine.layer_tree().layers.len();
     let resp = reg
         .dispatch(&mut engine, "add_raster", json!({ "anchor": null }), &[])
         .expect("add_raster dispatch");
@@ -57,7 +57,11 @@ fn add_raster_dispatch_adds_a_layer_and_returns_id() {
         "add_raster returns a bare id"
     );
     assert!(resp.bytes.is_none(), "non-binary response carries no bytes");
-    assert_eq!(engine.layer_tree().len(), before + 1, "a layer was added");
+    assert_eq!(
+        engine.layer_tree().layers.len(),
+        before + 1,
+        "a layer was added"
+    );
 }
 
 #[test]
@@ -97,13 +101,21 @@ fn set_isolated_node_returns_the_installed_session_value() {
 }
 
 #[test]
-fn layer_tree_query_round_trips_to_an_array() {
+fn layer_tree_query_round_trips_with_the_boundary() {
     let reg = RequestRegistry::new();
     let mut engine = test_engine(64, 64);
     let resp = reg
         .dispatch(&mut engine, "layer_tree", json!(null), &[])
         .expect("layer_tree dispatch");
-    assert!(resp.value.is_array(), "layer_tree is a JSON array");
+    assert!(
+        resp.value["layers"].is_array(),
+        "layer_tree carries a rows array"
+    );
+    assert_eq!(
+        resp.value["screenSpaceCount"],
+        json!(0),
+        "a fresh document has an empty screen-space run"
+    );
 }
 
 #[test]

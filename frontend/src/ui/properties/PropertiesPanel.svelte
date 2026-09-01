@@ -3,32 +3,16 @@
     import LayerProperties from './LayerProperties.svelte';
     import GroupProperties from './GroupProperties.svelte';
     import TextProperties from './TextProperties.svelte';
-    import VeilProperties from '../veils/VeilProperties.svelte';
     import VoidProperties from '../voids/VoidProperties.svelte';
     import FilterProperties from '../filters/FilterProperties.svelte';
 
     let activeLayer = $derived(app.activeNode);
 
-    // `activeVeilIndex` is a chain position (the engine's `index` field on
-    // each VeilInfo), not a position in `veilList` — the list is returned in
-    // reverse chain order for display. Look up by `index` so the two stay
-    // aligned regardless of length.
-    let activeVeil = $derived(
-        app.activeVeilIndex !== null
-            ? app.veilList.find((v: { index: number }) => v.index === app.activeVeilIndex) ?? null
-            : null,
-    );
 </script>
 
 <div class="panel">
     <div class="panel-body">
-        {#if activeVeil}
-            <VeilProperties veil={activeVeil} />
-        {:else if activeLayer}
-            <!-- Filter layers honor neither opacity nor blend mode yet (the
-                 first slice composites at full strength), so the blend/opacity
-                 controls are hidden rather than shown as inert. Re-enable when
-                 opacity/blend honoring lands. -->
+        {#if activeLayer}
             {#if activeLayer.type !== 'filter'}
                 <LayerProperties node={activeLayer} />
             {/if}

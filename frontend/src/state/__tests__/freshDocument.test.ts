@@ -9,6 +9,8 @@ function fakeEngine() {
         fillBackground: vi.fn(),
         fillBackgroundColor: vi.fn(),
         resize: vi.fn(),
+        addFilter: vi.fn(),
+        setScreenSpaceBoundary: vi.fn(),
     };
     return { engine: { api } as unknown as Engine, api };
 }
@@ -28,19 +30,21 @@ describe('freshDocument recipes', () => {
             expect(api.fillBackgroundColor).not.toHaveBeenCalled();
         });
 
-        it('seeds the four hidden veils after resizing', () => {
+        it('seeds four effect layers and puts the divider above all of them', () => {
             const { engine, api } = fakeEngine();
-            const addVeil = vi.fn();
-            const inst = { engine, addVeil } as unknown as DarklyInstance;
-            RECIPES.demo.seedVeils(inst, 800, 600);
-            expect(api.resize).toHaveBeenCalledWith({ width: 800, height: 600 });
-            expect(addVeil).toHaveBeenCalledTimes(4);
-            expect(addVeil.mock.calls.map((c) => c[0])).toEqual([
+            const inst = { engine } as unknown as DarklyInstance;
+            RECIPES.demo.seedViewportEffects(inst, 800, 600);
+            expect(api.addFilter).toHaveBeenCalledTimes(4);
+            expect(api.addFilter.mock.calls.map((c) => c[0].pipeline)).toEqual([
                 'rainy_glass',
                 'grain',
                 'lens_blur',
                 'vhs',
             ]);
+            // One boundary call at the end, not one per layer: adding a layer
+            // never crosses the divider on its own.
+            expect(api.setScreenSpaceBoundary).toHaveBeenCalledTimes(1);
+            expect(api.setScreenSpaceBoundary).toHaveBeenCalledWith({ count: 4 });
         });
     });
 
@@ -62,13 +66,12 @@ describe('freshDocument recipes', () => {
             expect(api.fillBackground).not.toHaveBeenCalled();
         });
 
-        it('seeds no veils', () => {
-            const addVeil = vi.fn();
+        it('seeds no viewport effects', () => {
             const { engine, api } = fakeEngine();
-            const inst = { engine, addVeil } as unknown as DarklyInstance;
-            RECIPES.app.seedVeils(inst, 800, 600);
-            expect(addVeil).not.toHaveBeenCalled();
-            expect(api.resize).not.toHaveBeenCalled();
+            const inst = { engine } as unknown as DarklyInstance;
+            RECIPES.app.seedViewportEffects(inst, 800, 600);
+            expect(api.addFilter).not.toHaveBeenCalled();
+            expect(api.setScreenSpaceBoundary).not.toHaveBeenCalled();
         });
     });
 });

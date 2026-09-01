@@ -5,6 +5,7 @@
 use darkly_macros::handlers;
 
 use super::DarklyEngine;
+use crate::document::TreeSlot;
 use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::{BakeLayersAction, BakeSourceSlot};
 
@@ -15,7 +16,11 @@ impl DarklyEngine {
     #[handler]
     pub fn flatten_image(&mut self) -> Result<LayerId, String> {
         let root_id = self.doc.root_id();
-        let top_level: Vec<LayerId> = self.doc.children_of(root_id).to_vec();
+        // "Flatten the document" means the document's content. The
+        // screen-space run is a viewport treatment that no export contains, so
+        // it is neither baked into the result nor consumed by the flatten —
+        // taking `children_of(root)` here would delete it without baking it.
+        let top_level: Vec<LayerId> = self.doc.canvas_space_children().to_vec();
         if top_level.is_empty() {
             return Err("Document has no layers to flatten".into());
         }
@@ -71,32 +76,40 @@ impl DarklyEngine {
             source_tombstones.extend(self.collect_pixel_node_ids(id));
             sources.push(BakeSourceSlot {
                 id,
-                parent: Some(root_id),
-                position: idx,
+                slot: TreeSlot {
+                    parent: Some(root_id),
+                    position: idx,
+                    screen_space: false,
+                },
             });
         }
 
         // Detach every top-level non-result node. Textures stay alive as
         // tombstones owned by the BakeLayersAction.
-        for slot in &sources {
-            self.doc.detach_for_undo(slot.id);
+        for source in &sources {
+            self.doc.detach_for_undo(source.id);
         }
 
         // Reposition result to root position 0 (bottom of stack — flatten
         // makes the result the new "Background").
         self.doc.detach_for_undo(result_id);
-        self.doc.reinsert_entity(result_id, Some(root_id), 0);
+        self.doc.reinsert_entity(
+            result_id,
+            TreeSlot {
+                parent: Some(root_id),
+                position: 0,
+                screen_space: false,
+            },
+        );
 
-        let result_parent = self.doc.parent_of(result_id);
-        let result_position = self.doc.position_in_parent(result_id).unwrap_or(0);
+        let result_slot = self.doc.slot_of(result_id).unwrap_or_default();
 
         self.compositor.mark_dirty();
         self.push_undo(Box::new(BakeLayersAction::new(
             sources,
             source_tombstones,
             result_id,
-            result_parent,
-            result_position,
+            result_slot,
             vec![result_id],
         )));
 
@@ -172,19 +185,17 @@ impl DarklyEngine {
     fn bake_node_to_raster(&mut self, node_id: LayerId) -> Result<LayerId, String> {
         // Snapshot every property we need before mutation; once we start
         // adding/detaching, the borrows churn.
-        let (name, visible, locked, opacity, blend_mode, parent, position) =
-            match self.doc.find_node(node_id) {
-                Some(node) => (
-                    node.common().name.clone(),
-                    node.common().visible,
-                    node.common().locked,
-                    node.blend().opacity,
-                    node.blend().blend_mode,
-                    self.doc.parent_of(node_id),
-                    self.doc.position_in_parent(node_id).unwrap_or(0),
-                ),
-                None => return Err("Unknown node".into()),
-            };
+        let (name, visible, locked, opacity, blend_mode, slot) = match self.doc.find_node(node_id) {
+            Some(node) => (
+                node.common().name.clone(),
+                node.common().visible,
+                node.common().locked,
+                node.blend().opacity,
+                node.blend().blend_mode,
+                self.doc.slot_of(node_id).unwrap_or_default(),
+            ),
+            None => return Err("Unknown node".into()),
+        };
 
         // Allocate the result raster, canvas-sized, inheriting the source's
         // identity props so it composites into the parent the same way the
@@ -239,22 +250,16 @@ impl DarklyEngine {
 
         // Reposition the result to take the source's slot.
         self.doc.detach_for_undo(result_id);
-        self.doc.reinsert_entity(result_id, parent, position);
+        self.doc.reinsert_entity(result_id, slot);
 
-        let result_parent = self.doc.parent_of(result_id);
-        let result_position = self.doc.position_in_parent(result_id).unwrap_or(0);
+        let result_slot = self.doc.slot_of(result_id).unwrap_or_default();
 
         self.compositor.mark_dirty();
         self.push_undo(Box::new(BakeLayersAction::new(
-            vec![BakeSourceSlot {
-                id: node_id,
-                parent,
-                position,
-            }],
+            vec![BakeSourceSlot { id: node_id, slot }],
             source_tombstones,
             result_id,
-            result_parent,
-            result_position,
+            result_slot,
             vec![result_id],
         )));
 

@@ -70,7 +70,7 @@ fn fresh_void_is_named_after_its_display_type() {
 }
 
 fn layer_name(engine: &DarklyEngine, layer_id: darkly::layer::LayerId) -> String {
-    let tree = engine.layer_tree();
+    let tree = engine.layer_tree().layers;
     let json = serde_json::to_value(&tree).unwrap();
     fn walk(node: &serde_json::Value, want: u64) -> Option<String> {
         if let Some(arr) = node.as_array() {
@@ -129,7 +129,7 @@ fn add_void_layer_appears_in_tree() {
         .expect("noise void should be addable");
 
     // The void layer surfaces in `layer_tree()` with the `void` type tag.
-    let tree = engine.layer_tree();
+    let tree = engine.layer_tree().layers;
     let json = serde_json::to_string(&tree).unwrap();
     assert!(
         json.contains("\"type\":\"void\""),
@@ -386,7 +386,7 @@ fn void_params_via_tree(
     engine: &DarklyEngine,
     layer_id: darkly::layer::LayerId,
 ) -> Vec<ParamValue> {
-    let tree = engine.layer_tree();
+    let tree = engine.layer_tree().layers;
     let json = serde_json::to_value(&tree).unwrap();
     fn walk(node: &serde_json::Value, want: u64) -> Option<serde_json::Value> {
         if let Some(arr) = node.as_array() {

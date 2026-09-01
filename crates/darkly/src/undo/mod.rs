@@ -7,6 +7,7 @@ mod layer;
 mod mask_property;
 mod pixel_bounds;
 pub mod property;
+mod screen_space;
 mod selection;
 mod selection_metadata;
 mod tombstones;
@@ -23,6 +24,7 @@ pub use layer::{
 pub use mask_property::MaskLinkedToHostAction;
 pub use pixel_bounds::PixelBoundsAction;
 pub use property::PropertyAction;
+pub use screen_space::ScreenSpaceBoundaryAction;
 pub use selection::SelectionAction;
 pub use selection_metadata::SelectionMetadataAction;
 
@@ -300,9 +302,8 @@ mod tests {
         let id = doc.add_raster_layer(None);
 
         // Record the add as undoable.
-        let parent = doc.parent_of(id);
-        let pos = doc.position_in_parent(id).unwrap();
-        let _ = undo.push(&mut doc, Box::new(EntityAddAction::new(id, parent, pos)));
+        let slot = doc.slot_of(id).unwrap();
+        let _ = undo.push(&mut doc, Box::new(EntityAddAction::new(id, slot)));
 
         assert_eq!(doc.flat_layers().len(), 1);
 
@@ -323,12 +324,11 @@ mod tests {
         let id = doc.add_raster_layer(None);
 
         // Remove the layer (undoable).
-        let parent = doc.parent_of(id);
-        let pos = doc.position_in_parent(id).unwrap();
+        let slot = doc.slot_of(id).unwrap();
         let node = doc.detach_for_undo(id).unwrap();
         let _ = undo.push(
             &mut doc,
-            Box::new(EntityRemoveAction::new(node, parent, pos, Vec::new())),
+            Box::new(EntityRemoveAction::new(node, slot, Vec::new())),
         );
 
         assert_eq!(doc.flat_layers().len(), 0);
@@ -356,18 +356,11 @@ mod tests {
         assert_eq!(flat, vec![l1, l2, l3]);
 
         // Move l1 to the top (after l3).
-        let old_parent = doc.parent_of(l1);
-        let old_pos = doc.position_in_parent(l1).unwrap();
+        let old = doc.slot_of(l1).unwrap();
         doc.move_layer(l1, crate::document::MoveTarget::After(l3));
-        let new_parent = doc.parent_of(l1);
-        let new_pos = doc.position_in_parent(l1).unwrap();
+        let new = doc.slot_of(l1).unwrap();
 
-        let _ = undo.push(
-            &mut doc,
-            Box::new(LayerMoveAction::new(
-                l1, old_parent, old_pos, new_parent, new_pos,
-            )),
-        );
+        let _ = undo.push(&mut doc, Box::new(LayerMoveAction::new(l1, old, new)));
 
         let flat: Vec<_> = doc.flat_layers().iter().map(|l| l.id()).collect();
         assert_eq!(flat, vec![l2, l3, l1]);
@@ -484,9 +477,8 @@ mod tests {
         assert!(!doc.dirty, "fresh doc starts clean");
 
         let id = doc.add_raster_layer(None);
-        let parent = doc.parent_of(id);
-        let pos = doc.position_in_parent(id).unwrap();
-        let _ = undo.push(&mut doc, Box::new(EntityAddAction::new(id, parent, pos)));
+        let slot = doc.slot_of(id).unwrap();
+        let _ = undo.push(&mut doc, Box::new(EntityAddAction::new(id, slot)));
         assert!(doc.dirty, "push must flip dirty");
     }
 
@@ -529,9 +521,8 @@ mod tests {
         let mut undo = UndoStack::new(50);
 
         let id = doc.add_raster_layer(None);
-        let parent = doc.parent_of(id);
-        let pos = doc.position_in_parent(id).unwrap();
-        let _ = undo.push(&mut doc, Box::new(EntityAddAction::new(id, parent, pos)));
+        let slot = doc.slot_of(id).unwrap();
+        let _ = undo.push(&mut doc, Box::new(EntityAddAction::new(id, slot)));
         assert!(doc.dirty);
 
         undo.undo(&mut doc);
@@ -554,9 +545,8 @@ mod tests {
         let before = doc.revision;
 
         let id = doc.add_raster_layer(None);
-        let parent = doc.parent_of(id);
-        let pos = doc.position_in_parent(id).unwrap();
-        let _ = undo.push(&mut doc, Box::new(EntityAddAction::new(id, parent, pos)));
+        let slot = doc.slot_of(id).unwrap();
+        let _ = undo.push(&mut doc, Box::new(EntityAddAction::new(id, slot)));
         assert!(doc.revision > before, "push must bump revision");
     }
 
@@ -604,12 +594,8 @@ mod tests {
 
         // "Add above l1" — should land between l1 and l2.
         let new_id = doc.add_raster_layer(Some(l1));
-        let parent = doc.parent_of(new_id);
-        let pos = doc.position_in_parent(new_id).unwrap();
-        let _ = undo.push(
-            &mut doc,
-            Box::new(EntityAddAction::new(new_id, parent, pos)),
-        );
+        let slot = doc.slot_of(new_id).unwrap();
+        let _ = undo.push(&mut doc, Box::new(EntityAddAction::new(new_id, slot)));
 
         let flat: Vec<_> = doc.flat_layers().iter().map(|l| l.id()).collect();
         assert_eq!(flat, vec![l1, new_id, l2]);

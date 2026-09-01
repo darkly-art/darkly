@@ -19,8 +19,9 @@ fn test_engine() -> DarklyEngine {
 /// Serialize the layer tree and index each top-level node by its `type` tag.
 fn dto_by_type(engine: &DarklyEngine) -> std::collections::HashMap<String, Value> {
     let tree = serde_json::to_value(engine.layer_tree()).expect("layer_tree serializes");
-    tree.as_array()
-        .expect("layer tree is an array")
+    tree["layers"]
+        .as_array()
+        .expect("layer tree carries a rows array")
         .iter()
         .map(|n| {
             let ty = n.get("type").and_then(Value::as_str).unwrap().to_string();

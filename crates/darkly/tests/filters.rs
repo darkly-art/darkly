@@ -726,7 +726,7 @@ fn filter_defaults(e: &DarklyEngine, type_id: &str) -> Vec<ParamValue> {
 /// from the engine's layer-tree query.
 fn filter_layer_params(e: &DarklyEngine, id: LayerId) -> Vec<ParamValue> {
     let ffi = id.to_ffi() as f64;
-    for node in e.layer_tree() {
+    for node in e.layer_tree().layers {
         if let LayerInfo::Filter {
             id: nid, params, ..
         } = &node
@@ -746,7 +746,7 @@ fn filter_layer_params(e: &DarklyEngine, id: LayerId) -> Vec<ParamValue> {
 /// layer-tree query.
 fn filter_layer_icon(e: &DarklyEngine, id: LayerId) -> String {
     let ffi = id.to_ffi() as f64;
-    for node in e.layer_tree() {
+    for node in e.layer_tree().layers {
         if let LayerInfo::Filter { id: nid, icon, .. } = &node {
             if *nid == ffi {
                 return icon.to_string();

@@ -3,6 +3,7 @@ mod brush_graph;
 pub(crate) mod brush_library;
 mod canvas_resize;
 mod canvas_transform;
+mod catalogs;
 mod clipboard;
 mod duplicate;
 mod export;
@@ -25,7 +26,6 @@ pub mod save;
 mod selection_support;
 pub mod types;
 mod undo_dispatch;
-mod veils;
 mod voids;
 
 pub use brush_graph::{ExposedPortInfo, ExposedValue};
@@ -36,7 +36,7 @@ pub use process_recording::{ProcessRecorder, RecordedFrame};
 pub use rendering::{PickSource, DEFAULT_THUMB_SIZE};
 pub use save::{SaveError, SaveJob, SavePurpose, SaveReadbackKind};
 pub use types::{
-    ClipboardExport, EngineState, LayerInfo, ModifierInfo, ParamInfo, StrokeOp, VeilInfo,
+    ClipboardExport, EngineState, LayerInfo, LayerTree, ModifierInfo, ParamInfo, StrokeOp,
 };
 
 pub use perf::{BrushPerfDelta, FrameRenderPhases};
@@ -1148,6 +1148,21 @@ impl DarklyEngine {
         )
     }
 
+    /// Blocking readback of the present pass **plus the screen-space run**,
+    /// into a `viewport_w × viewport_h` target. The only harness that can
+    /// observe a viewport-only effect at all — every composite-level readback
+    /// is taken before the run exists.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_readback_screen_run(&mut self, viewport_w: u32, viewport_h: u32) -> Vec<u8> {
+        self.compositor.test_present_through_screen_run(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut self.doc,
+            viewport_w,
+            viewport_h,
+        )
+    }
+
     /// Test-only animation tick. Headless `render()` returns early without
     /// driving `update_animations`, so tests that need to advance the
     /// veil / overlay / void master clock call this directly. Pass a
@@ -1433,38 +1448,5 @@ mod tests {
         assert!(json.get("min").is_none());
         assert!(json.get("max").is_none());
         assert!(json.get("value").is_none());
-    }
-
-    #[test]
-    fn veil_info_serializes_correctly() {
-        let info = VeilInfo {
-            type_id: "pixelate".into(),
-            visible: true,
-            index: 0,
-            params: vec![
-                ParamInfo::from_def(&ParamDef::int("scale", 1, 32, 2), Some(&ParamValue::Int(4))),
-                ParamInfo::from_def(
-                    &ParamDef::boolean("soft", true),
-                    Some(&ParamValue::Bool(false)),
-                ),
-            ],
-        };
-        let json = serde_json::to_value(&info).unwrap();
-        assert_eq!(json["type"], "pixelate");
-        // Per the no-duplicate-display-name rule, only the type_id ships
-        // with the instance — display name is resolved by the UI via the
-        // veil_types() registry table.
-        assert!(json.get("displayName").is_none());
-        assert_eq!(json["visible"], true);
-        assert_eq!(json["index"], 0);
-
-        let params = json["params"].as_array().unwrap();
-        assert_eq!(params.len(), 2);
-        assert_eq!(params[0]["kind"], "int");
-        assert_eq!(params[0]["name"], "scale");
-        assert_eq!(params[0]["value"], 4);
-        assert_eq!(params[1]["kind"], "bool");
-        assert_eq!(params[1]["name"], "soft");
-        assert_eq!(params[1]["value"], false);
     }
 }

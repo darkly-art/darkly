@@ -4,7 +4,7 @@
 //!
 //! The save snapshot is the [`Manifest`] itself: built synchronously at
 //! `start_save_document` from the live document, it captures the tree,
-//! filters, selection metadata, veil chain, and the `requires`
+//! filters, selection metadata, the viewport boundary, and the `requires`
 //! inventory at submit time. Pixels are pinned via refcounted
 //! [`wgpu::Texture`] handles in the same synchronous prelude, so the
 //! user can keep painting / mutating the doc while readbacks complete
@@ -23,10 +23,9 @@ use crate::document::filter;
 use crate::document::layer_kind::{self, PixelBlobSpec};
 use crate::document::Entity;
 use crate::format::manifest::{
-    Manifest, ManifestCanvas, ManifestEntry, ManifestFontRef, ManifestRequires, ManifestVeil,
-    ManifestWriter, SaveBlob, SaveBundle, CONTAINER_VERSION, FORMAT_TAG,
+    Manifest, ManifestCanvas, ManifestEntry, ManifestFontRef, ManifestRequires, ManifestWriter,
+    SaveBlob, SaveBundle, CONTAINER_VERSION, FORMAT_TAG,
 };
-use crate::format::registry_io::InstancePayload;
 use crate::gpu::readback;
 use crate::layer::LayerId;
 
@@ -89,7 +88,7 @@ pub enum SaveReadbackKind {
 /// asynchronously into `pending_blobs` / `composite`).
 pub struct SaveJob {
     /// Manifest built synchronously at submit time. Captures the
-    /// document's tree / filter / veil / requires state at the moment
+    /// document's tree / filter / boundary / requires state at the moment
     /// `start_save_document` ran. Any subsequent doc mutation is
     /// invisible to this manifest.
     manifest: Manifest,
@@ -281,7 +280,7 @@ impl DarklyEngine {
 
 /// Walk the live document via the layer-kind / filter registries and
 /// produce a [`Manifest`] capturing every piece of state that survives
-/// save: tree, filters, selection, veils. Also returns the
+/// save: tree, filters, selection, boundary. Also returns the
 /// per-entity pixel-blob declarations the save flow uses to queue
 /// readbacks. Synchronous — runs as part of `start_save_document`'s
 /// prelude.
@@ -327,7 +326,6 @@ fn build_manifest(engine: &DarklyEngine) -> (Manifest, Vec<PixelBlobSpec>, Vec<S
     nodes.sort_by_key(|e| e.id);
     filters.sort_by_key(|e| e.id);
 
-    let veils = build_manifest_veils(engine);
     let requires = requires_from_doc(engine);
     let (fonts, font_blobs) = build_font_blobs(engine);
 
@@ -348,7 +346,7 @@ fn build_manifest(engine: &DarklyEngine) -> (Manifest, Vec<PixelBlobSpec>, Vec<S
         nodes,
         modifiers: filters,
         selection_id: doc.selection_id().map(LayerId::to_ffi),
-        veils,
+        screen_space_count: doc.screen_space_count,
         fonts,
     };
     (manifest, blobs, font_blobs)
@@ -404,34 +402,20 @@ fn build_font_blobs(engine: &DarklyEngine) -> (Vec<ManifestFontRef>, Vec<SaveBlo
     (fonts, blobs)
 }
 
-fn build_manifest_veils(engine: &DarklyEngine) -> Vec<ManifestVeil> {
-    let chain = engine.compositor.effect_chain();
-    let count = chain.count();
-    let mut veils = Vec::with_capacity(count);
-    // Chain order on the wire matches apply order (bottom of stack to
-    // top). `chain.info(i)` is in chain order — no need to reverse.
-    for i in 0..count {
-        let Some((type_id, visible)) = chain.info(i) else {
-            continue;
-        };
-        let params = chain.param_values(i).unwrap_or_default();
-        veils.push(ManifestVeil {
-            instance: InstancePayload::new(type_id.to_string(), params),
-            visible,
-        });
-    }
-    veils
-}
-
-/// Walk the live document + veil chain and collect every modular
-/// `type_id` in use. Registry-driven — no hand-maintained list to keep
-/// in sync when a new module is added. The load path diffs this against
-/// the binary's registries before parsing the body.
+/// Walk the live document and collect every modular `type_id` in use.
+/// Registry-driven — no hand-maintained list to keep in sync when a new module
+/// is added. The load path diffs this against the binary's registries before
+/// parsing the body.
+///
+/// Effect layers contribute their `pipeline` id, not just their layer-kind id.
+/// The layer kind is `"filter"` for every one of them, so without this a save
+/// naming `painting` would declare no requirement for it and load silently into
+/// a document where that layer does nothing.
 pub fn requires_from_doc(engine: &DarklyEngine) -> ManifestRequires {
     let mut layer_kinds = HashSet::new();
     let mut blend_modes = HashSet::new();
     let mut filter_kinds = HashSet::new();
-    let mut veil_types = HashSet::new();
+    let mut effect_types = HashSet::new();
 
     for entity in engine.doc.entities.values() {
         match entity {
@@ -445,24 +429,21 @@ pub fn requires_from_doc(engine: &DarklyEngine) -> ManifestRequires {
         }
     }
 
-    let chain = engine.compositor.effect_chain();
-    for i in 0..chain.count() {
-        if let Some(id) = chain.type_id(i) {
-            veil_types.insert(id.to_string());
-        }
+    for f in engine.doc.all_filter_layers() {
+        effect_types.insert(f.pipeline.clone());
     }
 
     let mut layer_kind: Vec<String> = layer_kinds.into_iter().collect();
     let mut blend_mode: Vec<String> = blend_modes.into_iter().collect();
     let mut filter: Vec<String> = filter_kinds.into_iter().collect();
-    let mut veil: Vec<String> = veil_types.into_iter().collect();
+    let mut effect: Vec<String> = effect_types.into_iter().collect();
     layer_kind.sort();
     blend_mode.sort();
     filter.sort();
-    veil.sort();
+    effect.sort();
 
     ManifestRequires {
-        veil,
+        effect,
         blend_mode,
         layer_kind,
         modifier: filter,
@@ -535,37 +516,31 @@ mod tests {
         assert!(matches!(err, SaveError::InProgress));
     }
 
-    /// `requires_from_doc` walks the live document + veil chain and
-    /// collects every modular `type_id` actually in use. Adding the
-    /// `noise` veil must show up under `requires.veil`; the existing
-    /// raster + group layer kinds and `normal` blend mode must show up
-    /// in their respective buckets.
+    /// `requires_from_doc` walks the live document and collects every modular
+    /// `type_id` actually in use. An effect layer must show up under
+    /// `requires.effect` by its *pipeline* id — its layer kind is `"filter"`,
+    /// which every effect layer shares and which says nothing about what the
+    /// binary needs to be able to render. The existing raster + group layer
+    /// kinds and `normal` blend mode must show up in their own buckets.
     #[test]
     fn requires_inventory_collects_used_modules() {
         let mut engine = headless_engine(32, 32);
         let _layer = engine.add_raster_layer(None);
 
-        // The veil chain's GPU textures size with the viewport; tests
-        // run headless (no surface), so seed the size manually before
-        // adding a veil — otherwise `ensure_textures` no-ops on a 0×0
-        // viewport and `add_veil` panics on the `views.unwrap()`.
-        engine
-            .compositor
-            .effect_chain_mut()
-            .resize(&engine.gpu.device, &engine.gpu.queue, 32, 32);
-
         let defaults: Vec<crate::gpu::params::ParamValue> = engine
-            .veil_param_defs("grain")
+            .filter_param_defs("grain")
             .iter()
             .map(crate::gpu::params::ParamDef::default_value)
             .collect();
-        engine.add_veil_layer("grain", &defaults);
+        engine
+            .add_filter_layer("grain", defaults, None)
+            .expect("grain effect layer");
 
         let requires = requires_from_doc(&engine);
         assert!(
-            requires.veil.iter().any(|v| v == "grain"),
-            "requires.veil should list grain (got {:?})",
-            requires.veil
+            requires.effect.iter().any(|v| v == "grain"),
+            "requires.effect should list grain (got {:?})",
+            requires.effect
         );
         assert!(
             requires.layer_kind.iter().any(|k| k == "raster"),

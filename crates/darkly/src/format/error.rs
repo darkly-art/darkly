@@ -2,7 +2,7 @@
 //!
 //! Every refusal carries enough information for the UI's `LoadErrorToast`
 //! (Phase 5) to format a precise diagnostic — "this file needs
-//! `veil/lens_flare`, please update Darkly" rather than "load failed."
+//! `effect/lens_flare`, please update Darkly" rather than "load failed."
 //!
 //! The variants here are the full closed set for load; the save path is
 //! infallible from the engine's perspective (any GPU failure is logged and
@@ -20,7 +20,7 @@ pub enum LoadError {
 
     /// The file's `requires` inventory names features the binary's
     /// registries don't know about. Each entry is `"<registry>/<type_id>"`
-    /// — e.g. `"veil/lens_flare"`, `"blend_mode/divide"`,
+    /// — e.g. `"effect/lens_flare"`, `"blend_mode/divide"`,
     /// `"layer_kind/text"`, `"filter/clip"`.
     UnsupportedFeatures { missing: Vec<String> },
 
@@ -151,10 +151,10 @@ mod tests {
     #[test]
     fn display_includes_diagnostic_for_unsupported_features() {
         let err = LoadError::UnsupportedFeatures {
-            missing: vec!["veil/lens_flare".into(), "blend_mode/divide".into()],
+            missing: vec!["effect/lens_flare".into(), "blend_mode/divide".into()],
         };
         let msg = format!("{err}");
-        assert!(msg.contains("veil/lens_flare"));
+        assert!(msg.contains("effect/lens_flare"));
         assert!(msg.contains("blend_mode/divide"));
         assert!(msg.contains("update Darkly"));
     }

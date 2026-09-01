@@ -57,8 +57,7 @@
     }
 
     let canDelete = $derived(
-        app.activeVeilIndex !== null
-            || (app.activeLayerId !== null && findNode(app.layerTree, app.activeLayerId) !== null),
+        app.activeLayerId !== null && findNode(app.layerTree, app.activeLayerId) !== null,
     );
 
     let canDuplicate = $derived(
@@ -83,9 +82,8 @@
     );
 
     function remove() {
-        // The `deleteLayer` action handles both veil-remove and layer-
-        // remove (including toast on error and tree refresh). The trash
-        // button just routes through it.
+        // The `deleteLayer` action owns layer removal (including the error
+        // toast and the tree refresh). The trash button just routes through it.
         actions.dispatch('deleteLayer');
         onupdate();
     }
@@ -126,7 +124,7 @@
     <button
         class="footer-btn danger"
         onclick={remove}
-        disabled={!canDelete || (app.activeVeilIndex === null && !activeEditable)}
+        disabled={!canDelete || !activeEditable}
         title={deleteTooltip}
     >
         <Icon name="fa6-solid:trash" />

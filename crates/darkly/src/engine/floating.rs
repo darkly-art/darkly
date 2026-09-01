@@ -959,9 +959,8 @@ impl DarklyEngine {
                 );
             });
 
-            let parent = self.doc.parent_of(layer_id);
-            let pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
-            self.push_undo(Box::new(EntityAddAction::new(layer_id, parent, pos)));
+            let slot = self.doc.slot_of(layer_id).unwrap_or_default();
+            self.push_undo(Box::new(EntityAddAction::new(layer_id, slot)));
 
             self.compositor.mark_node_pixels_dirty(layer_id);
             self.compositor.clear_floating_content();

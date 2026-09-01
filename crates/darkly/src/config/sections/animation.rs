@@ -4,10 +4,10 @@ use crate::config::schema::{Pref, PrefKind, SchemaSection, WidgetHint};
 // Rust callers. New prefs should use camelCase dot-paths.
 const PREFS: &[Pref] = &[
     Pref {
-        key: "animation.effect_divisor",
-        display_name: "Effect animation divisor",
+        key: "animation.screen_divisor",
+        display_name: "Viewport animation divisor",
         description: Some(
-            "How often animated effects tick, as a fraction of the master frame rate. 1 = every frame, 2 = every other, 4 = every fourth.",
+            "How often animated viewport-only effects tick, as a fraction of the master frame rate. 1 = every frame, 2 = every other, 4 = every fourth.",
         ),
         kind: PrefKind::Int { min: 1, max: 16 },
         widget: WidgetHint::Auto,
@@ -20,11 +20,12 @@ const PREFS: &[Pref] = &[
         widget: WidgetHint::Auto,
     },
     Pref {
-        key: "animation.void_divisor",
-        display_name: "Void animation divisor",
+        key: "animation.canvas_divisor",
+        display_name: "Canvas animation divisor",
         description: Some(
-            "How often animated void layers re-render, as a fraction of the master frame rate. \
-             Voids piggyback on the same clock as effects so ticks line up.",
+            "How often animated document content — void layers and effect layers below the \
+             viewport line — re-renders, as a fraction of the master frame rate. Both share \
+             one clock so their ticks line up.",
         ),
         kind: PrefKind::Int { min: 1, max: 16 },
         widget: WidgetHint::Auto,
@@ -35,7 +36,7 @@ pub fn register() -> SchemaSection {
     SchemaSection {
         id: "animation",
         display_name: "Animation",
-        description: Some("Tick rates for animated overlays and veils."),
+        description: Some("Tick rates for animated overlays and effects."),
         icon: Some("fa6-solid:stopwatch"),
         order: 60,
         prefs: PREFS,

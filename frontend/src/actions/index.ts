@@ -123,7 +123,6 @@ export function openDarklyAsTab(picked: OpenedFile): void {
             // `.darkly` may carry a non-zero `canvas_origin` from a crop.
             await inst.syncCanvasRect();
             await app.refreshLayerTree();
-            await app.refreshVeilList();
             app.requestFrame();
         } catch (e) {
             loadError.show(parseLoadErrorMessage(e));
@@ -665,13 +664,6 @@ export function registerActions() {
         handler: async () => {
             const engine = app.engine;
             if (!engine) return;
-            // Veil takes priority: the trash button on the layer panel
-            // doubles as veil-remove when a veil is active, so the
-            // keyboard shortcut should too.
-            if (app.activeVeilIndex !== null) {
-                app.removeVeil(app.activeVeilIndex);
-                return;
-            }
             // Structural rule: operate on the current selection. The
             // right-click handler ensures the clicked row is in the
             // selection BEFORE the menu opens, so reading from

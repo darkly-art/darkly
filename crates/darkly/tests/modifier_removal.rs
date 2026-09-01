@@ -29,7 +29,8 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 fn has_top_level_row(e: &DarklyEngine, id: LayerId) -> bool {
     let want = id.to_ffi() as f64;
     let tree = serde_json::to_value(e.layer_tree()).expect("layer_tree serializes");
-    tree.as_array()
+    tree["layers"]
+        .as_array()
         .map(|rows| {
             rows.iter().any(|row| {
                 row.get("id")
@@ -56,7 +57,7 @@ fn remove_layer_on_a_mask_id_detaches_the_mask() {
         "the mask must be gone from its host"
     );
     assert_eq!(
-        e.layer_tree().len(),
+        e.layer_tree().layers.len(),
         2,
         "only the two raster layers remain as rows"
     );
@@ -84,7 +85,7 @@ fn undoing_a_mask_removal_restores_it_on_its_host() {
         "undo must reattach the mask to its original host"
     );
     assert_eq!(
-        e.layer_tree().len(),
+        e.layer_tree().layers.len(),
         2,
         "undo must not add a row — the mask belongs to its host, not the root"
     );

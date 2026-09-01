@@ -496,7 +496,7 @@ mod tests {
     fn defaults_from_yaml() {
         reset_state();
         // Agnostic defaults present without picking an editor.
-        assert_eq!(get_i64("animation.effect_divisor"), 2);
+        assert_eq!(get_i64("animation.screen_divisor"), 2);
         assert_eq!(get_i64("canvas.width"), 1920);
         // Autosave section (schema in sections/autosave.rs, defaults in yaml).
         assert!(get_bool("autosave.enabled"));

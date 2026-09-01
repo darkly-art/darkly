@@ -59,8 +59,8 @@ impl DarklyEngine {
         // dirty per the write-site invariant.
         self.compositor.mark_dirty();
 
-        let position = self.doc.position_in_parent(mod_id).unwrap_or(0);
-        self.push_undo(Box::new(EntityAddAction::new(mod_id, Some(id), position)));
+        let slot = self.doc.slot_of(mod_id).unwrap_or_default();
+        self.push_undo(Box::new(EntityAddAction::new(mod_id, slot)));
     }
 
     /// Allocate an empty (unseeded) mask filter on `id`: create the filter,
@@ -183,7 +183,7 @@ impl DarklyEngine {
 
         // Captured before the detach severs the parent link the position is
         // read from, so undo restores the mask at its original index.
-        let mask_position = self.doc.position_in_parent(modifier_id).unwrap_or(0);
+        let mask_slot = self.doc.slot_of(modifier_id).unwrap_or_default();
         let detached = self.doc.detach_for_undo(modifier_id).is_some();
         self.compositor.dispose_node_texture(modifier_id);
         self.compositor.dispose_mask_snapshot_state(host_id);
@@ -197,8 +197,7 @@ impl DarklyEngine {
         if detached {
             actions.push(Box::new(EntityRemoveAction::new(
                 modifier_id,
-                Some(host_id),
-                mask_position,
+                mask_slot,
                 Vec::new(),
             )));
         }
@@ -383,7 +382,7 @@ impl DarklyEngine {
         // pending mask-region restore can land.
         // Captured before the detach severs the parent link the position is
         // read from, so undo restores the mask at its original index.
-        let mask_position = self.doc.position_in_parent(mask_id).unwrap_or(0);
+        let mask_slot = self.doc.slot_of(mask_id).unwrap_or_default();
         let detached = self.doc.detach_for_undo(mask_id).is_some();
         self.compositor.dispose_node_texture(mask_id);
         self.compositor.dispose_mask_snapshot_state(id);
@@ -391,8 +390,7 @@ impl DarklyEngine {
         if detached {
             actions.push(Box::new(EntityRemoveAction::new(
                 mask_id,
-                Some(id),
-                mask_position,
+                mask_slot,
                 Vec::new(),
             )));
         }

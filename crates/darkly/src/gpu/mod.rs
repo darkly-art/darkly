@@ -106,7 +106,6 @@ pub mod content_bounds;
 pub mod context;
 pub mod diff_rect;
 pub mod effect;
-pub mod effect_chain;
 pub mod effect_scaling;
 pub mod effects;
 pub mod floating_preview;
@@ -124,6 +123,7 @@ pub mod preview;
 pub mod readback;
 pub mod region_store;
 pub mod rescale;
+pub mod screen_run;
 pub mod selection;
 pub mod straight_composite;
 #[cfg(any(test, feature = "testing"))]

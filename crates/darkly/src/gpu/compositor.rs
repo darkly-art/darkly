@@ -4,10 +4,10 @@ use crate::gpu::atlas::LayerTexture;
 use crate::gpu::blend::BlendPipelines;
 use crate::gpu::content_bounds::ContentBoundsPass;
 use crate::gpu::effect::EffectCache;
-use crate::gpu::effect_chain::EffectChain;
 use crate::gpu::histogram::HistogramPass;
 use crate::gpu::overlay::ToolOverlay;
 use crate::gpu::params::ParamValue;
+use crate::gpu::screen_run::ScreenRun;
 use crate::gpu::view::{ViewTransform, DEFAULT_WORKSPACE_BG};
 use crate::gpu::void::{Void, VoidRegistry};
 use crate::layer::{FilterLayer, Layer, LayerId, RasterLayer, VectorLayer, VoidLayer};
@@ -533,6 +533,18 @@ struct MaskSnapshotState {
 /// compares them against the document and the compositor's current textures,
 /// and rebuilds on any drift — which is what makes the compose walk a pure
 /// encode with nothing to check.
+/// The pair an effect instance was prepared against. An effect layer is the
+/// same object in both spaces — one shader, one param schema — but the textures
+/// it binds, the resolution it runs at and the dirty flag it drives all follow
+/// from which side of the divider it sits on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EffectSpace {
+    /// Inside the tree walk, writing into this group's accumulator.
+    Canvas { parent: LayerId },
+    /// After the present pass, on the view-transformed image.
+    Screen,
+}
+
 struct EffectInstance {
     effect: Box<dyn crate::gpu::effect::Effect>,
     scaled: crate::gpu::effect_scaling::ScaledEffect,
@@ -541,8 +553,9 @@ struct EffectInstance {
     params: Vec<ParamValue>,
     /// Effect type this instance was built from.
     pipeline_id: String,
-    /// The group whose accumulator pair the cache's bind groups point at.
-    parent_group: LayerId,
+    /// Which space this instance was realized in, and therefore which
+    /// ping-pong pair its bind groups point at.
+    space: EffectSpace,
     /// Dimensions of that pair.
     render_size: (u32, u32),
     /// The [`Compositor::target_generation`] the bind groups were built under.
@@ -711,7 +724,7 @@ pub struct Compositor {
     padded_width: u32,
     padded_height: u32,
 
-    effect_chain: EffectChain,
+    screen_run: ScreenRun,
 
     /// Lazily-pipeline-cached registry of every void type built into the
     /// binary. Engine queries this for `void_types()` and `add_void_layer`
@@ -1234,7 +1247,7 @@ impl Compositor {
         let mut group_state = HashMap::new();
         group_state.insert(root_id, root_state);
 
-        let effect_chain = EffectChain::new(device, sampler.clone(), surface_format, accum_format);
+        let screen_run = ScreenRun::new(device, sampler.clone(), surface_format, accum_format);
 
         let tool_overlay = ToolOverlay::new(device, queue, surface_format);
 
@@ -1274,7 +1287,7 @@ impl Compositor {
             canvas_origin: crate::coord::CanvasPoint::new(0, 0),
             padded_width: padded_w,
             padded_height: padded_h,
-            effect_chain,
+            screen_run,
             void_registry: VoidRegistry::new(),
             effect_registry: crate::gpu::effect::EffectRegistry::new(),
             effect_instances: HashMap::new(),
@@ -3186,9 +3199,44 @@ impl Compositor {
         })
     }
 
+    /// Whether any effect layer above the divider wants continuous frames.
+    /// Only the screen-space side: a canvas-space animated effect drives
+    /// `needs_composite` through the layer path instead.
+    fn any_animated_screen_effect(&self, doc: &Document) -> bool {
+        doc.screen_space_run().iter().any(|id| {
+            doc.effective_visible(*id)
+                && self
+                    .effect_instances
+                    .get(id)
+                    .is_some_and(|inst| inst.effect.needs_animation())
+        })
+    }
+
+    /// Advance every effectively-visible animated effect instance in one space
+    /// by `dt`. Which space is a parameter rather than two loops because the
+    /// instances are one map and the only difference is the dirty flag the
+    /// caller sets afterwards.
+    fn tick_animated_effects(
+        &mut self,
+        queue: &wgpu::Queue,
+        dt: f32,
+        doc: &Document,
+        screen: bool,
+    ) {
+        for (id, inst) in self.effect_instances.iter_mut() {
+            if (inst.space == EffectSpace::Screen) != screen {
+                continue;
+            }
+            if !inst.effect.needs_animation() || !doc.effective_visible(*id) {
+                continue;
+            }
+            inst.effect.update_time(queue, &inst.cache, dt);
+        }
+    }
+
     /// Advance every effectively-visible animated layer's procedural
     /// content by `dt`. Called by `update_animations` at the cadence set by
-    /// `animation.void_divisor`. Visibility is queried the same way the
+    /// `animation.canvas_divisor`. Visibility is queried the same way the
     /// main composite walk queries it — no precomputed "hidden" set; the
     /// doc is the authoritative tree.
     fn tick_animated_layers(&mut self, queue: &wgpu::Queue, dt: f32, doc: &Document) {
@@ -3292,7 +3340,7 @@ impl Compositor {
     /// Master rAF tick counter. Advances exactly once per `update_animations`
     /// call (i.e. once per `engine.render`), starting at 0. This is the same
     /// counter every divisor-throttled subsystem inside the compositor checks
-    /// (`veil_divisor`, `overlay_divisor`, `void_divisor` — see
+    /// (`screen_divisor`, `overlay_divisor`, `canvas_divisor` — see
     /// [`Self::update_animations`]), so any JS-side throttle that uses
     /// `frame_count % divisor == 0` automatically aligns with all of them.
     /// Exposed so the WASM bridge can hand it to the frontend (e.g. the
@@ -3304,8 +3352,11 @@ impl Compositor {
     /// Unified frame scheduler. Called once per rAF tick.
     ///
     /// Systems fire at fractional rates of the master clock (rAF rate):
-    /// - Veils: every `veil_divisor`-th frame (default 2 = 50% = 30fps at 60hz)
+    /// - Viewport-only effects: every `screen_divisor`-th frame (default 2 =
+    ///   50% = 30fps at 60hz)
     /// - Overlay: every `overlay_divisor`-th frame (default 4 = 25% = 15fps at 60hz)
+    /// - Document content — void layers and canvas-space effect layers: every
+    ///   `canvas_divisor`-th frame
     ///
     /// Integer divisors guarantee alignment — a divisor-4 tick always coincides
     /// with a divisor-2 tick, so systems never force extra frame renders.
@@ -3327,13 +3378,13 @@ impl Compositor {
             return;
         }
 
-        let effect_divisor = crate::config::get_i64("animation.effect_divisor") as u64;
+        let screen_divisor = crate::config::get_i64("animation.screen_divisor") as u64;
         let overlay_divisor = crate::config::get_i64("animation.overlay_divisor") as u64;
-        let void_divisor = crate::config::get_i64("animation.void_divisor") as u64;
+        let canvas_divisor = crate::config::get_i64("animation.canvas_divisor") as u64;
 
-        let effect_fires = effect_divisor > 0
-            && self.effect_chain.needs_animation()
-            && self.frame_count.is_multiple_of(effect_divisor);
+        let screen_fires = screen_divisor > 0
+            && self.any_animated_screen_effect(doc)
+            && self.frame_count.is_multiple_of(screen_divisor);
 
         let overlay_fires = overlay_divisor > 0
             && self.tool_overlay.needs_animation()
@@ -3344,27 +3395,27 @@ impl Compositor {
         // forces a frame another subsystem wouldn't already produce. See
         // `docs/lessons-learned/gpu-lessons-learned.md` master-clock
         // principle.
-        let void_fires = void_divisor > 0
+        let canvas_fires = canvas_divisor > 0
             && self.any_animated_layer(doc)
-            && self.frame_count.is_multiple_of(void_divisor);
+            && self.frame_count.is_multiple_of(canvas_divisor);
 
-        if effect_fires {
-            self.effect_chain
-                .update_effects(queue, dt * effect_divisor as f32);
+        if screen_fires {
+            self.tick_animated_effects(queue, dt * screen_divisor as f32, doc, true);
         }
 
         if overlay_fires {
             self.tool_overlay.advance_time(dt * overlay_divisor as f32);
         }
 
-        if void_fires {
-            self.tick_animated_layers(queue, dt * void_divisor as f32, doc);
-            // Re-render needed: voids are document-side content, so they
-            // require a full composite, not just a re-present.
+        if canvas_fires {
+            self.tick_animated_layers(queue, dt * canvas_divisor as f32, doc);
+            self.tick_animated_effects(queue, dt * canvas_divisor as f32, doc, false);
+            // Re-render needed: this side of the divider is document content,
+            // so it requires a full composite, not just a re-present.
             self.needs_composite = true;
         }
 
-        if effect_fires || overlay_fires {
+        if screen_fires || overlay_fires {
             self.needs_present = true;
         }
     }
@@ -3374,7 +3425,7 @@ impl Compositor {
     /// per-layer visibility — same contract as [`Self::update_animations`].
     pub fn needs_animation(&self, doc: &Document) -> bool {
         self.tool_overlay.needs_animation()
-            || self.effect_chain.needs_animation()
+            || self.any_animated_screen_effect(doc)
             || self.any_animated_layer(doc)
     }
 
@@ -3486,35 +3537,33 @@ impl Compositor {
         wgpu::TextureFormat::Rgba8Unorm
     }
 
-    pub fn effect_chain(&self) -> &EffectChain {
-        &self.effect_chain
+    pub fn screen_run(&self) -> &ScreenRun {
+        &self.screen_run
     }
 
-    pub fn effect_chain_mut(&mut self) -> &mut EffectChain {
-        &mut self.effect_chain
+    pub fn screen_run_mut(&mut self) -> &mut ScreenRun {
+        &mut self.screen_run
     }
 
-    /// Instantiate `type_id` and append it to the screen-space chain.
-    ///
-    /// Lives here rather than on either half because it needs both: the
-    /// registry compiles the pipeline and builds the instance, the chain binds
-    /// it against the viewport pair. They are disjoint fields of this struct,
-    /// which is what lets one method hold both borrows.
-    pub fn add_screen_effect(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        type_id: &str,
-        params: &[ParamValue],
-    ) {
-        let format = self.effect_chain.accum_format();
-        let Some(effect) = self
-            .effect_registry
-            .instance(type_id, params, device, format)
-        else {
-            return;
-        };
-        self.effect_chain.add_effect(device, queue, effect);
+    /// Resize the screen-space run's textures. Replacing them invalidates every
+    /// bind group pointing at them, which the generation bump is what rebuilds
+    /// — the same counter a canvas resize bumps, so neither space needs its own
+    /// enumeration of invalidation triggers.
+    pub fn resize_screen_run(&mut self, width: u32, height: u32) {
+        if self.screen_run.resize(width, height) {
+            self.target_generation += 1;
+        }
+    }
+
+    /// Re-present without recompositing the canvas. What a parameter drag on a
+    /// screen-space effect needs: its output is downstream of the composite, so
+    /// the composite it reads is still valid.
+    pub fn mark_effect_dirty(&mut self, doc: &Document, id: LayerId) {
+        if doc.renders_in_screen_space(id) {
+            self.screen_run.mark_needs_present();
+        } else {
+            self.mark_dirty();
+        }
     }
 
     /// The registries a preview mechanism may need, borrow-split in one place
@@ -3611,13 +3660,32 @@ impl Compositor {
     /// Run the present pass, veil chain, and final blit to surface.
     /// Solid overlay primitives are drawn at the end of the final render
     /// pass (present or veil-blit) to avoid a separate LoadOp::Load pass.
-    fn present_and_veils(
+    fn present_and_screen_run(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        doc: &Document,
         surface_view: &wgpu::TextureView,
     ) {
-        if !self.effect_chain.has_visible() {
-            // No veils — present directly to surface.
+        // Synced here as well as before the compose walk, because the two
+        // spaces are woken by different dirty flags: a viewport resize replaces
+        // the run's textures without touching the canvas, so `render_offscreen`
+        // returns early and never reaches the sync. Idempotent and cheap when
+        // nothing drifted.
+        self.sync_effect_instances(device, queue, doc);
+
+        // Membership, order and visibility all come from the document; the run
+        // owns only the textures. An empty or wholly hidden run presents
+        // straight to the surface, which is the common case.
+        let members: Vec<LayerId> = doc
+            .screen_space_run()
+            .iter()
+            .copied()
+            .filter(|id| doc.effective_visible(*id) && self.effect_instances.contains_key(id))
+            .collect();
+
+        if members.is_empty() || self.screen_run.views().is_none() {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("present"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -3639,13 +3707,50 @@ impl Compositor {
             return;
         }
 
-        self.effect_chain.encode(
+        self.screen_run.encode_present_into_run(
             encoder,
-            surface_view,
             &self.present_to_effects_pipeline,
             &self.present_cache_bind_group,
-            &self.tool_overlay,
         );
+
+        let (Some(views), Some(scratch), Some(pipelines)) = (
+            self.screen_run.views(),
+            self.screen_run.scratch_view(),
+            self.screen_run.scaling_pipelines(),
+        ) else {
+            return;
+        };
+
+        // Same two-step shape as the canvas arm: the effect writes into the
+        // scratch, then the apply pass blends that back over the untouched
+        // half carrying the layer's opacity and blend mode. No mask binding is
+        // needed — a masked node cannot be above the divider.
+        let (vw, vh) = self.screen_run.viewport_size();
+        let full = (0, 0, vw, vh);
+        let mut src = 0usize;
+        for id in members {
+            let inst = &self.effect_instances[&id];
+            let dst = 1 - src;
+            inst.scaled
+                .encode(encoder, &*inst.effect, &inst.cache, pipelines, src, scratch);
+            Self::encode_in_place_apply(
+                &self.blend_pipelines,
+                &self.in_place_apply_pipelines,
+                &self.sampler,
+                encoder,
+                device,
+                &views[src],
+                scratch,
+                inst.apply_uniform.as_entire_binding(),
+                &views[dst],
+                &self.default_mask_bind_group,
+                full,
+            );
+            src = dst;
+        }
+
+        self.screen_run
+            .blit_to_surface(encoder, surface_view, src, &self.tool_overlay);
     }
 
     /// Composite a flat list of source node ids into a target raster layer's
@@ -3919,6 +4024,82 @@ impl Compositor {
         self.present_into_target(device, queue, viewport_w, viewport_h)
     }
 
+    /// Present **through the screen-space run** into a `target_w × target_h`
+    /// offscreen texture and return its bytes — what the surface would show,
+    /// minus the surface.
+    ///
+    /// [`Self::test_present_to_viewport`] deliberately stops at the present
+    /// pass, so it cannot see the run at all. This one exists because the whole
+    /// point of the run is that it happens *after* that pass: nothing below the
+    /// surface can observe the difference between the two spaces.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_present_through_screen_run(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        doc: &mut Document,
+        target_w: u32,
+        target_h: u32,
+    ) -> Vec<u8> {
+        self.resize_screen_run(target_w, target_h);
+        self.render_offscreen(device, queue, doc);
+
+        // Identity 1:1, so a target texel is a canvas texel and the assertion
+        // is about the run rather than about where the view transform put the
+        // canvas. `test_present_to_viewport` is the harness for the mapping.
+        let identity = ViewTransform::from_pan_zoom_rotate(
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            false,
+            self.canvas_width as f32,
+            self.canvas_height as f32,
+            target_w as f32,
+            target_h as f32,
+        );
+        self.update_view_transform(queue, &identity);
+
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("test-screen-run-target"),
+            size: wgpu::Extent3d {
+                width: target_w,
+                height: target_h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.screen_run.surface_format(),
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("test-screen-run"),
+        });
+        self.present_and_screen_run(&mut encoder, device, queue, doc, &target_view);
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let format = self.screen_run.surface_format();
+        let mut bytes = crate::gpu::test_utils::readback_texture(
+            device, queue, &target, format, target_w, target_h,
+        );
+
+        // The surface may be BGRA; hand callers RGBA either way, so a test
+        // asserting on a colour never has to know which surface it got.
+        if matches!(
+            format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ) {
+            for texel in bytes.as_chunks_mut::<4>().0 {
+                texel.swap(0, 2);
+            }
+        }
+        bytes
+    }
+
     /// Create a dynamic blend bind group for compositing a layer into a group.
     fn create_blend_bind_group(
         &self,
@@ -4090,6 +4271,10 @@ impl Compositor {
         children: &[LayerId],
         scissor: (u32, u32, u32, u32),
     ) {
+        // Resolved once per group rather than per child: the run is a slice of
+        // the root's children, so for a nested group this is an empty-match
+        // scan.
+        let screen_run = doc.screen_space_run();
         for &child_id in children {
             let node = match doc.find_node(child_id) {
                 Some(n) => n,
@@ -4103,6 +4288,14 @@ impl Compositor {
             // orthogonal — the document's eye state is never inspected
             // beyond this `visible()` check, and isolation never mutates it.
             if !self.is_in_isolation_path(doc, child_id) {
+                continue;
+            }
+            // Screen-space members are realized after the present pass, on the
+            // view-transformed image, so the canvas-space walk must not draw
+            // them. Export, flatten and merge composite through this same walk,
+            // which is what makes "viewport only" mean "not in the file" with
+            // no code of their own.
+            if screen_run.contains(&child_id) {
                 continue;
             }
             let mut ctx = CompositionContext {
@@ -4319,28 +4512,18 @@ impl Compositor {
 
         self.sync_effect_instances(device, queue, doc);
 
-        // Refresh every in-place host's apply uniform — canvas + mask geometry,
-        // plus the blend mode and opacity an effect layer contributes. Run
-        // after `sync_effect_instances` so a freshly built instance's buffer is
-        // written the same frame it is created.
+        // Refresh every masked passthrough host's apply uniform — canvas + mask
+        // geometry. Effect layers' uniforms are written by
+        // `sync_effect_instances` itself, beside the instances they belong to.
         let normal = crate::gpu::blend_mode::registry().default().gpu_value;
-        let hosts: Vec<(LayerId, wgpu::Buffer, u32, f32)> = self
+        let hosts: Vec<(LayerId, wgpu::Buffer)> = self
             .mask_snapshot_state
             .iter()
-            .map(|(id, pms)| (*id, pms.uniform_buf.clone(), normal, 1.0))
-            .chain(doc.all_filter_layers().iter().filter_map(|f| {
-                let inst = self.effect_instances.get(&f.id)?;
-                Some((
-                    f.id,
-                    inst.apply_uniform.clone(),
-                    f.blend.blend_mode.gpu_value,
-                    f.blend.opacity,
-                ))
-            }))
+            .map(|(id, pms)| (*id, pms.uniform_buf.clone()))
             .collect();
 
-        for (host_id, buf, blend_mode, opacity) in hosts {
-            let uniforms = self.apply_uniforms_for(doc, host_id, blend_mode, opacity, canvas_size);
+        for (host_id, buf) in hosts {
+            let uniforms = self.apply_uniforms_for(doc, host_id, normal, 1.0, canvas_size);
             queue.write_buffer(&buf, 0, bytemuck::bytes_of(&uniforms));
         }
     }
@@ -4452,36 +4635,65 @@ impl Compositor {
         doc: &Document,
     ) {
         self.ensure_canvas_apply_scratch(device);
-        let scale = crate::gpu::effect_scaling::canvas_scale();
-        let live: Vec<(LayerId, LayerId, String, Vec<ParamValue>)> = doc
+        self.screen_run.ensure_resources(device);
+
+        // One pass over the document's effect layers, each tagged with the
+        // space its position puts it in. Everything downstream — the pair it
+        // binds, the scale it runs at, the dirty flag it drives — follows from
+        // this tag, so there is no second list to keep in step.
+        let screen_run: Vec<LayerId> = doc.screen_space_run().to_vec();
+        let live: Vec<(LayerId, EffectSpace, String, Vec<ParamValue>)> = doc
             .all_filter_layers()
             .iter()
             .filter_map(|f| {
-                Some((
-                    f.id,
-                    doc.accumulator_host_of(f.id)?,
-                    f.pipeline.clone(),
-                    f.params.clone(),
-                ))
+                let space = if screen_run.contains(&f.id) {
+                    EffectSpace::Screen
+                } else {
+                    EffectSpace::Canvas {
+                        parent: doc.accumulator_host_of(f.id)?,
+                    }
+                };
+                Some((f.id, space, f.pipeline.clone(), f.params.clone()))
             })
             .collect();
 
         let ids: HashSet<LayerId> = live.iter().map(|(id, ..)| *id).collect();
         self.effect_instances.retain(|id, _| ids.contains(id));
 
-        for (id, parent_group, pipeline_id, params) in live {
-            let Some(gs) = self.group_state.get(&parent_group) else {
-                // The parent's accumulator does not exist yet; the next frame
-                // that creates it bumps `target_generation` and we build then.
-                continue;
+        for (id, space, pipeline_id, params) in live {
+            // The size the instance renders at and the scale it runs under.
+            // Canvas-space output is document content, so it defaults to full
+            // resolution; the viewport's is transient and does not.
+            let (size, scale) = match space {
+                EffectSpace::Canvas { parent } => {
+                    let Some(gs) = self.group_state.get(&parent) else {
+                        // The parent's accumulator does not exist yet; the next
+                        // frame that creates it bumps `target_generation` and
+                        // we build then.
+                        continue;
+                    };
+                    (
+                        (gs.accum.textures[0].width(), gs.accum.textures[0].height()),
+                        crate::gpu::effect_scaling::canvas_scale(),
+                    )
+                }
+                EffectSpace::Screen => {
+                    if self.screen_run.views().is_none() {
+                        // No viewport size yet.
+                        continue;
+                    }
+                    (self.screen_run.viewport_size(), self.screen_run.scale())
+                }
             };
-            let size = (gs.accum.textures[0].width(), gs.accum.textures[0].height());
+            if size.0 == 0 || size.1 == 0 {
+                continue;
+            }
 
             // Everything except the parameters is structural: a change means
             // the bind groups no longer describe reality.
             let structural_match = self.effect_instances.get(&id).is_some_and(|inst| {
                 inst.pipeline_id == pipeline_id
-                    && inst.parent_group == parent_group
+                    && inst.space == space
                     && inst.render_size == size
                     && inst.target_generation == self.target_generation
             });
@@ -4511,14 +4723,29 @@ impl Compositor {
                 continue;
             };
 
-            let gs = &self.group_state[&parent_group];
+            // Borrowed here rather than above: the registry call needs
+            // `&mut self`, which cannot coexist with a borrow of either pair.
+            let (views, pipelines) = match space {
+                EffectSpace::Canvas { parent } => (
+                    &self.group_state[&parent].accum.views,
+                    &self.canvas_scaling_pipelines,
+                ),
+                EffectSpace::Screen => {
+                    let (Some(views), Some(pipelines)) =
+                        (self.screen_run.views(), self.screen_run.scaling_pipelines())
+                    else {
+                        continue;
+                    };
+                    (views, pipelines)
+                }
+            };
             let (scaled, cache) = crate::gpu::effect_scaling::ScaledEffect::prepare(
                 device,
                 queue,
                 &mut *effect,
-                &gs.accum.views,
+                views,
                 &self.sampler,
-                &self.canvas_scaling_pipelines,
+                pipelines,
                 wgpu::TextureFormat::Rgba8Unorm,
                 size.0,
                 size.1,
@@ -4538,12 +4765,39 @@ impl Compositor {
                     cache,
                     params,
                     pipeline_id,
-                    parent_group,
+                    space,
                     render_size: size,
                     target_generation: self.target_generation,
                     apply_uniform,
                 },
             );
+        }
+
+        // The apply uniform belongs to the instance, so it is written here
+        // rather than by whichever caller happened to run the sync: a rebuild
+        // triggered from the present path (a viewport resize never dirties the
+        // composite) would otherwise leave a fresh buffer unwritten, and the
+        // effect would silently compose at opacity zero.
+        let canvas_size = [self.canvas_width as f32, self.canvas_height as f32];
+        let uniforms: Vec<(wgpu::Buffer, ApplyUniforms)> = doc
+            .all_filter_layers()
+            .iter()
+            .filter_map(|f| {
+                let inst = self.effect_instances.get(&f.id)?;
+                Some((
+                    inst.apply_uniform.clone(),
+                    self.apply_uniforms_for(
+                        doc,
+                        f.id,
+                        f.blend.blend_mode.gpu_value,
+                        f.blend.opacity,
+                        canvas_size,
+                    ),
+                ))
+            })
+            .collect();
+        for (buf, u) in uniforms {
+            queue.write_buffer(&buf, 0, bytemuck::bytes_of(&u));
         }
     }
 
@@ -5046,10 +5300,49 @@ impl Compositor {
         dst: usize,
         scissor: (u32, u32, u32, u32),
     ) {
+        // Effective mask: live by default, preview-mask when the floating
+        // target is this host's mask filter.
+        let mask_bg = self.effective_mask_bind_group(doc, host_id);
+        let gs = &self.group_state[&parent_group];
+        Self::encode_in_place_apply(
+            &self.blend_pipelines,
+            &self.in_place_apply_pipelines,
+            &self.sampler,
+            encoder,
+            device,
+            before,
+            after,
+            uniform,
+            &gs.accum.views[dst],
+            mask_bg,
+            scissor,
+        );
+    }
+
+    /// The pass itself, with its destination and its mask handed in.
+    ///
+    /// Both spaces run exactly this: canvas supplies a group accumulator half
+    /// and the host's effective mask, screen supplies a run half and the
+    /// identity mask. Field-explicit so the screen caller can hold the
+    /// disjoint `effect_instances` borrow across it.
+    #[allow(clippy::too_many_arguments)]
+    fn encode_in_place_apply(
+        blend_pipelines: &BlendPipelines,
+        in_place_apply_pipelines: &[(wgpu::TextureFormat, wgpu::RenderPipeline)],
+        sampler: &wgpu::Sampler,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        before: &wgpu::TextureView,
+        after: &wgpu::TextureView,
+        uniform: wgpu::BindingResource,
+        dst_view: &wgpu::TextureView,
+        mask_bg: &wgpu::BindGroup,
+        scissor: (u32, u32, u32, u32),
+    ) {
         let (scissor_x, scissor_y, scissor_w, scissor_h) = scissor;
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("in-place-apply-bg"),
-            layout: &self.blend_pipelines.bind_group_layout,
+            layout: &blend_pipelines.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -5061,7 +5354,7 @@ impl Compositor {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    resource: wgpu::BindingResource::Sampler(sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
@@ -5070,14 +5363,10 @@ impl Compositor {
             ],
         });
 
-        let gs = &self.group_state[&parent_group];
-        // Effective mask: live by default, preview-mask when the floating
-        // target is this host's mask filter.
-        let mask_bg = self.effective_mask_bind_group(doc, host_id);
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("in-place-apply"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &gs.accum.views[dst],
+                view: dst_view,
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
@@ -5088,7 +5377,7 @@ impl Compositor {
             ..Default::default()
         });
         rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
-        rpass.set_pipeline(&self.in_place_apply_pipelines[0].1);
+        rpass.set_pipeline(&in_place_apply_pipelines[0].1);
         rpass.set_bind_group(0, &bind_group, &[]);
         rpass.set_bind_group(1, mask_bg, &[]);
         rpass.draw(0..3, 0..1);
@@ -5262,13 +5551,13 @@ impl Compositor {
 
     /// Whether any rendering work is pending (composite, present, effects).
     fn has_pending_work(&self, _doc: &Document) -> bool {
-        self.needs_composite || self.needs_present || self.effect_chain.needs_present()
+        self.needs_composite || self.needs_present || self.screen_run.needs_present()
     }
 
     /// Clear present-related dirty flags after a frame.
     fn finish_present(&mut self) {
         self.needs_present = false;
-        self.effect_chain.clear_needs_present();
+        self.screen_run.clear_needs_present();
     }
 
     /// Upload dirty tiles, composite changed layers, present to a surface.
@@ -5283,10 +5572,12 @@ impl Compositor {
     ) {
         perf::time("render-total");
 
-        // Re-read `rendering.veil_scale` and rebuild per-veil resources if it
-        // changed. This sets needs_present when applicable, so config changes
-        // wake up an otherwise-idle app.
-        self.effect_chain.sync_resolution_scale(device, queue);
+        // Re-read the screen-space resolution scale. A change invalidates the
+        // instances built for the old one and sets needs_present, so a config
+        // edit wakes up an otherwise-idle app.
+        if self.screen_run.sync_resolution_scale() {
+            self.target_generation += 1;
+        }
 
         if !self.has_pending_work(doc) {
             perf::time_end("render-total");
@@ -5333,22 +5624,22 @@ impl Compositor {
             let (ox, oy) = (self.canvas_origin.x as f32, self.canvas_origin.y as f32);
             let plane_fwd = vt.plane_to_screen_matrix(ox, oy);
             let plane_inv = vt.screen_to_plane_matrix(ox, oy);
-            let vw = self.effect_chain.viewport_size().0;
-            let vh = self.effect_chain.viewport_size().1;
+            let vw = self.screen_run.viewport_size().0;
+            let vh = self.screen_run.viewport_size().1;
             self.tool_overlay
                 .prepare(device, queue, &plane_fwd, &plane_inv, vw, vh);
         }
 
-        // Present + veils. Solid overlay primitives are drawn at the end
-        // of the final pass (no separate LoadOp::Load pass needed).
-        self.present_and_veils(&mut encoder, &surface_view);
+        // Present + screen-space run. Solid overlay primitives are drawn at
+        // the end of the final pass (no separate LoadOp::Load pass needed).
+        self.present_and_screen_run(&mut encoder, device, queue, doc, &surface_view);
 
         // Snapshot-sampling overlay primitives (invert + soft-contrast) need a
         // separate pass with a surface→snapshot copy. Hit by rect-select and
         // the brush-stamp preview.
         if self.tool_overlay.has_snapshot() {
-            let vw = self.effect_chain.viewport_size().0;
-            let vh = self.effect_chain.viewport_size().1;
+            let vw = self.screen_run.viewport_size().0;
+            let vh = self.screen_run.viewport_size().1;
             self.tool_overlay
                 .encode_snapshot(&mut encoder, &output.texture, &surface_view, vw, vh);
         }

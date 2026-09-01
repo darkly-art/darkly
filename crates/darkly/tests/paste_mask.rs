@@ -77,7 +77,7 @@ fn drain_rich_copy(engine: &mut DarklyEngine) -> String {
 /// `(name, opacity, blend_mode, modifier_count)` for a top-level raster layer.
 fn raster_props(engine: &DarklyEngine, id: LayerId) -> (String, f32, String, usize) {
     let id_f = id.to_ffi() as f64;
-    for info in engine.layer_tree() {
+    for info in engine.layer_tree().layers {
         if let LayerInfo::Raster {
             id: lid,
             name,
@@ -119,7 +119,7 @@ fn paste_in_place_floating_writes_into_active_mask() {
     let v0 = base[0];
     assert!(base.iter().all(|&v| v == v0), "fresh mask must be uniform");
 
-    let layers_before = e.layer_tree().len();
+    let layers_before = e.layer_tree().layers.len();
     assert!(
         e.paste_in_place_floating(mask),
         "paste-in-place must float the clipboard onto the mask (not no-op)"
@@ -128,7 +128,7 @@ fn paste_in_place_floating_writes_into_active_mask() {
     settle(&mut e);
 
     assert_eq!(
-        e.layer_tree().len(),
+        e.layer_tree().layers.len(),
         layers_before,
         "pasting into a mask must not add a layer"
     );
@@ -166,7 +166,7 @@ fn paste_in_place_committed_writes_into_active_mask() {
 
     let base = e.test_readback_mask(host);
     let v0 = base[0];
-    let layers_before = e.layer_tree().len();
+    let layers_before = e.layer_tree().layers.len();
 
     let target = e
         .paste_in_place(Some(mask))
@@ -175,7 +175,7 @@ fn paste_in_place_committed_writes_into_active_mask() {
     settle(&mut e);
 
     assert_eq!(
-        e.layer_tree().len(),
+        e.layer_tree().layers.len(),
         layers_before,
         "committed paste into a mask must not add a layer"
     );

@@ -53,12 +53,11 @@
     function close() {
         addLayerModal.hide();
         if (!app.engine) return;
-        // The pickers add layers and veils by type, so the panel's view of both
-        // has to be re-read once one closes. Mounted at the app root — reachable
-        // from the palette and menu bar, not just the layer panel — so the
-        // refresh is ours to do rather than the panel's.
+        // The picker adds layers by type, so the panel's view has to be re-read
+        // once it closes. Mounted at the app root — reachable from the palette
+        // and menu bar, not just the layer panel — so the refresh is ours to do
+        // rather than the panel's.
         app.refreshLayerTree();
-        app.refreshVeilList();
         app.requestFrame();
     }
 

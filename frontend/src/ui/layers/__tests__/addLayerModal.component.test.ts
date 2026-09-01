@@ -57,14 +57,10 @@ const app = {
     catalogs,
     activeLayerId: 3,
     selectedLayerIds: new Set<number>(),
-    veilList: [],
     entries: (id: string) => catalogs[id]?.entries ?? [],
     refreshLayerTree: vi.fn(),
-    refreshVeilList: vi.fn(),
     requestFrame: vi.fn(),
     selectLayer: vi.fn(),
-    selectVeil: vi.fn(),
-    addVeil: vi.fn(),
 };
 
 vi.mock('../../../state/app.svelte', () => ({ app }));

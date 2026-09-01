@@ -20,7 +20,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::registry_io::InstancePayload;
 use crate::coord::CanvasRect;
 
 /// Current container schema version. Bumped *only* for fundamental
@@ -67,8 +66,11 @@ pub struct Manifest {
     /// pointer so the loader can find it without scanning the list.
     #[serde(default)]
     pub selection_id: Option<u64>,
-    /// Veil chain in apply order.
-    pub veils: Vec<ManifestVeil>,
+    /// How many of the root's trailing children render in screen space —
+    /// viewport-only, and absent from this file's composite. Clamped on load
+    /// against what the restored tree actually supports.
+    #[serde(default)]
+    pub screen_space_count: usize,
     /// Fonts embedded in this document so it renders self-contained on any
     /// machine — one entry per `font_family` a text object actually uses that
     /// the engine has runtime bytes for. Several families may share one blob
@@ -149,25 +151,16 @@ pub struct ManifestCanvas {
 /// get rejected in milliseconds without parsing the body.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestRequires {
+    /// Effect `type_id`s named by any effect layer in the document, in either
+    /// space. Not the layer *kind* — every effect layer shares one of those.
     #[serde(default)]
-    pub veil: Vec<String>,
+    pub effect: Vec<String>,
     #[serde(default)]
     pub blend_mode: Vec<String>,
     #[serde(default)]
     pub layer_kind: Vec<String>,
     #[serde(default)]
     pub modifier: Vec<String>,
-}
-
-/// On-disk shape for a veil chain entry. The body is the canonical
-/// `{ type_id, params }` envelope used by every modular system.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ManifestVeil {
-    #[serde(flatten)]
-    pub instance: InstancePayload,
-    /// Veils carry per-instance visibility — the chain can disable an
-    /// effect without removing it.
-    pub visible: bool,
 }
 
 /// Reference to a pixel blob inside the zip.
@@ -283,7 +276,7 @@ mod tests {
                 origin_y: 0,
             },
             requires: ManifestRequires {
-                veil: vec!["grain".into()],
+                effect: vec!["grain".into()],
                 blend_mode: vec!["normal".into(), "multiply".into()],
                 layer_kind: vec!["raster".into(), "group".into()],
                 modifier: vec!["mask".into()],
@@ -307,17 +300,7 @@ mod tests {
             }],
             modifiers: vec![],
             selection_id: None,
-            veils: vec![ManifestVeil {
-                instance: InstancePayload::new(
-                    "grain",
-                    vec![
-                        crate::gpu::params::ParamValue::Float(0.5),
-                        crate::gpu::params::ParamValue::Float(0.05),
-                        crate::gpu::params::ParamValue::Float(1.0),
-                    ],
-                ),
-                visible: true,
-            }],
+            screen_space_count: 0,
             fonts: vec![ManifestFontRef {
                 family: "Inter".into(),
                 hash: "0123456789abcdef".into(),

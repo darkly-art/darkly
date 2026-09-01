@@ -15,7 +15,7 @@
 //! 3. **Container version** — newer than the binary understands →
 //!    [`LoadError::ContainerTooNew`].
 //! 4. **`requires` inventory** — diffed against the four registries
-//!    (veils, blend modes, layer kinds, filters); any miss →
+//!    (effects, blend modes, layer kinds, filters); any miss →
 //!    [`LoadError::UnsupportedFeatures`] naming every missing
 //!    `"<registry>/<type_id>"`.
 //! 5. **Full schema parse + staging-doc construction** — any
@@ -24,7 +24,7 @@
 //!    and the file is corrupt → [`LoadError::CorruptManifest`].
 //!
 //! Only after every check passes does [`install_staging`] swap the
-//! document, replace the compositor, upload pixels, and restore veils.
+//! document, replace the compositor, and upload pixels.
 //! That phase has no fallible operations — by construction the install
 //! either completes or panics (a logic bug to fix at the source).
 //!
@@ -136,7 +136,7 @@ fn pre_check_requires_present(raw: &serde_json::Value) -> Result<(), LoadError> 
 }
 
 /// Cross-reference the manifest's `requires` inventory against the
-/// binary's four registries (veils, blend modes, layer kinds,
+/// binary's four registries (effects, blend modes, layer kinds,
 /// filters). Any miss collects a `"<registry>/<type_id>"` entry and
 /// the load is refused with [`LoadError::UnsupportedFeatures`].
 fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Result<(), LoadError> {
@@ -163,10 +163,10 @@ fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Res
         }
     }
 
-    let veil_registry = engine.compositor.effect_registry();
-    for id in &requires.veil {
-        if !veil_registry.has(id) {
-            missing.push(format!("veil/{id}"));
+    let effect_registry = engine.compositor.effect_registry();
+    for id in &requires.effect {
+        if !effect_registry.has(id) {
+            missing.push(format!("effect/{id}"));
         }
     }
 
@@ -364,6 +364,13 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
         }
     }
 
+    // The one place the screen-space invariant is established by hand. Load
+    // builds the tree from the manifest and derives the parent map directly,
+    // so `link` — where every other path enforces this — is never called.
+    // Clamping rather than trusting means a hand-edited or truncated file
+    // cannot ask for a raster to be rendered after the view transform.
+    doc.screen_space_count = doc.clamp_screen_space_count(manifest.screen_space_count);
+
     Ok((doc, id_map))
 }
 
@@ -429,19 +436,14 @@ fn install_staging(
 
     upload_loaded_pixels(engine, manifest, &id_map, entries);
 
-    // The veil chain sizes to the surface in production (via
-    // `resize()`); on a freshly-loaded compositor it's still 0×0,
-    // and `add_veil`'s `ensure_textures` would no-op silently and
-    // then unwrap on `views`. Seed to canvas dimensions so the
-    // restore path always sees a sized viewport — the next real
+    // The screen-space run sizes to the surface in production (via
+    // `resize()`); on a freshly-loaded compositor it's still 0×0, so its
+    // instances would have no pair to bind. Seed to canvas dimensions so the
+    // first frame after a load always sees a sized viewport — the next real
     // resize cascades to the right surface size automatically.
-    engine.compositor.effect_chain_mut().resize(
-        &engine.gpu.device,
-        &engine.gpu.queue,
-        engine.doc.width,
-        engine.doc.height,
-    );
-    restore_veils(engine, manifest);
+    engine
+        .compositor
+        .resize_screen_run(engine.doc.width, engine.doc.height);
     ensure_selection_state(engine);
     // Register embedded fonts before `sync_compositor_layers` realizes the
     // vector scenes, so text shapes with its real face on the first frame
@@ -639,31 +641,6 @@ fn register_embedded_fonts(
     }
 }
 
-/// Rebuild the veil chain from `manifest.veils`. The `requires`
-/// pre-check has already refused any veil the binary doesn't know
-/// about, so any miss here is a logic bug — the registry must have
-/// changed between pre-check and restore (impossible without a
-/// concurrent mutation we don't allow).
-fn restore_veils(engine: &mut DarklyEngine, manifest: &Manifest) {
-    engine.compositor.effect_chain_mut().clear_effects();
-    for veil in &manifest.veils {
-        let type_id = veil.instance.type_id.clone();
-        let params = veil.instance.params.clone();
-        if !engine.compositor.effect_registry().has(&type_id) {
-            log::error!(
-                "load: veil '{type_id}' missing despite requires pre-check — \
-                 registry drift?"
-            );
-            continue;
-        }
-        engine.add_veil_layer(&type_id, &params);
-        if !veil.visible {
-            let last = engine.compositor.effect_chain().count().saturating_sub(1);
-            engine.set_veil_visible(last, false);
-        }
-    }
-}
-
 /// Allocate the selection-filter GPU state — mirrors the engine
 /// constructor's eager allocation.
 fn ensure_selection_state(engine: &mut DarklyEngine) {
@@ -800,7 +777,7 @@ mod tests {
                 }),
             }],
             selection_id: None,
-            veils: Vec::new(),
+            screen_space_count: 0,
             fonts: Vec::new(),
         };
 

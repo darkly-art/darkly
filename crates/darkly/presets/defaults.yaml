@@ -124,9 +124,9 @@ settings:
   recording.minIntervalSeconds: 1.5
   recording.maxLongEdge: "1920"
   # Animation tick divisors.
-  animation.effect_divisor: 2
+  animation.screen_divisor: 2
   animation.overlay_divisor: 4
-  animation.void_divisor: 2
+  animation.canvas_divisor: 2
   # Rendering - default scale = sqrt(.5) = 0.7071 = roughly half the processing power compared to 1.0
   rendering.screen_effect_scale: 0.7071
   rendering.canvas_effect_scale: 1.0
