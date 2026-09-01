@@ -352,9 +352,16 @@ pub trait Void: std::fmt::Debug {
     /// rect in that window — harmless for the synchronous allocate-then-blit
     /// sequences that use it, but the reason this is not a public two-phase
     /// API.
+    ///
+    /// Takes a `queue` because adopting a source changes what the sampling
+    /// uniform has to say: the void stops covering the canvas and starts
+    /// drawing at the source's own size. An implementation that resizes without
+    /// republishing that uniform leaves the layer rendering through the
+    /// placeholder's extent.
     fn allocate_source(
         &mut self,
         _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
         _cache: &mut EffectCache,
         _width: u32,
         _height: u32,

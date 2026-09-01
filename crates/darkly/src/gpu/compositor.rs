@@ -2355,7 +2355,7 @@ impl Compositor {
             return;
         };
         proc.void
-            .allocate_source(device, &mut proc.cache, width, height);
+            .allocate_source(device, queue, &mut proc.cache, width, height);
         let Some(dst) = proc.cache.aux_textures.first().cloned() else {
             return;
         };

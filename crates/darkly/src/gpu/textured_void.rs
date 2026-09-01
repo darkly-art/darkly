@@ -619,6 +619,7 @@ impl Void for TexturedVoid {
     fn allocate_source(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         cache: &mut EffectCache,
         width: u32,
         height: u32,
@@ -629,9 +630,13 @@ impl Void for TexturedVoid {
         self.resize_aux_texture(device, cache, width, height);
         // `has_source` is what switches `content_rect` off its canvas-covering
         // fallback and onto the source's natural size, and what makes
-        // `persistent_frame_size` report. Both have to be true before a caller
-        // blits, or the uniform written below describes the placeholder.
+        // `persistent_frame_size` report.
         self.has_source = true;
+        // Both of those feed the sampling uniform, so it is republished here
+        // rather than left to whatever writes the pixels. A blit-based install
+        // never touches the uniform, and the layer would sample as if the
+        // source still covered the canvas until the next transform.
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
         self.dirty.mark();
     }
 
@@ -647,7 +652,7 @@ impl Void for TexturedVoid {
         if width == 0 || height == 0 {
             return;
         }
-        self.allocate_source(device, cache, width, height);
+        self.allocate_source(device, queue, cache, width, height);
         // Bytes are Rgba8Unorm in the source texture's premultiplied-alpha
         // convention — the save flow read back exactly these texels, and the
         // placement path premultiplies before calling.
@@ -669,11 +674,6 @@ impl Void for TexturedVoid {
                 height,
                 depth_or_array_layers: 1,
             },
-        );
-        queue.write_buffer(
-            &cache.uniform_bufs[0],
-            0,
-            bytemuck::bytes_of(&self.uniforms()),
         );
         self.dirty.mark();
     }
@@ -1362,7 +1362,7 @@ mod tests {
         let mut cache = v.create_cache(&device, &queue, &dst_view, &sampler, 8, 8);
         drop(dst);
 
-        v.allocate_source(&device, &mut cache, 300, 200);
+        v.allocate_source(&device, &queue, &mut cache, 300, 200);
 
         assert_eq!(v.persistent_frame_size(), Some((300, 200)));
         assert_eq!(

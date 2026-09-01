@@ -369,6 +369,53 @@ fn converting_a_selection_transform_keeps_the_unlifted_remainder() {
     );
 }
 
+/// The smart object must render at its source's natural size the moment it is
+/// created, not on the next transform.
+///
+/// Installing a source by GPU blit flips the void off its canvas-covering
+/// placeholder, so the sampling uniform written when the layer was created
+/// describes the wrong extent until it is rewritten. Nothing between creation
+/// and the first drag rewrites it, so the image ships stretched to the canvas —
+/// and the gizmo reads the *document* extent, so it looks correct while the
+/// pixels are wrong.
+#[test]
+fn a_converted_smart_object_renders_at_its_source_size() {
+    let mut engine = test_engine(64, 64);
+    let layer = engine.paste_image(16, 16, &opaque_block(16, 16, [0, 255, 0]), 8, 8, None);
+    engine.render(0.0);
+
+    engine.select_rect(
+        8.0,
+        8.0,
+        16.0,
+        16.0,
+        darkly::document::SelectionMode::Replace,
+        false,
+        0.0,
+    );
+    engine.render(0.0);
+    assert!(engine.begin_transform(layer), "transform starts");
+    engine.render(0.0);
+
+    let id = engine
+        .convert_floating_to_smart_object()
+        .expect("session converts");
+    engine.render(0.0);
+    assert!(is_smart_object(&engine, id));
+
+    let canvas = engine.test_readback_canvas();
+    assert_eq!(
+        rgba_at(&canvas, 64, 16, 16),
+        [0, 255, 0, 255],
+        "the source lands where it was lifted from",
+    );
+    assert_eq!(
+        rgba_at(&canvas, 64, 48, 48)[3],
+        0,
+        "and nowhere else — a stretched source would cover this",
+    );
+}
+
 /// The hole and the new layer are one edit: undo puts the pixels back and takes
 /// the smart object away together, or the user is left with a half-erased layer.
 #[test]
