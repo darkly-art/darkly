@@ -163,9 +163,7 @@ fn parse_args() -> Args {
             "--topology" | "-t" => {
                 let v = argv.next().expect("--topology requires a value");
                 topology = Topology::parse(&v).unwrap_or_else(|| {
-                    panic!(
-                        "unknown topology `{v}`, expected `paint`, `watercolor`, or `rough-ink`"
-                    )
+                    panic!("unknown topology `{v}`, expected `paint`, `watercolor`, or `rough-ink`")
                 });
             }
             "-h" | "--help" => {

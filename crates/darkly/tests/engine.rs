@@ -2229,11 +2229,7 @@ fn engine_brush_stroke_paints_on_mask() {
     paint_mask_dab(&mut engine, layer_id, (w / 2) as f32, (h / 2) as f32, 0.0);
 
     let pixels = engine.test_readback_mask(layer_id);
-    assert_eq!(
-        pixels.len(),
-        (w * h) as usize,
-        "mask is R8: one byte/pixel"
-    );
+    assert_eq!(pixels.len(), (w * h) as usize, "mask is R8: one byte/pixel");
     let center = mask_byte_at(&pixels, w, w / 2, h / 2);
     assert!(
         center < 250,
