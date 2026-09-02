@@ -238,6 +238,7 @@ impl Compositor {
         paint_pipelines: &crate::gpu::paint_target::PaintPipelines,
         staged: &crate::gpu::compositor::StagedNodeTexture,
         param: &TransformPreviewParams<'_>,
+        lifted: crate::gpu::transform::LiftedContent,
     ) -> bool {
         let Some(state) = self
             .transform_session
@@ -282,16 +283,32 @@ impl Compositor {
                 *uncovered,
             ),
         }
-        encoder.with_raw(|raw| {
-            self.transform_pass.render_state_commit(
-                device,
-                raw,
-                state,
-                staged.texture(),
-                staged.view(),
-            )
-        });
+        if lifted == crate::gpu::transform::LiftedContent::ReturnedToSource {
+            encoder.with_raw(|raw| {
+                self.transform_pass.render_state_commit(
+                    device,
+                    raw,
+                    state,
+                    staged.texture(),
+                    staged.view(),
+                )
+            });
+        }
         true
+    }
+
+    /// The source texture of a single-target transform session.
+    ///
+    /// Trimmed, at native resolution, premultiplied: the same shape a paste's
+    /// source has, but held per session target rather than in the paste slot.
+    /// `None` when there is no session, or when it has more than one target
+    /// (nothing that consumes this has a meaning for "the" source then).
+    pub fn transform_session_source_texture(&self) -> Option<wgpu::Texture> {
+        let session = self.transform_session.as_ref()?;
+        match session.targets.as_slice() {
+            [only] => Some(only.source_texture.clone()),
+            _ => None,
+        }
     }
 
     pub fn clear_transform_session(&mut self) {

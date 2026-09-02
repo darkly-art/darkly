@@ -1,4 +1,4 @@
-// @generated from RequestRegistry (ts-rs) - do not edit by hand.
+// @generated from RequestRegistry (ts-rs): do not edit by hand.
 // Regenerate: DARKLY_REGEN_TS=1 cargo test -p darkly --test protocol --features testing,ts-export
 
 export type JsonValue =
@@ -68,7 +68,7 @@ export type BorderSelectionReq = { radius: number, };
 
 export type BrushGraphCapabilities = { 
 /**
- * Whether the graph's terminals honour erase mode - false iff any
+ * Whether the graph's terminals honour erase mode; false iff any
  * terminal registers `supports_erase = false`. The brush-tool
  * options bar hides the erase toggle when false.
  */
@@ -76,7 +76,7 @@ supports_erase: boolean,
 /**
  * Iconify icon to show in the dab slot in place of a baked thumbnail,
  * contributed by the first node whose registration declares
- * `preview_staging` - content-dependent nodes (clone, blur, smudge,
+ * `preview_staging`: content-dependent nodes (clone, blur, smudge,
  * liquify) whose still-dab bake renders blank.
  */
 preview_fallback_icon: string | null, 
@@ -109,7 +109,7 @@ min: number,
  */
 max: number, 
 /**
- * Display-space default - what double-click reset returns to.
+ * Display-space default: what double-click reset returns to.
  * Sourced from the node-type registration, not the loaded brush.
  */
 default: number, 
@@ -134,7 +134,7 @@ export type UnitType = "Normalized" | "Percent" | "Degrees" | "Raw" | "Pixels";
 
 export type ExposedPortInfo = { 
 /**
- * `"<node_id>.<port_name>"` - the same string used to address the
+ * `"<node_id>.<port_name>"`: the same string used to address the
  * entry in `Graph::exposed_ports`. Frontend passes it back to
  * `set_exposed_port_meta` / `reorder_exposed_port` without having
  * to reconstruct the format.
@@ -171,7 +171,7 @@ export type BrushGraphUnexposePortReq = { node_id: string, port_name: string, };
 
 export type BrushInfo = { 
 /**
- * Opaque identity - what pack member lists and recents hold.
+ * Opaque identity: what pack member lists and recents hold.
  */
 id: string, 
 /**
@@ -179,7 +179,7 @@ id: string,
  */
 name: string, author: string, description: string, tags: Array<string>, 
 /**
- * Iconify icon shown in place of the baked dab/stroke thumbnails -
+ * Iconify icon shown in place of the baked dab/stroke thumbnails,
  * present when the graph contains a content-dependent node whose
  * preview bake renders blank (clone, blur, smudge, liquify). See
  * [`crate::brush::graph_capabilities`].
@@ -187,7 +187,7 @@ name: string, author: string, description: string, tags: Array<string>,
 icon: string | null, 
 /**
  * Whether the painter may rename or delete this brush, so the UI can grey
- * out affordances it would otherwise offer. A hint, not the authority -
+ * out affordances it would otherwise offer. A hint, not the authority:
  * same contract as [`BrushPackInfo::can_edit_members`].
  */
 can_edit: boolean, };
@@ -196,11 +196,11 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
 
-export type PortDir = "Input" | "Output";
-
 export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
 
 export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+
+export type PortDir = "Input" | "Output";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -212,7 +212,7 @@ min: number,
  */
 max: number, 
 /**
- * The authored value used when this input port is disconnected - the
+ * The authored value used when this input port is disconnected: the
  * full typed value (scalar slider value, enum-dropdown index, texture
  * name, curve points, color). Wired inputs ignore it and take the
  * upstream expression. For output ports it stays the neutral scalar
@@ -221,7 +221,7 @@ max: number,
  */
 value: InputValue, 
 /**
- * Enum-dropdown labels, in index order - non-empty only for
+ * Enum-dropdown labels, in index order, non-empty only for
  * [`WireKind`]-`Enum` inputs (shape's `algorithm`, noise/image `space`,
  * random's `mode`). Empty for every other input kind.
  */
@@ -229,7 +229,7 @@ enum_options?: Array<string>,
 /**
  * Whether an upstream wire may drive this input per-dab. Computed from
  * `wire_type.is_wirable()` at construction and carried as data so the
- * frontend reads it directly rather than re-deriving the rule - the
+ * frontend reads it directly rather than re-deriving the rule; the
  * single source of truth is [`WireKind::is_wirable`]. Every port built
  * from a registration (`PortDef::input`/`output`, and the clones in
  * `add_node` / portable import) sets it correctly; serde round-trips it.
@@ -239,7 +239,7 @@ wirable: boolean,
  * Whether an artist may *expose* this input as a brush-bar control.
  * Computed from `wire_type.is_user_exposable()` at construction and
  * carried as data so the frontend gates its expose affordance directly
- * off one value rather than re-deriving the type rule - the single
+ * off one value rather than re-deriving the type rule; the single
  * source of truth is [`WireKind::is_user_exposable`]. Orthogonal to
  * `wirable`: an enum is exposable but not wirable; a wired scalar is
  * wirable but (while connected) not artist-scrubbable. `expose_port`
@@ -251,7 +251,7 @@ exposable: boolean,
  * Quantization step. `0.0` (the default) means continuous; any positive
  * value snaps the slider, scrub, and typed-value commits to multiples of
  * `step` from `min`. Used when the wire takes a value but only certain
- * quantized values produce well-defined behavior - e.g. the shape
+ * quantized values produce well-defined behavior, e.g. the shape
  * node's `frequency`, where only integer values yield a seam-free
  * closed silhouette. Frontend honors the snap; the engine should still
  * defend by quantizing inputs in the node evaluator (a wired-in float
@@ -283,7 +283,7 @@ exposed: boolean,
  * render: the cursor-following dab overlay, the editor stroke
  * preview, and the library thumbnail bake. The brush WGSL
  * compiler clones the graph, drops incoming wires on flagged
- * ports, and replaces `default` with this constant - so all
+ * ports, and replaces `default` with this constant, so all
  * previews read as a showcase of the brush regardless of the
  * artist's working scrub. Real strokes still honour the
  * configured value.
@@ -306,8 +306,8 @@ preview_value: number | null,
  * preview cache and version counter should not bump on its scrub.
  *
  * Used by ports whose value the preview *pipeline* (not the
- * shader) ignores. Canonical example: `pen_input.stabilize` -
- * the editor preview's stroke engine is hard-wired to use
+ * shader) ignores. Canonical example: `pen_input.stabilize`.
+ * The editor preview's stroke engine is hard-wired to use
  * `PassThrough` as the stabilizer (the path is pre-cooked), so
  * the live `stabilize` value never reaches it. Marking this
  * declaratively avoids re-rendering a full stroke every ~100 ms
@@ -323,12 +323,12 @@ preview_irrelevant_scrub: boolean,
  * Conditional visibility: the port is only shown in the UI when the
  * value of the named param is one of the listed integer values. The
  * param is referenced by its registration name (e.g. `"algorithm"`)
- * and is expected to be an `Int`/`Enum` param - those are the only
+ * and is expected to be an `Int`/`Enum` param, since those are the only
  * types where dispatch on a discrete value makes sense.
  *
  * When `None` (the default), the port is always visible. When set,
  * the frontend hides the port row whenever the named param's current
- * value is outside the allowed list. This is purely a UI affordance -
+ * value is outside the allowed list. This is purely a UI affordance:
  * the engine still accepts and reads the port's value normally; it
  * just stops showing the artist a control they wouldn't act on.
  * Used by the Shape node to hide algorithm-specific knobs (Perlin's
@@ -341,7 +341,7 @@ visible_when: [string, Array<number>] | null,
  * slot-read time from source range to dest range (affine transform).
  * When either side is `None`, the value passes through raw.
  *
- * Distinct from `min`/`max`, which are slider/UI hints - `with_range`
+ * Distinct from `min`/`max`, which are slider/UI hints; `with_range`
  * stays "UI hint only, not enforced", and `with_natural_range` is the
  * separate, explicit opt-in for wire-boundary range mapping. Most
  * ports declare both with the same numbers; the two diverge for
@@ -355,7 +355,7 @@ natural_range: [number, number] | null,
  *
  * By default `crate::brush::reset_exposed_scrubs` resets every
  * exposed input back to its registration default before rendering
- * the dab thumbnail - the icon represents brush shape/texture, not
+ * the dab thumbnail: the icon represents brush shape/texture, not
  * the artist's working size/opacity/flow knobs. That policy is wrong
  * for orientation knobs (rotation): a calligraphy nib at
  * 45° *is* a different-looking brush, and the icon should reflect
@@ -367,8 +367,8 @@ natural_range: [number, number] | null,
  */
 persist_in_thumbnail: boolean, 
 /**
- * This output port emits a *spatial, per-fragment image* - a coverage
- * mask or colour field that varies across the dab - so a node carrying it
+ * This output port emits a *spatial, per-fragment image* (a coverage
+ * mask or colour field that varies across the dab), so a node carrying it
  * is worth a preview thumbnail (`circle.mask`, `image.color`,
  * `noise.color`, `stamp.dab`). Declared per port rather than inferred
  * from `wire_type`, because wire type can't tell a spatial field from a
@@ -386,7 +386,7 @@ preview_image: boolean,
  * on `dir == Input`; ignored on outputs (which are sources anyway).
  *
  * The editor shows the source handle only while the input is not
- * itself wire-driven - a driven port's value is the driver's, so it
+ * itself wire-driven: a driven port's value is the driver's, so it
  * should be tapped there instead. Consumers that resolve "which port a
  * wire leaves from" must ask [`PortDef::is_source`], never
  * `dir == Output`, or a settable-source is treated as a second-class
@@ -412,7 +412,7 @@ export type NodeRegistration = {
  */
 type_id: string, 
 /**
- * UI category for the add-node palette - describes what the node *does*,
+ * UI category for the add-node palette: describes what the node *does*,
  * not how it executes. Current values: "input", "math", "modulate",
  * "color", "shape", "texture", "output". Nothing filters on it; every
  * registered node appears in the palette and in the catalog.
@@ -423,7 +423,7 @@ category: string,
  */
 display_name: string, 
 /**
- * Short, single-sentence description of what this node does - shown as
+ * Short, single-sentence description of what this node does: shown as
  * the add-node menu tooltip. Should read as a noun-phrase or imperative
  * fragment in painter vocabulary (never engine-internal terms like
  * "scalar" or "fragment shader"); per-port detail goes on the ports
@@ -431,7 +431,7 @@ display_name: string,
  */
 description: string, 
 /**
- * Port definitions for this node type - the node's single, unified
+ * Port definitions for this node type: the node's single, unified
  * input/output list. Every input carries its own authored value and
  * widget metadata on the [`PortDef`]; there is no separate parameter
  * system.
@@ -444,7 +444,7 @@ is_gpu: boolean,
 /**
  * True for output terminals whose upstream graph fuses into a
  * compiled WGSL fragment shader. The dispatch walk in the runner
- * skips every upstream GPU node when one of these is present -
+ * skips every upstream GPU node when one of these is present:
  * their contribution lives inside the terminal's compiled shader,
  * only the terminal itself runs to queue dabs and flush.
  */
@@ -458,7 +458,7 @@ is_terminal: boolean,
 supports_erase: boolean, 
 /**
  * How a preview of any brush containing this node must be staged. Set by
- * nodes whose output depends on existing canvas content - over a flat
+ * nodes whose output depends on existing canvas content: over a flat
  * preview background they render blank, so the stroke gets a field to
  * transport and the dab slot gets a glyph. `None` for a node that makes
  * its own marks, which is every node that does not sample the canvas.
@@ -475,6 +475,8 @@ export type BrushThumbnailReq = { name: string, };
 
 export type BrushUploadImageReq = { resource_name: string, width: number, height: number, };
 
+export type CanConvertLayerToSmartObjectReq = { node_id: number, };
+
 export type CanFlattenNodeReq = { node_id: number, };
 
 export type CanMergeDownReq = { source_id: number, };
@@ -482,6 +484,35 @@ export type CanMergeDownReq = { source_id: number, };
 export type CanvasDimensionsResp = { width: number, height: number, };
 
 export type CanvasRectResp = { origin_x: number, origin_y: number, width: number, height: number, };
+
+export type ParamInfo = { kind: string, name: string, 
+/**
+ * Display label. `None` → the UI title-cases `name`.
+ */
+label: string | null, description: string | null, 
+/**
+ * How to render this parameter's editor. One closed set, which both
+ * `ParamKind` and the settings schema's `WidgetHint` map into:
+ * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
+ */
+widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
+/**
+ * Enum: `["Label1", "Label2", ...]`.
+ * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
+ */
+options: JsonValue | null, display: ParamDisplay, };
+
+export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
+/**
+ * The unit suffix alone, for a column header. Empty for unitless values.
+ */
+unit: string, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
+export type CaptureKind = "camera" | "display" | "stream";
+
+export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
 
 export type CatalogEntry = { type: string, displayName: string, 
 /**
@@ -499,7 +530,7 @@ category: string | null,
 hotkeyAction: string | null, params: Array<ParamInfo>, 
 /**
  * Whether this variant declares a
- * [`PreviewAnim`](crate::gpu::preview::PreviewAnim) - the one fact behind
+ * [`PreviewAnim`](crate::gpu::preview::PreviewAnim), the one fact behind
  * "a rendered preview of it exists". False for the registries whose entries
  * are affordances rather than images.
  *
@@ -519,35 +550,6 @@ supportsPreview: boolean,
  */
 source: VoidSource | null, };
 
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
-export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
-/**
- * The unit suffix alone, for a column header. Empty for unitless values.
- */
-unit: string, };
-
-export type ParamInfo = { kind: string, name: string, 
-/**
- * Display label. `None` → the UI title-cases `name`.
- */
-label: string | null, description: string | null, 
-/**
- * How to render this parameter's editor. One closed set, which both
- * `ParamKind` and the settings schema's `WidgetHint` map into:
- * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
- */
-widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
-/**
- * Enum: `["Label1", "Label2", ...]`.
- * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
- */
-options: JsonValue | null, display: ParamDisplay, };
-
-export type CaptureKind = "camera" | "display" | "stream";
-
-export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
-
 export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
 /**
  * Presentation order, for catalogs that declare one. Registry catalogs do
@@ -558,6 +560,8 @@ order: number | null, entries: Array<CatalogEntry>, };
 export type ClearSelectionContentsReq = { id: number, };
 
 export type CommitFilterPreviewReq = { node_id: number, filter_type: string, params: JsonValue, };
+
+export type ConvertLayerToSmartObjectReq = { node_id: number, };
 
 export type CopyReq = { id: number, };
 
@@ -603,9 +607,20 @@ export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 
 export type LayerTransformCapabilityReq = { id: number, };
 
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * Whether this modifier participates in transforms with its host.
+ */
+linkedToHost: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`]: a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
+
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
- * Effective editability - `false` when this node *or any ancestor*
+ * Effective editability: `false` when this node *or any ancestor*
  * carries `locked = true`. Mirrors `Document::is_node_editable`;
  * the UI consumes this directly to grey out controls so the
  * inheritance rule lives in one place (the document predicate)
@@ -613,12 +628,19 @@ export type LayerInfo = { "type": "raster", id: number, name: string, visible: b
  */
 editable: boolean, 
 /**
- * Whether paint ops have somewhere to land on this node - mirrors
+ * Whether paint ops have somewhere to land on this node, mirroring
  * `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
  * generated (void, filter, vector) and for groups; the panel reads it
  * to offer "Rasterize" instead of branching on `type`.
  */
-paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, 
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
+/**
+ * Whether this row offers "Convert to Smart Object"; mirrors
+ * `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+ * answers so the rule (owns its pixels, editable, no mask) lives with
+ * the operation instead of being restated by the panel.
+ */
+canBecomeSmartObject: boolean, icon: string, kindName: string, opacity: number, 
 /**
  * Stable `type_id` from the blend-mode registry (snake_case, e.g.
  * `"normal"`, `"color_burn"`). Resolve to a display label via the
@@ -634,12 +656,19 @@ modifiers: Array<ModifierInfo>,
  */
 bounds: { origin: { x: number, y: number }, width: number, height: number }, } | { "type": "void", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, 
 /**
- * Whether paint ops have somewhere to land on this node - mirrors
+ * Whether paint ops have somewhere to land on this node, mirroring
  * `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
  * generated (void, filter, vector) and for groups; the panel reads it
  * to offer "Rasterize" instead of branching on `type`.
  */
 paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
+/**
+ * Whether this row offers "Convert to Smart Object"; mirrors
+ * `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+ * answers so the rule (owns its pixels, editable, no mask) lives with
+ * the operation instead of being restated by the panel.
+ */
+canBecomeSmartObject: boolean, 
 /**
  * Iconify icon for this void kind (e.g. `"tabler:galaxy"`), resolved
  * per-subtype from the void's registration. The layer panel renders
@@ -647,7 +676,7 @@ paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: bool
  */
 icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, 
 /**
- * Stable `type_id` from the void registry - UI resolves to a
+ * Stable `type_id` from the void registry; UI resolves to a
  * display label via `void_types()`.
  */
 voidType: string, 
@@ -657,14 +686,21 @@ voidType: string,
  */
 params: Array<ParamInfo>, } | { "type": "filter", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, 
 /**
- * Whether paint ops have somewhere to land on this node - mirrors
+ * Whether paint ops have somewhere to land on this node, mirroring
  * `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
  * generated (void, filter, vector) and for groups; the panel reads it
  * to offer "Rasterize" instead of branching on `type`.
  */
-paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, 
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
 /**
- * Stable filter `type_id` (e.g. `"invert"`) - UI resolves to a
+ * Whether this row offers "Convert to Smart Object"; mirrors
+ * `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+ * answers so the rule (owns its pixels, editable, no mask) lives with
+ * the operation instead of being restated by the panel.
+ */
+canBecomeSmartObject: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, 
+/**
+ * Stable filter `type_id` (e.g. `"invert"`); UI resolves to a
  * display label via `filter_types()`.
  */
 pipeline: string, 
@@ -676,36 +712,39 @@ pipeline: string,
  */
 params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, 
 /**
- * Whether paint ops have somewhere to land on this node - mirrors
+ * Whether paint ops have somewhere to land on this node, mirroring
  * `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
  * generated (void, filter, vector) and for groups; the panel reads it
  * to offer "Rasterize" instead of branching on `type`.
  */
-paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, 
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
 /**
- * Whether paint ops have somewhere to land on this node - mirrors
+ * Whether this row offers "Convert to Smart Object"; mirrors
+ * `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+ * answers so the rule (owns its pixels, editable, no mask) lives with
+ * the operation instead of being restated by the panel.
+ */
+canBecomeSmartObject: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, 
+/**
+ * Whether paint ops have somewhere to land on this node, mirroring
  * `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
  * generated (void, filter, vector) and for groups; the panel reads it
  * to offer "Rasterize" instead of branching on `type`.
  */
-paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
-
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
 /**
- * Whether this modifier participates in transforms with its host.
+ * Whether this row offers "Convert to Smart Object"; mirrors
+ * `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+ * answers so the rule (owns its pixels, editable, no mask) lives with
+ * the operation instead of being restated by the panel.
  */
-linkedToHost: boolean, 
-/**
- * See [`LayerInfo::Raster::editable`] - a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
+canBecomeSmartObject: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
 
 export type LibrarySnapshot = { brushes: Array<BrushInfo>, packs: Array<BrushPackInfo>, };
 
 export type PackPalette = { 
 /**
- * The pack's own hue at full vividness - the color you would name it by.
+ * The pack's own hue at full vividness: the color you would name it by.
  */
 chroma: string, 
 /**
@@ -714,7 +753,7 @@ chroma: string,
  */
 refraction: string, 
 /**
- * The body the glass sits on - light or dark, the pack's own choice, low in
+ * The body the glass sits on: light or dark, the pack's own choice, low in
  * saturation. Carries value, not color. Alpha here lets the background
  * behind it show through.
  */
@@ -722,13 +761,13 @@ surface: string, };
 
 export type BrushPackInfo = { id: string, name: string, description: string, icon: string, palette: PackPalette, 
 /**
- * Member brush ids, in the pack's order. The authority on membership -
+ * Member brush ids, in the pack's order. The authority on membership:
  * nothing on [`BrushInfo`] repeats it.
  */
 members: Array<string>, 
 /**
  * What the painter may change, so the UI can grey out affordances it
- * would otherwise offer. A hint, not the authority - the engine rejects a
+ * would otherwise offer. A hint, not the authority: the engine rejects a
  * forbidden edit regardless of what the UI believed.
  */
 can_edit_members: boolean, can_edit_identity: boolean, };
@@ -894,7 +933,7 @@ export type StrokeToReq = { op: StrokeOp, };
 
 export type StrokeOp = { "op": "flood_fill", x: number, y: number, r: number, g: number, b: number, a: number, tolerance: number, } | { "op": "linear_gradient", x0: number, y0: number, x1: number, y1: number, r0: number, g0: number, b0: number, a0: number, r1: number, g1: number, b1: number, a1: number, } | { "op": "brush_stroke", x: number, y: number, pressure: number, x_tilt: number, y_tilt: number, rotation: number, tangential_pressure: number, time_ms: number, 
 /**
- * Foreground color as raw sRGB RGBA floats (0-1), as picked - the
+ * Foreground color as raw sRGB RGBA floats (0-1), as picked; the
  * compositor is display-referred, so no gamma conversion is applied.
  */
 cr: number, cg: number, cb: number, ca: number, };
@@ -976,6 +1015,8 @@ export type RequestKind =
     | 'brush_thumbnail'
     | 'brush_topology_version'
     | 'brush_upload_image'
+    | 'can_convert_floating_to_smart_object'
+    | 'can_convert_layer_to_smart_object'
     | 'can_flatten'
     | 'can_flatten_node'
     | 'can_merge_down'
@@ -994,6 +1035,8 @@ export type RequestKind =
     | 'clone_source_anchored'
     | 'commit_filter_preview'
     | 'commit_floating'
+    | 'convert_floating_to_smart_object'
+    | 'convert_layer_to_smart_object'
     | 'copy'
     | 'copy_layer_rich'
     | 'crop_to_selection'
@@ -1177,6 +1220,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'brush_thumbnail',
     'brush_topology_version',
     'brush_upload_image',
+    'can_convert_floating_to_smart_object',
+    'can_convert_layer_to_smart_object',
     'can_flatten',
     'can_flatten_node',
     'can_merge_down',
@@ -1195,6 +1240,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'clone_source_anchored',
     'commit_filter_preview',
     'commit_floating',
+    'convert_floating_to_smart_object',
+    'convert_layer_to_smart_object',
     'copy',
     'copy_layer_rich',
     'crop_to_selection',
@@ -1386,6 +1433,8 @@ export interface EngineApi {
     brushThumbnail(req: BrushThumbnailReq): Promise<{ bytes: Uint8Array }>;
     brushTopologyVersion(): Promise<{ value: number }>;
     brushUploadImage(req: BrushUploadImageReq, bytes: Uint8Array): Promise<void>;
+    canConvertFloatingToSmartObject(): Promise<boolean>;
+    canConvertLayerToSmartObject(req: CanConvertLayerToSmartObjectReq): Promise<boolean>;
     canFlatten(): Promise<boolean>;
     canFlattenNode(req: CanFlattenNodeReq): Promise<boolean>;
     canMergeDown(req: CanMergeDownReq): Promise<boolean>;
@@ -1404,6 +1453,8 @@ export interface EngineApi {
     cloneSourceAnchored(): Promise<boolean>;
     commitFilterPreview(req: CommitFilterPreviewReq): Promise<boolean>;
     commitFloating(): void;
+    convertFloatingToSmartObject(): Promise<number>;
+    convertLayerToSmartObject(req: ConvertLayerToSmartObjectReq): Promise<number>;
     copy(req: CopyReq): Promise<ClipboardExport | null>;
     copyLayerRich(req: CopyLayerRichReq): void;
     cropToSelection(): void;
@@ -1589,6 +1640,8 @@ export function makeApi(t: Transport): EngineApi {
         brushThumbnail: (req) => t.request('brush_thumbnail', req),
         brushTopologyVersion: () => t.request('brush_topology_version'),
         brushUploadImage: (req, bytes) => t.request('brush_upload_image', req, bytes),
+        canConvertFloatingToSmartObject: () => t.request('can_convert_floating_to_smart_object'),
+        canConvertLayerToSmartObject: (req) => t.request('can_convert_layer_to_smart_object', req),
         canFlatten: () => t.request('can_flatten'),
         canFlattenNode: (req) => t.request('can_flatten_node', req),
         canMergeDown: (req) => t.request('can_merge_down', req),
@@ -1607,6 +1660,8 @@ export function makeApi(t: Transport): EngineApi {
         cloneSourceAnchored: () => t.request('clone_source_anchored'),
         commitFilterPreview: (req) => t.request('commit_filter_preview', req),
         commitFloating: () => t.postFF('commit_floating'),
+        convertFloatingToSmartObject: () => t.request('convert_floating_to_smart_object'),
+        convertLayerToSmartObject: (req) => t.request('convert_layer_to_smart_object', req),
         copy: (req) => t.request('copy', req),
         copyLayerRich: (req) => t.postFF('copy_layer_rich', req),
         cropToSelection: () => t.postFF('crop_to_selection'),

@@ -245,6 +245,8 @@ Every system must be implemented properly. No hacks, no hardcoding, no shortcuts
 
 **Comments describe the code, not the plan that produced it.** Write comments about what the code does and why it's there as it stands, never about the process that got it there. Do not reference ephemeral planning artifacts: step or phase numbers, plan-list items, "TODO from the plan", "as decided in step 3", or before/after framing ("new", "now", "previously", "used to") that only makes sense relative to a change in flight. A comment that would be meaningless to someone reading the file fresh (with no knowledge of the task that introduced it) is in the wrong register; rewrite it to stand on its own, or delete it.
 
+If you're implementing one of the unchecked features in the README roadmap, or one that definitely deserves to be there, keep the roadmap up to date.
+
 ## No Migrations / No Backwards Compatibility (pre-release)
 
 Darkly is in pre-release / alpha. Until the first public release, breaking on-disk and on-the-wire formats is fine: do not write migrations, format-version upgrade paths, or legacy compatibility shims. Make the breaking change directly and update every producer and consumer in the same pass; existing artist data can be invalidated.

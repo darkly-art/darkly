@@ -52,7 +52,7 @@ Veils are nondestructive. You can paint as usual, behind the veil, and if you di
 <!-- darkly:catalog-table catalog=veils -->
 |  | Name | What it does |
 | :-: | --- | --- |
-| <img src="docs/images/previews/veils/black_and_white.jpg" width="200" alt="Black and White"> | **Black and White** | Desaturate to black and white - six grayscale formulas or custom channel weights, with an optional color tint. |
+| <img src="docs/images/previews/veils/black_and_white.jpg" width="200" alt="Black and White"> | **Black and White** | Desaturate to black and white: six grayscale formulas or custom channel weights, with an optional color tint. |
 | <img src="docs/images/previews/veils/chromatic_aberration.jpg" width="200" alt="Chromatic Aberration"> | **Chromatic Aberration** | Split the color channels apart along their hue axes, like a misaligned lens. |
 | <img src="docs/images/previews/veils/frozen.jpg" width="200" alt="Frozen"> | **Frozen** | Frost the view behind a pane of refracting ice. |
 | <img src="docs/images/previews/veils/grain.jpg" width="200" alt="Grain"> | **Grain** | Film grain noise over the view, optionally animated. |
@@ -60,7 +60,7 @@ Veils are nondestructive. You can paint as usual, behind the veil, and if you di
 | <img src="docs/images/previews/veils/painting.jpg" width="200" alt="Painting"> | **Painting** | Smooth the view into painterly, brush-like daubs. |
 | <img src="docs/images/previews/veils/pixelate.jpg" width="200" alt="Pixelate"> | **Pixelate** | Downsample the view into a blocky pixel mosaic. |
 | <img src="docs/images/previews/veils/rainy_glass.jpg" width="200" alt="Rainy Glass"> | **Rainy Glass** | Raindrops run down a pane of glass over the view. |
-| <img src="docs/images/previews/veils/vhs.jpg" width="200" alt="VHS"> | **VHS** | Analog VHS tape artifacts - scanlines, noise, and color bleed. |
+| <img src="docs/images/previews/veils/vhs.jpg" width="200" alt="VHS"> | **VHS** | Analog VHS tape artifacts: scanlines, noise, and color bleed. |
 | <img src="docs/images/previews/veils/watercolor.jpg" width="200" alt="Watercolor"> | **Watercolor** | Bleed the view outward into soft watercolor washes. |
 <!-- /darkly:catalog-table -->
 
@@ -152,6 +152,7 @@ For a feature to count, it must be:
 - [x] Flip canvas H / V
 - [x] Rotate canvas 90° CW / CCW / 180°
 - [x] Flip layer / selection H / V
+- [x] Smart objects
 - [ ] Recent colors
 - [ ] Saved swatches / palettes
 - [ ] Palette popup

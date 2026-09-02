@@ -6,7 +6,7 @@ use darkly_macros::handlers;
 
 use super::DarklyEngine;
 use crate::layer::{Layer, LayerId, LayerNode};
-use crate::undo::{BakeLayersAction, BakeSourceSlot};
+use crate::undo::BakeSourceSlot;
 
 #[handlers]
 impl DarklyEngine {
@@ -61,44 +61,24 @@ impl DarklyEngine {
             result_id,
         );
 
-        // Snapshot tombstones for the detached sources BEFORE detaching.
-        let mut source_tombstones: Vec<LayerId> = Vec::new();
-        let mut sources: Vec<BakeSourceSlot> = Vec::new();
-        for (idx, &id) in top_level.iter().enumerate() {
-            if id == result_id {
-                continue;
-            }
-            source_tombstones.extend(self.collect_pixel_node_ids(id));
-            sources.push(BakeSourceSlot {
+        // Record each source's slot before anything detaches. Flatten takes
+        // every top-level node except the result, hidden ones included; they
+        // are discarded from the document but still tombstoned, so undo brings
+        // them back with their pixels.
+        let sources: Vec<BakeSourceSlot> = top_level
+            .iter()
+            .enumerate()
+            .filter(|(_, &id)| id != result_id)
+            .map(|(idx, &id)| BakeSourceSlot {
                 id,
                 parent: Some(root_id),
                 position: idx,
-            });
-        }
+            })
+            .collect();
 
-        // Detach every top-level non-result node. Textures stay alive as
-        // tombstones owned by the BakeLayersAction.
-        for slot in &sources {
-            self.doc.detach_for_undo(slot.id);
-        }
-
-        // Reposition result to root position 0 (bottom of stack, flatten
-        // makes the result the new "Background").
-        self.doc.detach_for_undo(result_id);
-        self.doc.reinsert_entity(result_id, Some(root_id), 0);
-
-        let result_parent = self.doc.parent_of(result_id);
-        let result_position = self.doc.position_in_parent(result_id).unwrap_or(0);
-
-        self.compositor.mark_dirty();
-        self.push_undo(Box::new(BakeLayersAction::new(
-            sources,
-            source_tombstones,
-            result_id,
-            result_parent,
-            result_position,
-            vec![result_id],
-        )));
+        // Root position 0 is the bottom of the stack: flatten makes the result
+        // the new "Background".
+        self.finish_bake(sources, result_id, Some(root_id), 0);
 
         Ok(result_id)
     }
@@ -231,32 +211,16 @@ impl DarklyEngine {
         // Restore real uniforms so undo brings the source back in a sane state.
         self.refresh_blend_uniforms(node_id);
 
-        // Collect tombstones before detaching: `detach_for_undo` removes
-        // the parent link find_node walks rely on for `Group::children`.
-        let source_tombstones = self.collect_pixel_node_ids(node_id);
-
-        self.doc.detach_for_undo(node_id);
-
-        // Reposition the result to take the source's slot.
-        self.doc.detach_for_undo(result_id);
-        self.doc.reinsert_entity(result_id, parent, position);
-
-        let result_parent = self.doc.parent_of(result_id);
-        let result_position = self.doc.position_in_parent(result_id).unwrap_or(0);
-
-        self.compositor.mark_dirty();
-        self.push_undo(Box::new(BakeLayersAction::new(
+        self.finish_bake(
             vec![BakeSourceSlot {
                 id: node_id,
                 parent,
                 position,
             }],
-            source_tombstones,
             result_id,
-            result_parent,
-            result_position,
-            vec![result_id],
-        )));
+            parent,
+            position,
+        );
 
         Ok(result_id)
     }

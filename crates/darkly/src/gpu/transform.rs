@@ -45,6 +45,20 @@ pub fn pack_inv_rows(m: &Mat3) -> [[f32; 4]; 3] {
 // FloatingContent: CPU-side data owned by the engine
 // ---------------------------------------------------------------------------
 
+/// Where a transform session's lifted content goes when the session ends.
+///
+/// A session always owes its source a hole: the lift took those pixels out.
+/// What differs is whether the transformed content is drawn back in on top of
+/// that hole (an ordinary destructive move) or leaves the layer entirely to
+/// become a smart object, in which case the hole is all the source gets.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LiftedContent {
+    /// Drawn back into the source, transformed.
+    ReturnedToSource,
+    /// Kept by the caller; nothing is drawn back.
+    TakenByCaller,
+}
+
 /// Type-owned source-clear shape for one interactive transform target.
 pub enum ClearShape {
     /// `setup_transform` did a full-rect clear (no-selection branch).
@@ -523,8 +537,12 @@ impl TransformPass {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
+            // COPY_SRC so the trimmed, premultiplied source can be handed to
+            // something other than the commit shader: converting a float or a
+            // layer to a smart object blits straight out of it.
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
@@ -716,8 +734,12 @@ impl TransformPass {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: target_format,
+            // COPY_SRC so the trimmed, premultiplied source can be handed to
+            // something other than the commit shader: converting a float or a
+            // layer to a smart object blits straight out of it.
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });

@@ -2293,36 +2293,138 @@ impl Compositor {
         proc.void
             .set_source_pixels(device, queue, &mut proc.cache, width, height, bytes);
 
-        if let Some(tex) = proc.cache.aux_textures.first() {
-            let levels = tex.mip_level_count();
-            if levels > 1 {
-                let tex = tex.clone();
-                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("void-source-mips"),
-                });
-                // Void sources are stored premultiplied, so texels average
-                // as-is: no premultiply/un-premultiply round trip.
-                self.rescale_pass.generate_mip_chain(
-                    device,
-                    queue,
-                    &mut encoder,
-                    &tex,
-                    levels,
-                    true,
-                );
-                queue.submit([encoder.finish()]);
-            }
-        }
+        self.regenerate_void_mips(device, queue, layer_id);
         self.mark_dirty();
     }
 
-    /// Copy one void's source image onto another's, mip chain included.
+    /// Rebuild `layer_id`'s void source mip chain from its level 0. No-op when
+    /// the source has no chain (a streaming void allocates a single level).
+    ///
+    /// Every writer of a void source ends here, so minification quality does
+    /// not depend on which route the texels arrived by.
+    fn regenerate_void_mips(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layer_id: LayerId,
+    ) {
+        let Some(tex) = self
+            .procedural_content(layer_id)
+            .and_then(|p| p.cache.aux_textures.first())
+            .cloned()
+        else {
+            return;
+        };
+        let levels = tex.mip_level_count();
+        if levels <= 1 {
+            return;
+        }
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("void-source-mips"),
+        });
+        // Void sources are stored premultiplied, so texels average as-is: no
+        // premultiply/un-premultiply round trip.
+        self.rescale_pass
+            .generate_mip_chain(device, queue, &mut encoder, &tex, levels, true);
+        queue.submit([encoder.finish()]);
+    }
+
+    /// Install `src` as `layer_id`'s void source by GPU copy, reading a
+    /// `width × height` region at `src_origin`.
+    ///
+    /// The ingress for texels that are already on the GPU (a trimmed layer
+    /// region, another void's source), so they never make a round trip through
+    /// the CPU to get here. `src` must already be in the aux texture's
+    /// **premultiplied** convention and copyable (`COPY_SRC`).
+    ///
+    /// Only level 0 is copied; the chain is regenerated from it.
+    pub fn set_void_source_from_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layer_id: LayerId,
+        src: &wgpu::Texture,
+        src_origin: (u32, u32),
+        width: u32,
+        height: u32,
+    ) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        let Some(proc) = self.procedural_content_mut(layer_id) else {
+            return;
+        };
+        proc.void
+            .allocate_source(device, queue, &mut proc.cache, width, height);
+        let Some(dst) = proc.cache.aux_textures.first().cloned() else {
+            return;
+        };
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("void-source-from-texture"),
+        });
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: src,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: src_origin.0,
+                    y: src_origin.1,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &dst,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit([encoder.finish()]);
+
+        self.regenerate_void_mips(device, queue, layer_id);
+        self.mark_dirty();
+    }
+
+    /// The active floating session's source texture, if any.
+    ///
+    /// Trimmed to the content, at native resolution, in the **premultiplied**
+    /// convention, which is exactly what a void source wants, so a caller can
+    /// hand it straight to [`Self::set_void_source_from_texture`]. Cloned
+    /// because it is handed back across a `&mut self` call; a `wgpu::Texture`
+    /// is a refcounted handle, so this is cheap.
+    pub fn floating_source_texture(&self) -> Option<wgpu::Texture> {
+        self.transform_pass
+            .paste
+            .as_ref()
+            .map(|state| state.source_texture.clone())
+    }
+
+    /// The format of the active floating session's *target*.
+    ///
+    /// The honest answer to "is this a mask float": the paste path allocates an
+    /// RGBA8 source even for a mask target, so the source texture's format does
+    /// not distinguish the two and the target's does.
+    pub fn floating_target_format(&self) -> Option<wgpu::TextureFormat> {
+        self.transform_pass.paste.as_ref().map(|s| s.target_format)
+    }
+
+    /// Copy one void's source image onto another's.
     ///
     /// Duplication needs this because an externally-sourced image is not
     /// reproducible from the layer's params; the copy would otherwise render
-    /// blank. Both voids must already be realized; the destination's source is
-    /// reallocated to match the origin's so the copy is a straight
-    /// same-extent blit.
+    /// blank. Both voids must already be realized.
+    ///
+    /// Level 0 is copied and the destination's chain regenerated from it,
+    /// rather than copying every level across. The pyramid is deterministic, so
+    /// the result matches; going through the shared ingress is what keeps this
+    /// from being a third hand-written way to fill a void source.
     pub fn copy_void_source(
         &mut self,
         device: &wgpu::Device,
@@ -2330,6 +2432,9 @@ impl Compositor {
         src_id: LayerId,
         dst_id: LayerId,
     ) {
+        // Cloned out before the `&mut self` ingress call below, because the source
+        // texture is borrowed from the same map the destination is written
+        // through. `wgpu::Texture` is a refcounted handle, so this is cheap.
         let Some(src) = self
             .procedural_content(src_id)
             .and_then(|p| p.cache.aux_textures.first())
@@ -2337,68 +2442,13 @@ impl Compositor {
         else {
             return;
         };
-        let Some((logical_w, logical_h)) = self
+        let Some((width, height)) = self
             .procedural_content(src_id)
             .and_then(|p| p.void.persistent_frame_size())
         else {
             return;
         };
-
-        // Size the destination through the void's own installer so it applies
-        // the same allocation and mip policy, then overwrite every level with
-        // the origin's texels. The zeroed upload is a formality the blit
-        // immediately replaces, but it is what makes the destination's
-        // allocation match.
-        let zeroed = vec![0u8; (logical_w as usize) * (logical_h as usize) * 4];
-        if let Some(dst) = self.procedural_content_mut(dst_id) {
-            dst.void.set_source_pixels(
-                device,
-                queue,
-                &mut dst.cache,
-                logical_w,
-                logical_h,
-                &zeroed,
-            );
-        }
-
-        let Some(dst) = self
-            .procedural_content(dst_id)
-            .and_then(|p| p.cache.aux_textures.first())
-            .cloned()
-        else {
-            return;
-        };
-        if dst.size() != src.size() || dst.mip_level_count() != src.mip_level_count() {
-            return;
-        }
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("copy-void-source"),
-        });
-        for level in 0..src.mip_level_count() {
-            let size = src.size();
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &src,
-                    mip_level: level,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &dst,
-                    mip_level: level,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: (size.width >> level).max(1),
-                    height: (size.height >> level).max(1),
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
-        queue.submit([encoder.finish()]);
-        self.mark_dirty();
+        self.set_void_source_from_texture(device, queue, dst_id, &src, (0, 0), width, height);
     }
 
     /// Replace a node's entire texture contents with `bytes`, then mark

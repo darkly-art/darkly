@@ -10,7 +10,7 @@ use darkly_macros::handlers;
 
 use super::DarklyEngine;
 use crate::layer::{Layer, LayerId, LayerNode};
-use crate::undo::{BakeLayersAction, BakeSourceSlot};
+use crate::undo::BakeSourceSlot;
 
 #[handlers]
 impl DarklyEngine {
@@ -57,13 +57,21 @@ impl DarklyEngine {
         // Snapshot target's properties to inherit on the result (Photoshop
         // convention: the lower layer keeps its identity; the upper bakes
         // its blend into the pixels).
-        let (target_name, target_visible, target_locked, target_opacity, target_blend_mode) = {
+        //
+        // Opacity is deliberately NOT inherited. The bake composites every
+        // source through its own blend uniforms, so the target's opacity is
+        // already in the resulting pixels; copying it onto the result would
+        // apply it a second time at composite and halve a 50% layer to 25%.
+        // The blend *mode* is the opposite case and is inherited: composited
+        // first against a cleared accumulator, `mix(fg.rgb, Cs, bg.a)` reduces
+        // to `fg.rgb` for every mode, so the target's mode never lands in the
+        // pixels and has to be carried on the result to survive.
+        let (target_name, target_visible, target_locked, target_blend_mode) = {
             let t = self.doc.find_node(target_id).ok_or("Target node missing")?;
             (
                 t.common().name.clone(),
                 t.common().visible,
                 t.common().locked,
-                t.blend().opacity,
                 t.blend().blend_mode,
             )
         };
@@ -77,7 +85,6 @@ impl DarklyEngine {
             r.common.name = target_name;
             r.common.visible = target_visible;
             r.common.locked = target_locked;
-            r.blend.opacity = target_opacity;
             r.blend.blend_mode = target_blend_mode;
         }
         self.compositor.ensure_raster_layer(
@@ -98,55 +105,21 @@ impl DarklyEngine {
             result_id,
         );
 
-        // Collect tombstone ids BEFORE detaching: once detached, find_node
-        // returns None and we can't walk the subtree.
-        let mut source_tombstones = self.collect_pixel_node_ids(target_id);
-        source_tombstones.extend(self.collect_pixel_node_ids(source_id));
-
-        // Record the source/target slots so undo can put them back where
-        // they were. Positions are captured BEFORE detach.
-        let source_pos = self.doc.position_in_parent(source_id).unwrap_or(0);
-        let target_pos = self.doc.position_in_parent(target_id).unwrap_or(0);
+        // Slots are captured before anything detaches so undo restores both
+        // sources where they were.
         let sources = vec![
             BakeSourceSlot {
                 id: target_id,
                 parent,
-                position: target_pos,
+                position: self.doc.position_in_parent(target_id).unwrap_or(0),
             },
             BakeSourceSlot {
                 id: source_id,
                 parent,
-                position: source_pos,
+                position: self.doc.position_in_parent(source_id).unwrap_or(0),
             },
         ];
-
-        // Detach sources. Their textures stay alive in node_textures as
-        // tombstones owned by the BakeLayersAction.
-        self.doc.detach_for_undo(target_id);
-        self.doc.detach_for_undo(source_id);
-
-        // Move the result into target's original slot. `add_raster_layer`
-        // with anchor=target_id placed it above; now that target is detached
-        // we need to land at `target_pos_before` exactly.
-        let _ = target_pos_before;
-        // Reposition the result to the target's old position. Simplest:
-        // detach then re-insert.
-        self.doc.detach_for_undo(result_id);
-        self.doc
-            .reinsert_entity(result_id, parent, target_pos_before);
-
-        let result_parent = self.doc.parent_of(result_id);
-        let result_position = self.doc.position_in_parent(result_id).unwrap_or(0);
-
-        self.compositor.mark_dirty();
-        self.push_undo(Box::new(BakeLayersAction::new(
-            sources,
-            source_tombstones,
-            result_id,
-            result_parent,
-            result_position,
-            vec![result_id],
-        )));
+        self.finish_bake(sources, result_id, parent, target_pos_before);
 
         Ok(result_id)
     }
@@ -163,7 +136,8 @@ impl DarklyEngine {
 
     /// Bake every layer in `ids` (≥2, any parent) into one raster placed at
     /// the panel-topmost selected layer's slot. The result inherits the
-    /// topmost's name / blend mode / opacity / visibility; sources from
+    /// topmost's name / blend mode / visibility, but not its opacity, which
+    /// the bake has already applied to the pixels; sources from
     /// other parents are detached and tombstoned. Groups in the selection
     /// are flattened during the bake. Returns the id of the result.
     ///
@@ -201,7 +175,10 @@ impl DarklyEngine {
         let topmost_id = *unique.last().expect("len >= 2");
 
         // Snapshot the topmost's properties + slot now, before any detach.
-        let (top_name, top_visible, top_locked, top_opacity, top_blend_mode) = {
+        // Opacity is deliberately not among them; see `merge_down`, which
+        // carries the full reasoning: every source is baked through its own
+        // blend uniforms, so its opacity is already in the result's pixels.
+        let (top_name, top_visible, top_locked, top_blend_mode) = {
             let t = self
                 .doc
                 .find_node(topmost_id)
@@ -210,7 +187,6 @@ impl DarklyEngine {
                 t.common().name.clone(),
                 t.common().visible,
                 t.common().locked,
-                t.blend().opacity,
                 t.blend().blend_mode,
             )
         };
@@ -241,7 +217,6 @@ impl DarklyEngine {
             r.common.name = top_name;
             r.common.visible = top_visible;
             r.common.locked = top_locked;
-            r.blend.opacity = top_opacity;
             r.blend.blend_mode = top_blend_mode;
         }
         self.compositor.ensure_raster_layer(
@@ -262,37 +237,7 @@ impl DarklyEngine {
             result_id,
         );
 
-        // Collect tombstones from every source BEFORE detach so the walk
-        // can reach the subtrees.
-        let mut source_tombstones: Vec<LayerId> = Vec::new();
-        for &id in &unique {
-            source_tombstones.extend(self.collect_pixel_node_ids(id));
-        }
-
-        // Detach every source. Their textures stay alive in node_textures
-        // as tombstones owned by the BakeLayersAction.
-        for &id in &unique {
-            self.doc.detach_for_undo(id);
-        }
-
-        // Reposition the result at the topmost's original slot. Detach +
-        // reinsert is the simplest exact-slot landing.
-        self.doc.detach_for_undo(result_id);
-        self.doc
-            .reinsert_entity(result_id, topmost_parent, topmost_pos);
-
-        let result_parent = self.doc.parent_of(result_id);
-        let result_position = self.doc.position_in_parent(result_id).unwrap_or(0);
-
-        self.compositor.mark_dirty();
-        self.push_undo(Box::new(BakeLayersAction::new(
-            sources,
-            source_tombstones,
-            result_id,
-            result_parent,
-            result_position,
-            vec![result_id],
-        )));
+        self.finish_bake(sources, result_id, topmost_parent, topmost_pos);
 
         Ok(result_id)
     }

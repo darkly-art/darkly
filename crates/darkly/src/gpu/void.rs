@@ -337,6 +337,36 @@ pub trait Void: std::fmt::Debug {
         _bytes: &[u8],
     ) {
     }
+
+    /// Reallocate this void's source texture at `width × height` and rebuild
+    /// its bind group, without supplying any texels.
+    ///
+    /// The allocation half of [`Self::set_source_pixels`], split out so a
+    /// caller that already holds the pixels **on the GPU** can size the
+    /// destination and then blit into it, instead of routing a full-size buffer
+    /// through the CPU just to make the void allocate.
+    ///
+    /// The fresh texture is zero-initialised by wgpu, so the void reads as
+    /// fully transparent between this call and the blit that fills it. It
+    /// already reports `persistent_frame_size()` and a natural-size content
+    /// rect in that window, harmless for the synchronous allocate-then-blit
+    /// sequences that use it, but the reason this is not a public two-phase
+    /// API.
+    ///
+    /// Takes a `queue` because adopting a source changes what the sampling
+    /// uniform has to say: the void stops covering the canvas and starts
+    /// drawing at the source's own size. An implementation that resizes without
+    /// republishing that uniform leaves the layer rendering through the
+    /// placeholder's extent.
+    fn allocate_source(
+        &mut self,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        _cache: &mut EffectCache,
+        _width: u32,
+        _height: u32,
+    ) {
+    }
 }
 
 /// How the frontend acquires a void's per-frame external image. Carried on
@@ -564,6 +594,13 @@ impl VoidRegistry {
             .get(type_id)
             .map(|e| e.reg.supports_live_transform)
             .unwrap_or(false)
+    }
+
+    /// Where a registered kind's pixels come from, or `None` for an unknown
+    /// type id. Lets consumers ask about provenance without reaching for the
+    /// whole registration.
+    pub fn source(&self, type_id: &str) -> Option<VoidSource> {
+        self.entries.get(type_id).map(|e| e.reg.source)
     }
 
     pub fn has(&self, type_id: &str) -> bool {

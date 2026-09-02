@@ -741,15 +741,38 @@ impl DarklyEngine {
         anchor: Option<LayerId>,
         transform_override: Option<crate::transform::Transform>,
     ) -> Option<LayerId> {
+        // Creation, naming and the seeded transform are `create_void_layer`'s;
+        // this adds the undo entry that makes it a standalone user action.
+        let id = self.create_void_layer(void_type, params, anchor, transform_override)?;
+
+        let parent = self.doc.parent_of(id);
+        let pos = self.doc.position_in_parent(id).unwrap_or(0);
+        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
+
+        Some(id)
+    }
+
+    /// Add a void layer without pushing an undo entry, returning its id.
+    ///
+    /// The body of [`Self::add_void_layer_with_transform`], which is this plus
+    /// one `EntityAddAction`. Split out for callers that fold the creation into
+    /// a *larger* undo step: converting a layer to a smart object consumes the
+    /// source and creates the void in one action, and a nested entry would let
+    /// undo tear the two apart.
+    ///
+    /// Every caller owns an undo entry that covers this. There is no path that
+    /// legitimately creates a void with no way back.
+    pub(crate) fn create_void_layer(
+        &mut self,
+        void_type: &str,
+        params: Vec<crate::gpu::params::ParamValue>,
+        anchor: Option<LayerId>,
+        transform_override: Option<crate::transform::Transform>,
+    ) -> Option<LayerId> {
         if !self.compositor.void_registry().has(void_type) {
             return None;
         }
-        // Default-name the layer after the void's display label so the
-        // panel reads "Noise 1" / "Noise 2" rather than a generic "Void N".
         let display_label = self.compositor.void_registry().display_name(void_type);
-        // Seed the kind's initial gizmo transform (camera = selfie flip,
-        // everything else = identity) atomically with creation, so it's one
-        // undo step and round-trips through save/load like any later edit.
         let canvas = self.doc.canvas_rect();
         let initial_transform = transform_override.unwrap_or_else(|| {
             self.compositor.void_registry().default_transform(
@@ -765,9 +788,6 @@ impl DarklyEngine {
             initial_transform,
             anchor,
         );
-        // Build the trait object here (engine), then hand it to the
-        // compositor; the compositor stops caring about `(type_id,
-        // params)` as a pair, owning only the constructed `Box<dyn Void>`.
         let format = self.compositor.canvas_content_format();
         let void = self.compositor.void_registry_mut().create_void(
             void_type,
@@ -777,19 +797,9 @@ impl DarklyEngine {
         );
         self.compositor
             .ensure_void_layer(&self.gpu.device, &self.gpu.queue, id, void);
-        // A fresh void instance starts at identity, so push the seeded
-        // transform down now rather than waiting for the next frame's
-        // doc→compositor sync. Otherwise the layer renders untransformed for
-        // one frame, and never gets corrected at all on paths that composite
-        // without going through `render()`.
         self.compositor
             .update_void_layer_transform(&self.gpu.queue, id, &initial_transform);
         self.compositor.mark_dirty();
-
-        let parent = self.doc.parent_of(id);
-        let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
-
         Some(id)
     }
 

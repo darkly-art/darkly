@@ -67,6 +67,11 @@ pub enum LayerInfo {
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
+        /// Whether this row offers "Convert to Smart Object"; mirrors
+        /// `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+        /// answers so the rule (owns its pixels, editable, no mask) lives with
+        /// the operation instead of being restated by the panel.
+        can_become_smart_object: bool,
         icon: &'static str,
         kind_name: &'static str,
         opacity: f32,
@@ -96,6 +101,11 @@ pub enum LayerInfo {
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
+        /// Whether this row offers "Convert to Smart Object"; mirrors
+        /// `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+        /// answers so the rule (owns its pixels, editable, no mask) lives with
+        /// the operation instead of being restated by the panel.
+        can_become_smart_object: bool,
         /// Iconify icon for this void kind (e.g. `"tabler:galaxy"`), resolved
         /// per-subtype from the void's registration. The layer panel renders
         /// it as the void layer's thumbnail.
@@ -128,6 +138,11 @@ pub enum LayerInfo {
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
+        /// Whether this row offers "Convert to Smart Object"; mirrors
+        /// `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+        /// answers so the rule (owns its pixels, editable, no mask) lives with
+        /// the operation instead of being restated by the panel.
+        can_become_smart_object: bool,
         icon: &'static str,
         kind_name: &'static str,
         opacity: f32,
@@ -159,6 +174,11 @@ pub enum LayerInfo {
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
+        /// Whether this row offers "Convert to Smart Object"; mirrors
+        /// `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+        /// answers so the rule (owns its pixels, editable, no mask) lives with
+        /// the operation instead of being restated by the panel.
+        can_become_smart_object: bool,
         icon: &'static str,
         kind_name: &'static str,
         opacity: f32,
@@ -180,6 +200,11 @@ pub enum LayerInfo {
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
+        /// Whether this row offers "Convert to Smart Object"; mirrors
+        /// `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+        /// answers so the rule (owns its pixels, editable, no mask) lives with
+        /// the operation instead of being restated by the panel.
+        can_become_smart_object: bool,
         icon: &'static str,
         kind_name: &'static str,
         collapsed: bool,
@@ -511,6 +536,16 @@ pub(crate) fn node_to_layer_info(
     let editable = doc.is_node_editable(node_id);
     let paintable = doc.pixel_buffer(node_id).is_some();
     let kind = node.kind();
+    // Most capability flags are per *kind*, but the thumbnail is a per-layer
+    // question: a void holding a supplied image shows the image, where its
+    // procedural and live siblings show a glyph. `Layer::has_thumbnail`
+    // answers it; a group has no layer to ask, so it keeps the kind flag.
+    let node_has_thumbnail = match node {
+        LayerNode::Layer(layer) => layer.has_thumbnail(void_registry),
+        LayerNode::Group(_) => kind.has_thumbnail,
+    };
+    let can_become_smart_object =
+        crate::engine::smart_object::layer_can_become_smart_object(doc, node_id);
     let info = match node {
         LayerNode::Layer(layer) => match layer {
             Layer::Raster(r) => LayerInfo::Raster {
@@ -522,7 +557,8 @@ pub(crate) fn node_to_layer_info(
                 paintable,
                 can_have_mask: kind.can_have_mask,
                 can_rename: kind.can_rename,
-                has_thumbnail: kind.has_thumbnail,
+                has_thumbnail: node_has_thumbnail,
+                can_become_smart_object,
                 icon: kind.icon,
                 kind_name: kind.display_name,
                 opacity: r.blend.opacity,
@@ -551,7 +587,8 @@ pub(crate) fn node_to_layer_info(
                     paintable,
                     can_have_mask: kind.can_have_mask,
                     can_rename: kind.can_rename,
-                    has_thumbnail: kind.has_thumbnail,
+                    has_thumbnail: node_has_thumbnail,
+                    can_become_smart_object,
                     icon: if subtype_icon.is_empty() {
                         kind.icon
                     } else {
@@ -586,7 +623,8 @@ pub(crate) fn node_to_layer_info(
                     paintable,
                     can_have_mask: kind.can_have_mask,
                     can_rename: kind.can_rename,
-                    has_thumbnail: kind.has_thumbnail,
+                    has_thumbnail: node_has_thumbnail,
+                    can_become_smart_object,
                     icon: if pipeline_icon.is_empty() {
                         kind.icon
                     } else {
@@ -613,7 +651,8 @@ pub(crate) fn node_to_layer_info(
                 paintable,
                 can_have_mask: kind.can_have_mask,
                 can_rename: kind.can_rename,
-                has_thumbnail: kind.has_thumbnail,
+                has_thumbnail: node_has_thumbnail,
+                can_become_smart_object,
                 icon: kind.icon,
                 kind_name: kind.display_name,
                 opacity: v.blend.opacity,
@@ -634,7 +673,8 @@ pub(crate) fn node_to_layer_info(
             paintable,
             can_have_mask: kind.can_have_mask,
             can_rename: kind.can_rename,
-            has_thumbnail: kind.has_thumbnail,
+            has_thumbnail: node_has_thumbnail,
+            can_become_smart_object,
             icon: kind.icon,
             kind_name: kind.display_name,
             collapsed: g.collapsed,

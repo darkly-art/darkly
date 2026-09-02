@@ -146,6 +146,47 @@ impl Transform {
         }
     }
 
+    /// This transform followed by a translation of `(dx, dy)` in the frame it
+    /// maps *into*.
+    ///
+    /// Mode-preserving: an affine stays affine, a homography stays a homography.
+    /// That matters because a transform's mode is artist-visible (the gizmo
+    /// offers perspective handles for `Perspective` and not for `Basic`), so
+    /// re-anchoring content must not silently promote or demote it.
+    ///
+    /// The translation is applied on the left (`translate ∘ self`), which for a
+    /// homography commutes with the perspective divide: the divide happens on
+    /// `w`, and a translation row leaves `w` untouched.
+    pub fn then_translated(self, dx: f32, dy: f32) -> Transform {
+        match self {
+            Transform::Basic([a, b, tx, c, d, ty]) => {
+                Transform::Basic([a, b, tx + dx, c, d, ty + dy])
+            }
+            Transform::Perspective(m) => Transform::Perspective(mat3_multiply(
+                &[1.0, 0.0, dx, 0.0, 1.0, dy, 0.0, 0.0, 1.0],
+                &m,
+            )),
+        }
+    }
+
+    /// A translation of `(dx, dy)` applied **before** this transform, i.e.
+    /// `self ∘ translate(dx, dy)`: the input is shifted, not the output.
+    ///
+    /// The counterpart to [`Self::then_translated`], and what re-anchors a
+    /// *source* rather than repositioning a result: mapping a trimmed source's
+    /// local pixel coordinates into the frame this transform expects.
+    /// Mode-preserving for the same reason.
+    pub fn pre_translated(self, dx: f32, dy: f32) -> Transform {
+        let shift: Mat3 = [1.0, 0.0, dx, 0.0, 1.0, dy, 0.0, 0.0, 1.0];
+        match self {
+            Transform::Basic(m) => {
+                let p = mat3_multiply(&affine_to_mat3(&m), &shift);
+                Transform::Basic([p[0], p[1], p[2], p[3], p[4], p[5]])
+            }
+            Transform::Perspective(m) => Transform::Perspective(mat3_multiply(&m, &shift)),
+        }
+    }
+
     /// Widen to a 3×3 projective matrix: what the GPU commit path consumes.
     /// `Basic` widens via [`affine_to_mat3`]; `Perspective` returns its matrix.
     pub fn to_projective(&self) -> Mat3 {
@@ -532,5 +573,44 @@ mod tests {
         approx(d.rotation, angle);
         approx(d.scale.0, 3.0);
         approx(d.scale.1, 2.0);
+    }
+    /// `then_translated` must move the mapped point by exactly `(dx, dy)` and
+    /// leave the mode alone. Both halves matter: conversion re-anchors a
+    /// trimmed source into the plane with it, and a float mid-perspective-drag
+    /// must not be silently demoted to affine on the way into a smart object.
+    #[test]
+    fn then_translated_shifts_the_image_and_preserves_the_mode() {
+        // Affine: a 2x scale, then a shift of (5, -3).
+        let basic = Transform::from_affine([2.0, 0.0, 1.0, 0.0, 2.0, 4.0]);
+        let moved = basic.then_translated(5.0, -3.0);
+        assert!(matches!(moved, Transform::Basic(_)), "affine stays affine");
+        let before = mat3_apply(&basic.to_projective(), 3.0, 7.0);
+        let after = mat3_apply(&moved.to_projective(), 3.0, 7.0);
+        approx(after.0 - before.0, 5.0);
+        approx(after.1 - before.1, -3.0);
+
+        // Homography with a non-trivial bottom row, so the perspective divide
+        // is actually exercised rather than collapsing to the affine case.
+        let persp = Transform::Perspective([2.0, 0.0, 1.0, 0.0, 2.0, 4.0, 0.001, 0.002, 1.0]);
+        let moved = persp.then_translated(5.0, -3.0);
+        assert!(
+            matches!(moved, Transform::Perspective(_)),
+            "homography stays a homography",
+        );
+        let before = mat3_apply(&persp.to_projective(), 3.0, 7.0);
+        let after = mat3_apply(&moved.to_projective(), 3.0, 7.0);
+        approx(after.0 - before.0, 5.0);
+        approx(after.1 - before.1, -3.0);
+    }
+
+    /// Translating by zero is the identity, in both modes: the degenerate
+    /// case conversion hits whenever the trimmed content starts at the plane
+    /// origin.
+    #[test]
+    fn then_translated_by_zero_changes_nothing() {
+        let basic = Transform::from_affine([2.0, 0.5, 1.0, -0.5, 2.0, 4.0]);
+        assert_eq!(basic.then_translated(0.0, 0.0), basic);
+        let persp = Transform::Perspective([2.0, 0.0, 1.0, 0.0, 2.0, 4.0, 0.001, 0.002, 1.0]);
+        assert_eq!(persp.then_translated(0.0, 0.0), persp);
     }
 }

@@ -13,6 +13,7 @@
 
 use super::DarklyEngine;
 use crate::layer::{LayerId, LayerNode};
+use crate::undo::{BakeLayersAction, BakeSourceSlot};
 
 impl DarklyEngine {
     /// Every pixel-bearing node id under `root`: raster layers, mask
@@ -112,5 +113,58 @@ impl DarklyEngine {
             );
         });
         self.compositor.mark_node_pixels_dirty(dst_id);
+    }
+    /// Consume `sources` into `result_id` at `(parent, position)` as one undo
+    /// step: tombstone every pixel-bearing node under each source, detach them,
+    /// land the result in the slot, and push the [`BakeLayersAction`] that
+    /// reverses it.
+    ///
+    /// The shared tail of every bake op: flatten image, rasterize/flatten a
+    /// node, merge down, merge a selection. They differ in what they composite
+    /// and where the result belongs; from here on they are identical, and were
+    /// four verbatim copies before this existed.
+    ///
+    /// **Must be called while the sources are still attached**, because the tombstone
+    /// walk needs `find_node` to reach their subtrees, which `detach_for_undo`
+    /// breaks. `sources` carries each one's pre-detach slot so undo can put it
+    /// back exactly.
+    pub(crate) fn finish_bake(
+        &mut self,
+        sources: Vec<BakeSourceSlot>,
+        result_id: LayerId,
+        parent: Option<LayerId>,
+        position: usize,
+    ) {
+        let mut source_tombstones: Vec<LayerId> = Vec::new();
+        for slot in &sources {
+            source_tombstones.extend(self.collect_pixel_node_ids(slot.id));
+        }
+
+        for slot in &sources {
+            self.doc.detach_for_undo(slot.id);
+        }
+
+        // Detach + reinsert is the exact-slot landing: the result was anchored
+        // relative to a source that has just been detached, so its current
+        // position means nothing.
+        self.doc.detach_for_undo(result_id);
+        self.doc.reinsert_entity(result_id, parent, position);
+
+        // Re-read rather than trusting the requested slot: `reinsert_entity`
+        // clamps, and undo has to reverse where the node actually landed.
+        let result_parent = self.doc.parent_of(result_id);
+        let result_position = self.doc.position_in_parent(result_id).unwrap_or(0);
+
+        self.compositor.mark_dirty();
+        self.push_undo(Box::new(BakeLayersAction::new(
+            sources,
+            source_tombstones,
+            result_id,
+            result_parent,
+            result_position,
+            // Asking the result what it owns, rather than assuming one texture,
+            // so a result that is not a bare raster still disposes correctly.
+            self.collect_pixel_node_ids(result_id),
+        )));
     }
 }
