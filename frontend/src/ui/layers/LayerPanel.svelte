@@ -38,15 +38,25 @@
 
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="layer-list" ondragover={onDragOver} ondrop={onDrop}>
-        <SpaceDivider onupdate={refresh} />
-
-        {#each app.layerTree as node (node.id)}
+        <!-- The divider is a row in the flow, not an overlay: rows are not a
+             fixed height (groups nest, modifiers add sub-rows), so anything
+             positioned by arithmetic on a row count lands mid-row. Its index in
+             the list *is* the boundary. -->
+        {#each app.layerTree as node, i (node.id)}
+            {#if i === app.screenSpaceCount}
+                <SpaceDivider onupdate={refresh} />
+            {/if}
             {#if node.type === 'group'}
                 <LayerGroup group={node} onupdate={refresh} />
             {:else}
                 <LayerItem layer={node} onupdate={refresh} />
             {/if}
         {/each}
+
+        <!-- Every row is above the line, so the divider sits at the bottom. -->
+        {#if app.screenSpaceCount >= app.layerTree.length && app.layerTree.length > 0}
+            <SpaceDivider onupdate={refresh} />
+        {/if}
 
         {#if app.layerTree.length === 0}
             <div class="empty-message">No layers</div>

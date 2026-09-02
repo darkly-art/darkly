@@ -730,8 +730,12 @@ impl LayerNode {
     /// *presence* is what disqualifies, not mask visibility, for the same reason
     /// visibility is ignored.
     ///
-    /// An empty passthrough group answers `true` vacuously; it composites
-    /// nothing in either space, so the answer is harmless either way.
+    /// An **empty** group answers `false`. Reading it as vacuously `true` is
+    /// tempting — it composites nothing in either space — but a group is
+    /// created empty and filled afterwards, so a vacuous `true` lets a fresh
+    /// group be swept above the divider and then filled with rasters, leaving
+    /// the run holding something that cannot render there. Nothing is a
+    /// viewport effect until it contains one.
     pub fn supports_screen_space(&self, doc: &Document) -> bool {
         if doc.has_mask(self.id()) {
             return false;
@@ -746,6 +750,7 @@ impl LayerNode {
             // own, so it is eligible exactly when everything it inlines is.
             LayerNode::Group(g) => {
                 g.passthrough
+                    && !g.children.is_empty()
                     && g.children.iter().all(|c| {
                         doc.find_node(*c)
                             .is_some_and(|n| n.supports_screen_space(doc))

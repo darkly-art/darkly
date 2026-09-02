@@ -745,6 +745,13 @@ pub struct Compositor {
     /// encodes. Entries for removed effect layers are pruned there too.
     effect_instances: HashMap<LayerId, EffectInstance>,
 
+    /// How many times an effect instance has been built from scratch —
+    /// pipeline lookup, `ScaledEffect::prepare`, fresh bind groups. Steady
+    /// state is one per effect layer for the life of the document; anything
+    /// that grows with the frame count means an instance is being rebuilt
+    /// rather than reused, which is invisible except as lag.
+    effect_rebuilds: u64,
+
     /// Bumped whenever any accumulator is recreated, so an effect instance
     /// holding bind groups over a freed texture is detected and rebuilt rather
     /// than encoded. `set_canvas_rect` recreates every `GroupState`, so one
@@ -1291,6 +1298,7 @@ impl Compositor {
             void_registry: VoidRegistry::new(),
             effect_registry: crate::gpu::effect::EffectRegistry::new(),
             effect_instances: HashMap::new(),
+            effect_rebuilds: 0,
             target_generation: 0,
             canvas_apply_scratch: None,
             canvas_scaling_pipelines: crate::gpu::effect_scaling::ScalingPipelines::new(
@@ -3537,6 +3545,13 @@ impl Compositor {
         wgpu::TextureFormat::Rgba8Unorm
     }
 
+    /// Cumulative count of from-scratch effect-instance builds. A caching
+    /// regression shows up here as a number that tracks the frame count.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn effect_rebuilds(&self) -> u64 {
+        self.effect_rebuilds
+    }
+
     pub fn screen_run(&self) -> &ScreenRun {
         &self.screen_run
     }
@@ -3668,21 +3683,29 @@ impl Compositor {
         doc: &Document,
         surface_view: &wgpu::TextureView,
     ) {
-        // Synced here as well as before the compose walk, because the two
-        // spaces are woken by different dirty flags: a viewport resize replaces
-        // the run's textures without touching the canvas, so `render_offscreen`
-        // returns early and never reaches the sync. Idempotent and cheap when
-        // nothing drifted.
-        self.sync_effect_instances(device, queue, doc);
-
         // Membership, order and visibility all come from the document; the run
         // owns only the textures. An empty or wholly hidden run presents
         // straight to the surface, which is the common case.
-        let members: Vec<LayerId> = doc
+        let run: Vec<LayerId> = doc
             .screen_space_run()
             .iter()
             .copied()
-            .filter(|id| doc.effective_visible(*id) && self.effect_instances.contains_key(id))
+            .filter(|id| doc.effective_visible(*id))
+            .collect();
+
+        // Synced here as well as before the compose walk, because the two
+        // spaces are woken by different dirty flags: a viewport resize replaces
+        // the run's textures without touching the canvas, so `render_offscreen`
+        // returns early and never reaches the sync. Gated on the run having
+        // members, so a document with no viewport effects — the common case —
+        // does not pay for a second walk of every effect layer per frame.
+        if !run.is_empty() {
+            self.sync_effect_instances(device, queue, doc);
+        }
+
+        let members: Vec<LayerId> = run
+            .into_iter()
+            .filter(|id| self.effect_instances.contains_key(id))
             .collect();
 
         if members.is_empty() || self.screen_run.views().is_none() {
@@ -4711,6 +4734,7 @@ impl Compositor {
                 // rebuild it against the same views.
             }
 
+            self.effect_rebuilds += 1;
             let Some(mut effect) = self.effect_registry.instance(
                 &pipeline_id,
                 &params,

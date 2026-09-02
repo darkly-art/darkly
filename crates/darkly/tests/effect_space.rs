@@ -490,3 +490,135 @@ fn save_to_zip(engine: &mut DarklyEngine, override_count: Option<u64>) -> Vec<u8
     }
     panic!("save did not complete within 32 frames");
 }
+
+// ---------------------------------------------------------------------------
+// Instance reuse
+// ---------------------------------------------------------------------------
+
+/// An effect instance is built once and reused. Rebuilding one means recompiling
+/// its pipeline lookup, re-running `ScaledEffect::prepare` and allocating fresh
+/// bind groups; doing that per frame is invisible except as lag while painting,
+/// which is exactly how it was found.
+#[test]
+fn effect_instances_are_not_rebuilt_every_frame() {
+    let mut engine = test_engine(64, 64);
+    let raster = engine.add_raster_layer(None);
+    fill_layer(&mut engine, raster, 255, 0, 0);
+    let _canvas_effect = effect(&mut engine, "invert");
+    let _screen_effect = effect(&mut engine, "grain");
+    engine.set_screen_space_boundary(1);
+
+    // Settle: the first frames legitimately build both instances.
+    for _ in 0..4 {
+        engine.render(0.0);
+    }
+    let settled = engine.test_effect_rebuilds();
+
+    // Now paint, which dirties the composite every frame — the case that was
+    // slow. Nothing structural changes, so nothing may be rebuilt.
+    for i in 0..8 {
+        engine.begin_stroke(raster).unwrap();
+        engine.stroke_to(StrokeOp::BrushStroke {
+            x: 10.0 + i as f32,
+            y: 10.0,
+            pressure: 1.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
+            time_ms: 0.0,
+            cr: 0.0,
+            cg: 0.0,
+            cb: 1.0,
+            ca: 1.0,
+        });
+        engine.end_stroke();
+        engine.render(0.0);
+    }
+
+    assert_eq!(
+        engine.test_effect_rebuilds(),
+        settled,
+        "painting must not rebuild any effect instance"
+    );
+}
+
+/// Dragging a run member down next to a canvas-space layer takes it out of the
+/// run.
+///
+/// Crossing the divider does not change a node's index — the lowest
+/// viewport-only child and the topmost canvas child are the same position — so
+/// the order of the children cannot express the move. What does express it is
+/// *what the node was dropped next to*: a layer dropped beside a canvas-space
+/// layer is canvas-space. Reported as "dragging a veil beneath the viewport
+/// boundary doesn't work"; it was a silent no-op.
+#[test]
+fn dragging_a_run_member_below_the_divider_takes_it_out_of_the_run() {
+    let mut engine = test_engine(16, 16);
+    let raster = engine.add_raster_layer(None);
+    let bottom = effect(&mut engine, "rainy_glass");
+    let middle = effect(&mut engine, "grain");
+    let top = effect(&mut engine, "vhs");
+    engine.set_screen_space_boundary(3);
+    assert_eq!(run_ids(&engine), vec![bottom, middle, top]);
+
+    // The gesture: drop the lowest run member just above the raster — the slot
+    // directly below the divider, which is the position it already occupies.
+    engine
+        .move_layers(vec![bottom], MoveTarget::After(raster))
+        .expect("move below the divider");
+
+    assert!(
+        !in_run(&engine, bottom),
+        "the dragged effect must end up below the line"
+    );
+    assert_eq!(
+        run_ids(&engine),
+        vec![middle, top],
+        "and the rest of the run is undisturbed"
+    );
+}
+
+/// The mirror gesture: dropping a canvas-space effect beside a run member puts
+/// it in the run. Same reference-node rule, opposite outcome.
+#[test]
+fn dragging_an_effect_above_the_divider_puts_it_in_the_run() {
+    let mut engine = test_engine(16, 16);
+    let _raster = engine.add_raster_layer(None);
+    let below = effect(&mut engine, "rainy_glass");
+    let above = effect(&mut engine, "grain");
+    engine.set_screen_space_boundary(1);
+    assert_eq!(run_ids(&engine), vec![above]);
+
+    engine
+        .move_layers(vec![below], MoveTarget::Before(above))
+        .expect("move above the divider");
+
+    assert_eq!(
+        run_ids(&engine),
+        vec![below, above],
+        "the dragged effect joins the run without moving anything else"
+    );
+}
+
+/// Reordering inside the run keeps everything in it: the reference node is a
+/// run member, so the moved node inherits that side.
+#[test]
+fn reordering_inside_the_run_keeps_every_member() {
+    let mut engine = test_engine(16, 16);
+    let _raster = engine.add_raster_layer(None);
+    let a = effect(&mut engine, "rainy_glass");
+    let b = effect(&mut engine, "grain");
+    let c = effect(&mut engine, "vhs");
+    engine.set_screen_space_boundary(3);
+
+    engine
+        .move_layers(vec![c], MoveTarget::Before(a))
+        .expect("reorder inside the run");
+
+    assert_eq!(
+        run_ids(&engine),
+        vec![c, a, b],
+        "reordering inside the run keeps all three above the line"
+    );
+}

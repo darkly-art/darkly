@@ -14,7 +14,7 @@ pub use pixel_transform::{
     TransformCapabilityError, TransformLinkPolicy, TransformMembershipSnapshot, TransformPlanError,
 };
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use slotmap::{SecondaryMap, SlotMap};
 
@@ -68,6 +68,20 @@ pub enum MoveTarget {
     IntoGroupTop(LayerId),
     #[serde(rename = "into_bottom")]
     IntoGroupBottom(LayerId),
+}
+
+impl MoveTarget {
+    /// The node this target is stated relative to. Every variant names one —
+    /// which is what lets a move inherit its reference's side of the viewport
+    /// divider instead of being told which side it meant.
+    pub fn reference(&self) -> LayerId {
+        match *self {
+            MoveTarget::Before(id)
+            | MoveTarget::After(id)
+            | MoveTarget::IntoGroupTop(id)
+            | MoveTarget::IntoGroupBottom(id) => id,
+        }
+    }
 }
 
 /// One slot in [`Document::entities`]. Tree nodes (layers + groups) and
@@ -1054,10 +1068,44 @@ impl Document {
         if self.is_filter(layer_id) {
             return;
         }
+        // A move is stated relative to another node, and that node's side of
+        // the viewport divider is the side the moved node lands on. Nothing has
+        // to be told to the move: "drop this next to that" already says it.
+        //
+        // This is the only thing that *can* say it. Crossing the divider does
+        // not change a node's index — the lowest viewport-only child and the
+        // topmost canvas child are the same position — so the order of the
+        // children cannot express the difference and the reference node has to.
+        let mut members: HashSet<LayerId> = self.screen_space_run().iter().copied().collect();
+        let wants_screen = members.contains(&target.reference());
+        members.remove(&layer_id);
+
         if self.unlink(layer_id).is_none() {
             return;
         }
         self.attach_at_target(layer_id, target);
+
+        if wants_screen {
+            members.insert(layer_id);
+        }
+        self.set_screen_space_members(&members);
+    }
+
+    /// Re-derive the boundary from a set of intended members: the run becomes
+    /// the longest trailing suffix all of whose entries are in the set.
+    ///
+    /// Total by construction. A node dropped into the middle of the run while
+    /// not a member simply stops the suffix there — everything above it stays
+    /// viewport-only and the divider comes to rest directly above it, which is
+    /// what dropping a canvas-space layer at that spot means.
+    fn set_screen_space_members(&mut self, members: &HashSet<LayerId>) {
+        let k = self
+            .children_of(self.root)
+            .iter()
+            .rev()
+            .take_while(|id| members.contains(*id))
+            .count();
+        self.screen_space_count = k.min(self.qualifying_screen_space_suffix());
     }
 
     /// Detach an entity — tree node or filter — from its parent, leaving it

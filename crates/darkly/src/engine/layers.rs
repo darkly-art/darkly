@@ -1295,12 +1295,7 @@ impl DarklyEngine {
         if !self.resolve_transform_conflict() {
             return Err("Active transform could not be committed".into());
         }
-        let target_id = match target {
-            MoveTarget::Before(t)
-            | MoveTarget::After(t)
-            | MoveTarget::IntoGroupTop(t)
-            | MoveTarget::IntoGroupBottom(t) => t,
-        };
+        let target_id = target.reference();
         for &id in &ids {
             if id == target_id || self.doc.is_ancestor_of(id, target_id) {
                 return Err("Cannot move a layer into itself".into());

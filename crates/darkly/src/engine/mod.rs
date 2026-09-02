@@ -1163,6 +1163,13 @@ impl DarklyEngine {
         )
     }
 
+    /// Cumulative count of from-scratch effect-instance builds — see
+    /// [`crate::gpu::compositor::Compositor::effect_rebuilds`].
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_effect_rebuilds(&self) -> u64 {
+        self.compositor.effect_rebuilds()
+    }
+
     /// Test-only animation tick. Headless `render()` returns early without
     /// driving `update_animations`, so tests that need to advance the
     /// veil / overlay / void master clock call this directly. Pass a

@@ -1,34 +1,32 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
     import { pointerDrag } from '../workspace/pointerDrag';
-
-    /** Pixel height of one layer row, for translating a drag into a row count. */
-    const ROW_HEIGHT = 34;
+    import { gapAt, maxEligible } from './spaceDivider';
+    import Icon from '../../icons/Icon.svelte';
 
     let { onupdate }: { onupdate?: () => void } = $props();
 
+    let el = $state<HTMLElement | null>(null);
     /** Live count during a drag; `null` when resting on the engine's value. */
     let dragCount = $state<number | null>(null);
-    let dragStart = 0;
 
     let count = $derived(dragCount ?? app.screenSpaceCount);
 
-    /** How far down the divider can go: it stops at the first row that cannot
-     *  be rendered after the view transform. The engine clamps authoritatively
-     *  when the drag lands; this is what keeps the handle from visibly
-     *  overshooting under the cursor. */
-    let maxCount = $derived.by(() => {
-        let n = 0;
-        for (const row of app.layerTree) {
-            if (!row.screenSpaceEligible) break;
-            n++;
-        }
-        return n;
-    });
+    let maxCount = $derived(maxEligible(app.layerTree));
 
-    function onMove(_dx: number, dy: number) {
-        const rows = Math.round((dy + dragStart) / ROW_HEIGHT);
-        dragCount = Math.max(0, Math.min(maxCount, rows));
+    /** Which gap the pointer is nearest, measured against the rows that are
+     *  actually on screen. Rows are siblings in the list; this one is too, so
+     *  it skips itself. */
+    function countAt(clientY: number): number {
+        const list = el?.parentElement;
+        if (!list) return count;
+        const rows = [...list.children]
+            .filter(child => child !== el)
+            .map(child => {
+                const rect = child.getBoundingClientRect();
+                return { top: rect.top, height: rect.height };
+            });
+        return gapAt(clientY, rows, maxCount);
     }
 
     function onEnd(aborted: boolean) {
@@ -42,41 +40,31 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
+    bind:this={el}
     class="divider"
     class:empty={count === 0}
-    style:top="{count * ROW_HEIGHT}px"
-    title="Anything above this line is applied to your view of the canvas. It is not part of the image: exports, Flatten and Merge ignore it."
+    title="Effects above this line change how the canvas looks on screen. They are not part of the image — exports, Flatten and Merge ignore them."
     use:pointerDrag={{
-        onStart: () => {
-            dragStart = app.screenSpaceCount * ROW_HEIGHT;
-            dragCount = app.screenSpaceCount;
-        },
-        onMove,
+        onStart: (e) => { dragCount = countAt(e.clientY); },
+        onMove: (_dx, _dy, e) => { dragCount = countAt(e.clientY); },
         onEnd,
     }}
 >
     <span class="rule"></span>
-    <span class="label">
-        Viewport only — not exported
-        {#if count === 0}<span class="hint">Drag down to make an effect viewport-only</span>{/if}
-    </span>
+    <span class="label"><Icon name="fa6-solid:display" /> viewport</span>
     <span class="rule"></span>
 </div>
 
 <style>
     .divider {
-        position: absolute;
-        left: 0;
-        right: 0;
         display: flex;
         align-items: center;
         gap: 6px;
         padding: 0 8px;
-        height: 12px;
-        margin-top: -6px;
+        height: 14px;
+        flex: 0 0 auto;
         cursor: ns-resize;
         user-select: none;
-        z-index: 2;
     }
 
     .rule {
@@ -86,33 +74,22 @@
     }
 
     .label {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
         font-size: 9px;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
+        letter-spacing: 0.06em;
         color: var(--text-dim, #888);
         white-space: nowrap;
     }
 
-    /* At rest on an empty run the line is decoration, not a boundary with
-       anything above it, so it recedes until hovered. */
-    .divider.empty .label,
-    .divider.empty .rule {
-        opacity: 0.45;
+    /* With nothing above it the line is an affordance, not a boundary, so it
+       recedes until pointed at. */
+    .divider.empty {
+        opacity: 0.4;
     }
 
-    .divider:hover .label,
-    .divider:hover .rule {
+    .divider:hover {
         opacity: 1;
-    }
-
-    .hint {
-        display: none;
-        margin-left: 6px;
-        text-transform: none;
-        letter-spacing: 0;
-    }
-
-    .divider.empty:hover .hint {
-        display: inline;
     }
 </style>
